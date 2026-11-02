@@ -10,7 +10,6 @@ The `test_auth_mode.py` file tests the authentication bypass mode for automated 
 
 1. Enable test mode and optionally customize credentials:
    ```bash
-   export ADCP_AUTH_TEST_MODE=true
 
    # Optional: Customize test credentials
    export TEST_SUPER_ADMIN_PASSWORD=my_secure_test_pass

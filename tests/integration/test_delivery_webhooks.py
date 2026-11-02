@@ -72,7 +72,7 @@ async def test_send_reports_with_media_buys(mock_db_session, scheduler):
     mock_media_buy_1.raw_request = {
         "reporting_webhook": {
             "url": "https://example.com/webhook1",
-            "frequency": "daily",
+            "reporting_frequency": "daily",
         }
     }
 
@@ -87,7 +87,7 @@ async def test_send_reports_with_media_buys(mock_db_session, scheduler):
     mock_media_buy_3.raw_request = {
         "reporting_webhook": {
             "url": "https://example.com/webhook3",
-            "frequency": "daily",
+            "reporting_frequency": "daily",
         }
     }
 

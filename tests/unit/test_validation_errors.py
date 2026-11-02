@@ -3,9 +3,9 @@
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from src.core.exceptions import AdCPValidationError
 from src.core.schemas import CreateMediaBuyRequest
 from src.core.validation_helpers import first_validation_error_field, format_validation_error
+from tests.helpers import assert_construction_rejects
 
 
 def test_first_validation_error_field_uses_bracket_notation():
@@ -34,12 +34,17 @@ def test_first_validation_error_field_is_owned_by_exception_leaf_module():
     assert first_validation_error_field.__module__ == "src.core.exceptions"
 
 
-def test_create_media_buy_boundary_validation_preserves_field_suggestion():
-    """Boundary request construction keeps the current field-specific hint."""
-    from src.core.tools.media_buy_create import _build_create_media_buy_request
+def test_create_media_buy_boundary_validation_names_the_offending_field():
+    """Boundary request construction tells the buyer WHICH field, via the field slot.
 
-    with pytest.raises(AdCPValidationError) as exc_info:
-        _build_create_media_buy_request(
+    The specificity lives on ``field``, not in prose: the suggestion is a function of the
+    code and is asserted nowhere, since comparing it to CODE_TABLE would grade the table
+    against itself. This test previously pinned an authored sentence that named the same
+    field ``field=`` already carries.
+    """
+
+    assert_construction_rejects(
+        lambda: CreateMediaBuyRequest(
             brand={"domain": "wiretest.example"},
             packages=None,
             start_time=None,
@@ -51,11 +56,9 @@ def test_create_media_buy_boundary_validation_preserves_field_suggestion():
             account=None,
             idempotency_key=None,
             paused=None,
-        )
-
-    error = exc_info.value
-    assert error.field == "idempotency_key"
-    assert error.suggestion == ("Provide the required 'idempotency_key' field and resend the request.")
+        ),
+        field="idempotency_key",
+    )
 
 
 def test_brand_target_audience_must_be_string():
@@ -88,6 +91,7 @@ def test_create_media_buy_request_invalid_brand_manifest():
     # In adcp 3.6.0, brand is a BrandReference with optional domain field
     # Missing domain does not raise an error since domain is optional
     req = CreateMediaBuyRequest(
+        account={"account_id": "acct_test"},
         brand={"domain": "testbrand.com"},
         end_time="2026-02-01T00:00:00Z",
         start_time="2026-01-01T00:00:00Z",
@@ -113,7 +117,7 @@ def test_validation_error_formatting():
         )
     except ValidationError as e:
         # Use the shared helper function
-        error_msg = format_validation_error(e, context="test request")
+        error_msg = format_validation_error(e, label="test request")
 
         # Check that we got a helpful error message
         assert "Invalid test request:" in error_msg

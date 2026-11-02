@@ -8,16 +8,20 @@ conftest's _harness_env.
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC
 from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._harness_db import db_session
-from tests.bdd.steps._outcome_helpers import payload_or_none, require_payload
+from tests.bdd.steps._outcome_helpers import payload_or_none, require_payload, wire_absent, wire_dict
 from tests.bdd.steps.generic._auth import authenticate_env_as
 from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.bdd.steps.generic._table import as_bool, drop_header_if
 from tests.bdd.steps.generic.given_media_buy import _resolve_date_token
+from tests.factories.mint import mint
+from tests.harness.media_buy_create import OMIT_ACCOUNT, OMIT_IDEMPOTENCY_KEY
 
 # ═══════════════════════════════════════════════════════════════════════
 # Label mapping — Gherkin package labels → real package_ids
@@ -116,8 +120,6 @@ def _assert_wire_field_equals(ctx: dict, field: str, expected: str) -> None:
 
     Reads ctx['wire_response'] (the buyer-facing body), not the reconstructed
     payload. Shared dumb value comparator for the wire value-pin steps."""
-    from tests.bdd.steps._outcome_helpers import wire_dict
-
     wire = wire_dict(ctx)
     actual = wire.get(field)
     assert actual == expected, f"Expected wire {field} '{expected}', got {actual!r} (wire keys: {sorted(wire)})"
@@ -151,8 +153,6 @@ def then_wire_valid_actions_include(ctx: dict, action: str) -> None:
     valid_actions must be derived from the NORMALIZED AdCP status, so a persisted
     'scheduled' buy reports pending_start's actions (not [] from the raw string)
     (#1417)."""
-    from tests.bdd.steps._outcome_helpers import wire_dict
-
     wire = wire_dict(ctx)
     actions = wire.get("valid_actions") or []
     assert action in actions, f"Expected '{action}' in wire valid_actions, got {actions!r}"
@@ -232,12 +232,6 @@ def given_existing_mb_start_time(ctx: dict, start_time: str) -> None:
     env._commit_factory_data()
 
 
-@given("a valid update_media_buy request")
-def given_update_request_no_table(ctx: dict) -> None:
-    """Initialize update request kwargs with defaults (media_buy_id from ctx)."""
-    _ensure_update_defaults(ctx)
-
-
 @given(parsers.parse("a valid update_media_buy request with:"))
 def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> None:
     """Build update request kwargs from a data table."""
@@ -247,6 +241,7 @@ def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> No
     _supported_fields = {
         "media_buy_id",
         "paused",
+        "canceled",
         "start_time",
         "end_time",
         "packages",
@@ -257,7 +252,7 @@ def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> No
     kwargs = _ensure_update_defaults(ctx)
     clock = ctx["env"].clock
     # Skip header row (pytest-bdd datatables include the header as first row)
-    rows = datatable[1:] if datatable and datatable[0][0].strip() == "field" else datatable
+    rows = drop_header_if(datatable, "field")
     # Track which fields the table explicitly sets
     table_fields = {row[0].strip() for row in rows}
     for row in rows:
@@ -271,7 +266,9 @@ def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> No
             # Resolve Gherkin label (e.g. "mb_existing") to real factory ID
             kwargs["media_buy_id"] = _resolve_media_buy_id(ctx, value)
         elif field == "paused":
-            kwargs["paused"] = value.lower() == "true"
+            kwargs["paused"] = as_bool(value)
+        elif field == "canceled":
+            kwargs["canceled"] = as_bool(value)
         elif field == "start_time":
             kwargs["start_time"] = _resolve_date_token(value, clock)
         elif field == "end_time":
@@ -318,12 +315,39 @@ def given_request_omits_start_end_paused(ctx: dict) -> None:
         kwargs.pop(field, None)
 
 
-# Step "the request does NOT include an idempotency_key" is owned by
-# tests/bdd/steps/domain/uc002_create_media_buy.py (canonical, shared across
-# UC-002/003) to avoid a cross-module shadow now that this module is registered.
-# No graded UC-003 scenario uses that text; when the dormant UC-003 idempotency
-# scenarios graduate (PR #1567 follow-up) they need an update-kwargs strip under
-# a distinct step text (create/update behaviours genuinely differ).
+@given("the request does NOT include an idempotency_key")
+def given_request_omits_idempotency_key(ctx: dict) -> None:
+    """Send NO idempotency_key, which 3.1.1 makes a rejection.
+
+    ``media-buy/update-media-buy-request.json`` lists ``idempotency_key`` in ``/required``,
+    so the absence is INVALID_REQUEST — see the version-cited note on
+    @T-UC-003-idempotency-absent in the feature file.
+
+    This sentence used to live in ``uc002_create_media_buy.py`` as "canonical, shared
+    across UC-002/003", writing ``ctx["idempotency_key"] = None`` — a key no UC-003 step
+    reads, so the scenario dispatched WITH the key and graded the opposite of what it says.
+    The sentence appears on exactly one feature line, this use case's, and UC-002 bound it
+    to none; ownership moves to the bag it describes, which is what the note it replaces
+    already prescribed ("create/update behaviours genuinely differ").
+
+    The sentinel rather than a pop: see ``_ensure_update_defaults``.
+    """
+    _ensure_update_defaults(ctx)["idempotency_key"] = OMIT_IDEMPOTENCY_KEY
+
+
+@given("the request does NOT include an account field")
+def given_request_omits_account(ctx: dict) -> None:
+    """Send NO account, which 3.1.1 makes a rejection.
+
+    ``media-buy/update-media-buy-request.json`` lists ``account`` in ``/required``
+    (v3.1 added it, for governance checks and account resolution), so the absence is
+    INVALID_REQUEST — which is what @T-UC-003-account-absent asserts.
+
+    The sentence had NO definition at all, so the scenario raised
+    StepDefinitionNotFoundError and its xfail recorded a spec/production gap where the
+    real cause was missing wiring.
+    """
+    _ensure_update_defaults(ctx)["account"] = OMIT_ACCOUNT
 
 
 @given("the request does not include any updatable fields")
@@ -353,7 +377,7 @@ def given_package_update_with_table(ctx: dict, datatable: list[list[str]]) -> No
     kwargs = _ensure_update_defaults(ctx)
     pkg_update: dict[str, Any] = {}
     # Skip header row if present (pytest-bdd datatables include header as first row)
-    rows = datatable[1:] if datatable and datatable[0][0].strip().lower() == "field" else datatable
+    rows = drop_header_if(datatable, "field")
     for row in rows:
         field, value = row[0].strip(), row[1].strip()
         assert field in _supported_pkg_fields, (
@@ -366,7 +390,7 @@ def given_package_update_with_table(ctx: dict, datatable: list[list[str]]) -> No
         elif field == "budget":
             pkg_update["budget"] = float(value)
         elif field == "paused":
-            pkg_update["paused"] = value.lower() == "true"
+            pkg_update["paused"] = as_bool(value)
         elif field == "targeting_overlay":
             pkg_update["targeting_overlay"] = json.loads(value)
         elif field == "product_id":
@@ -463,7 +487,6 @@ def given_daily_spend_ok(ctx: dict) -> None:
                         f"{max_daily} — step claims 'does not exceed max_daily_package_spend' "
                         "but existing packages violate the constraint"
                     )
-    ctx.setdefault("daily_spend_validated", True)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -503,6 +526,35 @@ def given_package_update_creative_assignments(ctx: dict, datatable: list[list[st
     # Track referenced creative_ids for later guard steps
     ctx["referenced_creative_ids"] = [a["creative_id"] for a in assignments]
     ctx["referenced_placement_ids"] = [pid for a in assignments for pid in (a.get("placement_ids") or [])]
+
+
+@given(parsers.parse('the package update references creative "{creative_id}" via {array}'))
+def given_package_update_references_creative(ctx: dict, creative_id: str, array: str) -> None:
+    """Reference one creative through the named ARRAY parameter, and only that one.
+
+    ``creative_ids`` and ``creative_assignments`` are the two request members that
+    name creatives, they reach the same validation helper, and the only thing that
+    differs on the wire is which array ``error.field`` points at. One step so an
+    outline can grade both from one row each, instead of two scenarios that drift.
+
+    Creates nothing: the scenarios using this are the not-found and bad-state paths,
+    where a companion Given says what the library does or does not hold.
+    """
+    kwargs = _ensure_update_defaults(ctx)
+    if not kwargs.get("packages"):
+        kwargs["packages"] = [{"package_id": "pkg_001"}]
+    pkg = kwargs["packages"][0]
+    if array == "creative_ids":
+        pkg["creative_ids"] = [creative_id]
+    elif array == "creative_assignments":
+        pkg["creative_assignments"] = [{"creative_id": creative_id, "weight": 1.0}]
+    else:
+        raise AssertionError(
+            f"{array!r} is not a request member that references creatives. The two are "
+            "'creative_ids' and 'creative_assignments'; a third spelling means the "
+            "scenario names something update_media_buy does not accept."
+        )
+    ctx["referenced_creative_ids"] = [creative_id]
 
 
 @given("all referenced creative_ids exist in the creative library")
@@ -569,9 +621,9 @@ def given_placement_ids_valid(ctx: dict) -> None:
     assert isinstance(pids, list), f"Expected placement_ids to be a list, got {type(pids).__name__}"
     assert len(pids) > 0, "placement_ids list is empty — step claims placements are 'valid for the product'"
     # Step claims 'valid for the product' — product must be present to validate against
-    product = ctx.get("default_product") or ctx.get("existing_product")
+    product = ctx.get("default_product")
     assert product is not None, (
-        "No product in ctx (neither 'default_product' nor 'existing_product') — "
+        "No product in ctx under 'default_product' — "
         "step claims placements are 'valid for the product' but no product exists to validate against"
     )
     # Verify product does not have restrictive placement config that would reject these.
@@ -588,34 +640,38 @@ def given_placement_ids_valid(ctx: dict) -> None:
     # When product has no placements restriction, all placements are
     # valid by definition — this is correct AdCP semantics (no restriction = all allowed).
     # Log which path was taken for debugging.
-    ctx.setdefault("placement_validation_path", "unrestricted" if allowed is None else "restricted")
 
 
 @given("the package update includes inline creatives with valid content")
 def given_package_update_inline_creatives(ctx: dict) -> None:
     """Add inline creative objects to the first package update.
 
-    Uses the adcp CreativeAsset structure with minimal valid content.
+    The sentence promises VALID content, and the hand-built asset map did not
+    deliver it: ``{"primary": {url, width, height}}`` carries no ``asset_type``
+    discriminator, so ``AdCPPackageUpdate.creatives`` rejects the item with
+    ``assets.primary.AssetVariant Unable to extract tag using discriminator
+    'asset_type' [type=union_tag_not_found]`` and the update never reaches the
+    behaviour under test. Built through ``image_spec`` now, which is the same
+    correction ``uc003_ext_error_scenarios.given_package_update_inline_creatives_bare``
+    already carries with the same reasoning. The invalidity was never this
+    scenario's subject, so it is fixed rather than declared malformed.
     """
+    from tests.factories.creative_asset import build_assets, image_spec
+    from tests.factories.request import CreativeAssetRequestFactory
+
     kwargs = _ensure_update_defaults(ctx)
     if not kwargs.get("packages"):
         kwargs["packages"] = [{"package_id": "pkg_001"}]
     kwargs["packages"][0]["creatives"] = [
-        {
-            "creative_id": "inline-cr-001",
-            "name": "Inline Creative 1",
-            "format_id": {
+        CreativeAssetRequestFactory.payload(
+            creative_id="inline-cr-001",
+            name="Inline Creative 1",
+            format_id={
                 "agent_url": "https://creative.adcontextprotocol.org",
                 "id": "display_300x250",
             },
-            "assets": {
-                "primary": {
-                    "url": "https://example.com/banner-1.png",
-                    "width": 300,
-                    "height": 250,
-                }
-            },
-        }
+            assets=build_assets(image_spec("primary", url="https://example.com/banner-1.png")),
+        )
     ]
 
 
@@ -643,7 +699,6 @@ def given_package_update_optimization_goals_default(ctx: dict) -> None:
     # Default: single metric goal (clicks) — representative for replacement semantics test.
     # The parameterized variant (with goals_value) handles scenario-specific goals.
     kwargs["packages"][0]["optimization_goals"] = json.loads('[{"kind": "metric", "metric": "clicks", "priority": 1}]')
-    ctx.setdefault("optimization_goals_source", "default_clicks")
 
 
 @given(parsers.parse("the package update includes optimization_goals: {goals_value}"))
@@ -667,7 +722,6 @@ def given_package_update_optimization_goals(ctx: dict, goals_value: str) -> None
         # Step text "includes optimization_goals: <not provided>" is a Scenario Outline
         # convention: the field slot exists in the template but this row omits the value.
         kwargs["packages"][0].pop("optimization_goals", None)
-        ctx["optimization_goals_omitted"] = True
         assert "optimization_goals" not in kwargs["packages"][0], (
             "optimization_goals should be absent after '<not provided>' — preservation test requires omission"
         )
@@ -787,10 +841,6 @@ def given_package_update_negative_keywords_remove(ctx: dict) -> None:
 @when("the Buyer Agent sends the update_media_buy request")
 def when_send_update_request(ctx: dict) -> None:
     """Build UpdateMediaBuyRequest and dispatch through harness."""
-    from pydantic import ValidationError
-
-    from src.core.exceptions import AdCPError
-    from src.core.schemas import UpdateMediaBuyRequest
 
     update_kwargs = ctx.get("update_kwargs", {})
     # Resolve Gherkin package_id labels ("pkg_001") to real factory-generated
@@ -801,46 +851,39 @@ def when_send_update_request(ctx: dict) -> None:
         for pkg in packages:
             if isinstance(pkg, dict) and "package_id" in pkg:
                 pkg["package_id"] = _resolve_package_id(ctx, pkg["package_id"])
-    try:
-        req = UpdateMediaBuyRequest(**update_kwargs)
-    except ValidationError as e:
-        # Schema validation rejects the request before production code runs.
-        # Store as ctx["error"] so Then steps can assert on it.
-        ctx["error"] = e
-        return
-    except AdCPError as e:
-        # A schema-level validator raised a typed AdCP error (e.g. the immutable
-        # package-field guard → INVALID_REQUEST). It propagates as-is (not wrapped
-        # in ValidationError), so capture it the same way for the Then steps.
-        ctx["error"] = e
-        return
-
-    if ctx.get("has_auth") is False:
-        dispatch_request(ctx, req=req, identity=None)
-    else:
-        dispatch_request(ctx, req=req)
-
-    # Post-process: promote error responses to ctx["error"]
-    _promote_update_errors(ctx)
-
-
-def _promote_update_errors(ctx: dict) -> None:
-    """Promote UpdateMediaBuyError responses to ctx['error'] for Then steps."""
-    resp = payload_or_none(ctx)
-    if resp is None:
-        return
-    from src.core.schemas._base import UpdateMediaBuyError
-
-    if isinstance(resp, UpdateMediaBuyError) and resp.errors:
-        ctx["error"] = resp.errors[0]
-        ctx["error_response"] = resp
-        # This promotion makes the error payload INVISIBLE to success-path Thens —
-        # that was the point of the old `del ctx["response"]`, and retiring the key
-        # did not retire the requirement. Clear every source the payload accessors
-        # read, or require_payload/payload_or_none hand the error payload straight
-        # back and a success-path Then grades it as a success.
-        ctx.pop("result", None)
-        ctx.pop("self_dispatched_response", None)
+    # Dispatch the RAW flat bag, not a locally-constructed model. Building
+    # UpdateMediaBuyRequest here meant a payload the schema rejects never reached a
+    # transport: the ValidationError was raised in the TEST process and stored as
+    # ctx["error"], so every "malformed input is rejected with X" scenario graded the
+    # harness's own exception -- keys ['code','message'], no suggestion -- instead of the
+    # wire envelope production actually emits, which does carry one. Such a test cannot fail
+    # when the server stops rejecting the payload, because the server was never asked.
+    #
+    # The harness already supports this form; _is_update_request's docstring says the raw
+    # dispatch exists precisely "for scenarios whose payload the LOCAL UpdateMediaBuyRequest
+    # must reject". The step simply was not using it.
+    #
+    # The required fields are LITERALS no longer. `account={"account_id": "acct_test"}` and
+    # `idempotency_key="test-idem-key-0001"` used to be written into the bag at this point,
+    # which put them beyond the reach of every Given that means to remove one: "the request
+    # does NOT include an account field" and the `<not provided>` Examples rows all popped a
+    # key this step then put straight back, so those rows graded a request carrying the
+    # field they say is absent. `apply_required_update_fields` setdefaults them instead, so
+    # a Given's OMIT sentinel survives to the wire — and it runs HERE as well as in
+    # `_ensure_update_defaults` because this sentence is also UC-026's and the dual-emit
+    # feature's When, and UC-026 builds its bag with its own `_ensure_update_kwargs`.
+    #
+    # NO `identity=` EITHER. A no-auth scenario used to dispatch `identity=None`, which is
+    # not a request field: `_flatten_update_request` passes it into the flat wire params, so
+    # the DTO rejected it under extra="forbid" and all three transports answered
+    # INVALID_REQUEST to an auth row asserting AUTH_MISSING. The credential is the channel —
+    # `given_buyer_no_auth` stashes a token-less one in ctx["credential"] and
+    # `dispatch_request` presents it, so the REAL resolver refuses a real request. UC-019
+    # removed this exact shape from its own dispatch (_dispatch_query); this was the last copy.
+    #
+    # The defaults are written INTO the scenario's own bag, not a copy, so the minted key is
+    # the same on a second dispatch within one scenario — what an idempotent-replay row needs.
+    dispatch_request(ctx, **apply_required_update_fields(ctx, update_kwargs))
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1078,74 +1121,22 @@ def then_response_has_sandbox(ctx: dict) -> None:
 def then_no_errors_field(ctx: dict) -> None:
     """Assert the response does not contain an 'errors' field at all.
 
-    Step text says 'NOT contain' — the field should be absent (None),
-    not just empty. An empty list ``[]`` still means the field exists.
+    Step text says 'NOT contain' — the key must be ABSENT, not merely null: an empty list
+    or a serialized null both mean the field exists. wire_absent encodes that distinction.
+
+    Asserted on the WIRE rather than on resp.model_dump(): a round-trip through the model
+    proves the serializer is self-consistent, not what the buyer actually received.
     """
-    resp = require_payload(ctx)
-    # "NOT contain" means the key must be absent, not just None.
-    # Use exclude_none=True (AdCP default) so errors=None is excluded from the dict.
-    if hasattr(resp, "model_dump"):
-        data = resp.model_dump(exclude_none=True)
-        assert "errors" not in data, (
-            f"Expected 'errors' key absent from response (exclude_none=True), but found: {data.get('errors')!r}"
-        )
-    else:
-        errors = getattr(resp, "errors", None)
-        assert errors is None, f"Expected no 'errors' field in response, got: {errors}"
+    wire_absent(ctx, "errors")
 
 
-@then('the response should contain an "errors" array')
-def then_response_has_errors_array(ctx: dict) -> None:
-    """Assert the response contains an 'errors' field with a non-empty list.
-
-    For error responses, ctx["error"] is set and ctx["response"] is deleted
-    by _promote_update_errors. This step checks the raw error response stored
-    in ctx["error_response"] and validates that each error has the required
-    AdCP Error structure (code + message fields).
-    """
-    from src.core.schemas._base import UpdateMediaBuyError
-
-    error_resp = ctx.get("error_response")
-    if error_resp is not None:
-        assert isinstance(error_resp, UpdateMediaBuyError), (
-            f"Expected error_response to be UpdateMediaBuyError, got {type(error_resp).__name__}"
-        )
-        assert error_resp.errors is not None and len(error_resp.errors) >= 1, (
-            f"Error response has empty/None errors: {error_resp}"
-        )
-        # Validate AdCP Error structure: each error must have code and message
-        for i, err in enumerate(error_resp.errors):
-            assert err.code, f"errors[{i}] missing required 'code' field: {err!r}"
-            assert err.message, f"errors[{i}] missing required 'message' field: {err!r}"
-        return
-    # Fallback: _promote_update_errors sets ctx["error"] from errors[0]
-    error = ctx.get("error")
-    assert error is not None, (
-        "Expected response to contain 'errors' array but no error found — "
-        "neither ctx['error_response'] nor ctx['error'] is set"
-    )
-    # Validate the promoted error has AdCP Error structure
-    assert error.code, f"Promoted error missing required 'code' field: {error!r}"
-    assert error.message, f"Promoted error missing required 'message' field: {error!r}"
-
-
-def _submitted_wire_dict(ctx: dict) -> dict[str, Any]:
-    """Return the success-path response as the buyer sees it on the serialized wire.
-
-    REST/A2A/MCP expose the real success-path wire dict via ``ctx["wire_response"]``
-    (stashed by the dispatcher). IMPL has no wire, so serialize the typed payload
-    through the production serializer — the same path that produces wire bytes for
-    the other transports. A real-wire transport that did NOT stash wire_response is
-    a loud failure, not a silent fallback to the typed model (which would let the
-    UpdateMediaBuySubmitted assertions pass vacuously).
-
-    Delegates to the shared ``wire_dict``: this used to be a third verbatim copy
-    of the same wire-presence predicate, which is how one copy would keep keying
-    on transport identity after the others stopped.
-    """
-    from tests.bdd.steps._outcome_helpers import wire_dict
-
-    return wire_dict(ctx)
+# Step 'the response should contain an "errors" array' is owned by
+# tests/bdd/steps/generic/then_media_buy.py, which grades the WIRE rejection
+# (``ctx["result"].assert_wire_error_is_schema_conformant()`` against pinned
+# core/error.json). The copy that lived here read ctx["error_response"] — a key
+# _promote_update_errors set from an in-process UpdateMediaBuyError that the test
+# process itself had reconstructed, so it could not fail when the wire envelope
+# regressed. Both the promoter and the key are gone; the generic step subsumes it.
 
 
 @then("the response should contain a task_id")
@@ -1156,7 +1147,7 @@ def then_response_contains_task_id(ctx: dict) -> None:
     serialized wire (ctx['wire_response']) so an A2A/MCP/REST regression that
     drops task_id is caught — not on the coerced typed payload.
     """
-    data = _submitted_wire_dict(ctx)
+    data = wire_dict(ctx)
     task_id = data.get("task_id")
     assert isinstance(task_id, str) and task_id, (
         f"Submitted response must carry a non-empty task_id on the wire, got {task_id!r} (wire keys: {sorted(data)})"
@@ -1175,9 +1166,23 @@ def _assert_a2a_submitted_task_has_no_artifacts(ctx: dict) -> None:
     """
     from tests.harness.transport import Transport
 
-    if ctx.get("transport") is not Transport.A2A:
+    # The A2A branch below is a LEGITIMATE transport-aware assertion (see the
+    # docstring): on A2A the wire-dict NOT-contain checks are vacuous, so the real
+    # Task is graded instead. What is NOT legitimate is reaching it with the
+    # transport unset — `None is not Transport.A2A` silently reads as "some other
+    # transport" and returns, grading nothing on the only transport this guard
+    # exists for. An unset transport is a wiring bug; report it (salesagent-n78j0.1.5).
+    transport = ctx.get("transport")
+    if transport is None:
+        raise AssertionError(
+            "A2A submitted-artifact guard reached with ctx['transport'] unset — the "
+            "check would silently downgrade to 'not A2A' and grade nothing. Dispatch "
+            "through dispatch_request (which raises on an unset transport) or set "
+            "ctx['transport'] explicitly."
+        )
+    if transport is not Transport.A2A:
         return
-    if (ctx.get("wire_response") or {}).get("status") != "submitted":
+    if wire_dict(ctx).get("status") != "submitted":
         return
     env = ctx.get("env")
     task = getattr(env, "last_a2a_task", None)
@@ -1193,42 +1198,29 @@ def then_response_not_contain_field(ctx: dict, field_name: str) -> None:
     """Assert the response does NOT contain a given field.
 
     BR-RULE-018 INV-1/INV-2: Success responses must not contain error fields,
-    and error responses must not contain success-specific fields. Handles both
-    directions by checking ctx['response'] (success) first, then error_response/error.
-
-    The success-path check reads the REAL serialized wire (``ctx["wire_response"]``
-    via ``_submitted_wire_dict``), not ``response.model_dump()``: media_buy_id and
-    implementation_date are not declared on UpdateMediaBuySubmitted, so a
-    model-level check passes vacuously and can never catch a wire regression (e.g.
-    the A2A submitted reconstruction leaking a field). Absent-or-null on the wire
-    satisfies "does NOT contain" (a null field is not conveyed); a real value is a
-    contract violation. This is the Core Invariant / Design-Refinement Q5.
+    and error responses must not contain success-specific fields. Both directions read
+    the REAL serialized wire — ``ctx["wire_response"]`` on success, the two-layer error
+    envelope on failure — never ``model_dump()``: media_buy_id and implementation_date
+    are not declared on UpdateMediaBuySubmitted, so a model-level check passes vacuously
+    and can never catch a wire regression (e.g. the A2A submitted payload leaking a
+    field). Absent-or-null on the wire satisfies "does NOT contain" (a null field is
+    not conveyed); a real value is a contract violation.
     """
     # Success-path response — assert against the buyer-facing serialized wire.
     response = payload_or_none(ctx)
     if response is not None:
-        data = _submitted_wire_dict(ctx)
+        data = wire_dict(ctx)
         assert data.get(field_name) is None, (
             f"Response should NOT contain '{field_name}' field on the wire (BR-RULE-018), "
             f"but found: {data.get(field_name)!r}"
         )
         _assert_a2a_submitted_task_has_no_artifacts(ctx)
         return
-    # Error-path response (BR-RULE-018 INV-2)
-    error_resp = ctx.get("error_response")
-    if error_resp is not None and hasattr(error_resp, "model_dump"):
-        data = error_resp.model_dump(exclude_none=True)
-        assert field_name not in data, (
-            f"Error response should NOT contain '{field_name}' field "
-            f"(BR-RULE-018 INV-2), but found: {data.get(field_name)!r}"
-        )
-        return
-    # Fallback: check error object directly
-    error = ctx.get("error")
-    assert error is not None, f"Cannot check absence of '{field_name}' — no response, error_response, or error in ctx"
-    field_val = getattr(error, field_name, None)
-    assert field_val is None, (
-        f"Error should NOT contain '{field_name}' field (BR-RULE-018 INV-2), but found: {field_val!r}"
+    # Error-path response (BR-RULE-018 INV-2) — the envelope the buyer received.
+    envelope = ctx["result"].error_envelope()
+    assert envelope.get(field_name) is None, (
+        f"Error envelope should NOT contain '{field_name}' field "
+        f"(BR-RULE-018 INV-2), but found: {envelope.get(field_name)!r}"
     )
 
 
@@ -1315,7 +1307,10 @@ def then_old_assignments_removed(ctx: dict, old_ids: str) -> None:
 def given_idempotency_key(ctx: dict, value: str) -> None:
     """Set or omit idempotency_key on the update request.
 
-    '<not provided>' means omit the field (test preservation semantics).
+    '<not provided>' means omit the field — recorded as the OMIT sentinel rather than by
+    popping the key, because a later Given's `_ensure_update_defaults` call would default a
+    popped key straight back and the row would grade a request carrying the key it says is
+    absent. `_flatten_update_request` drops the sentinel at the wire.
     Empty string means set to '' (for boundary validation of empty keys).
     Any other value sets it as-is. Handles length placeholders like
     '<255 character string>' by generating a string of the described length.
@@ -1328,7 +1323,7 @@ def given_idempotency_key(ctx: dict, value: str) -> None:
     kwargs = _ensure_update_defaults(ctx)
     stripped = value.strip()
     if stripped == "<not provided>":
-        kwargs.pop("idempotency_key", None)
+        kwargs["idempotency_key"] = OMIT_IDEMPOTENCY_KEY
         return
 
     # Handle length placeholders: <N character string>, <N char string>, <N chars>
@@ -1949,7 +1944,7 @@ def given_creative_assignments_with_placements(ctx: dict, placement_config: str)
 
     # Handle "product unsupported" — configure product to not support placements
     if "product unsupported" in stripped:
-        product = ctx.get("default_product") or ctx.get("existing_product")
+        product = ctx.get("default_product")
         if product is None:
             # UC-003 harness doesn't store product in ctx — look up from existing package
             pkg_obj = ctx.get("existing_package")
@@ -2311,8 +2306,63 @@ def given_package_update_with_content(ctx: dict, update_content: str) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
+def apply_required_update_fields(ctx: dict, kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Default the two fields update-media-buy-request.json lists in /required besides the id.
+
+    3.1.1 declares ``required: ["idempotency_key", "account", "media_buy_id"]``, so a bag
+    carrying only ``media_buy_id`` is a request the pin rejects. ONE function with two
+    callers: :func:`_ensure_update_defaults`, so the Given that says "a VALID
+    update_media_buy request" builds a valid bag; and the When step, so a use case with its
+    own bag builder (UC-026's ``_ensure_update_kwargs``) dispatches a valid request too.
+
+    ``setdefault``, so a Given that names a field wins — including a Given that means to
+    send NONE, which writes the harness's ``OMIT_*`` sentinel rather than popping the key.
+    A pop would be undone by the next Given's call through here; the sentinel survives both
+    this function and the next, and ``MediaBuyDualEnv._flatten_update_request`` strips it at
+    the wire (the payload artifact records it as ``<omit:idempotency_key>`` /
+    ``<omit:account>``).
+
+    ``idempotency_key`` is minted per scenario and spec-shaped
+    (``^[A-Za-z0-9_.:-]{16,255}$``): unique, because a key reused across scenarios replays
+    the first one's response instead of performing the update; stable within a scenario, so
+    a row that dispatches the same request twice hits the idempotency cache on purpose.
+    Same two-policy split as ``given_media_buy._ensure_request_defaults`` on the create
+    side, for the same reason.
+
+    ``account`` must RESOLVE, not merely be present: the transport boundary looks the
+    reference up, so a literal id answers ACCOUNT_NOT_FOUND and every scenario that is not
+    about accounts fails on resolution before reaching what it grades. It is taken from
+    ``ctx["account_ref"]`` — the one key in this tree meaning "the account this request
+    names", filled in by the env route's seed — and only seeded here when no route named
+    one. That preference is load-carrying, not tidiness: ``setup_default_account`` goes
+    through ``setup_default_data``, which RE-CREATES a missing principal, and
+    @T-UC-003-ext-a-unknown deletes its principal on purpose two Givens earlier. Seeding
+    unconditionally resurrected the identity that scenario had just removed, and all three
+    transports answered PERMISSION_DENIED instead of the refusal the row grades.
+    """
+    kwargs.setdefault("idempotency_key", mint(f"bdd-upd-key-{uuid.uuid4().hex}"))
+    kwargs.setdefault(
+        "account",
+        ctx.get("account_ref") or {"account_id": ctx["env"].setup_default_account().account_id},
+    )
+    return kwargs
+
+
 def _ensure_update_defaults(ctx: dict) -> dict[str, Any]:
-    """Ensure ctx['update_kwargs'] has valid defaults for an update request."""
+    """Ensure ctx['update_kwargs'] holds an update request that is VALID BY CONSTRUCTION.
+
+    3.1.1 ``media-buy/update-media-buy-request.json`` declares
+    ``required: ["idempotency_key", "account", "media_buy_id"]``, so a bag carrying only
+    ``media_buy_id`` is a request the pin rejects — and the step that calls this says "a
+    VALID update_media_buy request", which then held for no scenario using it: every one
+    dispatched a body production answers with INVALID_REQUEST naming a field the scenario
+    never meant to test. The auth rows were the visible case (AUTH_MISSING expected,
+    INVALID_REQUEST received), and the same defect silently re-pointed every other row.
+
+    ``media_buy_id`` comes from the Background's buy; the other two are
+    :func:`apply_required_update_fields`, which the When step also runs so a bag this
+    function never touched still dispatches a valid request.
+    """
     if "update_kwargs" not in ctx:
         mb = ctx.get("existing_media_buy")
         assert mb is not None, (
@@ -2322,7 +2372,7 @@ def _ensure_update_defaults(ctx: dict) -> dict[str, Any]:
         ctx["update_kwargs"] = {
             "media_buy_id": mb.media_buy_id,
         }
-    return ctx["update_kwargs"]
+    return apply_required_update_fields(ctx, ctx["update_kwargs"])
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2381,6 +2431,35 @@ def given_request_revision_absent(ctx: dict) -> None:
 @given(parsers.parse("the request revision is set to {revision:d}"))
 def given_request_revision(ctx: dict, revision: int) -> None:
     """Send *revision* as the buyer''s expected-current token on the update request."""
+    kwargs = _ensure_update_defaults(ctx)
+    kwargs["revision"] = revision
+
+
+@given(parsers.parse('the request revision is set to "{revision}"'))
+def given_request_revision_wrong_type(ctx: dict, revision: str) -> None:
+    """Send *revision* as a STRING — the wrong-type partition row.
+
+    A separate step from the ``{revision:d}`` parser above for the same reason
+    ``<not provided>`` needs its own: the @T-UC-003-partition-revision Examples row
+    carries a QUOTED value (``"7"``), and an int parser cannot match it. ``parsers.parse``
+    rather than ``parsers.re`` so the match is anchored at BOTH ends, matching the sibling
+    ``{revision:d}`` step's form — an unanchored ``re`` pattern matches any line that
+    merely starts with this text.
+
+    Without this step the row failed on StepDefinitionNotFoundError, and the strict-xfail
+    guard correctly refused to let that be recorded as a production/spec gap — it is test
+    wiring, and the guard named it: "MISCLASSIFIED strict-xfail ... this is DORMANCY
+    (test-wiring), not a graded production gap". That is the
+    dormancy-misclassified-as-gap pattern ``test_architecture_bdd_xfail_reason_tokens``
+    grades.
+
+    The string is passed through UNCONVERTED. That is the whole point of the row:
+    ``revision`` is typed as an integer, so 7 and ``"7"`` must NOT behave alike — the
+    request must be refused as INVALID_REQUEST. Coercing it here with ``int(revision)``
+    would send a well-typed 7 and grade the CONFLICT path instead (a re-run of the
+    ``matches_current`` row), so the row would pass while testing nothing it names, and a
+    production regression that silently accepts a string would read as green.
+    """
     kwargs = _ensure_update_defaults(ctx)
     kwargs["revision"] = revision
 

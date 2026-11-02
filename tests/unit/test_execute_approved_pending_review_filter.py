@@ -65,7 +65,6 @@ class TestExecuteApprovedPendingReviewFilter:
 
         with (
             patch("src.core.database.repositories.MediaBuyUoW", return_value=uow1),
-            patch("src.core.config_loader.set_current_tenant"),
             patch("src.core.config_loader.get_tenant_by_id", return_value={"tenant_id": "t1"}),
             patch(f"{_MODULE}.get_adapter", return_value=mock_adapter),
             patch(f"{_MODULE}._execute_adapter_media_buy_creation") as adapter_boundary,

@@ -1,0 +1,420 @@
+# DORMANT BDD SCENARIOS — scenarios that grade NOTHING because a step has no binding.
+#
+# A scenario whose step definition is missing does not fail. tests/bdd/conftest.py
+# converts StepDefinitionNotFoundError into an xfail, so it is reported as EXPECTED
+# and is invisible in a green run. That is DORMANCY (test-wiring), not a graded
+# spec-production gap, and this file is what stops it growing silently
+# (#1929).
+#
+# ENFORCEMENT is PER-TEST, not a count: a scenario that goes dormant whose entry is
+# NOT listed here FAILS immediately. A count would only be computable from a full BDD
+# run, which means it could not fire on `cassini test bdd <module>` -- absent exactly
+# when someone is iterating. A per-test decision works on any subset run.
+#
+# THIS LIST MAY ONLY SHRINK. Removing an entry means the step got wired and the
+# scenario now grades something. Adding one means new coverage was lost; fix the
+# wiring instead.
+#
+# KEY = <scenario tag> :: <step keyword> <step text, normalized>
+# Keyed on the TAG and the MISSING STEP, deliberately NOT on file paths, line numbers
+# or Examples-row parameters: salesagent-d34gf rewrites 613 scenarios across 32
+# features, and any key carrying a position would mass-invalidate on that refactor.
+# A baseline that rots on an unrelated edit gets deleted by the next person under time
+# pressure. Quoted literals, bare numbers and inline objects are normalized to
+# placeholders so a NEW Examples row of an already-dormant scenario does not read as
+# new dormancy -- while a genuinely new missing step, under any tag, still does.
+#
+# Generated from run a74edf1648 (test-results/innet_030926_2020) covering
+# 1356 test instances / 118 scenario tags. Measured, not estimated:
+# the reason string is NOT serialized by pytest-json-report, so the only trace in
+# those reports is StepDefinitionNotFoundError inside call.longrepr (salesagent-vtreb).
+#
+# The coverage hole itself -- UC-004 and UC-019 are substantially ungraded -- is
+# tracked as salesagent-8j5nf, NOT fixed here.
+
+
+# T-UC-004-aggr-brand-lift-qualifier  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-aggr-brand-lift-qualifier :: given delivery data for two media buys owned by "<>"
+
+# T-UC-004-aggr-components  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-aggr-components :: given delivery data for two media buys owned by "<>"
+
+# T-UC-004-aggr-finest-granularity  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-aggr-finest-granularity :: given delivery data for two media buys owned by "<>"
+
+# T-UC-004-aggr-qualifier-closed  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-aggr-qualifier-closed :: given delivery data for two media buys owned by "<>"
+
+# T-UC-004-aggr-scope-standard  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-aggr-scope-standard :: given delivery data for two media buys owned by "<>"
+
+# T-UC-004-aggregated-reach-heterogeneous-omitted  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-aggregated-reach-heterogeneous-omitted :: then the aggregated_totals should not include "<>" field
+
+# T-UC-004-aggregated-reach-homogeneous  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-aggregated-reach-homogeneous :: then the aggregated_totals should include "<>" deduplicated across both media buys
+
+# T-UC-004-boundary-aggregated-reach  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-boundary-aggregated-reach :: given delivery data for media buys owned by "<>"
+
+# T-UC-004-boundary-delayed-data  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-boundary-delayed-data :: given a webhook delivery covering media buys for "<>"
+
+# T-UC-004-boundary-measurement-window  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-boundary-measurement-window :: given delivery data for media buy "<>" owned by "<>"
+
+# T-UC-004-boundary-media-buy-status  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-boundary-media-buy-status :: when the response reports media buy status at boundary "<>"
+
+# T-UC-004-boundary-metric-aggregates  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-boundary-metric-aggregates :: given delivery data for two media buys owned by "<>"
+
+# T-UC-004-boundary-missing-metrics  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-boundary-missing-metrics :: given a package for media buy "<>" with committed_metrics present
+
+# T-UC-004-boundary-package-commercial  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-boundary-package-commercial :: when the response reports per-package commercial fields at boundary "<>"
+
+# T-UC-004-boundary-sandbox  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-boundary-sandbox :: when the response is assembled at sandbox boundary "<>"
+
+# T-UC-004-delayed-all-available  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-delayed-all-available :: given a webhook delivery covering three media buys for "<>"
+
+# T-UC-004-delayed-count-nonnegative  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-delayed-count-nonnegative :: given a webhook delivery covering media buys for "<>"
+
+# T-UC-004-delayed-no-false-complete  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-delayed-no-false-complete :: given a webhook delivery covering media buys for "<>"
+
+# T-UC-004-delayed-sync-absent  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-delayed-sync-absent :: when the Buyer Agent requests delivery metrics for "<>" via the synchronous API
+
+# T-UC-004-envelope-two-layer  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-envelope-two-layer :: given an asynchronous delivery task for "<>"
+
+# T-UC-004-identify-account-scope  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-identify-account-scope :: given media buys for "<>" spanning accounts "<>" and "<>"
+
+# T-UC-004-metric-aggregates-completion-source  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-metric-aggregates-completion-source :: given package "<>" reports completion_rate under completion_source "<>"
+
+# T-UC-004-metric-aggregates-vendor-scope  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-metric-aggregates-vendor-scope :: given the seller reports vendor metric "<>" from vendor domain "<>"
+
+# T-UC-004-metric-aggregates-viewable-rate-by-standard  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-metric-aggregates-viewable-rate-by-standard :: given package "<>" reports viewable_rate under viewability_standard "<>"
+
+# T-UC-004-missing-committed-source  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-missing-committed-source :: given a package for media buy "<>" with committed_metrics present
+
+# T-UC-004-missing-dropped-metric  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-missing-dropped-metric :: given a package for media buy "<>" with a metric committed before period end
+
+# T-UC-004-missing-fallback  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-missing-fallback :: given a package for media buy "<>" with committed_metrics absent
+
+# T-UC-004-missing-late-commit  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-missing-late-commit :: given a package for media buy "<>" with committed_metrics present
+
+# T-UC-004-missing-metrics-clean  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-missing-metrics-clean :: given package "<>" committed to deliver metric "<>"
+
+# T-UC-004-missing-metrics-flagged  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-missing-metrics-flagged :: given package "<>" committed to deliver metric "<>"
+
+# T-UC-004-missing-qualifier-match  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-missing-qualifier-match :: given a package for media buy "<>" with a qualified committed metric not populated
+
+# T-UC-004-missing-scope  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-missing-scope :: given a package for media buy "<>" with a missing_metrics entry of scope "<>"
+
+# T-UC-004-missing-window-exclusion  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-missing-window-exclusion :: given a package for media buy "<>" with a committed metric not yet measurable for the current measurement_window
+
+# Graduated: T-UC-004-package-commercial-fields — the Given is wired
+# (given_package_pricing, tests/bdd/steps/domain/uc004_delivery.py), the three
+# commercial-field Thens read by_package off the wire by value, and the scenario passes on
+# a2a/mcp/rest. Its `effective_rate` Then was retired in the same change: no such property
+# exists at AdCP 3.1.1, and the auction reading it meant is graded by
+# T-UC-004-package-auction-effective-rate.
+
+# T-UC-004-package-daily-breakdown-off  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-package-daily-breakdown-off :: then the response packages should NOT include "<>" arrays
+
+# T-UC-004-package-daily-breakdown-on  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-package-daily-breakdown-on :: when the Buyer Agent requests delivery metrics for "<>" with include_package_daily_breakdown true
+
+# T-UC-004-package-delivery-status  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-package-delivery-status :: given package "<>" has delivery_status "<>"
+
+# T-UC-004-package-is-final-false  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-package-is-final-false :: given package "<>" delivers under measurement_window "<>"
+
+# T-UC-004-package-is-final-true  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-package-is-final-true :: given package "<>" delivers under measurement_window "<>"
+
+# T-UC-004-package-pacing-index  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-package-pacing-index :: given package "<>" is ahead with pacing_index <n>.<n>
+T-UC-004-package-pacing-index :: given package "<>" is behind with pacing_index <n>.<n>
+T-UC-004-package-pacing-index :: given package "<>" is on track with pacing_index <n>.<n>
+
+# T-UC-004-partition-status-filter  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-partition-status-filter :: when the Buyer Agent requests delivery metrics with status_filter "<>"active"<>"paused"<>"
+T-UC-004-partition-status-filter :: when the Buyer Agent requests delivery metrics with status_filter "<>"pending_creatives"<>"pending_start"<>"active"<>"paused"<>"completed"<>"rejected"<>"canceled"<>"
+
+# T-UC-004-reach-dedup  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-reach-dedup :: given delivery data for media buys owned by "<>" sharing one reach_unit
+
+# T-UC-004-reach-frequency-gate  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-reach-frequency-gate :: given delivery data for media buys owned by "<>" where reach is "<>"
+
+# T-UC-004-reach-nonnegative  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-reach-nonnegative :: given delivery data for media buys owned by "<>" with aggregated reach present
+
+# T-UC-004-sandbox-natural-key  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-sandbox-natural-key :: given a sandbox account referenced by natural key brand "<>" and operator "<>" with sandbox true
+
+# T-UC-004-status-reporting-delayed  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-status-reporting-delayed :: given the ad server adapter cannot return data for "<>" yet
+
+# T-UC-004-storyboard-controller-driven-delivery-schema-compliance  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-storyboard-controller-driven-delivery-schema-compliance :: given a comply_test_controller has injected simulated delivery with impressions <n>, clicks <n>, and spend <n>.<n> USD into a media buy
+
+# T-UC-004-storyboard-required-metrics-end-to-end-accountability  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-storyboard-required-metrics-end-to-end-accountability :: given the buyer declared filters.required_metrics including "<>" at get_products time
+
+# T-UC-004-storyboard-vendor-metric-end-to-end  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-storyboard-vendor-metric-end-to-end :: given the seller's product declared reporting_capabilities.vendor_metrics for vendor "<>" and metric_id "<>"
+
+# T-UC-004-v31-forecastable-metric-vocab  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-v31-forecastable-metric-vocab :: given a forecast point for media buy "<>"
+
+# T-UC-004-v31-metric-scope-standard  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-v31-metric-scope-standard :: given the seller committed to deliver "<>" as a standard metric
+
+# T-UC-004-v31-metric-scope-vendor  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-v31-metric-scope-vendor :: given the seller committed to deliver vendor metric "<>" from brand "<>"
+
+# T-UC-004-webhook-adjusted-resend  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-webhook-adjusted-resend :: given a prior webhook report for "<>" covered reporting_period "<>" to "<>"
+
+# T-UC-004-webhook-partial-data  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-webhook-partial-data :: given a webhook batch covering media buys "<>" and "<>"
+
+# T-UC-004-webhook-window-update  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-webhook-window-update :: given a prior webhook report for "<>" used measurement_window "<>"
+
+# T-UC-004-window-absent  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-window-absent :: given delivery data for media buy "<>" owned by "<>"
+
+# T-UC-004-window-first-report  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-window-first-report :: given no prior report exists for media buy "<>" for the reporting period
+
+# T-UC-004-window-isfinal-absent  (test_uc004_deliver_media_buy_metrics.py)
+T-UC-004-window-isfinal-absent :: given delivery data for media buy "<>" owned by "<>"
+
+# T-UC-005-boundary-disclosure-persistence  (test_uc005_discover_creative_formats.py)
+T-UC-005-boundary-disclosure-persistence :: given a seller with formats declaring various disclosure persistence capabilities
+
+# T-UC-005-boundary-sandbox  (test_uc005_discover_creative_formats.py)
+T-UC-005-boundary-sandbox :: given a seller handling a list_creative_formats request for the given account context
+
+# T-UC-005-ext-b-persistence-dupes  (test_uc005_discover_creative_formats.py)
+T-UC-005-ext-b-persistence-dupes :: when the Buyer Agent requests formats with disclosure_persistence filter ["<>", "<>"]
+
+# T-UC-005-ext-b-persistence-empty  (test_uc005_discover_creative_formats.py)
+T-UC-005-ext-b-persistence-empty :: when the Buyer Agent requests formats with disclosure_persistence filter []
+
+# T-UC-005-ext-b-persistence-invalid  (test_uc005_discover_creative_formats.py)
+T-UC-005-ext-b-persistence-invalid :: when the Buyer Agent requests formats with disclosure_persistence filter ["<>"]
+
+# T-UC-005-inv-049-11-holds  (test_uc005_discover_creative_formats.py)
+T-UC-005-inv-049-11-holds :: given the registry has format "<>" with disclosure_capabilities:
+
+# T-UC-005-inv-049-11-nofield  (test_uc005_discover_creative_formats.py)
+T-UC-005-inv-049-11-nofield :: given the registry has format "<>" with no disclosure_capabilities field
+
+# T-UC-005-inv-049-11-violated  (test_uc005_discover_creative_formats.py)
+T-UC-005-inv-049-11-violated :: given the registry has format "<>" with disclosure_capabilities:
+
+# T-UC-005-inv-049-8-capabilities  (test_uc005_discover_creative_formats.py)
+T-UC-005-inv-049-8-capabilities :: given the registry has format "<>" with disclosure_capabilities positions ["<>", "<>"]
+
+# T-UC-005-main-no-pricing  (test_uc005_discover_creative_formats.py)
+T-UC-005-main-no-pricing :: given the creative agent registry has formats without vendor pricing options
+
+# T-UC-005-main-pricing  (test_uc005_discover_creative_formats.py)
+T-UC-005-main-pricing :: given the creative agent registry has formats with vendor pricing options
+
+# T-UC-005-partition-disclosure-persistence  (test_uc005_discover_creative_formats.py)
+T-UC-005-partition-disclosure-persistence :: given a seller with formats declaring various disclosure persistence capabilities
+
+# T-UC-005-v31-asset-registry-discriminators  (test_uc005_discover_creative_formats.py)
+T-UC-005-v31-asset-registry-discriminators :: given the seller catalog has at least one format containing an "<>" asset
+
+# T-UC-005-v31-asset-registry-no-variant-siblings  (test_uc005_discover_creative_formats.py)
+T-UC-005-v31-asset-registry-no-variant-siblings :: when the Buyer Agent sends a list_creative_formats request with asset_types ["<>"]
+
+# T-UC-005-v31-payload-vs-requirements-separation  (test_uc005_discover_creative_formats.py)
+T-UC-005-v31-payload-vs-requirements-separation :: given the seller catalog has a format with a required image asset capped at <n> MB
+
+
+# T-UC-006-storyboard-provenance-claim-contradicted  (test_uc006_sync_creatives.py)
+T-UC-006-storyboard-provenance-claim-contradicted :: given the Buyer Agent submits a creative claiming digital_source_type "<>"
+
+# UC-018 has NO entries. Every scenario of BR-UC-018-list-creatives.feature executes: the
+# `fields` projection is implemented (it narrows the optional members and keeps the six the
+# response schema requires, which is the reading that satisfies both halves of the pin), and
+# the one row whose request_params cell named a database fixture rather than a request was
+# deleted in favour of @T-UC-018-inv-149-6-holds, which grades that obligation end to end.
+
+# T-UC-019-boundary-cancellation  (test_uc019_query_media_buys.py)
+T-UC-019-boundary-cancellation :: given the principal "<>" owns media buy "<>" with status active
+T-UC-019-boundary-cancellation :: given the principal "<>" owns media buy "<>" with status active and packages[<n>].canceled false but emits cancellation
+T-UC-019-boundary-cancellation :: given the principal "<>" owns media buy "<>" with status active and packages[<n>].canceled true with cancellation
+T-UC-019-boundary-cancellation :: given the principal "<>" owns media buy "<>" with status active but seller emits cancellation block
+T-UC-019-boundary-cancellation :: given the principal "<>" owns media buy "<>" with status canceled and cancellation canceled_by 'operator' (not in enum)
+T-UC-019-boundary-cancellation :: given the principal "<>" owns media buy "<>" with status canceled and cancellation reason exactly <n> characters
+T-UC-019-boundary-cancellation :: given the principal "<>" owns media buy "<>" with status canceled and cancellation {<>}
+
+# T-UC-019-boundary-currency-budget  (test_uc019_query_media_buys.py)
+T-UC-019-boundary-currency-budget :: given the principal "<>" owns media buy "<>" with currency "<>" and total_budget -<n>.<n>
+T-UC-019-boundary-currency-budget :: given the principal "<>" owns media buy "<>" with currency "<>" and total_budget <n>
+
+# T-UC-019-boundary-delivery-status  (test_uc019_query_media_buys.py)
+T-UC-019-boundary-delivery-status :: given package "<>" has snapshot.staleness_seconds <n> and elapsed time <n> since activation
+
+# T-UC-019-boundary-history  (test_uc019_query_media_buys.py)
+T-UC-019-boundary-history :: given the principal "<>" owns media buy "<>" with <n> history entries
+
+# T-UC-019-boundary-sandbox  (test_uc019_query_media_buys.py)
+T-UC-019-boundary-sandbox :: given the request targets an explicit production account
+
+# T-UC-019-boundary-targeting-overlay  (test_uc019_query_media_buys.py)
+T-UC-019-boundary-targeting-overlay :: given package "<>" persisted package_config has no targeting_overlay and no legacy targeting
+T-UC-019-boundary-targeting-overlay :: given package "<>" persisted package_config has no targeting_overlay but legacy targeting {<>}
+T-UC-019-boundary-targeting-overlay :: given package "<>" persisted package_config has one of two buys "<>"/"<>" has package "<>" with corrupted targeting_overlay and the other buy is clean
+T-UC-019-boundary-targeting-overlay :: given package "<>" persisted package_config has targeting_overlay set to the list ['not','a','dict']
+T-UC-019-boundary-targeting-overlay :: given package "<>" persisted package_config has targeting_overlay set to the string 'not a dict'
+T-UC-019-boundary-targeting-overlay :: given package "<>" persisted package_config has targeting_overlay {<>}
+T-UC-019-boundary-targeting-overlay :: given package "<>" persisted package_config has two packages "<>" and "<>" both with corrupted targeting_overlay strings
+
+# T-UC-019-boundary-valid-actions  (test_uc019_query_media_buys.py)
+T-UC-019-boundary-valid-actions :: then every value in media buy "<>" valid_actions should be drawn from the media-buy-valid-action enum
+
+# T-UC-019-inv-289-3  (test_uc019_query_media_buys.py)
+T-UC-019-inv-289-3 :: given the principal "<>" owns media buy "<>" with <n> history entries created over time
+
+# T-UC-019-inv-289-5  (test_uc019_query_media_buys.py)
+T-UC-019-inv-289-5 :: given the principal "<>" owns media buy "<>" with a history entry at revision <n>
+
+# T-UC-019-inv-289-6  (test_uc019_query_media_buys.py)
+T-UC-019-inv-289-6 :: given buyer "<>" performs an update that creates a history entry
+
+# T-UC-019-inv-289-9  (test_uc019_query_media_buys.py)
+T-UC-019-inv-289-9 :: given a history entry was created for action "<>" targeting package "<>"
+
+# T-UC-019-inv-290-3  (test_uc019_query_media_buys.py)
+T-UC-019-inv-290-3 :: then the media buy "<>" valid_actions should include "<>"
+
+# T-UC-019-inv-290-4  (test_uc019_query_media_buys.py)
+T-UC-019-inv-290-4 :: then the media buy "<>" valid_actions should include "<>"
+
+# T-UC-019-inv-290-5  (test_uc019_query_media_buys.py)
+T-UC-019-inv-290-5 :: then the media buy "<>" should include a valid_actions field
+
+# T-UC-019-inv-292-1  (test_uc019_query_media_buys.py)
+T-UC-019-inv-292-1 :: given the principal "<>" owns media buy "<>" with status "<>" and persisted cancellation metadata
+
+# T-UC-019-inv-292-2  (test_uc019_query_media_buys.py)
+T-UC-019-inv-292-2 :: then the media buy "<>" should not include a cancellation block
+
+# T-UC-019-inv-292-7  (test_uc019_query_media_buys.py)
+T-UC-019-inv-292-7 :: given the seller emits cancellation block with an extra field "<>"
+
+# T-UC-019-inv-293-2  (test_uc019_query_media_buys.py)
+T-UC-019-inv-293-2 :: when the Buyer Agent sends a get_media_buys request with account {<>}
+
+# T-UC-019-inv-293-5  (test_uc019_query_media_buys.py)
+T-UC-019-inv-293-5 :: then the response media_buys array should be empty
+
+# T-UC-019-inv-294-3  (test_uc019_query_media_buys.py)
+T-UC-019-inv-294-3 :: given package "<>" persisted targeting_overlay is a string (will raise TypeError on Targeting(**str))
+
+# WIRED (inv-294-5 / inv-294-6 / inv-294-8): the three isolation scenarios of
+# BR-RULE-294 now bind every step and grade on the wire, across a2a/mcp/rest. Their
+# entries are gone rather than kept "just in case" — while they sat here, the tripwire
+# would have let the same scenarios go dormant again silently.
+
+# T-UC-019-inv-295-1  (test_uc019_query_media_buys.py)
+T-UC-019-inv-295-1 :: given package "<>" has snapshot.staleness_seconds <n> and elapsed 600s since activation
+
+# T-UC-019-inv-295-2  (test_uc019_query_media_buys.py)
+T-UC-019-inv-295-2 :: given package "<>" has snapshot.staleness_seconds <n> and elapsed 1800s since activation
+
+# T-UC-019-inv-296-1  (test_uc019_query_media_buys.py)
+T-UC-019-inv-296-1 :: then the media buy "<>" account field if present should equal the current billing account "<>"
+
+# T-UC-019-inv-296-2  (test_uc019_query_media_buys.py)
+T-UC-019-inv-296-2 :: given the principal "<>" owns media buy "<>" created with explicit invoice_recipient override
+
+# T-UC-019-inv-296-3  (test_uc019_query_media_buys.py)
+T-UC-019-inv-296-3 :: given the principal "<>" owns media buy "<>" created without an invoice_recipient override
+
+# T-UC-019-inv-296-4  (test_uc019_query_media_buys.py)
+T-UC-019-inv-296-4 :: given the principal "<>" owns media buy "<>" with persisted invoice_recipient that includes bank_details
+
+# T-UC-019-inv-package-creative-deadline-inheritance  (test_uc019_query_media_buys.py)
+T-UC-019-inv-package-creative-deadline-inheritance :: given media buy "<>" has package "<>" with creative_deadline "<>"
+
+# T-UC-019-partition-cancellation  (test_uc019_query_media_buys.py)
+T-UC-019-partition-cancellation :: given the principal "<>" owns media buy "<>" with status active
+T-UC-019-partition-cancellation :: given the principal "<>" owns media buy "<>" with status active and packages[<n>].canceled true with package cancellation {<>}
+T-UC-019-partition-cancellation :: given the principal "<>" owns media buy "<>" with status active but seller emits cancellation block
+T-UC-019-partition-cancellation :: given the principal "<>" owns media buy "<>" with status canceled and cancellation {<>}
+T-UC-019-partition-cancellation :: given the principal "<>" owns media buy "<>" with status canceled and cancellation {<>} (canceled_by missing)
+T-UC-019-partition-cancellation :: given the principal "<>" owns media buy "<>" with status canceled and per-package cancellation blocks omitted
+
+# T-UC-019-partition-confirmed-at  (test_uc019_query_media_buys.py)
+T-UC-019-partition-confirmed-at :: given the principal "<>" owns media buy "<>" with persisted store missing confirmed_at (defective seller)
+
+# T-UC-019-partition-currency-budget  (test_uc019_query_media_buys.py)
+T-UC-019-partition-currency-budget :: given the principal "<>" owns media buy "<>" with currency "<>" and no total_budget field
+T-UC-019-partition-currency-budget :: given the principal "<>" owns media buy "<>" with currency "<>" and total_budget -<n>
+T-UC-019-partition-currency-budget :: given the principal "<>" owns media buy "<>" with currency "<>" and total_budget <n>
+T-UC-019-partition-currency-budget :: given the principal "<>" owns media buy "<>" with currency "<>" and total_budget <n>.<n>
+T-UC-019-partition-currency-budget :: given the principal "<>" owns media buy "<>" with no currency field and total_budget <n>
+
+# T-UC-019-partition-delivery-status  (test_uc019_query_media_buys.py)
+T-UC-019-partition-delivery-status :: given package "<>" activation occurred such that elapsed 1800s since activation
+T-UC-019-partition-delivery-status :: given package "<>" activation occurred such that elapsed 300s since activation
+T-UC-019-partition-delivery-status :: given package "<>" activation occurred such that irrelevant timing
+
+# T-UC-019-partition-history  (test_uc019_query_media_buys.py)
+T-UC-019-partition-history :: given the principal "<>" owns media buy "<>" with <n> history entries
+
+# T-UC-019-partition-invoice-recipient  (test_uc019_query_media_buys.py)
+T-UC-019-partition-invoice-recipient :: given the principal "<>" owns media buy "<>" with explicit invoice_recipient override {<>}, bank_details:{<>}}
+T-UC-019-partition-invoice-recipient :: given the principal "<>" owns media buy "<>" with explicit invoice_recipient override {<>}], address:{<>}}
+T-UC-019-partition-invoice-recipient :: given the principal "<>" owns media buy "<>" with no invoice_recipient override (inherits account default)
+T-UC-019-partition-invoice-recipient :: given the principal "<>" owns media buy "<>" with persisted account binding {<>}
+T-UC-019-partition-invoice-recipient :: given the principal "<>" owns media buy "<>" with seller defectively echoes bank_details on invoice_recipient
+T-UC-019-partition-invoice-recipient :: given the principal "<>" owns media buy "<>" with seller emits invoice_recipient with no persisted content
+
+# T-UC-019-partition-package-creative-deadline  (test_uc019_query_media_buys.py)
+T-UC-019-partition-package-creative-deadline :: given media buy "<>" carries buy creative_deadline "<>"
+T-UC-019-partition-package-creative-deadline :: given media buy "<>" carries no buy creative_deadline
+
+# T-UC-019-partition-targeting-rehydration  (test_uc019_query_media_buys.py)
+T-UC-019-partition-targeting-rehydration :: given package "<>" persisted package_config has no targeting_overlay and no legacy targeting
+T-UC-019-partition-targeting-rehydration :: given package "<>" persisted package_config has no targeting_overlay but legacy targeting {<>}
+T-UC-019-partition-targeting-rehydration :: given package "<>" persisted package_config has targeting_overlay set to the string 'not a dict'
+T-UC-019-partition-targeting-rehydration :: given package "<>" persisted package_config has targeting_overlay {<>}
+
+# T-UC-019-partition-valid-actions  (test_uc019_query_media_buys.py)
+T-UC-019-partition-valid-actions :: then the media buy "<>" valid_actions should equal []
+T-UC-019-partition-valid-actions :: then the media buy "<>" valid_actions should equal [cancel, update_budget, update_dates, update_packages, add_packages, sync_creatives]
+T-UC-019-partition-valid-actions :: then the media buy "<>" valid_actions should equal [cancel, update_budget, update_dates, update_packages, add_packages]
+T-UC-019-partition-valid-actions :: then the media buy "<>" valid_actions should equal [pause, cancel, update_budget, update_dates, update_packages, add_packages]
+T-UC-019-partition-valid-actions :: then the media buy "<>" valid_actions should equal [resume, cancel, update_budget, update_dates]

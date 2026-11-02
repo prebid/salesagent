@@ -19,10 +19,11 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
+from src.adapters.base import AdapterCreateResult
 from src.core.database.models import PersistedMediaBuyStatus
 from src.core.database.repositories.creative import CreativeAssignmentRepository
-from src.core.schemas import CreateMediaBuySuccess, Principal
 from src.core.tools.media_buy_create import ApprovalOutcome
+from tests.factories.principal import PrincipalFactory
 
 # Who approved, and when. Passed in by the caller and written by the same
 # ``update_status`` call as the status, so the assertion can name all three.
@@ -48,11 +49,18 @@ def _make_mock_media_buy():
     mb.end_time = datetime.now(UTC) + timedelta(days=8)
     mb.budget = Decimal("5000.00")
     mb.currency = "USD"
+    # The PERSISTED request. execute_approved_media_buy no longer rebuilds a
+    # CreateMediaBuyRequest out of it: it reads the brand and po_number it needs for the
+    # adapter carrier, takes the total off ``budget`` above, and resolves the account
+    # from the row's own account_id. A stored payload is a record, not a request, so the
+    # keys a request must carry (account, idempotency_key) are no longer consulted here.
     mb.raw_request = {
         "brand": {"domain": "testbrand.com"},
         "start_time": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
         "end_time": (datetime.now(UTC) + timedelta(days=8)).isoformat(),
         "packages": [{"product_id": "prod_1", "pricing_option_id": "po_1", "budget": 5000.0}],
+        "account": {"account_id": "acct_test"},
+        "idempotency_key": "approved-exec-key-0001",
     }
     return mb
 
@@ -112,13 +120,7 @@ class TestExecuteApprovedStatusUpdate:
         db_package = _make_mock_package()
         product = _make_mock_product()
 
-        principal = Principal(
-            principal_id="principal_1",
-            name="Test Principal",
-            platform_mappings={},
-        )
-
-        adapter_response = CreateMediaBuySuccess.carrier(
+        adapter_response = AdapterCreateResult(
             media_buy_id="mb_test_001",
             packages=[],
         )
@@ -183,12 +185,17 @@ class TestExecuteApprovedStatusUpdate:
 
         with (
             patch("src.core.database.repositories.MediaBuyUoW", side_effect=lambda _: next(uow_iter)),
-            patch("src.core.config_loader.set_current_tenant"),
             patch(
                 "src.core.config_loader.get_tenant_by_id",
                 return_value={"tenant_id": "tenant_1", "adapter_type": "mock"},
             ),
-            patch("src.core.auth.get_principal_object", return_value=principal),
+            # Resolution from the stored ids is the resolver's (``identity_of``), and it
+            # reads the tenant and principal rows this unit test has no database for.
+            # The identity it would have built comes from the factory instead.
+            patch(
+                "src.core.tools.media_buy_create.identity_of",
+                return_value=PrincipalFactory.make_identity(principal_id="principal_1", tenant_id="tenant_1"),
+            ),
             patch(
                 "src.core.tools.media_buy_create._execute_adapter_media_buy_creation",
                 return_value=adapter_response,

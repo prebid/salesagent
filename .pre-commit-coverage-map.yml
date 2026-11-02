@@ -21,18 +21,15 @@ check-gam-auth-support:
 check-response-attribute-access:
   enforced_by: ci-step
   location: Makefile::quality-ci
-check-roundtrip-tests:
-  enforced_by: ci-step
-  location: Makefile::quality-ci
 check-code-duplication:
-  enforced_by: ci-step
-  location: Makefile::quality-ci
+  enforced_by: gate + ci-step
+  location: tox.ini::quality -> tests/quality/test_ratchets_slow.py + Makefile::quality-ci
 check-migration-heads:
   enforced_by: guard-existing
   location: tests/unit/test_architecture_single_migration_head.py
 check-parameter-alignment:
   enforced_by: guard-existing
-  location: tests/unit/test_architecture_boundary_completeness.py
+  location: .ast-grep/rules/impl-signature-is-request-and-identity.yml
 adcp-contract-tests:
   enforced_by: pre-push + ci
   location: stages_prepush + .github/workflows/ci.yml::schema-contract
@@ -46,14 +43,14 @@ check-route-conflicts:
   enforced_by: pre-push + ci-step
   location: stages_prepush + Makefile::quality-ci
 type-ignore-no-regression:
-  enforced_by: pre-push + ci-step
-  location: stages_prepush + Makefile::quality-ci
+  enforced_by: guard + pre-push + ci-step
+  location: tests/unit/test_architecture_ratchet_enforcement.py + stages_prepush + Makefile::quality-ci
 ruff-complexity-no-regression:
-  enforced_by: pre-push + ci-step
-  location: stages_prepush + Makefile::quality-ci
+  enforced_by: guard + pre-push + ci-step
+  location: tests/unit/test_architecture_ratchet_enforcement.py + stages_prepush + Makefile::quality-ci
 mypy-untyped-defs-no-regression:
-  enforced_by: pre-push + ci-step
-  location: stages_prepush + Makefile::quality-ci
+  enforced_by: gate + pre-push + ci-step
+  location: tox.ini::quality -> tests/quality/test_ratchets_slow.py + stages_prepush + Makefile::quality-ci
 no-hardcoded-urls:
   enforced_by: pre-push + ci-step
   location: stages_prepush + Makefile::quality-ci
@@ -78,3 +75,12 @@ no-skip-tests:
 no-fn-calls:
   enforced_by: consolidated
   location: .pre-commit-hooks/check_repo_invariants.py
+no-developer-paths:
+  enforced_by: consolidated
+  location: .pre-commit-hooks/check_repo_invariants.py
+fixme-citation-no-regression:
+  enforced_by: guard + pre-push + ci-step
+  location: tests/unit/test_architecture_ratchet_enforcement.py + stages_prepush + Makefile::quality-ci
+admin-raw-session-no-regression:
+  enforced_by: guard
+  location: tests/unit/test_architecture_ratchet_enforcement.py

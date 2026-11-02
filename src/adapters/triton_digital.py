@@ -1,14 +1,22 @@
-import json
 import logging
 from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import JsonValue
 
-from src.adapters.base import AdServerAdapter, CreativeEngineAdapter
-from src.adapters.constants import REQUIRED_UPDATE_ACTIONS
+from src.adapters.base import (
+    AdapterCreateRequest,
+    AdapterCreateResult,
+    AdapterUpdateResult,
+    AdServerAdapter,
+    CreativeEngineAdapter,
+)
+from src.adapters.constants import require_supported_update_action
+from src.adapters.utils.pricing import resolve_package_rate
 from src.adapters.vendor_http import VendorHttpClient, require_vendor
+from src.core.errors.details import CapabilityRefusalDetails, EntityRefDetails
 from src.core.exceptions import (
+    AdCPAdapterError,
     AdCPCapabilityNotSupportedError,
     AdCPPackageNotFoundError,
 )
@@ -31,36 +39,23 @@ class TritonDigital(AdServerAdapter):
         self,
         config: dict[str, Any],
         principal: Principal,
-        dry_run: bool = False,
         creative_engine: CreativeEngineAdapter | None = None,
         tenant_id: str | None = None,
     ):
-        super().__init__(config, principal, dry_run, creative_engine, tenant_id)
+        super().__init__(config, principal, creative_engine, tenant_id)
 
         # Get Triton-specific principal ID
-        self.advertiser_id = self._require_config(
-            self.principal.get_adapter_id("triton"),
-            field="advertiser_id",
-            message=f"Principal {principal.principal_id} does not have a Triton advertiser ID",
-        )
+        self.advertiser_id = self._require_config(self.principal.get_adapter_id("triton"), field="advertiser_id")
 
         # Get Triton configuration
         self.base_url = self.config.get("base_url", "https://tap-api.tritondigital.com/v1")
         self.auth_token = self.config.get("auth_token")
 
-        self._vendor: VendorHttpClient | None = None
-        if self.dry_run:
-            self.log("Running in dry-run mode - Triton API calls will be simulated", dry_run_prefix=False)
-        else:
-            self.auth_token = self._require_config(
-                self.auth_token,
-                field="auth_token",
-                message="Triton Digital config is missing 'auth_token'",
-            )
-            self._vendor = VendorHttpClient(
-                base_url=self.base_url,
-                headers={"Authorization": f"Bearer {self.auth_token}", "Content-Type": "application/json"},
-            )
+        self.auth_token = self._require_config(self.auth_token, field="auth_token")
+        self._vendor: VendorHttpClient | None = VendorHttpClient(
+            base_url=self.base_url,
+            headers={"Authorization": f"Bearer {self.auth_token}", "Content-Type": "application/json"},
+        )
 
     # Only audio device types supported
     SUPPORTED_DEVICE_TYPES = {"mobile", "desktop", "audio"}
@@ -76,8 +71,8 @@ class TritonDigital(AdServerAdapter):
             return unsupported
 
         # Check device types - only audio-capable devices
-        if targeting_overlay.device_type_any_of:
-            for device in targeting_overlay.device_type_any_of:
+        if targeting_overlay.device_form_factors:
+            for device in targeting_overlay.device_form_factors:
                 if device not in self.SUPPORTED_DEVICE_TYPES:
                     unsupported.append(
                         f"Device type '{device}' not supported (Triton supports audio-capable devices only)"
@@ -134,12 +129,12 @@ class TritonDigital(AdServerAdapter):
 
     def create_media_buy(
         self,
-        request: CreateMediaBuyRequest,
+        request: AdapterCreateRequest,
         packages: list[MediaPackage],
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict[str, Any]] | None = None,
-    ) -> CreateMediaBuyResponse:
+    ) -> AdapterCreateResult:
         """Creates a new Campaign and Flights in the Triton TAP API."""
         # Log operation
         self.audit_logger.log_operation(
@@ -153,7 +148,6 @@ class TritonDigital(AdServerAdapter):
 
         self.log(
             f"TritonDigital.create_media_buy for principal '{self.principal.name}' (Triton advertiser ID: {self.advertiser_id})",
-            dry_run_prefix=False,
         )
 
         # Validate targeting from MediaPackage objects (targeting_overlay is populated from request)
@@ -167,7 +161,7 @@ class TritonDigital(AdServerAdapter):
         if unsupported_features:
             error_msg = f"Unsupported targeting features for Triton Digital: {'; '.join(unsupported_features)}"
             self.log(f"[red]Error: {error_msg}[/red]")
-            raise AdCPCapabilityNotSupportedError(error_msg, details={"features": unsupported_features})
+            raise AdCPCapabilityNotSupportedError(details=CapabilityRefusalDetails(rejected_value=unsupported_features))
 
         # Generate a media buy ID
         media_buy_id = (
@@ -175,185 +169,108 @@ class TritonDigital(AdServerAdapter):
         )
 
         # Calculate total budget using pricing_info if available
-        total_budget = 0
+        total_budget = 0.0
         for p in packages:
-            # Use pricing_info if available (pricing_option_id flow), else fallback to package.cpm
-            pricing_info = package_pricing_info.get(p.package_id) if package_pricing_info else None
-            if pricing_info:
-                # Use rate from pricing option (fixed) or bid_price (auction)
-                rate = pricing_info["rate"] if pricing_info["is_fixed"] else pricing_info.get("bid_price", p.cpm)
-            else:
-                # Fallback to legacy package.cpm
-                rate = p.cpm
-            total_budget += rate * p.impressions / 1000
+            total_budget += resolve_package_rate(p, package_pricing_info) * p.impressions / 1000
 
-        if self.dry_run:
-            self.log(f"Would call: POST {self.base_url}/campaigns")
-            self.log("  Campaign Payload: {")
-            self.log(f"    'advertiserId': '{self.advertiser_id}',")
-            self.log(f"    'name': 'AdCP Campaign {media_buy_id}',")
-            self.log(f"    'startDate': '{start_time.date().isoformat()}',")
-            self.log(f"    'endDate': '{end_time.date().isoformat()}',")
-            self.log(f"    'totalBudget': {total_budget:.2f},")
-            self.log("    'active': true")
-            self.log("  }")
+        # Create campaign in Triton
+        campaign_payload: dict[str, JsonValue] = {
+            "advertiserId": self.advertiser_id,
+            "name": f"AdCP Campaign {media_buy_id}",
+            "startDate": start_time.date().isoformat(),
+            "endDate": end_time.date().isoformat(),
+            "totalBudget": total_budget,
+            "active": True,
+        }
 
-            # Log flight creation for each package
-            for package in packages:
-                # Get pricing for this package
-                pricing_info = package_pricing_info.get(package.package_id) if package_pricing_info else None
-                if pricing_info:
-                    rate = (
-                        pricing_info["rate"] if pricing_info["is_fixed"] else pricing_info.get("bid_price", package.cpm)
-                    )
-                else:
-                    rate = package.cpm
+        response = require_vendor(self._vendor, vendor="Triton Digital").call(
+            "POST", "/campaigns", json=campaign_payload
+        )
+        campaign_data = response.json()
+        campaign_id = campaign_data["id"]
 
-                self.log(f"Would call: POST {self.base_url}/flights")
-                self.log("  Flight Payload: {")
-                self.log(f"    'name': '{package.name}',")
-                self.log(f"    'campaignId': '{media_buy_id}',")
-                self.log("    'type': 'STANDARD',")
-                self.log("    'goal': {")
-                self.log("      'type': 'IMPRESSIONS',")
-                self.log(f"      'value': {package.impressions}")
-                self.log("    },")
-                self.log(f"    'rate': {rate},")
-                self.log("    'rateType': 'CPM',")
-                self.log(f"    'startDate': '{start_time.date().isoformat()}',")
-                self.log(f"    'endDate': '{end_time.date().isoformat()}'")
+        # Create flights for each package
+        for package in packages:
+            rate = resolve_package_rate(package, package_pricing_info)
 
-                # Add targeting if provided (from package-level targeting_overlay per AdCP spec)
-                if package.targeting_overlay:
-                    targeting = self._build_targeting(package.targeting_overlay)
-                    if targeting:
-                        self.log(f"    'targeting': {json.dumps(targeting, indent=6)}")
-
-                self.log("  }")
-        else:
-            # Create campaign in Triton
-            campaign_payload: dict[str, JsonValue] = {
-                "advertiserId": self.advertiser_id,
-                "name": f"AdCP Campaign {media_buy_id}",
+            flight_payload = {
+                "name": package.name,
+                "campaignId": campaign_id,
+                "type": "STANDARD",
+                "goal": {"type": "IMPRESSIONS", "value": package.impressions},
+                "rate": rate,  # Use pricing from pricing option or fallback
+                "rateType": "CPM",
                 "startDate": start_time.date().isoformat(),
                 "endDate": end_time.date().isoformat(),
-                "totalBudget": total_budget,
-                "active": True,
             }
 
-            response = require_vendor(self._vendor, vendor="Triton Digital").call(
-                "POST", "/campaigns", json=campaign_payload
-            )
-            campaign_data = response.json()
-            campaign_id = campaign_data["id"]
+            # Add targeting if provided (from package-level targeting_overlay per AdCP spec)
+            if package.targeting_overlay:
+                targeting = self._build_targeting(package.targeting_overlay)
+                if targeting and "targeting" in targeting:
+                    flight_payload["targeting"] = targeting["targeting"]
+                if targeting and "stationIds" in targeting:
+                    flight_payload["stationIds"] = targeting["stationIds"]
 
-            # Create flights for each package
-            for package in packages:
-                # Get pricing for this package
-                pricing_info = package_pricing_info.get(package.package_id) if package_pricing_info else None
-                if pricing_info:
-                    rate = (
-                        pricing_info["rate"] if pricing_info["is_fixed"] else pricing_info.get("bid_price", package.cpm)
-                    )
-                else:
-                    rate = package.cpm
+            require_vendor(self._vendor, vendor="Triton Digital").call("POST", "/flights", json=flight_payload)
 
-                flight_payload = {
-                    "name": package.name,
-                    "campaignId": campaign_id,
-                    "type": "STANDARD",
-                    "goal": {"type": "IMPRESSIONS", "value": package.impressions},
-                    "rate": rate,  # Use pricing from pricing option or fallback
-                    "rateType": "CPM",
-                    "startDate": start_time.date().isoformat(),
-                    "endDate": end_time.date().isoformat(),
-                }
+        # Use the actual campaign ID from Triton
+        media_buy_id = f"triton_{campaign_id}"
 
-                # Add targeting if provided (from package-level targeting_overlay per AdCP spec)
-                if package.targeting_overlay:
-                    targeting = self._build_targeting(package.targeting_overlay)
-                    if targeting and "targeting" in targeting:
-                        flight_payload["targeting"] = targeting["targeting"]
-                    if targeting and "stationIds" in targeting:
-                        flight_payload["stationIds"] = targeting["stationIds"]
-
-                flight_response = require_vendor(self._vendor, vendor="Triton Digital").call(
-                    "POST", "/flights", json=flight_payload
-                )
-
-            # Use the actual campaign ID from Triton
-            media_buy_id = f"triton_{campaign_id}"
-
-        return self._build_create_success(request, media_buy_id, packages)
+        return self._build_create_success(media_buy_id, packages)
 
     def add_creative_assets(
         self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
     ) -> list[AssetStatus]:
         """Uploads creatives and associates them with flights in a campaign."""
-        self.log(f"TritonDigital.add_creative_assets for media buy '{media_buy_id}'", dry_run_prefix=False)
+        self.log(f"TritonDigital.add_creative_assets for media buy '{media_buy_id}'")
         created_asset_statuses = []
 
-        if self.dry_run:
+        try:
+            # Extract campaign ID from media_buy_id (format: triton_{campaign_id})
+            campaign_id = media_buy_id.replace("triton_", "")
+
+            # Get all flights for the campaign to map package names to flight IDs
+            flights_response = require_vendor(self._vendor, vendor="Triton Digital").call(
+                "GET", "/flights", params={"campaignId": campaign_id}
+            )
+            flights = flights_response.json()
+            flight_map = {flight["name"]: flight["id"] for flight in flights}
+
             for asset in assets:
                 if asset["format"] != "audio":
-                    self.log(f"Skipping asset {asset['creative_id']} - Triton only supports audio formats")
+                    self.log(
+                        f"Skipping asset {asset['creative_id']} with unsupported format for Triton: {asset['format']}"
+                    )
                     continue
 
-                self.log(f"Would create creative: {asset['name']}")
-                self.log(f"Would call: POST {self.base_url}/creatives")
-                self.log("  Creative Payload: {")
-                self.log(f"    'name': '{asset['name']}',")
-                self.log("    'type': 'AUDIO',")
-                self.log(f"    'url': '{asset['media_url']}'")
-                self.log("  }")
-                self.log(f"Would associate creative with flights for packages: {asset.get('package_assignments', [])}")
-                created_asset_statuses.append(AssetStatus(creative_id=asset["creative_id"], status="approved"))
-        else:
-            try:
-                # Extract campaign ID from media_buy_id (format: triton_{campaign_id})
-                campaign_id = media_buy_id.replace("triton_", "")
+                creative_payload = {"name": asset["name"], "type": "AUDIO", "url": asset["media_url"]}
 
-                # Get all flights for the campaign to map package names to flight IDs
-                flights_response = require_vendor(self._vendor, vendor="Triton Digital").call(
-                    "GET", "/flights", params={"campaignId": campaign_id}
+                creative_response = require_vendor(self._vendor, vendor="Triton Digital").call(
+                    "POST", "/creatives", json=creative_payload
                 )
-                flights = flights_response.json()
-                flight_map = {flight["name"]: flight["id"] for flight in flights}
+                creative_data = creative_response.json()
+                creative_id: JsonValue = creative_data["id"]
 
-                for asset in assets:
-                    if asset["format"] != "audio":
-                        self.log(
-                            f"Skipping asset {asset['creative_id']} with unsupported format for Triton: {asset['format']}"
+                # Associate the creative with the assigned flights
+                flight_ids_to_associate = [
+                    flight_map[pkg_id] for pkg_id in asset.get("package_assignments", []) if pkg_id in flight_map
+                ]
+
+                if flight_ids_to_associate:
+                    for flight_id in flight_ids_to_associate:
+                        association_payload: dict[str, JsonValue] = {"creativeIds": [creative_id]}
+                        require_vendor(self._vendor, vendor="Triton Digital").call(
+                            "PUT", f"/flights/{flight_id}", json=association_payload
                         )
-                        continue
 
-                    creative_payload = {"name": asset["name"], "type": "AUDIO", "url": asset["media_url"]}
+                created_asset_statuses.append(AssetStatus(creative_id=asset["creative_id"], status="approved"))
 
-                    creative_response = require_vendor(self._vendor, vendor="Triton Digital").call(
-                        "POST", "/creatives", json=creative_payload
-                    )
-                    creative_data = creative_response.json()
-                    creative_id: JsonValue = creative_data["id"]
-
-                    # Associate the creative with the assigned flights
-                    flight_ids_to_associate = [
-                        flight_map[pkg_id] for pkg_id in asset.get("package_assignments", []) if pkg_id in flight_map
-                    ]
-
-                    if flight_ids_to_associate:
-                        for flight_id in flight_ids_to_associate:
-                            association_payload: dict[str, JsonValue] = {"creativeIds": [creative_id]}
-                            assoc_response = require_vendor(self._vendor, vendor="Triton Digital").call(
-                                "PUT", f"/flights/{flight_id}", json=association_payload
-                            )
-
-                    created_asset_statuses.append(AssetStatus(creative_id=asset["creative_id"], status="approved"))
-
-            except OutboundError as e:
-                self.log(f"Error creating Triton Creative: {e}")
-                for asset in assets:
-                    if not any(s.creative_id == asset["creative_id"] for s in created_asset_statuses):
-                        created_asset_statuses.append(AssetStatus(creative_id=asset["creative_id"], status="failed"))
+        except OutboundError as e:
+            self.log(f"Error creating Triton Creative: {e}")
+            for asset in assets:
+                if not any(s.creative_id == asset["creative_id"] for s in created_asset_statuses):
+                    created_asset_statuses.append(AssetStatus(creative_id=asset["creative_id"], status="failed"))
 
         return created_asset_statuses
 
@@ -380,74 +297,28 @@ class TritonDigital(AdServerAdapter):
 
     def check_media_buy_status(self, media_buy_id: str, today: datetime) -> CheckMediaBuyStatusResponse:
         """Checks the status of a Campaign in the Triton TAP API."""
-        self.log(f"TritonDigital.check_media_buy_status for media buy '{media_buy_id}'", dry_run_prefix=False)
+        self.log(f"TritonDigital.check_media_buy_status for media buy '{media_buy_id}'")
 
-        if self.dry_run:
-            self.log(f"Would call: GET {self.base_url}/campaigns/{media_buy_id}")
-            self.log("Would check campaign active status and dates")
-            return CheckMediaBuyStatusResponse(media_buy_id=media_buy_id, status="active")
-        else:
-            try:
-                # Extract campaign ID from media_buy_id
-                campaign_id = media_buy_id.replace("triton_", "")
+        try:
+            # Extract campaign ID from media_buy_id
+            campaign_id = media_buy_id.replace("triton_", "")
 
-                response = require_vendor(self._vendor, vendor="Triton Digital").call(
-                    "GET", f"/campaigns/{campaign_id}"
-                )
-                campaign_data = response.json()
+            response = require_vendor(self._vendor, vendor="Triton Digital").call("GET", f"/campaigns/{campaign_id}")
+            campaign_data = response.json()
 
-                # Map Triton status to our status
-                status = "active" if campaign_data.get("active", False) else "paused"
+            # Map Triton status to our status
+            status = "active" if campaign_data.get("active", False) else "paused"
 
-                # Check if campaign is completed based on end date
-                end_date = datetime.fromisoformat(campaign_data["endDate"])
-                if end_date < today:
-                    status = "completed"
+            # Check if campaign is completed based on end date
+            end_date = datetime.fromisoformat(campaign_data["endDate"])
+            if end_date < today:
+                status = "completed"
 
-                return CheckMediaBuyStatusResponse(media_buy_id=media_buy_id, status=status)
+            return CheckMediaBuyStatusResponse(media_buy_id=media_buy_id, status=status)
 
-            except OutboundError as e:
-                self.log(f"Error checking Triton Campaign status: {e}")
-                return CheckMediaBuyStatusResponse(media_buy_id=media_buy_id, status="unknown")
-
-    def _dry_run_delivery(
-        self, media_buy_id: str, date_range: ReportingPeriod, today: datetime
-    ) -> AdapterGetMediaBuyDeliveryResponse:
-        """What a delivery report WOULD do, and the figures it would return.
-
-        The dry-run arm is a self-contained narration plus a simulated result;
-        kept beside the real request path it was two thirds of the statements in
-        a function whose subject is the real request.
-        """
-        self.log(f"Would call: POST {self.base_url}/reports")
-        self.log("  Report Request: {")
-        self.log("    'reportType': 'FLIGHT',")
-        self.log(f"    'startDate': '{date_range.start.isoformat()}',")
-        self.log(f"    'endDate': '{date_range.end.isoformat()}',")
-        self.log(f"    'filters': {{'campaigns': ['{media_buy_id}']}},")
-        self.log("    'columns': ['flightName', 'impressions', 'totalRevenue']")
-        self.log("  }")
-        self.log("Would poll for report completion and download results")
-
-        # Simulate response based on campaign progress
-        days_elapsed = (today.date() - date_range.start.date()).days
-        progress_factor = min(days_elapsed / 14, 1.0)  # Assume 14-day campaigns
-
-        # Calculate simulated delivery for audio campaigns
-        impressions = int(300000 * progress_factor * 0.92)  # 92% delivery rate for audio
-        spend = impressions * 25 / 1000  # $25 CPM for audio
-
-        self.log(f"Would return: {impressions:,} impressions, ${spend:,.2f} spend")
-
-        return AdapterGetMediaBuyDeliveryResponse(
-            media_buy_id=media_buy_id,
-            reporting_period=date_range,
-            totals=DeliveryTotals(
-                impressions=impressions, spend=spend, clicks=0, ctr=0.0, completed_views=0, completion_rate=0.0
-            ),
-            by_package=[],
-            currency="USD",
-        )
+        except OutboundError as e:
+            self.log(f"Error checking Triton Campaign status: {e}")
+            return CheckMediaBuyStatusResponse(media_buy_id=media_buy_id, status="unknown")
 
     def get_media_buy_delivery(
         self, media_buy_id: str, date_range: ReportingPeriod, today: datetime
@@ -455,108 +326,81 @@ class TritonDigital(AdServerAdapter):
         """Runs and parses a delivery report from the Triton TAP API."""
         self.log(
             f"TritonDigital.get_media_buy_delivery for principal '{self.principal.name}' and media buy '{media_buy_id}'",
-            dry_run_prefix=False,
         )
-        self.log(f"Date range: {date_range.start} to {date_range.end}", dry_run_prefix=False)
+        self.log(f"Date range: {date_range.start} to {date_range.end}")
 
-        if self.dry_run:
-            return self._dry_run_delivery(media_buy_id, date_range, today)
-        else:
-            report_payload: dict[str, JsonValue] = {
-                "reportType": "FLIGHT",
-                "startDate": date_range.start.isoformat(),
-                "endDate": date_range.end.isoformat(),
-                "filters": {"campaigns": [media_buy_id]},
-                "columns": ["flightName", "impressions", "totalRevenue"],
-            }
+        report_payload: dict[str, JsonValue] = {
+            "reportType": "FLIGHT",
+            "startDate": date_range.start.isoformat(),
+            "endDate": date_range.end.isoformat(),
+            "filters": {"campaigns": [media_buy_id]},
+            "columns": ["flightName", "impressions", "totalRevenue"],
+        }
 
-            try:
-                response = require_vendor(self._vendor, vendor="Triton Digital").call(
-                    "POST", "/reports", json=report_payload
+        try:
+            response = require_vendor(self._vendor, vendor="Triton Digital").call(
+                "POST", "/reports", json=report_payload
+            )
+            report_job = response.json()
+            job_id = report_job["id"]
+
+            import time
+
+            for _ in range(10):  # Poll for up to 5 seconds
+                status_response = require_vendor(self._vendor, vendor="Triton Digital").call(
+                    "GET", f"/reports/{job_id}"
                 )
-                report_job = response.json()
-                job_id = report_job["id"]
+                status_data = status_response.json()
+                if status_data["status"] == "COMPLETED":
+                    report_url = status_data["url"]
+                    break
+                time.sleep(0.5)
+            else:
+                raise AdCPAdapterError()
 
-                import time
+            # A VENDOR-RETURNED url with no auth — one of the two sites this
+            # migration genuinely secures rather than merely tidies.
+            report_response = send(report_url, method="GET", timeout=30.0, max_attempts=1)
 
-                for _ in range(10):  # Poll for up to 5 seconds
-                    status_response = require_vendor(self._vendor, vendor="Triton Digital").call(
-                        "GET", f"/reports/{job_id}"
-                    )
-                    status_data = status_response.json()
-                    if status_data["status"] == "COMPLETED":
-                        report_url = status_data["url"]
-                        break
-                    time.sleep(0.5)
-                else:
-                    raise Exception("Triton report did not complete in time.")
+            import csv
+            import io
 
-                # A VENDOR-RETURNED url with no auth — one of the two sites this
-                # migration genuinely secures rather than merely tidies.
-                report_response = send(report_url, method="GET", timeout=30.0, max_attempts=1)
+            report_reader = csv.reader(io.StringIO(report_response.text))
+            header = next(report_reader)
+            col_map = {col: i for i, col in enumerate(header)}
 
-                import csv
-                import io
+            total_impressions = 0
+            total_spend = 0.0
+            by_package = []
 
-                report_reader = csv.reader(io.StringIO(report_response.text))
-                header = next(report_reader)
-                col_map = {col: i for i, col in enumerate(header)}
+            for row in report_reader:
+                impressions = int(row[col_map["impressions"]])
+                spend = float(row[col_map["totalRevenue"]])
+                package_name = row[col_map["flightName"]]
 
-                total_impressions = 0
-                total_spend = 0.0
-                by_package = []
+                total_impressions += impressions
+                total_spend += spend
 
-                for row in report_reader:
-                    impressions = int(row[col_map["impressions"]])
-                    spend = float(row[col_map["totalRevenue"]])
-                    package_name = row[col_map["flightName"]]
+                by_package.append(AdapterPackageDelivery(package_id=package_name, impressions=impressions, spend=spend))
 
-                    total_impressions += impressions
-                    total_spend += spend
+            return AdapterGetMediaBuyDeliveryResponse(
+                media_buy_id=media_buy_id,
+                reporting_period=date_range,
+                totals=DeliveryTotals(
+                    impressions=total_impressions,
+                    spend=total_spend,
+                    clicks=0,
+                    ctr=0.0,
+                    completed_views=0,
+                    completion_rate=0.0,
+                ),
+                by_package=by_package,
+                currency="USD",
+            )
 
-                    by_package.append(
-                        AdapterPackageDelivery(package_id=package_name, impressions=impressions, spend=spend)
-                    )
-
-                return AdapterGetMediaBuyDeliveryResponse(
-                    media_buy_id=media_buy_id,
-                    reporting_period=date_range,
-                    totals=DeliveryTotals(
-                        impressions=total_impressions,
-                        spend=total_spend,
-                        clicks=0,
-                        ctr=0.0,
-                        completed_views=0,
-                        completion_rate=0.0,
-                    ),
-                    by_package=by_package,
-                    currency="USD",
-                )
-
-            except OutboundError as e:
-                self.log(f"Error getting delivery report from Triton: {e}")
-                raise
-
-    def update_media_buy_performance_index(
-        self, media_buy_id: str, package_performance: list[PackagePerformance]
-    ) -> bool:
-        """Updates performance indices for packages in Triton."""
-        self.log(
-            f"TritonDigital.update_media_buy_performance_index for media buy '{media_buy_id}'", dry_run_prefix=False
-        )
-
-        if self.dry_run:
-            self.log("Performance index updates:")
-            for perf in package_performance:
-                self.log(f"  Package {perf.package_id}: index={perf.performance_index:.2f}")
-            self.log("Would adjust flight targeting or budget allocation based on performance")
-            self.log("Note: Triton TAP API may not directly support performance index updates")
-            return True
-        else:
-            # Triton doesn't have a direct performance index API
-            # In production, might update flight budgets or pause poor performers
-            self.log("Triton does not directly support performance index updates. Custom implementation needed.")
-            return True
+        except OutboundError as e:
+            self.log(f"Error getting delivery report from Triton: {e}")
+            raise
 
     def update_media_buy(
         self,
@@ -565,156 +409,93 @@ class TritonDigital(AdServerAdapter):
         package_id: str | None,
         budget: int | None,
         today: datetime,
-    ) -> UpdateMediaBuyResponse:
+    ) -> AdapterUpdateResult:
         """Updates a media buy in Triton Digital using standardized actions."""
-        self.log(f"TritonDigital.update_media_buy for {media_buy_id} with action {action}", dry_run_prefix=False)
+        self.log(f"TritonDigital.update_media_buy for {media_buy_id} with action {action}")
 
-        if action not in REQUIRED_UPDATE_ACTIONS:
-            raise AdCPCapabilityNotSupportedError(
-                f"Action '{action}' not supported. Supported actions: {REQUIRED_UPDATE_ACTIONS}",
-            )
+        require_supported_update_action(action)
 
-        if self.dry_run:
+        try:
             campaign_id = media_buy_id.replace("triton_", "")
 
-            if action == "pause_media_buy":
-                self.log(f"Would pause campaign {campaign_id}")
-                self.log(f"Would call: PUT {self.base_url}/campaigns/{campaign_id}")
-                self.log("  Payload: {'active': false}")
-            elif action == "resume_media_buy":
-                self.log(f"Would resume campaign {campaign_id}")
-                self.log(f"Would call: PUT {self.base_url}/campaigns/{campaign_id}")
-                self.log("  Payload: {'active': true}")
-            elif action == "pause_package" and package_id:
-                self.log(f"Would pause flight '{package_id}' in campaign {campaign_id}")
-                self.log(f"Would call: PUT {self.base_url}/flights/{package_id}")
-                self.log("  Payload: {'active': false}")
-                return UpdateMediaBuySuccess.carrier(
+            if action in ["pause_media_buy", "resume_media_buy"]:
+                # Update campaign status
+                update_payload: dict[str, Any] = {"active": action == "resume_media_buy"}
+                require_vendor(self._vendor, vendor="Triton Digital").call(
+                    "PUT", f"/campaigns/{campaign_id}", json=update_payload
+                )
+
+            elif action in ["pause_package", "resume_package"] and package_id:
+                # Get flight ID by name
+                flights_response = require_vendor(self._vendor, vendor="Triton Digital").call(
+                    "GET", "/flights", params={"campaignId": campaign_id}
+                )
+                flights = flights_response.json()
+
+                flight = next((f for f in flights if f["name"] == package_id), None)
+                if not flight:
+                    raise AdCPPackageNotFoundError(details=EntityRefDetails(package_id=package_id))
+
+                # Update flight status
+                is_resume = action == "resume_package"
+                flight_update_payload: dict[str, Any] = {"active": is_resume}
+                require_vendor(self._vendor, vendor="Triton Digital").call(
+                    "PUT", f"/flights/{flight['id']}", json=flight_update_payload
+                )
+
+                # Return affected package with paused state
+                return AdapterUpdateResult(
                     media_buy_id=media_buy_id,
                     affected_packages=[
                         AffectedPackage(
                             package_id=package_id,
-                            paused=True,
+                            paused=not is_resume,
                             changes_applied=None,
                             buyer_package_ref=None,
                         )
                     ],
-                    implementation_date=today,
                 )
-            elif action == "resume_package" and package_id:
-                self.log(f"Would resume flight '{package_id}' in campaign {campaign_id}")
-                self.log(f"Would call: PUT {self.base_url}/flights/{package_id}")
-                self.log("  Payload: {'active': true}")
-                return UpdateMediaBuySuccess.carrier(
-                    media_buy_id=media_buy_id,
-                    affected_packages=[
-                        AffectedPackage(
-                            package_id=package_id,
-                            paused=False,
-                            changes_applied=None,
-                            buyer_package_ref=None,
-                        )
-                    ],
-                    implementation_date=today,
-                )
+
             elif (
                 action in ["update_package_budget", "update_package_impressions"] and package_id and budget is not None
             ):
-                if action == "update_package_budget":
-                    self.log(f"Would update budget for flight '{package_id}' to ${budget}")
-                    new_impressions = int((budget / 25.0) * 1000)  # Assuming $25 CPM for audio
-                else:
-                    self.log(f"Would update impressions for flight '{package_id}' to {budget}")
-                    new_impressions = budget
-                self.log(f"Would call: PUT {self.base_url}/flights/{package_id}")
-                self.log(f"  Payload: {{'goal': {{'type': 'IMPRESSIONS', 'value': {new_impressions}}}}}")
+                # Get flight and update goal
+                flights_response = require_vendor(self._vendor, vendor="Triton Digital").call(
+                    "GET", "/flights", params={"campaignId": campaign_id}
+                )
+                flights = flights_response.json()
 
-            return UpdateMediaBuySuccess.carrier(
+                flight = next((f for f in flights if f["name"] == package_id), None)
+                if not flight:
+                    raise AdCPPackageNotFoundError(details=EntityRefDetails(package_id=package_id))
+
+                # Calculate impressions based on action
+                if action == "update_package_budget":
+                    # Get current CPM from flight
+                    cpm = flight.get("rate", 25.0)  # Default to $25 CPM
+                    new_impressions = int((budget / cpm) * 1000)
+                else:  # update_package_impressions
+                    new_impressions = budget  # budget param contains impressions
+
+                goal_update_payload: dict[str, Any] = {"goal": {"type": "IMPRESSIONS", "value": new_impressions}}
+                require_vendor(self._vendor, vendor="Triton Digital").call(
+                    "PUT", f"/flights/{flight['id']}", json=goal_update_payload
+                )
+
+            return AdapterUpdateResult(
                 media_buy_id=media_buy_id,
                 affected_packages=[],  # List of package_ids affected by update
-                implementation_date=today,
             )
-        else:
-            try:
-                campaign_id = media_buy_id.replace("triton_", "")
 
-                if action in ["pause_media_buy", "resume_media_buy"]:
-                    # Update campaign status
-                    update_payload: dict[str, Any] = {"active": action == "resume_media_buy"}
-                    response = require_vendor(self._vendor, vendor="Triton Digital").call(
-                        "PUT", f"/campaigns/{campaign_id}", json=update_payload
-                    )
+        except OutboundError as e:
+            self.log(f"Error updating Triton campaign/flight: {e}")
+            from src.core.helpers.outbound_error_mapping import raise_mapped_outbound_error
 
-                elif action in ["pause_package", "resume_package"] and package_id:
-                    # Get flight ID by name
-                    flights_response = require_vendor(self._vendor, vendor="Triton Digital").call(
-                        "GET", "/flights", params={"campaignId": campaign_id}
-                    )
-                    flights = flights_response.json()
-
-                    flight = next((f for f in flights if f["name"] == package_id), None)
-                    if not flight:
-                        raise AdCPPackageNotFoundError(f"Flight '{package_id}' not found")
-
-                    # Update flight status
-                    is_resume = action == "resume_package"
-                    flight_update_payload: dict[str, Any] = {"active": is_resume}
-                    response = require_vendor(self._vendor, vendor="Triton Digital").call(
-                        "PUT", f"/flights/{flight['id']}", json=flight_update_payload
-                    )
-
-                    # Return affected package with paused state
-                    return UpdateMediaBuySuccess.carrier(
-                        media_buy_id=media_buy_id,
-                        affected_packages=[
-                            AffectedPackage(
-                                package_id=package_id,
-                                paused=not is_resume,
-                                changes_applied=None,
-                                buyer_package_ref=None,
-                            )
-                        ],
-                        implementation_date=today,
-                    )
-
-                elif (
-                    action in ["update_package_budget", "update_package_impressions"]
-                    and package_id
-                    and budget is not None
-                ):
-                    # Get flight and update goal
-                    flights_response = require_vendor(self._vendor, vendor="Triton Digital").call(
-                        "GET", "/flights", params={"campaignId": campaign_id}
-                    )
-                    flights = flights_response.json()
-
-                    flight = next((f for f in flights if f["name"] == package_id), None)
-                    if not flight:
-                        raise AdCPPackageNotFoundError(f"Flight '{package_id}' not found")
-
-                    # Calculate impressions based on action
-                    if action == "update_package_budget":
-                        # Get current CPM from flight
-                        cpm = flight.get("rate", 25.0)  # Default to $25 CPM
-                        new_impressions = int((budget / cpm) * 1000)
-                    else:  # update_package_impressions
-                        new_impressions = budget  # budget param contains impressions
-
-                    goal_update_payload: dict[str, Any] = {"goal": {"type": "IMPRESSIONS", "value": new_impressions}}
-                    response = require_vendor(self._vendor, vendor="Triton Digital").call(
-                        "PUT", f"/flights/{flight['id']}", json=goal_update_payload
-                    )
-
-                return UpdateMediaBuySuccess.carrier(
-                    media_buy_id=media_buy_id,
-                    affected_packages=[],  # List of package_ids affected by update
-                    implementation_date=today,
-                )
-
-            except OutboundError as e:
-                self.log(f"Error updating Triton campaign/flight: {e}")
-                from src.core.helpers.outbound_error_mapping import raise_mapped_outbound_error
-
-                raise_mapped_outbound_error(
-                    e, provenance=OperatorEndpoint("Triton Digital"), logger=logging.getLogger(__name__)
-                )
+            # The vendor's URL/response body is an upstream API response from a
+            # seller-internal integration; AdCP 3.1.1 transport-errors.mdx
+            # § Security Considerations forbids it on the buyer wire. The mapper
+            # keeps it off: it names only the OperatorEndpoint role and chains the
+            # OutboundError as ``__cause__`` for the log, never the buyer envelope.
+            raise_mapped_outbound_error(
+                e, provenance=OperatorEndpoint("Triton Digital"), logger=logging.getLogger(__name__)
+            )

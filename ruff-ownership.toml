@@ -1,0 +1,71 @@
+# OWNERSHIP import bans: a tool obtains its principal, tenant and account from the identity
+# and nowhere else, BY CONSTRUCTION.
+#
+# Run as its own line in `make quality-ci`, beside ruff-boundary.toml and ruff-egress.toml:
+#
+#     uv run ruff check --config ruff-ownership.toml --no-respect-gitignore src/ scripts/
+#
+# WHY A THIRD CONFIG. ruff's per-file-ignores exempt a RULE per path, and every ban here is
+# the same rule (TID251), so a file exempted from one ban is exempted from all bans in the
+# same config. The admin UI and the setup scripts legitimately import PrincipalRepository and
+# AccountRepository -- they manage principals and accounts as DATA -- but they must stay under
+# the boundary bans (ToolError, the auth refusals, ContextObject, the direct-_impl names).
+# Keeping the ownership bans in a config of their own is what lets the admin tree be exempt
+# from these and from nothing else, the same separation ruff-egress.toml already makes for
+# the outbound-HTTP bans.
+#
+# The bans here name the modules that can load a principal row (the repository, the
+# cross-tenant reads, the resolver's primitives) or an account row (the repository, its unit
+# of work). Business logic reads identity.principal, identity.tenant and identity.account;
+# the resolver (src/core/resolved_identity.py) is the one place those are loaded from a
+# request, and identity_of the one place they are loaded from stored ids.
+#
+# Two ownership bans are NOT here, because their exemption sets are narrower than this
+# config's: the ORM Principal model (exempt: the four repository files that query it) and
+# the resolver's account lookup (exempt: the resolver) are banned in ruff-boundary.toml,
+# where the per-file-ignores are exactly those files. Under this config's src/admin/** and
+# scripts/** exemptions, both were importable from an admin blueprint and a setup script.
+#
+# Proven live by tests/unit/test_ruff_boundary_bans.py, which reads this table as well as
+# the boundary one; there is no allowlist and no other guard.
+
+[lint]
+select = ["TID251"]
+
+[lint.per-file-ignores]
+# The resolver and its primitives: the one place a request's principal and account are
+# loaded, and the module that defines the token/id lookups.
+"src/core/resolved_identity.py" = ["TID251"]
+"src/core/auth_utils.py" = ["TID251"]
+# The repository modules that compose or re-export AccountRepository (the unit of work, the
+# package index, the resolver's lookup). The four that query the ORM Principal model need no
+# entry here: that ban, and their exemption from it, live in ruff-boundary.toml.
+"src/core/database/repositories/__init__.py" = ["TID251"]
+"src/core/database/repositories/uow.py" = ["TID251"]
+"src/core/database/repositories/account_lookup.py" = ["TID251"]
+# The surfaces that manage principals and accounts as DATA rather than act as a caller: the
+# admin UI and its services, the setup scripts, the two account-management tools, the
+# demo-tenant bootstrap, the GAM reporting API the admin app registers, the testing-only
+# debug routes, and the operator setup checklist. The four single files outside src/admin
+# and scripts are listed by name so nothing else in src/ inherits the exemption.
+"src/admin/**" = ["TID251"]
+"scripts/**" = ["TID251"]
+"src/core/tools/accounts.py" = ["TID251"]
+"src/core/database/database.py" = ["TID251"]
+"src/adapters/gam_reporting_api.py" = ["TID251"]
+"src/routes/health.py" = ["TID251"]
+"src/services/setup_checklist_service.py" = ["TID251"]
+
+[lint.flake8-tidy-imports.banned-api]
+# The modules that can load a principal row or resolve a token or stored id to one. The ORM
+# Principal model itself is banned in ruff-boundary.toml (see the header).
+"src.core.database.repositories.principal".msg = "A tool holds the principal the resolver loaded (identity.principal) and loads no other. PrincipalRepository is for the admin surfaces that manage principals as data."
+"src.core.database.repositories.principal_lookup".msg = "A tool holds the principal the resolver loaded (identity.principal). The cross-tenant reads here serve the CI seed and the setup checklist, not business logic."
+"src.core.auth_utils".msg = "The resolver's primitives resolve a token or a stored id to a principal once, in src/core/resolved_identity.py. A tool reads identity.principal; a job with stored ids calls identity_of."
+
+# The account repository and its unit of work. The resolver's account LOOKUP
+# (repositories.account_lookup) is banned in ruff-boundary.toml, where its one exemption,
+# the resolver, already sits; the tools that manage accounts as DATA (list_accounts,
+# sync_accounts) use AccountRepository and never import the lookup.
+"src.core.database.repositories.account".msg = "A tool holds the account the resolver resolved (identity.account) and resolves no other. AccountRepository is for the resolver's lookup and the tools and admin surfaces that manage accounts as data."
+"src.core.database.repositories.uow.AccountUoW".msg = "A tool holds the account the resolver resolved (identity.account). AccountUoW is for the resolver's lookup and the tools and admin surfaces that manage accounts as data."

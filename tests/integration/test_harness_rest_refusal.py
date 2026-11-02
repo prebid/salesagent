@@ -1,25 +1,31 @@
 """A transport the harness cannot dispatch must refuse loudly, not dispatch something else.
 
 ``MediaBuyCreateListEnv`` routes ``req=GetMediaBuysRequest`` to the get_media_buys
-dispatch on IMPL/A2A/MCP, but declares no REST body of its own — so a REST list
-request falls through to ``MediaBuyCreateEnv.build_rest_body``, a *create*-shaped
-builder. There is no get_media_buys REST route to fall through to: ``src/routes/api_v1.py``
-exposes only ``POST /media-buys`` (create), ``PUT /media-buys/{id}`` (update) and
-``POST /media-buys/delivery``.
+dispatch. On IMPL/A2A/MCP it always did; on REST it does now, because
+``get_media_buys`` HAS a REST route — ``@router.post("/media-buys/query")`` in
+``src/routes/api_v1.py`` — so every UC-019 scenario is parametrized on rest and e2e_rest.
+The per-UC ``_NO_REST_UC_TAG_PREFIXES`` exclusion that once withheld them is gone
+entirely: reachability is the ``ToolSpec`` row's answer, and every row carries a
+``RestBinding``.
 
-What the inherited create builder does with a list request today, measured at HEAD
-629230123 — and deliberately NOT what these tests assert, because both arms are
-accidents rather than a contract:
+That is a change of fact, not of obligation. The obligation is and was: a list request
+must never be dispatched as something else. While the route did not exist, the only way
+to honour it was to refuse; the inherited create builder would otherwise have done one
+of two things with a list request, measured at the time:
 
-  * ``req=`` arm: ``AttributeError: 'GetMediaBuysRequest' object has no attribute
+  * ``req=`` branch: ``AttributeError: 'GetMediaBuysRequest' object has no attribute
     'packages'``, raised inside ``_restore_creative_ids`` (media_buy_create.py:54
     via :406) — an obscure crash in a create-only helper, not a refusal.
-  * flat-kwargs arm: builds ``{"media_buy_ids": [...], "idempotency_key": ...}`` and
+  * flat-kwargs branch: builds ``{"media_buy_ids": [...], "idempotency_key": ...}`` and
     POSTs it, create-SHAPED, to the create collection ``/api/v1/media-buys``.
 
-The obligation these tests grade is the refusal itself, and — the part that is easy
-to get wrong — that the refusal SURVIVES to the caller. Two launderers sit between
-the raise and the report:
+With the route landed, the way to honour it is to dispatch the list request AT THE LIST
+ROUTE, which ``TestListRestDispatchReachesTheListRoute`` pins end to end. A refusal here
+now would fail a graded transport rather than guard an un-routed one.
+
+The REFUSAL DIALECT is still graded below, because envs that genuinely cannot dispatch a
+transport still need it, and getting it wrong is silent. Two launderers sit between such
+a raise and the report:
 
   (a) ``tests/bdd/conftest.py:103-105`` converts any ``NotImplementedError`` raised
       in a BDD call phase into ``report.outcome = "skipped"`` + ``wasxfail``. A
@@ -36,14 +42,6 @@ the raise and the report:
 and not a ``NotImplementedError`` (escapes (a)). ``test_weaker_refusal_dialects_are_swallowed``
 below is the mechanical demonstration, against the real dispatcher.
 
-Scope note, stated rather than faked: launderer (a) is graded here by the type
-property only, not end to end. UC-019 is in ``_NO_REST_UC_TAG_PREFIXES``
-(tests/bdd/conftest.py:2833), so its scenarios are parametrized a2a+mcp and the REST
-arm never runs under BDD at all — no BDD test reaches this seam, and driving the
-``pytest_runtest_makereport`` hook for real would need a nested pytest run rather than
-a test. The integration pin in this file is the grading path for the seam; the BDD
-conftest hook does not apply to it.
-
 GH #1941 (review finding F18); precedent for shape: tests/integration/test_harness_wire_response.py
 """
 
@@ -53,7 +51,7 @@ from typing import Any
 
 import pytest
 
-from src.core.schemas._base import GetMediaBuysRequest, UpdateMediaBuyRequest
+from src.core.schemas._base import GetMediaBuysRequest, GetMediaBuysResponse, UpdateMediaBuyRequest
 from tests.harness.media_buy_create_list import MediaBuyCreateListEnv
 from tests.harness.media_buy_create_update_list import MediaBuyCreateUpdateListEnv
 from tests.harness.transport import Transport
@@ -62,38 +60,66 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
 @pytest.mark.requires_db
-class TestUnroutedRestDispatchRefuses:
-    """The un-routed REST arm of the create+list env refuses instead of dispatching."""
+class TestListRestDispatchReachesTheListRoute:
+    """The REST branch of the create+list env dispatches get_media_buys, not create."""
 
-    def test_rest_list_request_refuses_through_call_via(self, integration_db):
-        """A REST get_media_buys call raises out of ``call_via``, it does not return a result.
+    def test_rest_list_request_reaches_the_query_route(self, integration_db):
+        """A REST get_media_buys call returns a list response, not a create-shaped call.
 
         Driven through ``env.call_via(Transport.REST, ...)`` — the whole dispatch — and
-        NOT through a direct ``build_rest_body()`` call. A direct-call pin passes while
-        launderer (b) still eats the refusal one call-frame over, which is greening the
-        cited test while the disease persists.
+        NOT through a direct ``build_rest_body()`` call, for the same reason the refusal
+        pin it replaces was: a direct-call assertion passes while ``RestDispatcher``'s
+        ``except Exception`` swallows a real failure one call-frame over, so nothing
+        propagates and the test grades a builder in isolation rather than a dispatch.
 
-        ``pytest.raises`` is what mechanically locks the dialect: downgrade the refusal
-        to ``NotImplementedError`` or ``AssertionError`` and ``RestDispatcher`` swallows
-        it into an error-shaped ``TransportResult``, nothing propagates, and this test
-        reddens with DID NOT RAISE.
-
-        The message must name what refused and why, so the reader of a failing run does
-        not have to re-derive the route table: the tool and the transport.
+        ``GetMediaBuysResponse`` is the load-bearing assertion. The create route answers
+        with a create result and the create builder crashes on ``packages`` before it
+        ever POSTs, so neither can produce this type: a response of this shape is proof
+        the list request reached ``POST /api/v1/media-buys/query``. The empty
+        ``media_buys`` is read off ``require_wire`` — the HTTP body itself, not the
+        re-parsed payload — and is the correct answer for an id no principal owns;
+        grading it keeps the pin from passing on a route that answers anything at all.
         """
         with MediaBuyCreateListEnv() as env:
-            with pytest.raises(pytest.fail.Exception) as excinfo:
-                env.call_via(Transport.REST, req=GetMediaBuysRequest(media_buy_ids=["mb_absent"]))
+            # Seeds the tenant + principal the REST auth dep resolves the token against.
+            # Without it the route answers AUTH_MISSING and the dispatch is graded on
+            # the auth boundary rather than on which tool it reached.
+            env.setup_media_buy_data()
+            result = env.call_via(Transport.REST, req=GetMediaBuysRequest(media_buy_ids=["mb_absent"]))
 
-        message = str(excinfo.value)
-        assert "get_media_buys" in message, f"refusal does not name the tool it refused: {message!r}"
-        assert "REST" in message or "rest" in message, f"refusal does not name the transport: {message!r}"
+        assert not result.is_error, f"REST get_media_buys did not dispatch: {result.error!r}"
+        assert isinstance(result.payload, GetMediaBuysResponse), (
+            f"REST dispatched something other than get_media_buys: got {type(result.payload).__name__}"
+        )
+        assert result.require_wire()["media_buys"] == []
+
+    def test_rest_list_request_builds_the_list_body_at_the_list_route(self):
+        """The body, endpoint and method all switch together for a list request.
+
+        Three assertions and not one, because each is a separate way to dispatch the
+        wrong call: a create-shaped body at the right route, the right body at the
+        create collection, or the right body PUT rather than POSTed. The endpoint and
+        method are read AFTER ``build_rest_body`` because that is the order
+        ``RestE2EDispatcher`` reads them in.
+        """
+        env = MediaBuyCreateListEnv()
+
+        body = env.build_rest_body(req=GetMediaBuysRequest(media_buy_ids=["mb_absent"]))
+
+        assert body == {"media_buy_ids": ["mb_absent"]}
+        assert env.REST_ENDPOINT == "/api/v1/media-buys/query"
+        assert env.REST_METHOD == "post"
+
+
+@pytest.mark.requires_db
+class TestRefusalDialectIsStillGraded:
+    """The dialect an env that genuinely cannot dispatch a transport must refuse in."""
 
     def test_refusal_escapes_both_launderers_by_type(self):
         """The refusal type is outside the reach of both launderers on the dispatch path.
 
         This is the property the choice of ``pytest.fail`` rests on, pinned so a future
-        "simplification" back to ``NotImplementedError`` (which re-arms both) cannot pass
+        "simplification" back to ``NotImplementedError`` (which re-branches both) cannot pass
         silently. Launderer (b) is additionally demonstrated end-to-end against the real
         dispatcher in ``test_weaker_refusal_dialects_are_swallowed``.
         """
@@ -165,20 +191,27 @@ class TestRefusalDialectSurvivesTheDispatcher:
 
 @pytest.mark.requires_db
 class TestNonListRestRoutingIsPreserved:
-    """The non-list arm must delegate via ``super()``, not by naming a parent class.
+    """The non-list branch must delegate via ``super()``, not by naming a parent class.
 
     ``MediaBuyCreateUpdateListEnv.__mro__`` is [CreateUpdateList, CreateList,
     ListDispatchMixin, DualEnv, CreateEnv, IntegrationEnv, BaseTestEnv], so
     ``build_rest_body`` resolves to ``MediaBuyDualEnv.build_rest_body`` — the stateful
-    create-vs-update router. A refusal override on ``MediaBuyCreateListEnv`` that fell
-    back to ``MediaBuyCreateEnv.build_rest_body`` explicitly instead of
+    create-vs-update router. A list override on ``MediaBuyCreateListEnv`` that fell back
+    to ``MediaBuyCreateEnv.build_rest_body`` explicitly instead of
     ``super().build_rest_body(**kwargs)`` would skip that router: updates would build a
-    create-shaped body and POST the collection.
+    create-shaped body and POST the collection. The same applies to ``REST_ENDPOINT``
+    and ``REST_METHOD``, which are now properties on that class and must defer through
+    ``super()`` for the two verbs below.
     """
 
     def test_update_request_still_routes_to_the_update_body_and_endpoint(self):
         env = MediaBuyCreateUpdateListEnv()
-        req = UpdateMediaBuyRequest(media_buy_id="mb_seeded", paused=True)
+        req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
+            media_buy_id="mb_seeded",
+            paused=True,
+        )
 
         body = env.build_rest_body(req=req)
 

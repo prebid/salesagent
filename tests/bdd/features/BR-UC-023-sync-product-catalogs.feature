@@ -1,5 +1,4 @@
 # Generated from adcp-req @ a14db6e5894e781a8b2c577e86e1b136876e4915 on 2026-06-03T11:30:04Z (merge mode)
-# DO NOT EDIT -- re-run: python scripts/compile_bdd.py --merge
 
 Feature: BR-UC-023 Sync Product Catalogs
   As a Buyer
@@ -401,7 +400,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     Given the Buyer has no authentication credentials
     When the Buyer Agent sends a sync_catalogs request
     Then the operation should fail
-    And the error code should be "AUTH_REQUIRED"
+    And the error code should be "AUTH_MISSING"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     And the suggestion should contain "authentication"
@@ -415,8 +414,8 @@ Feature: BR-UC-023 Sync Product Catalogs
     Given the Buyer Agent has an expired authentication token
     When the Buyer Agent sends a sync_catalogs request
     Then the operation should fail
-    And the error code should be "AUTH_REQUIRED"
-    And the error recovery should be "correctable"
+    And the error code should be "AUTH_INVALID"
+    And the error recovery should be "terminal"
     And the error should include "suggestion" field
     And the suggestion should contain "authentication" or "token"
     # POST-F2: Expired token treated as auth failure

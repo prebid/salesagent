@@ -14,10 +14,11 @@ from typing import Any
 
 import sqlalchemy.exc
 
+from src.adapters.base import AdapterCreateRequest
 from src.adapters.base_workflow import BaseWorkflowManager
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Context, ObjectWorkflowMapping, WorkflowStep
-from src.core.schemas import CreateMediaBuyRequest, MediaPackage
+from src.core.schemas import MediaPackage
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +128,7 @@ class GAMWorkflowManager(BaseWorkflowManager):
 
     def create_manual_order_workflow_step(
         self,
-        request: CreateMediaBuyRequest,
+        request: AdapterCreateRequest,
         packages: list[MediaPackage],
         start_time: datetime,
         end_time: datetime,
@@ -174,8 +175,7 @@ class GAMWorkflowManager(BaseWorkflowManager):
         order_name = apply_naming_template(effective_template, naming_context)
 
         # Build detailed action list for humans to manually create the order
-        # Calculate total budget from package budgets (AdCP v2.2.0)
-        total_budget_amount = request.get_total_budget()
+        total_budget_amount = request.total_budget
 
         action_details = {
             "action_type": "create_gam_order",

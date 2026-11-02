@@ -17,6 +17,7 @@ class TestDateTimeStringParsing:
     def test_create_media_buy_with_utc_z_format(self):
         """Test parsing ISO 8601 with Z timezone (most common format)."""
         req = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             # Required per AdCP spec
             brand={"domain": "nike.com"},
             po_number="TEST-001",
@@ -40,6 +41,7 @@ class TestDateTimeStringParsing:
     def test_create_media_buy_with_offset_format(self):
         """Test parsing ISO 8601 with +00:00 offset."""
         req = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             # Required per AdCP spec
             brand={"domain": "adidas.com"},
             po_number="TEST-002",
@@ -59,6 +61,7 @@ class TestDateTimeStringParsing:
     def test_create_media_buy_with_pst_timezone(self):
         """Test parsing ISO 8601 with PST offset."""
         req = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             # Required per AdCP spec
             brand={"domain": "puma.com"},
             po_number="TEST-003",
@@ -78,6 +81,8 @@ class TestDateTimeStringParsing:
     def test_update_media_buy_with_datetime_strings(self):
         """Test UpdateMediaBuyRequest with datetime strings."""
         req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id="mb_123",
             start_time="2025-03-01T00:00:00Z",
             end_time="2025-03-31T23:59:59Z",
@@ -97,6 +102,7 @@ class TestDateTimeStringParsing:
         # Library enforces timezone on end_time (datetime type)
         with pytest.raises(ValidationError, match="timezone"):
             CreateMediaBuyRequest(
+                account={"account_id": "acct_test"},
                 # Required per AdCP spec
                 brand={"domain": "converse.com"},
                 po_number="TEST-006",
@@ -108,15 +114,27 @@ class TestDateTimeStringParsing:
             )
 
     def test_invalid_datetime_format_rejected(self):
-        """Test that invalid datetime formats are rejected."""
+        """A non-ISO datetime is rejected, AND rejected for being a bad datetime.
+
+        The package payload here used to be the pre-3.1 shape — package_id / products /
+        status — which ``_accept_only_declared_fields`` now refuses at the boundary with
+        AdCPInvalidRequestError BEFORE any datetime is parsed. So the request did fail,
+        but for a reason that has nothing to do with the format this test is named for,
+        and a plain ``pytest.raises(Exception)`` would have called that a pass.
+
+        It uses the declared shape now (the same one its sibling above uses), so the
+        request reaches datetime validation, and the match pins the datetime error
+        rather than any error.
+        """
         from pydantic import ValidationError
 
-        with pytest.raises(ValidationError):
+        with pytest.raises(ValidationError, match="datetime_from_date_parsing"):
             CreateMediaBuyRequest(
+                account={"account_id": "acct_test"},
                 # Required per AdCP spec
                 brand={"domain": "vans.com"},
                 po_number="TEST-007",
-                packages=[{"package_id": "pkg_1", "products": ["prod_1"], "status": "draft", "budget": 5000.0}],
+                packages=[{"product_id": "prod_1", "pricing_option_id": "test_pricing", "budget": 5000.0}],
                 start_time="02/15/2025",  # Wrong format!
                 end_time="02/28/2025",
                 # budget moved to package level per AdCP v2.2.0
@@ -126,6 +144,7 @@ class TestDateTimeStringParsing:
     def test_create_media_buy_roundtrip_serialization(self):
         """Test that parsed datetimes can be serialized back to ISO 8601."""
         req = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             # Required per AdCP spec
             brand={"domain": "asics.com"},
             po_number="TEST-008",
@@ -152,6 +171,7 @@ class TestDateTimeParsingEdgeCases:
     def test_datetime_with_tzinfo_access(self):
         """Test that accessing .tzinfo on datetime works correctly."""
         req = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             # Required per AdCP spec
             brand={"domain": "brooks.com"},
             po_number="TEST-009",
@@ -174,6 +194,7 @@ class TestDateTimeParsingEdgeCases:
         """Test that CreateMediaBuyRequest works with datetime objects."""
 
         req = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             # Required per AdCP spec
             brand={"domain": "saucony.com"},
             packages=[{"product_id": "prod_1", "budget": 5000.0, "pricing_option_id": "test_pricing"}],

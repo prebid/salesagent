@@ -3,11 +3,10 @@
 # Export decorator
 from src.admin.utils.audit_decorator import log_admin_action
 
-# Export all helper functions (previously in utils.py)
+# Export all helper functions
 from src.admin.utils.helpers import (
     LimitedResult,
     approve_media_buy_through_writer,
-    echo_context,
     execute_limited,
     get_custom_targeting_mappings,
     get_tenant_config_from_db,
@@ -39,8 +38,6 @@ __all__ = [
     "validate_gam_user_response",
     "get_custom_targeting_mappings",
     "translate_custom_targeting",
-    # Webhook helpers
-    "echo_context",
     # Query helpers
     "LimitedResult",
     "execute_limited",

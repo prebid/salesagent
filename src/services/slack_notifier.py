@@ -4,11 +4,12 @@ Sends notifications for new tasks and approvals via Slack webhooks.
 """
 
 import logging
-import os
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 from urllib.parse import urlparse
+
+from src.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -186,7 +187,7 @@ class SlackNotifier:
                 blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"*Details:*\n{detail_text}"}})
 
         # Add action buttons with tenant-specific URL
-        admin_url = os.getenv("ADMIN_UI_URL", "http://localhost:8001")
+        admin_url = get_settings().runtime.admin_ui_url
         script_name = _ADMIN_PREFIX
         if tenant_id:
             # Tenant-specific workflows page
@@ -326,7 +327,7 @@ class SlackNotifier:
             )
 
         # Build correct URL to specific creative
-        admin_url = os.getenv("ADMIN_UI_URL", "http://localhost:8001")
+        admin_url = get_settings().runtime.admin_ui_url
         script_name = _ADMIN_PREFIX
         if tenant_id:
             # Link directly to the specific creative using anchor
@@ -679,7 +680,7 @@ class SlackNotifier:
             blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"*Error:*\n```{error_text}```"}})
 
         # Add action button with tenant-specific URL
-        admin_url = os.getenv("ADMIN_UI_URL", "http://localhost:8001")
+        admin_url = get_settings().runtime.admin_ui_url
         script_name = _ADMIN_PREFIX
         if tenant_id and media_buy_id:
             # Link to specific media buy in tenant context

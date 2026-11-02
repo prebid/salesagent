@@ -1,0 +1,88 @@
+# internal_detail carries the caught exception, never an authored sentence (salesagent-3cs7o.13).
+#
+# `AdCPSalesAgentError.internal_detail` is the non-wire slot for the exception a raise site
+# caught (ADR-010 point 5). The parameter is typed `BaseException | None`, so mypy refuses a
+# string at every site it type-checks -- but mypy runs over src/ alone, and the harness under
+# tests/ kept authoring f-strings into it. An authored sentence there says nothing the error
+# CODE, the exception CLASS and the typed details do not already say; a fact (an id, a count,
+# a status) belongs on the declared details class, and a caught exception is passed as itself.
+#
+# WHY AST-GREP AND NOT RUFF. TID251 bans a NAME that is imported; a keyword argument's VALUE
+# being a string expression is a structural fact about the call site, which only a syntax
+# rule can state. The rule matches the keyword argument `internal_detail=` (and the
+# attribute assignment `x.internal_detail =`) whose value is an authored string in any of
+# its spellings: a string or f-string literal, an implicitly concatenated string, a `+`
+# with a string on either side, `%` formatting of a string, `.format(...)` on a string,
+# `str(...)`, a conditional expression with a string arm, or any of those in parentheses.
+# `internal_detail=e` and `internal_detail=None` match nothing.
+#
+# Files: src/, scripts/ AND tests/ -- the last is the scope mypy does not cover.
+id: internal-detail-is-an-exception
+language: Python
+severity: error
+message: >-
+  internal_detail takes the caught exception (BaseException), never an authored string.
+  Pass the exception you caught, put a fact on the declared details class, or pass nothing
+  (ADR-010 point 5, salesagent-3cs7o.13).
+files:
+  - "src/**/*.py"
+  - "scripts/**/*.py"
+  - "tests/**/*.py"
+utils:
+  # Recursive on purpose: `("a" + b)`, `str(x) if c else "y"` and their nestings all
+  # bottom out in a string literal, a `str(...)` call, or a `.format(...)` on a string.
+  # The metavariables are the non-capturing `$_` kind: a capturing `$A` is bound once
+  # per match, so `x + ("b" + y)` would require the inner `$A` to equal the outer one
+  # and the nested `+` would never match.
+  authored-string:
+    any:
+      - kind: string
+      - kind: concatenated_string
+      - kind: parenthesized_expression
+        has:
+          matches: authored-string
+      - pattern: $_L + $_R
+        has:
+          matches: authored-string
+      - pattern: $_L % $_R
+        has:
+          field: left
+          matches: authored-string
+      - pattern: $_S.format($$$_ARGS)
+        has:
+          field: function
+          has:
+            field: object
+            matches: authored-string
+      - pattern: str($$$_ARGS)
+      # tree-sitter-python gives conditional_expression no field names; its children
+      # are consequence, condition, alternative in that order.
+      - pattern: $_T if $_C else $_F
+        any:
+          - has:
+              nthChild: 1
+              matches: authored-string
+          - has:
+              nthChild: 3
+              matches: authored-string
+rule:
+  any:
+    - kind: keyword_argument
+      all:
+        - has:
+            field: name
+            regex: ^internal_detail$
+        - has:
+            field: value
+            matches: authored-string
+    - kind: assignment
+      all:
+        - has:
+            field: left
+            kind: attribute
+            has:
+              field: attribute
+              regex: ^internal_detail$
+        - has:
+            field: right
+            matches: authored-string

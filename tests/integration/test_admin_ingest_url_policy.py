@@ -34,14 +34,25 @@ obligation, not a wire contract.
 from __future__ import annotations
 
 import logging
+from urllib.parse import urlsplit
 
 import pytest
-from adcp.types import AuthenticationScheme
+from adcp.types import AuthenticationScheme, ErrorCode
 from sqlalchemy import select
 
+from src.admin.blueprints import principals as principals_blueprint
 from src.core.database.models import CreativeAgent, PushNotificationConfig, SignalsAgent, Tenant
+from src.core.errors.codes import CODE_TABLE, Recovery
+from src.core.exceptions import AdCPSalesAgentError
 from tests.factories import PrincipalFactory
 from tests.helpers.webhook_credential_refusal import SHORT_CREDENTIAL, assert_admin_flash_refuses_the_credential
+from tests.integration._egress_ingest_helpers import (
+    ADMITTED_URL,
+    PRINCIPAL_ID,
+    TENANT_ID,
+    flashes,
+    post_register_hmac_webhook,
+)
 from tests.integration.test_outbound_http import set_flags
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -59,7 +70,6 @@ INSECURE_PUBLIC_URL = "http://signals.example.com/agent"
 # response body would be the leak point 6 forbids.
 LEAKED_FRAGMENTS = ("169.254.169.254", "reserved", "resolve", "metadata")
 
-TENANT_ID = "ingest_url_policy"
 API_KEY = "sk-ingest-url-policy-test"
 
 
@@ -76,9 +86,6 @@ def seeded_tenant(integration_db):
     with IntegrationEnv() as env:
         TenantFactory(tenant_id=TENANT_ID, name="Ingest URL Policy", subdomain="ingesturlpolicy")
         yield env
-
-
-PRINCIPAL_ID = "ingest_url_policy_principal"
 
 
 @pytest.fixture
@@ -108,16 +115,6 @@ def management_api_client(seeded_tenant, monkeypatch):
     return app.test_client()
 
 
-def flashes(client) -> list[tuple[str, str]]:
-    """The (category, message) pairs queued for the next rendered page.
-
-    Read from the session rather than from rendered HTML: the flash is the
-    thing the handler produced, and the template is not under test here.
-    """
-    with client.session_transaction() as session:
-        return list(session.get("_flashes", []))
-
-
 def signals_agents_for(env) -> list[SignalsAgent]:
     """Every signals agent row for the test tenant, read fresh.
 
@@ -137,9 +134,6 @@ def post_signals_agent(client, url: str):
         data={"agent_url": url, "name": "Ingest Policy Agent", "enabled": "on", "timeout": "30"},
         follow_redirects=False,
     )
-
-
-ADMITTED_URL = "https://127.0.0.1:9999/agent"
 
 
 def create_agent_through_the_add_form(client, env, monkeypatch) -> SignalsAgent:
@@ -311,6 +305,11 @@ def test_create_tenant_refuses_blocked_webhook_url(field, label, management_api_
         json={
             "name": "Refused Tenant",
             "subdomain": "refusedtenant",
+            # Supplied so the egress policy is the ONLY thing that can refuse this
+            # request. A tenant declares the host it is served at, so a payload without
+            # one is refused for that instead — with a 400 and no echo, which is what
+            # the sibling test below asserts, so it would have passed vacuously.
+            "virtual_host": "refusedtenant.adcp.test",
             "ad_server": "mock",
             field: METADATA_URL,
         },
@@ -338,6 +337,11 @@ def test_create_tenant_refusal_does_not_echo_the_reason(management_api_client, m
         json={
             "name": "Refused Tenant",
             "subdomain": "refusedtenant",
+            # Supplied so the egress policy is the ONLY thing that can refuse this
+            # request. A tenant declares the host it is served at, so a payload without
+            # one is refused for that instead — with a 400 and no echo, which is what
+            # the sibling test below asserts, so it would have passed vacuously.
+            "virtual_host": "refusedtenant.adcp.test",
             "ad_server": "mock",
             "slack_webhook_url": METADATA_URL,
         },
@@ -410,29 +414,6 @@ def post_register_webhook(client, url: str):
     )
 
 
-def post_register_hmac_webhook(
-    client, url: str, secret: str, *, tenant_id: str = TENANT_ID, principal_id: str = PRINCIPAL_ID
-):
-    """POST the principal-webhook registration form as an HMAC-SHA256 registration.
-
-    ``auth_type`` is the enum member rather than a literal: the form's option
-    values are rendered from ``AuthenticationScheme`` (webhook_management.html),
-    so this posts what a browser posts, and the non-canonical ``"hmac_sha256"``
-    spelling the gate refuses cannot creep back in through a test.
-
-    ``tenant_id`` / ``principal_id`` default to this module's fixtures and are
-    parameters only so the cross-surface equivalence pin in
-    ``test_webhook_hmac_credentials_ingest_refusal.py`` can drive this same form
-    against the tenant its own harness seeded, instead of spelling the route a
-    second time.
-    """
-    return client.post(
-        f"/tenant/{tenant_id}/principals/{principal_id}/webhooks/register",
-        data={"url": url, "auth_type": AuthenticationScheme.HMAC_SHA256, "hmac_secret": secret},
-        follow_redirects=False,
-    )
-
-
 def push_notification_configs_for(env) -> list[PushNotificationConfig]:
     """Every registered webhook for the test principal, read fresh."""
     session = env.get_session()
@@ -442,36 +423,138 @@ def push_notification_configs_for(env) -> list[PushNotificationConfig]:
     )
 
 
+@pytest.fixture
+def declared_refusals(monkeypatch) -> list[AdCPSalesAgentError]:
+    """Every typed refusal ``register_webhook`` declares, captured in order.
+
+    A SPY, not a substitute: it delegates to the real
+    ``record_admin_action_failure``, so the audit row is still written and still
+    says FAILED. Nothing about the route's behaviour changes; this only reads the
+    object the route already hands over.
+
+    A channel is needed because the route's own answer no longer carries the
+    fact. Under ADR-010 the operator-facing sentence is a function of the CODE
+    (``CODE_TABLE``) and of nothing else, so ``flash(f"...{e}")`` renders that
+    sentence and ``e.field`` reaches no rendered surface -- the authored sentence
+    this module used to assert ("URL resolves to a restricted range.") exists
+    nowhere in ``src/`` any more, and reproducing it here would be a second
+    message table. WHICH FIELD was refused is still known, and still travels: the
+    route hands the whole typed error to ``record_admin_action_failure``, which is
+    where it is read from rather than reconstructed.
+
+    A route that stopped declaring its refusal -- the accept-then-audit-as-success
+    defect ``record_admin_action_failure`` exists to prevent -- captures nothing
+    here and every case below goes red on the count.
+    """
+    captured: list[AdCPSalesAgentError] = []
+    record_failure = principals_blueprint.record_admin_action_failure
+
+    def spy(error: AdCPSalesAgentError) -> None:
+        captured.append(error)
+        record_failure(error)
+
+    monkeypatch.setattr(principals_blueprint, "record_admin_action_failure", spy)
+    return captured
+
+
+def assert_webhook_registration_refused(
+    client,
+    declared: list[AdCPSalesAgentError],
+    *,
+    code: ErrorCode,
+    field: str,
+    withheld: tuple[str, ...],
+) -> None:
+    """One refusal, graded on every channel it is allowed to speak through.
+
+    Written once because all three refusal cases below grade the same shape and
+    differ only in the code, the field, and the value that must not leak. The
+    division of labour is the one ``tests/unit/adapters/test_vendor_http.py``
+    established for ADR-010 errors: classification and the structured field are
+    read off the typed error, the operator-facing sentence is asserted as
+    ``CODE_TABLE``'s for that code rather than transcribed, and the
+    operator-facing text must name neither the refused host nor the supplied
+    credential (AdCP 3.1.1 ``transport-errors.mdx`` § Security Considerations,
+    the same rule L1 ``security.mdx`` point 6 states for this vector).
+    """
+    assert len(declared) == 1, f"expected exactly one declared refusal, got {declared}"
+    (refusal,) = declared
+
+    # Classification. ``correctable`` because the operator supplied the bad value
+    # and resubmitting a good one succeeds -- a form route answering ``terminal``
+    # would be telling an operator not to bother.
+    assert refusal.error_code == code
+    assert refusal.recovery == Recovery.CORRECTABLE
+
+    # WHICH INPUT to fix. Equality, not membership: the sibling gate one field
+    # over refuses URLs, and an operator sent to fix a URL that is fine has been
+    # told the wrong thing.
+    assert refusal.field == field
+
+    # The sentence belongs to the code, so it is asserted THROUGH the table: a
+    # route that rendered some other code's sentence fails here. That is only
+    # discriminating while the two codes in play resolve to different text, so
+    # this asserts it instead of assuming it.
+    assert CODE_TABLE[ErrorCode.VALIDATION_ERROR].message != CODE_TABLE[ErrorCode.INVALID_REQUEST].message
+    queued = flashes(client)
+    assert queued == [("error", f"Error registering webhook: {CODE_TABLE[code].message}")]
+
+    # What an operator's screen may not carry: not the refused host (an internal
+    # address handed back is a network map for whoever supplied the URL) and not
+    # the shared secret (the flash is rendered back into the page).
+    rendered = queued[0][1].lower()
+    leaked = [value for value in withheld if value.lower() in rendered]
+    assert leaked == [], f"the flash leaked {leaked}: {queued[0][1]!r}"
+
+
 @pytest.mark.parametrize(
-    ("url", "expected_flash"),
+    ("url", "cause"),
     [
-        (METADATA_URL, "Error registering webhook: URL resolves to a restricted range."),
-        (INSECURE_PUBLIC_URL, "Error registering webhook: URL resolves to a restricted range."),
+        (METADATA_URL, "hostname is on the blocklist"),
+        (INSECURE_PUBLIC_URL, "scheme is not https"),
     ],
 )
 def test_register_webhook_refuses_and_stores_nothing(
-    url, expected_flash, authenticated_admin_client, seeded_principal, monkeypatch
+    url, cause, authenticated_admin_client, seeded_principal, monkeypatch, caplog, declared_refusals
 ):
     """principals.py — a principal's push-notification webhook is stored now,
     posted to later, and is graded the same as every other ingest site.
 
-    Both rows expect the SAME flash: AdCPBlockedUrlError owns one sentence for
-    every refusal, so the wording no longer varies with the cause. The cause is
-    still recorded -- as a WARNING from the gate that computed it -- which is
-    where an operator reads why a particular URL was refused. The parametrize
-    still carries both URLs because the thing being graded is that each is
-    refused and nothing is stored, not what the operator is told.
+    Both rows produce the SAME operator-facing sentence: ``AdCPBlockedUrlError``
+    is ``AdCPUrlNotAllowedError``, whose text is ``VALIDATION_ERROR``'s from
+    ``CODE_TABLE``, so the wording cannot vary with the cause. What the
+    parametrize carries is therefore the CAUSE and no longer a flash: the reason
+    moved channel rather than away -- the seam that computed it logs it -- so a
+    metadata URL refused for the wrong reason (say, "malformed") still does not
+    pass as a metadata refusal.
     """
     set_flags(monkeypatch)
+    caplog.set_level(logging.WARNING)
 
     response = post_register_webhook(authenticated_admin_client, url)
 
     assert response.status_code == 302
-    # Exact, and exactly one: the REASON is parametrized alongside the URL rather
-    # than matched by prefix, so a metadata URL refused for the wrong reason (say,
-    # "could not be parsed") does not pass as a metadata refusal.
-    assert flashes(authenticated_admin_client) == [("error", expected_flash)]
+    assert_webhook_registration_refused(
+        authenticated_admin_client,
+        declared_refusals,
+        code=ErrorCode.VALIDATION_ERROR,
+        field="webhook.url",
+        withheld=(url, urlsplit(url).hostname, *LEAKED_FRAGMENTS),
+    )
+
+    # The security-relevant half. A handler that flashed and then fell through to
+    # a write would satisfy everything above; only reading the table back can tell
+    # "refused" from "refused, and stored anyway".
     assert push_notification_configs_for(seeded_principal) == []
+
+    # Where the authored diagnostic went. Same seam and same logger the
+    # signals-agent case above grades, and the URL is rendered through the one
+    # sanitizer -- so the operator reads the host here, on the channel that is
+    # allowed to name it, and not in the flash asserted above.
+    seam = [record.getMessage() for record in caplog.records if record.name == "src.core.security.egress.policy"]
+    assert [message for message in seam if url in message] == [f"Refusing URL at registration ({cause}): {url}"], (
+        f"the seam did not log the refusal cause for {url!r}; got {seam}"
+    )
 
 
 # The positive control this site went without until salesagent-h585d (which
@@ -526,7 +609,7 @@ def test_register_webhook_stores_a_row_when_the_url_is_admitted(
 # "the object's contents are identical"). UNGRADED by the conformance
 # storyboard: nothing in dist/compliance/3.1.1/ sends a short credential, so
 # grading cannot be cited either way and the schema is the only authority in
-# play. Full ruling: .claude/notes/pldmk8-spec-grounding.md.
+# play, so the pinned schema cited above is the whole ruling.
 # The boundary value and the contract that grades it both live in
 # ``tests.helpers.webhook_credential_refusal`` — the module that already holds
 # "what a credential refusal looks like" for the protocol surfaces — so this
@@ -534,7 +617,7 @@ def test_register_webhook_stores_a_row_when_the_url_is_admitted(
 
 
 def test_register_webhook_refuses_a_secret_shorter_than_the_pinned_minimum(
-    authenticated_admin_client, seeded_principal, monkeypatch
+    authenticated_admin_client, seeded_principal, monkeypatch, declared_refusals
 ):
     """A 31-character HMAC secret is refused at ingest, naming the credential.
 
@@ -556,19 +639,34 @@ def test_register_webhook_refuses_a_secret_shorter_than_the_pinned_minimum(
     * the ROW, because a flash-only assertion passes against a handler that
       flashes and then stores anyway — accept-then-never-deliver is the exact
       defect being removed;
-    * the FIELD SUFFIX, because "it refused" is not enough: the sibling gate one
-      field over refuses URLs, and an operator sent to fix a URL that is fine has
-      been told the wrong thing;
+    * the FIELD, because "it refused" is not enough: the sibling gate one field
+      over refuses URLs, and an operator sent to fix a URL that is fine has been
+      told the wrong thing. It is read off the declared refusal rather than out of
+      the flash, because under ADR-010 the flash carries ``CODE_TABLE``'s sentence
+      for the code and nothing else;
+    * the CODE, because the two gates answer with different ones —
+      ``INVALID_REQUEST`` for a document that violates the pinned schema against
+      ``VALIDATION_ERROR`` for a schema-valid URL a deny-list refuses — which is
+      the only part of the distinction that reaches the operator's screen at all;
     * that the SECRET is not echoed, because the flash is rendered back into the
       page and a credential belongs in no operator-facing surface (the reason
       this route stopped rendering stored credentials at all).
+
+    The last three are asserted THROUGH
+    :func:`tests.helpers.webhook_credential_refusal.assert_admin_flash_refuses_the_credential`
+    rather than by spelling ``code`` / ``field`` / ``withheld`` here. That helper
+    owns the credential-specific BINDING of those three parameters — the same
+    binding the protocol surfaces' cross-surface equivalence pin asserts — and it
+    delegates the grading shape back to :func:`assert_webhook_registration_refused`
+    below. Restating the binding at this call site is how this surface and the
+    protocol surfaces drift on WHICH input a short credential blames.
     """
     set_flags(monkeypatch, private=True)
 
     response = post_register_hmac_webhook(authenticated_admin_client, ADMITTED_URL, SHORT_CREDENTIAL)
 
     assert response.status_code == 302
-    assert_admin_flash_refuses_the_credential(flashes(authenticated_admin_client), secret=SHORT_CREDENTIAL)
+    assert_admin_flash_refuses_the_credential(authenticated_admin_client, declared_refusals, secret=SHORT_CREDENTIAL)
     assert push_notification_configs_for(seeded_principal) == []
 
 

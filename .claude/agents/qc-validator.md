@@ -92,4 +92,6 @@ Output a validation report:
 Runs everything above plus:
 1. `make quality-full` (includes integration and e2e tests)
 2. Verifies all open beads tasks are either completed or have clear follow-up issues
-3. Checks `bd list --status=in_progress` for abandoned work
+3. Checks `bd ready` for abandoned work (never `bd list` — see
+   `.claude/rules/workflows/beads-workflow.md`, it can balloon bd to tens of GB here)
+4. (No sync step: `bd sync` does not exist in bd 1.1.2 and export/replication are automatic)

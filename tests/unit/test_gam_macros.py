@@ -420,7 +420,7 @@ class TestAddTrackingUrlsToCreative:
         from src.adapters.gam.managers.creatives import GAMCreativesManager
 
         mock_client = MagicMock()
-        return GAMCreativesManager(mock_client, "12345", dry_run=True)
+        return GAMCreativesManager(mock_client, "12345")
 
     # -------------------------------------------------------------------------
     # ThirdPartyCreative - uses thirdPartyImpressionTrackingUrls

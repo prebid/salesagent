@@ -9,10 +9,10 @@ exercised through the full _get_products_impl pipeline with real DB data.
 
 import pytest
 
-from src.core.resolved_identity import ResolvedIdentity
-from src.core.tenant_context import LazyTenantContext
-from src.core.testing_hooks import AdCPTestContext
+from src.core.resolved_identity import PublicIdentity, ResolvedIdentity
+from src.core.tenant_context import TenantContext
 from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
+from tests.harness._identity import make_identity
 from tests.harness.product import ProductEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -21,14 +21,17 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 def _lazy_identity(
     tenant_id: str,
     principal_id: str | None = "p1",
-) -> ResolvedIdentity:
-    """Create a ResolvedIdentity using LazyTenantContext for real DB tenant lookup."""
-    return ResolvedIdentity(
+) -> ResolvedIdentity | PublicIdentity:
+    """An identity carrying the tenant row the database holds for *tenant_id*.
+
+    Through the canonical harness helper, so ``principal_id=None`` builds the
+    ``PublicIdentity`` a public tool takes rather than a ``ResolvedIdentity`` whose
+    principal is None -- a shape the type no longer has.
+    """
+    return make_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
-        tenant=LazyTenantContext(tenant_id),
-        protocol="mcp",
-        testing_context=AdCPTestContext(dry_run=False, mock_time=None, jump_to_event=None, test_session_id=None),
+        tenant=TenantContext.load(tenant_id),
     )
 
 

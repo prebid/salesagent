@@ -11,8 +11,6 @@ Utility scripts for setup, deployment, and operations.
 
 ### `/ops/` - Operations
 - `migrate.py` - Run database migrations
-- `manage_auth.py` - Manage authentication tokens
-- `get_tokens.py` - Retrieve access tokens
 - `check_tenants.py` - Check tenant health
 - `sync_all_tenants.py` - Sync all GAM tenants (cron job)
 - `aggregate_format_metrics.py` - Aggregate format metrics from GAM
@@ -31,7 +29,6 @@ Utility scripts for setup, deployment, and operations.
 
 ### Root Level
 - `run_server.py` - MCP server runner (used by run_all_services.py)
-- `run_admin_ui.py` - Admin UI runner (production WSGI wrapper)
 - `generate_encryption_key.py` - Generate Fernet encryption keys
 - `generate_frontend_types.py` - Generate TypeScript types from Pydantic schemas
 - `gam_prerequisites_check.py` - Check GAM OAuth prerequisites

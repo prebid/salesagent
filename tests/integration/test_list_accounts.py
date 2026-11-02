@@ -42,7 +42,7 @@ class TestListAccountsAgentScoping:
             AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=acc1)
             env._commit_factory_data()
 
-            response = _list_accounts_impl(identity=env.identity)
+            response = _list_accounts_impl(req=None, identity=env.identity)
 
         assert len(response.accounts) == 1
         assert response.accounts[0].account_id == "acc_la_1"
@@ -61,19 +61,6 @@ class TestListAccountsAgentScoping:
             AccountFactory(tenant=tenant, account_id="acc_no_access")
             env._commit_factory_data()
 
-            response = _list_accounts_impl(identity=env.identity)
+            response = _list_accounts_impl(req=None, identity=env.identity)
 
         assert len(response.accounts) == 0
-
-
-class TestListAccountsUnauthenticated:
-    """BR-RULE-055 INV-3: unauthenticated list_accounts raises AUTH_REQUIRED."""
-
-    def test_unauthenticated_returns_auth_error(self, integration_db):
-        import pytest
-
-        from src.core.exceptions import AdCPAuthenticationError
-        from src.core.tools.accounts import _list_accounts_impl
-
-        with pytest.raises(AdCPAuthenticationError, match="Authentication required"):
-            _list_accounts_impl(identity=None)

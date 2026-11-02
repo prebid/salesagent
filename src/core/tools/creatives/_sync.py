@@ -3,96 +3,97 @@
 import logging
 import time
 from collections.abc import Sequence
+from contextlib import ExitStack
 from typing import Any
 
-from adcp import PushNotificationConfig
-from adcp.types import ContextObject, CreativeAction, CreativeAsset
+from adcp.types import CreativeAction, CreativeAsset
 from pydantic import BaseModel
 
-from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.repositories.uow import CreativeUoW
-from src.core.exceptions import AdCPError
-from src.core.helpers import log_tool_activity
-from src.core.resolved_identity import ResolvedIdentity
+from src.core.errors.details import ValidationDetails
+from src.core.exceptions import AdCPSalesAgentError, adcp_error_for
+from src.core.helpers import enum_value, log_tool_activity
+from src.core.resolved_identity import AccountIdentity, ResolvedIdentity
 from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
+from src.core.schemas.creative import SyncCreativesRequest
+from src.core.tenant_context import TenantContext
 from src.core.validation_helpers import format_validation_error, run_async_in_sync_context
 from src.core.webhook_validator import webhook_url_for_log
 from src.core.webhooks.registration import accept_push_notification_config
 
 from ._assignments import _process_assignments
 from ._processing import _create_new_creative, _failed_sync_result, _update_existing_creative
-from ._validation import _get_field, _validate_creative_input, check_provenance_required
+from ._validation import _get_field, _validate_creative_input, check_provenance_policy
 from ._workflow import _audit_log_sync, _create_sync_workflow_steps, _send_creative_notifications
 
 logger = logging.getLogger(__name__)
 
 
-def _append_warning(result: SyncCreativeResult, warning: str) -> None:
-    """Append a non-fatal warning to a sync result.
+def _with_creative(details: ValidationDetails | None, creative_id: str) -> ValidationDetails:
+    """Attach the offending creative to a details block, or start one.
 
-    ``warnings`` is inherited from the adcp 6.6 parent with a ``None`` default (it was
-    formerly a local ``[]``-default override, PR #1567), so materialize the list
-    before appending rather than assuming a list is present.
+    Both per-creative failure paths need this, so it lives once rather than as
+    two copies of a dict merge. ``model_copy`` rather than assignment because a
+    details block is a value: the caller's instance is not mutated underneath it.
     """
-    result.warnings = (result.warnings or []) + [warning]
+    if details is None:
+        return ValidationDetails(creative_id=creative_id)
+    return details.model_copy(update={"creative_id": creative_id})
 
 
 def _sync_creatives_impl(
-    creatives: Sequence[CreativeAsset | BaseModel | dict[str, Any]],
-    assignments: dict | None = None,
-    creative_ids: list[str] | None = None,
-    delete_missing: bool = False,
-    dry_run: bool = False,
-    validation_mode: str = "strict",
-    push_notification_config: PushNotificationConfig | None = None,
-    context: ContextObject | dict | None = None,
-    identity: ResolvedIdentity | None = None,
+    req: SyncCreativesRequest,
+    identity: AccountIdentity,
 ) -> SyncCreativesResponse:
-    """Sync creative assets to centralized library (AdCP v2.5 spec compliant endpoint).
+    """The sync_creatives CONTROLLER: resolve who is calling, then run the service.
 
-    Primary creative management endpoint that handles:
-    - Bulk creative upload/update with upsert semantics
-    - Creative assignment to media buy packages via assignments dict
-    - Support for both hosted assets (media_url) and third-party tags (snippet)
-    - Scoped updates via creative_ids filter, dry-run mode, and validation options
+    Thin by construction. Everything a transport must establish before the work can start
+    lives here; the work itself is :func:`sync_creatives`, which takes an already-resolved
+    caller and never asks who they are.
 
-    Args:
-        creatives: Array of creative assets to sync
-        assignments: Bulk assignment map of creative_id to package_ids (spec-compliant)
-        creative_ids: Filter to limit sync scope to specific creatives (AdCP 2.5).
-            - None (default): Process all creatives in payload
-            - Empty list []: Process no creatives (filter matches nothing)
-            - List of IDs: Only process creatives whose IDs appear in both payload AND this filter
-        delete_missing: Delete creatives not in sync payload (use with caution)
-        dry_run: Preview changes without applying them
-        validation_mode: Validation strictness (strict or lenient)
-        push_notification_config: Push notification config for status updates (AdCP spec, optional)
-        context: Application level context per adcp spec
-        identity: ResolvedIdentity with principal/tenant info (transport-agnostic)
-
-    Returns:
-        SyncCreativesResponse with synced creatives and assignments
+    That split is what lets another tool reuse creative sync. ``create_media_buy`` and
+    ``update_media_buy`` upload a package's inline creatives, and they used to do it by
+    calling this function -- one controller invoking another, which meant the nested call
+    carried the outer request's ``idempotency_key`` into a function that had no business
+    seeing it, and inherited an auth check that had already run. They call the SERVICE now.
     """
+    return sync_creatives(req, identity=identity, principal_id=identity.principal.principal_id, tenant=identity.tenant)
+
+
+def sync_creatives(
+    req: SyncCreativesRequest,
+    *,
+    identity: ResolvedIdentity,
+    principal_id: str,
+    tenant: TenantContext,
+) -> SyncCreativesResponse:
+    """Sync creative assets to the centralized creative library.
+
+    THE SERVICE. Takes a resolved caller and does the work: no auth, no transport concerns,
+    no idempotency. Callable from any controller, and from any other service that needs
+    creatives uploaded -- which is the point.
+    """
+
+    # ``creatives`` is aliased because it is NARROWED below by the creative_ids filter.
+    # Everything else is read as ``req.<field>`` at its use site -- no alias, so the request
+    # stays the one carrier.
+    creatives: Sequence[CreativeAsset | BaseModel | dict[str, Any]] = req.creatives
+    # bool() here narrows the ANNOTATION, it does not supply the default. The model declares
+    # ``bool | None`` -- wider than the pinned {"type": "boolean"} -- so an explicit null is
+    # still representable and two callees below want a real bool.
+    dry_run = bool(req.dry_run)
+    validation_mode = enum_value(req.validation_mode)
+
     from pydantic import ValidationError
 
-    # Phase 1a: Models flow through to helpers (which convert via isinstance guard).
-    # No model_dump at orchestrator level — helpers handle dict conversion transitionally.
-
-    # AdCP 2.5: Filter creatives by creative_ids if provided
-    # This allows scoped updates to specific creatives without affecting others
-    if creative_ids:
-        creative_ids_set = set(creative_ids)
+    # AdCP 2.5: Filter creatives by creative_ids if provided -- scoped updates to specific
+    # creatives without affecting others.
+    if req.creative_ids:
+        creative_ids_set = set(req.creative_ids)
         creatives = [c for c in creatives if _get_field(c, "creative_id") in creative_ids_set]
         logger.info(f"[sync_creatives] Filtered to {len(creatives)} creatives by creative_ids filter")
 
     start_time = time.time()
-
-    # Authentication — principal_id is required for creative sync (NOT NULL in database).
-    # require_principal_id first so the canonical auth message surfaces for missing/anonymous auth;
-    # require_identity narrows the type. Tenant is resolved at the transport boundary.
-    principal_id = require_principal_id(identity, context=context)
-    identity = require_identity(identity, context=context)
-    tenant = require_tenant(identity, context=context)
 
     # Registration SSRF gate on the buyer-supplied webhook URL, taken HERE: before
     # any DB / workflow write stashes the URL, and before the per-creative loop,
@@ -107,11 +108,10 @@ def _sync_creatives_impl(
     # SEND-time gate and re-checks with DNS when the callback is actually dialed —
     # so no second address check belongs on this path.
     webhook_url = None
-    if push_notification_config:
+    if req.push_notification_config:
         registration = accept_push_notification_config(
-            push_notification_config,
+            req.push_notification_config,
             field_prefix="push_notification_config",
-            context=context,
         )
         webhook_url = registration.url
         if webhook_url is not None and str(webhook_url).strip():
@@ -139,28 +139,47 @@ def _sync_creatives_impl(
 
     # Get tenant creative approval settings
     # approval_mode: "auto-approve", "require-human", "ai-powered"
-    logger.info(f"[sync_creatives] Tenant dict keys: {list(tenant.keys())}")
-    logger.info(f"[sync_creatives] Tenant approval_mode field: {tenant.get('approval_mode', 'NOT FOUND')}")
-    approval_mode = tenant.get("approval_mode", "require-human")
-    logger.info(f"[sync_creatives] Final approval mode: {approval_mode} (from tenant: {tenant.get('tenant_id')})")
+    approval_mode = tenant.approval_mode
+    logger.info(f"[sync_creatives] Approval mode: {approval_mode} (from tenant: {tenant.tenant_id})")
 
     # Fetch creative formats ONCE before processing loop (outside any transaction)
     # This avoids async HTTP calls inside database savepoints which cause transaction errors
     from src.core.creative_agent_registry import get_creative_agent_registry
 
     registry = get_creative_agent_registry()
-    all_formats = run_async_in_sync_context(registry.list_all_formats(tenant_id=tenant["tenant_id"]))
+    all_formats = run_async_in_sync_context(registry.list_all_formats(tenant_id=tenant.tenant_id))
 
-    with CreativeUoW(tenant["tenant_id"]) as uow:
+    # ONE write path for both branches: dry_run rolls this transaction back on clean
+    # exit instead of committing it (BaseUoW), so preview and live run identical
+    # resolve/validate/write code and a preview's reads see its own flushed rows
+    # (sync-creatives-request.json#/properties/dry_run @ v3.1.1).
+    #
+    # The stack, rather than a plain `with`, is what keeps the assignment stage a
+    # SINGLE call site below: live closes this transaction before that call (as
+    # the implicit block exit used to), dry keeps it open and hands it over so
+    # both stages share the one rolled-back transaction. A second invocation
+    # under an `if dry_run:` would re-fork the very seam this collapses.
+    with ExitStack() as stack:
+        uow = stack.enter_context(CreativeUoW(tenant.tenant_id, dry_run=dry_run))
         assert uow.creatives is not None
         creative_repo = uow.creatives
+
+        # sync-creatives-response.json (SyncCreativesSuccess.sandbox): "When true, this
+        # response contains simulated data from sandbox mode"; core/account.json: a sandbox
+        # account is one with "no real platform calls, no real spend". The account the
+        # request names (required by the pin) is what says so, and the resolver already
+        # loaded it onto the identity, so it is read off ``identity.account`` like the
+        # tenant and principal -- no second select. Set only when true and omitted
+        # otherwise: the error shape forbids the field, and a production account's
+        # response simply has none.
+        sandbox = True if identity.account is not None and identity.account.sandbox else None
 
         # Check if any product in this tenant requires AI provenance metadata
         provenance_policies = creative_repo.get_provenance_policies()
         tenant_requires_provenance = len(provenance_policies) > 0
         if tenant_requires_provenance:
             logger.info(
-                f"[sync_creatives] Tenant {tenant['tenant_id']} has "
+                f"[sync_creatives] Tenant {tenant.tenant_id} has "
                 f"{len(provenance_policies)} product(s) requiring AI provenance"
             )
 
@@ -188,52 +207,39 @@ def _sync_creatives_impl(
                     creative_id = creative.creative_id or "unknown"
                     # Format ValidationError nicely for clients, pass through ValueError as-is
                     if isinstance(validation_error, ValidationError):
-                        error_msg = format_validation_error(validation_error, context=f"creative {creative_id}")
+                        error_msg = format_validation_error(validation_error, label=f"creative {creative_id}")
                     else:
                         error_msg = str(validation_error)
                     failed_creatives.append({"creative_id": creative_id, "error": error_msg})
                     failed_count += 1
-                    results.append(_failed_sync_result(creative_id, error_msg))
+                    # adcp_error_for is the ONE type->code mapping: reusing it here
+                    # keeps the per-creative advisory identical to what the request-level
+                    # boundary would have produced, and it already derives field + details
+                    # from the pydantic error. The raw text rides internal_detail (server
+                    # log only) instead of details, so no arbitrary exception text reaches
+                    # the buyer.
+                    typed = adcp_error_for(validation_error)
+                    typed.internal_detail = validation_error
+                    # A DECLARED field, not a dict poked onto a built error. The
+                    # subject is what `creative_id` names, and ValidationDetails
+                    # carries it (inherited from EntityRefDetails). The pydantic
+                    # field-level detail now travels in issues[], which
+                    # adcp_error_for already populated.
+                    typed.details = _with_creative(typed.details, creative_id)
+                    results.append(_failed_sync_result(creative_id, typed))
                     continue  # Skip to next creative
 
-                # Check provenance requirement (EU AI Act Article 50)
-                provenance_warning = None
+                # The product's provenance policy (core/creative-policy.json, EU AI Act
+                # Article 50): a creative that does not meet it is a per-item PROVENANCE_*
+                # failure, caught below with every other correctable typed error. The first
+                # policy is the tenant-wide one.
                 if tenant_requires_provenance:
-                    # Use the first matching policy (tenant-wide enforcement)
-                    provenance_warning = check_provenance_required(validated_creative, provenance_policies[0])
+                    check_provenance_policy(validated_creative, provenance_policies[0])
 
-                # dry_run: build simulated results without DB writes
-                if dry_run:
-                    creative_id = creative.creative_id or "unknown"
-                    # Check if creative exists (read-only) to determine would-create vs would-update
-                    existing_creative = None
-                    if creative.creative_id:
-                        existing_creative = creative_repo.get_by_id(creative.creative_id, principal_id)
-
-                    if existing_creative:
-                        updated_count += 1
-                        results.append(
-                            SyncCreativeResult(
-                                creative_id=creative_id,
-                                action=CreativeAction.updated,
-                                internal_status=existing_creative.status,
-                                review_feedback=None,
-                            )
-                        )
-                    else:
-                        created_count += 1
-                        results.append(
-                            SyncCreativeResult(
-                                creative_id=creative_id,
-                                action=CreativeAction.created,
-                                review_feedback=None,
-                            )
-                        )
-                    synced_creatives.append(creative)
-                    continue
-
-                # Use savepoint for individual creative transaction isolation
-                with creative_repo.begin_nested():
+                # Savepoint per creative: isolates this row's writes AND the effects
+                # queued while processing it, so a creative that fails takes its
+                # queued AI-review submit down with it (#1970).
+                with creative_repo.savepoint():
                     # Check if creative already exists (always check for upsert/patch behavior)
                     # SECURITY: Must filter by principal_id to prevent cross-principal modification
                     existing_creative = None
@@ -249,7 +255,6 @@ def _sync_creatives_impl(
                             approval_mode=approval_mode,
                             tenant=tenant,
                             webhook_url=webhook_url,
-                            context=context,
                             all_formats=all_formats,
                             registry=registry,
                             principal_id=principal_id,
@@ -291,13 +296,6 @@ def _sync_creatives_impl(
                                 creative_info["ai_review_reason"] = existing_creative.data["ai_review"].get("reason")
                             creatives_needing_approval.append(creative_info)
 
-                        # Add provenance warning if applicable
-                        if provenance_warning and update_result.action != "failed":
-                            _append_warning(update_result, provenance_warning)
-                            # Flag for review when provenance is missing
-                            existing_creative.status = "pending_review"
-                            needs_approval = True
-
                         results.append(update_result)
 
                     else:
@@ -309,7 +307,6 @@ def _sync_creatives_impl(
                             approval_mode=approval_mode,
                             tenant=tenant,
                             webhook_url=webhook_url,
-                            context=context,
                             all_formats=all_formats,
                             registry=registry,
                             principal_id=principal_id,
@@ -344,17 +341,12 @@ def _sync_creatives_impl(
                             # No ai_result available yet in async mode
                             creatives_needing_approval.append(creative_info)
 
-                        # Add provenance warning if applicable
-                        if provenance_warning and create_result.action != "failed":
-                            _append_warning(create_result, provenance_warning)
-                            needs_approval = True
-
                         results.append(create_result)
 
                     # If we reach here, creative processing succeeded
                     synced_creatives.append(creative)
 
-            except AdCPError as e:
+            except AdCPSalesAgentError as e:
                 # Typed errors keyed on their recovery semantics: TRANSIENT ones
                 # (agent rate-limited/unavailable during the format fetch) are
                 # request-level infra failures — propagate so the buyer sees
@@ -372,23 +364,20 @@ def _sync_creatives_impl(
                 )
                 failed_count += 1
                 # Carry the typed error's OWN classification onto the per-item
-                # result. The default is SERVICE_UNAVAILABLE — now paired with the
-                # pin's `transient` rather than left empty — which for a
-                # correctable error reports the SELLER as unavailable for a
-                # problem in the buyer's own document, and drops the `field` that
-                # says which input to fix. That matters most for an egress
-                # refusal, whose message deliberately says nothing.
-                # The recovery is no longer forwarded: it derives from the code in
-                # wire_advisory, and the raise sites that used to hand-type a
-                # contradicting terminal no longer can.
-                results.append(
-                    _failed_sync_result(
-                        creative_id,
-                        error_msg,
-                        code=e.error_code,
-                        field=getattr(e, "field", None),
-                    )
-                )
+                # result, by handing over the EXCEPTION rather than a message plus
+                # hand-plucked kwargs. Falling back to the SERVICE_UNAVAILABLE
+                # default reported the SELLER as unavailable for a problem in the
+                # buyer's own document and dropped the `field` that says which input
+                # to fix — worst for an egress refusal, whose message deliberately
+                # says nothing.
+                #
+                # Passing the exception is what makes that ONE conversion:
+                # AdCPErrorDetail.from_exception reads code, field and the typed
+                # details class off `e` and resolves sentence/recovery/suggestion
+                # from CODE_TABLE — the same derivation the transport envelope uses,
+                # so the per-creative advisory and the request-level envelope cannot
+                # disagree. Nothing here forwards a recovery: it follows from the code.
+                results.append(_failed_sync_result(creative_id, e))
             except Exception as e:
                 # Savepoint automatically rolls back this creative only
                 creative_id = _get_field(raw_creative, "creative_id", "unknown")
@@ -397,10 +386,17 @@ def _sync_creatives_impl(
                     {"creative_id": creative_id, "name": _get_field(raw_creative, "name"), "error": error_msg}
                 )
                 failed_count += 1
-                results.append(_failed_sync_result(creative_id, error_msg))
+                # Same single mapping as the request-level boundary: a pydantic
+                # ValidationError becomes VALIDATION_ERROR with its field and details,
+                # anything else becomes INTERNAL_ERROR. Synthesizing a bare INTERNAL_ERROR
+                # here instead threw away the field the buyer needs.
+                typed = adcp_error_for(e)
+                typed.internal_detail = e
+                typed.details = _with_creative(typed.details, creative_id)
+                results.append(_failed_sync_result(creative_id, typed))
 
         # Archive creatives not in the sync payload when delete_missing=True
-        if delete_missing:
+        if req.delete_missing:
             # Collect all creative IDs from the payload (regardless of success/failure)
             payload_creative_ids = {_get_field(c, "creative_id") for c in creatives}
             payload_creative_ids.discard(None)
@@ -411,8 +407,7 @@ def _sync_creatives_impl(
 
             for db_creative in existing_creatives:
                 if db_creative.creative_id not in payload_creative_ids and db_creative.status != "archived":
-                    if not dry_run:
-                        db_creative.status = "archived"
+                    db_creative.status = "archived"
                     deleted_count += 1
                     results.append(
                         SyncCreativeResult(
@@ -422,34 +417,57 @@ def _sync_creatives_impl(
                         )
                     )
 
-        # CreativeUoW auto-commits on clean exit — no explicit commit needed
+        # Approval workflow steps join THIS transaction.
+        # No dry_run condition: the identical write path runs on both branches and
+        # a preview's rollback discards the steps with the creatives, so a
+        # preview now exercises the step/mapping write instead of skipping it.
+        # Ordering: BaseUoW.__exit__ commits and only THEN drains after_commit,
+        # so the notification below cannot name a step the commit has not yet
+        # released — it holds by construction, not by careful sequencing.
+        if creatives_needing_approval:
+            _create_sync_workflow_steps(
+                creatives_needing_approval=creatives_needing_approval,
+                principal_id=principal_id,
+                tenant=tenant,
+                approval_mode=approval_mode,
+                push_notification_config=req.push_notification_config,
+                uow=uow,
+            )
 
-    # Process assignments (spec-compliant: creative_id → package_ids mapping)
-    assignment_list = _process_assignments(
-        assignments=assignments,
-        results=results,
-        tenant=tenant,
-        validation_mode=validation_mode,
-        principal_id=principal_id,
-    )
+            def _notify() -> None:
+                _send_creative_notifications(
+                    creatives_needing_approval=creatives_needing_approval,
+                    tenant=tenant,
+                    approval_mode=approval_mode,
+                    principal_id=principal_id,
+                )
 
-    # Create workflow steps and send notifications for creatives requiring approval
-    # Skip in dry_run mode — no side effects
-    if creatives_needing_approval and not dry_run:
-        _create_sync_workflow_steps(
-            creatives_needing_approval=creatives_needing_approval,
-            principal_id=principal_id,
+            creative_repo.after_commit(_notify, label="creative_approval_slack")
+
+        # LIVE: close (and so commit) the creatives transaction here, exactly as
+        # the implicit block exit did before — the assignment stage then opens
+        # its own, and reads these creatives as committed rows.
+        # DRY: leave it open. The assignment stage joins THIS transaction and
+        # reads the same creatives as flushed rows, so it grades the post-sync
+        # state without a shadow carrier, and the whole thing rolls back together.
+        # NOTE: this conditional is the transaction seam itself (the commit-vs-
+        # rollback decision), not a hand-placed effect gate — it is deliberately
+        # retained, so this file is not literally dry_run-free after prkv.16.
+        if not dry_run:
+            stack.close()
+
+        # Process assignments (spec-compliant: creative_id → package_ids mapping).
+        # ONE mechanism, one call site, both branches: the same resolution,
+        # validation, strict-raise, upsert, weight normalization and media-buy
+        # status transition run either way — dry_run differs only in which
+        # transaction they run in and that it is discarded.
+        assignment_list = _process_assignments(
+            assignments=req.assignments,
+            results=results,
             tenant=tenant,
-            approval_mode=approval_mode,
-            push_notification_config=push_notification_config,
-            context=context,
-            identity=identity,
-        )
-        _send_creative_notifications(
-            creatives_needing_approval=creatives_needing_approval,
-            tenant=tenant,
-            approval_mode=approval_mode,
+            validation_mode=validation_mode,
             principal_id=principal_id,
+            uow=uow if dry_run else None,
         )
 
     # Audit logging
@@ -459,7 +477,7 @@ def _sync_creatives_impl(
         synced_creatives=synced_creatives,
         failed_creatives=failed_creatives,
         assignment_list=assignment_list,
-        creative_ids=creative_ids,
+        creative_ids=req.creative_ids,
         dry_run=dry_run,
         created_count=created_count,
         updated_count=updated_count,
@@ -468,9 +486,7 @@ def _sync_creatives_impl(
         creatives_needing_approval=creatives_needing_approval,
     )
 
-    # Log activity
-    if identity is not None:
-        log_tool_activity(identity, "sync_creatives", start_time)
+    log_tool_activity(identity, "sync_creatives", start_time)
 
     # Build message
     message = f"Synced {created_count + updated_count} creatives"
@@ -493,8 +509,11 @@ def _sync_creatives_impl(
         message += f", {len(creatives_needing_approval)} require approval"
 
     # Build AdCP-compliant response (per official spec)
-    return SyncCreativesResponse(
+    response = SyncCreativesResponse(
         creatives=results,
         dry_run=dry_run,
-        context=context,
+        sandbox=sandbox,
+        message=message,
     )
+
+    return response

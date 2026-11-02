@@ -9,9 +9,14 @@ per-PROCESS, so every xdist worker that landed any of its 29 tests paid its own
 import plus its own nested collection.
 
 The suite already collects everything, once, for real. This publishes that, and
-the four questions become in-process set operations. Same shape as
-``tests/_worker_profile.py``: off unless an environment variable names a
-directory, one file per process, and a reader that folds the parts.
+the four questions become in-process set operations. Off unless an environment
+variable names a directory, one file per process, and a reader that folds the
+parts.
+
+This module is also the one home for what any plugin writing a per-session artifact
+at ``pytest_sessionfinish`` needs: ``write_artifact``, ``read_artifacts``,
+``required_dir``, ``scope_fingerprint`` and ``relative_target``. It is stdlib-only
+apart from the marker helper, and the root conftest already imports it.
 
 ## A record is identified by its SCOPE, not by its suite
 
@@ -65,6 +70,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -81,29 +87,69 @@ _retained: list[Any] = []
 _record: dict[str, Any] | None = None
 
 
-def _relative_target(config: Any) -> list[str]:
+def relative_target(config: Any) -> list[str]:
     """The invocation paths, relative to rootdir, normalized and sorted.
 
     ``pytest tests/bdd/`` and ``pytest tests/bdd`` are the same collection and
     must produce the same target, or a caller asking for the full tree by name
     would miss it over a trailing slash.
     """
-    rootdir = Path(str(config.rootdir))
+    rootdir = Path(str(config.rootdir)).resolve()
     targets = []
     for arg in config.args:
         # A nodeid argument (``path::test``) narrows selection, not the target
         # directory; keep only the path half so the scope stays comparable.
-        path_part = str(arg).split("::", 1)[0]
-        path = Path(path_part)
+        path = Path(str(arg).split("::", 1)[0])
         try:
-            path = path.resolve().relative_to(rootdir.resolve())
+            targets.append(path.resolve().relative_to(rootdir).as_posix())
         except ValueError:
             # Outside rootdir (or not a path at all) -- record it verbatim
             # rather than guessing, so an unexpected invocation is visible.
             targets.append(str(arg))
-            continue
-        targets.append(path.as_posix().rstrip("/") or ".")
     return sorted(set(targets))
+
+
+def write_artifact(path: Path, body: str) -> None:
+    """Write one per-session artifact, reporting a failure instead of raising.
+
+    A diagnostic never changes the outcome of the thing it measures. An exception out
+    of ``pytest_sessionfinish`` is an unhandled error, so an unwritable path would turn
+    a session whose tests all passed into a nonzero exit with no summary line.
+
+    Swallowing the write is safe because losing the artifact is not silent: each reader
+    fails closed on a missing record (``load``, ``load_run``, and the runner's
+    missing-artifact check for the payload capture).
+
+    OSError, not Exception: PermissionError, FileExistsError, NotADirectoryError and
+    ENOSPC are all subclasses of it, while a defect in the artifact itself stays loud.
+    """
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+    except OSError as exc:
+        print(f"[session-artifact] could not write {path}: {exc}", file=sys.stderr)
+
+
+def read_artifacts(directory: str | Path) -> list[tuple[Path, dict[str, Any]]]:
+    """Every per-session file in ``directory``, in a stable order."""
+    return [(path, json.loads(path.read_text(encoding="utf-8"))) for path in sorted(Path(directory).glob("*.json"))]
+
+
+def required_dir(variable: str, refusal: type[Exception], consequence: str) -> Path:
+    """Where a READER finds this run's records. Raises rather than defaulting.
+
+    A reader that silently falls back grades whatever is there, or asks its question of
+    an empty set and passes, which is the failure these artifacts exist to remove.
+    """
+    directory = os.environ.get(variable)
+    if not directory:
+        raise refusal(f"{variable} is unset, so {consequence}")
+    return Path(directory)
+
+
+def scope_fingerprint(*scope: Any) -> str:
+    """A short stable name for a session's scope, for use in its file name."""
+    return hashlib.sha256(json.dumps(scope, sort_keys=True).encode("utf-8")).hexdigest()[:12]
 
 
 def _selection_filter(config: Any) -> str:
@@ -132,7 +178,7 @@ def serialize(session: Any) -> None:
     selected = {item.nodeid for item in session.items}
     _record = {
         "suite": os.environ.get("TOX_ENV_NAME", ""),
-        "target": _relative_target(config),
+        "target": relative_target(config),
         "filter": _selection_filter(config),
         "e2e_enabled": os.environ.get("BDD_E2E_ENABLED", "").lower() == "true",
         "worker": os.environ.get("PYTEST_XDIST_WORKER", "main"),
@@ -152,22 +198,13 @@ def on_session_finish() -> None:
     """Write this process's record."""
     if not enabled or _record is None:
         return
-    out = Path(str(_OUT_DIR))
-    out.mkdir(parents=True, exist_ok=True)
-
-    # Named by a fingerprint of the SCOPE, not by the tox env. `_worker_profile`
-    # can use `TOX_ENV_NAME or "adhoc"` because only tox writes its directory;
-    # this one is also written by CI's bdd-tests-shard job, which runs
-    # `.github/actions/_pytest` with paths rather than tox, leaving TOX_ENV_NAME
-    # unset. Both shards would then write `adhoc-gw0.json` -- harmless while
-    # they are separate runners, and a silent overwrite the moment the two
-    # artifacts are downloaded into one directory, which is exactly what the CI
-    # wiring step does. The pid keeps two same-scope processes apart; no reader
-    # parses the filename, since every field it encodes is in the record too.
-    scope = json.dumps([_record["target"], _record["filter"]], sort_keys=True)
-    fingerprint = hashlib.sha256(scope.encode("utf-8")).hexdigest()[:12]
-    name = f"{fingerprint}-{_record['worker']}-{os.getpid()}.json"
-    (out / name).write_text(json.dumps(_record), encoding="utf-8")
+    # Named by a fingerprint of the SCOPE, not by the tox env: CI's bdd-tests-shard job
+    # runs `.github/actions/_pytest` with paths rather than tox, leaving TOX_ENV_NAME
+    # unset, and its two shards' artifacts are downloaded into one directory. The pid
+    # keeps two same-scope processes apart; no reader parses the filename, since every
+    # field it encodes is in the record too.
+    name = f"{scope_fingerprint(_record['target'], _record['filter'])}-{_record['worker']}-{os.getpid()}.json"
+    write_artifact(Path(str(_OUT_DIR)) / name, json.dumps(_record))
 
 
 def manifest_dir() -> Path:
@@ -177,15 +214,13 @@ def manifest_dir() -> Path:
     empty directory asks its question of an empty set and passes, which is the
     failure this whole artifact exists to remove.
     """
-    directory = os.environ.get("PYTEST_COLLECTION_MANIFEST")
-    if not directory:
-        raise ManifestNotFound(
-            "PYTEST_COLLECTION_MANIFEST is unset, so no collection record can be "
-            "read. These tests grade what a real run collected; run them through "
-            "`tox -e collection` after a BDD session, or via run_all_tests.sh, "
-            "which exports it."
-        )
-    return Path(directory)
+    return required_dir(
+        "PYTEST_COLLECTION_MANIFEST",
+        ManifestNotFound,
+        "no collection record can be read. These tests grade what a real run collected; "
+        "run them through `tox -e collection` after a BDD session, or via "
+        "run_all_tests.sh, which exports it.",
+    )
 
 
 # The full `tests/bdd` tree, as `target` records it. Both `[testenv:bdd]` and
@@ -219,10 +254,8 @@ def load(
     ``filter=""`` demands an UNFILTERED record and is not satisfied by a
     filtered one.
     """
-    directory = Path(directory)
     records = []
-    for path in sorted(directory.glob("*.json")):
-        record = json.loads(path.read_text(encoding="utf-8"))
+    for _, record in read_artifacts(directory):
         if target is not None and record.get("target") != sorted(target):
             continue
         if filter is not None and record.get("filter", "") != filter:

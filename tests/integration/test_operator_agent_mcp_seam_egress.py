@@ -41,42 +41,45 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.core.creative_agent_registry import CreativeAgent, CreativeAgentRegistry
+from src.core.errors.codes import CODE_TABLE
 from src.core.exceptions import (
-    RECOVERY_BY_WIRE_CODE,
     AdCPConfigurationError,
-    AdCPError,
+    AdCPSalesAgentError,
     AdCPServiceUnavailableError,
-    build_two_layer_error_envelope,
 )
 from src.core.signals_agent_registry import SignalsAgent, SignalsAgentRegistry
 from src.core.utils.mcp_client import MCPConnectionError
 from tests.helpers import assert_envelope_shape
+from tests.helpers.egress_backoff import fast_backoff
+from tests.helpers.envelope_assertions import envelope_for
 from tests.helpers.local_http_origin import run_local_origin
 from tests.integration.property_list_helpers import allow_local_origin
-from tests.integration.test_outbound_http import fast_backoff
 
 pytestmark = [pytest.mark.integration]
 
 
-def _assert_wire_pair(exc: AdCPError, code: str, *, pinned_recovery: str) -> None:
+def _assert_wire_pair(exc: AdCPSalesAgentError, code: str, *, pinned_recovery: str) -> None:
     """Assert the buyer-visible envelope is *code* paired with its pinned recovery.
 
     Asserts on the two-layer WIRE envelope, not on the exception's attributes:
     the envelope is what a buyer receives, and reading the attributes would grade
     the object this test already constructed the expectation from.
 
-    The expected recovery is read from ``RECOVERY_BY_WIRE_CODE`` rather than
-    written as a literal, so this cannot drift from the pin — if a spec bump
-    reclassified the code, this test would follow it instead of asserting
-    yesterday's answer. *pinned_recovery* pins the derivation itself once per
-    call site, so it cannot silently return the wrong thing.
+    The expected recovery is read from ``CODE_TABLE`` rather than written as a
+    literal, so this cannot drift from the pin — the table is loaded from the
+    normative ``enums/error-code.json`` ``enumMetadata``, so if a spec bump
+    reclassified the code this test would follow it instead of asserting
+    yesterday's answer. (It absorbed the ``RECOVERY_BY_WIRE_CODE`` map this
+    lookup used to go through, and is still the pin, not a literal.)
+    *pinned_recovery* pins the derivation itself once per call site, so it
+    cannot silently return the wrong thing.
     """
-    expected = RECOVERY_BY_WIRE_CODE[code]
+    expected = CODE_TABLE[code].recovery
     assert expected == pinned_recovery, (
         f"the pinned enumMetadata classifies {code} as {expected!r}, not {pinned_recovery!r} — "
         "the premise this assertion is built on no longer holds"
     )
-    assert_envelope_shape(build_two_layer_error_envelope(exc), code, recovery=expected)
+    assert_envelope_shape(envelope_for(exc), code, recovery=expected)
 
 
 def _assert_terminal_by_code(exc: AdCPConfigurationError) -> None:
@@ -87,7 +90,7 @@ def _assert_terminal_by_code(exc: AdCPConfigurationError) -> None:
 def _assert_transient_by_code(exc: AdCPServiceUnavailableError) -> None:
     """SERVICE_UNAVAILABLE / transient — what a status-less seam failure maps to.
 
-    ``raise_mapped_mcp_error``'s no-recoverable-status arm — delegated to
+    ``raise_mapped_mcp_error``'s no-recoverable-status branch — delegated to
     ``adcp_error_for_status``'s ``status is None`` branch
     (``src/core/helpers/outbound_error_mapping.py``) — is the one an
     ``MCPCompatibilityError`` reaches: nothing HTTP is wrapped beneath it. The
@@ -225,7 +228,7 @@ class TestOperatorAgentFailureIsClassifiedTerminalByCode:
     async def test_a_rejected_handshake_is_configuration_error(self, monkeypatch):
         """A terminal 4xx reported by the guarded seam -> CONFIGURATION_ERROR / terminal.
 
-        Grades ``raise_mapped_mcp_error``'s terminal-4xx arm — delegated to
+        Grades ``raise_mapped_mcp_error``'s terminal-4xx branch — delegated to
         ``adcp_error_for_status``'s ``400 <= status < 500`` branch
         (``src/core/helpers/outbound_error_mapping.py``) — on the signals path:
         "the endpoint this deployment is configured to use rejected us" is a
@@ -235,7 +238,7 @@ class TestOperatorAgentFailureIsClassifiedTerminalByCode:
         The failure is injected as the seam's OWN contract rather than by serving
         a 404 over a socket: fastmcp's handshake surfaces a plain "Session
         terminated" with no HTTP status attached, so a real 404 never reaches the
-        status-bearing arm at all (verified — it lands in the unreachable arm and
+        status-bearing branch at all (verified — it lands in the unreachable branch and
         raises SERVICE_UNAVAILABLE). What the mapper actually keys on is a
         ``httpx.HTTPStatusError`` chained beneath the seam's exception, which is
         what ``wrapped_failure`` exists to recover; that chain is
@@ -245,7 +248,7 @@ class TestOperatorAgentFailureIsClassifiedTerminalByCode:
 
         response = httpx.Response(404, request=httpx.Request("POST", "https://signals.operator.test/mcp"))
         wrapped = httpx.HTTPStatusError("404 Not Found", request=response.request, response=response)
-        seam_error = MCPConnectionError("Failed to connect to MCP agent after 3 attempts")
+        seam_error = MCPConnectionError(internal_detail=wrapped)
         seam_error.__cause__ = wrapped
 
         agent = SignalsAgent(agent_url="https://signals.operator.test", name="operator-signals-agent")
@@ -314,7 +317,7 @@ class TestAPayloadThatIsNotAJSONObjectIsClassified:
     the fix must not cover only one: ``structured_content`` carrying a JSON array
     (the isinstance hole), and a ``TextContent`` block whose ``.text`` is not
     valid JSON at all (``json.loads`` raising ``JSONDecodeError``, a bare
-    ``ValueError`` that no ``except`` arm on either path catches).
+    ``ValueError`` that no ``except`` branch on either path catches).
     """
 
     @pytest.mark.parametrize("path", list(_OPERATOR_FETCHES), ids=list(_OPERATOR_FETCHES))

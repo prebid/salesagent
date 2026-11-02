@@ -7,7 +7,7 @@ through the env's per-transport primitive, never a direct ``_impl`` call.*
 
 **Why this module exists rather than the liveness artifact.** The wire-grading §5
 declares two graders: the per-scenario ledgered/live partition pinned in
-``tests/integration/test_bdd_scenario_liveness_real_run.py:99-125`` — which
+``tests/collection/test_bdd_scenario_liveness_real_run.py`` — which
 solution-review pass 3 (P4) defers, and which the wire-grading work **must not
 modify** — and the REVERSION TEST, which pass-3 finding (d) requires to be *an
 EXECUTED step in the grader, not a prose procedure*. This module is that
@@ -435,7 +435,7 @@ def _dispatch_client(env: Any, transport: Transport, payload: dict[str, Any]) ->
     """
     from tests.harness.client import AdCPTestClient
 
-    return AdCPTestClient(env).call("sync_creatives", payload, transport, identity=None)
+    return AdCPTestClient(env).call("sync_creatives", payload, transport, credential={})
 
 
 #: Both dispatch paths a storyboard scenario can take to the seller. Every C4
@@ -446,14 +446,14 @@ DISPATCH_PATHS = {"call_via": _dispatch_call_via, "client": _dispatch_client}
 #: Where a genuine transport fault is injected, per transport: the env primitive
 #: that transport's DELIVER calls on BOTH dispatch paths (``_deliver_mcp`` /
 #: ``CreativeSyncEnv.deliver_mcp`` both reach ``_run_mcp_client``; the two REST
-#: legs both reach ``_prepare_rest_request``). Raising there reproduces the real
+#: legs both reach ``get_rest_client``). Raising there reproduces the real
 #: failure mode the derived status names — the request died before any AdCP
 #: envelope existed — rather than hand-setting ``status`` on the result, which
 #: would grade the assertion against a value the test itself invented.
 _FAULT_INJECTION_POINT = {
     Transport.MCP: "_run_mcp_client",
     Transport.A2A: "_run_a2a_handler",
-    Transport.REST: "_prepare_rest_request",
+    Transport.REST: "get_rest_client",
 }
 
 _FAULT_MESSAGE = "simulated transport fault: the seller died before emitting an AdCP envelope"

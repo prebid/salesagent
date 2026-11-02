@@ -23,9 +23,7 @@ from sqlalchemy import ColumnElement, delete, func, select
 from sqlalchemy.orm import InstrumentedAttribute, Session
 
 from src.core.database.models import IdempotencyAttempt
-
-# Matches GetAdcpCapabilitiesResponse.adcp.idempotency.replay_ttl_seconds (86400 = 24h).
-DEFAULT_REPLAY_TTL = timedelta(seconds=86400)
+from src.core.idempotency_policy import DEFAULT_REPLAY_TTL
 
 
 class IdempotencyAttemptRepository:

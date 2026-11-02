@@ -14,41 +14,23 @@ beyond the docstring.
 from __future__ import annotations
 
 import ast
-from pathlib import Path
 from typing import Literal
 
 import pytest
 
 from tests.unit._architecture_helpers import iter_call_expressions
-
-_BDD_STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
+from tests.unit._bdd_guard_helpers import iter_bdd_steps
 
 # Allowlist for empty Given/When steps. Must only shrink — never add entries.
 # Fixed in #1181: given_tenant_exists and given_account_not_exists now have real bodies.
-_EMPTY_GIVEN_WHEN_ALLOWLIST: set[tuple[str, str]] = {
-    # FIXME(#2131): uc019/uc026 stubs pending implementation
-    ("bdd/steps/domain/uc019_query_media_buys.py", "when_query_by_refs"),
-    ("bdd/steps/domain/uc026_package_media_buy.py", "given_request_with_buyer_ref"),
-    ("bdd/steps/domain/uc026_package_media_buy.py", "given_resubmit_buyer_ref"),
-    ("bdd/steps/domain/uc026_package_media_buy.py", "given_buyer_owns_mb_with_ref_and_id"),
-    ("bdd/steps/domain/uc026_package_media_buy.py", "given_buyer_owns_mb_with_buyer_ref"),
-    ("bdd/steps/domain/uc026_package_media_buy.py", "given_cross_buy_request"),
-    ("bdd/steps/domain/uc026_package_media_buy.py", "given_buyer_owns_pkg_by_buyer_ref"),
-    ("bdd/steps/domain/uc026_package_media_buy.py", "given_partition_buyer_ref"),
-    ("bdd/steps/domain/uc026_package_media_buy.py", "given_boundary_buyer_ref"),
-}
-
-
-def _is_decorated_with(func: ast.FunctionDef | ast.AsyncFunctionDef, decorator_name: str) -> bool:
-    """Check if function is decorated with @<decorator_name>(...)."""
-    for dec in func.decorator_list:
-        if isinstance(dec, ast.Call):
-            func_node = dec.func
-            if isinstance(func_node, ast.Name) and func_node.id == decorator_name:
-                return True
-        if isinstance(dec, ast.Name) and dec.id == decorator_name:
-            return True
-    return False
+#
+# EMPTY. Its nine rows all named step functions that no longer exist — eight uc026
+# ``buyer_ref`` Givens for a field the pin dropped from create-media-buy-request.json,
+# and uc019's when_query_by_refs. They survived because the staleness check below could
+# only see functions that were still THERE: it walked the live steps and asked whether an
+# allowlisted one had gained a body, so a row whose function was deleted outright was
+# never examined at all. The guard reported green while its allowlist tracked nothing.
+_EMPTY_GIVEN_WHEN_ALLOWLIST: set[tuple[str, str]] = set()
 
 
 def _body_is_empty(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
@@ -95,24 +77,18 @@ StepKind = Literal["given", "when", "then"]
 
 
 def _iter_step_functions(
-    decorator_names: set[StepKind],
+    decorator_names: tuple[StepKind, ...],
 ) -> list[tuple[str, str, int, StepKind, ast.FunctionDef | ast.AsyncFunctionDef]]:
-    """Yield (relative_path, func_name, lineno, decorator, func_node) for matching steps."""
-    results = []
-    for py_file in sorted(_BDD_STEPS_DIR.rglob("*.py")):
-        if py_file.name.startswith("_"):
-            continue
-        source = py_file.read_text()
-        tree = ast.parse(source, filename=str(py_file))
-        relative = str(py_file.relative_to(_BDD_STEPS_DIR.parent.parent))
+    """Yield (relative_path, func_name, lineno, decorator, func_node) for matching steps.
 
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            for dec_name in decorator_names:
-                if _is_decorated_with(node, dec_name):
-                    results.append((relative, node.name, node.lineno, dec_name, node))
-    return results
+    A function carrying more than one of *decorator_names* is reported once per
+    decorator — the violation message names which one it was.
+    """
+    return [
+        (step.relative, step.name, step.lineno, dec_name, step.node)
+        for step in iter_bdd_steps(step_names=decorator_names)
+        for dec_name in step.decorators
+    ]
 
 
 class TestBddNoPassSteps:
@@ -122,7 +98,7 @@ class TestBddNoPassSteps:
     def test_no_empty_then_steps(self):
         """Every @then step must contain an assert, function call, or raise."""
         violations = []
-        for rel, name, lineno, _, func in _iter_step_functions({"then"}):
+        for rel, name, lineno, _, func in _iter_step_functions(("then",)):
             if _body_is_empty(func):
                 violations.append(f"{rel}:{lineno} {name} — empty body (pass/docstring-only)")
             elif _contains_placeholder_call(func):
@@ -138,7 +114,7 @@ class TestBddNoPassSteps:
     def test_no_placeholder_given_when_steps(self):
         """Given/When steps must not delegate to placeholder helpers like _pending()."""
         violations = []
-        for rel, name, lineno, dec_name, func in _iter_step_functions({"given", "when"}):
+        for rel, name, lineno, dec_name, func in _iter_step_functions(("given", "when")):
             if _contains_placeholder_call(func):
                 violations.append(f"{rel}:{lineno} @{dec_name} {name} — placeholder delegation (_pending)")
 
@@ -156,7 +132,7 @@ class TestBddNoPassSteps:
         create a tenant with products. An empty body means the step text is lying.
         """
         violations = []
-        for rel, name, lineno, dec_name, func in _iter_step_functions({"given", "when"}):
+        for rel, name, lineno, dec_name, func in _iter_step_functions(("given", "when")):
             if _body_is_empty(func) and (rel, name) not in _EMPTY_GIVEN_WHEN_ALLOWLIST:
                 violations.append(f"{rel}:{lineno} @{dec_name} {name} — empty body")
 
@@ -173,12 +149,19 @@ class TestBddNoPassSteps:
         When someone fixes an allowlisted step, this test reminds them to remove
         it from the allowlist.
         """
+        live: set[tuple[str, str]] = set()
         stale = []
-        for rel, name, lineno, _, func in _iter_step_functions({"given", "when"}):
+        for rel, name, lineno, _, func in _iter_step_functions(("given", "when")):
+            live.add((rel, name))
             if (rel, name) in _EMPTY_GIVEN_WHEN_ALLOWLIST and not _body_is_empty(func):
-                stale.append(f"{rel}:{lineno} {name}")
+                stale.append(f"{rel}:{lineno} {name} — no longer empty")
 
-        assert not stale, (
-            f"Found {len(stale)} allowlisted step(s) that are no longer empty — remove from allowlist:\n"
-            + "\n".join(f"  {v}" for v in stale)
+        # A row whose function was DELETED is stale too, and it is the half this check
+        # used to miss: walking the live steps can only notice a row whose function is
+        # still there. Nine rows survived that way, naming functions the tree no longer
+        # had, while the guard reported green.
+        stale += [f"{rel} {name} — no such step function" for rel, name in sorted(_EMPTY_GIVEN_WHEN_ALLOWLIST - live)]
+
+        assert not stale, f"Found {len(stale)} stale allowlist entr(ies) — remove from allowlist:\n" + "\n".join(
+            f"  {v}" for v in stale
         )

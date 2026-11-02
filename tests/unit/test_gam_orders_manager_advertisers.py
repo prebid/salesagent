@@ -41,7 +41,6 @@ class TestGetAdvertisers:
             client_manager=mock_client_manager,
             advertiser_id="test_advertiser",
             trafficker_id="test_trafficker",
-            dry_run=False,
         )
         return manager
 
@@ -206,27 +205,6 @@ class TestGetAdvertisers:
 
         # Should return empty list
         assert result == []
-
-    def test_get_advertisers_dry_run_mode(self, mock_client_manager):
-        """Test dry run mode returns mock data."""
-        # Create manager in dry-run mode
-        manager = GAMOrdersManager(
-            client_manager=mock_client_manager,
-            advertiser_id="test_advertiser",
-            trafficker_id="test_trafficker",
-            dry_run=True,
-        )
-
-        # Call method (should not call GAM API)
-        result = manager.get_advertisers()
-
-        # Should return mock data
-        assert len(result) == 2
-        assert result[0]["id"] == "123456789"
-        assert result[1]["id"] == "987654321"
-
-        # Verify GAM service was NOT called
-        mock_client_manager.get_service.assert_not_called()
 
     def test_get_advertisers_error_handling(self, orders_manager, mock_client_manager):
         """Test error handling when GAM API fails."""

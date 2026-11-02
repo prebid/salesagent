@@ -1,8 +1,13 @@
-"""
-Unit tests for GAM adapter workflow paths returning packages correctly.
+"""Unit tests for the GAM adapter's three create-path outcomes.
 
-Tests that both manual approval and activation workflow paths return packages
-with package_id, fixing the "Adapter did not return package_id" error.
+Each of manual approval, activation workflow and the plain success path must hand the
+tool back the packages it was asked to place — the same package ids, none dropped or
+duplicated — plus, where line items were created, the GAM line-item id per package.
+
+This file used to say it proved the adapter "returns packages with package_id, fixing
+the 'Adapter did not return package_id' error". That bug is no longer gradable: the
+carrier split made ``AdapterCreateResult.packages`` a required ``list[ResponsePackage]``
+with a required ``package_id``, so pydantic refuses a result that lacks them.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -10,6 +15,7 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
+from src.adapters.base import AdapterCreateRequest
 from src.adapters.google_ad_manager import GoogleAdManager
 from src.core.schemas import CreateMediaBuyRequest, FormatId, MediaPackage, PackageRequest
 
@@ -37,19 +43,27 @@ def mock_gam_config():
 
 @pytest.fixture
 def sample_request():
-    """Sample CreateMediaBuyRequest."""
+    """What the create path hands the adapter.
+
+    An adapter takes the CARRIER, not the buyer's ``CreateMediaBuyRequest`` — so this
+    goes through the production projection rather than building one by hand, which is
+    also how ``total_budget`` gets summed the way the tool sums it.
+    """
     start_time = datetime.now(UTC)
     end_time = start_time + timedelta(days=30)
     # adcp 3.6.0: brand_manifest → brand (BrandReference with domain field)
-    return CreateMediaBuyRequest(
-        brand={"domain": "testbrand.com"},
-        idempotency_key="unit-test-key-gamwf-0001",
-        packages=[
-            PackageRequest(product_id="prod_123", budget=5000.0, pricing_option_id="test_pricing"),
-            PackageRequest(product_id="prod_456", budget=5000.0, pricing_option_id="test_pricing"),
-        ],
-        start_time=start_time,
-        end_time=end_time,
+    return AdapterCreateRequest.from_buyer_request(
+        CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            brand={"domain": "testbrand.com"},
+            idempotency_key="unit-test-key-gamwf-0001",
+            packages=[
+                PackageRequest(product_id="prod_123", budget=5000.0, pricing_option_id="test_pricing"),
+                PackageRequest(product_id="prod_456", budget=5000.0, pricing_option_id="test_pricing"),
+            ],
+            start_time=start_time,
+            end_time=end_time,
+        )
     )
 
 
@@ -96,7 +110,6 @@ def _build_gam_adapter(mock_principal):
             network_code="123456",
             advertiser_id="789",
             trafficker_id="456",
-            dry_run=False,
             tenant_id="tenant_123",
         )
 
@@ -156,7 +169,6 @@ class TestGAMManualApprovalPath:
                 network_code="123456",
                 advertiser_id="789",
                 trafficker_id="456",
-                dry_run=False,
                 tenant_id="tenant_123",
             )
 
@@ -174,25 +186,29 @@ class TestGAMManualApprovalPath:
                     request=sample_request, packages=sample_packages, start_time=start_time, end_time=end_time
                 )
 
-                # Assert - Response must have packages field
-                assert response.packages is not None, "Response must have packages field"
-                assert isinstance(response.packages, list), "packages must be a list"
+                # The returned packages ARE the requested ones: same ids, none dropped,
+                # none duplicated.
+                #
+                # Removed with them: `packages is not None`, `isinstance(..., list)` and
+                # a per-package `hasattr(pkg, "package_id") and pkg.package_id is not
+                # None`. Those cannot fail. `AdapterCreateResult.packages` is a required
+                # `list[ResponsePackage]` and `ResponsePackage.package_id` is a required
+                # `str`, so pydantic refuses the construction before any assertion runs —
+                # they graded the type system, not the adapter.
+                assert len(response.packages) == len(sample_packages)
+                assert {pkg.package_id for pkg in response.packages} == {pkg.package_id for pkg in sample_packages}
 
-                # Assert - Must have same number of packages as input
-                assert len(response.packages) == len(sample_packages), f"Expected {len(sample_packages)} packages"
-
-                # Assert - Each package must have package_id
-                for i, pkg in enumerate(response.packages):
-                    assert hasattr(pkg, "package_id") and pkg.package_id is not None, f"Package {i} missing package_id"
-
-                # Assert - Package IDs must match input packages
-                returned_ids = {pkg.package_id for pkg in response.packages}
-                expected_ids = {pkg.package_id for pkg in sample_packages}
-                ids_msg = f"Package IDs don't match. Got {returned_ids}, expected {expected_ids}"
-                assert returned_ids == expected_ids, ids_msg
-
-                # Assert - Other required fields
-                assert response.workflow_step_id == "workflow_step_123", "workflow_step_id must be set"
+                # Assert - the workflow step was opened. It is NOT on the result:
+                # AdapterCreateResult carries what the tool reads, and a step an
+                # adapter opens is tracked by the workflow tables.
+                mock_workflow.assert_called_once_with(
+                    sample_request,
+                    sample_packages,
+                    start_time,
+                    end_time,
+                    response.media_buy_id,
+                    order_name_template=None,
+                )
 
     def test_manual_approval_failure_still_returns_packages(
         self, mock_principal, mock_gam_config, sample_request, sample_packages
@@ -208,7 +224,6 @@ class TestGAMManualApprovalPath:
                 network_code="123456",
                 advertiser_id="789",
                 trafficker_id="456",
-                dry_run=False,
                 tenant_id="tenant_123",
             )
 
@@ -262,13 +277,14 @@ class TestGAMActivationWorkflowPath:
                 network_code="123456",
                 advertiser_id="789",
                 trafficker_id="456",
-                dry_run=False,
                 tenant_id="tenant_123",
             )
 
             # Mock the order creation
             mock_order_id = "order_123"
-            mock_line_item_ids = [111, 222]
+            # production's create_line_items returns list[str] (orders.py str()-casts the
+            # GAM id), so the stand-in returns what the real manager returns
+            mock_line_item_ids = ["111", "222"]
 
             with (
                 patch.object(adapter.orders_manager, "create_order") as mock_create_order,
@@ -308,26 +324,18 @@ class TestGAMActivationWorkflowPath:
                     request=sample_request, packages=sample_packages, start_time=start_time, end_time=end_time
                 )
 
-            # Assert - Response must have packages field
-            assert response.packages is not None, "Response must have packages field"
-            assert isinstance(response.packages, list), "packages must be a list"
+            # Same ids in, same ids out (see the note on the manual-approval test for
+            # the presence/type assertions removed here and why they could not fail).
+            assert len(response.packages) == len(sample_packages)
+            assert {pkg.package_id for pkg in response.packages} == {pkg.package_id for pkg in sample_packages}
 
-            # Assert - Must have same number of packages as input
-            assert len(response.packages) == len(sample_packages), f"Expected {len(sample_packages)} packages"
-
-            # Assert - Each package must have package_id (AdCP spec requirement)
-            # Note: platform_line_item_id is internal tracking data, not part of AdCP Package spec
-            for i, pkg in enumerate(response.packages):
-                assert hasattr(pkg, "package_id") and pkg.package_id is not None, f"Package {i} missing package_id"
-
-            # Assert - Package IDs must match input packages
-            returned_ids = {pkg.package_id for pkg in response.packages}
-            expected_ids = {pkg.package_id for pkg in sample_packages}
-            assert returned_ids == expected_ids, f"Package IDs don't match. Got {returned_ids}, expected {expected_ids}"
-
-            # Assert - Other required fields
-            assert response.workflow_step_id == "activation_workflow_123", "workflow_step_id must be set"
+            # Assert - the activation step was opened for the guaranteed order. It is
+            # not on the result: the workflow tables track a step an adapter opens.
+            mock_activation_workflow.assert_called_once_with(mock_order_id, sample_packages)
             assert response.media_buy_id == mock_order_id, "media_buy_id must match order ID"
+
+            # Assert - each package carries the line item GAM created for it
+            assert response.platform_line_item_ids == {"pkg_001": "111", "pkg_002": "222"}
 
 
 class TestGAMSuccessPath:
@@ -352,18 +360,18 @@ class TestGAMSuccessPath:
                 network_code="123456",
                 advertiser_id="789",
                 trafficker_id="456",
-                dry_run=False,
                 tenant_id="tenant_123",
             )
 
             # Mock the order creation
             mock_order_id = "order_456"
-            mock_line_item_ids = [333, 444]
+            mock_line_item_ids = ["333", "444"]
 
             with (
                 patch.object(adapter.orders_manager, "create_order") as mock_create_order,
                 patch.object(adapter.orders_manager, "create_line_items") as mock_create_line_items,
                 patch.object(adapter, "_check_order_has_guaranteed_items") as mock_check_guaranteed,
+                patch.object(adapter.workflow_manager, "create_activation_workflow_step") as mock_activation_workflow,
                 patch("src.core.database.database_session.get_db_session") as mock_db_session,
             ):
                 # Setup mocks
@@ -396,17 +404,15 @@ class TestGAMSuccessPath:
                     request=sample_request, packages=sample_packages, start_time=start_time, end_time=end_time
                 )
 
-            # Assert - Response must have packages field
-            assert response.packages is not None, "Response must have packages field"
-            assert len(response.packages) == len(sample_packages), f"Expected {len(sample_packages)} packages"
+            # Same ids in, same ids out (see the note on the manual-approval test for
+            # the presence/type assertions removed here and why they could not fail).
+            assert len(response.packages) == len(sample_packages)
+            assert {pkg.package_id for pkg in response.packages} == {pkg.package_id for pkg in sample_packages}
 
-            # Assert - Each package must have package_id (AdCP spec requirement)
-            # Note: platform_line_item_id is internal tracking data, not part of AdCP Package spec
-            for i, pkg in enumerate(response.packages):
-                assert hasattr(pkg, "package_id") and pkg.package_id is not None, f"Package {i} missing package_id"
-
-            # Assert - No workflow_step_id on success path
-            assert response.workflow_step_id is None, "Success path should not have workflow_step_id"
+            # Assert - no activation step on the success path, and the line items GAM
+            # created reach the tool under their package ids
+            mock_activation_workflow.assert_not_called()
+            assert response.platform_line_item_ids == {"pkg_001": "333", "pkg_002": "444"}
 
 
 class TestGAMAdapterErrorTaxonomy:
@@ -443,7 +449,53 @@ class TestGAMAdapterErrorTaxonomy:
                     request=sample_request, packages=sample_packages, start_time=start_time, end_time=end_time
                 )
 
-        assert exc_info.value.error_code == "LINE_ITEM_CREATION_FAILED"
+        assert exc_info.value.error_code == "AD_SERVER_CREATE_FAILED"
+
+
+class TestGAMAdapterSeamPreservesClassification:
+    """The classification survives ``GoogleAdManager.create_media_buy``.
+
+    ``orders_manager.create_order`` classifies an ad-server refusal into the AdCP
+    error the buyer should read. The tool layer then re-raises a typed
+    ``AdCPSalesAgentError`` untouched. Between those two is this seam
+    (google_ad_manager.py:672), and nothing pinned it: an ``except Exception``
+    introduced around that call would re-collapse every refusal to one code while
+    the manager-level and wire-level tests both stayed green.
+
+    Driving the real adapter, because the seam IS adapter code -- a mocked adapter
+    replaces exactly what is under test. Reuses ``_build_gam_adapter`` rather than
+    re-wiring the adapter here (salesagent-rys3u.8).
+    """
+
+    def test_rate_limit_from_the_order_call_propagates_unchanged(self, mock_principal, sample_request, sample_packages):
+        """A quota refusal beneath the seam reaches the caller still RATE_LIMITED."""
+        from src.core.exceptions import AdCPRateLimitError
+
+        adapter = _build_gam_adapter(mock_principal)
+
+        with (
+            patch.object(
+                adapter.orders_manager,
+                "create_order",
+                side_effect=AdCPRateLimitError(retry_after=30),
+            ),
+            patch("src.core.database.database_session.get_db_session") as mock_db_session,
+        ):
+            _stub_product_session(mock_db_session)
+
+            start_time = datetime.now()
+            end_time = start_time + timedelta(days=30)
+            with pytest.raises(AdCPRateLimitError) as exc_info:
+                adapter.create_media_buy(
+                    request=sample_request,
+                    packages=sample_packages,
+                    start_time=start_time,
+                    end_time=end_time,
+                )
+
+        # Not AdCPAdapterError, not AD_SERVER_CREATE_FAILED: the seam must not
+        # relabel a classification the layer beneath it already made.
+        assert exc_info.value.error_code == "RATE_LIMITED"
 
 
 class TestGAMProductUnavailableRaiseSites:
@@ -458,8 +510,8 @@ class TestGAMProductUnavailableRaiseSites:
     test_typed_error_wire_codes.py pins the class -> wire-code mapping by
     constructing the exception directly; here the production validation loop is
     driven so a class-swap at either site (e.g. AdCPProductUnavailableError ->
-    AdCPError or AdCPCapabilityNotSupportedError) is caught. The wire collapses
-    PRODUCT_UNAVAILABLE through ERROR_CODE_MAPPING, pinned separately.
+    AdCPSalesAgentError or AdCPCapabilityNotSupportedError) is caught. The wire collapses
+    PRODUCT_UNAVAILABLE as its own declared code, pinned separately.
     """
 
     @pytest.mark.parametrize(

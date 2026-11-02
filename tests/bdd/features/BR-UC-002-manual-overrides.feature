@@ -14,7 +14,7 @@ Feature: BR-UC-002 Manual Overrides
   Background:
     Given a Seller Agent is operational and accepting requests
     And a tenant exists with completed setup checklist
-    And the Buyer is authenticated with a valid principal_id
+    And the Buyer is authenticated
 
   # Replaces T-UC-002-alt-manual-reject from auto-generated feature.
   # Original scenario has no Given step for push_notification_config,

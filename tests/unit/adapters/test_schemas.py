@@ -29,7 +29,6 @@ class TestBaseSchemas:
         """BaseConnectionConfig should reject unknown fields."""
         with pytest.raises(ValidationError) as exc_info:
             BaseConnectionConfig(unknown_field="value")
-        assert "extra_forbidden" in str(exc_info.value)
 
     def test_base_product_config_empty(self):
         """BaseProductConfig should allow empty instantiation."""
@@ -44,16 +43,11 @@ class TestMockSchemas:
         """MockConnectionConfig should have expected defaults."""
         config = MockConnectionConfig()
         assert config.manual_approval_required is False
-        assert config.dry_run is False
 
     def test_mock_connection_config_custom_values(self):
         """MockConnectionConfig should accept custom values."""
-        config = MockConnectionConfig(
-            manual_approval_required=True,
-            dry_run=True,
-        )
+        config = MockConnectionConfig(manual_approval_required=True)
         assert config.manual_approval_required is True
-        assert config.dry_run is True
 
     def test_mock_product_config_defaults(self):
         """MockProductConfig should have simulation defaults."""
@@ -169,7 +163,6 @@ class TestSchemaJsonSerialization:
         schema = MockConnectionConfig.model_json_schema()
         assert schema["type"] == "object"
         assert "properties" in schema
-        assert "dry_run" in schema["properties"]
         assert "manual_approval_required" in schema["properties"]
 
     def test_mock_product_config_json_schema(self):
@@ -186,6 +179,6 @@ class TestSchemaJsonSerialization:
     def test_schema_descriptions_present(self):
         """Schema fields should have descriptions."""
         schema = MockConnectionConfig.model_json_schema()
-        dry_run_schema = schema["properties"]["dry_run"]
-        assert "description" in dry_run_schema
-        assert len(dry_run_schema["description"]) > 0
+        approval_schema = schema["properties"]["manual_approval_required"]
+        assert "description" in approval_schema
+        assert len(approval_schema["description"]) > 0

@@ -425,7 +425,6 @@
         }
     }
 
-    /* Virtual Host now uses simple text input - complex widget styling removed */
 </style>
 
 <!-- Header -->
@@ -571,29 +570,27 @@
                                     {% endif %}
                                 </div>
                                 {% if tenant.favicon_url %}
-                                <form method="POST" action="{{ script_name }}/tenant/{{ tenant.tenant_id }}/remove_favicon" style="margin: 0;">
-                                    <button type="submit" class="btn btn-outline-danger btn-sm" onclick="return confirm('Remove custom favicon and use the default?')">
-                                        Remove
-                                    </button>
-                                </form>
+                                <button type="submit" form="favicon-remove-form" class="btn btn-outline-danger btn-sm" onclick="return confirm('Remove custom favicon and use the default?')">
+                                    Remove
+                                </button>
                                 {% endif %}
                             </div>
 
                             <!-- Upload form -->
                             <div style="margin-bottom: 1rem;">
-                                <form method="POST" action="{{ script_name }}/tenant/{{ tenant.tenant_id }}/upload_favicon" enctype="multipart/form-data" style="display: flex; gap: 0.5rem; align-items: center;">
-                                    <input type="file" name="favicon" accept=".ico,.png,.svg" style="flex: 1;">
-                                    <button type="submit" class="btn btn-secondary btn-sm">Upload</button>
-                                </form>
+                                <div style="display: flex; gap: 0.5rem; align-items: center;">
+                                    <input type="file" name="favicon" form="favicon-upload-form" accept=".ico,.png,.svg" style="flex: 1;">
+                                    <button type="submit" form="favicon-upload-form" class="btn btn-secondary btn-sm">Upload</button>
+                                </div>
                             </div>
 
                             <!-- URL form -->
                             <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px dashed #e2e8f0;">
                                 <label style="font-size: 0.875rem; font-weight: 500; margin-bottom: 0.5rem; display: block;">Or provide a URL:</label>
-                                <form method="POST" action="{{ script_name }}/tenant/{{ tenant.tenant_id }}/update_favicon_url" style="display: flex; gap: 0.5rem; align-items: center;">
-                                    <input type="url" name="favicon_url" value="{{ tenant.favicon_url or '' }}" placeholder="https://example.com/favicon.ico" style="flex: 1; padding: 0.5rem; border: 1px solid #e2e8f0; border-radius: 6px;">
-                                    <button type="submit" class="btn btn-secondary btn-sm">Save URL</button>
-                                </form>
+                                <div style="display: flex; gap: 0.5rem; align-items: center;">
+                                    <input type="url" name="favicon_url" form="favicon-url-form" value="{{ tenant.favicon_url or '' }}" placeholder="https://example.com/favicon.ico" style="flex: 1; padding: 0.5rem; border: 1px solid #e2e8f0; border-radius: 6px;">
+                                    <button type="submit" form="favicon-url-form" class="btn btn-secondary btn-sm">Save URL</button>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -604,8 +601,8 @@
                     <h3>Domain Configuration</h3>
                     <div class="form-grid">
                         <div class="form-group">
-                            <label for="virtual_host">Custom Domain (Optional)</label>
-                            <input type="text" id="virtual_host" name="virtual_host" value="{{ tenant.virtual_host or '' }}" placeholder="e.g. sales-agent.yourcompany.com">
+                            <label for="virtual_host">Custom Domain *</label>
+                            <input type="text" id="virtual_host" name="virtual_host" required value="{{ tenant.virtual_host }}" placeholder="e.g. sales-agent.yourcompany.com">
                             <small>
                                 <p style="margin-top: 0.5rem; color: #666; font-size: 0.85em;">
                                     {% if single_tenant_mode %}
@@ -695,6 +692,15 @@
                     <button type="submit" class="btn btn-primary">Save Account Settings</button>
                 </div>
             </form>
+
+            <!-- The favicon controls sit inside account-settings-form and reach these through form="".
+                 A form nested in a form is dropped by the HTML parser, and the first inner </form>
+                 closes the outer one, leaving the domain field and Save button in no form at all. -->
+            {% if tenant.favicon_url %}
+            <form id="favicon-remove-form" method="POST" action="{{ script_name }}/tenant/{{ tenant.tenant_id }}/remove_favicon"></form>
+            {% endif %}
+            <form id="favicon-upload-form" method="POST" action="{{ script_name }}/tenant/{{ tenant.tenant_id }}/upload_favicon" enctype="multipart/form-data"></form>
+            <form id="favicon-url-form" method="POST" action="{{ script_name }}/tenant/{{ tenant.tenant_id }}/update_favicon_url"></form>
 
             <!-- Access Control (Domain & Email Authorization) -->
             <div class="form-section" style="margin-top: 2rem; padding-top: 2rem; border-top: 1px solid #e5e7eb;">
@@ -2059,8 +2065,8 @@ Exclude any products that don't match the brand's tone.</pre>
 
         </div>
 
-        <!-- Creative Formats section removed - table dropped in migration f2addf453200 -->
-        <!-- Formats are now fetched from creative agents via AdCP, not stored in local DB -->
+        <!-- No Creative Formats section: formats are fetched from creative agents over
+             AdCP, never stored in this database, so there is nothing here to configure. -->
 
         <!-- Advertisers Settings -->
         <div id="advertisers" class="settings-section">
@@ -2107,16 +2113,11 @@ Exclude any products that don't match the brand's tone.</pre>
                                     <td><code>{{ principal.principal_id }}</code></td>
                                     <td>
                                         <div class="d-flex align-items-center gap-1">
-                                            <code class="token-display" data-full="{{ principal.access_token }}" data-truncated="{{ principal.access_token[:12] }}...">{{ principal.access_token[:12] }}...</code>
+                                            <code class="token-display" title="Only the first characters are kept in a readable form; the token itself is stored hashed">{{ principal.token_prefix }}…</code>
                                             <button class="btn btn-outline-secondary btn-sm py-0 px-1"
-                                                    onclick="toggleTokenVisibility(this)"
-                                                    title="Show/hide full token">
-                                                👁
-                                            </button>
-                                            <button class="btn btn-outline-secondary btn-sm py-0 px-1"
-                                                    onclick="copyAccessToken('{{ principal.access_token }}')"
-                                                    title="Copy token">
-                                                📋
+                                                    onclick="rotateToken('{{ principal.principal_id }}', '{{ principal.name }}')"
+                                                    title="Rotate token: issues a new one, shown once; the old one stops working">
+                                                🔄
                                             </button>
                                         </div>
                                     </td>
@@ -2149,13 +2150,13 @@ Exclude any products that don't match the brand's tone.</pre>
                                     <td>
                                         <div class="btn-group btn-group-sm">
                                             <button class="btn btn-outline-primary btn-sm"
-                                                    onclick="copyA2AConfig('{{ principal.principal_id }}', '{{ principal.name }}', '{{ principal.access_token }}')"
-                                                    title="Copy A2A Configuration">
+                                                    onclick="copyA2AConfig('{{ principal.principal_id }}', '{{ principal.name }}')"
+                                                    title="Copy A2A configuration (fill in the token you were shown at creation or rotation)">
                                                 A2A
                                             </button>
                                             <button class="btn btn-outline-primary btn-sm"
-                                                    onclick="copyMCPConfig('{{ principal.principal_id }}', '{{ principal.name }}', '{{ principal.access_token }}')"
-                                                    title="Copy MCP Configuration">
+                                                    onclick="copyMCPConfig('{{ principal.principal_id }}', '{{ principal.name }}')"
+                                                    title="Copy MCP configuration (fill in the token you were shown at creation or rotation)">
                                                 MCP
                                             </button>
                                         </div>
@@ -2624,7 +2625,9 @@ Exclude any products that don't match the brand's tone.</pre>
                 <h3>MCP Server Endpoint</h3>
                 <div class="config-code">
                     <button class="copy-button" onclick="copyToClipboard(this)">Copy</button>
-                    <pre style="margin: 0;">{% if tenant.virtual_host %}https://{{ tenant.virtual_host }}/mcp/{% elif is_production %}https://{{ tenant.subdomain }}.{{ sales_agent_domain }}/mcp/{% else %}http://localhost:{{ mcp_port }}/mcp/{% endif %}</pre>
+                    {# One arm only: virtual_host is mandatory (#2191), so there is no host-less
+                       tenant to offer a localhost URL or a "configure your domain" note to. #}
+                    <pre style="margin: 0;">https://{{ tenant.virtual_host }}/mcp/</pre>
                 </div>
             </div>
 
@@ -2636,12 +2639,10 @@ Exclude any products that don't match the brand's tone.</pre>
 from fastmcp.client.transports import StreamableHttpTransport
 
 headers = {
-    "x-adcp-auth": "YOUR_ACCESS_TOKEN"{% if not tenant.virtual_host %},
-    "x-adcp-tenant": "{{ tenant.subdomain }}"{% endif %}
-
+    "Authorization": "Bearer YOUR_ACCESS_TOKEN"
 }
 transport = StreamableHttpTransport(
-    url="{% if tenant.virtual_host %}https://{{ tenant.virtual_host }}/mcp/{% elif is_production %}https://{{ tenant.subdomain }}.{{ sales_agent_domain }}/mcp/{% else %}http://localhost:{{ mcp_port }}/mcp/{% endif %}",
+    url="https://{{ tenant.virtual_host }}/mcp/",
     headers=headers
 )
 client = Client(transport=transport)
@@ -2755,10 +2756,8 @@ result = await client.tools.get_products(brief="video ads")</pre>
      data-a2a-port="{{ mcp_port }}"
      data-mcp-port="{{ mcp_port }}"
      data-is-production="{% if is_production %}true{% else %}false{% endif %}"
-     data-virtual-host="{{ tenant.virtual_host if tenant.virtual_host else '' }}"
-     data-subdomain="{{ tenant.subdomain if tenant.subdomain else '' }}"
+     data-virtual-host="{{ tenant.virtual_host }}"
      data-tenant-ad-server="{{ tenant.ad_server if tenant.ad_server else '' }}"
-     data-sales-agent-domain="{{ sales_agent_domain if sales_agent_domain else 'sales-agent.example.com' }}"
      style="display: none;">
 </div>
 

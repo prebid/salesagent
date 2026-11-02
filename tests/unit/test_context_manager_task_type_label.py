@@ -58,7 +58,7 @@ def _capture_send(tool_name: str):
 
     cm = context_manager.ContextManager()
     with patch.object(context_manager, "get_protocol_webhook_service", return_value=fake_service):
-        cm._send_push_notifications(make_push_step(tool_name), "completed", session)
+        cm._send_push_notifications(make_push_step(tool_name), "completed")
 
     if "task" not in captured:
         return None

@@ -160,7 +160,7 @@ class TestWebhookURLValidator:
 
 
 class TestLocalhostAllowanceUnderTestingMode:
-    """The loopback allowance is a real behaviour, so it is graded on BOTH arms.
+    """The loopback allowance is a real behaviour, so it is graded on BOTH branches.
 
     ``validate_webhook_url_registration`` hands its verdict to
     ``_maybe_allow_localhost``, which rescues a loopback refusal when
@@ -170,8 +170,8 @@ class TestLocalhostAllowanceUnderTestingMode:
     allowance must not also rescue a bad SCHEME), and the two tests that reached
     it directly went through ``validate_for_testing``, which this change deletes.
 
-    Both arms are pinned explicitly because the suite sets ``ADCP_TESTING=true``
-    autouse: a one-armed test here would silently grade whichever posture the
+    Both branches are pinned explicitly because the suite sets ``ADCP_TESTING=true``
+    autouse: a one-branch test here would silently grade whichever posture the
     fixture happened to leave behind, which is exactly how a gate control goes
     inert without anyone noticing.
 
@@ -200,7 +200,7 @@ class TestLocalhostAllowanceUnderTestingMode:
     def test_loopback_allowed_under_testing_mode(self, monkeypatch, url):
         """With ADCP_TESTING the allowance rescues the loopback verdict.
 
-        This is the arm with no prior coverage. Verified to fail the moment
+        This is the branch with no prior coverage. Verified to fail the moment
         ``_maybe_allow_localhost`` stops rescuing — without it, deleting that
         branch would break only the e2e stack, far from the change that caused it.
         """

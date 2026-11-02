@@ -9,9 +9,9 @@ tests will skip rather than fail, since external service availability is outside
 our control.
 """
 
-import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from unittest.mock import patch
 
 import pytest
 
@@ -28,12 +28,14 @@ from src.core.database.models import (
     PropertyTag,
     Tenant,
 )
-from src.core.resolved_identity import ResolvedIdentity
-from src.core.schemas import CreateMediaBuyRequest
-from src.core.testing_hooks import AdCPTestContext
-from tests.helpers.adcp_factories import create_test_package_request
-from tests.helpers.external_service import is_external_service_response_error
-from tests.utils.database_helpers import create_tenant_with_timestamps
+from tests.factories import PricingOptionFactory
+from tests.factories.account import seed_default_account
+from tests.factories.principal import plaintext_token_for
+from tests.helpers.adcp_factories import create_test_media_buy_request, create_test_package_request
+from tests.helpers.gam_client import stub_gam_client_manager
+from tests.integration.media_buy_helpers import assert_created, make_media_buy_identity
+from tests.utils.database_helpers import bind_factories_to_session
+from tests.utils.tenant_setup import seed_gam_tenant
 
 # Tests are now AdCP 2.4 compliant (removed status field, using errors field)
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -45,31 +47,52 @@ _FUTURE_END_30D = (_NOW + timedelta(days=37)).strftime("%Y-%m-%dT23:59:59Z")
 _FUTURE_END_10D = (_NOW + timedelta(days=17)).strftime("%Y-%m-%dT23:59:59Z")
 
 
+TENANT_ID = "test_gam_pricing_tenant"
+PRINCIPAL_ID = "test_advertiser_pricing"
+GAM_ADVERTISER_ID = "123456789"
+
+
+def _identity():
+    """The caller ``_create_media_buy_impl`` takes: principal, tenant AND account.
+
+    ``account`` is spec-required on the request and the implementation reads
+    ``identity.account.account_id``; the tenant comes from its ROW (so the fixture's
+    ``human_review_required=False`` governs); and the principal carries the GAM mapping
+    the seeded row carries, because ``get_adapter`` reads the buyer's ``advertiser_id``
+    off it and order creation requires one.
+    """
+    return make_media_buy_identity(
+        PRINCIPAL_ID,
+        TENANT_ID,
+        platform_mappings={"google_ad_manager": {"advertiser_id": GAM_ADVERTISER_ID}},
+    )
+
+
+@pytest.fixture(autouse=True)
+def _stub_gam_client():
+    """Serve the GAM adapter a stand-in SOAP client for every test in this module.
+
+    The adapter has no dry-run mode: it builds a real client when constructed and every
+    read and write it makes is a GAM call. These tests grade the pricing translation the
+    adapter performs on the way to those calls, so the client is a stand-in
+    (``tests/helpers/gam_client``) and nothing leaves the process.
+    """
+    with patch("src.adapters.google_ad_manager.GAMClientManager") as client_manager:
+        client_manager.return_value = stub_gam_client_manager()
+        yield
+
+
 @pytest.fixture
 def setup_gam_tenant_with_all_pricing_models(integration_db):
     """Create a GAM tenant with products offering all supported pricing models."""
     with get_db_session() as session:
-        # Create GAM tenant
-        # Note: human_review_required=False ensures media buy validation runs immediately
-        # rather than going to approval workflow (needed for pricing validation tests)
-        tenant = create_tenant_with_timestamps(
+        tenant = seed_gam_tenant(
+            session,
             tenant_id="test_gam_pricing_tenant",
             name="GAM Pricing Test Publisher",
             subdomain="gam-pricing-test",
-            ad_server="google_ad_manager",
-            human_review_required=False,
+            trafficker_id="gam_traffic_456",
         )
-        session.add(tenant)
-        session.flush()
-
-        # Add adapter config (mock mode for testing)
-        adapter_config = AdapterConfig(
-            tenant_id="test_gam_pricing_tenant",
-            adapter_type="google_ad_manager",
-            gam_network_code="123456",
-            gam_trafficker_id="gam_traffic_456",
-        )
-        session.add(adapter_config)
 
         # Add currency limit
         currency_limit = CurrencyLimit(
@@ -89,14 +112,21 @@ def setup_gam_tenant_with_all_pricing_models(integration_db):
         session.add(property_tag)
 
         # Create principal
-        principal = Principal(
+        principal = Principal.with_token(
+            plaintext_token_for("test_advertiser_pricing"),
             tenant_id="test_gam_pricing_tenant",
             principal_id="test_advertiser_pricing",
             name="Test Advertiser - Pricing",
-            access_token="test_gam_pricing_token",
-            platform_mappings={"google_ad_manager": {"advertiser_id": "123456789"}},
+            platform_mappings={"google_ad_manager": {"advertiser_id": GAM_ADVERTISER_ID}},
         )
         session.add(principal)
+        session.flush()
+
+        # The ACCOUNT the request names, and this principal's access to it. Required on
+        # create-media-buy-request.json and resolved for real, so a payload naming an
+        # account with no row or no grant is refused before the pricing translation.
+        with bind_factories_to_session(session):
+            seed_default_account(TENANT_ID, PRINCIPAL_ID)
 
         # Add GAM inventory (required for product validation)
         gam_inventory_1 = GAMInventory(
@@ -157,7 +187,7 @@ def setup_gam_tenant_with_all_pricing_models(integration_db):
         session.add(product_cpm)
         session.flush()
 
-        pricing_cpm = PricingOption(
+        pricing_cpm = PricingOptionFactory.build(
             tenant_id="test_gam_pricing_tenant",
             product_id="prod_gam_cpm_guaranteed",
             pricing_model="cpm",
@@ -222,7 +252,7 @@ def setup_gam_tenant_with_all_pricing_models(integration_db):
         session.add(product_cpc)
         session.flush()
 
-        pricing_cpc = PricingOption(
+        pricing_cpc = PricingOptionFactory.build(
             tenant_id="test_gam_pricing_tenant",
             product_id="prod_gam_cpc",
             pricing_model="cpc",
@@ -271,7 +301,7 @@ def setup_gam_tenant_with_all_pricing_models(integration_db):
         session.add(product_vcpm)
         session.flush()
 
-        pricing_vcpm = PricingOption(
+        pricing_vcpm = PricingOptionFactory.build(
             tenant_id="test_gam_pricing_tenant",
             product_id="prod_gam_vcpm",
             pricing_model="vcpm",
@@ -336,7 +366,7 @@ def setup_gam_tenant_with_all_pricing_models(integration_db):
         session.add(product_flat)
         session.flush()
 
-        pricing_flat = PricingOption(
+        pricing_flat = PricingOptionFactory.build(
             tenant_id="test_gam_pricing_tenant",
             product_id="prod_gam_flatrate",
             pricing_model="flat_rate",
@@ -380,9 +410,7 @@ async def test_gam_cpm_guaranteed_creates_standard_line_item(setup_gam_tenant_wi
     """Test CPM guaranteed creates STANDARD line item with priority 8."""
     from src.core.tools.media_buy_create import _create_media_buy_impl
 
-    request = CreateMediaBuyRequest(
-        brand={"domain": "testbrand.com"},
-        idempotency_key=f"int-key-{uuid.uuid4().hex}",
+    request = create_test_media_buy_request(
         packages=[
             create_test_package_request(
                 product_id="prod_gam_cpm_guaranteed",
@@ -394,26 +422,11 @@ async def test_gam_cpm_guaranteed_creates_standard_line_item(setup_gam_tenant_wi
         end_time=_FUTURE_END_30D,
     )
 
-    identity = ResolvedIdentity(
-        principal_id="test_advertiser_pricing",
-        tenant_id="test_gam_pricing_tenant",
-        tenant={"tenant_id": "test_gam_pricing_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
-    )
+    identity = _identity()
 
-    response, _ = await _create_media_buy_impl(req=request, identity=identity)
+    response = await _create_media_buy_impl(req=request, identity=identity)
 
-    # Verify response is success (AdCP 2.4 compliant)
-    # Success response has media_buy_id, error response has errors field
-    # Skip if external creative agent is unavailable
-    if is_external_service_response_error(response):
-        pytest.skip(f"External creative agent unavailable: {response.errors}")
-
-    assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
-        f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
-    )
-    assert response.media_buy_id is not None
+    assert_created(response)
 
     # In dry-run mode, the response should succeed
     # In real mode, we'd verify GAM line item properties:
@@ -428,9 +441,7 @@ async def test_gam_cpc_creates_price_priority_line_item_with_clicks_goal(setup_g
     """Test CPC creates PRICE_PRIORITY line item with CLICKS goal unit."""
     from src.core.tools.media_buy_create import _create_media_buy_impl
 
-    request = CreateMediaBuyRequest(
-        brand={"domain": "testbrand.com"},
-        idempotency_key=f"int-key-{uuid.uuid4().hex}",
+    request = create_test_media_buy_request(
         packages=[
             create_test_package_request(
                 product_id="prod_gam_cpc",
@@ -442,26 +453,11 @@ async def test_gam_cpc_creates_price_priority_line_item_with_clicks_goal(setup_g
         end_time=_FUTURE_END_30D,
     )
 
-    identity = ResolvedIdentity(
-        principal_id="test_advertiser_pricing",
-        tenant_id="test_gam_pricing_tenant",
-        tenant={"tenant_id": "test_gam_pricing_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
-    )
+    identity = _identity()
 
-    response, _ = await _create_media_buy_impl(req=request, identity=identity)
+    response = await _create_media_buy_impl(req=request, identity=identity)
 
-    # Verify response is success (AdCP 2.4 compliant)
-    # Success response has media_buy_id, error response has errors field
-    # Skip if external creative agent is unavailable
-    if is_external_service_response_error(response):
-        pytest.skip(f"External creative agent unavailable: {response.errors}")
-
-    assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
-        f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
-    )
-    assert response.media_buy_id is not None
+    assert_created(response)
 
     # In real GAM mode, line item would have:
     # - lineItemType = "PRICE_PRIORITY"
@@ -477,9 +473,7 @@ async def test_gam_vcpm_creates_standard_line_item_with_viewable_impressions(set
     """Test VCPM creates STANDARD line item with VIEWABLE_IMPRESSIONS goal."""
     from src.core.tools.media_buy_create import _create_media_buy_impl
 
-    request = CreateMediaBuyRequest(
-        brand={"domain": "testbrand.com"},
-        idempotency_key=f"int-key-{uuid.uuid4().hex}",
+    request = create_test_media_buy_request(
         packages=[
             create_test_package_request(
                 product_id="prod_gam_vcpm",
@@ -491,26 +485,11 @@ async def test_gam_vcpm_creates_standard_line_item_with_viewable_impressions(set
         end_time=_FUTURE_END_30D,
     )
 
-    identity = ResolvedIdentity(
-        principal_id="test_advertiser_pricing",
-        tenant_id="test_gam_pricing_tenant",
-        tenant={"tenant_id": "test_gam_pricing_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
-    )
+    identity = _identity()
 
-    response, _ = await _create_media_buy_impl(req=request, identity=identity)
+    response = await _create_media_buy_impl(req=request, identity=identity)
 
-    # Verify response is success (AdCP 2.4 compliant)
-    # Success response has media_buy_id, error response has errors field
-    # Skip if external creative agent is unavailable
-    if is_external_service_response_error(response):
-        pytest.skip(f"External creative agent unavailable: {response.errors}")
-
-    assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
-        f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
-    )
-    assert response.media_buy_id is not None
+    assert_created(response)
 
     # In real GAM mode, line item would have:
     # - lineItemType = "STANDARD" (VCPM only works with STANDARD)
@@ -527,9 +506,7 @@ async def test_gam_flat_rate_calculates_cpd_correctly(setup_gam_tenant_with_all_
     from src.core.tools.media_buy_create import _create_media_buy_impl
 
     # 10 day campaign: $5000 total = $500/day
-    request = CreateMediaBuyRequest(
-        brand={"domain": "testbrand.com"},
-        idempotency_key=f"int-key-{uuid.uuid4().hex}",
+    request = create_test_media_buy_request(
         packages=[
             create_test_package_request(
                 product_id="prod_gam_flatrate",
@@ -538,29 +515,14 @@ async def test_gam_flat_rate_calculates_cpd_correctly(setup_gam_tenant_with_all_
             )
         ],
         start_time=_FUTURE_START,
-        end_time=_FUTURE_END_10D,  # 10 days
+        end_time=_FUTURE_END_10D,
     )
 
-    identity = ResolvedIdentity(
-        principal_id="test_advertiser_pricing",
-        tenant_id="test_gam_pricing_tenant",
-        tenant={"tenant_id": "test_gam_pricing_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
-    )
+    identity = _identity()
 
-    response, _ = await _create_media_buy_impl(req=request, identity=identity)
+    response = await _create_media_buy_impl(req=request, identity=identity)
 
-    # Verify response is success (AdCP 2.4 compliant)
-    # Success response has media_buy_id, error response has errors field
-    # Skip if external creative agent is unavailable
-    if is_external_service_response_error(response):
-        pytest.skip(f"External creative agent unavailable: {response.errors}")
-
-    assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
-        f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
-    )
-    assert response.media_buy_id is not None
+    assert_created(response)
 
     # In real GAM mode, line item would have:
     # - lineItemType = "SPONSORSHIP" (FLAT_RATE → CPD uses SPONSORSHIP)
@@ -576,9 +538,7 @@ async def test_gam_multi_package_mixed_pricing_models(setup_gam_tenant_with_all_
     """Test creating media buy with multiple packages using different pricing models."""
     from src.core.tools.media_buy_create import _create_media_buy_impl
 
-    request = CreateMediaBuyRequest(
-        brand={"domain": "testbrand.com"},
-        idempotency_key=f"int-key-{uuid.uuid4().hex}",
+    request = create_test_media_buy_request(
         packages=[
             create_test_package_request(
                 product_id="prod_gam_cpm_guaranteed",
@@ -600,26 +560,11 @@ async def test_gam_multi_package_mixed_pricing_models(setup_gam_tenant_with_all_
         end_time=_FUTURE_END_30D,
     )
 
-    identity = ResolvedIdentity(
-        principal_id="test_advertiser_pricing",
-        tenant_id="test_gam_pricing_tenant",
-        tenant={"tenant_id": "test_gam_pricing_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
-    )
+    identity = _identity()
 
-    response, _ = await _create_media_buy_impl(req=request, identity=identity)
+    response = await _create_media_buy_impl(req=request, identity=identity)
 
-    # Verify response is success (AdCP 2.4 compliant)
-    # Success response has media_buy_id, error response has errors field
-    # Skip if external creative agent is unavailable
-    if is_external_service_response_error(response):
-        pytest.skip(f"External creative agent unavailable: {response.errors}")
-
-    assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
-        f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
-    )
-    assert response.media_buy_id is not None
+    assert_created(response)
 
     # Each package should create a line item with correct pricing:
     # - pkg_1: CPM, STANDARD, priority 8
@@ -638,7 +583,7 @@ async def test_gam_auction_cpc_creates_price_priority(setup_gam_tenant_with_all_
 
     # Add auction CPC pricing option
     with get_db_session() as session:
-        pricing_auction = PricingOption(
+        pricing_auction = PricingOptionFactory.build(
             tenant_id="test_gam_pricing_tenant",
             product_id="prod_gam_cpc",
             pricing_model="cpc",
@@ -652,9 +597,7 @@ async def test_gam_auction_cpc_creates_price_priority(setup_gam_tenant_with_all_
         session.add(pricing_auction)
         session.commit()
 
-    request = CreateMediaBuyRequest(
-        brand={"domain": "testbrand.com"},
-        idempotency_key=f"int-key-{uuid.uuid4().hex}",
+    request = create_test_media_buy_request(
         packages=[
             create_test_package_request(
                 product_id="prod_gam_cpc",
@@ -667,23 +610,11 @@ async def test_gam_auction_cpc_creates_price_priority(setup_gam_tenant_with_all_
         end_time=_FUTURE_END_30D,
     )
 
-    identity = ResolvedIdentity(
-        principal_id="test_advertiser_pricing",
-        tenant_id="test_gam_pricing_tenant",
-        tenant={"tenant_id": "test_gam_pricing_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
-    )
+    identity = _identity()
 
-    response, _ = await _create_media_buy_impl(req=request, identity=identity)
+    response = await _create_media_buy_impl(req=request, identity=identity)
 
-    if is_external_service_response_error(response):
-        pytest.skip(f"External creative agent unavailable: {response.errors}")
-
-    assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
-        f"Auction CPC media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown'}"
-    )
-    assert response.media_buy_id is not None
+    assert_created(response)
 
     # Cleanup auction pricing option
     with get_db_session() as session:

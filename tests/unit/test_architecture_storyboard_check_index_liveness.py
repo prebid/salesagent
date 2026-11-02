@@ -144,11 +144,12 @@ def test_steps_bound_without_registry_row_does_not_grade(monkeypatch, tmp_path: 
     assert all(r["scenario_liveness"][scenario_id]["registry_wired"] is False for r in claiming)
 
 
-@requires_pinned_bundle
-def test_ledgered_scenario_marks_graduation_candidate_when_not_measured_failing(monkeypatch, tmp_path: Path) -> None:
-    """A scenario ledgered as a known gap, for a check the real conformance run
-    does not measure FAILING, is a graduation candidate -- independent of wiring."""
-    scenario_id = "T-UC-019-storyboard-post-create-status-poll"
+def _ledgered_scenario_result(monkeypatch, tmp_path: Path, scenario_id: str, *, exercised: set[str] | None = None):
+    """``build()`` with one scenario reporting ``ledgered=True`` and no harness wiring.
+
+    ``exercised`` stands in for the conformance ledger holding a row for those
+    storyboards — the only evidence this repo carries that a run reached them.
+    """
     artifact = tmp_path / "liveness.json"
     artifact.write_text(
         json.dumps({"scenarios": [{"scenario_id": scenario_id, "steps_bound": True, "ledgered": True}]}),
@@ -158,10 +159,38 @@ def test_ledgered_scenario_marks_graduation_candidate_when_not_measured_failing(
         scenario_liveness_join, "load_artifact", lambda _path, _fixed=artifact: _real_load_artifact(_fixed)
     )
     monkeypatch.setattr(scenario_liveness_join, "load_env_routes", lambda: [])  # not registry-wired at all
+    if exercised is not None:
+        monkeypatch.setattr(storyboard_check_index, "_exercised_storyboards", lambda _repo: exercised)
+    else:
+        # PIN THE OTHER INPUT TOO. `_exercised_storyboards` prefers a published
+        # storyboard_collected.json (salesagent-v03pe.3) and falls back to the failure
+        # ledger only when none exists. test-results/ is gitignored, so whether that file
+        # is on disk depends on whether someone has run the storyboard suite in this
+        # worktree -- and a partial artifact from a degraded run narrows the exercised set.
+        # A guard whose verdict moves with ambient disk state is not a guard, so point the
+        # reader at a path that cannot exist and let it use the committed ledger, which is
+        # the input these cases are actually about.
+        monkeypatch.setattr(
+            storyboard_check_index, "_collected_artifact_path", lambda _repo: tmp_path / "no-such-artifact.json"
+        )
+    return storyboard_check_index.build(REPO_ROOT, ADCP_HOME)
 
-    result = storyboard_check_index.build(REPO_ROOT, ADCP_HOME)
-    candidates = [r for r in result["records"] if scenario_id in r["scenarios"] and r["measured"] == "no ledger entry"]
-    assert candidates, "fixture broken: no 'no ledger entry' check is claimed by T-UC-019-...-poll"
+
+@requires_pinned_bundle
+def test_ledgered_scenario_marks_graduation_candidate_when_a_run_reached_the_storyboard(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A scenario ledgered as a known gap, for a check the real conformance run REACHED
+    and did not measure FAILING, is a graduation candidate -- independent of wiring."""
+    scenario_id = "T-UC-019-storyboard-post-create-status-poll"
+    result = _ledgered_scenario_result(monkeypatch, tmp_path, scenario_id, exercised={"media_buy_seller"})
+
+    candidates = [
+        r
+        for r in result["records"]
+        if scenario_id in r["scenarios"] and r["measured"] == storyboard_check_index.MEASURED_NOT_FAILING
+    ]
+    assert candidates, "fixture broken: no reached-and-not-failing check is claimed by T-UC-019-...-poll"
     assert all(r["graduation_candidate"] for r in candidates)
     # Not registry-wired -> not graded -- graduation_candidate does not require it.
     assert all(not r["graded_by_live_scenario"] for r in candidates)
@@ -170,6 +199,35 @@ def test_ledgered_scenario_marks_graduation_candidate_when_not_measured_failing(
     rendered = storyboard_check_index.render(result)
     assert "## 4. Graduation candidates" in rendered
     assert f"`{scenario_id}`" in rendered.split("## 4. Graduation candidates")[1].split("## 5.")[0]
+
+
+@requires_pinned_bundle
+def test_a_ledgered_scenario_on_an_unmeasured_check_is_not_a_graduation_candidate(monkeypatch, tmp_path: Path) -> None:
+    """The salesagent-b341x.25 defect: a check nobody has been shown to run was offered
+    as ready to graduate.
+
+    The ledger records FAILURES only, so "no row" covers both "the run graded this and
+    it passed" and "no run ever reached it". Measured at the 3.1.1 pin this is not a
+    corner case -- ALL 51 checks this scenario claims belong to
+    ``protocols/media-buy/index.yaml``, for which the ledger holds no row at all, and
+    not one of the 20 claiming scenarios in the tree claims a storyboard a run has been
+    shown to reach. Every graduation candidate the old report could produce was over an
+    unmeasured check.
+    """
+    scenario_id = "T-UC-019-storyboard-post-create-status-poll"
+    result = _ledgered_scenario_result(monkeypatch, tmp_path, scenario_id)
+
+    unmeasured = [
+        r
+        for r in result["records"]
+        if scenario_id in r["scenarios"] and r["measured"] == storyboard_check_index.MEASURED_NOT_MEASURED
+    ]
+    assert unmeasured, "fixture broken: this scenario's claims should all be NOT MEASURED at the 3.1.1 pin"
+    assert not any(r["graduation_candidate"] for r in unmeasured), (
+        "a check whose storyboard the conformance ledger has no row for has not been shown to "
+        "run, so there is no run to graduate it against. Offering it puts checks nobody has "
+        "graded on a list a human is meant to act on."
+    )
 
 
 @requires_pinned_bundle

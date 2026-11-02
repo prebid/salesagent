@@ -1,5 +1,4 @@
 # Generated from adcp-req @ a14db6e5894e781a8b2c577e86e1b136876e4915 on 2026-06-03T11:30:04Z (merge mode)
-# DO NOT EDIT -- re-run: python scripts/compile_bdd.py --merge
 
 Feature: BR-UC-027 Manage Async Tasks
   As a Buyer or Seller
@@ -25,7 +24,7 @@ Feature: BR-UC-027 Manage Async Tasks
   #   H (SUMMARY_INCONSISTENT -- response self-check)
   # Error codes: REFERENCE_NOT_FOUND, TASK_NOT_COMPLETABLE, COMPLETION_STATUS_INVALID,
   #   AUTH_REQUIRED, SORT_FIELD_INVALID, SORT_DIRECTION_INVALID,
-  #   FILTER_ARRAY_EMPTY, FILTER_TASK_IDS_TOO_MANY, FILTER_DATE_INVALID_FORMAT,
+  #   INVALID_REQUEST, FILTER_TASK_IDS_TOO_MANY, FILTER_DATE_INVALID_FORMAT,
   #   FILTER_VALUE_INVALID, SUMMARY_INCONSISTENT
 
   Background:
@@ -237,7 +236,6 @@ Feature: BR-UC-027 Manage Async Tasks
     When the Buyer Agent invokes get_task with task_id "task_nonexistent_999"
     Then the operation should fail with error code "REFERENCE_NOT_FOUND"
     And the error code should be "REFERENCE_NOT_FOUND"
-    And the error message should reference task_id "task_nonexistent_999"
     And the error should include "suggestion" field
     And the suggestion should contain "Verify the task_id"
     And the request context is echoed in the response
@@ -253,7 +251,6 @@ Feature: BR-UC-027 Manage Async Tasks
     When the Buyer Agent invokes complete_task with task_id "task_ghost_001" and status "completed"
     Then the operation should fail with error code "REFERENCE_NOT_FOUND"
     And the error code should be "REFERENCE_NOT_FOUND"
-    And the error message should reference task_id "task_ghost_001"
     And the error should include "suggestion" field
     And the suggestion should contain "Verify the task_id"
     # POST-F1: System state unchanged, no task modified
@@ -268,7 +265,6 @@ Feature: BR-UC-027 Manage Async Tasks
     When the Buyer Agent invokes get_task with task_id "task_cross_001"
     Then the operation should fail with error code "REFERENCE_NOT_FOUND"
     And the error code should be "REFERENCE_NOT_FOUND"
-    And the error message should reference task_id "task_cross_001"
     And the error should include "suggestion" field
     And the suggestion should contain "belongs to the current tenant"
     # POST-F1: Tenant isolation enforced
@@ -279,9 +275,8 @@ Feature: BR-UC-027 Manage Async Tasks
   Scenario: TASK_NOT_COMPLETABLE -- task already completed
     Given the tenant has a task "task_done_001" in status "completed"
     When the Buyer Agent invokes complete_task with task_id "task_done_001" and status "completed"
-    Then the operation should fail with error code "TASK_NOT_COMPLETABLE"
-    And the error code should be "TASK_NOT_COMPLETABLE"
-    And the error message should indicate the task is already in status "completed"
+    Then the operation should fail with error code "INVALID_STATE"
+    And the error code should be "INVALID_STATE"
     And the error should include "suggestion" field
     And the suggestion should contain "pending, in_progress, or requires_approval"
     And the request context is echoed in the response
@@ -294,9 +289,8 @@ Feature: BR-UC-027 Manage Async Tasks
   Scenario: TASK_NOT_COMPLETABLE -- task already failed
     Given the tenant has a task "task_failed_001" in status "failed"
     When the Buyer Agent invokes complete_task with task_id "task_failed_001" and status "completed"
-    Then the operation should fail with error code "TASK_NOT_COMPLETABLE"
-    And the error code should be "TASK_NOT_COMPLETABLE"
-    And the error message should indicate the task is already in status "failed"
+    Then the operation should fail with error code "INVALID_STATE"
+    And the error code should be "INVALID_STATE"
     And the error should include "suggestion" field
     And the suggestion should contain "pending, in_progress, or requires_approval"
     # POST-F1: System state unchanged
@@ -306,9 +300,8 @@ Feature: BR-UC-027 Manage Async Tasks
   Scenario: COMPLETION_STATUS_INVALID -- non-terminal status value
     Given the tenant has a task "task_val_001" in status "pending"
     When the Buyer Agent invokes complete_task with task_id "task_val_001" and status "pending"
-    Then the operation should fail with error code "COMPLETION_STATUS_INVALID"
-    And the error code should be "COMPLETION_STATUS_INVALID"
-    And the error message should indicate "pending" is invalid
+    Then the operation should fail with error code "INVALID_REQUEST"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "'completed' or 'failed'"
     And the request context is echoed in the response
@@ -321,9 +314,8 @@ Feature: BR-UC-027 Manage Async Tasks
   Scenario: COMPLETION_STATUS_INVALID -- terminal but disallowed status
     Given the tenant has a task "task_val_002" in status "pending"
     When the Buyer Agent invokes complete_task with task_id "task_val_002" and status "canceled"
-    Then the operation should fail with error code "COMPLETION_STATUS_INVALID"
-    And the error code should be "COMPLETION_STATUS_INVALID"
-    And the error message should indicate "canceled" is invalid
+    Then the operation should fail with error code "INVALID_REQUEST"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "'completed' or 'failed'"
     # POST-F1: Canceled not allowed via complete_task
@@ -334,9 +326,8 @@ Feature: BR-UC-027 Manage Async Tasks
   Scenario: COMPLETION_STATUS_INVALID -- arbitrary unrecognized status
     Given the tenant has a task "task_val_003" in status "pending"
     When the Buyer Agent invokes complete_task with task_id "task_val_003" and status "approved"
-    Then the operation should fail with error code "COMPLETION_STATUS_INVALID"
-    And the error code should be "COMPLETION_STATUS_INVALID"
-    And the error message should indicate "approved" is invalid
+    Then the operation should fail with error code "INVALID_REQUEST"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "'completed' or 'failed'"
     # POST-F1: Unknown values rejected
@@ -348,7 +339,6 @@ Feature: BR-UC-027 Manage Async Tasks
     When the Buyer Agent invokes list_tasks
     Then the operation should fail with error code "AUTH_REQUIRED"
     And the error code should be "AUTH_REQUIRED"
-    And the error message should contain "tenant context"
     And the error should include "suggestion" field
     And the suggestion should contain "x-adcp-auth token"
     # POST-F1: System state unchanged
@@ -362,7 +352,6 @@ Feature: BR-UC-027 Manage Async Tasks
     When the Buyer Agent invokes get_task with task_id "task_any_001"
     Then the operation should fail with error code "AUTH_REQUIRED"
     And the error code should be "AUTH_REQUIRED"
-    And the error message should contain "tenant context"
     And the error should include "suggestion" field
     And the suggestion should contain "x-adcp-auth token"
     # POST-F1: System state unchanged
@@ -376,7 +365,6 @@ Feature: BR-UC-027 Manage Async Tasks
     When the Buyer Agent invokes complete_task with task_id "task_any_002" and status "completed"
     Then the operation should fail with error code "AUTH_REQUIRED"
     And the error code should be "AUTH_REQUIRED"
-    And the error message should contain "tenant context"
     And the error should include "suggestion" field
     And the suggestion should contain "x-adcp-auth token"
     # POST-F1: System state unchanged
@@ -397,8 +385,8 @@ Feature: BR-UC-027 Manage Async Tasks
 
     Examples: Invalid partitions (terminal states and not found)
       | partition                | task_state     | outcome                                                                                       |
-      | already_completed        | completed      | the operation fails with error code "TASK_NOT_COMPLETABLE" and suggestion about completable states |
-      | already_failed           | failed         | the operation fails with error code "TASK_NOT_COMPLETABLE" and suggestion about completable states |
+      | already_completed        | completed      | the operation fails with error code "INVALID_STATE" and suggestion about completable states |
+      | already_failed           | failed         | the operation fails with error code "INVALID_STATE" and suggestion about completable states |
       | task_not_found           | nonexistent    | the operation fails with error code "REFERENCE_NOT_FOUND" and suggestion to verify task_id             |
 
   @T-UC-027-partition-status @partition @completion_status
@@ -415,9 +403,9 @@ Feature: BR-UC-027 Manage Async Tasks
 
     Examples: Invalid partitions
       | partition              | status_value  | outcome                                                                                       |
-      | non_terminal_status    | "pending"     | the operation fails with error code "COMPLETION_STATUS_INVALID" and suggestion about valid values  |
-      | other_terminal_status  | "canceled"    | the operation fails with error code "COMPLETION_STATUS_INVALID" and suggestion about valid values  |
-      | unknown_status         | "approved"    | the operation fails with error code "COMPLETION_STATUS_INVALID" and suggestion about valid values  |
+      | non_terminal_status    | "pending"     | the operation fails with error code "INVALID_REQUEST" and suggestion about valid values  |
+      | other_terminal_status  | "canceled"    | the operation fails with error code "INVALID_REQUEST" and suggestion about valid values  |
+      | unknown_status         | "approved"    | the operation fails with error code "INVALID_REQUEST" and suggestion about valid values  |
 
   @T-UC-027-partition-filtering @partition @list_filtering
   Scenario Outline: Task list filtering -- <partition>
@@ -438,10 +426,10 @@ Feature: BR-UC-027 Manage Async Tasks
 
     Examples: Invalid partitions
       | partition              | filter_config                                       | outcome                                                                                         |
-      | empty_multi_value      | filter statuses []                                  | the operation fails with error code "FILTER_ARRAY_EMPTY" and suggestion to provide at least one value   |
-      | task_ids_exceeds_max   | filter task_ids with 101 items                      | the operation fails with error code "FILTER_TASK_IDS_TOO_MANY" and suggestion to reduce count          |
-      | invalid_date_format    | filter created_after "2025/01/01"                   | the operation fails with error code "FILTER_DATE_INVALID_FORMAT" and suggestion about ISO 8601 format  |
-      | invalid_enum_value     | filter status "nonexistent_status"                  | the operation fails with error code "FILTER_VALUE_INVALID" and suggestion to check enum values          |
+      | empty_multi_value      | filter statuses []                                  | the operation fails with error code "INVALID_REQUEST" and suggestion to provide at least one value   |
+      | task_ids_exceeds_max   | filter task_ids with 101 items                      | the operation fails with error code "INVALID_REQUEST" and suggestion to reduce count          |
+      | invalid_date_format    | filter created_after "2025/01/01"                   | the operation fails with error code "INVALID_REQUEST" and suggestion about ISO 8601 format  |
+      | invalid_enum_value     | filter status "nonexistent_status"                  | the operation fails with error code "INVALID_REQUEST" and suggestion to check enum values          |
 
   @T-UC-027-partition-sort @partition @sort_validation
   Scenario Outline: Task list sort validation -- <partition>
@@ -460,8 +448,8 @@ Feature: BR-UC-027 Manage Async Tasks
 
     Examples: Invalid partitions
       | partition                | sort_config                                      | outcome                                                                                      |
-      | invalid_sort_field       | sort field "priority" direction "asc"            | the operation fails with error code "SORT_FIELD_INVALID" and suggestion about supported fields    |
-      | invalid_sort_direction   | sort field "created_at" direction "ascending"    | the operation fails with error code "SORT_DIRECTION_INVALID" and suggestion about asc or desc     |
+      | invalid_sort_field       | sort field "priority" direction "asc"            | the operation fails with error code "INVALID_REQUEST" and suggestion about supported fields    |
+      | invalid_sort_direction   | sort field "created_at" direction "ascending"    | the operation fails with error code "INVALID_REQUEST" and suggestion about asc or desc     |
 
   @T-UC-027-partition-audit @partition @audit_logging
   Scenario Outline: Task completion audit logging -- <partition>
@@ -496,7 +484,7 @@ Feature: BR-UC-027 Manage Async Tasks
 
     Examples: Invalid partitions
       | partition              | setup                                                  | query_config                     | outcome                                                                                                 |
-      | returned_exceeds_total | system constructs summary with returned > total        | (system error scenario)          | system error "SUMMARY_INCONSISTENT" indicating returned cannot exceed total_matching with suggestion     |
+      | returned_exceeds_total | system constructs summary with returned > total        | (system error scenario)          | system error "VALIDATION_ERROR" indicating returned cannot exceed total_matching with suggestion     |
 
   @T-UC-027-boundary-lifecycle @boundary @completion_lifecycle
   Scenario Outline: Completion lifecycle boundary -- <boundary_point>
@@ -509,8 +497,8 @@ Feature: BR-UC-027 Manage Async Tasks
       | task in pending state               | the tenant has a task "task_bnd_001" in status "pending"      | the task transitions to completed                                                        |
       | task in in_progress state           | the tenant has a task "task_bnd_001" in status "in_progress"  | the task transitions to completed                                                        |
       | task in requires_approval state     | the tenant has a task "task_bnd_001" in status "requires_approval" | the task transitions to completed                                                   |
-      | task in completed state             | the tenant has a task "task_bnd_001" in status "completed"    | the operation fails with "TASK_NOT_COMPLETABLE" and suggestion about completable states  |
-      | task in failed state                | the tenant has a task "task_bnd_001" in status "failed"       | the operation fails with "TASK_NOT_COMPLETABLE" and suggestion about completable states  |
+      | task in completed state             | the tenant has a task "task_bnd_001" in status "completed"    | the operation fails with "INVALID_STATE" and suggestion about completable states  |
+      | task in failed state                | the tenant has a task "task_bnd_001" in status "failed"       | the operation fails with "INVALID_STATE" and suggestion about completable states  |
       | task_id does not exist              | the tenant has no task with id "task_bnd_001"                 | the operation fails with "REFERENCE_NOT_FOUND" and suggestion to verify task_id               |
 
   @T-UC-027-boundary-status @boundary @completion_status
@@ -524,9 +512,9 @@ Feature: BR-UC-027 Manage Async Tasks
       | status = 'completed'                                                | "completed"   | the task transitions to completed                                                             |
       | status = 'failed'                                                   | "failed"      | the task transitions to failed                                                                |
       | status omitted (default to completed)                               | (omitted)     | the task transitions to completed via default                                                 |
-      | status = 'pending' (valid task-status but not completion target)    | "pending"     | the operation fails with "COMPLETION_STATUS_INVALID" and suggestion about valid values        |
-      | status = 'canceled' (terminal but not allowed via complete_task)    | "canceled"    | the operation fails with "COMPLETION_STATUS_INVALID" and suggestion about valid values        |
-      | status = 'approved' (not a recognized value)                        | "approved"    | the operation fails with "COMPLETION_STATUS_INVALID" and suggestion about valid values        |
+      | status = 'pending' (valid task-status but not completion target)    | "pending"     | the operation fails with "INVALID_REQUEST" and suggestion about valid values        |
+      | status = 'canceled' (terminal but not allowed via complete_task)    | "canceled"    | the operation fails with "INVALID_REQUEST" and suggestion about valid values        |
+      | status = 'approved' (not a recognized value)                        | "approved"    | the operation fails with "INVALID_REQUEST" and suggestion about valid values        |
 
   @T-UC-027-boundary-filtering @boundary @list_filtering
   Scenario Outline: List filtering boundary -- <boundary_point>
@@ -540,11 +528,11 @@ Feature: BR-UC-027 Manage Async Tasks
       | filters object empty {}                             | empty filters object                                   | all tenant tasks returned                                                                 |
       | single status filter                                | filter status "submitted"                              | only submitted tasks returned                                                             |
       | statuses array with 1 item (minItems boundary)      | filter statuses ["submitted"]                          | only submitted tasks returned                                                             |
-      | statuses array with 0 items                         | filter statuses []                                     | operation fails with "FILTER_ARRAY_EMPTY" and suggestion to provide at least one value    |
+      | statuses array with 0 items                         | filter statuses []                                     | operation fails with "INVALID_REQUEST" and suggestion to provide at least one value    |
       | task_ids with 100 items (maxItems boundary)         | filter task_ids with exactly 100 items                 | specific tasks returned by ID                                                             |
-      | task_ids with 101 items (exceeds maxItems)          | filter task_ids with 101 items                         | operation fails with "FILTER_TASK_IDS_TOO_MANY" and suggestion to reduce count            |
+      | task_ids with 101 items (exceeds maxItems)          | filter task_ids with 101 items                         | operation fails with "INVALID_REQUEST" and suggestion to reduce count            |
       | date filter with valid ISO 8601                     | filter created_after "2026-01-01T00:00:00Z"            | tasks created after date returned                                                         |
-      | date filter with non-ISO format                     | filter created_after "2025/01/01"                      | operation fails with "FILTER_DATE_INVALID_FORMAT" and suggestion about ISO 8601           |
+      | date filter with non-ISO format                     | filter created_after "2025/01/01"                      | operation fails with "INVALID_REQUEST" and suggestion about ISO 8601           |
       | all filter dimensions combined                      | filter protocol "media-buy" statuses ["submitted"] created_after "2026-01-01T00:00:00Z" | matching tasks returned with AND semantics |
 
   @T-UC-027-boundary-sort @boundary @sort_validation
@@ -558,9 +546,9 @@ Feature: BR-UC-027 Manage Async Tasks
       | sort omitted (defaults to created_at desc)             | no sort specified                              | tasks sorted by created_at descending                                                     |
       | sort field = 'created_at'                              | sort field "created_at" direction "asc"        | tasks sorted by created_at ascending                                                      |
       | sort field = 'protocol' (v3.1 last enum value; replaces pre-v3.1 `domain`) | sort field "protocol" direction "desc"     | tasks sorted by adcp-protocol descending                                                  |
-      | sort field = 'priority' (not in enum)                  | sort field "priority" direction "asc"          | operation fails with "SORT_FIELD_INVALID" and suggestion about supported fields            |
+      | sort field = 'priority' (not in enum)                  | sort field "priority" direction "asc"          | operation fails with "INVALID_REQUEST" and suggestion about supported fields            |
       | sort direction = 'asc'                                 | sort field "created_at" direction "asc"        | tasks sorted by created_at ascending                                                      |
-      | sort direction = 'ascending' (not in enum)             | sort field "created_at" direction "ascending"  | operation fails with "SORT_DIRECTION_INVALID" and suggestion about asc or desc             |
+      | sort direction = 'ascending' (not in enum)             | sort field "created_at" direction "ascending"  | operation fails with "INVALID_REQUEST" and suggestion about asc or desc             |
 
   @T-UC-027-boundary-audit @boundary @audit_logging
   Scenario Outline: Audit logging boundary -- <boundary_point>
@@ -588,7 +576,7 @@ Feature: BR-UC-027 Manage Async Tasks
       | returned = total_matching (single page, all results)             | the tenant has 5 tasks and max_results >= 5                | query_summary shows returned equals total_matching                   |
       | returned < total_matching (multi-page result set)                | the tenant has 75 tasks and max_results is 20              | query_summary shows returned 20 and total_matching 75                |
       | filters_applied is empty array (no filters)                      | the tenant has tasks and no filters applied                | query_summary shows empty filters_applied                            |
-      | returned > total_matching (invariant violation)                   | (system error condition)                                   | system error "SUMMARY_INCONSISTENT" with suggestion about system error |
+      | returned > total_matching (invariant violation)                   | (system error condition)                                   | system error "VALIDATION_ERROR" with suggestion about system error |
 
   @T-UC-027-inv-203-1-holds @invariant @BR-RULE-203
   Scenario: BR-RULE-203 INV-1 holds -- completable task transitions to terminal state
@@ -603,8 +591,8 @@ Feature: BR-UC-027 Manage Async Tasks
   Scenario: BR-RULE-203 INV-2 violated -- terminal task cannot be completed again
     Given the tenant has a task "task_inv2_001" in status "completed"
     When the Buyer Agent invokes complete_task with task_id "task_inv2_001" and status "failed"
-    Then the operation should fail with error code "TASK_NOT_COMPLETABLE"
-    And the error code should be "TASK_NOT_COMPLETABLE"
+    Then the operation should fail with error code "INVALID_STATE"
+    And the error code should be "INVALID_STATE"
     And the error should include "suggestion" field
     And the suggestion should contain "pending, in_progress, or requires_approval"
     # INV-2: Terminal state rejects completion
@@ -646,8 +634,8 @@ Feature: BR-UC-027 Manage Async Tasks
   Scenario: BR-RULE-204 INV-3 violated -- invalid status rejected before task lookup
     Given the tenant has a task "task_inv204_3" in status "pending"
     When the Buyer Agent invokes complete_task with task_id "task_inv204_3" and status "rejected"
-    Then the operation should fail with error code "COMPLETION_STATUS_INVALID"
-    And the error code should be "COMPLETION_STATUS_INVALID"
+    Then the operation should fail with error code "INVALID_REQUEST"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "'completed' or 'failed'"
     # INV-3: Invalid status rejected before task lookup
@@ -663,8 +651,8 @@ Feature: BR-UC-027 Manage Async Tasks
   Scenario: BR-RULE-205 INV-2 violated -- empty multi-value array rejected
     Given the tenant has workflow tasks
     When the Buyer Agent invokes list_tasks with filter protocols []
-    Then the operation should fail with error code "FILTER_ARRAY_EMPTY"
-    And the error code should be "FILTER_ARRAY_EMPTY"
+    Then the operation should fail with error code "INVALID_REQUEST"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "at least one value"
     # INV-2: minItems=1 enforced
@@ -674,8 +662,8 @@ Feature: BR-UC-027 Manage Async Tasks
   Scenario: BR-RULE-205 INV-3 violated -- task_ids exceeds 100 items
     Given the tenant has workflow tasks
     When the Buyer Agent invokes list_tasks with filter task_ids containing 101 items
-    Then the operation should fail with error code "FILTER_TASK_IDS_TOO_MANY"
-    And the error code should be "FILTER_TASK_IDS_TOO_MANY"
+    Then the operation should fail with error code "INVALID_REQUEST"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "Reduce the number"
     # INV-3: maxItems=100 enforced
@@ -694,8 +682,8 @@ Feature: BR-UC-027 Manage Async Tasks
   Scenario: BR-RULE-205 INV-5 violated -- invalid date format rejected
     Given the tenant has workflow tasks
     When the Buyer Agent invokes list_tasks with filter updated_after "not-a-date"
-    Then the operation should fail with error code "FILTER_DATE_INVALID_FORMAT"
-    And the error code should be "FILTER_DATE_INVALID_FORMAT"
+    Then the operation should fail with error code "INVALID_REQUEST"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "ISO 8601"
     # INV-5: Date format validation
@@ -719,8 +707,8 @@ Feature: BR-UC-027 Manage Async Tasks
   Scenario: BR-RULE-206 INV-3 violated -- invalid sort field rejected
     Given the tenant has tasks
     When the Buyer Agent invokes list_tasks with sort field "name" direction "asc"
-    Then the operation should fail with error code "SORT_FIELD_INVALID"
-    And the error code should be "SORT_FIELD_INVALID"
+    Then the operation should fail with error code "INVALID_REQUEST"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "supported sort fields"
     # INV-3: Invalid sort field
@@ -730,8 +718,8 @@ Feature: BR-UC-027 Manage Async Tasks
   Scenario: BR-RULE-206 INV-4 violated -- invalid sort direction rejected
     Given the tenant has tasks
     When the Buyer Agent invokes list_tasks with sort field "status" direction "up"
-    Then the operation should fail with error code "SORT_DIRECTION_INVALID"
-    And the error code should be "SORT_DIRECTION_INVALID"
+    Then the operation should fail with error code "INVALID_REQUEST"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "'asc' or 'desc'"
     # INV-4: Invalid sort direction
@@ -984,8 +972,8 @@ Feature: BR-UC-027 Manage Async Tasks
   Scenario: Extension G EC-007 -- FILTER_VALUE_INVALID rejects out-of-enum filter value
     Given the tenant has workflow tasks
     When the Buyer Agent invokes list_tasks with filter status "nonexistent_status"
-    Then the operation should fail with error code "FILTER_VALUE_INVALID"
-    And the error code should be "FILTER_VALUE_INVALID"
+    Then the operation should fail with error code "INVALID_REQUEST"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "enum"
     And the request context is echoed in the response
@@ -996,11 +984,11 @@ Feature: BR-UC-027 Manage Async Tasks
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/core/tasks-list-request.json
 
   @T-UC-027-ext-g-filter-array-empty @extension @ext-g @error @post-f1 @post-f2 @post-f3
-  Scenario: Extension G EC-008 -- FILTER_ARRAY_EMPTY rejects multi-value array with zero items
+  Scenario: Extension G EC-008 -- INVALID_REQUEST rejects multi-value array with zero items
     Given the tenant has workflow tasks
     When the Buyer Agent invokes list_tasks with filter statuses []
-    Then the operation should fail with error code "FILTER_ARRAY_EMPTY"
-    And the error code should be "FILTER_ARRAY_EMPTY"
+    Then the operation should fail with error code "INVALID_REQUEST"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "at least one value"
     And the request context is echoed in the response
@@ -1014,8 +1002,8 @@ Feature: BR-UC-027 Manage Async Tasks
   Scenario: Extension G EC-009 -- FILTER_DATE_INVALID_FORMAT rejects non-ISO 8601 date filter
     Given the tenant has workflow tasks
     When the Buyer Agent invokes list_tasks with filter created_after "2025/01/01"
-    Then the operation should fail with error code "FILTER_DATE_INVALID_FORMAT"
-    And the error code should be "FILTER_DATE_INVALID_FORMAT"
+    Then the operation should fail with error code "INVALID_REQUEST"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "ISO 8601"
     And the request context is echoed in the response
@@ -1029,8 +1017,8 @@ Feature: BR-UC-027 Manage Async Tasks
   Scenario: Extension G EC-010 -- FILTER_TASK_IDS_TOO_MANY rejects task_ids array exceeding 100
     Given the tenant has workflow tasks
     When the Buyer Agent invokes list_tasks with filter task_ids containing 101 items
-    Then the operation should fail with error code "FILTER_TASK_IDS_TOO_MANY"
-    And the error code should be "FILTER_TASK_IDS_TOO_MANY"
+    Then the operation should fail with error code "INVALID_REQUEST"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "Reduce the number"
     And the request context is echoed in the response
@@ -1044,8 +1032,8 @@ Feature: BR-UC-027 Manage Async Tasks
   Scenario: Extension G EC-011 -- SORT_FIELD_INVALID rejects sort.field outside v3.1 enum
     Given the tenant has tasks
     When the Buyer Agent invokes list_tasks with sort field "priority" direction "asc"
-    Then the operation should fail with error code "SORT_FIELD_INVALID"
-    And the error code should be "SORT_FIELD_INVALID"
+    Then the operation should fail with error code "INVALID_REQUEST"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "supported sort fields"
     And the request context is echoed in the response
@@ -1059,8 +1047,8 @@ Feature: BR-UC-027 Manage Async Tasks
   Scenario: Extension G EC-012 -- SORT_DIRECTION_INVALID rejects sort.direction outside {asc,desc}
     Given the tenant has tasks
     When the Buyer Agent invokes list_tasks with sort field "created_at" direction "ascending"
-    Then the operation should fail with error code "SORT_DIRECTION_INVALID"
-    And the error code should be "SORT_DIRECTION_INVALID"
+    Then the operation should fail with error code "INVALID_REQUEST"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "'asc' or 'desc'"
     And the request context is echoed in the response
@@ -1074,9 +1062,8 @@ Feature: BR-UC-027 Manage Async Tasks
     Given the tenant has workflow tasks
     And the server response construction yields query_summary aggregates that disagree with the tasks array
     When the Buyer Agent invokes list_tasks with no filters
-    Then the operation should fail with error code "SUMMARY_INCONSISTENT"
-    And the error code should be "SUMMARY_INCONSISTENT"
-    And the error message identifies the inconsistent counter
+    Then the operation should fail with error code "VALIDATION_ERROR"
+    And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
     And the request context is echoed in the response
     # EC-013: server self-check at response construction

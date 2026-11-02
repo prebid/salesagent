@@ -19,9 +19,13 @@ from unittest.mock import ANY
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._harness_db import db_session as _db_session
-from tests.bdd.steps._outcome_helpers import _get_response_field, payload_or_none, require_payload
-from tests.bdd.steps.generic._create_request import build_create_request_kwargs
+from tests.bdd.steps._outcome_helpers import _get_response_field, payload_or_none, require_payload, wire_field
+from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal
+from tests.bdd.steps.generic._create_request import build_create_request_kwargs, pricing_option_id
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
+from tests.factories.mint import mint
+from tests.harness.create_request import build_request_packages
+from tests.helpers.account_seeding import seed_natural_key_matches
 
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — request setup and account state
@@ -54,15 +58,19 @@ def _attach_raw_account_shape(ctx: dict, account_value: Any | None) -> None:
     Instead we stash the raw flat kwargs (``request_kwargs`` minus a typed
     account, plus the raw ``account_value`` verbatim) and dispatch them as a RAW
     body (``dispatch_mode="create_raw"``). Production's route + Pydantic then
-    builds the request and either accepts it (account omitted is valid — account
-    is optional) or rejects the oneOf-both shape with VALIDATION_ERROR on the wire.
+    builds the request and rejects it: an ABSENT account is INVALID_REQUEST naming
+    ``account`` (create-media-buy-request.json /required lists it — this used to say
+    "account omitted is valid, account is optional", which was the deviation
+    salesagent-prkv.68 removed), and the oneOf-both shape is a VALIDATION_ERROR.
     """
     from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
+    from tests.harness.media_buy_create import OMIT_ACCOUNT
 
     kwargs = _ensure_request_defaults(ctx)
-    kwargs.pop("account", None)
-    if account_value is not None:
-        kwargs["account"] = account_value
+    # The SENTINEL, not a pop: the harness defaults a seeded account into any request that
+    # does not name one, so popping would hand this scenario an account and it would stop
+    # grading the absence it exists for.
+    kwargs["account"] = OMIT_ACCOUNT if account_value is None else account_value
     ctx["dispatch_mode"] = "create_raw"
 
 
@@ -93,7 +101,6 @@ def given_request_with_natural_key(ctx: dict, brand: str, operator: str) -> None
 def given_request_without_account(ctx: dict) -> None:
     """Set up a create_media_buy request with no account field."""
     ctx["account_ref"] = None
-    ctx["account_absent"] = True
 
 
 @given("a valid create_media_buy request with creative assignments")
@@ -160,10 +167,7 @@ def given_natural_key_not_found(ctx: dict) -> None:
 def given_account_needs_setup(ctx: dict, account_id: str) -> None:
     """Create account with pending_approval status (setup not complete)."""
     env = ctx["env"]
-    if "tenant" not in ctx:
-        tenant, principal = env.setup_default_data()
-        ctx["tenant"] = tenant
-        ctx["principal"] = principal
+    ensure_tenant_principal(ctx, env)
     tenant, principal = ctx["tenant"], ctx["principal"]
     account = AccountFactory(
         tenant=tenant,
@@ -179,25 +183,21 @@ def given_account_needs_setup(ctx: dict, account_id: str) -> None:
 def given_multiple_matches(ctx: dict, count: int) -> None:
     """Create multiple accounts matching the same natural key."""
     env = ctx["env"]
-    if "tenant" not in ctx:
-        tenant, principal = env.setup_default_data()
-        ctx["tenant"] = tenant
-        ctx["principal"] = principal
-    else:
-        tenant = ctx["tenant"]
-        principal = ctx["principal"]
+    ensure_tenant_principal(ctx, env)
+    tenant = ctx["tenant"]
+    principal = ctx["principal"]
 
     brand = ctx.get("request_brand", "multi-brand.com")
     operator = ctx.get("request_operator", "agency.com")
 
-    for i in range(count):
-        account = AccountFactory(
-            tenant=tenant,
-            account_id=f"acc-multi-{i}",
-            brand={"domain": brand},
-            operator=operator,
-        )
-        AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
+    seed_natural_key_matches(
+        tenant,
+        count=count,
+        brand_domain=brand,
+        operator=operator,
+        owner_for_index=lambda _i: principal,
+        account_id_prefix="acc-multi",
+    )
 
 
 @given(parsers.parse("the natural key matches {total:d} accounts but the agent can access {accessible:d}"))
@@ -210,32 +210,23 @@ def given_natural_key_partial_access(ctx: dict, total: int, accessible: int) -> 
     from tests.factories.principal import PrincipalFactory
 
     env = ctx["env"]
-    if "tenant" not in ctx:
-        tenant, principal = env.setup_default_data()
-        ctx["tenant"] = tenant
-        ctx["principal"] = principal
-    else:
-        tenant = ctx["tenant"]
-        principal = ctx["principal"]
+    ensure_tenant_principal(ctx, env)
+    tenant = ctx["tenant"]
+    principal = ctx["principal"]
 
     brand = ctx.get("request_brand", "multi-brand.com")
     operator = ctx.get("request_operator", "agency.com")
     other_principal = PrincipalFactory(tenant=tenant)
 
-    accessible_ids: list[str] = []
-    for i in range(total):
-        account_id = f"acc-scope-{i}"
-        account = AccountFactory(
-            tenant=tenant,
-            account_id=account_id,
-            status="active",
-            brand={"domain": brand},
-            operator=operator,
-        )
-        owner = principal if i < accessible else other_principal
-        AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=owner, account=account)
-        if i < accessible:
-            accessible_ids.append(account_id)
+    accounts = seed_natural_key_matches(
+        tenant,
+        count=total,
+        brand_domain=brand,
+        operator=operator,
+        owner_for_index=lambda i: principal if i < accessible else other_principal,
+        account_id_prefix="acc-scope",
+    )
+    accessible_ids: list[str] = [a.account_id for a in accounts[:accessible]]
     # Record the accessible account id(s) so a Then step can pin the resolved
     # account to the one the agent can actually access (#1417).
     ctx["accessible_account_ids"] = accessible_ids
@@ -243,36 +234,22 @@ def given_natural_key_partial_access(ctx: dict, total: int, accessible: int) -> 
 
 @given("the Buyer Agent's token resolves no principal")
 def given_unauthenticated_principal(ctx: dict) -> None:
-    """Force the dispatch identity to an unauthenticated one: a tenant is resolved
-    (from the host header, as MCP middleware does) but principal_id is None.
+    """Present no token while still addressing the tenant.
 
-    This is the exact shape an unauthenticated MCP caller presents — MCP resolves
-    a tenant from the host but no principal from a missing/invalid token, so account
-    resolution at the transport boundary runs with principal_id=None. A2A/REST raise
-    on the missing token before this point; forcing the identity here exercises the
-    shared ``enrich_identity_with_account`` boundary guard uniformly on every wire
-    transport. See #1417.
+    This is the exact shape an unauthenticated caller presents: the tenant resolves
+    from the request's tenant header and no principal resolves from the absent token.
+    The real resolver answers it on every wire transport alike. See #1417.
     """
-    from tests.factories.principal import PrincipalFactory
-
-    env = ctx["env"]
-    ctx["dispatch_identity"] = PrincipalFactory.make_identity(
-        principal_id=None,
-        tenant_id=env._tenant_id,
-    )
+    ctx["credential"] = ctx["env"].credential(token=None)
 
 
 @given(parsers.parse('the account "{account_id}" exists and is active'))
 def given_account_exists_active(ctx: dict, account_id: str) -> None:
     """Create an active account with agent access."""
     env = ctx["env"]
-    if "tenant" not in ctx:
-        tenant, principal = env.setup_default_data()
-        ctx["tenant"] = tenant
-        ctx["principal"] = principal
-    else:
-        tenant = ctx["tenant"]
-        principal = ctx["principal"]
+    ensure_tenant_principal(ctx, env)
+    tenant = ctx["tenant"]
+    principal = ctx["principal"]
 
     account = AccountFactory(
         tenant=tenant,
@@ -288,13 +265,9 @@ def given_account_exists_active(ctx: dict, account_id: str) -> None:
 def given_account_active(ctx: dict) -> None:
     """Create an active account for the current request context."""
     env = ctx["env"]
-    if "tenant" not in ctx:
-        tenant, principal = env.setup_default_data()
-        ctx["tenant"] = tenant
-        ctx["principal"] = principal
-    else:
-        tenant = ctx["tenant"]
-        principal = ctx["principal"]
+    ensure_tenant_principal(ctx, env)
+    tenant = ctx["tenant"]
+    principal = ctx["principal"]
 
     account_id = ctx.get("request_account_id", "acc-001")
     account = AccountFactory(
@@ -313,13 +286,9 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
     from adcp.types import AccountReference, AccountReferenceById, AccountReferenceByNaturalKey, BrandReference
 
     env = ctx["env"]
-    if "tenant" not in ctx:
-        tenant, principal = env.setup_default_data()
-        ctx["tenant"] = tenant
-        ctx["principal"] = principal
-    else:
-        tenant = ctx["tenant"]
-        principal = ctx["principal"]
+    ensure_tenant_principal(ctx, env)
+    tenant = ctx["tenant"]
+    principal = ctx["principal"]
 
     if partition == "explicit_account_id":
         account = AccountFactory(
@@ -347,9 +316,11 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
 
     elif partition == "missing_account":
         # Schema-shape case: dispatch the create with NO account field at all.
-        # account is OPTIONAL on CreateMediaBuyRequest (account-management mid-spec),
-        # so production accepts it and creates the buy — outcome is success, not
-        # a rejection (see #1417 empirical trace).
+        # account is REQUIRED on CreateMediaBuyRequest (create-media-buy-request.json
+        # /required), so production refuses it with INVALID_REQUEST naming account.
+        # This said the opposite, citing a #1417 empirical trace: production DID accept it,
+        # and the scenario was reconciled to that rather than to the spec. The deviation is
+        # gone (salesagent-prkv.68), so the scenario grades the refusal again.
         _attach_raw_account_shape(ctx, None)
         return
 
@@ -369,17 +340,16 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
         )
 
     elif partition == "natural_key_ambiguous":
-        for i in range(3):
-            account = AccountFactory(
-                tenant=tenant,
-                account_id=f"acc-amb-{i}",
-                status="active",
-                brand={"domain": "ambiguous.com"},
-                operator="ambiguous.com",
-            )
-            # Grant the requesting agent access so ambiguity is genuine FOR THIS AGENT —
-            # natural-key resolution is access-scoped (#1417).
-            AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
+        # The requesting agent is granted access to all three so the ambiguity is
+        # genuine FOR THIS AGENT — natural-key resolution is access-scoped (#1417).
+        seed_natural_key_matches(
+            tenant,
+            count=3,
+            brand_domain="ambiguous.com",
+            operator="ambiguous.com",
+            owner_for_index=lambda _i: principal,
+            account_id_prefix="acc-amb",
+        )
         ctx["account_ref"] = AccountReference(
             root=AccountReferenceByNaturalKey(brand=BrandReference(domain="ambiguous.com"), operator="ambiguous.com"),
         )
@@ -452,13 +422,9 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
     from adcp.types import AccountReference, AccountReferenceById, AccountReferenceByNaturalKey, BrandReference
 
     env = ctx["env"]
-    if "tenant" not in ctx:
-        tenant, principal = env.setup_default_data()
-        ctx["tenant"] = tenant
-        ctx["principal"] = principal
-    else:
-        tenant = ctx["tenant"]
-        principal = ctx["principal"]
+    ensure_tenant_principal(ctx, env)
+    tenant = ctx["tenant"]
+    principal = ctx["principal"]
 
     if config.startswith("acc-") and "active" in config:
         account_id = config.split()[0]
@@ -495,17 +461,16 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
         )
 
     elif config.startswith("brand+op") and "multi match" in config:
-        for i in range(2):
-            account = AccountFactory(
-                tenant=tenant,
-                account_id=f"acc-multi-{i}",
-                status="active",
-                brand={"domain": "multi.com"},
-                operator="multi.com",
-            )
-            # Access-scoped ambiguity (#1417): grant the agent access so the
-            # two matches are genuinely ambiguous for it.
-            AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
+        # Access-scoped ambiguity (#1417): the agent is granted access to both,
+        # so the two matches are genuinely ambiguous for it.
+        seed_natural_key_matches(
+            tenant,
+            count=2,
+            brand_domain="multi.com",
+            operator="multi.com",
+            owner_for_index=lambda _i: principal,
+            account_id_prefix="acc-multi",
+        )
         ctx["account_ref"] = AccountReference(
             root=AccountReferenceByNaturalKey(brand=BrandReference(domain="multi.com"), operator="multi.com"),
         )
@@ -544,9 +509,9 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
         ctx["account_ref"] = AccountReference(root=AccountReferenceById(account_id="acc-suspended"))
 
     elif "no account" in config:
-        # Schema-shape case: account field omitted entirely. account is OPTIONAL
-        # on CreateMediaBuyRequest, so production accepts and creates the buy →
-        # success, not a rejection (#1417 empirical trace).
+        # Schema-shape case: account field omitted entirely. account is REQUIRED on
+        # CreateMediaBuyRequest, so production refuses it — see the missing_account
+        # partition above for why this comment used to claim the opposite.
         _attach_raw_account_shape(ctx, None)
         return
 
@@ -746,7 +711,7 @@ def when_send_create_media_buy(ctx: dict) -> None:
         from tests.bdd.steps.generic._dispatch import dispatch_request
 
         kwargs = _build_idempotency_request_kwargs(ctx)
-        kwargs["idempotency_key"] = f"uc002-manual-{uuid.uuid4().hex}"
+        kwargs["idempotency_key"] = mint(f"uc002-manual-{uuid.uuid4().hex}")
         account_ref = ctx.get("account_ref")
         if account_ref is not None:
             kwargs["account"] = account_ref.model_dump(mode="json", exclude_none=True)
@@ -761,24 +726,19 @@ def when_send_create_media_buy(ctx: dict) -> None:
 
 def _dispatch_full_create(ctx: dict) -> None:
     """Build a typed CreateMediaBuyRequest from ctx['request_kwargs'] and dispatch."""
-    from pydantic import ValidationError
 
-    from src.core.schemas import CreateMediaBuyRequest
     from tests.bdd.steps.generic._dispatch import dispatch_request
 
+    # Dispatch the RAW flat bag; the TRANSPORT validates. Constructing the request here and
+    # catching its ValidationError meant a schema-invalid payload never crossed a transport:
+    # the scenario then graded the harness's own exception -- keys ['code','message'], no
+    # suggestion -- rather than the wire envelope production emits. A test routed that way
+    # cannot fail when the server stops rejecting the payload, because it never asked one.
     kwargs = ctx.get("request_kwargs", {})
-    try:
-        req = CreateMediaBuyRequest(**kwargs)
-    except ValidationError as e:
-        ctx["error"] = e
-        return
 
-    # No-auth scenarios (#1417) stash an unauthenticated identity so the
-    # transport-boundary account-resolution guard is exercised on the wire.
-    if "dispatch_identity" in ctx:
-        dispatch_request(ctx, req=req, identity=ctx["dispatch_identity"])
-    else:
-        dispatch_request(ctx, req=req)
+    # No-auth scenarios (#1417) stash a token-less credential so the resolver's refusal
+    # is exercised on the wire. dispatch_request reads ctx["credential"] itself.
+    dispatch_request(ctx, **kwargs)
 
 
 def _dispatch_raw_create(ctx: dict) -> None:
@@ -794,13 +754,6 @@ def _dispatch_raw_create(ctx: dict) -> None:
     dispatch_request(ctx, **ctx.get("request_kwargs", {}))
 
 
-def _ensure_tenant_principal(ctx: dict, env: object) -> None:
-    """Create tenant + principal if not already created by a Given step."""
-    from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal
-
-    ensure_tenant_principal(ctx, env)
-
-
 # ═══════════════════════════════════════════════════════════════════════
 # THEN steps — account-specific assertions
 # ═══════════════════════════════════════════════════════════════════════
@@ -808,28 +761,22 @@ def _ensure_tenant_principal(ctx: dict, env: object) -> None:
 
 @then(parsers.parse('the error should include "details" with setup instructions'))
 def then_error_has_setup_details(ctx: dict) -> None:
-    """Assert error details include setup instructions."""
-    error = ctx.get("error")
-    assert error is not None, "No error recorded in ctx"
-    from src.core.exceptions import AdCPError
+    """Assert the WIRE error object carries setup instructions in details.
 
-    if isinstance(error, AdCPError):
-        assert error.details, f"Expected details on error: {error}"
-        details_str = str(error.details).lower()
-        assert "setup" in details_str or "billing" in details_str or "configure" in details_str, (
-            f"Expected setup instructions in details: {error.details}"
-        )
-    else:
-        raise AssertionError(f"Cannot check details on non-AdCPError: {type(error).__name__}")
-
-
-@then(parsers.parse('the error message should contain "{count} accounts"'))
-def then_error_contains_count(ctx: dict, count: str) -> None:
-    """Assert error message mentions the specific number of matching accounts."""
-    error = ctx.get("error")
-    assert error is not None, "No error recorded in ctx"
-    msg = str(error)
-    assert f"{count} account" in msg.lower() or f"{count}" in msg, f"Expected '{count} accounts' in error: {msg}"
+    Reads errors[0].details from the envelope the buyer received rather than a
+    reconstructed exception (salesagent-3dawm.18).
+    """
+    result = ctx["result"]
+    error_object = result.wire_error_object()
+    assert error_object is not None, (
+        "expected a wire rejection carrying setup details, but no wire error envelope was captured"
+    )
+    details = error_object.get("details")
+    assert details, f"Expected details on the wire error object: {error_object}"
+    details_str = str(details).lower()
+    assert "setup" in details_str or "billing" in details_str or "configure" in details_str, (
+        f"Expected setup instructions in details: {details}"
+    )
 
 
 @then(parsers.parse("the result should be {outcome}"))
@@ -842,7 +789,7 @@ def then_result_should_be(ctx: dict, outcome: str) -> None:
     - Workflow outcomes: correct approval path was taken
     - Persistence outcomes: DB state matches the expected persistence behavior
     - Task list outcomes: task query returned correctly shaped/ordered results
-    - Error outcomes: AdCPError with matching code and recovery
+    - Error outcomes: AdCPSalesAgentError with matching code and recovery
     - Unknown: raises ValueError so unmapped rows are caught immediately
     """
     if outcome == "success":
@@ -1019,7 +966,15 @@ def _assert_validation_pass(ctx: dict, outcome: str) -> None:
     4. For full create scenarios: the response has a media_buy_id (success)
     """
     domain = _extract_validation_domain(outcome)
-    assert "error" not in ctx, f"Expected '{domain}' validation to pass but got error: {ctx.get('error')}"
+    # The ENVELOPE, not just str(error). ``ctx["error"]`` is the carrier the transport raised,
+    # and on a wire transport its repr is "wire error VALIDATION_ERROR" and nothing more -- no
+    # field, no details, no issues. A row of this outline failed on e2e_rest and passed on the
+    # other three, and that message named the code while withholding every value that would
+    # say WHICH validation, so the cause could not be read off a CI log at all.
+    assert "error" not in ctx, (
+        f"Expected '{domain}' validation to pass but got error: {ctx.get('error')}\n"
+        f"wire envelope: {ctx.get('wire_error_envelope')}"
+    )
     resp = require_payload(ctx)
     if isinstance(resp, str):
         assert len(resp) > 0, f"Expected non-empty account_id for '{domain}' validation pass, got empty string"
@@ -1064,21 +1019,18 @@ def _assert_pipeline_routing(ctx: dict, outcome: str) -> None:
     assert "error" not in ctx, (
         f"Expected request to route to '{expected_pipeline}' pipeline but got error: {ctx.get('error')}"
     )
-    resp = require_payload(ctx)
-    dispatched = ctx.get("dispatched_pipeline")
-    if dispatched is None:
-        pytest.xfail(
-            f"Harness does not yet expose dispatched pipeline "
-            f"(expected '{expected_pipeline}'). "
-            f"Add ctx['dispatched_pipeline'] to the When step."
-        )
-    assert dispatched == expected_pipeline, f"Expected dispatched pipeline '{expected_pipeline}', got '{dispatched}'"
-    if is_default:
-        explicit_mode = ctx.get("explicit_buying_mode")
-        assert explicit_mode is None, (
-            f"Expected default pipeline routing (no explicit buying_mode), "
-            f"but ctx['explicit_buying_mode'] = {explicit_mode!r}"
-        )
+    require_payload(ctx)
+    # UNCONDITIONAL xfail, because the guard it replaces always fired: this read
+    # ctx["dispatched_pipeline"], xfailed when it was None, and no step in
+    # tests/bdd has ever written it -- so the equality assert below it, and the
+    # ctx["explicit_buying_mode"] check under `is_default`, were unreachable.
+    # Production takes no buying-mode branch a Then can observe; closing this gap
+    # needs a When that records the pipeline it dispatched, not a ctx.get default.
+    pytest.xfail(
+        f"Harness does not expose the dispatched pipeline (expected {expected_pipeline!r}, "
+        f"default-routing scenario: {is_default}). A When step must record which "
+        "pipeline it dispatched before this can be graded."
+    )
 
 
 def _assert_workflow_outcome(ctx: dict, outcome: str) -> None:
@@ -1251,9 +1203,12 @@ def _assert_task_list_outcome(ctx: dict, outcome: str) -> None:
     elif outcome.startswith("tasks filtered to"):
         _assert_tasks_filtered(tasks, outcome)
     elif outcome.startswith("tasks of all") or outcome.startswith("tasks from all"):
-        seeded_count = ctx.get("seeded_task_count")
-        if seeded_count is not None:
-            assert len(tasks) >= seeded_count, f"Expected >= {seeded_count} tasks (unfiltered), got {len(tasks)}"
+        # "of all statuses / from all domains / of all types" IS the multi-value
+        # claim _assert_multi_value_filter already grades, so it grades it. This
+        # branch used to compare against ctx["seeded_task_count"], which no step
+        # writes -- the guard was `if seeded_count is not None`, so the whole
+        # branch asserted nothing at all.
+        _assert_multi_value_filter(tasks, outcome)
     elif outcome.startswith("defaults to"):
         if "created_at" in outcome and len(tasks) >= 2:
             values = [_get_task_field(t, "created_at") for t in tasks]
@@ -1301,7 +1256,7 @@ def _assert_error_outcome(ctx: dict, outcome: str) -> None:
     real wire envelope via ``result.assert_wire_error`` — the AdCP two-layer error
     contract the buyer sees — instead of a reconstructed exception.
     """
-    from src.core.exceptions import AdCPError
+    from tests.harness.transport import extract_wire_suggestion
 
     assert "error" in ctx, f"Expected an error for outcome: {outcome}"
     error = ctx["error"]
@@ -1319,16 +1274,23 @@ def _assert_error_outcome(ctx: dict, outcome: str) -> None:
     # Suggestion-only: "error with suggestion"
     if remainder.startswith("with suggestion"):
         if result is not None and result.wire_error_envelope is not None:
-            code = result.wire_error_envelope.get("adcp_error", {}).get("code")
-            result.assert_wire_error(code, require_suggestion=True)
+            # No Gherkin code to pin here; assert the buyer-facing suggestion is
+            # present on the wire via the canonical harness reader (the same
+            # top-level lookup assert_wire_error uses), not a hand-rolled envelope
+            # index — and without round-tripping the wire's own code back through
+            # assert_wire_error, which would hard-fail on a non-pinned code.
+            suggestion = extract_wire_suggestion(result.wire_error_envelope)
+            assert suggestion, (
+                f"Expected a non-empty top-level suggestion on the wire error, got envelope: "
+                f"{result.wire_error_envelope}"
+            )
             return
-        assert isinstance(error, AdCPError), (
-            f"Expected AdCPError for suggestion check, got {type(error).__name__}: {error}"
+        raise AssertionError(
+            "Expected a top-level suggestion on the WIRE error, but no wire error envelope was "
+            "captured. The reconstructed fallback that used to answer here is gone "
+            "(salesagent-3dawm.18): it read a suggestion the harness had re-derived from the "
+            "code, so it could only ever agree with the table."
         )
-        # STRICT error.json conformance: suggestion is a top-level error
-        # attribute; a copy buried in details does not count (#1417).
-        assert error.suggestion, f"Expected top-level suggestion on the error, got: {error.suggestion!r}"
-        return
 
     # Check if first word is a structured error code.
     # Strip surrounding quotes: the partition/boundary outlines write the code
@@ -1356,15 +1318,11 @@ def _assert_error_outcome(ctx: dict, outcome: str) -> None:
             result.assert_wire_error(expected_code, recovery=recovery, require_suggestion=require_suggestion)
             return
 
-        assert isinstance(error, AdCPError), (
-            f"Expected AdCPError with code '{expected_code}', got {type(error).__name__}: {error}"
+        raise AssertionError(
+            f"Expected the wire to carry error code {expected_code!r}, but no wire error envelope "
+            "was captured. This used to fall through to a reconstructed exception, so a scenario "
+            "that produced NO wire bytes still passed (salesagent-3dawm.18)."
         )
-        assert error.error_code == expected_code, f"Expected error code '{expected_code}', got '{error.error_code}'"
-        if recovery is not None:
-            assert error.recovery == recovery, f"Expected recovery '{recovery}', got '{error.recovery}'"
-        if require_suggestion:
-            # STRICT error.json conformance: top-level attribute only (#1417).
-            assert error.suggestion, f"Expected top-level suggestion on the error, got: {error.suggestion!r}"
     else:
         # Descriptive: "error unknown sort field"
         description = remainder
@@ -1375,82 +1333,6 @@ def _assert_error_outcome(ctx: dict, outcome: str) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 # Hand-authored: Authorization boundary steps (PR #1170 review)
 # ═══════════════════════════════════════════════════════════════════════
-
-
-@given("the account exists but is accessible only to a different agent")
-def given_account_other_agent(ctx: dict) -> None:
-    """Create an account with access granted to a different principal."""
-    from tests.factories.principal import PrincipalFactory
-
-    env = ctx["env"]
-    if "tenant" not in ctx:
-        tenant, principal = env.setup_default_data()
-        ctx["tenant"] = tenant
-        ctx["principal"] = principal
-    else:
-        tenant = ctx["tenant"]
-
-    account_id = ctx.get("request_account_id", "acc_other_agent")
-    # Create account
-    account = AccountFactory(
-        tenant=tenant,
-        account_id=account_id,
-        status="active",
-        brand={"domain": "other-agent-denied.com"},
-        operator="other-agent-denied.com",
-    )
-    # Grant access to a DIFFERENT principal — not the requesting agent
-    other_principal = PrincipalFactory(tenant=tenant)
-    AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=other_principal, account=account)
-
-
-@given("the natural key resolves to an account accessible only to a different agent")
-def given_natural_key_other_agent(ctx: dict) -> None:
-    """Create an account matching the natural key with access to a different principal."""
-    from tests.factories.principal import PrincipalFactory
-
-    env = ctx["env"]
-    if "tenant" not in ctx:
-        tenant, principal = env.setup_default_data()
-        ctx["tenant"] = tenant
-        ctx["principal"] = principal
-    else:
-        tenant = ctx["tenant"]
-
-    account = AccountFactory(
-        tenant=tenant,
-        status="active",
-        brand={"domain": "other-agent.com"},
-        operator="other-agent.com",
-    )
-    other_principal = PrincipalFactory(tenant=tenant)
-    AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=other_principal, account=account)
-
-
-@given("the sandbox account exists but is accessible only to a different agent")
-def given_sandbox_account_other_agent(ctx: dict) -> None:
-    """Create a sandbox account with access to a different principal."""
-    from tests.factories.principal import PrincipalFactory
-
-    env = ctx["env"]
-    if "tenant" not in ctx:
-        tenant, principal = env.setup_default_data()
-        ctx["tenant"] = tenant
-        ctx["principal"] = principal
-    else:
-        tenant = ctx["tenant"]
-
-    account_id = ctx.get("request_account_id", "acc_sandbox_other")
-    account = AccountFactory(
-        tenant=tenant,
-        account_id=account_id,
-        status="active",
-        sandbox=True,
-        brand={"domain": "sandbox-denied.com"},
-        operator="sandbox-denied.com",
-    )
-    other_principal = PrincipalFactory(tenant=tenant)
-    AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=other_principal, account=account)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1481,7 +1363,6 @@ def given_tenant_auto_approval(ctx: dict) -> None:
 
     tenant.human_review_required = False
     env._commit_factory_data()
-    env._identity_cache.clear()
     env._tenant_overrides["human_review_required"] = False
 
     adapter_mock = env.mock["adapter"].return_value
@@ -1493,7 +1374,6 @@ def given_tenant_auto_approval(ctx: dict) -> None:
         "Step claims auto-approval but the adapter mock gates create_media_buy on "
         f"manual approval: {adapter_mock.manual_approval_operations!r}"
     )
-    ctx["tenant_auto_approval"] = True
 
 
 # ── v3.1 idempotency replay / missing (T-UC-002-v31-idempotency-{replay,missing}) ──
@@ -1574,65 +1454,164 @@ def given_media_buy_already_created_same_key(ctx: dict) -> None:
     ctx["adapter_calls_after_first_create"] = adapter_mock.create_media_buy.call_count
 
 
-@given(parsers.parse("a valid create_media_buy request with:\n{datatable}"))
-def given_valid_request_with_table(ctx: dict, datatable) -> None:
-    """Build a create_media_buy request from a field/value data table."""
-    request_fields: dict = {}
-    # datatable is a list of lists (rows), where first row is header
-    if hasattr(datatable, "__iter__"):
-        rows = list(datatable)
-        # Skip header row if it looks like column names
-        if rows and hasattr(rows[0], "__iter__"):
-            header = [str(c).strip() for c in rows[0]]
-            for row in rows[1:]:
-                cells = [str(c).strip() for c in row]
-                if len(cells) >= 2:
-                    field_name = cells[header.index("field")] if "field" in header else cells[0]
-                    field_value = cells[header.index("value")] if "value" in header else cells[1]
-                    request_fields[field_name] = field_value
-
-    ctx["request_fields"] = request_fields
-
-    # Extract specific fields into ctx for use by other steps
-    if "idempotency_key" in request_fields:
-        ctx["idempotency_key"] = request_fields["idempotency_key"]
-    if "account" in request_fields:
-        # Parse "account_id "acc-001"" format
-        acct_val = request_fields["account"]
-        if acct_val.startswith('account_id "') and acct_val.endswith('"'):
-            ctx["request_account_id"] = acct_val.split('"')[1]
-    if "brand" in request_fields:
-        brand_val = request_fields["brand"]
-        if brand_val.startswith('domain "') and brand_val.endswith('"'):
-            ctx["request_brand_domain"] = brand_val.split('"')[1]
+# `a valid create_media_buy request with:` used to have a SECOND definition here, whose
+# pattern was `"a valid create_media_buy request with:\n{datatable}"`. A pytest-bdd step name
+# never contains a newline — zero of the 49534 sentences rendered from every feature's
+# Examples do — so that pattern could not match anything, and the sentence has always been
+# served by `given_media_buy.py::given_valid_create_request_with_table`, which builds the real
+# request kwargs. This copy only stashed `ctx["request_fields"]` and `ctx["request_brand_domain"]`,
+# which nothing reads, plus `ctx["request_account_id"]`, which three live steps write.
 
 
 @given(parsers.parse("the request includes {count:d} package with a valid product_id"))
 @given(parsers.parse("the request includes {count:d} packages with valid product_ids"))
 def given_request_includes_packages(ctx: dict, count: int) -> None:
-    """Add packages with valid product_ids to the request."""
-    ctx["package_count"] = count
+    """The pending create request carries ``count`` packages, each naming a seeded product.
+
+    The COUNT IS NOW BUILT AND ASSERTED. It previously was neither, on the reasoning that
+    building the second package "would change what every UC-002 happy path grades" -- a
+    real worry, now measured and smaller than it looked: exactly TWO feature lines in the
+    corpus declare this sentence (``BR-UC-002-create-media-buy`` and
+    ``BR-UC-002-media-buy-status-dual-emit``), and only the second one executes. The base
+    request built by ``build_create_request_kwargs`` is untouched, so the ~148 scenarios
+    that go through it and never say this sentence keep their single package.
+
+    WHY THE COUNT IS THE OBLIGATION rather than decoration (grounded in salesagent-9p7oe.2
+    against the 3.1.1 pin): four of this scenario's other Givens and both of its unique
+    Thens are universally quantified over packages -- "each package has a positive budget",
+    'all packages use the same currency "USD"', "each package has a valid
+    pricing_option_id", "the response should include packages with allocations", "each
+    package should include product_id, budget, and pricing details". A universal quantifier
+    over a singleton grades nothing: at count=1 a seller that echoes a constant product_id,
+    collapses N packages into one, or misallocates budget across them satisfies all of
+    them. The pin agrees -- create_media_buy.mdx L226 makes the per-package ``product_id``
+    echo a MUST, L266 states a CROSS-package currency rule, and its canonical Quick Start
+    (L67) sends two packages with two different product_ids.
+
+    Each package beyond the first gets its OWN Product and PricingOption. Pointing them all
+    at one product would leave the per-package obligations just as vacuous as count=1 did.
+    """
+    env = ctx["env"]
+    kwargs = ctx["request_kwargs"]
+
+    extras = [env.setup_product_chain(ctx["tenant"], product_id=f"prod_pkg_{index}") for index in range(1, count)]
+    env._commit_factory_data()
+    ctx["extra_products"] = extras
+
+    pairs = [(ctx["default_product"].product_id, pricing_option_id(ctx["default_pricing_option"]))]
+    pairs += [(product.product_id, pricing_option_id(option)) for product, option in extras]
+    kwargs["packages"] = build_request_packages(pairs)
+
+    packages = kwargs["packages"]
+    assert len(packages) == count, (
+        f"Step claims the request includes {count} package(s), but it carries {len(packages)}."
+    )
+    missing = [i for i, pkg in enumerate(packages) if not pkg.get("product_id")]
+    assert not missing, (
+        f"Step claims every package has a valid product_id, but package(s) {missing} carry none: {packages}"
+    )
 
 
-@given("the package has a positive budget meeting minimum spend")
-def given_package_positive_budget(ctx: dict) -> None:
-    """Ensure the package has a budget that meets minimum spend requirements."""
-    ctx["package_budget_valid"] = True
+def _wire_packages(ctx: dict) -> list[dict]:
+    """The response's ``packages`` array as the BUYER received it, one entry per request package.
+
+    Reads the WIRE, not ``result.payload``. A payload round-trip proves the serializer is
+    self-consistent with the model it just built; it cannot show what crossed the transport.
+
+    The length check lives here because both sentences below depend on it and neither is
+    meaningful without it: an echo assertion that iterates ``zip(request, response)``
+    silently passes when the seller returns FEWER packages than were asked for, which is
+    precisely the collapse-N-into-one defect these sentences exist to catch.
+    """
+    requested = ctx["request_kwargs"].get("packages") or []
+    packages = wire_field(ctx, "packages")
+    assert isinstance(packages, list), f"Response 'packages' is {type(packages).__name__}, expected a list."
+    assert len(packages) == len(requested), (
+        f"Request carried {len(requested)} package(s); response returned {len(packages)}. "
+        f"A seller MUST represent every requested package (AdCP 3.1.1 create_media_buy.mdx L226)."
+    )
+    return packages
+
+
+@then("the response should include packages with allocations")
+def then_response_has_packages(ctx: dict) -> None:
+    """Every response package is ALLOCATED to the product its request package named.
+
+    The obligation is an ECHO, and the pin states it as a MUST: "Sellers MUST echo it
+    [product_id] on every response package object representing the request" (AdCP 3.1.1,
+    create_media_buy.mdx L226). So the assertion compares the response's product_id to the
+    REQUEST's, per package, in order.
+
+    It previously asserted ``pkg.get("product_id")`` was truthy. That is green for a seller
+    that echoes a constant, allocates every package to the same product, or returns them in
+    a different order -- three real allocation defects, none detectable. The comparison is
+    only falsifiable because the scenario now sends two packages naming DIFFERENT products
+    (salesagent-9p7oe.2/.3); at one package, or two naming one product, truthiness and
+    equality grade the same thing, which is nothing.
+    """
+    requested = ctx["request_kwargs"]["packages"]
+    for index, (sent, got) in enumerate(zip(requested, _wire_packages(ctx), strict=True)):
+        assert got.get("product_id") == sent["product_id"], (
+            f"Package {index}: requested product_id {sent['product_id']!r}, response echoed {got.get('product_id')!r}."
+        )
+
+
+@then("each package should include product_id, budget, and pricing details")
+def then_packages_have_details(ctx: dict) -> None:
+    """Each response package carries the product, budget and pricing the buyer asked for.
+
+    Three VALUES compared against the request, not three presence checks. The previous
+    version asserted each field ``is not None`` and, for budget, that a dict had an
+    ``amount`` key -- all of which a seller passes by returning any number at all, including
+    another package's. Budgets differ per package by construction now, so an equality
+    assertion distinguishes correct allocation from a seller that splits the total evenly or
+    assigns one package's budget to all of them.
+
+    ``budget`` is compared through its amount because the wire may carry either a bare
+    number or the ``{amount, currency}`` object -- the pin allows both shapes, and which one
+    a seller sends is not what this sentence grades.
+    """
+    requested = ctx["request_kwargs"]["packages"]
+    for index, (sent, got) in enumerate(zip(requested, _wire_packages(ctx), strict=True)):
+        assert got.get("product_id") == sent["product_id"], (
+            f"Package {index}: requested product_id {sent['product_id']!r}, got {got.get('product_id')!r}."
+        )
+        budget = got.get("budget")
+        amount = budget.get("amount") if isinstance(budget, dict) else budget
+        assert amount == sent["budget"], (
+            f"Package {index}: requested budget {sent['budget']!r}, response carried {amount!r}."
+        )
+        assert got.get("pricing_option_id") == sent["pricing_option_id"], (
+            f"Package {index}: requested pricing_option_id {sent['pricing_option_id']!r}, "
+            f"response carried {got.get('pricing_option_id')!r}."
+        )
 
 
 # Canonical owner of "the ad server adapter is available" — removed from the
 # generic given_media_buy.py module to avoid a cross-module shadow.
 @given("the ad server adapter is available")
 def given_adapter_available(ctx: dict) -> None:
-    """Mark the ad server adapter as available for the scenario."""
-    ctx["adapter_available"] = True
+    """The scenario's env has an ad server adapter for the create to reach.
+
+    Availability is the env's default, so there is nothing to turn on; what the
+    step establishes is that the adapter the create will call is actually
+    mocked in this env -- the same check ``given_adapter_supports_reporting``
+    already makes in UC-019. The ctx flag it used to set was read by no step, so
+    an env with no adapter passed this sentence just as happily.
+    """
+    assert "adapter" in ctx["env"].mock, (
+        "Step claims 'the ad server adapter is available' but no adapter mock is "
+        f"configured in this env: {sorted(ctx['env'].mock)}"
+    )
 
 
-@given("the request does NOT include an idempotency_key")
-def given_no_idempotency_key(ctx: dict) -> None:
-    """Explicitly set request to have no idempotency_key."""
-    ctx["idempotency_key"] = None
-    ctx.get("request_fields", {}).pop("idempotency_key", None)
+# "the request does NOT include an idempotency_key" stood here, described as "canonical,
+# shared across UC-002/003". It was bound to NO UC-002 feature line — the sentence appears
+# on exactly one line in the whole tree, BR-UC-003's @T-UC-003-idempotency-absent — and the
+# body it offered that scenario (`ctx["idempotency_key"] = None`) named a key no UC-003 step
+# reads, so the row dispatched WITH a key and graded the opposite of its own sentence.
+# Ownership moved to the bag it describes:
+# tests/bdd/steps/domain/uc003_update_media_buy.py.
 
 
 @given(parsers.parse("the idempotency_key is set to {value}"))
@@ -1649,28 +1628,21 @@ def given_idempotency_key_set(ctx: dict, value: str) -> None:
         ctx["idempotency_key"] = value
 
 
-@when(parsers.parse('the Buyer Agent sends the same create_media_buy request with idempotency_key "{key}"'))
-def when_send_same_request_with_key(ctx: dict, key: str) -> None:
-    """Replay the same create_media_buy request with the given idempotency_key.
-
-    Uses the same request fields from the previous request but ensures the
-    idempotency_key matches the provided value.
-    """
-    ctx["idempotency_key"] = key
-    ctx["is_replay"] = True
-    # Dispatch the request through the harness
-    from tests.bdd.steps.generic._dispatch import dispatch_request
-
-    dispatch_request(ctx)
-
-
-@when("the Buyer Agent sends a second create_media_buy request with the same parameters")
-def when_send_second_request(ctx: dict) -> None:
-    """Send a second create_media_buy request with identical parameters."""
-    ctx["is_second_request"] = True
-    from tests.bdd.steps.generic._dispatch import dispatch_request
-
-    dispatch_request(ctx)
+# Seven more steps stood here and above, none of them bound: `the error message should
+# contain "{count} accounts"`, three cross-agent access Givens (`the account exists but is
+# accessible only to a different agent` and its natural-key and sandbox siblings), `the
+# package has a positive budget meeting minimum spend`, and the two idempotency Whens
+# (`sends the same create_media_buy request with idempotency_key ...`, `sends a second
+# create_media_buy request with the same parameters`). Each sentence greps zero times in
+# tests/bdd/features and matches none of the 49534 rendered sentences.
+#
+# Both obligations behind them are still graded, by live scenarios that say it differently,
+# which is why deleting these loses no coverage. Cross-principal account scoping:
+# @T-UC-002-ym1c-access-scope ("the natural key matches 2 accounts but the agent can access
+# 1") and @T-UC-002-fb2l-unauth-no-disclosure, in BR-UC-002-account-access.feature.
+# Idempotent replay: @T-UC-002-v31-idempotency-replay ("a media buy was already created for
+# the same seller with that idempotency_key"). These seven were a second, unreached path to
+# the same ground.
 
 
 @then("the response should succeed")
@@ -1724,7 +1696,7 @@ def then_dual_emit_media_buy_status(ctx: dict) -> None:
     ``submitted``) while the DOMAIN status survives under ``media_buy_status``. The
     earlier "both identical" oracle read the re-mirrored reconstructed payload
     (``_mirror_media_buy_status``) and so could never observe this wire reality.
-    See docs/adcp-spec-version.md "Behavior target vs SDK pin".
+    See docs/adcp-spec-version.md "`status` vs `media_buy_status` on media-buy responses".
     """
     from adcp.types import GeneratedTaskStatus as ProtocolTaskStatus
     from adcp.types import MediaBuyStatus
@@ -1752,61 +1724,6 @@ def then_dual_emit_media_buy_status(ctx: dict) -> None:
             f"Expected top-level 'status' to be a protocol TaskStatus value on the wire "
             f"(one of {sorted(protocol_values)}), got {status!r}"
         )
-
-
-@then(parsers.parse('I remember the "{field}" as "{alias}"'))
-def then_remember_field(ctx: dict, field: str, alias: str) -> None:
-    """Remember a response field value for later comparison."""
-    response = require_payload(ctx)
-    if hasattr(response, field):
-        value = getattr(response, field)
-    elif isinstance(response, dict):
-        value = response.get(field)
-    else:
-        dumped = response.model_dump() if hasattr(response, "model_dump") else {}
-        value = dumped.get(field)
-    assert value is not None, f"Cannot remember None value for '{field}'"
-    ctx.setdefault("remembered", {})[alias] = value
-
-
-@then(parsers.parse('the response "{field}" should equal the remembered "{alias}"'))
-def then_response_equals_remembered(ctx: dict, field: str, alias: str) -> None:
-    """Assert a response field equals a previously remembered value."""
-    response = require_payload(ctx)
-    remembered = ctx.get("remembered", {})
-    assert alias in remembered, f"No remembered value for '{alias}'"
-
-    if hasattr(response, field):
-        actual = getattr(response, field)
-    elif isinstance(response, dict):
-        actual = response.get(field)
-    else:
-        dumped = response.model_dump() if hasattr(response, "model_dump") else {}
-        actual = dumped.get(field)
-
-    assert actual == remembered[alias], (
-        f"Response {field}={actual!r} does not equal remembered {alias}={remembered[alias]!r}"
-    )
-
-
-@then(parsers.parse('the response "{field}" should NOT equal the remembered "{alias}"'))
-def then_response_not_equals_remembered(ctx: dict, field: str, alias: str) -> None:
-    """Assert a response field does NOT equal a previously remembered value."""
-    response = require_payload(ctx)
-    remembered = ctx.get("remembered", {})
-    assert alias in remembered, f"No remembered value for '{alias}'"
-
-    if hasattr(response, field):
-        actual = getattr(response, field)
-    elif isinstance(response, dict):
-        actual = response.get(field)
-    else:
-        dumped = response.model_dump() if hasattr(response, "model_dump") else {}
-        actual = dumped.get(field)
-
-    assert actual != remembered[alias], (
-        f"Response {field}={actual!r} should NOT equal remembered {alias}={remembered[alias]!r}"
-    )
 
 
 @then(parsers.parse('the response should include the previously created "{field}"'))
@@ -1857,78 +1774,54 @@ def then_error_references_missing_field(ctx: dict, field: str) -> None:
         )
         return
 
-    message = _get_error_message_for_step(error)
+    message = _get_error_message_for_step(error, ctx)
     assert field in message, f"Validation error does not reference the missing '{field}' field. Message: {message!r}"
 
 
-def _get_error_message_for_step(error: object) -> str:
-    """Best-effort human-readable text from an AdCPError / Error model / exception."""
-    from src.core.exceptions import AdCPError
+def _get_error_message_for_step(error: object, ctx: dict | None = None) -> str:
+    """Buyer-facing text for a step that searches it for a field name.
 
-    if isinstance(error, AdCPError):
-        parts = [error.message or ""]
-        if error.details:
-            parts.append(str(error.details))
-        return " ".join(parts)
+    Prefers the WIRE error object -- message plus details, since after
+    salesagent-3dawm.14 the message is derived from the code and the specifics
+    (which field, which id) live in details. Falls back to the in-process
+    exception only when there is no wire, which is the genuine no-dispatch path.
+    """
+    if ctx is not None:
+        result = ctx.get("result")
+        error_object = result.wire_error_object() if result is not None else None
+        if error_object is not None:
+            parts = [str(error_object.get("message") or "")]
+            if error_object.get("details"):
+                parts.append(str(error_object["details"]))
+            if error_object.get("field"):
+                parts.append(str(error_object["field"]))
+            return " ".join(parts)
     message = getattr(error, "message", None)
-    return message if isinstance(message, str) and message else str(error)
+    if isinstance(message, str) and message:
+        details = getattr(error, "details", None)
+        return f"{message} {details}" if details else message
+    return str(error)
 
 
 # ── Order naming steps (hand-authored, adcp 3.12 / PR #1217) ──
 
 
-@then(parsers.parse('I remember the ad server order name as "{alias}"'))
-def then_remember_order_name(ctx: dict, alias: str) -> None:
-    """Remember the ad server order name for later comparison."""
-    response = require_payload(ctx)
-    # Order name is typically in the adapter call args or response metadata
-    order_name = ctx.get("last_order_name")
-    assert order_name is not None, "No order name recorded — harness must capture it"
-    ctx.setdefault("remembered", {})[alias] = order_name
-
-
-@then(parsers.parse('the ad server order name should differ from the remembered "{alias}"'))
-def then_order_name_differs(ctx: dict, alias: str) -> None:
-    """Assert the order name from the latest request differs from the remembered one."""
-    remembered = ctx.get("remembered", {})
-    assert alias in remembered, f"No remembered value for '{alias}'"
-    current = ctx.get("last_order_name")
-    assert current is not None, "No order name for current request"
-    assert current != remembered[alias], f"Order name '{current}' should differ from remembered '{remembered[alias]}'"
-
-
-@then(parsers.parse('the ad server order name should not contain "{substring}"'))
-def then_order_name_no_substring(ctx: dict, substring: str) -> None:
-    """Assert the order name does not contain the given substring."""
-    order_name = ctx.get("last_order_name")
-    assert order_name is not None, "No order name recorded"
-    assert substring not in order_name, f"Order name '{order_name}' should not contain '{substring}'"
-
-
-@then("the ad server order name should contain the media_buy_id from the response")
-def then_order_name_contains_media_buy_id(ctx: dict) -> None:
-    """Assert the order name contains the media_buy_id from the create response."""
-    order_name = ctx.get("last_order_name")
-    response = payload_or_none(ctx)
-    assert order_name is not None, "No order name recorded"
-    assert response is not None, "No response in ctx"
-    media_buy_id = getattr(response, "media_buy_id", None)
-    if isinstance(response, dict):
-        media_buy_id = response.get("media_buy_id")
-    assert media_buy_id is not None, "No media_buy_id in response"
-    assert media_buy_id in order_name, f"Order name '{order_name}' should contain media_buy_id '{media_buy_id}'"
-
-
-@given(parsers.parse('the tenant order_name_template is "{template}"'))
-def given_order_name_template(ctx: dict, template: str) -> None:
-    """Set a custom order_name_template on the tenant."""
-    ctx.setdefault("tenant_config", {})["order_name_template"] = template
-
-
-@given("the tenant uses the default order_name_template")
-def given_default_order_name_template(ctx: dict) -> None:
-    """Use the default order_name_template (no override)."""
-    ctx.setdefault("tenant_config", {}).pop("order_name_template", None)
+# ── Order naming steps: DELETED, hand-authored for adcp 3.12 / PR #1217 ──
+#
+# Nine steps stood here — `I remember the "{field}" as "{alias}"`, its two comparison
+# siblings, four `ad server order name` Thens, and the two `order_name_template` Givens.
+# No feature binds any of their sentences: the strings do not occur in tests/bdd/features
+# at all, by literal grep and by rendering every Examples row through pytest-bdd's own
+# FeatureParser (the resolver validated against the control "a creative with no format_id",
+# which greps zero times and binds at BR-UC-006-sync-creatives.feature:866).
+#
+# They could not have graded order naming even if a scenario bound them: four of them read
+# `ctx["last_order_name"]`, and NOTHING in tests/ ever writes that key, so each would have
+# failed on its own "No order name recorded" guard. The two Givens wrote
+# `ctx["tenant_config"]`, which no step reads either.
+#
+# Order-name templating is therefore UNGRADED, and was before this deletion. Wiring it needs
+# a harness that captures the adapter's order name, not these steps back.
 
 
 @then("the Buyer should be notified via webhook")
@@ -1955,7 +1848,6 @@ def then_webhook_notification(ctx: dict) -> None:
          FIXME: Wire through the production admin approve/reject
          flow, then remove the xfail.
     """
-    import pytest
     from sqlalchemy import select
 
     from src.core.database.models import ObjectWorkflowMapping, PushNotificationConfig
@@ -2093,13 +1985,19 @@ def then_webhook_notification(ctx: dict) -> None:
         # flow which populates request_data, then remove this xfail.
         req_data = step.request_data or {}
         step_push_cfg = req_data.get("push_notification_config") if isinstance(req_data, dict) else None
-        if not isinstance(step_push_cfg, dict) or step_push_cfg.get("url") != expected_url:
-            pytest.xfail(
-                "SPEC-PRODUCTION GAP: step.request_data does not carry "
-                "push_notification_config with the buyer's URL — "
-                "_send_push_notifications would skip dispatch. "
-                "FIXME: wire through the admin flow."
-            )
+        # A workflow step that does not carry the buyer's push_notification_config cannot
+        # notify anyone: _send_push_notifications finds no URL and skips dispatch silently.
+        # That is the defect this step exists to catch, and the xfail keyed on it meant the
+        # step could not report it. FIXME(#2132) tracks wiring the
+        # production admin approve/reject flow that populates request_data.
+        assert isinstance(step_push_cfg, dict), (
+            f"workflow step carries no push_notification_config, so the buyer is never "
+            f"notified; request_data={req_data!r}"
+        )
+        assert step_push_cfg.get("url") == expected_url, (
+            f"workflow step carries push_notification_config for "
+            f"{step_push_cfg.get('url')!r}, not the buyer's {expected_url!r}"
+        )
 
         # Happy path (reached when harness wires the full admin flow):
         assert step_push_cfg["url"] == expected_url, (
@@ -2215,7 +2113,7 @@ def then_slack_notification_sent(ctx: dict) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 # Authored to wake @T-UC-002-v31-success-revision-and-actions, which had no step
 # definitions and so sat behind the UC-002 harness xfail. It grades the three v3.1
-# fields on the arm the buyer meets first — the same three the create response used
+# fields on the branch the buyer meets first — the same three the create response used
 # to fabricate from schema defaults rather than read from the persisted row.
 
 

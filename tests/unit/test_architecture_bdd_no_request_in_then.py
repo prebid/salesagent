@@ -77,10 +77,16 @@ _DISPATCH_IN_THEN_ALLOWLIST: set[str] = {
     # (dispatch_request) so that, when these scenarios are wired, they exercise
     # the parametrized transport on the wire (#1417). Rate limiting and
     # payload size remain spec-production gaps (FIXME: no GitHub issue filed).
-    "bdd/steps/domain/uc002_nfr.py:126 then_auth_before_business_logic",
-    "bdd/steps/domain/uc002_nfr.py:190 then_rate_limiting_enforced",
-    "bdd/steps/domain/uc002_nfr.py:236 then_payload_size_limits",
-    "bdd/steps/domain/uc002_nfr.py:411 then_budget_validated_against_min_order",
+    #
+    # These four entries are keyed by LINE NUMBER, so an unrelated edit above one of them
+    # moves the key without changing the violation. Same four functions, same four defects
+    # throughout: removing six message-substring branches from then_payload_size_limits,
+    # dropping the local beads ids out of the FIXME comments, and re-adding the spec-gap
+    # note each shifted the numbers below.
+    "bdd/steps/domain/uc002_nfr.py then_auth_before_business_logic",
+    "bdd/steps/domain/uc002_nfr.py then_rate_limiting_enforced",
+    "bdd/steps/domain/uc002_nfr.py then_payload_size_limits",
+    "bdd/steps/domain/uc002_nfr.py then_budget_validated_against_min_order",
 }
 
 _ASSERT_ON_REQUEST_ALLOWLIST: set[str] = set()

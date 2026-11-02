@@ -19,11 +19,11 @@ setup:
     description: |
       Run the BDD modules this batch touches BEFORE any changes and record
       counts. Name the FILES — a whole-`tests/bdd/` slice deadlocks under xdist
-      against the single agent-db; the offload path is `saci test bdd <files>`.
+      against the single agent-db; the offload path is `cassini test bdd <files>`.
 
       ```bash
       # the module(s) for the batch's scenarios (from orient), e.g.:
-      saci test bdd tests/bdd/test_uc0XX_*.py -rxX --no-header -q 2>&1 | tail -8
+      cassini test bdd tests/bdd/test_uc0XX_*.py -rxX --no-header -q 2>&1 | tail -8
       ```
 
       Record in epic notes: passed, xpassed (with the nodeid set), xfailed, failed.
@@ -258,7 +258,7 @@ finalize:
   - id: verify-no-regression
     title: "Verify zero regressions vs baseline (count + xpass identity)"
     description: |
-      Re-run the batch's BDD modules (`saci test bdd <files>`, named — never the
+      Re-run the batch's BDD modules (`cassini test bdd <files>`, named — never the
       whole dir, which deadlocks under xdist) and compare against the baseline:
       - `failed` / `error` == 0.
       - `passed >= baseline` is NOT sufficient on its own: one test starting to

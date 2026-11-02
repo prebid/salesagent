@@ -126,7 +126,10 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
     Given a tenant is configured for product discovery
     And the outbound private-range egress hatch is open
     When the buyer requests products with a property list agent at "<agent_url>"
-    Then the request is rejected with VALIDATION_ERROR naming field "property_list.agent_url"
+    Then the error is compliant with the AdCP error spec
+    And the response arrives
+    And the response contains error code VALIDATION_ERROR
+    And the response error field is property_list.agent_url
 
     Examples:
       | agent_url                    |
@@ -139,7 +142,8 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
     Given a tenant is configured for product discovery
     And the outbound private-range egress hatch is open
     When the buyer requests products with a property list agent at "<agent_url>"
-    Then the refusal message on both envelope layers is exactly "URL resolves to a restricted range."
+    Then the error is compliant with the AdCP error spec
+    And the refusal is VALIDATION_ERROR / correctable on both envelope layers, and its error object carries the code's own message
     And the error envelope names neither the supplied host nor any IP address
 
     Examples:
@@ -160,7 +164,10 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
     Given a tenant is configured for product discovery
     And the outbound private-range egress hatch is open
     When the buyer requests products with a property list agent at "http://example.com"
-    Then the request is rejected with VALIDATION_ERROR naming field "property_list.agent_url"
+    Then the error is compliant with the AdCP error spec
+    And the response arrives
+    And the response contains error code VALIDATION_ERROR
+    And the response error field is property_list.agent_url
 
   # The third buyer-supplied URL on the protocol surface, and the one with the
   # LOWEST privilege bar: creatives[].format_id.agent_url names the creative
@@ -170,7 +177,7 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
   # Graded here rather than only in integration because the refusal's
   # classification — not merely its existence — is the obligation: before the
   # fix the connection WAS refused, but the registry reported it through its
-  # OPERATOR arm as CONFIGURATION_ERROR / terminal, telling the buyer a seller
+  # OPERATOR branch as CONFIGURATION_ERROR / terminal, telling the buyer a seller
   # was misconfigured about a URL the buyer themselves chose, with no field.
   #
   # Hatches OPEN, and a cloud-metadata address, for the reason the header gives:
@@ -185,7 +192,8 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
   Scenario: a refused creative-agent agent_url is a correctable buyer error at sync ingest
     Given the outbound private-range egress hatch is open
     When the buyer syncs a creative whose format agent is at "https://169.254.169.254"
-    Then the creative is rejected with VALIDATION_ERROR naming field "creatives[0].format_id.agent_url"
+    Then the response is compliant with the sync_creatives success spec
+    And the creative is rejected with VALIDATION_ERROR naming field "creatives[0].format_id.agent_url"
 
   # The ingest twin: the same obligation — a buyer-supplied URL we refuse comes
   # back as a correctable, non-disclosing error naming the field to fix —
@@ -215,16 +223,22 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
   #
   # The message is now cause-blind, same as the seam scenarios above: the
   # registration gate used to report a per-cause reason (which CIDR, which
-  # resolved address) — the bug fixed here — and now returns the SAME fixed,
-  # non-disclosing text regardless of which reserved range matched
-  # (`egress.policy._RESTRICTED_RANGE_MESSAGE`). The non-disclosure Then below
-  # holds that line independently of the exact-message Then above.
+  # resolved address) — the bug fixed here — and now returns the SAME
+  # non-disclosing sentence regardless of which reserved range matched. That
+  # sentence is no longer an authored per-class string: under ADR-010 the
+  # buyer-facing message is a pure function of the CODE through CODE_TABLE, so
+  # cause-blindness is a property of the taxonomy rather than of one carefully
+  # worded constant. The Then below grades exactly that, and the non-disclosure
+  # Then after it holds the host/address line independently.
   @T-EGRESS-SSRF-ingest-refused-webhook-url @egress_create @invariant
   Scenario Outline: a refused push_notification_config.url is a correctable buyer error at ingest
     Given the outbound private-range egress hatch is open
     When the buyer creates a media buy with push notification url "<webhook_url>"
-    Then the request is rejected with VALIDATION_ERROR naming field "push_notification_config.url"
-    And the refusal message on both envelope layers is exactly "URL resolves to a restricted range."
+    Then the error is compliant with the AdCP error spec
+    And the response arrives
+    And the response contains error code VALIDATION_ERROR
+    And the response error field is push_notification_config.url
+    And the refusal is VALIDATION_ERROR / correctable on both envelope layers, and its error object carries the code's own message
     And the error envelope names neither the supplied host nor any IP address
 
     Examples:
@@ -254,13 +268,27 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
   # UNGRADED BY STORYBOARD: nothing in dist/compliance/3.1.1/ grades a seller
   # refusing an unservable webhook registration (the `credentials` hits in
   # universal/security.yaml are TRANSPORT auth — API keys, Basic, OAuth — not a
-  # webhook registration). Same standing as the SSRF gate above, so the refusal
-  # SHAPE is production-authoritative and is settled by the sibling gate one
-  # field over: VALIDATION_ERROR / correctable / field, the identical triple the
-  # URL half returns. `correctable` is from the pinned enum's own metadata
-  # (enums/error-code.json), never STANDARD_ERROR_CODES — the buyer is the only
-  # party who can supply the secret, and supplying it makes the identical
-  # request succeed.
+  # webhook registration). That silence is about WHETHER a seller must refuse,
+  # not about which code a refusal carries — enums/error-code.json answers the
+  # second directly, and against the schema facts stated just above:
+  #
+  #   INVALID_REQUEST  "Request is malformed, missing required fields, or
+  #                     violates schema constraints."
+  #   VALIDATION_ERROR "Request contains invalid field values or violates
+  #                     business rules beyond schema validation."
+  #
+  # A `credentials` that is absent (`required`) or under `minLength: 32` is the
+  # first, verbatim, so these scenarios grade INVALID_REQUEST / correctable /
+  # field. This group previously copied the sibling URL gate's VALIDATION_ERROR
+  # on the reasoning that the SHAPE was production-authoritative wherever the
+  # storyboard was silent; that answered a question the pin had already
+  # answered. The URL half KEEPS VALIDATION_ERROR and is not a divergence: a
+  # deny-listed host is a schema-VALID `format: "uri"` string refused by seller
+  # policy, which is the second sentence. `correctable` is from the pinned
+  # enum's own metadata (enums/error-code.json), never STANDARD_ERROR_CODES, and
+  # is carried by BOTH codes — so it pins that the buyer is the only party who
+  # can supply the secret and that supplying it makes the identical request
+  # succeed, while the CODE is what separates the two gates.
   #
   # Why ingest, like the URL half: accepting the registration and discovering it
   # later is a SILENT non-delivery. The senders fail closed inside a background
@@ -282,9 +310,6 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
   # proves the agreement instead of asserting it here: if any transport re-forks
   # the field path, a scenario reddens.
   #
-  # The message/send scenarios below keep @a2a_untyped_ingest: their surface is
-  # the A2A protocol envelope, which has no counterpart on MCP or REST at all.
-  #
   # Every URL below is public and passes the registration SSRF gate that runs
   # immediately before this one, so the ONLY thing that can refuse these requests
   # is the credential half — a green here cannot be the URL gate firing by luck.
@@ -300,12 +325,15 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
   # `credentials` is required AND `minLength: 32`, so no document that survives
   # the request model can reach the credential gate with a missing secret.
   # What this scenario does grade is still worth having: that the refusal is a
-  # correctable VALIDATION_ERROR naming the credentials field, on every
+  # correctable INVALID_REQUEST naming the credentials field, on every
   # transport, rather than a 500 or a silent acceptance.
   @T-EGRESS-CREDS-create-media-buy @egress_create @invariant
   Scenario: a credential-less HMAC-SHA256 registration is refused at create ingest
     When the buyer creates a media buy registering HMAC-SHA256 with no credentials
-    Then the request is rejected with VALIDATION_ERROR naming field "push_notification_config.authentication.credentials"
+    Then the error is compliant with the AdCP error spec
+    And the response arrives
+    And the response contains error code INVALID_REQUEST
+    And the response error field is push_notification_config.authentication.credentials
     And the refusal names the missing shared secret and not the URL
 
   # GRADES THE REQUEST MODEL, NOT THE INGEST GATE — measured, not assumed.
@@ -330,13 +358,19 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
   Scenario: a credential-less HMAC-SHA256 registration is refused at update ingest
     Given the Buyer owns an existing media buy
     When the buyer updates the media buy registering HMAC-SHA256 with no credentials
-    Then the request is rejected with VALIDATION_ERROR naming field "push_notification_config.authentication.credentials"
+    Then the error is compliant with the AdCP error spec
+    And the response arrives
+    And the response contains error code INVALID_REQUEST
+    And the response error field is push_notification_config.authentication.credentials
     And the refusal names the missing shared secret and not the URL
 
   @T-EGRESS-CREDS-sync-creatives @egress_sync_creds @invariant
   Scenario: a credential-less HMAC-SHA256 registration is refused at sync ingest
     When the buyer syncs a creative registering HMAC-SHA256 with no credentials
-    Then the request is rejected with VALIDATION_ERROR naming field "push_notification_config.authentication.credentials"
+    Then the error is compliant with the AdCP error spec
+    And the response arrives
+    And the response contains error code INVALID_REQUEST
+    And the response error field is push_notification_config.authentication.credentials
     And the refusal names the missing shared secret and not the URL
 
   # The fourth registration surface, and the one that is not an AdCP tool
@@ -349,12 +383,15 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
   # SINGULAR and free-form (no enum guards the value here), which is why the
   # scheme below is the exact pinned spelling and the refusal must still name the
   # credential.
-  @T-EGRESS-CREDS-a2a-message-send @egress @a2a_untyped_ingest @invariant
-  Scenario: a credential-less HMAC-SHA256 registration is refused at A2A message/send
-    Given a tenant is configured for product discovery
-    When the buyer sends a request registering HMAC-SHA256 with no credentials in the protocol envelope
-    Then the request is rejected with VALIDATION_ERROR naming field "push_notification_config.authentication.credentials"
-    And the refusal names the missing shared secret and not the URL
+  # RETIRED: the two "at A2A message/send" scenarios. Their surface was the A2A
+  # protocol envelope's own push registration (`configuration.taskPushNotificationConfig`),
+  # which this agent no longer implements -- it advertises `push_notifications=false` and
+  # declines all four `tasks/pushNotificationConfig/*` methods, because AdCP 3.1.1
+  # L3/webhooks.mdx :308 makes that a SEPARATE registration channel with a separate (A2A
+  # `Task`) envelope. Both obligations they carried are graded above on the channel this
+  # seller does implement: "refused at create ingest" / "at update ingest" / "at sync
+  # ingest" for the credential-less case, and "refused at sync ingest" for the sub-32 one.
+
 
   # ── The CARDINALITY half, and the credential MINIMUM ───────────────
   #
@@ -381,8 +418,10 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
   #
   # UNGRADED BY STORYBOARD, same standing as the credential group above: nothing
   # in dist/compliance/3.1.1/ grades a seller refusing a schema-invalid webhook
-  # registration. The refusal SHAPE is therefore settled by the sibling gates one
-  # field over — VALIDATION_ERROR / correctable / field — which is also what the
+  # registration. The CODE is still not a free choice — a `schemes` array over
+  # `maxItems: 1`, like an absent `credentials`, "violates schema constraints"
+  # and is INVALID_REQUEST / correctable / field by enums/error-code.json (the
+  # full quotation is in the credential group above). That is also what the
   # coercion funnel already emits on the transports that DO type this parameter.
   #
   # WHY EVERY WIRED TRANSPORT: "every transport names the same field" IS the
@@ -405,12 +444,18 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
   @T-EGRESS-SCHEMES-multi-create @egress_create @invariant
   Scenario: a two-scheme registration is refused at create ingest
     When the buyer creates a media buy registering two authentication schemes
-    Then the request is rejected with VALIDATION_ERROR naming field "push_notification_config.authentication.schemes"
+    Then the error is compliant with the AdCP error spec
+    And the response arrives
+    And the response contains error code INVALID_REQUEST
+    And the response error field is push_notification_config.authentication.schemes
 
   @T-EGRESS-CREDS-short-sync @egress_sync_creds @invariant
   Scenario: a shared secret shorter than the pinned minimum is refused at sync ingest
     When the buyer syncs a creative registering HMAC-SHA256 with a 31-character secret
-    Then the request is rejected with VALIDATION_ERROR naming field "push_notification_config.authentication.credentials"
+    Then the error is compliant with the AdCP error spec
+    And the response arrives
+    And the response contains error code INVALID_REQUEST
+    And the response error field is push_notification_config.authentication.credentials
 
   # The PRIMITIVES twin of the scenario above.
   #
@@ -446,9 +491,3 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
   # green here can never be the SSRF gate firing by luck, and the exact-field
   # assertion is what rules out the A2A `_invalid_params_from_ssrf_error` funnel
   # re-enveloping this as a URL refusal.
-  @T-EGRESS-CREDS-short-a2a-message-send @egress @a2a_untyped_ingest @invariant
-  Scenario: a shared secret shorter than the pinned minimum is refused at A2A message/send
-    Given a tenant is configured for product discovery
-    When the buyer sends a request registering HMAC-SHA256 with a 31-character secret in the protocol envelope
-    Then the request is rejected with VALIDATION_ERROR naming field "push_notification_config.authentication.credentials"
-    And the refusal names the too-short shared secret and not the URL

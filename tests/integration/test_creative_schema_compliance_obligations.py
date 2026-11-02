@@ -361,26 +361,40 @@ class TestCreativeActionEnumThroughSync:
             assert actions["c_delete"] == "deleted"
 
     def test_failed_action_for_invalid_creative(self, integration_db):
-        """Invalid creative input returns 'failed' action.
+        """A creative the sync cannot validate returns the 'failed' action.
 
         Covers: UC-006-CREATIVE-SCHEMA-COMPLIANCE-09
+
+        The old payload was ``{"creative_id": "", "name": "No ID", "assets": {}}`` with the
+        comment "use a dict to bypass client-side Pydantic validation" -- and bypassing
+        validation is exactly what it did, because the caller could hand _impl loose fields.
+        Every caller builds a SyncCreativesRequest now, so that payload is refused at the
+        request boundary (no format_id, empty assets) and never produces a per-creative
+        result at all. Refusal-at-the-boundary is graded in
+        test_creative_validation_rest_obligations.py.
+
+        What this obligation is about is the ACTION ENUM: that a creative the sync cannot
+        validate comes back as ``failed`` rather than being dropped. That branch is still
+        reachable -- by a SPEC-LEGAL creative whose format the registry does not know -- so
+        it is reached that way here. The assertion is also unconditional now; it was
+        ``if failed: assert failed[0].action == "failed"``, which passed whether or not
+        anything failed.
         """
+        from unittest.mock import AsyncMock
+
         with CreativeSyncEnv() as env:
             env.setup_default_data()
+            # Format unknown to the registry: clears the request schema, fails validation.
+            env.mock["registry"].return_value.get_format = AsyncMock(return_value=None)
 
-            # Sync with a creative that has no creative_id (should fail validation)
-            # Use a dict to bypass client-side Pydantic validation
             response = env.call_impl(
-                creatives=[{"creative_id": "", "name": "No ID", "assets": {}}],
+                creatives=[_make_creative_asset(creative_id="c_unknown_format", name="Unknown Format")],
                 validation_mode="strict",
             )
 
-            # Should have at least one result
-            assert len(response.creatives) >= 1
-            # Find the failed result
-            failed = [r for r in response.creatives if r.action == "failed"]
-            if failed:
-                assert failed[0].action == "failed"
+            assert [r.creative_id for r in response.creatives] == ["c_unknown_format"]
+            assert response.creatives[0].action == "failed"
+            assert response.creatives[0].errors
 
     def test_all_action_enum_values_exist(self, integration_db):
         """CreativeAction enum contains all 5 spec-required values.

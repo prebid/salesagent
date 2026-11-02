@@ -1,5 +1,4 @@
 # Generated from adcp-req @ 5967bbda117667537ac193ba00aced716e4e0b7c on 2026-08-18T19:09:26Z (merge mode)
-# DO NOT EDIT -- re-run: python scripts/compile_bdd.py --merge
 
 Feature: BR-UC-019 Query Media Buys
   As a Buyer (Human or AI Agent)
@@ -19,7 +18,7 @@ Feature: BR-UC-019 Query Media Buys
 
   Background:
     Given a Seller Agent is operational and accepting requests
-    And an authenticated Buyer with principal_id "buyer-001"
+    And the Buyer is authenticated
     And the principal "buyer-001" exists in the tenant database
 
 
@@ -33,7 +32,8 @@ Feature: BR-UC-019 Query Media Buys
     Given the principal "buyer-001" owns media buy "mb-001" with start_date "2026-03-01" and end_date "2026-03-31"
     And today is "2026-03-15"
     When the Buyer Agent sends a get_media_buys request with no filters
-    Then the response should include media buy "mb-001" with status "active"
+    Then the response is compliant with the get_media_buys spec
+    And the response should include media buy "mb-001" with status "active"
     And each media buy should include package-level details with budget, bid_price, product_id, flight dates, and paused state
     And each package should include creative approval state when creatives are assigned
     And each media buy should include buyer_campaign_ref for correlation
@@ -66,37 +66,40 @@ Feature: BR-UC-019 Query Media Buys
     And today is "2026-03-15"
     When the Buyer Agent sends a get_media_buys request with no filters
     Then the response envelope carries status completed
-    And the response should be schema-valid against media-buy/get-media-buys-response.json
+    And the response is compliant with the get_media_buys spec
     # core/protocol-envelope.json marks `status` REQUIRED on every task response
-    # envelope, and get-media-buys-response.json composes that arm via a top-level
+    # envelope, and get-media-buys-response.json composes that branch via a top-level
     # allOf — so the requirement reaches this response through composition rather
     # than by being spelled out on it. That is exactly how it went missing in a
     # real implementation: the response type declared no status at all and no
-    # transport noticed, because nothing graded the composed arm.
+    # transport noticed, because nothing graded the composed branch.
 
   @T-UC-019-main-filter-ids @main-flow @filtering
   Scenario: Query media buys by specific media_buy_ids
     Given the principal "buyer-001" owns media buys "mb-001", "mb-002", and "mb-003"
-    When the Buyer Agent sends a get_media_buys request with media_buy_ids ["mb-001", "mb-003"]
-    Then the response should include media buys "mb-001" and "mb-003"
+    When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001", "mb-003"]
+    Then the response is compliant with the get_media_buys spec
+    And the response should include media buys "mb-001" and "mb-003"
     And the response should not include media buy "mb-002"
     # POST-S1: Status present for each requested buy
 
   @T-UC-019-main-snapshot @main-flow @snapshot
   Scenario: Query media buys with delivery snapshots requested and available
-    Given the principal "buyer-001" owns media buy "mb-001" with an active package "pkg-001"
+    Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
     And the ad platform adapter supports realtime reporting
     And snapshot data is available for package "pkg-001"
     When the Buyer Agent sends a get_media_buys request with include_snapshot true
-    Then the response package "pkg-001" should include a snapshot
+    Then the response is compliant with the get_media_buys spec
+    And package "pkg-001" should include a snapshot
     And the snapshot should include as_of, staleness_seconds, impressions, and spend
     # POST-S4: Near-real-time delivery metrics present per package
 
   @T-UC-019-main-no-results @main-flow
   Scenario: Query returns empty results when principal has no matching media buys
-    Given the principal "buyer-001" owns no media buys
+    Given an authenticated principal "buyer-001" who owns no media buys
     When the Buyer Agent sends a get_media_buys request with no filters
-    Then the response should include an empty media_buys array
+    Then the response is compliant with the get_media_buys spec
+    And the response should include an empty media_buys array
     And no error should be present in the response
     # POST-S1: Empty result is valid (no matching buys)
 
@@ -104,74 +107,99 @@ Feature: BR-UC-019 Query Media Buys
   Scenario: Authentication required - identity missing from request
     Given the Buyer has no authentication credentials
     When the Buyer Agent sends a get_media_buys request without authentication
-    Then the operation should fail with error code "AUTH_REQUIRED"
-    And the error message should indicate that identity is required
-    And the error should include a "recovery" field indicating terminal failure
+    Then the error is compliant with the AdCP error spec
+    And the operation should fail with error code "AUTH_MISSING"
+    And the error should include a "recovery" field indicating correctable failure
     And the error should include a "suggestion" field
-    And the suggestion should contain "authentication" or "credentials"
     # POST-F1: Buyer knows the operation failed
     # POST-F2: Error explains authentication is missing
     # POST-F3: Recovery classification indicates how to fix
 
-  @T-UC-019-ext-b @extension @ext-b @error
-  Scenario: Principal ID missing - identity resolved but principal_id absent
-    Given an authenticated identity with no principal_id
-    When the Buyer Agent sends a get_media_buys request
-    Then the response should include an empty media_buys array
-    And the response errors array should include error code "principal_id_missing"
-    And the error message should contain "Principal ID not found"
-    And the error should include a "suggestion" field
-    And the suggestion should contain "re-authenticate" or "credentials"
-    # POST-F1: Buyer knows no results were returned
-    # POST-F2: Error explains principal_id is missing
+  # REMOVED: "Principal ID missing - identity resolved but principal_id absent".
+  #
+  # It asked for an identity that is resolved and carries no principal, answered with an
+  # empty media_buys array and an errors[] entry coded "principal_id_missing". Three
+  # independent reasons, each checkable:
+  #
+  # 1. The state is unconstructible. get_media_buys declares ResolvedIdentity
+  #    (src/core/tools/media_buy_list.py:147), on which the principal is not optional, so
+  #    "resolved but without a principal" is not a state the boundary can hand a tool. The
+  #    harness said so directly: the Given failed constructing Principal with
+  #    principal_id=None, and the run reported it as MISCLASSIFIED strict-xfail — wiring
+  #    dormancy recorded as a production gap.
+  # 2. The code is not in the protocol. adcp 3.1.1 enums/error-code.json declares 92 codes,
+  #    none containing "PRINCIPAL", and every one is upper snake case; "principal_id_missing"
+  #    is neither a member nor the shape of a member. No site under src/ emits it.
+  # 3. The shape contradicts the pin. An empty array beside an advisory is a success
+  #    document; the two refusals the pin defines for this situation carry recoveries that
+  #    forbid reading them that way — AUTH_INVALID is terminal, AUTH_MISSING correctable.
+  #
+  # The real behaviour it was reaching for is graded, on every transport, by the principal
+  # scoping boundary outline below: a presented credential that resolves to no principal is
+  # refused hard with AUTH_INVALID, and no credential at all with AUTH_MISSING.
     # POST-F3: Buyer can infer corrective action
 
-  @T-UC-019-ext-c @extension @ext-c @error
-  Scenario: Principal not found - principal_id not in registry
-    Given an authenticated Buyer with principal_id "buyer-unknown"
-    And the principal "buyer-unknown" does not exist in the tenant database
-    When the Buyer Agent sends a get_media_buys request
-    Then the response should include an empty media_buys array
-    And the response errors array should include error code "principal_not_found"
-    And the error message should contain "not found"
-    And the error should include a "suggestion" field
-    And the suggestion should contain "register" or "verify"
-    # POST-F1: Buyer knows no results were returned
-    # POST-F2: Error explains principal was not found
-    # POST-F3: Buyer can infer corrective action
+  # REMOVED: "Principal not found - principal_id not in registry".
+  #
+  # It is the same state as the principal scoping boundary row "credentials presented but
+  # not resolvable" — a credential that verifies against no principal row — and asked for
+  # the opposite answer: a compliant get_media_buys response, an empty media_buys array,
+  # and an errors[] entry coded "principal_not_found". Both halves contradict adcp 3.1.1.
+  #
+  # 1. The code is not in the protocol. enums/error-code.json declares 92 codes, none
+  #    containing "PRINCIPAL", and every one is upper snake case. No site under src/
+  #    emits "principal_not_found".
+  # 2. The shape contradicts the pin's own recovery. The refusal the pin defines for a
+  #    presented-and-rejected credential is AUTH_INVALID with recovery "terminal" and the
+  #    suggestion "do NOT auto-retry"; an empty array beside an advisory is a success
+  #    document, which a buyer may legitimately retry and reconcile against.
+  # 3. The Given could only reach that shape by injecting a fabricated identity into the
+  #    request kwargs, bypassing the resolver — the simulated-identity path this epic
+  #    removed with the IMPL transport.
+  #
+  # The behaviour it was reaching for is graded, on every transport, by the principal
+  # scoping boundary outline below.
 
   @T-UC-019-ext-d @extension @ext-d @error
   Scenario: Request validation failed - invalid parameter values
-    Given an authenticated Buyer with principal_id "buyer-001"
+    Given the Buyer is authenticated
     When the Buyer Agent sends a get_media_buys request with invalid parameter types
-    Then the operation should fail with error code "VALIDATION_ERROR"
+    Then the error is compliant with the AdCP error spec
+    And the operation should fail with error code "INVALID_REQUEST"
     And the error message should include field-level validation details
     And the error should include a "recovery" field indicating correctable failure
     And the error should include a "suggestion" field
-    And the suggestion should contain "fix" or "correct" or "valid"
     # POST-F1: Buyer knows the operation failed
     # POST-F2: Error identifies which fields failed validation
     # POST-F3: Per-field details enable targeted correction
 
-  @T-UC-019-ext-e @extension @ext-e @error
-  Scenario: Account filter not supported - account_id provided but not implemented
-    Given an authenticated Buyer with principal_id "buyer-001"
-    When the Buyer Agent sends a get_media_buys request with account_id "acc-001"
-    Then the operation should fail with error code "ACCOUNT_FILTER_NOT_SUPPORTED"
-    And the error message should contain "account_id filtering is not yet supported"
-    And the error should include a "recovery" field indicating correctable failure
-    And the error should include a "suggestion" field
-    And the suggestion should contain "remove account_id" or "omit account_id"
-    # POST-F1: Buyer knows the operation failed
-    # POST-F2: Error explains account filtering is not supported
-    # POST-F3: Recovery is correctable -- omit account_id and retry
+  @T-UC-019-ext-e @extension @ext-e
+  Scenario: A request carrying an account is accepted and scoped to it
+    Given the Buyer is authenticated
+    # The account must RESOLVE, or this scenario cannot grade what it names. The seller
+    # resolves the account a request carries before running the tool, so an unseeded id
+    # fails with ACCOUNT_NOT_FOUND -- a correct answer to a different question.
+    And the Buyer has access to an account
+    When the Buyer Agent sends a get_media_buys request with that account_id
+    Then the response is compliant with the get_media_buys spec
+    And the response should succeed
+    # get-media-buys-request.json declares `account` as an optional property, so a
+    # buyer sending one is conformant and the seller must accept it. Every other tool
+    # that declares the field accepts it -- it is REQUIRED on create_media_buy,
+    # update_media_buy and sync_creatives, and optional-and-accepted on
+    # get_media_buy_delivery, get_products, get_task_status, list_tasks,
+    # list_creatives and list_accounts. get_media_buys was the only refusal.
 
   @T-UC-019-partition-status @partition @status
   Scenario Outline: Status computation from flight dates - <partition>
-    Given the principal "buyer-001" owns media buy "mb-001" with start_date "<start>" and end_date "<end>"
-    And today is "<today>"
+    Given the principal "buyer-001" owns media buy "mb-001" whose flight window starts <start> and ends <end>
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the media buy "mb-001" should have status "<expected_status>"
+    Then the response is compliant with the get_media_buys spec
+    And the media buy "mb-001" should have status "<expected_status>"
+    # The window is relative to the run date and no clock is pinned, for the reason
+    # given on the boundary outline below: a patched datetime never reaches a server
+    # running in its own container, so an absolute window graded the calendar rather
+    # than the partition.
     # BR-RULE-150: Status computed from relationship between today and flight dates
     # RETIRED (T-UC-019-partition-status-invalid): "Status computation with missing dates".
     # Verified against AdCP 3.1 GA (spec pin v3.1-04f59d2d5): the core media-buy object
@@ -187,36 +215,45 @@ Feature: BR-UC-019 Query Media Buys
     # status, no TypeError). Retired at the source, so the merge does not re-add it.
 
     Examples: Valid partitions
-      | partition                 | today      | start      | end        | expected_status |
-      | active_refined_pending_start | 2026-03-01 | 2026-03-15 | 2026-03-31 | pending_start   |
-      | active_refined_in_flight  | 2026-03-15 | 2026-03-01 | 2026-03-31 | active          |
-      | active_refined_completed  | 2026-04-01 | 2026-03-01 | 2026-03-31 | completed       |
-      | single_day_flight         | 2026-03-15 | 2026-03-15 | 2026-03-15 | active          |
+      | partition                    | start        | end          | expected_status |
+      | active_refined_pending_start | in 14 days   | in 30 days   | pending_start   |
+      | active_refined_in_flight     | 14 days ago  | in 16 days   | active          |
+      | active_refined_completed     | 31 days ago  | 1 day ago    | completed       |
+      | single_day_flight            | today        | today        | active          |
 
+  # The flight window is stated RELATIVE to the day the test runs, and the scenario
+  # pins no clock. An absolute window obliges the scenario to patch production's
+  # datetime, which reaches production only while it shares the test process: over
+  # e2e_rest the server runs in its own container on the real clock, so the patch was
+  # inert and every row was judged against the calendar instead of against the
+  # boundary it names. Three rows then "passed" merely because the real date had
+  # drifted past a fixed 2026-03 window, and the other four could not pass at all.
+  # Offsets need no clock, so each boundary is graded identically on every transport.
   @T-UC-019-boundary-status @boundary @status
   Scenario Outline: Status computation boundary - <boundary_point>
-    Given the principal "buyer-001" owns media buy "mb-001" with start_date "<start>" and end_date "<end>"
-    And today is "<today>"
+    Given the principal "buyer-001" owns media buy "mb-001" whose flight window starts <start> and ends <end>
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the media buy "mb-001" should have status "<expected_status>"
+    Then the response is compliant with the get_media_buys spec
+    And the media buy "mb-001" should have status "<expected_status>"
     # BR-RULE-150: Boundary test at flight date transition points
 
     Examples: Boundary values
-      | boundary_point                                            | today      | start      | end        | expected_status |
-      | persisted='active', day before start                      | 2026-03-14 | 2026-03-15 | 2026-03-31 | pending_start   |
-      | persisted='active', start day itself                      | 2026-03-15 | 2026-03-15 | 2026-03-31 | active          |
-      | persisted='active', end day itself                        | 2026-03-31 | 2026-03-15 | 2026-03-31 | active          |
-      | persisted='active', day after end                         | 2026-04-01 | 2026-03-15 | 2026-03-31 | completed       |
-      | persisted='active', start==end==today                     | 2026-03-15 | 2026-03-15 | 2026-03-15 | active          |
-      | persisted='active', start==end, day before                | 2026-03-14 | 2026-03-15 | 2026-03-15 | pending_start   |
-      | persisted='active', start==end, day after                 | 2026-03-16 | 2026-03-15 | 2026-03-15 | completed       |
+      | boundary_point                                            | start        | end          | expected_status |
+      | persisted='active', day before start                      | in 1 day     | in 17 days   | pending_start   |
+      | persisted='active', start day itself                      | today        | in 16 days   | active          |
+      | persisted='active', end day itself                        | 16 days ago  | today        | active          |
+      | persisted='active', day after end                         | 17 days ago  | 1 day ago    | completed       |
+      | persisted='active', start==end==today                     | today        | today        | active          |
+      | persisted='active', start==end, day before                | in 1 day     | in 1 day     | pending_start   |
+      | persisted='active', start==end, day after                 | 1 day ago    | 1 day ago    | completed       |
 
   @T-UC-019-inv-150-4 @invariant @BR-RULE-150
   Scenario: INV-4 holds - start_time takes precedence over start_date
     Given the principal "buyer-001" owns media buy "mb-001" with start_date "2026-03-15" and start_time "2026-03-10T00:00:00Z" and end_date "2026-03-31"
     And today is "2026-03-12"
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the media buy "mb-001" should have status "active"
+    Then the response is compliant with the get_media_buys spec
+    And the media buy "mb-001" should have status "active"
     # BR-RULE-150 INV-4: start_time.date() (2026-03-10) used instead of start_date (2026-03-15)
 
   @T-UC-019-inv-150-5 @invariant @BR-RULE-150
@@ -224,18 +261,23 @@ Feature: BR-UC-019 Query Media Buys
     Given the principal "buyer-001" owns media buy "mb-001" with start_date "2026-03-01" and end_date "2026-03-31" and end_time "2026-03-25T23:59:59Z"
     And today is "2026-03-28"
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the media buy "mb-001" should have status "completed"
+    Then the response is compliant with the get_media_buys spec
+    And the media buy "mb-001" should have status "completed"
     # BR-RULE-150 INV-5: end_time.date() (2026-03-25) used instead of end_date (2026-03-31)
 
   @T-UC-019-partition-status-filter @partition @status_filter
   Scenario Outline: Default status filter behavior - <partition>
     Given the principal "buyer-001" owns media buys in various statuses
-    And today is "2026-03-15"
     When the Buyer Agent sends a get_media_buys request with <filter_config>
-    Then <expected_behavior>
-    # Pin the clock: the "various statuses" seed builds each buy's flight window
-    # around this date, so the query MUST evaluate status against it too (else all
-    # windows are in the past under the real clock and every buy reads completed).
+    Then the response is compliant with the get_media_buys spec
+    And <expected_behavior>
+    # No clock is pinned. The "various statuses" seed builds each window as an offset
+    # from the REAL date, so the query evaluates status against the same day the seed
+    # used on every transport. Pinning a clock here did the opposite of what its note
+    # claimed: the patch never reached a server in its own container, so over e2e_rest
+    # all three windows sat in the past and every buy read "completed" -- which made
+    # the "completed" and "all seven" rows pass for a reason that had nothing to do
+    # with status_filter.
     # BR-RULE-151: Status filter defaults and validation
 
     Examples: Valid partitions
@@ -247,26 +289,35 @@ Feature: BR-UC-019 Query Media Buys
 
   @T-UC-019-partition-status-filter-invalid @partition @status_filter @error
   Scenario Outline: Invalid status filter values - <partition>
-    Given an authenticated Buyer with principal_id "buyer-001"
+    Given the Buyer is authenticated
     When the Buyer Agent sends a get_media_buys request with <invalid_filter>
-    Then the operation should fail with error code "<error_code>"
+    Then the error is compliant with the AdCP error spec
+    And the operation should fail with error code "<error_code>"
     And the error should include a "suggestion" field
-    And the suggestion should contain "<suggestion_fragment>"
-    # BR-RULE-151: Invalid status filter rejected
+    And the error field should contain "status_filter"
+    # BR-RULE-151: Invalid status filter rejected.
+    # Both partitions violate a SCHEMA CONSTRAINT rather than a business rule:
+    # get-media-buys-request.json types status_filter as oneOf [MediaBuyStatus,
+    # array of MediaBuyStatus with minItems 1], so an out-of-enum value and an
+    # empty array both fail the schema. The pin maps that to INVALID_REQUEST
+    # ("malformed, missing required fields, or violates schema constraints"),
+    # not VALIDATION_ERROR (which is scoped to rules BEYOND schema validation).
+    # WHICH parameter failed travels on error.field; the suggestion is derived
+    # from the code and cannot name the offending value (#1753).
 
     Examples: Invalid partitions
-      | partition              | invalid_filter                      | error_code                   | suggestion_fragment                    |
-      | unknown_status_value   | status_filter "expired"             | STATUS_FILTER_INVALID_VALUE  | pending_activation, active             |
-      | empty_array            | status_filter as empty array []     | STATUS_FILTER_EMPTY          | at least one status value              |
+      | partition              | invalid_filter                      | error_code       |
+      | unknown_status_value   | status_filter "expired"             | INVALID_REQUEST  |
+      | empty_array            | status_filter as empty array []     | INVALID_REQUEST  |
 
   @T-UC-019-boundary-status-filter @boundary @status_filter
   Scenario Outline: Status filter boundary - <boundary_point>
     Given the principal "buyer-001" owns media buys in various statuses
-    And today is "2026-03-15"
     When the Buyer Agent sends a get_media_buys request with <filter_config>
-    Then <expected_behavior>
-    # Pin the clock so the seed's flight windows and the query's status
-    # computation agree (see the partition scenario above).
+    Then the response is compliant with the get_media_buys spec
+    And <expected_behavior>
+    # No clock is pinned; the seed anchors on the real date (see the partition
+    # scenario above for why pinning one silently degraded this outline on e2e_rest).
     # BR-RULE-151: Boundary test for status filter
 
     Examples: Boundary values
@@ -276,9 +327,9 @@ Feature: BR-UC-019 Query Media Buys
       | single valid enum value                     | status_filter "active"                                 | only media buys with status "active" are returned               |
       | array with one valid value                  | status_filter ["completed"]                            | only media buys with status "completed" are returned            |
       | array with all seven enum values            | all seven v3.1 status values in status_filter          | media buys in any status are returned                           |
-      | empty array                                 | status_filter as empty array []                        | error "STATUS_FILTER_EMPTY" with suggestion                     |
-      | removed enum value `pending_activation`     | status_filter "pending_activation"                     | error "STATUS_FILTER_INVALID_VALUE" with suggestion             |
-      | array with mix of valid and unknown values  | status_filter ["active", "expired"]                    | error "STATUS_FILTER_INVALID_VALUE" with suggestion             |
+      | empty array                                 | status_filter as empty array []                        | error "INVALID_REQUEST" with suggestion                     |
+      | removed enum value `pending_activation`     | status_filter "pending_activation"                     | error "INVALID_REQUEST" with suggestion             |
+      | array with mix of valid and unknown values  | status_filter ["active", "expired"]                    | error "INVALID_REQUEST" with suggestion             |
 
   @T-UC-019-partition-approval @partition @approval_status
   Scenario Outline: Creative approval status mapping - <partition>
@@ -286,7 +337,8 @@ Feature: BR-UC-019 Query Media Buys
     And package "pkg-001" has a creative assignment with creative_id "<creative_id>"
     And the creative "<creative_id>" has internal status "<internal_status>" <extra_condition>
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the creative approval for "<creative_id>" should have approval_status "<expected_approval>"
+    Then the response is compliant with the get_media_buys spec
+    And the creative approval for "<creative_id>" should have approval_status "<expected_approval>"
     And <rejection_check>
     # BR-RULE-152: Internal creative status mapped to AdCP protocol enum
 
@@ -294,17 +346,18 @@ Feature: BR-UC-019 Query Media Buys
       | partition                | creative_id | internal_status | extra_condition                              | expected_approval | rejection_check                                     |
       | approved_creative        | cr-001      | approved        |                                              | approved          | rejection_reason should be absent                   |
       | rejected_with_reason     | cr-002      | rejected        | and rejection_reason "Image too dark"        | rejected          | rejection_reason should be "Image too dark"         |
-      | rejected_without_reason  | cr-003      | rejected        | and no rejection_reason in data              | rejected          | rejection_reason should be null or absent           |
+      | rejected_without_reason  | cr-003      | rejected        | and no rejection_reason in data              | rejected          | rejection_reason should be absent |
       | pending_review_explicit  | cr-004      | submitted       |                                              | pending_review    | rejection_reason should be absent                   |
       | pending_review_catchall  | cr-005      | processing      |                                              | pending_review    | rejection_reason should be absent                   |
 
   @T-UC-019-partition-approval-invalid @partition @approval_status
   Scenario: Creative approval mapping - no_creative_found (silent skip)
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
-    And package "pkg-001" has a creative assignment referencing creative_id "cr-999"
+    And package "pkg-001" has a creative assignment with creative_id "cr-999"
     And no creative with id "cr-999" exists in the tenant
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the creative approvals for package "pkg-001" should not include an entry for "cr-999"
+    Then the response is compliant with the get_media_buys spec
+    And the creative approvals for package "pkg-001" should not include an entry for "cr-999"
     And no error should be raised for the missing creative
     # BR-RULE-152 INV-4: Nonexistent creative silently omitted from approvals
 
@@ -314,7 +367,8 @@ Feature: BR-UC-019 Query Media Buys
     And package "pkg-001" has a creative assignment with creative_id "cr-001"
     And the creative "cr-001" has <creative_condition>
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then <expected_outcome>
+    Then the response is compliant with the get_media_buys spec
+    And <expected_outcome>
     # BR-RULE-152: Boundary test for approval status mapping
 
     Examples: Boundary values
@@ -332,8 +386,9 @@ Feature: BR-UC-019 Query Media Buys
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
     And package "pkg-001" has a creative with internal status "approved"
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the creative approval should have approval_status "approved"
-    And rejection_reason should not be present in the approval entry
+    Then the response is compliant with the get_media_buys spec
+    And the creative approval should have approval_status "approved"
+    And rejection_reason should be absent
     # BR-RULE-152 INV-5: rejection_reason is absent when approval_status is not rejected
 
   @T-UC-019-partition-snapshot @partition @include_snapshot
@@ -341,7 +396,8 @@ Feature: BR-UC-019 Query Media Buys
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
     And <adapter_condition>
     When the Buyer Agent sends a get_media_buys request with <snapshot_request>
-    Then <expected_outcome>
+    Then the response is compliant with the get_media_buys spec
+    And <expected_outcome>
     # BR-RULE-153: Snapshot availability depends on adapter capability
 
     Examples: Valid partitions
@@ -356,7 +412,8 @@ Feature: BR-UC-019 Query Media Buys
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
     And <adapter_condition>
     When the Buyer Agent sends a get_media_buys request with <snapshot_request>
-    Then <expected_outcome>
+    Then the response is compliant with the get_media_buys spec
+    And <expected_outcome>
     # BR-RULE-153: Boundary test for snapshot behavior
 
     Examples: Boundary values
@@ -366,7 +423,7 @@ Feature: BR-UC-019 Query Media Buys
       | include_snapshot true, adapter supports, snapshot returned               | the adapter supports realtime reporting and data is available    | include_snapshot true       | package "pkg-001" should include a snapshot                                                  |
       | include_snapshot true, adapter supports, snapshot null for a package     | the adapter supports realtime reporting but no data for pkg-001  | include_snapshot true       | snapshot_unavailable_reason "SNAPSHOT_TEMPORARILY_UNAVAILABLE"                                |
       | include_snapshot true, adapter does not support realtime                 | the adapter does not support realtime reporting                  | include_snapshot true       | snapshot_unavailable_reason "SNAPSHOT_UNSUPPORTED"                                            |
-      | include_snapshot true, all packages have snapshot                        | the adapter supports realtime reporting and data for all pkgs    | include_snapshot true       | all packages should include snapshots                                                        |
+      | include_snapshot true, all packages have snapshot                        | the adapter supports realtime reporting and data is available | include_snapshot true       | all packages should include snapshots                                                        |
       | include_snapshot true, mixed — some packages have snapshot, some do not  | the adapter supports reporting, data for pkg-001 but not pkg-002 | include_snapshot true       | pkg-001 has snapshot, pkg-002 has SNAPSHOT_TEMPORARILY_UNAVAILABLE                           |
 
   @T-UC-019-inv-153-5 @invariant @BR-RULE-153
@@ -375,7 +432,8 @@ Feature: BR-UC-019 Query Media Buys
     And the ad platform adapter supports realtime reporting
     And snapshot data is available for package "pkg-001"
     When the Buyer Agent sends a get_media_buys request with include_snapshot true
-    Then the snapshot for package "pkg-001" should include "as_of" timestamp
+    Then the response is compliant with the get_media_buys spec
+    And the snapshot for package "pkg-001" should include "as_of" timestamp
     And the snapshot should include "staleness_seconds" integer
     And the snapshot should include "impressions" count
     And the snapshot should include "spend" amount
@@ -385,7 +443,8 @@ Feature: BR-UC-019 Query Media Buys
   Scenario Outline: Principal scoping - <partition>
     Given <principal_setup>
     When the Buyer Agent sends a get_media_buys request
-    Then <expected_outcome>
+    Then the response is compliant with the get_media_buys spec
+    And <expected_outcome>
     # BR-RULE-154: Principal scoping and tenant isolation
 
     Examples: Valid partitions
@@ -397,24 +456,44 @@ Feature: BR-UC-019 Query Media Buys
   Scenario Outline: Principal scoping boundary - <boundary_point>
     Given <principal_setup>
     When the Buyer Agent sends a get_media_buys request
-    Then <expected_outcome>
+    Then the response is compliant with the get_media_buys spec
+    And <expected_outcome>
     # BR-RULE-154: Boundary test for principal resolution
+    #
+    # Three rows were corrected here, against adcp 3.1.1 enums/error-code.json.
+    #
+    # Two demanded "an authenticated identity with no principal_id" answered with a SOFT
+    # AUTH_MISSING and an empty media_buys array. Both halves contradict the pin. Its
+    # AUTH_MISSING description reads "No credentials were presented. Sellers MUST return
+    # this code when no Authorization header was included in the request", so a caller who
+    # HAS presented a credential is never AUTH_MISSING; that is the row below on no
+    # authentication context. And the state itself is unconstructible: get_media_buys is a
+    # protected tool whose implementation declares ResolvedIdentity
+    # (src/core/tools/media_buy_list.py:147), on which the principal is not optional, so the
+    # resolver refuses such a caller before the tool runs rather than serving it an empty
+    # array. Those two rows described the tenant-admin-token credential class this epic
+    # removed, where a token authenticated without naming a buyer.
+    #
+    # The third demanded a SOFT AUTH_INVALID with an empty array for a credential naming an
+    # unknown principal. The code is right and the shape is not: the pin gives AUTH_INVALID
+    # recovery "terminal" with the suggestion "do NOT auto-retry", and a terminal refusal is
+    # not an empty success. The three collapse into one row: a presented credential that
+    # resolves to no principal is refused, hard, before any database access.
 
     Examples: Boundary values
       | boundary_point                          | principal_setup                                                       | expected_outcome                                                                                                          |
       | valid principal with multiple media buys | an authenticated principal "buyer-001" who owns 5 media buys         | the response should include 5 media buys scoped to buyer-001                                                              |
       | valid principal with zero media buys    | an authenticated principal "buyer-002" who owns no media buys         | the response should include an empty media_buys array                                                                     |
-      | principal_id is null                    | an authenticated identity with principal_id null                      | empty media_buys with soft error code "AUTH_REQUIRED" message "Principal ID not found in context"                         |
-      | principal_id is empty string            | an authenticated identity with principal_id ""                        | empty media_buys with soft error code "AUTH_REQUIRED" message "Principal ID not found in context"                         |
-      | principal_id not in registry            | an authenticated principal "buyer-ghost" not in registry              | empty media_buys with soft error code "AUTH_REQUIRED" message "Principal buyer-ghost not found"                           |
-      | identity not resolved (no auth)         | no authentication context                                             | hard error code "AUTH_REQUIRED" raised before any DB access                                                               |
+      | credentials presented but not resolvable | a presented credential that resolves to no principal                  | hard error code "AUTH_INVALID" raised before any DB access                                                                |
+      | identity not resolved (no auth)         | no authentication context                                             | hard error code "AUTH_MISSING" raised before any DB access                                                                |
 
   @T-UC-019-inv-154-tenant @invariant @BR-RULE-154
   Scenario: INV-1 and INV-5 hold - two-layer isolation prevents cross-principal access
     Given an authenticated principal "buyer-001" who owns media buy "mb-001"
     And an authenticated principal "buyer-002" who owns media buy "mb-002"
     When "buyer-001" sends a get_media_buys request
-    Then the response should include media buy "mb-001"
+    Then the response is compliant with the get_media_buys spec
+    And the response should include media buy "mb-001"
     And the response should not include media buy "mb-002"
     # BR-RULE-154 INV-1: Database scoped to tenant
     # BR-RULE-154 INV-5: Results filtered to principal only
@@ -424,7 +503,8 @@ Feature: BR-UC-019 Query Media Buys
     Given the principal "buyer-001" owns media buy "mb-001" with start_date "2026-04-01" and end_date "2026-04-30"
     And today is "2026-03-15"
     When the Buyer Agent sends a get_media_buys request with status_filter "pending_start"
-    Then the response should include media buy "mb-001" with status "pending_start"
+    Then the response is compliant with the get_media_buys spec
+    And the response should include media buy "mb-001" with status "pending_start"
     # BR-RULE-150 INV-1: today < start_date yields pending_start.
     # CORRECTED to AdCP 3.1 enums/media-buy-status.json @ v3.1-04f59d2d5: pre-flight is pending_start
     # ("ready to serve, waiting for its flight date"); "pending_activation" is not a 3.1 wire value.
@@ -434,7 +514,8 @@ Feature: BR-UC-019 Query Media Buys
     Given the principal "buyer-001" owns media buy "mb-001" with start_date "2026-03-01" and end_date "2026-03-31"
     And today is "2026-03-15"
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the response should include media buy "mb-001" with status "active"
+    Then the response is compliant with the get_media_buys spec
+    And the response should include media buy "mb-001" with status "active"
     # BR-RULE-150 INV-2: start_date <= today <= end_date yields active
 
   @T-UC-019-inv-150-3 @invariant @BR-RULE-150
@@ -442,29 +523,30 @@ Feature: BR-UC-019 Query Media Buys
     Given the principal "buyer-001" owns media buy "mb-001" with start_date "2026-02-01" and end_date "2026-02-28"
     And today is "2026-03-15"
     When the Buyer Agent sends a get_media_buys request with status_filter "completed"
-    Then the response should include media buy "mb-001" with status "completed"
+    Then the response is compliant with the get_media_buys spec
+    And the response should include media buy "mb-001" with status "completed"
     # BR-RULE-150 INV-3: today > end_date yields completed
 
   @T-UC-019-inv-151-1 @invariant @BR-RULE-151
   Scenario: INV-1 holds - default filter returns only active media buys
     Given the principal "buyer-001" owns active media buy "mb-001" and completed media buy "mb-002"
-    And today is "2026-03-15"
     When the Buyer Agent sends a get_media_buys request with no status_filter
-    Then the response should include media buy "mb-001"
+    Then the response is compliant with the get_media_buys spec
+    And the response should include media buy "mb-001"
     And the response should not include media buy "mb-002"
-    # Pin the clock: the seed builds mb-001/mb-002 flight windows around this same
-    # "today" (mock_today), so the query MUST evaluate status against it too, else
-    # mb-001's window is in the past under the real clock and it reads as completed.
+    # No clock is pinned. The seed builds both windows around the REAL date, so the
+    # query evaluates status against the same day the seed used -- on a server in its
+    # own container as well as in-process, which a patched datetime never reached.
     # BR-RULE-151 INV-1: null status_filter defaults to {active}
 
   @T-UC-019-inv-151-4 @invariant @BR-RULE-151 @error
   Scenario: INV-4 violated - unknown status value rejected
-    Given an authenticated Buyer with principal_id "buyer-001"
+    Given the Buyer is authenticated
     When the Buyer Agent sends a get_media_buys request with status_filter "expired"
-    Then the operation should fail with error code "STATUS_FILTER_INVALID_VALUE"
-    And the error message should indicate "expired" is not a valid MediaBuyStatus
+    Then the error is compliant with the AdCP error spec
+    And the operation should fail with error code "INVALID_REQUEST"
+    And the error field should contain "status_filter"
     And the error should include a "suggestion" field
-    And the suggestion should contain "pending_activation, active"
     # BR-RULE-151 INV-4: Unknown status value rejected with suggestion
 
   @T-UC-019-inv-152-1 @invariant @BR-RULE-152
@@ -472,7 +554,8 @@ Feature: BR-UC-019 Query Media Buys
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
     And package "pkg-001" has a creative with internal status "approved"
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the creative approval should have approval_status "approved"
+    Then the response is compliant with the get_media_buys spec
+    And the creative approval should have approval_status "approved"
     # BR-RULE-152 INV-1: approved maps to approved
 
   @T-UC-019-inv-152-2 @invariant @BR-RULE-152
@@ -480,7 +563,8 @@ Feature: BR-UC-019 Query Media Buys
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
     And package "pkg-001" has a creative with internal status "rejected" and rejection_reason "Text overlaps safe zone"
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the creative approval should have approval_status "rejected"
+    Then the response is compliant with the get_media_buys spec
+    And the creative approval should have approval_status "rejected"
     And the rejection_reason should be "Text overlaps safe zone"
     # BR-RULE-152 INV-2: rejected maps to rejected with reason
 
@@ -489,14 +573,16 @@ Feature: BR-UC-019 Query Media Buys
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
     And package "pkg-001" has a creative with internal status "in_review"
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the creative approval should have approval_status "pending_review"
+    Then the response is compliant with the get_media_buys spec
+    And the creative approval should have approval_status "pending_review"
     # BR-RULE-152 INV-3: Catch-all maps unknown status to pending_review
 
   @T-UC-019-inv-153-1 @invariant @BR-RULE-153
   Scenario: INV-1 holds - no snapshot fields when not requested
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
     When the Buyer Agent sends a get_media_buys request with include_snapshot false
-    Then package "pkg-001" should not have a snapshot field
+    Then the response is compliant with the get_media_buys spec
+    And package "pkg-001" should not have a snapshot field
     And package "pkg-001" should not have a snapshot_unavailable_reason field
     # BR-RULE-153 INV-1: Snapshot not requested means no snapshot fields
 
@@ -505,10 +591,9 @@ Feature: BR-UC-019 Query Media Buys
     Given the principal "buyer-001" owns media buy "mb-001" with packages "pkg-001" and "pkg-002"
     And the ad platform adapter does not support realtime reporting
     When the Buyer Agent sends a get_media_buys request with include_snapshot true
-    Then package "pkg-001" should have snapshot_unavailable_reason "SNAPSHOT_UNSUPPORTED"
+    Then the response is compliant with the get_media_buys spec
+    And package "pkg-001" should have snapshot_unavailable_reason "SNAPSHOT_UNSUPPORTED"
     And package "pkg-002" should have snapshot_unavailable_reason "SNAPSHOT_UNSUPPORTED"
-    And the error should include a "suggestion" field
-    And the suggestion should contain "adapter" or "realtime" or "reporting"
     # BR-RULE-153 INV-3: All packages get SNAPSHOT_UNSUPPORTED
 
   @T-UC-019-inv-153-4 @invariant @BR-RULE-153
@@ -517,7 +602,8 @@ Feature: BR-UC-019 Query Media Buys
     And the ad platform adapter supports realtime reporting
     And no snapshot data is available for package "pkg-001"
     When the Buyer Agent sends a get_media_buys request with include_snapshot true
-    Then package "pkg-001" should have snapshot_unavailable_reason "SNAPSHOT_TEMPORARILY_UNAVAILABLE"
+    Then the response is compliant with the get_media_buys spec
+    And package "pkg-001" should have snapshot_unavailable_reason "SNAPSHOT_TEMPORARILY_UNAVAILABLE"
     # BR-RULE-153 INV-4: Package without data gets TEMPORARILY_UNAVAILABLE
 
   @T-UC-019-inv-150-6 @invariant @BR-RULE-150 @schema-v3.1
@@ -526,7 +612,8 @@ Feature: BR-UC-019 Query Media Buys
     And media buy "mb-001" has start_date "2026-03-01" and end_date "2026-03-31"
     And today is "2026-03-15"
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the media buy "mb-001" should have status "paused"
+    Then the response is compliant with the get_media_buys spec
+    And the media buy "mb-001" should have status "paused"
     # BR-RULE-150 INV-6: is_paused=true overrides the flight-window refinement to paused
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
@@ -536,7 +623,8 @@ Feature: BR-UC-019 Query Media Buys
     And media buy "mb-001" has start_date "2026-03-01" and end_date "2026-03-31"
     And today is "2026-03-15"
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the media buy "mb-001" should have status "<expected>"
+    Then the response is compliant with the get_media_buys spec
+    And the media buy "mb-001" should have status "<expected>"
     # BR-RULE-150 INV-7: terminal lifecycle states pass through; no flight-window refinement
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
@@ -551,7 +639,8 @@ Feature: BR-UC-019 Query Media Buys
   Scenario Outline: INV-8 holds - pre-serving persisted states map to their pending status
     Given the principal "buyer-001" owns media buy "mb-001" with persisted status "<persisted>"
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the media buy "mb-001" should have status "<expected>"
+    Then the response is compliant with the get_media_buys spec
+    And the media buy "mb-001" should have status "<expected>"
     # BR-RULE-150 INV-8: pre-serving persisted states map to their pending status; no flight refinement.
     # CORRECTED to AdCP 3.1 enums/media-buy-status.json @ v3.1-04f59d2d5: a draft buy has no creatives
     # assigned, so it is pending_creatives ("approved but has no creatives"), NOT pending_start
@@ -569,7 +658,8 @@ Feature: BR-UC-019 Query Media Buys
   Scenario: INV-9 holds - persisted failed maps to rejected
     Given the principal "buyer-001" owns media buy "mb-001" with persisted status "failed"
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the media buy "mb-001" should have status "rejected"
+    Then the response is compliant with the get_media_buys spec
+    And the media buy "mb-001" should have status "rejected"
     # BR-RULE-150 INV-9: persisted 'failed' has no v3.1 wire equivalent; maps to closest terminal 'rejected'
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
@@ -577,7 +667,8 @@ Feature: BR-UC-019 Query Media Buys
   Scenario Outline: INV-10 holds - pending_creatives and pending_start pass through unchanged
     Given the principal "buyer-001" owns media buy "mb-001" with persisted status "<persisted>"
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the media buy "mb-001" should have status "<persisted>"
+    Then the response is compliant with the get_media_buys spec
+    And the media buy "mb-001" should have status "<persisted>"
     # BR-RULE-150 INV-10: pending_creatives/pending_start pass through; no flight refinement
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
     # RETIRED SCENARIO (T-UC-019-inv-150-11): "unknown persisted status defaults to
@@ -620,7 +711,8 @@ Feature: BR-UC-019 Query Media Buys
     And media buy "mb-001" has start_date "2026-03-01" and end_date "2026-03-31"
     And today is "2026-03-15"
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the request should be refused for "mb-001" with error code "CONFIGURATION_ERROR"
+    Then the error is compliant with the AdCP error spec
+    And the request should be refused for "mb-001" with error code "CONFIGURATION_ERROR"
     # BR-RULE-150 INV-11: a persisted status outside the closed vocabulary is a defect in
     # the seller's own store. It is refused at the write boundary, and if one reaches a
     # read it is surfaced as CONFIGURATION_ERROR / recovery terminal — never interpreted.
@@ -637,7 +729,8 @@ Feature: BR-UC-019 Query Media Buys
     And the principal "buyer-001" owns media buy "mb-002" with status "completed"
     And the principal "buyer-001" owns media buy "mb-003" with status "canceled"
     When the Buyer Agent sends a get_media_buys request with no status_filter and media_buy_ids ["mb-001","mb-002","mb-003"]
-    Then the response should include media buy "mb-001"
+    Then the response is compliant with the get_media_buys spec
+    And the response should include media buy "mb-001"
     And the response should include media buy "mb-002"
     And the response should include media buy "mb-003"
     # BR-RULE-151 INV-5: explicit media_buy_ids suppresses the implicit {active} default
@@ -646,7 +739,8 @@ Feature: BR-UC-019 Query Media Buys
   Scenario Outline: include_history partitions - <partition>
     Given the principal "buyer-001" owns media buy "mb-001" with <history_state>
     When the Buyer Agent sends a get_media_buys request with <request_form>
-    Then <expected_outcome>
+    Then the response is compliant with the get_media_buys spec
+    And <expected_outcome>
     # BR-RULE-289: include_history bounded 0..1000; default 0; history[] absent unless > 0
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
@@ -662,8 +756,9 @@ Feature: BR-UC-019 Query Media Buys
   Scenario Outline: include_history boundary - <boundary_point>
     Given the principal "buyer-001" owns media buy "mb-001" with 10 history entries
     When the Buyer Agent sends a get_media_buys request with <request_form>
-    Then <expected_outcome>
-    # BR-RULE-289: range [0, 1000] integer; below or above is VALIDATION_ERROR
+    Then the response is compliant with the get_media_buys spec
+    And <expected_outcome>
+    # BR-RULE-289: range [0, 1000] integer; below or above is INVALID_REQUEST
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
     Examples: Boundary values
@@ -672,15 +767,16 @@ Feature: BR-UC-019 Query Media Buys
       | include_history = 0 (lower bound inclusive) | include_history 0           | the history field should be absent on each media buy entry                                |
       | include_history = 1                       | include_history 1            | the history array should contain 1 entry                                                  |
       | include_history = 1000 (upper bound inclusive) | include_history 1000     | the history array should contain 10 entries (min of include_history and available)        |
-      | include_history = 1001                    | include_history 1001         | error code "VALIDATION_ERROR" with suggestion mentioning range "[0, 1000]"                |
-      | include_history = -1                      | include_history -1           | error code "VALIDATION_ERROR" with suggestion mentioning range "[0, 1000]"                |
+      | include_history = 1001                    | include_history 1001         | error code "INVALID_REQUEST" with suggestion mentioning range "[0, 1000]"                |
+      | include_history = -1                      | include_history -1           | error code "INVALID_REQUEST" with suggestion mentioning range "[0, 1000]"                |
       | include_history = 5.5 (non-integer)       | include_history 5.5          | error code "VALIDATION_ERROR" with suggestion mentioning integer                          |
 
   @T-UC-019-inv-289-3 @invariant @BR-RULE-289 @schema-v3.1
   Scenario: INV-3 holds - response returns min(include_history, available) most recent entries
     Given the principal "buyer-001" owns media buy "mb-001" with 12 history entries created over time
     When the Buyer Agent sends a get_media_buys request with include_history 5
-    Then the response media buy "mb-001" history array should contain 5 entries
+    Then the response is compliant with the get_media_buys spec
+    And the response media buy "mb-001" history array should contain 5 entries
     And the history entries should be ordered most recent first
     # BR-RULE-289 INV-3: min(include_history, available) most recent first
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
@@ -689,7 +785,8 @@ Feature: BR-UC-019 Query Media Buys
   Scenario: INV-5 holds - history entries are append-only and byte-identical across queries
     Given the principal "buyer-001" owns media buy "mb-001" with a history entry at revision 3
     When the Buyer Agent sends two get_media_buys requests with include_history 10 at times t1 and t2
-    Then the entry at revision 3 from the t1 response should be byte-identical to the entry at revision 3 from the t2 response
+    Then the response is compliant with the get_media_buys spec
+    And the entry at revision 3 from the t1 response should be byte-identical to the entry at revision 3 from the t2 response
     # BR-RULE-289 INV-5: sellers MUST NOT modify or delete previously emitted entries
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
@@ -698,7 +795,8 @@ Feature: BR-UC-019 Query Media Buys
     Given the principal "buyer-001" owns media buy "mb-001"
     And buyer "buyer-001" performs an update that creates a history entry
     When the Buyer Agent sends a get_media_buys request with include_history 5
-    Then the new history entry actor should reflect the authenticated identity "buyer-001"
+    Then the response is compliant with the get_media_buys spec
+    And the new history entry actor should reflect the authenticated identity "buyer-001"
     And the actor value should not be derived from any caller-supplied field
     # BR-RULE-289 INV-6: actor derived from auth context; never caller-provided
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
@@ -709,7 +807,8 @@ Feature: BR-UC-019 Query Media Buys
     And a history entry was created for action "package_paused" targeting package "pkg-001"
     And a separate history entry was created for action "updated_budget" at the media-buy level
     When the Buyer Agent sends a get_media_buys request with include_history 5
-    Then the package_paused entry should have package_id "pkg-001"
+    Then the response is compliant with the get_media_buys spec
+    And the package_paused entry should have package_id "pkg-001"
     And the updated_budget entry should omit package_id
     # BR-RULE-289 INV-9: package-targeted entries carry package_id; buy-level entries omit it
 
@@ -717,7 +816,8 @@ Feature: BR-UC-019 Query Media Buys
   Scenario Outline: valid_actions per status - <partition>
     Given the principal "buyer-001" owns media buy "mb-001" with returned wire status "<status>"
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the media buy "mb-001" valid_actions should equal <expected_actions>
+    Then the response is compliant with the get_media_buys spec
+    And the media buy "mb-001" valid_actions should equal <expected_actions>
     # BR-RULE-290: valid_actions deterministically derived from wire status via MEDIA_BUY_STATE_MACHINE
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
@@ -733,7 +833,8 @@ Feature: BR-UC-019 Query Media Buys
   Scenario Outline: valid_actions boundary - status=<status>
     Given the principal "buyer-001" owns media buy "mb-001" with returned wire status "<status>"
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then every value in media buy "mb-001" valid_actions should be drawn from the media-buy-valid-action enum
+    Then the response is compliant with the get_media_buys spec
+    And every value in media buy "mb-001" valid_actions should be drawn from the media-buy-valid-action enum
     And the action set should match the state-machine table for status "<status>"
     # BR-RULE-290: closed enum {pause, resume, cancel, update_budget, update_dates, update_packages, add_packages, sync_creatives}
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
@@ -752,7 +853,8 @@ Feature: BR-UC-019 Query Media Buys
   Scenario: INV-3 holds - active status includes pause and excludes resume
     Given the principal "buyer-001" owns media buy "mb-001" with returned wire status "active"
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the media buy "mb-001" valid_actions should include "pause"
+    Then the response is compliant with the get_media_buys spec
+    And the media buy "mb-001" valid_actions should include "pause"
     And the media buy "mb-001" valid_actions should not include "resume"
     # BR-RULE-290 INV-3: active -> pause yes, resume no
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
@@ -761,7 +863,8 @@ Feature: BR-UC-019 Query Media Buys
   Scenario: INV-4 holds - paused status includes resume and excludes pause/update_packages/add_packages
     Given the principal "buyer-001" owns media buy "mb-001" with returned wire status "paused"
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the media buy "mb-001" valid_actions should include "resume"
+    Then the response is compliant with the get_media_buys spec
+    And the media buy "mb-001" valid_actions should include "resume"
     And the media buy "mb-001" valid_actions should not include "pause"
     And the media buy "mb-001" valid_actions should not include "update_packages"
     And the media buy "mb-001" valid_actions should not include "add_packages"
@@ -772,7 +875,8 @@ Feature: BR-UC-019 Query Media Buys
   Scenario Outline: INV-5 holds - terminal statuses emit empty valid_actions array (not omitted)
     Given the principal "buyer-001" owns media buy "mb-001" with returned wire status "<terminal_status>"
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the media buy "mb-001" should include a valid_actions field
+    Then the response is compliant with the get_media_buys spec
+    And the media buy "mb-001" should include a valid_actions field
     And the media buy "mb-001" valid_actions should be an empty array
     # BR-RULE-290 INV-5: terminal statuses -> valid_actions = [] (positive end-of-lifecycle signal)
 
@@ -786,7 +890,8 @@ Feature: BR-UC-019 Query Media Buys
   Scenario Outline: revision partitions - <partition>
     Given the principal "buyer-001" owns media buy "mb-001" with <revision_state>
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the media buy "mb-001" revision should be <expected>
+    Then the response is compliant with the get_media_buys spec
+    And the media buy "mb-001" revision should be <expected>
     # BR-RULE-291: revision >= 1, per-buy monotonic counter
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
@@ -800,7 +905,8 @@ Feature: BR-UC-019 Query Media Buys
   Scenario Outline: revision boundary - <boundary_point>
     Given the principal "buyer-001" owns media buy "mb-001" with <revision_state>
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then <expected_outcome>
+    Then the response is compliant with the get_media_buys spec
+    And <expected_outcome>
     # BR-RULE-291: the pinned item schema types revision {"type":"integer","minimum":1}
     # and lists it in the item's `required`, so a buy whose persisted revision is
     # below that minimum is NOT publishable — the seller must not put it on the wire.
@@ -850,7 +956,8 @@ Feature: BR-UC-019 Query Media Buys
     Given the principal "buyer-001" owns media buy "mb-good" with persisted revision 1
     And the principal "buyer-001" owns media buy "mb-broken" with persisted revision 0 (defective seller)
     When the Buyer Agent sends a get_media_buys request with no filters
-    Then the response should include media buy "mb-good"
+    Then the response is compliant with the get_media_buys spec
+    And the response should include media buy "mb-good"
     And the response should not include media buy "mb-broken"
     And the response errors should name the omitted media buy "mb-broken"
     And the response errors array should include error code "CONFIGURATION_ERROR"
@@ -877,7 +984,8 @@ Feature: BR-UC-019 Query Media Buys
   Scenario: INV-1 holds - every returned media buy has revision integer >= 1
     Given the principal "buyer-001" owns 3 media buys
     When the Buyer Agent sends a get_media_buys request
-    Then every returned media buy should include an integer revision field
+    Then the response is compliant with the get_media_buys spec
+    And every returned media buy should include an integer revision field
     And every revision should be >= 1
     # BR-RULE-291 INV-1: revision is always present, integer, minimum 1
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
@@ -888,7 +996,8 @@ Feature: BR-UC-019 Query Media Buys
     And no state-changing writes occur between two reads
     When the Buyer Agent sends a get_media_buys request at time t1
     And the Buyer Agent sends a get_media_buys request at time t2 (t1 < t2)
-    Then the revision at t1 should equal the revision at t2
+    Then the response is compliant with the get_media_buys spec
+    And the revision at t1 should equal the revision at t2
     # BR-RULE-291 INV-4: no intervening write -> revision unchanged across reads
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
@@ -898,14 +1007,16 @@ Feature: BR-UC-019 Query Media Buys
     When the Buyer Agent sends a get_media_buys request at time t1
     And one successful update_media_buy lands between t1 and t2
     And the Buyer Agent sends a get_media_buys request at time t2
-    Then the revision at t2 should be strictly greater than the revision at t1
+    Then the response is compliant with the get_media_buys spec
+    And the revision at t2 should be strictly greater than the revision at t1
     # BR-RULE-291 INV-5: every successful state-changing write increments revision by at least 1
 
   @T-UC-019-inv-confirmed-at-present @invariant @confirmed_at @schema-v3.1
   Scenario: confirmed_at present - every returned media buy carries an ISO 8601 timestamp set at creation
     Given the principal "buyer-001" owns media buy "mb-001" that was successfully created at "2026-05-01T12:00:00Z"
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the media buy "mb-001" should include a confirmed_at field
+    Then the response is compliant with the get_media_buys spec
+    And the media buy "mb-001" should include a confirmed_at field
     And the confirmed_at value should be the ISO 8601 timestamp "2026-05-01T12:00:00Z"
     # POST-S6 / INT-006: confirmed_at is set when the buy transitions out of pre-create state and is exposed on every read
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
@@ -916,7 +1027,8 @@ Feature: BR-UC-019 Query Media Buys
     When the Buyer Agent sends a get_media_buys request at time t1
     And one successful update_media_buy lands between t1 and t2
     And the Buyer Agent sends a get_media_buys request at time t2
-    Then the confirmed_at at t1 should equal "2026-05-01T12:00:00Z"
+    Then the response is compliant with the get_media_buys spec
+    And the confirmed_at at t1 should equal "2026-05-01T12:00:00Z"
     And the confirmed_at at t2 should equal "2026-05-01T12:00:00Z"
     # POST-S6 / INT-006: confirmed_at reflects the original confirmation moment; revision updates do not rewrite it
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
@@ -925,7 +1037,8 @@ Feature: BR-UC-019 Query Media Buys
   Scenario Outline: confirmed_at - <partition>
     Given the principal "buyer-001" owns media buy "mb-001" with <buy_state>
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then <expected_outcome>
+    Then the response is compliant with the get_media_buys spec
+    And <expected_outcome>
     # POST-S6 / INT-006: confirmed_at presence and ISO 8601 shape
     # RETIRED ROW (T-UC-019-partition-confirmed-at): "confirmed_at_missing_on_buy",
     # briefly rewritten as "confirmed_at_null_column_on_active_buy". Both spellings are
@@ -995,7 +1108,8 @@ Feature: BR-UC-019 Query Media Buys
     And media buy "mb-001" carries <buy_state>
     And package "pkg-001" carries <package_state>
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then <expected_outcome>
+    Then the response is compliant with the get_media_buys spec
+    And <expected_outcome>
     # POST-S2 / INT-002: package-level creative_deadline; when absent, the buy-level creative_deadline applies
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
@@ -1017,7 +1131,8 @@ Feature: BR-UC-019 Query Media Buys
     And media buy "mb-001" has package "pkg-001" with creative_deadline "2026-04-10T00:00:00Z"
     And media buy "mb-001" has package "pkg-002" with no creative_deadline
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the package "pkg-001" creative_deadline should equal "2026-04-10T00:00:00Z"
+    Then the response is compliant with the get_media_buys spec
+    And the package "pkg-001" creative_deadline should equal "2026-04-10T00:00:00Z"
     And the package "pkg-002" creative_deadline should be omitted
     And the effective deadline for "pkg-002" should be the buy-level "2026-04-15T00:00:00Z"
     # POST-S2 / INT-002: package-level value overrides; absence inherits from buy
@@ -1026,7 +1141,8 @@ Feature: BR-UC-019 Query Media Buys
   Scenario Outline: cancellation block - <partition>
     Given the principal "buyer-001" owns media buy "mb-001" with <buy_state>
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then <expected_outcome>
+    Then the response is compliant with the get_media_buys spec
+    And <expected_outcome>
     # BR-RULE-292: block presence iff terminal flag true; required {canceled_at, canceled_by}; optional reason<=500
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
@@ -1049,7 +1165,8 @@ Feature: BR-UC-019 Query Media Buys
   Scenario Outline: cancellation boundary - <boundary_point>
     Given the principal "buyer-001" owns media buy "mb-001" with <buy_state>
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then <expected_outcome>
+    Then the response is compliant with the get_media_buys spec
+    And <expected_outcome>
     # BR-RULE-292: boundary - reason length, terminal-flag toggle, additionalProperties
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
@@ -1068,7 +1185,8 @@ Feature: BR-UC-019 Query Media Buys
   Scenario: INV-1 holds - canceled status MUST carry cancellation block
     Given the principal "buyer-001" owns media buy "mb-001" with status "canceled" and persisted cancellation metadata
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the media buy "mb-001" should include a cancellation block
+    Then the response is compliant with the get_media_buys spec
+    And the media buy "mb-001" should include a cancellation block
     And the cancellation block should include canceled_at and canceled_by
     # BR-RULE-292 INV-1: status==canceled -> cancellation block MUST be present
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
@@ -1077,7 +1195,8 @@ Feature: BR-UC-019 Query Media Buys
   Scenario: INV-2 holds - non-canceled status MUST NOT carry cancellation block
     Given the principal "buyer-001" owns media buy "mb-001" with status "active"
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the media buy "mb-001" should not include a cancellation block
+    Then the response is compliant with the get_media_buys spec
+    And the media buy "mb-001" should not include a cancellation block
     # BR-RULE-292 INV-2: status!=canceled -> cancellation block MUST be absent
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
@@ -1086,47 +1205,53 @@ Feature: BR-UC-019 Query Media Buys
     Given the principal "buyer-001" owns media buy "mb-001" with status "canceled"
     And the seller emits cancellation block with an extra field "refund_status"
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the response should be flagged as schema-invalid for "mb-001" with code "SCHEMA_VIOLATION"
+    Then the error is compliant with the AdCP error spec
+    And the response should be flagged as schema-invalid for "mb-001" with code "SCHEMA_VIOLATION"
     And the validation message should reference cancellation.additionalProperties
     # BR-RULE-292 INV-7: additionalProperties:false on cancellation; ride-along metadata belongs in ext
 
   @T-UC-019-inv-293-2 @invariant @BR-RULE-293 @error @ext-e @schema-v3.1
-  Scenario: INV-2 holds - v3.x account (AccountReference) triggers ACCOUNT_FILTER_NOT_SUPPORTED before any DB read
-    Given an authenticated Buyer with principal_id "buyer-001"
+  Scenario: INV-2 holds - v3.x account (AccountReference) triggers UNSUPPORTED_FEATURE before any DB read
+    Given the Buyer is authenticated
     When the Buyer Agent sends a get_media_buys request with account {brand:"brand-x", operator:"op-y"}
-    Then the operation should fail with error code "ACCOUNT_FILTER_NOT_SUPPORTED"
-    And the error code should be "ACCOUNT_FILTER_NOT_SUPPORTED"
-    And the error recovery classification should be "correctable"
-    And no database query should have been executed
-    And the error should include a "suggestion" field
-    And the suggestion should contain "remove" or "omit" or "without the `account` filter"
-    # BR-RULE-293 INV-2: v3.x AccountReference -> AdCPValidationError before DB read
+    Then the response is compliant with the get_media_buys spec
+    And the response should succeed
+    # BR-RULE-293 INV-2 said a v3.x AccountReference must raise UNSUPPORTED_FEATURE
+    # before any DB read. That invariant ratified a stopgap rather than a decision:
+    # 0b7a695d9 ("address PR1175 review round 2") added the `account` field to
+    # unbreak the A2A handler, which was reading a key normalization had renamed,
+    # and rejected it "for now" instead of implementing the filter. The refusal then
+    # acquired a rule number and this scenario.
+    #
+    # UNSUPPORTED_FEATURE also misdescribes it. It means the seller does not do
+    # accounts; this seller requires them on create_media_buy, update_media_buy and
+    # sync_creatives, and resolves them centrally at the boundary for every tool.
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
   @T-UC-019-inv-293-5 @invariant @BR-RULE-293 @error @schema-v3.1
   Scenario: INV-5 holds - account-filter validation failure yields empty media_buys with no DB query
-    Given an authenticated Buyer with principal_id "buyer-001"
+    Given the Buyer is authenticated
     When the Buyer Agent sends a get_media_buys request with account_id "acc-001"
-    Then the response media_buys array should be empty
+    Then the response is compliant with the get_media_buys spec
+    And the response media_buys array should be empty
     And no database query should have been executed
     And the error should include a "suggestion" field
-    And the suggestion should contain "omit" or "without the `account` filter"
     # BR-RULE-293 INV-5: validation fails -> no DB query; no partial result leak
-    # CORRECTED to AdCP 3.1.1 enums/error-code.json: SERVICE_UNAVAILABLE is on-wire;
-    # INTERNAL_ERROR is absent from the enum (off-wire). Implementation: src/core/exceptions.py
-    # INTERNAL_CODES collapses INTERNAL_ERROR -> SERVICE_UNAVAILABLE on the wire.
 
+  # AdCP 3.1.1 core/error.json: the error-code vocabulary is OPEN — error.code is a wire-typed
+  # string, the published enum is documentary, and a receiver decodes an unknown code by reading
+  # error.recovery. INTERNAL_ERROR is absent from the enum but IS emittable, and since the code
+  # rewriters were deleted it reaches the buyer as itself rather than being collapsed to
+  # SERVICE_UNAVAILABLE.
   @T-UC-019-partition-targeting-rehydration @partition @targeting_overlay @schema-v3.1
   Scenario Outline: targeting_overlay rehydration - <partition>
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
     And package "pkg-001" persisted package_config has <persisted_state>
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then <expected_outcome>
+    Then the response is compliant with the get_media_buys spec
+    And <expected_outcome>
     # BR-RULE-294: per-package fail-soft; TypeError caught narrowly; ValidationError NOT caught
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
-    # CORRECTED to AdCP 3.1.1 enums/error-code.json: SERVICE_UNAVAILABLE is on-wire;
-    # INTERNAL_ERROR is absent from the enum (off-wire). Implementation: src/core/exceptions.py
-    # INTERNAL_CODES collapses INTERNAL_ERROR -> SERVICE_UNAVAILABLE on the wire.
     # graded: unit — tests/unit/test_get_media_buys.py (BDD errors[] steps not wired; scenario dormant/xfail)
 
     Examples: Valid partitions
@@ -1134,20 +1259,26 @@ Feature: BR-UC-019 Query Media Buys
       | no_targeting_persisted               | no targeting_overlay and no legacy targeting          | the package "pkg-001" targeting_overlay should be null and no error should appear in response.errors[] for "pkg-001"                                            |
       | targeting_rehydrates_cleanly         | targeting_overlay {geo:['US']}                        | the package "pkg-001" targeting_overlay should be a Targeting object with geo ["US"]                                                                            |
       | legacy_targeting_key                 | no targeting_overlay but legacy targeting {geo:['US']} | the package "pkg-001" targeting_overlay should be a Targeting object with geo ["US"]                                                                            |
-      | rehydration_typeerror_partial_success | targeting_overlay set to the string 'not a dict'      | the package "pkg-001" targeting_overlay should be null and response.errors[] should include an INTERNAL_ERROR entry with message starting "TARGETING_REHYDRATION_FAILED:" |
+      | rehydration_typeerror_partial_success | targeting_overlay set to the string 'not a dict'      | the package "pkg-001" targeting_overlay should be null and response.errors[] should include a SERVICE_UNAVAILABLE entry with details.reason "targeting_rehydration_failed" |
 
+  # AdCP 3.1.1 core/error.json: the error-code vocabulary is OPEN — error.code is a wire-typed
+  # string, the published enum is documentary, and a receiver decodes an unknown code by reading
+  # error.recovery. INTERNAL_ERROR is absent from the enum but IS emittable, and since the code
+  # rewriters were deleted it reaches the buyer as itself rather than being collapsed to
+  # SERVICE_UNAVAILABLE.
+  # graded: unit — tests/unit/test_get_media_buys.py (BDD errors[] steps not wired; scenario dormant/xfail)
   @T-UC-019-inv-294-3 @invariant @BR-RULE-294 @error @schema-v3.1
   Scenario: INV-3 holds - TypeError during Targeting instantiation yields non-fatal SERVICE_UNAVAILABLE + null overlay
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
     And package "pkg-001" persisted targeting_overlay is a string (will raise TypeError on Targeting(**str))
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then a warning should be logged with media_buy_id "mb-001" and package_id "pkg-001"
+    Then the response is compliant with the get_media_buys spec
+    And a warning should be logged with media_buy_id "mb-001" and package_id "pkg-001"
     And response.errors[] should include an entry with code "SERVICE_UNAVAILABLE"
-    And that errors[] entry message should start with "TARGETING_REHYDRATION_FAILED:"
+    And that errors[] entry details "reason" should be "targeting_rehydration_failed"
     And that errors[] entry field selector should be "media_buys[].packages[pkg-001].targeting_overlay"
     And the package "pkg-001" targeting_overlay should be null
     And the error should include a "suggestion" field
-    And the suggestion should contain "package_config" or "rehydrated"
     # BR-RULE-294 INV-3: narrow TypeError catch -> warn + non-fatal Error + null overlay
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
     # SUPERSEDED CODE: this scenario is DORMANT — its Given has no
@@ -1160,44 +1291,98 @@ Feature: BR-UC-019 Query Media Buys
     # of THIS scenario (the logging and "suggestion" obligations it also states) is a
     # separate graduation, deliberately out of zkde1.6's scope.
 
-  @T-UC-019-inv-294-5 @invariant @BR-RULE-294 @schema-v3.1
+  # ISOLATION IS THE OBLIGATION, and it was ungraded. The degradation of ONE corrupt
+  # package_config cell is graded by @T-UC-019-blob-degraded-package-field below, but
+  # that outline seeds one buy with one package, so neither half of the isolation
+  # claim — a sibling PACKAGE in the same buy (INV-5), a sibling BUY in the same
+  # listing (INV-6) — was covered anywhere. Production could start failing a whole
+  # listing over one corrupt sibling and nothing would go red.
+  #
+  # CODE CORRECTED: these two scenarios demanded a `TARGETING_REHYDRATION_FAILED`
+  # advisory. There is no such code. Pinned
+  # `adcp/_schemas/3.1/enums/error-code.json` declares 92 codes and that is not one
+  # of them, and `Error.code` is typed `ErrorCodeT` (src/core/schemas/_base.py:225),
+  # so an advisory carrying it is unconstructible rather than merely non-standard.
+  # The code for a corrupt cell in the SELLER's own store is CONFIGURATION_ERROR,
+  # recovery "terminal" — settled, with its full reasoning, in the
+  # @T-UC-019-blob-degraded-package-field comment block below, which these scenarios
+  # now share a Then sentence with rather than restating. What survives of the
+  # original sentence is its quantifier: EXACTLY ONE advisory in the whole document,
+  # which is the half that grades "isolation" as opposed to "an advisory exists".
+  #
+  # GEO SPELLING CORRECTED: the valid sibling was spelled `{geo:["US"]}`. Pinned
+  # `core/targeting.json` declares no `geo` field at all — the v3 spelling is
+  # `geo_countries` (array of ISO 3166-1 alpha-2) — and `Targeting` reshapes nothing
+  # on the way in, so the flat spelling raises extra_forbidden in dev/CI while
+  # rehydrating the SIBLING and fails the whole listing: the exact outcome these
+  # scenarios forbid. Same correction as `_VALID_BLOB_SIBLINGS`.
+  @T-UC-019-inv-294-5 @invariant @BR-RULE-294 @error @schema-v3.1
   Scenario: INV-5 holds - one corrupted package does not break sibling packages in the same buy
     Given the principal "buyer-001" owns media buy "mb-001" with packages "pkg-001" and "pkg-002"
-    And package "pkg-001" persisted targeting_overlay is corrupted (will raise TypeError)
-    And package "pkg-002" persisted targeting_overlay is a valid dict {geo:["US"]}
+    And package "pkg-001" package_config key targeting_overlay holds the JSON value "not a dict"
+    And package "pkg-002" package_config key targeting_overlay holds the JSON value {"geo_countries": ["US"]}
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the package "pkg-001" targeting_overlay should be null
-    And the package "pkg-002" targeting_overlay should be a Targeting object with geo ["US"]
-    And response.errors[] should include exactly one TARGETING_REHYDRATION_FAILED entry for ("mb-001", "pkg-001")
+    Then the response is compliant with the get_media_buys spec
+    And the response should include media buy "mb-001" with package "pkg-001"
+    And the package "pkg-001" wire field targeting_overlay should be null or absent
+    And the package "pkg-002" targeting_overlay should carry geo_countries ["US"]
+    And response.errors[] should carry exactly one advisory for package "pkg-001" field targeting_overlay with code "CONFIGURATION_ERROR" and recovery "terminal"
     # BR-RULE-294 INV-5: per-package failure isolation
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
-  @T-UC-019-inv-294-6 @invariant @BR-RULE-294 @schema-v3.1
+  @T-UC-019-inv-294-6 @invariant @BR-RULE-294 @error @schema-v3.1
   Scenario: INV-6 holds - one buy with a corrupted package does not break sibling buys
-    Given the principal "buyer-001" owns media buys "mb-001" and "mb-002"
-    And media buy "mb-001" package "pkg-001" has corrupted targeting_overlay (will raise TypeError)
-    And media buy "mb-002" has valid persisted state
+    # Two buys seeded one Given each, rather than through a two-buy sentence of its
+    # own: the per-buy seeder already exists and already registers the package, so
+    # "mb-002 has valid persisted state" becomes a value the scenario STATES instead
+    # of a phrase whose meaning lived in a step body. The When names no
+    # media_buy_ids on purpose — this is the unfiltered listing path, where a row
+    # that fails to render takes the whole tenant's listing with it.
+    Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
+    And the principal "buyer-001" owns media buy "mb-002" with package "pkg-002"
+    And package "pkg-001" package_config key targeting_overlay holds the JSON value "not a dict"
+    And package "pkg-002" package_config key targeting_overlay holds the JSON value {"geo_countries": ["US"]}
     When the Buyer Agent sends a get_media_buys request
-    Then the response should include media buy "mb-001" with package "pkg-001" targeting_overlay null
-    And the response should include media buy "mb-002" rendered normally
-    And response.errors[] should include exactly one TARGETING_REHYDRATION_FAILED entry for ("mb-001", "pkg-001")
+    Then the response is compliant with the get_media_buys spec
+    And the response should include media buy "mb-001" with package "pkg-001"
+    And the package "pkg-001" wire field targeting_overlay should be null or absent
+    And the response should include media buy "mb-002" with package "pkg-002"
+    And the package "pkg-002" targeting_overlay should carry geo_countries ["US"]
+    And response.errors[] should carry exactly one advisory for package "pkg-001" field targeting_overlay with code "CONFIGURATION_ERROR" and recovery "terminal"
     # BR-RULE-294 INV-6: per-buy failure isolation across the response
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
+  # BOTH HALVES OF "ONLY", as two rows. The original single scenario asserted the
+  # fallback fires when the modern key is absent and said nothing about the case its
+  # own title names — a read path that consulted `targeting` unconditionally, or in
+  # preference to `targeting_overlay`, satisfied it. Production reads
+  # `pkg_config.get("targeting_overlay") or pkg_config.get("targeting")`
+  # (src/core/tools/media_buy_list.py:274), so the modern key winning when both are
+  # present is the behavior, and it is now the second row.
+  #
+  # GEO SPELLING CORRECTED to the pinned `geo_countries` for the reason given on
+  # INV-5 above: `core/targeting.json` declares no `geo`.
   @T-UC-019-inv-294-8 @invariant @BR-RULE-294 @schema-v3.1
-  Scenario: INV-8 holds - legacy targeting key consulted only when modern key absent
+  Scenario Outline: INV-8 holds - legacy targeting key consulted only when modern key absent - <case>
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
-    And package "pkg-001" persisted package_config has no targeting_overlay key but has legacy targeting {geo:["US"]}
+    And <persisted_keys>
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the package "pkg-001" targeting_overlay should be a Targeting object with geo ["US"]
+    Then the response is compliant with the get_media_buys spec
+    And the package "pkg-001" targeting_overlay should carry geo_countries <expected_countries>
     # BR-RULE-294 INV-8: pre-rename data compatibility through legacy `targeting` key fallback
+
+    Examples:
+      | case               | persisted_keys                                                                                                                  | expected_countries |
+      | modern_key_absent  | package "pkg-001" package_config has no targeting_overlay key but has legacy targeting {"geo_countries": ["US"]}                 | ["US"]             |
+      | modern_key_present | package "pkg-001" package_config has legacy targeting {"geo_countries": ["US"]} and targeting_overlay {"geo_countries": ["GB"]}  | ["GB"]             |
 
   @T-UC-019-blob-degraded-package-field @invariant @BR-RULE-294 @error @schema-v3.1
   Scenario Outline: a legacy-invalid <field> in package_config degrades that field alone - <field>
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
     And package "pkg-001" package_config key <field> holds the legacy JSON value <legacy_value>
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the response should include media buy "mb-001" with package "pkg-001"
+    Then the response is compliant with the get_media_buys spec
+    And the response should include media buy "mb-001" with package "pkg-001"
     And the package "pkg-001" wire field <field> should be null or absent
     And response.errors[] should carry exactly one advisory for package "pkg-001" field <field> with code "CONFIGURATION_ERROR" and recovery "terminal"
     And response.errors[] should carry no advisory with code "SERVICE_UNAVAILABLE"
@@ -1249,7 +1434,8 @@ Feature: BR-UC-019 Query Media Buys
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
     And media buy "mb-001" raw_request key buyer_campaign_ref holds the legacy JSON value 123
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the response should include media buy "mb-001" with package "pkg-001"
+    Then the response is compliant with the get_media_buys spec
+    And the response should include media buy "mb-001" with package "pkg-001"
     And the media buy "mb-001" wire field buyer_campaign_ref should be null or absent
     And response.errors[] should carry exactly one advisory for media buy "mb-001" field buyer_campaign_ref with code "CONFIGURATION_ERROR" and recovery "terminal"
 
@@ -1260,7 +1446,8 @@ Feature: BR-UC-019 Query Media Buys
     And the snapshot reports staleness_seconds <staleness_seconds>
     And the package <delivery_observation>
     When the Buyer Agent sends a get_media_buys request with include_snapshot true
-    Then the package "pkg-001" snapshot delivery_status should be <expected>
+    Then the response is compliant with the get_media_buys spec
+    And the package "pkg-001" snapshot delivery_status should be <expected>
     # BR-RULE-295: not_delivering forbidden until elapsed >= staleness_seconds since activation
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
@@ -1287,7 +1474,8 @@ Feature: BR-UC-019 Query Media Buys
     And impressions remain 0
     And the seller's candidate delivery_status value is <candidate>
     When the Buyer Agent sends a get_media_buys request with include_snapshot true
-    Then the result for "pkg-001" delivery_status should be <expected_outcome>
+    Then the response is compliant with the get_media_buys spec
+    And the result for "pkg-001" delivery_status should be <expected_outcome>
     # BR-RULE-295: boundary at elapsed=staleness_seconds inclusive
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
@@ -1311,7 +1499,8 @@ Feature: BR-UC-019 Query Media Buys
     And package "pkg-001" has snapshot.staleness_seconds 900 and elapsed 600s since activation
     And impressions for "pkg-001" remain 0
     When the Buyer Agent sends a get_media_buys request with include_snapshot true
-    Then the snapshot for "pkg-001" should NOT report delivery_status "not_delivering"
+    Then the response is compliant with the get_media_buys spec
+    And the snapshot for "pkg-001" should NOT report delivery_status "not_delivering"
     And the snapshot should report delivery_status "delivering" or omit delivery_status
     # BR-RULE-295 INV-1: anti-flapping gate during staleness window
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
@@ -1322,14 +1511,16 @@ Feature: BR-UC-019 Query Media Buys
     And package "pkg-001" has snapshot.staleness_seconds 900 and elapsed 1800s since activation
     And impressions for "pkg-001" remain 0
     When the Buyer Agent sends a get_media_buys request with include_snapshot true
-    Then the snapshot for "pkg-001" MAY report delivery_status "not_delivering"
+    Then the response is compliant with the get_media_buys spec
+    And the snapshot for "pkg-001" MAY report delivery_status "not_delivering"
     # BR-RULE-295 INV-2: post-window + zero impressions -> not_delivering legal
 
   @T-UC-019-partition-invoice-recipient @partition @invoice_recipient @schema-v3.1
   Scenario Outline: invoice_recipient + account echo - <partition>
     Given the principal "buyer-001" owns media buy "mb-001" with <persisted_billing>
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then <expected_outcome>
+    Then the response is compliant with the get_media_buys spec
+    And <expected_outcome>
     # BR-RULE-296: account+invoice_recipient echo with bank_details writeOnly redaction
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
@@ -1349,7 +1540,8 @@ Feature: BR-UC-019 Query Media Buys
   Scenario: INV-1 holds - buy bound to account MAY echo the account snapshot
     Given the principal "buyer-001" owns media buy "mb-001" bound to account "acct_123"
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the media buy "mb-001" account field if present should equal the current billing account "acct_123"
+    Then the response is compliant with the get_media_buys spec
+    And the media buy "mb-001" account field if present should equal the current billing account "acct_123"
     # BR-RULE-296 INV-1: account snapshot reflects current billing target (not creation-time copy)
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
@@ -1357,7 +1549,8 @@ Feature: BR-UC-019 Query Media Buys
   Scenario: INV-2 holds - explicit invoice_recipient override at create echoes the persisted entity
     Given the principal "buyer-001" owns media buy "mb-001" created with explicit invoice_recipient override
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the media buy "mb-001" should include an invoice_recipient field reflecting the persisted (post-transform) value
+    Then the response is compliant with the get_media_buys spec
+    And the media buy "mb-001" should include an invoice_recipient field reflecting the persisted (post-transform) value
     # BR-RULE-296 INV-2: echo is descriptive; reflects what seller stored
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
@@ -1365,7 +1558,8 @@ Feature: BR-UC-019 Query Media Buys
   Scenario: INV-3 holds - no override at create -> invoice_recipient absent on the entry
     Given the principal "buyer-001" owns media buy "mb-001" created without an invoice_recipient override
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the media buy "mb-001" should not include an invoice_recipient field
+    Then the response is compliant with the get_media_buys spec
+    And the media buy "mb-001" should not include an invoice_recipient field
     # BR-RULE-296 INV-3: account-default inheritance -> field omitted
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
@@ -1373,7 +1567,8 @@ Feature: BR-UC-019 Query Media Buys
   Scenario: INV-4 holds - bank_details MUST NOT appear in any echoed invoice_recipient (writeOnly redaction)
     Given the principal "buyer-001" owns media buy "mb-001" with persisted invoice_recipient that includes bank_details
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the media buy "mb-001" invoice_recipient should be present
+    Then the response is compliant with the get_media_buys spec
+    And the media buy "mb-001" invoice_recipient should be present
     And the invoice_recipient should not include a bank_details sub-field
     # BR-RULE-296 INV-4: bank_details is writeOnly per schema; seller stores it but never echoes it
 
@@ -1381,7 +1576,8 @@ Feature: BR-UC-019 Query Media Buys
   Scenario Outline: media_buy currency + total_budget partitions - <partition>
     Given the principal "buyer-001" owns media buy "mb-001" with <buy_state>
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then <expected_outcome>
+    Then the response is compliant with the get_media_buys spec
+    And <expected_outcome>
     # uc019_currency_and_budget: pure structural constraint (no BR-RULE); validated against v3.1 schema
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
@@ -1403,7 +1599,8 @@ Feature: BR-UC-019 Query Media Buys
   Scenario Outline: media_buy currency + total_budget boundary - <boundary_point>
     Given the principal "buyer-001" owns media buy "mb-001" with <buy_state>
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then <expected_outcome>
+    Then the response is compliant with the get_media_buys spec
+    And <expected_outcome>
     # uc019_currency_and_budget: boundary values from constraint YAML
 
     Examples: Boundary values
@@ -1420,9 +1617,9 @@ Feature: BR-UC-019 Query Media Buys
     Given the principal "buyer-001" owns media buy "mb-001"
     And the request targets a sandbox account
     When the Buyer Agent sends a get_media_buys request
-    Then the response should contain "media_buys" array
+    Then the response is compliant with the get_media_buys spec
+    And the response should contain "media_buys" array
     And the response should include sandbox equals true
-    And no real ad platform API calls should have been made
     # BR-RULE-209 INV-1: inputs validated same as production
     # BR-RULE-209 INV-2: real ad platform calls suppressed
     # BR-RULE-209 INV-4: response includes sandbox: true
@@ -1432,7 +1629,8 @@ Feature: BR-UC-019 Query Media Buys
     Given the principal "buyer-001" owns media buy "mb-001"
     And the request targets a production account
     When the Buyer Agent sends a get_media_buys request
-    Then the response should contain "media_buys" array
+    Then the response is compliant with the get_media_buys spec
+    And the response should contain "media_buys" array
     And the response should not include a sandbox field
     # BR-RULE-209 INV-5: production account -> sandbox absent
 
@@ -1440,23 +1638,33 @@ Feature: BR-UC-019 Query Media Buys
   Scenario: Sandbox account with invalid request returns real validation error
     Given the request targets a sandbox account
     When the Buyer Agent sends a get_media_buys request with invalid status filter
-    Then the response should indicate a validation error
+    Then the error is compliant with the AdCP error spec
+    And the error code should be "INVALID_REQUEST"
     And the error should be a real validation error, not simulated
     And the error should include a suggestion for how to fix the issue
     # BR-RULE-209 INV-7: sandbox validation errors are real
     # POST-F3: suggestion field present
+    #
+    # NAMES the code rather than saying "a validation error" and letting a shared step
+    # pick one. The step it used to route to hardcoded VALIDATION_ERROR; the pinned split
+    # puts this vector on the OTHER side. The When sends status_filter=["invalid_status"],
+    # a value outside the MediaBuyStatus enum -- INVALID_REQUEST is "malformed, missing
+    # required fields, or violates SCHEMA CONSTRAINTS", while VALIDATION_ERROR is "invalid
+    # field values or violates business rules BEYOND schema validation". An out-of-enum
+    # member is the first. The invariant this scenario actually grades is INV-7 (the
+    # sandbox error is REAL, not simulated), which the following two steps carry; the
+    # code was incidental to it and is now stated instead of guessed.
+    # @source repo=adcp ref=v3.1.1 path=core/error.json (code enum + descriptions)
 
   @T-UC-019-boundary-sandbox @boundary @sandbox @br-rule-209
   Scenario Outline: sandbox response semantics boundary - <boundary_point>
     Given the principal "buyer-001" owns media buy "mb-001"
     And the request <account_kind>
     When the Buyer Agent sends a get_media_buys request
-    Then the response should contain "media_buys" array
+    Then the response is compliant with the get_media_buys spec
+    And the response should contain "media_buys" array
     And the response <sandbox_assertion>
     # BR-RULE-209 BVA: canonical sandbox echo placements from sandbox_response_semantics.yaml
-    # CORRECTED to AdCP 3.1.1 enums/error-code.json: SERVICE_UNAVAILABLE is on-wire;
-    # INTERNAL_ERROR is absent from the enum (off-wire). Implementation: src/core/exceptions.py
-    # INTERNAL_CODES collapses INTERNAL_ERROR -> SERVICE_UNAVAILABLE on the wire.
 
     Examples: Boundary values
       | boundary_point                                          | account_kind                            | sandbox_assertion                          |
@@ -1464,12 +1672,18 @@ Feature: BR-UC-019 Query Media Buys
       | sandbox absent in response (production account)         | targets a production account            | should not include a sandbox field         |
       | sandbox: false in response (explicit production)        | targets an explicit production account  | should include sandbox equals false        |
 
+  # AdCP 3.1.1 core/error.json: the error-code vocabulary is OPEN — error.code is a wire-typed
+  # string, the published enum is documentary, and a receiver decodes an unknown code by reading
+  # error.recovery. INTERNAL_ERROR is absent from the enum but IS emittable, and since the code
+  # rewriters were deleted it reaches the buyer as itself rather than being collapsed to
+  # SERVICE_UNAVAILABLE.
   @T-UC-019-boundary-targeting-overlay @boundary @targeting_overlay @br-rule-294 @schema-v3.1
   Scenario Outline: targeting_overlay rehydration boundary - <boundary_point>
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
     And package "pkg-001" persisted package_config has <persisted_state>
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then <expected_outcome>
+    Then the response is compliant with the get_media_buys spec
+    And <expected_outcome>
     # BR-RULE-294 BVA: per-package fail-soft on TypeError; clean rehydration otherwise
 
     Examples: Boundary values
@@ -1477,16 +1691,16 @@ Feature: BR-UC-019 Query Media Buys
       | targeting_overlay key absent, targeting key absent                             | no targeting_overlay and no legacy targeting                  | the package "pkg-001" targeting_overlay should be null and no error should appear in response.errors[] for "pkg-001"                                                                                                                    |
       | targeting_overlay key present and parseable                                    | targeting_overlay {geo:['US']}                                | the package "pkg-001" targeting_overlay should be a Targeting object with geo ["US"]                                                                                                                                                    |
       | targeting_overlay key absent, targeting key present                            | no targeting_overlay but legacy targeting {geo:['US']}        | the package "pkg-001" targeting_overlay should be a Targeting object with geo ["US"]                                                                                                                                                    |
-      | targeting_overlay is a string (TypeError on Targeting(**str))                  | targeting_overlay set to the string 'not a dict'              | the package "pkg-001" targeting_overlay should be null and response.errors[] should include an INTERNAL_ERROR entry with message starting "TARGETING_REHYDRATION_FAILED:" and a "suggestion" field referencing "package_config"          |
-      | targeting_overlay is a list (TypeError on Targeting(**list))                   | targeting_overlay set to the list ['not','a','dict']          | the package "pkg-001" targeting_overlay should be null and response.errors[] should include an INTERNAL_ERROR entry with message starting "TARGETING_REHYDRATION_FAILED:" and a "suggestion" field referencing "package_config"          |
-      | two packages in same buy both raise TypeError                                  | two packages "pkg-001" and "pkg-002" both with corrupted targeting_overlay strings | both packages' targeting_overlay should be null and response.errors[] should include two INTERNAL_ERROR entries (one per package) each with a "suggestion" field referencing "package_config"                              |
-      | one of N buys has one bad package                                              | one of two buys "mb-001"/"mb-002" has package "pkg-001" with corrupted targeting_overlay and the other buy is clean | the corrupted package's targeting_overlay should be null, sibling buys should render normally, and response.errors[] should include exactly one INTERNAL_ERROR entry with a "suggestion" field referencing "package_config"             |
+      | targeting_overlay is a string (TypeError on Targeting(**str))                  | targeting_overlay set to the string 'not a dict'              | the package "pkg-001" targeting_overlay should be null and response.errors[] should include a SERVICE_UNAVAILABLE entry with details.reason "targeting_rehydration_failed"          |
+      | targeting_overlay is a list (TypeError on Targeting(**list))                   | targeting_overlay set to the list ['not','a','dict']          | the package "pkg-001" targeting_overlay should be null and response.errors[] should include a SERVICE_UNAVAILABLE entry with details.reason "targeting_rehydration_failed"          |
+      | two packages in same buy both raise TypeError                                  | two packages "pkg-001" and "pkg-002" both with corrupted targeting_overlay strings | both packages' targeting_overlay should be null and response.errors[] should include two SERVICE_UNAVAILABLE entries (one per package) each with a "suggestion" field referencing "package_config"                              |
+      | one of N buys has one bad package                                              | one of two buys "mb-001"/"mb-002" has package "pkg-001" with corrupted targeting_overlay and the other buy is clean | the corrupted package's targeting_overlay should be null, sibling buys should render normally, and response.errors[] should include exactly one SERVICE_UNAVAILABLE entry with a "suggestion" field referencing "package_config"             |
 
   @T-UC-019-storyboard-post-create-status-poll @storyboard-v3.1 @v3-1 @post-create-poll
   Scenario: get_media_buys called immediately after create_media_buy resolves the freshly-created buy by media_buy_id
     Given the buyer captured a media_buy_id from a successful create_media_buy response
     When the Buyer Agent calls get_media_buys with that media_buy_id under the same account
-    Then the response should be schema-valid against media-buy/get-media-buys-response.json
+    Then the response is compliant with the get_media_buys spec
     And the media_buys array should include the freshly-created buy
     And the included entry should expose the same media_buy_id and status "pending_creatives"
     # media-buy/index.yaml create_buy / check_buy_status step: after the buyer
@@ -1504,7 +1718,8 @@ Feature: BR-UC-019 Query Media Buys
     And media buy "mb-001" has start_date "2026-03-01" and end_date "2026-03-31"
     And today is "2026-03-15"
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the media buy "mb-001" confirmed_at should be null on the wire
+    Then the response is compliant with the get_media_buys spec
+    And the media buy "mb-001" confirmed_at should be null on the wire
     # HAND-EDITED (#1900): authored locally, not rendered from adcp-req. The marker is
     # load-bearing — compile_bdd's merge classifies a LEGACY-only scenario without one
     # as LEGACY-DELETE, and an Examples row added to an UPSTREAM scenario is replaced

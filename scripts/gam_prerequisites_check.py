@@ -9,8 +9,14 @@ Returns:
     Exit code 0 if all prerequisites met, 1 otherwise
 """
 
-import os
 import sys
+from pathlib import Path
+
+from pydantic import ValidationError
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from src.core.config import load_settings  # noqa: E402
 
 
 def main():
@@ -19,9 +25,17 @@ def main():
 
     all_good = True
 
+    # The environment, read once for this script. A malformed credential is reported
+    # the way the server would report it at startup.
+    try:
+        auth = load_settings().auth
+    except ValidationError as e:
+        print(f"  Configuration is malformed:\n{e}\n")
+        return 1
+
     # Check OAuth credentials
-    client_id = os.environ.get("GAM_OAUTH_CLIENT_ID")
-    client_secret = os.environ.get("GAM_OAUTH_CLIENT_SECRET")
+    client_id = auth.gam_oauth_client_id
+    client_secret = auth.gam_oauth_client_secret
 
     if client_id:
         print("  GAM_OAUTH_CLIENT_ID is set")
@@ -36,7 +50,7 @@ def main():
         all_good = False
 
     # Check service account provisioning capability
-    gcp_project = os.environ.get("GCP_PROJECT_ID")
+    gcp_project = auth.gcp_project_id
     if gcp_project:
         print(f"  GCP_PROJECT_ID is set ({gcp_project})")
         print("     Service account auto-provisioning available")

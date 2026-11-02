@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts.audit import storyboard_spec
+from src.core.config import ToolingSettings
 
 # Ledger ids are `protocol::track::storyboard::step` (the protocol segment arrived
 # with A2A grading). Storyboard is the THIRD segment; a three-group pattern silently
@@ -117,6 +118,25 @@ def join_id(declared_id: str | None, stem: str) -> str:
 
 LEDGER = Path("tests") / "storyboard" / "known_failures.txt"
 
+
+def ledger_path(repo: Path) -> Path:
+    """The ledger file to load, under ``repo``; ``STORYBOARD_LEDGER_PATH`` redirects it.
+
+    ONE resolver, because two things read the ledger and must read the same one: the
+    xfail routing in ``tests/storyboard/conftest.py`` and the in-session stale-entry
+    join in ``tests/storyboard/test_storyboard_conformance.py``. Resolved in two places,
+    a redirect reaches one of them and the join then reports staleness against a file
+    the routing never saw.
+
+    The redirect exists because the committed ledger is empty — the storyboard grades
+    every check it collects — so the only way to grade the machinery is to hand it a
+    ledger with entries in it
+    (``tests/integration/test_storyboard_ledger_fitness_real_session.py``).
+    """
+    override = ToolingSettings().storyboard_ledger_path  # STORYBOARD_LEDGER_PATH
+    return override if override else repo / LEDGER
+
+
 # The runner-level synthetic. `test_storyboard_conformance` emits this row when
 # the runner grades zero checks, so it is a real ledger key with no `check:`
 # line behind it and therefore no record in the check index. Named once, here,
@@ -125,6 +145,21 @@ LEDGER = Path("tests") / "storyboard" / "known_failures.txt"
 RUNNER_SYNTHETIC_STORYBOARD_ID = "agent_reachability"
 RUNNER_SYNTHETIC_STEP_ID = "graded_checks_produced"
 RUNNER_SYNTHETIC_KEY = (RUNNER_SYNTHETIC_STORYBOARD_ID, RUNNER_SYNTHETIC_STEP_ID)
+
+#: The other synthetic check a run can produce: the protocol graded FEWER checks than
+#: the floor this repo has recorded. ``agent_reachability`` above catches a run that
+#: graded NOTHING; this catches the one that graded less than the recorded floor, which no
+#: pytest outcome can otherwise express -- a check that regresses from pass to SKIP
+#: removes its own failing item, so the suite gets greener as the agent gets worse.
+#
+#: Deliberately NOT added to ``storyboard_check_index``'s ``known_step_keys``, unlike
+#: ``RUNNER_SYNTHETIC_KEY`` above. That exemption is what lets a row naming a synthetic
+#: live in the ledger without reading as an orphan -- and a floor breach that could be
+#: ledgered is a floor that can be switched off in one line. Leaving the key out means
+#: such a row fails the orphan join instead, so lowering the floor has to happen in
+#: ``.storyboard-pass-floor``, where the number is visible and the diff says what it was.
+PASS_FLOOR_STORYBOARD_ID = "pass_floor"
+PASS_FLOOR_STEP_ID = "floor_met"
 
 # The storyboard whose steps the runner generates from conformance fixtures
 # rather than from `check:` lines, and where those fixtures live inside the
@@ -165,9 +200,7 @@ def load(path: Path) -> list[LedgerCheckId]:
     for every ledger in the repo — and this supplies the bracket grammar.
 
     A line the grammar rejects RAISES. Dropping it instead would let a typo'd
-    entry quietly stop grading its check with nothing to notice, so the drop
-    branch is gone — and so is the paragraph that used to justify it, because
-    leaving the justification in place is how the branch comes back.
+    entry quietly stop grading its check with nothing to notice.
     """
     if not path.is_file():
         return []

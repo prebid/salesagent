@@ -36,6 +36,7 @@ class TestMockAdapterPublisherSync:
                 tenant_id="test_mock_sync",
                 name="Test Mock Sync Tenant",
                 subdomain="test-mock-sync",
+                virtual_host="test-mock-sync.adcp.test",
                 ad_server="mock",
                 authorized_emails=["test@example.com"],
                 created_at=datetime.now(UTC),
@@ -96,25 +97,20 @@ class TestMockAdapterPublisherSync:
 
         from src.admin.app import create_app
         from src.admin.blueprints.publisher_partners import sync_publisher_partners
-        from src.core.config import AppConfig
+        from src.core.config import get_settings
 
-        # Mock config to return development environment (triggers auto-verify)
-        mock_config = AppConfig()
-        mock_config.environment = "development"
-
+        # Auto-verify is a NAMED allowance on the settings -- "anywhere that is not
+        # production" -- read per call; the AppConfig object with an ``environment``
+        # string this used to build is gone, and nothing compares that string any more.
         app = create_app()
 
         with app.test_request_context():
-            with patch("src.admin.blueprints.publisher_partners.get_config", return_value=mock_config):
-                with patch(
-                    "src.admin.blueprints.publisher_partners.get_tenant_url",
-                    return_value="http://test.example.com",
-                ):
-                    response = sync_publisher_partners(mock_tenant)
-                    data = response.get_json()
+            with patch.object(type(get_settings()), "publisher_auto_verify_allowed", property(lambda _self: True)):
+                response = sync_publisher_partners(mock_tenant)
+                data = response.get_json()
 
-                    assert data["verified"] == 1
-                    assert data.get("tags_created", 0) >= 0  # May be 0 if tag already exists
+                assert data["verified"] == 1
+                assert data.get("tags_created", 0) >= 0  # May be 0 if tag already exists
 
         # Verify PropertyTag was created
         with get_db_session() as session:
@@ -131,24 +127,17 @@ class TestMockAdapterPublisherSync:
 
         from src.admin.app import create_app
         from src.admin.blueprints.publisher_partners import sync_publisher_partners
-        from src.core.config import AppConfig
-
-        mock_config = AppConfig()
-        mock_config.environment = "development"
+        from src.core.config import get_settings
 
         app = create_app()
 
         with app.test_request_context():
-            with patch("src.admin.blueprints.publisher_partners.get_config", return_value=mock_config):
-                with patch(
-                    "src.admin.blueprints.publisher_partners.get_tenant_url",
-                    return_value="http://test.example.com",
-                ):
-                    response = sync_publisher_partners(mock_tenant)
-                    data = response.get_json()
+            with patch.object(type(get_settings()), "publisher_auto_verify_allowed", property(lambda _self: True)):
+                response = sync_publisher_partners(mock_tenant)
+                data = response.get_json()
 
-                    assert data["verified"] == 1
-                    assert data.get("properties_created", 0) >= 1
+                assert data["verified"] == 1
+                assert data.get("properties_created", 0) >= 1
 
         # Verify AuthorizedProperty was created
         with get_db_session() as session:
@@ -173,20 +162,13 @@ class TestMockAdapterPublisherSync:
 
         from src.admin.app import create_app
         from src.admin.blueprints.publisher_partners import sync_publisher_partners
-        from src.core.config import AppConfig
-
-        mock_config = AppConfig()
-        mock_config.environment = "development"
+        from src.core.config import get_settings
 
         app = create_app()
 
         with app.test_request_context():
-            with patch("src.admin.blueprints.publisher_partners.get_config", return_value=mock_config):
-                with patch(
-                    "src.admin.blueprints.publisher_partners.get_tenant_url",
-                    return_value="http://test.example.com",
-                ):
-                    sync_publisher_partners(mock_tenant)
+            with patch.object(type(get_settings()), "publisher_auto_verify_allowed", property(lambda _self: True)):
+                sync_publisher_partners(mock_tenant)
 
         # Verify all properties have verified status
         with get_db_session() as session:
@@ -204,22 +186,15 @@ class TestMockAdapterPublisherSync:
 
         from src.admin.app import create_app
         from src.admin.blueprints.publisher_partners import sync_publisher_partners
-        from src.core.config import AppConfig
-
-        mock_config = AppConfig()
-        mock_config.environment = "development"
+        from src.core.config import get_settings
 
         app = create_app()
 
         # Run sync twice
         with app.test_request_context():
-            with patch("src.admin.blueprints.publisher_partners.get_config", return_value=mock_config):
-                with patch(
-                    "src.admin.blueprints.publisher_partners.get_tenant_url",
-                    return_value="http://test.example.com",
-                ):
-                    sync_publisher_partners(mock_tenant)
-                    sync_publisher_partners(mock_tenant)
+            with patch.object(type(get_settings()), "publisher_auto_verify_allowed", property(lambda _self: True)):
+                sync_publisher_partners(mock_tenant)
+                sync_publisher_partners(mock_tenant)
 
         # Verify no duplicates
         with get_db_session() as session:

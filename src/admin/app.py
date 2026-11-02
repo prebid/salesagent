@@ -2,8 +2,6 @@
 
 import json
 import logging
-import os
-import secrets
 
 import markdown
 from flask import Flask, request
@@ -33,16 +31,16 @@ from src.admin.blueprints.publisher_partners import publisher_partners_bp
 from src.admin.blueprints.schemas import schemas_bp
 from src.admin.blueprints.settings import settings_bp, tenant_management_settings_bp
 from src.admin.blueprints.signals_agents import signals_agents_bp
+from src.admin.blueprints.signing_keys import signing_keys_bp
 
 # from src.admin.blueprints.tasks import tasks_bp  # Disabled - tasks eliminated in favor of workflow system
 from src.admin.blueprints.tenants import tenants_bp
 from src.admin.blueprints.users import users_bp
 from src.admin.blueprints.workflows import workflows_bp
+from src.core.config import load_settings
 from src.core.config_loader import is_single_tenant_mode
 from src.core.domain_config import (
     get_session_cookie_domain,
-    get_tenant_url,
-    is_sales_agent_domain,
 )
 
 # Configure logging
@@ -102,16 +100,27 @@ class CustomProxyFix:
         return self.app(environ, custom_start_response)
 
 
-def create_app(config=None):
-    """Create and configure the Flask application."""
+def create_app(config=None, settings=None):
+    """Create and configure the Flask application.
+
+    The composition root for the admin UI: the app is composed from *settings* (a
+    :class:`src.core.config.Settings`). A root that already read the environment
+    (src/app.py) hands its object in; the standalone admin server and the tests let this
+    factory read it, once, here. The signature stays unannotated on purpose: annotating it
+    puts the factory body under mypy, and the body carries Flask ``wsgi_app`` and ``cache``
+    assignments mypy rejects that are not this change's to fix.
+    """
+    settings = settings or load_settings()
+    is_production = settings.runtime.is_production
+
     app = Flask(__name__, template_folder="../../templates", static_folder="../../static")
 
     # Configuration
-    app.secret_key = os.environ.get("FLASK_SECRET_KEY", secrets.token_hex(32))
+    app.secret_key = settings.runtime.flask_secret_key
     app.logger.setLevel(logging.INFO)
 
     # Configure session cookies for EventSource compatibility
-    if os.environ.get("PRODUCTION") == "true":
+    if is_production:
         app.config["SESSION_COOKIE_SECURE"] = True  # Required for SameSite=None over HTTPS
         app.config["SESSION_COOKIE_HTTPONLY"] = False  # Allow EventSource to access cookies
         app.config["SESSION_COOKIE_SAMESITE"] = "None"  # Required for EventSource cross-origin requests
@@ -155,7 +164,7 @@ def create_app(config=None):
     app.jinja_env.filters["markdown"] = markdown_filter
 
     # Trust proxy headers in production
-    if os.environ.get("PRODUCTION") == "true":
+    if is_production:
         app.config["PREFERRED_URL_SCHEME"] = "https"
         # Force external URLs to use HTTPS
         app.config["SERVER_NAME"] = None  # Let Flask detect from request
@@ -166,7 +175,7 @@ def create_app(config=None):
         app.config.update(config)
 
     # Apply proxy fixes for production
-    if os.environ.get("PRODUCTION") == "true":
+    if is_production:
         # Create a middleware to copy Fly.io headers to standard headers
         # Fly sends Fly-Forwarded-Proto but Werkzeug expects X-Forwarded-Proto
         class FlyHeadersMiddleware:
@@ -207,66 +216,12 @@ def create_app(config=None):
     cache = Cache(app)
     app.cache = cache  # Make cache available to blueprints
 
-    # Redirect external domain /admin requests to tenant subdomain
-    @app.before_request
-    def redirect_external_domain_admin():
-        """Redirect /admin/* requests from external domains to tenant subdomain.
-
-        External domains (via Approximated) should not serve admin UI due to OAuth cookie issues.
-        Instead, redirect to the tenant's subdomain where OAuth works correctly.
-        """
-        from flask import redirect, request
-
-        from src.core.config_loader import get_tenant_by_virtual_host
-
-        # Check if this is an /admin request
-        # Note: CustomProxyFix middleware strips /admin from request.path, so we check script_root
-        # In production with SCRIPT_NAME=/admin, script_root will be '/admin'
-        # But we need to also check that the path isn't just root (/)
-        is_admin_request = (request.script_root == "/admin" and request.path != "/") or request.path.startswith(
-            "/admin"
-        )
-        if not is_admin_request:
-            return None
-
-        # Check for Apx-Incoming-Host header (indicates request from Approximated)
-        apx_host = request.headers.get("Apx-Incoming-Host") or request.headers.get("apx-incoming-host")
-        if not apx_host:
-            logger.debug(f"No Apx-Incoming-Host header for /admin request: {request.path}")
-            return None  # Not from Approximated, allow normal routing
-
-        # Check if it's an external domain (not part of sales agent domain)
-        if is_sales_agent_domain(apx_host):
-            logger.debug(f"Subdomain request to /admin, allowing: {apx_host}")
-            return None  # Subdomain request, allow normal routing
-
-        # External domain detected - redirect to tenant subdomain
-        logger.info(f"External domain /admin request detected: {apx_host} -> {request.path}")
-        tenant = get_tenant_by_virtual_host(apx_host)
-        if not tenant:
-            logger.warning(f"No tenant found for external domain: {apx_host}")
-            return None  # Can't determine tenant, let normal routing handle it
-
-        tenant_subdomain = tenant.get("subdomain")
-        if not tenant_subdomain:
-            logger.warning(f"Tenant {tenant.get('tenant_id')} has no subdomain configured")
-            return None  # No subdomain configured, let normal routing handle it
-
-        # Build redirect URL to tenant subdomain
-        # Note: request.full_path is relative to script_root, so we need to add /admin back
-        path_with_admin = (
-            f"/admin{request.full_path}" if not request.full_path.startswith("/admin") else request.full_path
-        )
-
-        if os.environ.get("PRODUCTION") == "true":
-            redirect_url = f"{get_tenant_url(tenant_subdomain)}{path_with_admin}"
-        else:
-            # Local dev: Use localhost with port (unified FastAPI port)
-            port = os.environ.get("ADCP_SALES_PORT", "8080")
-            redirect_url = f"http://{tenant_subdomain}.localhost:{port}{path_with_admin}"
-
-        logger.info(f"Redirecting external domain {apx_host}/admin to subdomain: {redirect_url}")
-        return redirect(redirect_url, code=302)
+    # NO before_request hook for "external domain" /admin requests, and there is nothing
+    # for one to do: a tenant is served at the host it declares, so there is no second
+    # address to bounce an /admin request to, and the edge folds the Approximated vendor
+    # header into Host and drops it, so there is no second host to classify either. A hook
+    # that computes a classification in order to log a value nothing acts on is a cost on
+    # every request.
 
     # Debug: Log Set-Cookie headers on auth-related responses
     @app.after_request
@@ -303,7 +258,7 @@ def create_app(config=None):
 
         from src.core.database.database_session import get_db_session
         from src.core.database.models import Tenant
-        from src.core.domain_config import get_sales_agent_domain, get_support_email
+        from src.core.domain_config import get_support_email
 
         context = {}
 
@@ -312,8 +267,11 @@ def create_app(config=None):
         # Inject support email (configurable via SUPPORT_EMAIL env var)
         context["support_email"] = get_support_email()
 
-        # Inject sales agent domain for URL generation in templates
-        context["sales_agent_domain"] = get_sales_agent_domain() or "example.com"
+        # NO sales_agent_domain. Templates built per-tenant URLs as
+        # `https://{{ tenant.subdomain }}.{{ sales_agent_domain }}/...`, which is the
+        # derivation removes — and its `or "example.com"` default made
+        # every such URL a plausible-looking fiction when the setting was unset. A tenant's
+        # URL comes from `tenant.virtual_host`, the host it is actually served at.
 
         # Inject fresh tenant data if user is logged in with a tenant
         tenant_id = session.get("tenant_id")
@@ -351,6 +309,7 @@ def create_app(config=None):
     app.register_blueprint(authorized_properties_bp, url_prefix="/tenant")
     app.register_blueprint(creative_agents_bp, url_prefix="/tenant/<tenant_id>/creative-agents")
     app.register_blueprint(signals_agents_bp, url_prefix="/tenant/<tenant_id>/signals-agents")
+    app.register_blueprint(signing_keys_bp, url_prefix="/tenant/<tenant_id>/signing-keys")
     app.register_blueprint(inventory_bp)  # Has its own internal routing
     app.register_blueprint(inventory_profiles_bp, url_prefix="/tenant/<tenant_id>/inventory-profiles")
     app.register_blueprint(publisher_partners_bp, url_prefix="/tenant")  # Publisher partnerships
@@ -409,7 +368,7 @@ def register_adapter_routes(app):
         # Note: We skip instantiation errors since routes are optional
         adapter_configs = [
             (GoogleAdManager, {"config": {}, "principal": None}),
-            (MockAdServer, {"principal": None, "dry_run": False}),
+            (MockAdServer, {"principal": None}),
         ]
 
         for adapter_class, kwargs in adapter_configs:

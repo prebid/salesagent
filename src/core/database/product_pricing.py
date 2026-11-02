@@ -44,17 +44,9 @@ def get_product_pricing_options(product: ProductModel) -> list[dict[str, Any]]:
     )
     if pricing_options_loaded and product.pricing_options:
         for po in product.pricing_options:
-            # Generate pricing_option_id if not present (for backward compatibility)
-            pricing_option_id = getattr(po, "pricing_option_id", None)
-            if not pricing_option_id:
-                # Construct pricing_option_id in a stable, human-readable format
-                # Format: {pricing_model}_{currency}_{fixed|auction}
-                fixed_str = "fixed" if po.is_fixed else "auction"
-                pricing_option_id = f"{po.pricing_model}_{po.currency.lower()}_{fixed_str}"
-
             pricing_options_list.append(
                 {
-                    "pricing_option_id": pricing_option_id,
+                    "pricing_option_id": po.pricing_option_id,
                     "pricing_model": po.pricing_model,
                     "rate": float(po.rate) if po.rate else None,
                     "currency": po.currency,

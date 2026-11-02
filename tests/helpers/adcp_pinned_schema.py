@@ -6,12 +6,10 @@ This module is the DEPENDENCY-FREE half of what used to be a single module
 ``jsonschema``/``referencing`` import — so a caller that needs to locate and read
 a pinned schema does not pull in the validation-only dependency stack.
 
-It lives under ``tests/helpers/`` and has no consumer under ``src/``. This
-docstring used to claim otherwise, naming ``src/core/version_compat.py`` as a
-reader; that module does not import it, no module under ``src/`` imports
-anything from ``tests/``, and one that did would break the layering this
-repository enforces. The split is real and useful, but it is a dependency
-split, not a production/test split.
+It lives under ``tests/helpers/`` and has no consumer under ``src/``. No module
+under ``src/`` imports anything from ``tests/``, and one that did would break the
+layering this repository enforces. The split is real and useful, but it is a
+dependency split, not a production/test split.
 
 ``tests/helpers/pinned_schema.py`` re-exports every name here and adds the
 jsonschema-validation-specific pieces (``validator_for``,
@@ -97,8 +95,37 @@ def normalize_ref(ref: str) -> str:
     return stripped
 
 
+def app_schema_root() -> Path:
+    """The repo's own schema tree, for tools the pinned spec does not describe.
+
+    A seller may expose more tools than the standard. ``complete_task`` is the
+    live case: registered, dispatchable on every transport, and absent from the
+    pinned 3.1 tree entirely. Its schemas live in ``schemas/`` at the repo root,
+    written to the same conventions as the SDK's, so nothing downstream needs to
+    know which root answered.
+
+    See ``schemas/README.md`` for the resolution order and what happens when the
+    spec catches up.
+    """
+    return Path(__file__).resolve().parents[2] / "schemas"
+
+
+def schema_roots() -> tuple[Path, ...]:
+    """Every root a schema may come from, PINNED FIRST.
+
+    Order is the precedence: the spec's own definition of a contract always wins
+    over ours. A name present in both is not resolved by preference but by
+    raising — see :func:`_resolve_filename`.
+    """
+    roots = [schema_root()]
+    app = app_schema_root()
+    if app.is_dir():
+        roots.append(app)
+    return tuple(roots)
+
+
 def _contained_path(candidate: Path, *, what: str) -> Path:
-    """Resolve *candidate* and assert it stays inside the pinned schema tree.
+    """Resolve *candidate* and assert it stays inside one of the schema roots.
 
     The single containment check for this module. A ref can embed traversal
     (``"media-buy/../../../../etc/hosts"``), and probing an UNRESOLVED path
@@ -108,8 +135,8 @@ def _contained_path(candidate: Path, *, what: str) -> Path:
     messages.
     """
     resolved = candidate.resolve()
-    if not resolved.is_relative_to(schema_root().resolve()):
-        raise PinnedSchemaError(f"{what} escapes the pinned SDK schema tree: {resolved}")
+    if not any(resolved.is_relative_to(root.resolve()) for root in schema_roots()):
+        raise PinnedSchemaError(f"{what} escapes the schema trees: {resolved}")
     return resolved
 
 
@@ -122,24 +149,41 @@ def _resolve_filename(filename: str) -> Path:
     the plain tree itself, e.g. ``core/error.json`` vs
     ``trusted-match/error.json``), this raises rather than silently picking
     one — pass a category-qualified ref (``"core/error.json"``) instead.
-    """
-    root = schema_root()
-    if "/" in filename:
-        path = _contained_path(root / filename, what=f"Schema ref {filename!r}")
-        if not path.exists():
-            raise PinnedSchemaError(f"Pinned schema not found: {filename} -> {path}")
-        return path
 
-    matches = sorted(p for p in root.rglob(filename) if _EXCLUDED_TOP_LEVEL_DIR not in p.relative_to(root).parts)
-    if not matches:
-        raise PinnedSchemaError(f"Pinned schema {filename!r} not found under {root}.")
-    if len(matches) > 1:
-        rels = [str(m.relative_to(root)) for m in matches]
+    TWO ROOTS, PINNED FIRST. A name found in both is not resolved by
+    precedence — it raises, because two live definitions of one contract is the
+    condition the app tree exists to avoid, and the day the spec ships a schema
+    we wrote ourselves the right move is to delete ours, not to shadow it. See
+    ``schemas/README.md``.
+    """
+    hits: list[Path] = []
+    for root in schema_roots():
+        if "/" in filename:
+            candidate = _contained_path(root / filename, what=f"Schema ref {filename!r}")
+            if candidate.exists():
+                hits.append(candidate)
+            continue
+
+        matches = sorted(p for p in root.rglob(filename) if _EXCLUDED_TOP_LEVEL_DIR not in p.relative_to(root).parts)
+        if len(matches) > 1:
+            rels = [str(m.relative_to(root)) for m in matches]
+            raise PinnedSchemaError(
+                f"Schema filename {filename!r} is ambiguous ({rels}) — pass a "
+                f"category-qualified ref (e.g. {rels[0]!r}) instead of a bare filename."
+            )
+        hits.extend(matches)
+
+    if not hits:
+        roots = ", ".join(str(r) for r in schema_roots())
+        raise PinnedSchemaError(f"Schema {filename!r} not found under any of: {roots}")
+    if len(hits) > 1:
+        where = ", ".join(str(h) for h in hits)
         raise PinnedSchemaError(
-            f"Pinned schema filename {filename!r} is ambiguous ({rels}) — pass a "
-            f"category-qualified ref (e.g. {rels[0]!r}) instead of a bare filename."
+            f"Schema {filename!r} exists in the pinned tree AND in the app tree ({where}). "
+            f"The spec now describes this contract — delete the app-owned copy in schemas/ "
+            f"rather than keeping two live definitions of it."
         )
-    return matches[0]
+    return hits[0]
 
 
 def _load_with_id(path: Path) -> dict[str, Any]:

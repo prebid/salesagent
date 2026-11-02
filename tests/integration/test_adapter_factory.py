@@ -9,13 +9,27 @@ adapter type, especially important for adapters with keyword-only arguments.
 """
 
 import pytest
-from sqlalchemy import delete, select
+from sqlalchemy import delete
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.models import Tenant as ModelTenant
 from src.core.helpers import get_adapter
-from src.core.schemas import Principal
+from src.core.resolved_identity import ResolvedIdentity
+from src.core.tenant_context import TenantContext
+from tests.factories.principal import PrincipalFactory
+
+
+def _identity_for(tenant_id: str, principal_id: str) -> ResolvedIdentity:
+    """The identity ``get_adapter`` takes: the seeded tenant row, with the buyer inside.
+
+    ``get_adapter(identity)`` reads both facts off one object (commit a1b79d22d), so a
+    caller cannot pair a tenant with a principal from somewhere else -- and there is no
+    dry-run flag on an adapter any more, because nothing could set one.
+    """
+    tenant = TenantContext.load(tenant_id)
+    assert tenant is not None, f"the setup fixture must have committed tenant {tenant_id}"
+    return PrincipalFactory.make_identity(principal_id=principal_id, tenant_id=tenant_id, tenant=tenant)
 
 
 @pytest.mark.integration
@@ -213,59 +227,32 @@ class TestAdapterFactory:
             "triton": TritonDigital,
         }
 
-        from src.core.config_loader import set_current_tenant
-
         for adapter_type, tenant_id, principal_id in setup_adapters:
-            with get_db_session() as session:
-                # Load principal from database
-                db_principal = session.scalars(
-                    select(ModelPrincipal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
-                ).first()
+            # get_adapter takes the ONE identity and reads the tenant and the principal off
+            # it, so the two cannot be handed over as a mismatched pair. The tenant is the
+            # committed row, which is what the resolver would have loaded.
+            identity = _identity_for(tenant_id, principal_id)
 
-                # Load tenant for context
-                db_tenant = session.scalars(select(ModelTenant).filter_by(tenant_id=tenant_id)).first()
+            # Test instantiation via factory function
+            try:
+                adapter = get_adapter(identity)
+                assert adapter is not None, f"get_adapter() returned None for {adapter_type}"
 
-                # Set tenant context for get_adapter()
-                set_current_tenant(
-                    {
-                        "tenant_id": db_tenant.tenant_id,
-                        "name": db_tenant.name,
-                        "subdomain": db_tenant.subdomain,
-                        "ad_server": db_tenant.ad_server,
-                        "is_active": db_tenant.is_active,
-                    }
+                # Verify correct adapter type
+                expected_class = adapter_type_map[adapter_type]
+                assert isinstance(adapter, expected_class), (
+                    f"Expected {expected_class.__name__}, got {type(adapter).__name__}"
                 )
 
-                # Convert to schema object
-                principal = Principal(
-                    principal_id=db_principal.principal_id,
-                    name=db_principal.name,
-                    platform_mappings=db_principal.platform_mappings or {},
+            except TypeError as e:
+                pytest.fail(
+                    f"TypeError instantiating {adapter_type} adapter via get_adapter(): {e}\n"
+                    f"This usually means constructor signature doesn't match factory function call."
                 )
-
-                # Test instantiation via factory function
-                try:
-                    adapter = get_adapter(principal, dry_run=True)
-                    assert adapter is not None, f"get_adapter() returned None for {adapter_type}"
-
-                    # Verify correct adapter type
-                    expected_class = adapter_type_map[adapter_type]
-                    assert isinstance(adapter, expected_class), (
-                        f"Expected {expected_class.__name__}, got {type(adapter).__name__}"
-                    )
-
-                    # Verify dry_run mode was set
-                    assert adapter.dry_run is True, f"dry_run not set correctly for {adapter_type}"
-
-                except TypeError as e:
-                    pytest.fail(
-                        f"TypeError instantiating {adapter_type} adapter via get_adapter(): {e}\n"
-                        f"This usually means constructor signature doesn't match factory function call."
-                    )
-                except Exception as e:
-                    # Other exceptions are OK (e.g., missing credentials in dry-run mode)
-                    # We only care about constructor signature mismatches (TypeError)
-                    pass
+            except Exception:
+                # Other exceptions are OK (e.g., missing credentials).
+                # We only care about constructor signature mismatches (TypeError)
+                pass
 
     def test_gam_adapter_requires_network_code(self, setup_adapters):
         """Test that GAM adapter correctly receives network_code from factory.
@@ -274,46 +261,18 @@ class TestAdapterFactory:
         causing: "GoogleAdManager.__init__() takes 3 positional arguments but
         4 positional arguments (and 1 keyword-only argument) were given"
         """
-        from src.core.config_loader import set_current_tenant
+        identity = _identity_for("test_factory_gam", "gam_principal")
 
-        with get_db_session() as session:
-            db_principal = session.scalars(
-                select(ModelPrincipal).filter_by(tenant_id="test_factory_gam", principal_id="gam_principal")
-            ).first()
+        # This should work without TypeError
+        adapter = get_adapter(identity)
 
-            # Load tenant for context
-            db_tenant = session.scalars(select(ModelTenant).filter_by(tenant_id="test_factory_gam")).first()
+        # Verify it's actually a GAM adapter, not mock fallback
+        from src.adapters.google_ad_manager import GoogleAdManager
 
-            # Set tenant context for get_adapter()
-            set_current_tenant(
-                {
-                    "tenant_id": db_tenant.tenant_id,
-                    "name": db_tenant.name,
-                    "subdomain": db_tenant.subdomain,
-                    "ad_server": db_tenant.ad_server,
-                    "is_active": db_tenant.is_active,
-                }
-            )
+        assert isinstance(adapter, GoogleAdManager), (
+            f"Expected GAM adapter, got {type(adapter).__name__}. Check tenant/adapter_config setup."
+        )
 
-            principal = Principal(
-                principal_id=db_principal.principal_id,
-                name=db_principal.name,
-                platform_mappings=db_principal.platform_mappings or {},
-            )
-
-            # This should work without TypeError
-            adapter = get_adapter(principal, dry_run=True)
-
-            # Verify it's actually a GAM adapter, not mock fallback
-            from src.adapters.google_ad_manager import GoogleAdManager
-
-            assert isinstance(adapter, GoogleAdManager), (
-                f"Expected GAM adapter, got {type(adapter).__name__}. Check tenant/adapter_config setup."
-            )
-
-            # Verify network_code was passed correctly
-            assert hasattr(adapter, "network_code"), "GAM adapter missing network_code attribute"
-            assert adapter.network_code == "123456789", "network_code not set correctly"
-
-            # Clean up context
-            set_current_tenant(None)
+        # Verify network_code was passed correctly
+        assert hasattr(adapter, "network_code"), "GAM adapter missing network_code attribute"
+        assert adapter.network_code == "123456789", "network_code not set correctly"

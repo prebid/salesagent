@@ -44,7 +44,16 @@ function validateAccessControl() {
             <label for="subdomain">Subdomain / Path Identifier</label>
             <input type="text" id="subdomain" name="subdomain"
                    placeholder="e.g., nytimes" pattern="[a-z0-9-]+">
-            <small>Access via subdomain (nytimes.localhost:8080) or path (localhost:8080 with x-adcp-tenant header). Leave blank to use tenant ID.</small>
+            <small>An internal identifier only — it does not route. Leave blank to derive it from the name.</small>
+        </div>
+
+        <div class="form-group">
+            <label for="virtual_host">Virtual Host *</label>
+            <input type="text" id="virtual_host" name="virtual_host" required
+                   placeholder="e.g., nytimes.example.com or nytimes.example.com:8443">
+            <small>The address this tenant is served at, and the only way a request can name
+                   it. Include the port when it is not the scheme's default — the agent card
+                   publishes this string verbatim and clients connect to what it says.</small>
         </div>
 
         <h3 style="margin-top: 2rem;">Access Control</h3>

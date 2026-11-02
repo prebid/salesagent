@@ -41,18 +41,33 @@ class TestCreativeListingBoundary:
         assert c.name == "Test Creative"
         assert c.format_id.id == "display_300x250"
 
-    def test_creative_variants_silently_stripped(self):
-        """Passing variants= (from old delivery base) is silently stripped, not rejected."""
+    def test_creative_variants_is_refused_not_stripped(self):
+        """Passing variants= (from the old delivery base) is REJECTED, not stripped.
+
+        The pinned ``creative/list-creatives-response.json`` item declares
+        ``[account, assets, assignments, concept_id, concept_name, created_date,
+        creative_id, format_id, items, name, pricing_options, purge, snapshot,
+        snapshot_unavailable_reason, status, tags, updated_date, variables,
+        webhook_activity]`` — no ``variants``. In 3.1 that field belongs to a DIFFERENT
+        object: the per-creative delivery breakdown in
+        ``creative/get-creative-delivery-response.json`` and the build groups in
+        ``media-buy/build-creative-response.json``.
+
+        This case previously asserted a SILENT STRIP. That is the production-mode half of
+        CLAUDE.md pattern #7 and never the dev-mode one: an undeclared field is a hard
+        rejection in dev exactly so a spec field this seller has not implemented is loud,
+        and dropped only in production. Stripping is also not a model-construction
+        behavior at all — ``deep_strip_to_schema`` runs at the boundary.
+        """
         from src.core.schemas import Creative, FormatId
 
-        c = Creative(
-            creative_id="c1",
-            name="Test Creative",
-            format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
-            variants=[],
-        )
-        assert c.creative_id == "c1"
-        assert not hasattr(c, "variants")
+        with pytest.raises(ValidationError, match="variants"):
+            Creative(
+                creative_id="c1",
+                name="Test Creative",
+                format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
+                variants=[],
+            )
 
     def test_creative_without_creative_id_is_rejected(self):
         """creative_id is REQUIRED — missing it must raise ValidationError."""
@@ -92,8 +107,12 @@ class TestCreativeListingBoundary:
         response = c.model_dump()
         assert "principal_id" not in response, "principal_id must not leak into AdCP response"
 
-    def test_creative_principal_id_present_in_internal_dump(self):
-        """principal_id must be present in model_dump_internal() for DB storage."""
+    def test_creative_principal_id_present_on_the_model(self):
+        """principal_id is carried on the model even though it never reaches the wire.
+
+        The attribute IS what existing means for a ``Field(exclude=True)`` field; there is
+        no second dump shape to read it out of (CLAUDE.md pattern 4 — one serializer seat).
+        """
         from src.core.schemas import Creative, FormatId
 
         c = Creative(
@@ -102,8 +121,7 @@ class TestCreativeListingBoundary:
             format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
             principal_id="p1",
         )
-        internal = c.model_dump_internal()
-        assert internal.get("principal_id") == "p1"
+        assert c.principal_id == "p1"
 
 
 class TestPaginationCursorBased:

@@ -62,7 +62,14 @@ def test_manual_approval_update_via_real_a2a_pipeline_is_submitted_task_without_
         adapter.manual_approval_required = True
         adapter.manual_approval_operations = ["update_media_buy"]
 
-        result = env.call_a2a(req=UpdateMediaBuyRequest(media_buy_id=_MEDIA_BUY_ID, budget=15000.0))
+        result = env.call_a2a(
+            req=UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
+                media_buy_id=_MEDIA_BUY_ID,
+                end_time="2026-12-01T00:00:00Z",
+            )
+        )
 
         task = env.last_a2a_task
         assert task is not None, "harness did not capture the A2A Task — did the dispatch bypass _run_a2a_handler?"
@@ -80,11 +87,10 @@ def test_manual_approval_update_via_real_a2a_pipeline_is_submitted_task_without_
     # The harness-synthesized envelope (built from Task state + id) parses as the
     # submitted variant and carries the task_id the buyer polls. Secondary pin:
     # this proves the Task id doubles as the AdCP task_id, not artifact content.
-    # Production's _update_media_buy_impl returns the bare UpdateMediaBuySubmitted
-    # protocol variant (spec 3.1.1 serializes it flat, status="submitted"+task_id at
-    # top level), so the harness reconstructs it bare — not wrapped in UpdateMediaBuyResult.
+    # The harness wraps the reconstructed member in the UpdateMediaBuyResult
+    # protocol envelope (#1417), mirroring production's _update_media_buy_impl.
     assert isinstance(result, UpdateMediaBuySubmitted), (
-        f"expected bare UpdateMediaBuySubmitted, got {type(result).__name__}"
+        f"expected UpdateMediaBuySubmitted in the envelope, got {type(result).__name__}"
     )
     assert result.status == "submitted"
     assert result.task_id, "submitted update must carry a task_id for the buyer to poll"

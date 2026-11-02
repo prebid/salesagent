@@ -10,8 +10,8 @@ from src.admin.utils import approve_media_buy_through_writer, require_tenant_acc
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Context
-from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.repositories import MediaBuyRepository
+from src.core.database.repositories.principal import PrincipalRepository
 from src.core.database.repositories.workflow import WorkflowRepository
 from src.core.tools.media_buy_create import ApprovalOutcome
 
@@ -57,9 +57,7 @@ def list_workflows(tenant_id, **kwargs):
             context = db.scalars(select(Context).filter_by(context_id=step.context_id)).first()
             principal = None
             if context and context.principal_id:
-                principal = db.scalars(
-                    select(ModelPrincipal).filter_by(principal_id=context.principal_id, tenant_id=tenant_id)
-                ).first()
+                principal = PrincipalRepository(db, tenant_id).get(context.principal_id)
 
             workflows_list.append(
                 {
@@ -127,9 +125,7 @@ def review_workflow_step(tenant_id, workflow_id, step_id):
         # Get principal info
         principal = None
         if context and context.principal_id:
-            principal = db.scalars(
-                select(ModelPrincipal).filter_by(principal_id=context.principal_id, tenant_id=tenant_id)
-            ).first()
+            principal = PrincipalRepository(db, tenant_id).get(context.principal_id)
 
         # Parse request data
         request_data = step.request_data if step.request_data else {}
@@ -142,7 +138,6 @@ def review_workflow_step(tenant_id, workflow_id, step_id):
             tenant_id=tenant_id,
             workflow_id=workflow_id,
             step=step,
-            context=context,
             principal=principal,
             request_data=request_data,
             formatted_request=formatted_request,

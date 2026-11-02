@@ -179,7 +179,6 @@ class TestBroadstreetInventoryManager:
         manager = BroadstreetInventoryManager(
             client=client,
             network_id=client.network_id,
-            dry_run=False,
         )
 
         zones = manager.fetch_zones()
@@ -199,7 +198,6 @@ class TestBroadstreetInventoryManager:
         manager = BroadstreetInventoryManager(
             client=client,
             network_id=client.network_id,
-            dry_run=False,
         )
 
         response = manager.build_inventory_response()

@@ -1,6 +1,9 @@
-# Manifest: Drop `impl` from BDD — change sites & per-row disposition
+# Manifest: drop `impl` from BDD — change sites and per-row disposition
 
-> Phase 2 of epic `salesagent-5yst`. Design: [bdd-drop-impl.md](bdd-drop-impl.md).
+> Phase 2 of epic `salesagent-5yst`. Design:
+> [docs/design/bdd-drop-impl.md](../docs/design/bdd-drop-impl.md), a retirement
+> note — the migration ran, and the live description of the transport set is
+> [docs/design/bdd-harness-architecture.md](../docs/design/bdd-harness-architecture.md).
 > Line numbers are hints — **anchor on symbols/markers** (conftest churns).
 > Candidate dispositions for the 34 coverage rows are **hypotheses to confirm by
 > running the wire variant** in Phase 3, not settled conclusions.
@@ -16,7 +19,7 @@
 | **S4 uc011** | 1 UC-011 row disposition | S0,S1 |
 | **S5 reconcile** | full wire-suite run; bulk 375; verify gate | S2,S3,S4 |
 
-## Section 1 — Core change sites (S0, deterministic)
+## Section 1 — core change sites (S0, deterministic)
 
 | ID | File · anchor | Action |
 |----|---------------|--------|
@@ -28,7 +31,7 @@
 **Keep (do NOT touch):** `Transport.IMPL` enum, `ImplDispatcher`, `DISPATCHERS[IMPL]`,
 `env.call_impl`, the private `_synthesized_error_envelope` (via `result.error_envelope()`) — used by unit/integration tests.
 
-## Section 2 — Ledger cleanup (S1)
+## Section 2 — ledger cleanup (S1)
 
 Each entry cross-checked against the 34-row list so no real pass is dropped.
 
@@ -41,7 +44,7 @@ Each entry cross-checked against the 34-row list so no real pass is dropped.
 | L5 | conftest UC-004 account OR-condition (~1535 `(is_impl or is_a2a)`) | Simplify (impl branch dead). |
 | L6 | conftest UC-019/principal `is_impl` branch (~1810-1827) | Reconcile with S2 `principal_ownership` row (UNREACHABLE → xfail+note or remove). |
 
-## Section 3 — The 34 coverage rows (S2/S3/S4)
+## Section 3 — the 34 coverage rows (S2/S3/S4)
 
 Disposition codes: **FIX-WIRE-TEST** (harness drops param → carry it), **FIX-WIRE-PROD**
 (prod wrapper missing param → add it), **STALE-XFAIL** (validation is shared-schema →
@@ -85,27 +88,29 @@ REST body `src/routes/api_v1.py::ListCreativeFormatsBody` (~127-130); request mo
 |-----|----------------------|---------------|
 | `test_context_echoed_in_sync_error_response` (impl pass; a2a/mcp/rest xfailed) | **verify** → FIX-WIRE or XFAIL+NOTE | `context` is a protocol-envelope field (`core/protocol-envelope.json`); echo on a *sync error* response is wire/envelope behavior. Run wire: if wrappers echo `context` on error → pass; else XFAIL+NOTE "context not echoed on wire error envelope" (envelope work, relates to D2/`egnl`). |
 
-## Section 4 — Bulk & side-effects (S5)
+## Section 4 — bulk and side-effects (S5)
 
 - **Removing `_IMPL_ONLY` (C2) re-parametrizes the UC-002 `@account` rows onto wire.**
   They were impl-exclusive; post-change they run on a2a/mcp/rest. They must xfail
   cleanly there (account resolution not wired on wire = `l9wn`). Add/verify a wire
   xfail-tag for `@account` with note "account resolution not wired on wire (`l9wn`)".
-- **375 impl-exclusive-xfailed rows** lose the impl variant; ensure their existing
-  tag-based xfails (`_XFAIL_TAGS`) apply on the wire variants so they don't surface
-  as failures. (Most already keyed by tag, not transport — verify in S5.)
+- **375 impl-exclusive-xfailed rows** lose the impl variant; ensure their tag-based
+  xfails (`_XFAIL_TAGS`) apply on the wire variants so they do not appear as
+  failures. (Most already keyed by tag, not transport — verify in S5.)
 - **MediaBuyAccountEnv** (`tests/harness/media_buy_account.py`, impl-only) is no longer
   reached from BDD after C2; leave it (used directly / future wire wiring), or its
   `@account` scenarios xfail on wire per above.
 
-## Section 5 — Verification gate (S5)
+## Section 5 — verification gate (S5)
 
-1. Full serial wire run: `pytest tests/bdd/ -n0 -p no:randomly --json-report …` (agent-db).
-2. Compare to pre-drop baseline (`/tmp/bdd_full.json`, wire union ≈ a2a 375 / mcp 377 / rest 358).
-3. **Pass criteria:** 0 new failures (only honest xfails); every one of the 34 rows
-   accounted for (now wire-passing, or xfail+note); wire passing ≥ pre-drop wire passing.
-4. Each XFAIL+NOTE references its gap ticket (`l9wn` account, `egnl` context/status,
-   `j2qj` REST body) or a new spec-gap note (sampling_method, buyer_refs).
+1. Run the full serial wire suite: `pytest tests/bdd/ -n0 -p no:randomly --json-report …` (agent-db).
+2. Compare to the pre-drop baseline (`/tmp/bdd_full.json`, wire union ≈ a2a 375 / mcp 377 / rest 358).
+3. Check the pass criteria: no failure the baseline did not have (only honest xfails);
+   every one of the 34 rows accounted for (wire-passing, or xfail+note); wire passing ≥
+   pre-drop wire passing.
+4. Confirm that each XFAIL+NOTE references its gap ticket (`l9wn` account, `egnl`
+   context/status, `j2qj` REST body) or a spec-gap note of its own (sampling_method,
+   buyer_refs).
 
 ## Open items folded forward (not blockers for the drop)
 

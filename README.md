@@ -72,6 +72,8 @@ Publishers deploy their own sales agent. Choose based on your needs:
 | **Docker** (local/on-prem) | 2 min | Easy | [quickstart.md](docs/quickstart.md) |
 | **Fly.io** (cloud) | 10-15 min | Medium | [fly.md](docs/deployment/walkthroughs/fly.md) |
 | **Google Cloud Run** | 15-20 min | Medium | [gcp.md](docs/deployment/walkthroughs/gcp.md) |
+| **AWS** (ECS Fargate, RDS) | 30 min | Medium | [aws.md](docs/deployment/aws.md) |
+| **Single VM** (Docker Compose + Caddy) | 30-45 min | Medium | [vm.md](docs/deployment/vm.md) |
 
 **Docker is the fastest** - it bundles PostgreSQL and just works. Cloud platforms require separate database setup.
 
@@ -137,13 +139,13 @@ Add to your Claude config (`~/Library/Application Support/Claude/claude_desktop_
   "mcpServers": {
     "adcp": {
       "command": "uvx",
-      "args": ["mcp-remote", "http://localhost:8000/mcp/", "--header", "x-adcp-auth: YOUR_TOKEN"]
+      "args": ["mcp-remote", "http://localhost:8000/mcp/", "--header", "Authorization: Bearer YOUR_TOKEN"]
     }
   }
 }
 ```
 
-Get your token from Admin UI → Advertisers → (select advertiser) → API Token.
+Your token is shown once, when the advertiser is created in Admin UI → Advertisers; rotate it there if it is lost.
 
 ---
 
@@ -166,6 +168,8 @@ docker compose logs adcp-server | head -50
 - **[Quickstart](docs/quickstart.md)** - Docker deployment (2 min)
 - **[Fly.io](docs/deployment/walkthroughs/fly.md)** - Cloud deployment (10-15 min)
 - **[Google Cloud Run](docs/deployment/walkthroughs/gcp.md)** - GCP deployment (15-20 min)
+- **[AWS](docs/deployment/aws.md)** - ECS Fargate, RDS and ALB with Terraform (30 min)
+- **[Single VM](docs/deployment/vm.md)** - Docker Compose and Caddy on one Linux VM, multi-tenant
 - **[Single-Tenant](docs/deployment/single-tenant.md)** - Single publisher deployment
 - **[Multi-Tenant](docs/deployment/multi-tenant.md)** - Platform deployment
 
@@ -238,41 +242,20 @@ JSON-RPC 2.0 server for agent-to-agent communication:
 
 ## Testing Backend
 
-The mock server provides AdCP testing capabilities for developers, driven by request headers:
+The mock ad server (`src/adapters/mock_ad_server.py`) serves a tenant configured with
+the `mock` adapter and spends nothing. It answers every AdCP tool with simulated
+inventory and delivery, and it honours two testing affordances that live in the data
+rather than in request headers:
 
-### Request Headers
-- **X-Dry-Run**: Test operations without real execution
-- **X-Mock-Time**: Control time for deterministic testing
-- **X-Jump-To-Event**: Skip to specific campaign events
-- **X-Test-Session-ID**: Isolate parallel test sessions
-- **X-Auto-Advance**: Automatic event progression
-- **X-Force-Error**: Simulate error conditions
+- **Keyword scenarios**: a media buy or creative whose name carries `[REJECT:reason]`,
+  `[APPROVE]`, or `[ASK:field]` is rejected, approved, or sent to human review
+  (`src/adapters/test_scenario_parser.py`).
+- **Seeded delivery**: `src/services/delivery_simulator.py` writes per-buy delivery
+  rows that `get_media_buy_delivery` returns verbatim, so an end-to-end test can pin
+  exact numbers.
 
-### Response Headers
-- **X-Next-Event**: Next expected campaign event
-- **X-Next-Event-Time**: Timestamp for next event
-- **X-Simulated-Spend**: Current campaign spend simulation
-
-### Testing Features
-- **Campaign Lifecycle Simulation**: Event progression (creation → completion)
-- **Error Scenario Testing**: Budget exceeded, delivery issues, platform errors
-- **Time Simulation**: Fast-forward campaigns for testing
-- **Session Isolation**: Parallel test execution without conflicts
-- **Zero real spend during testing**
-
-```python
-# Example: Test with time simulation
-headers = {
-    "x-adcp-auth": "your_token",
-    "X-Dry-Run": "true",
-    "X-Mock-Time": "2026-02-15T12:00:00Z",
-    "X-Test-Session-ID": "test-123",
-}
-
-# Use with any MCP client for safe testing
-```
-
-See `examples/mock_server_testing_demo.py` for complete testing examples.
+Requests carry no testing headers. A request is served the same way whether a test or
+a buyer sent it; the only difference between them is the tenant's adapter.
 
 ## Using the MCP Client
 
@@ -283,7 +266,7 @@ from fastmcp.client.transports import StreamableHttpTransport
 # Connect to the server
 transport = StreamableHttpTransport(
     url="http://localhost:8000/mcp/",
-    headers={"x-adcp-auth": "your_token"},
+    headers={"Authorization": "Bearer your_token"},
 )
 client = Client(transport=transport)
 

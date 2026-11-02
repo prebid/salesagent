@@ -282,7 +282,7 @@ class TestRenderEnvFromTemplate:
             "# ============================================\n"
             "# [OPTIONAL] Authentication\n"
             "# ============================================\n"
-            "# ADCP_AUTH_TEST_MODE=false\n"
+            "# SUPER_ADMIN_EMAILS=\n"
             "\n"
             "# ============================================\n"
             "# [OPTIONAL] Advanced Settings\n"
@@ -459,10 +459,17 @@ class TestEnsurePreCommit:
     def test_installs_hooks(self, tmp_path: Path):
         (tmp_path / ".git" / "hooks").mkdir(parents=True)
 
+        # subprocess.run is patched as well as _run: ensure_pre_commit probes
+        # `git config --get core.hooksPath` through subprocess DIRECTLY, so without this the
+        # test reads the developer's real git config and skips installation when a global
+        # core.hooksPath happens to hold a pre-commit file. It passed for as long as nobody
+        # had one.
         with (
             patch.object(setup_dev, "ROOT_DIR", tmp_path),
             patch.object(setup_dev, "_run") as mock_run,
+            patch.object(setup_dev.subprocess, "run") as mock_subprocess,
         ):
+            mock_subprocess.return_value = MagicMock(returncode=1, stdout="")
             mock_run.return_value = MagicMock(returncode=0)
             result = setup_dev.ensure_pre_commit()
 

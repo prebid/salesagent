@@ -257,24 +257,30 @@ class TestLegacyAndUnknownStatusesNotDropped:
             assert _compute_status(buy, _REF).value == "pending_start", window
 
 
-class TestSimulationReachesTerminalStatus:
-    """Under time simulation, a non-terminal buy follows the simulated clock; terminals are preserved.
+class TestTheFlightWindowNeverOverridesAnExplicitDecision:
+    """Only the generic serving state is date-refined; everything else is verbatim.
 
-    Regression (finding #3): honoring the persisted lifecycle short-circuited
-    date refinement, so a time-simulation client (jump_to_event) on a buy
-    created as pending_creatives never reached "completed" and the "final"
-    delivery notification was unreachable.
+    This class used to grade a ``simulate=True`` mode, in which any NON-terminal
+    persisted state also followed the flight window so a time-simulation client
+    (``mock_time`` / ``jump_to_event``) could watch a buy reach "completed" and
+    receive the "final" delivery notification. That parameter is gone with the
+    testing-hook channel that fed it (commit a1b79d22d): no request can ask for
+    simulation, so there is no second refinement rule left to grade. What survives
+    is the rule that made the simulated one an exception — the persisted lifecycle
+    is authoritative, and a date can only refine the serving state.
     """
 
-    def test_simulated_pending_buy_reaches_completed_past_flight(self):
+    def test_a_non_serving_status_is_not_refined_by_a_past_flight_window(self):
+        """A pending buy whose flight has ended is still pending, not completed."""
         buy = _buy("pending_creatives", start=date(2025, 1, 1), end=date(2025, 3, 31))
-        past_flight = date(2025, 6, 1)
-        assert resolve_canonical_status(buy, past_flight, simulate=True) == "completed"
-        # Without simulation the persisted lifecycle stays authoritative.
-        assert resolve_canonical_status(buy, past_flight, simulate=False) == "pending_creatives"
 
-    def test_simulation_preserves_terminal_decisions(self):
-        """Simulation must not resurrect a buy the seller deliberately stopped."""
+        assert resolve_canonical_status(buy, date(2025, 6, 1)) == "pending_creatives"
+
+    def test_a_terminal_decision_survives_its_flight_window(self):
+        """A date must not resurrect a buy the seller deliberately stopped."""
         for terminal in ("canceled", "rejected", "paused"):
             buy = _buy(terminal, start=date(2025, 1, 1), end=date(2025, 3, 31))
-            assert resolve_canonical_status(buy, date(2025, 6, 1), simulate=True) == terminal
+
+            # Both inside the window and long past it: neither edge re-derives it.
+            assert resolve_canonical_status(buy, date(2025, 2, 1)) == terminal, terminal
+            assert resolve_canonical_status(buy, date(2025, 6, 1)) == terminal, terminal

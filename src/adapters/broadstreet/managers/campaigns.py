@@ -13,6 +13,7 @@ from src.adapters.broadstreet.client import BroadstreetClient
 from src.adapters.broadstreet.config_schema import (
     parse_implementation_config,
 )
+from src.core.exceptions import AdCPConfigurationError
 
 logger = logging.getLogger(__name__)
 
@@ -27,20 +28,17 @@ class BroadstreetCampaignManager:
         self,
         client: BroadstreetClient | None,
         advertiser_id: str,
-        dry_run: bool = False,
         log_func: Callable[[str], None] | None = None,
     ):
         """Initialize the campaign manager.
 
         Args:
-            client: Broadstreet API client (None for dry-run mode)
+            client: Broadstreet API client
             advertiser_id: Broadstreet advertiser ID
-            dry_run: Whether to simulate operations
             log_func: Optional logging function
         """
         self.client = client
         self.advertiser_id = advertiser_id
-        self.dry_run = dry_run
         self.log = log_func or (lambda msg: logger.info(msg))
 
     def create_campaign(
@@ -61,30 +59,13 @@ class BroadstreetCampaignManager:
         Returns:
             Created campaign data with 'id' key
         """
-        config = parse_implementation_config(impl_config)
+        parse_implementation_config(impl_config)
 
         # Build campaign name using template
         campaign_name = name
 
-        if self.dry_run:
-            self.log(f"Would create campaign: {campaign_name}")
-            self.log(f"  Advertiser ID: {self.advertiser_id}")
-            self.log(f"  Start Date: {start_date.isoformat()}")
-            self.log(f"  End Date: {end_date.isoformat()}")
-            self.log(f"  Cost Type: {config.cost_type}")
-            self.log(f"  Delivery Rate: {config.delivery_rate}")
-
-            # Return mock campaign data
-            mock_id = f"dry_run_{int(datetime.now(UTC).timestamp())}"
-            return {
-                "id": mock_id,
-                "name": campaign_name,
-                "start_date": start_date.isoformat(),
-                "end_date": end_date.isoformat(),
-            }
-
         if not self.client:
-            raise RuntimeError("Client not available in non-dry-run mode")
+            raise AdCPConfigurationError()
 
         result = self.client.create_campaign(
             advertiser_id=self.advertiser_id,
@@ -147,46 +128,20 @@ class BroadstreetCampaignManager:
                 )
                 continue
 
-            if self.dry_run:
-                self.log(f"Would create placements for package: {package_id}")
-                self.log(f"  Product: {product_id}")
-                self.log(f"  Zones: {zone_ids}")
-                self.log(f"  Budget: {package.get('budget', 'N/A')}")
-                self.log(f"  Impressions: {package.get('impressions', 'N/A')}")
+            # Note: Broadstreet placements require an advertisement_id
+            # In the real flow, placements are created when creatives are added
+            # For now, we just track the zone configuration
+            self.log(f"Package {package_id} configured for zones: {zone_ids}")
+            self.log("  (Placements will be created when creatives are added)")
 
-                # Mock placement data
-                mock_placements = [
-                    {
-                        "id": f"placement_{zone_id}_{package_id}",
-                        "zone_id": zone_id,
-                        "campaign_id": campaign_id,
-                    }
-                    for zone_id in zone_ids
-                ]
-
-                placement_results.append(
-                    {
-                        "package_id": package_id,
-                        "product_id": product_id,
-                        "status": "created",
-                        "placements": mock_placements,
-                    }
-                )
-            else:
-                # Note: Broadstreet placements require an advertisement_id
-                # In the real flow, placements are created when creatives are added
-                # For now, we just track the zone configuration
-                self.log(f"Package {package_id} configured for zones: {zone_ids}")
-                self.log("  (Placements will be created when creatives are added)")
-
-                placement_results.append(
-                    {
-                        "package_id": package_id,
-                        "product_id": product_id,
-                        "status": "pending_creatives",
-                        "zone_ids": zone_ids,
-                    }
-                )
+            placement_results.append(
+                {
+                    "package_id": package_id,
+                    "product_id": product_id,
+                    "status": "pending_creatives",
+                    "zone_ids": zone_ids,
+                }
+            )
 
         return placement_results
 

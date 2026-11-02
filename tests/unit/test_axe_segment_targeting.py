@@ -66,6 +66,7 @@ def test_create_media_buy_request_with_axe_segments():
     from datetime import datetime
 
     request = CreateMediaBuyRequest(
+        account={"account_id": "acct_test"},
         brand={"domain": "example.com"},
         start_time=datetime(2025, 1, 15, 0, 0, 0, tzinfo=UTC),
         end_time=datetime(2025, 2, 15, 23, 59, 59, tzinfo=UTC),
@@ -103,6 +104,8 @@ def test_update_media_buy_request_with_axe_segments():
     from src.core.schemas import AdCPPackageUpdate
 
     request = UpdateMediaBuyRequest(
+        account={"account_id": "acct_test"},
+        idempotency_key="test-idem-key-0001",
         media_buy_id="mb_test_001",
         packages=[
             AdCPPackageUpdate(

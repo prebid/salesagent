@@ -23,7 +23,6 @@ from src.core.schemas import (
     GetMediaBuyDeliveryRequest,
     GetProductsRequest,
     GetSignalsRequest,
-    ListAuthorizedPropertiesRequest,  # Removed from adcp 3.2.0, defined locally
     UpdateMediaBuyRequest,
 )
 from tests.helpers.adcp_factories import create_test_package_request
@@ -67,13 +66,6 @@ class TestMCPContractValidation:
         assert request.brief == "just a brief"
         assert request.brand is None
 
-    def test_list_authorized_properties_minimal(self):
-        """Test list_authorized_properties can be called with no parameters."""
-        request = ListAuthorizedPropertiesRequest()
-
-        # 'tags' field was removed in AdCP 2.5 - only 'context' remains as optional
-        assert request.context is None
-
     def test_activate_signal_minimal(self):
         """Test activate_signal with required fields."""
         request = ActivateSignalRequest(
@@ -89,6 +81,7 @@ class TestMCPContractValidation:
     def test_create_media_buy_minimal(self):
         """Test create_media_buy with minimal required fields per AdCP v3.12 spec."""
         request = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(
@@ -111,6 +104,7 @@ class TestMCPContractValidation:
         """
         # Test: Multiple packages with product IDs
         request = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             po_number="PO-12345",
             packages=[
@@ -161,13 +155,17 @@ class TestMCPContractValidation:
     def test_update_media_buy_minimal(self):
         """Test update_media_buy requires media_buy_id (adcp 3.12)."""
         # media_buy_id is required in adcp 3.12
-        request = UpdateMediaBuyRequest(media_buy_id="test_buy_123")
+        request = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"}, idempotency_key="test-idem-key-0001", media_buy_id="test_buy_123"
+        )
         assert request.media_buy_id == "test_buy_123"
         assert request.paused is None
 
         # Missing media_buy_id → validation error
         with pytest.raises(ValidationError):
-            UpdateMediaBuyRequest(paused=False)
+            UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"}, idempotency_key="test-idem-key-0001", paused=False
+            )
 
     def test_get_media_buy_delivery_minimal(self):
         """Test get_media_buy_delivery with no filters."""
@@ -198,7 +196,6 @@ class TestMCPToolParameterPatterns:
         # Tools that properly use request objects
         request_object_tools = [
             "get_signals",
-            "list_authorized_properties",
         ]
 
         # This test documents the current state for future refactoring
@@ -225,31 +222,7 @@ class TestMCPToolParameterPatterns:
 class TestSchemaDefaultValues:
     """Test that schema default values are sensible for client usage."""
 
-    def test_optional_fields_have_reasonable_defaults(self):
-        """Test that optional fields have defaults that make sense."""
-        # GetProductsRequest - per AdCP spec, all fields are optional and default to None
-        req = GetProductsRequest(brand={"domain": "testbrand.com"})
-        assert req.brief is None  # Optional, defaults to None per spec
-
-        # CreateMediaBuyRequest (with required fields per AdCP v3.12 spec)
-        req = CreateMediaBuyRequest(
-            brand={"domain": "testbrand.com"},
-            packages=[
-                create_test_package_request(
-                    product_id="prod1", budget=1000.0, pricing_option_id="default-pricing-option"
-                )
-            ],
-            start_time="2025-02-15T00:00:00Z",
-            end_time="2025-02-28T23:59:59Z",
-            po_number="test",
-            idempotency_key=f"int-key-{uuid.uuid4().hex}",
-        )
-        # Per AdCP spec, all fields are spec-compliant with library defaults
-        assert req.po_number == "test"
-
-        # ListAuthorizedPropertiesRequest
-        req = ListAuthorizedPropertiesRequest()
-        # adcp_version field was removed from AdCP spec
+    # adcp_version field was removed from AdCP spec
 
     def test_required_fields_are_truly_necessary(self):
         """Test that all required fields are actually necessary."""

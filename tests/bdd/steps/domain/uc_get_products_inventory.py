@@ -18,8 +18,7 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import assert_wire_rejection, require_payload
-from tests.bdd.steps.generic._brand_param import parse_brand_gherkin_param
+from tests.bdd.steps._outcome_helpers import require_payload
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories import (
     InventoryProfileFactory,
@@ -188,10 +187,22 @@ def when_request_products(ctx: dict) -> None:
     _call_get_products(ctx)
 
 
-@when(parsers.parse("the buyer requests products with brand {brand}"))
-def when_request_products_with_brand(ctx: dict, brand: str) -> None:
-    """Dispatch get_products with a brand value (JSON dict or bare/quoted string)."""
-    _call_get_products(ctx, brand=parse_brand_gherkin_param(brand))
+# Two steps stood here, neither bound by any feature: `the buyer requests products with brand
+# {brand}` and `the request is rejected with VALIDATION_ERROR naming field "{field}"`.
+#
+# The second is worth its own note, because egress_ssrf.py used to point at it as the shared
+# request-level rejection Then and that cross-reference had gone stale. The only rendering of
+# a comparable sentence anywhere is `the CREATIVE is rejected with VALIDATION_ERROR naming
+# field ...` at local-egress-ssrf-refusal.feature:196, which egress_ssrf.py serves itself. The
+# request-level SSRF refusals were reworded into three narrower sentences — `the response
+# arrives`, `the response contains error code VALIDATION_ERROR`, `the response error field is
+# ...` — and nothing has bound this one since.
+#
+# Nothing is lost. `then_response_error_code` grades the code through assert_wire_error, which
+# DEFAULTS recovery from CODE_TABLE, so `correctable` — the half this step's docstring called
+# load-bearing, because SERVICE_UNAVAILABLE/transient would tell a buyer to retry a refusal
+# that is permanent — is still asserted; `then_response_error_field` grades the pointer on
+# both envelope layers.
 
 
 # ── Then steps ──────────────────────────────────────────────────────
@@ -211,27 +222,6 @@ def then_has_products(ctx: dict) -> None:
     )
     assert actual.name == expected.name, f"Expected name={expected.name!r}, got {actual.name!r}"
     ctx["first_product"] = actual
-
-
-@then(parsers.parse('the request is rejected with VALIDATION_ERROR naming field "{field}"'))
-def then_rejected_validation_field(ctx: dict, field: str) -> None:
-    """Assert the wire envelope is VALIDATION_ERROR and names the field structurally.
-
-    Shared beyond this use case: it also binds the brand-shorthand scenarios and
-    every request-level refusal in ``local-egress-ssrf-refusal.feature`` (the
-    egress module used to carry a twin of this sentence for INVALID_REQUEST; the
-    seam and the DNS-free registration gate now answer with one code, so there is
-    one step). The rationale that came with it, and applies to every caller:
-
-    ``correctable`` is the load-bearing half. For the egress callers, the refusal
-    once surfaced as SERVICE_UNAVAILABLE / transient, which tells the buyer to
-    retry a request that will be refused identically forever; generally, it is the
-    assertion that says the buyer can fix this themselves. ``field`` is the other
-    half — where the message must disclose nothing (AdCP 3.1.1 L1 § "Webhook URL
-    validation (SSRF)" point 6), it is the ONLY channel that can say WHICH of the
-    request's inputs to fix.
-    """
-    assert_wire_rejection(ctx, "VALIDATION_ERROR", recovery="correctable", field=field)
 
 
 @then(parsers.parse('the first product publisher_properties selection_type is "{expected}"'))

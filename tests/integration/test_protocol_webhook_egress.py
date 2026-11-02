@@ -41,7 +41,7 @@ migration artefact:
 ``TestDeliveryLogParity.test_terminal_status_row_records_one_attempt_and_the_status``
 ``TestDeliveryLogParity.test_exhausted_row_counts_every_attempt_that_was_made``
     Both fail on the same live bug, at
-    ``protocol_webhook_service.py`` in the ``requests.HTTPError`` arm:
+    ``protocol_webhook_service.py`` in the ``requests.HTTPError`` branch:
     ``status_code = e.response.status_code if e.response else None``.
     ``requests.Response.__bool__`` returns ``self.ok``, which is False for
     EVERY response that raised ``HTTPError`` — so ``status_code`` is
@@ -113,7 +113,7 @@ _UNRESOLVABLE_WEBHOOK_URL = "https://webhook-sink.invalid/webhook"
 
 # The refusal wording an operator reads, in the delivery-log row AND in the audit
 # line. It is the EGRESS SEAM's — src/core/security/webhook_egress.py — not this
-# sender's: before lane salesagent-gra7.1 the sender's refusal arm overrode the
+# sender's: before lane salesagent-gra7.1 the sender's refusal branch overrode the
 # seam's detail with its own "refused by egress policy" string, which is one more
 # place the vocabulary could drift. Now the outcome carries the wording and the
 # recorder writes it down, so there is exactly one.
@@ -344,12 +344,12 @@ class TestDeliveryLogParity:
 class TestRefusedDestinationRow:
     """A destination refused by egress policy still leaves both operator records.
 
-    This is the arm production justifies at the ``OutboundRequestBlocked``
+    This is the branch production justifies at the ``OutboundRequestBlocked``
     handler — "a misconfigured destination that leaves no trace is
     indistinguishable from one nobody configured" — and it is the only failure
-    arm whose row and audit entry were graded nowhere: the four
+    branch whose row and audit entry were graded nowhere: the four
     ``TestDeliveryLogParity`` cases all land in the ``OutboundDeliveryFailed``
-    arm or on the success path, and the two cases that do reach a refusal
+    branch or on the success path, and the two cases that do reach a refusal
     (``tests/unit/test_protocol_webhook_ssrf.py``) run without a database and so
     can only see that nothing was sent.
 
@@ -476,7 +476,7 @@ class TestAuditTrail:
     async def test_a_transport_failure_still_leaves_an_audit_trail(self, integration_db, caplog):
         """A delivery that never got a response must not vanish silently.
 
-        This is the arm with no HTTP status to record at all: the origin accepts
+        This is the branch with no HTTP status to record at all: the origin accepts
         the connection, counts the hit, and closes without answering. An
         endpoint that fails this way and leaves no audit entry is
         indistinguishable from one that was never scheduled.

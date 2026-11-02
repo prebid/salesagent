@@ -10,6 +10,7 @@ from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import PricingOption, Product, Tenant
+from tests.factories import PricingOptionFactory
 
 
 @pytest.mark.requires_db
@@ -25,6 +26,7 @@ def test_product_deletion_with_pricing_options(integration_db):
             tenant_id="test_tenant_delete",
             name="Test Tenant Delete",
             subdomain="test-delete",
+            virtual_host="test-delete-pricing.adcp.test",
         )
         session.add(tenant)
         session.flush()
@@ -44,7 +46,7 @@ def test_product_deletion_with_pricing_options(integration_db):
         session.flush()
 
         # Add a pricing option
-        pricing_option = PricingOption(
+        pricing_option = PricingOptionFactory.build(
             tenant_id=tenant.tenant_id,
             product_id=product.product_id,
             pricing_model="cpm",
@@ -99,6 +101,7 @@ def test_pricing_option_direct_deletion_bypasses_trigger_due_to_cascade(integrat
             tenant_id="test_tenant_cascade",
             name="Test Tenant Cascade",
             subdomain="test-cascade",
+            virtual_host="test-cascade.adcp.test",
         )
         session.add(tenant)
         session.flush()
@@ -116,7 +119,7 @@ def test_pricing_option_direct_deletion_bypasses_trigger_due_to_cascade(integrat
         session.add(product)
         session.flush()
 
-        pricing_option = PricingOption(
+        pricing_option = PricingOptionFactory.build(
             tenant_id=tenant.tenant_id,
             product_id=product.product_id,
             pricing_model="cpm",

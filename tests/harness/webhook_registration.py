@@ -22,18 +22,17 @@ for its lifetime); the domain envs supply production. Neither is re-derived.
 from __future__ import annotations
 
 import uuid
-from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
-from unittest.mock import patch
 
+from tests.factories.mint import mint
+from tests.factories.webhook import PushNotificationConfigRequestFactory
 from tests.harness._mixins import LocalOriginMixin
 from tests.harness.media_buy_dual import MediaBuyDualEnv
-from tests.harness.product import ProductEnv
 from tests.helpers.adcp_factories import create_test_media_buy_request_dict
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    pass
 
 
 def _drop_registered_auth(stashed: Any) -> Any:
@@ -73,45 +72,6 @@ class _AuthDroppingStash(dict):
         super().__setitem__(key, _drop_registered_auth(value))
 
 
-class A2APushRegistrationEnv(LocalOriginMixin, ProductEnv):
-    """``message/send`` registers the webhook in the PROTOCOL envelope.
-
-    ``on_message_send`` reads ``params.configuration.task_push_notification_config``
-    before any skill routing, stashes it under the task id, and
-    ``_send_protocol_webhook`` reads that stash back when the task reaches a
-    terminal state. The skill the registration rides on (``get_products``) is
-    incidental — it exists only to give the task something to complete.
-    """
-
-    def call_a2a_with_push_config(self, push_config: dict[str, Any], **kwargs: Any) -> Any:
-        """Dispatch ``message/send`` carrying a protocol-level push registration.
-
-        ``push_config`` is the A2A protobuf shape (SINGULAR ``scheme``), not the
-        AdCP tool shape — see ``_a2a_send_message_configuration``.
-        """
-        return self.call_a2a(a2a_push_notification_config=push_config, **kwargs)
-
-    @contextmanager
-    def stash_drops_the_credential_half(self) -> Iterator[None]:
-        """Make the task stash lose the auth fields — the reverse-TDD mutation.
-
-        Patches ``__init__`` rather than an instance because the handler is
-        constructed inside ``_run_a2a_handler``; the stash is replaced right
-        after production installs it, so everything up to and including the
-        ingest gate runs untouched and only what SURVIVES the stash differs.
-        """
-        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-
-        original_init = AdCPRequestHandler.__init__
-
-        def _init_with_dropping_stash(handler: Any, *args: Any, **kwargs: Any) -> None:
-            original_init(handler, *args, **kwargs)
-            handler._task_push_configs = _AuthDroppingStash(handler._task_push_configs)
-
-        with patch.object(AdCPRequestHandler, "__init__", _init_with_dropping_stash):
-            yield
-
-
 class MediaBuyPushRegistrationEnv(LocalOriginMixin, MediaBuyDualEnv):
     """``create_media_buy`` / ``update_media_buy`` register; the WORKFLOW STEP delivers.
 
@@ -124,27 +84,49 @@ class MediaBuyPushRegistrationEnv(LocalOriginMixin, MediaBuyDualEnv):
     flow and the adapter completion path both use.
     """
 
-    def register_delivery_target(self) -> Any:
-        """Store ONE active ``PushNotificationConfig`` row pointing at the origin.
+    def register_delivery_target(self, count: int = 1) -> Any:
+        """Store *count* active ``PushNotificationConfig`` rows pointing at the origin.
 
-        ``_send_push_notifications`` sends once per active row per mapping, so
-        the row count is the delivery count — one row keeps
-        ``delivery_attempts == 1`` a statement about signing rather than about
-        fan-out. What the row HOLDS is not what gets delivered to: the config
-        the sender receives is rebuilt from the workflow step's stash. The row
-        stands in for the earlier ``create_media_buy`` that registered it, which
-        is the only way a real buyer's ``update_media_buy`` webhook is ever
-        delivered — update never upserts one itself.
+        The rows stand in for the earlier ``create_media_buy`` calls that
+        registered them, which is the only way a real buyer's
+        ``update_media_buy`` webhook is ever delivered — update never upserts one
+        itself. What a row HOLDS is not what gets delivered to: the config the
+        sender receives is rebuilt from the workflow step's stash.
+
+        THE ROW COUNT IS NOT THE DELIVERY COUNT, and this used to take no
+        argument BECAUSE it was: "``_send_push_notifications`` sends once per
+        active row per mapping, so the row count is the delivery count — one row
+        keeps ``delivery_attempts == 1`` a statement about signing rather than
+        about fan-out." That described a BUG and then arranged for it not to
+        show. The production loop it described read no part of the row it
+        iterated; it sent the step's own stashed registration once per row, so a
+        principal with three configs got three copies of one event (measured on
+        the storyboard tenant: the same payload to the same URL three times
+        inside 17ms, failing AdCP 3.1.1
+        ``webhook_emission::expect_no_duplicate_webhook_on_replay``). Seeding
+        exactly one row, with no way to seed two, is what kept every test here
+        green through it.
+
+        The loop is gone. Delivery is once per MAPPED OBJECT, and the stored rows
+        are not consulted on this path at all. ``count`` exists so a test can say
+        that out loud: seed several and the answer must still be one delivery.
+
+        Returns the single row at ``count=1`` (every existing caller's shape), and
+        the list otherwise.
         """
         from tests.factories import PushNotificationConfigFactory
 
         tenant, principal = self.setup_default_data()
-        return PushNotificationConfigFactory(
-            tenant=tenant,
-            principal=principal,
-            url=self.webhook_url,
-            is_active=True,
-        )
+        rows = [
+            PushNotificationConfigFactory(
+                tenant=tenant,
+                principal=principal,
+                url=self.webhook_url,
+                is_active=True,
+            )
+            for _ in range(count)
+        ]
+        return rows[0] if count == 1 else rows
 
     def push_step(self, tool_name: str) -> Any:
         """The workflow step ``tool_name`` created, read fresh from the database.
@@ -205,10 +187,9 @@ class MediaBuyPushRegistrationEnv(LocalOriginMixin, MediaBuyDualEnv):
         """
         stashed = self.stashed_push_config(step)
         request_data = dict(step.request_data)
-        request_data["push_notification_config"] = {
-            "url": stashed["url"],
-            "authentication": {"schemes": ["HMAC-SHA256"]},
-        }
+        request_data["push_notification_config"] = PushNotificationConfigRequestFactory.payload(
+            url=stashed["url"], authentication={"schemes": ["HMAC-SHA256"]}
+        )
         step.request_data = request_data
         self.get_session().add(step)
         self.get_session().commit()
@@ -241,43 +222,21 @@ class MediaBuyPushRegistrationEnv(LocalOriginMixin, MediaBuyDualEnv):
             # Spread, not keywords: an ``overrides`` carrying ``start_time`` must
             # OVERRIDE it, not raise "got multiple values for keyword argument".
             **{
-                "start_time": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
-                "end_time": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
-                "idempotency_key": f"fo99-{uuid.uuid4().hex}",
+                "start_time": mint((datetime.now(UTC) + timedelta(days=1)).isoformat()),
+                "end_time": mint((datetime.now(UTC) + timedelta(days=30)).isoformat()),
+                "idempotency_key": mint(f"fo99-{uuid.uuid4().hex}"),
                 **overrides,
             },
         )
 
-    def widen_stashed_schemes(self, step: Any, schemes: list[str]) -> None:
-        """Rewrite the stash's ``authentication.schemes`` to *schemes* — a LEGACY row.
-
-        Not a mutation that damages anything: it manufactures the one shape a
-        pre-deploy row can already hold. A ``schemes`` array with more than one
-        entry is schema-invalid against the pin (``maxItems: 1``), so nothing
-        typed could ever have written it — but the untyped A2A tool path forwards
-        the buyer's raw dict, and ``schemes[0]`` accepted it silently, so rows
-        like this exist in the wild and their delivery behavior is already
-        decided. Asserts the stash held a single-entry list first: widening a
-        stash that carried no schemes at all would grade nothing.
-        """
-        stashed = self.stashed_push_config(step)
-        auth = stashed.get("authentication")
-        assert isinstance(auth, dict) and len(auth.get("schemes") or []) == 1, (
-            f"expected a single-scheme stash to widen, found authentication={auth!r} — "
-            f"this helper manufactures a legacy row, it cannot invent the credential half"
-        )
-        self.restash_authentication(step, {**auth, "schemes": list(schemes)})
-
     def restash_authentication(self, step: Any, authentication: dict[str, Any]) -> None:
-        """Rewrite the stash's ``authentication`` block wholesale — the general LEGACY row.
+        """Rewrite the stash's ``authentication`` block wholesale — a LEGACY row.
 
-        :meth:`widen_stashed_schemes` is the cardinality-only special case of this
-        and delegates here, so there is one place that knows how a stashed
-        registration is rewritten and committed. A row whose block names an
-        unrecognised scheme, or holds a credential under the pinned
-        ``minLength: 32``, is manufactured with this — both are shapes the untyped
-        A2A path really wrote (it forwards the buyer's raw dict), and both are
-        what Epic D lane C4 stops delivering.
+        One place knows how a stashed registration is rewritten and committed. A
+        row whose block names an unrecognised scheme, or holds a credential under
+        the pinned ``minLength: 32``, is manufactured with this — both are shapes
+        the untyped A2A path really wrote (it forwards the buyer's raw dict), and
+        both are what Epic D lane C4 stops delivering.
 
         Asserts the stash already carried a block: rewriting one that was never
         there would grade a document no producer writes.
@@ -292,75 +251,6 @@ class MediaBuyPushRegistrationEnv(LocalOriginMixin, MediaBuyDualEnv):
         step.request_data = request_data
         self.get_session().add(step)
         self.get_session().commit()
-
-    @contextmanager
-    def rehydration_refuses_multi_scheme(self) -> Iterator[None]:
-        """Make ``from_stash`` STRICT about scheme cardinality — the reverse-TDD mutation.
-
-        The alternative design the lane rejected: refuse a >1 ``schemes`` array
-        everywhere, rehydration included. Applying it here is what proves the
-        tolerance case is graded rather than merely green — with rehydration
-        strict, a legacy row's delivery must stop, because the delivery path
-        fails CLOSED on ``AdCPValidationError`` (``context_manager``'s per-webhook
-        ``continue``), which is the regression the case exists to catch.
-        """
-        from src.core.exceptions import AdCPValidationError
-        from src.core.webhooks.registration import ValidatedWebhookRegistration
-
-        original = ValidatedWebhookRegistration.from_stash.__func__  # type: ignore[attr-defined]
-
-        def _strict_from_stash(cls: Any, stashed: Any, **kwargs: Any) -> Any:
-            auth = stashed.get("authentication") if isinstance(stashed, dict) else None
-            schemes = (auth or {}).get("schemes") or [] if isinstance(auth, dict) else []
-            if len(schemes) > 1:
-                raise AdCPValidationError(
-                    "Invalid push_notification_config.authentication.schemes: exactly one scheme is allowed.",
-                    field="push_notification_config.authentication.schemes",
-                )
-            return original(cls, stashed, **kwargs)
-
-        with patch.object(ValidatedWebhookRegistration, "from_stash", classmethod(_strict_from_stash)):
-            yield
-
-    @contextmanager
-    def wrapper_loses_the_row_identity(self) -> Iterator[None]:
-        """Drop the row id between the transport wrapper and ``_impl``.
-
-        The reverse-TDD mutation for the row-identity grader, written
-        shape-agnostically for the same reason ``_drop_registered_auth`` is: the
-        row id travels inside the buyer's raw dict today (``config["id"]``, read
-        at ``media_buy_create.py`` to key the upsert) and is expected to travel
-        as its own ``config_id`` argument once the config parameter is typed —
-        the AdCP model has no ``id`` field, so coercion drops it silently. This
-        removes whichever one is present, so the control keeps meaning "the row
-        the buyer named did not survive to the upsert" across that change.
-
-        Asserts on exit that it removed something: a control that mutates
-        nothing would report a vacuous grader as a real one.
-        """
-        import src.core.tools.media_buy_create as create_module
-
-        original_impl = create_module._create_media_buy_impl
-        stripped: list[str] = []
-
-        async def _impl_without_the_row_identity(*args: Any, **kwargs: Any) -> Any:
-            config = kwargs.get("push_notification_config")
-            if isinstance(config, dict) and config.get("id") is not None:
-                kwargs["push_notification_config"] = {k: v for k, v in config.items() if k != "id"}
-                stripped.append("push_notification_config['id']")
-            if kwargs.get("config_id") is not None:
-                kwargs["config_id"] = None
-                stripped.append("config_id")
-            return await original_impl(*args, **kwargs)
-
-        with patch.object(create_module, "_create_media_buy_impl", _impl_without_the_row_identity):
-            yield
-
-        assert stripped, (
-            "the mutation removed no row identity — either the wrapper never forwarded one, "
-            "or it now travels under a name this control does not know about; either way the "
-            "grader it controls is not actually graded by it"
-        )
 
     def persisted_config_rows(self) -> list[Any]:
         """Every push-notification row this env's tenant currently holds."""

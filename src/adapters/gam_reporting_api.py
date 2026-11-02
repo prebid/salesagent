@@ -19,7 +19,8 @@ from sqlalchemy import select
 from scripts.ops.gam_helper import get_ad_manager_client_for_tenant
 from src.adapters.gam_reporting_service import GAMReportingService
 from src.core.database.database_session import get_db_session
-from src.core.database.models import AdapterConfig, Principal, Tenant
+from src.core.database.models import AdapterConfig, Tenant
+from src.core.database.repositories.principal import PrincipalRepository
 
 logger = logging.getLogger(__name__)
 
@@ -300,8 +301,7 @@ def get_principal_reporting(tenant_id: str, principal_id: str):
 
     # Get the principal's advertiser_id
     with get_db_session() as db_session:
-        stmt = select(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
-        principal = db_session.scalars(stmt).first()
+        principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
 
     if not principal:
         return jsonify({"error": "Principal not found"}), 404
@@ -588,8 +588,7 @@ def get_principal_summary(tenant_id: str, principal_id: str):
 
     # Get the principal's advertiser_id
     with get_db_session() as db_session:
-        stmt = select(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
-        principal = db_session.scalars(stmt).first()
+        principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
 
     if not principal:
         return jsonify({"error": "Principal not found"}), 404

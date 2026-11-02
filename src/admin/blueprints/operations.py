@@ -4,7 +4,6 @@ import asyncio
 import logging
 from typing import Any
 
-from adcp import Error
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 
 # FIXME(#1388): Package has a local subclass; import from src.core.schemas (Pattern #7/#4).
@@ -12,11 +11,13 @@ from adcp.types import Package
 from flask import Blueprint, request
 from sqlalchemy import select
 
-from src.admin.utils import approve_media_buy_through_writer, echo_context, require_auth, require_tenant_access
+from src.admin.utils import approve_media_buy_through_writer, require_auth, require_tenant_access
 from src.core.database.models import PersistedMediaBuyStatus, PushNotificationConfig
 from src.core.database.repositories.media_buy import MediaBuyRepository
+from src.core.database.repositories.principal import PrincipalRepository
+from src.core.errors.details import RejectionReasonDetails
 from src.core.exceptions import AdCPMediaBuyRejectedError
-from src.core.schemas import CreateMediaBuyError, CreateMediaBuySuccess
+from src.core.schemas import CreateMediaBuyError, CreateMediaBuySuccess, Error
 from src.core.tools.media_buy_create import ApprovalOutcome
 from src.core.webhooks.delivery import WebhookTaskContext
 from src.services.protocol_webhook_service import get_protocol_webhook_service
@@ -25,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 
 def _as_request_dict(value: dict[str, Any] | str | None) -> dict[str, Any]:
-    """Narrow JSONType (dict|str|None) to a dict for .get() / echo_context."""
+    """Narrow JSONType (dict|str|None) to a dict for .get()."""
     return value if isinstance(value, dict) else {}
 
 
@@ -108,7 +109,6 @@ def media_buy_detail(tenant_id, media_buy_id):
     from src.core.database.models import (
         Creative,
         CreativeAssignment,
-        Principal,
         Product,
         WorkflowStep,
     )
@@ -121,11 +121,19 @@ def media_buy_detail(tenant_id, media_buy_id):
             if not media_buy:
                 return "Media buy not found", 404
 
-            # Get principal info
-            principal = None
+            # The buy's owner, loaded ONCE: the same stored-ids resolution the approval
+            # path uses, so the template's principal and the adapter's identity are one
+            # load. A buy whose owner row is gone renders without one.
+            from src.core.exceptions import AdCPConfigurationError
+            from src.core.resolved_identity import identity_of
+
+            owner = None
             if media_buy.principal_id:
-                stmt = select(Principal).filter_by(tenant_id=tenant_id, principal_id=media_buy.principal_id)
-                principal = db_session.scalars(stmt).first()
+                try:
+                    owner = identity_of(tenant_id, media_buy.principal_id)
+                except AdCPConfigurationError:
+                    owner = None
+            principal = owner.principal if owner else None
 
             # Get packages for this media buy from MediaPackage table
             media_packages = repo.get_packages(media_buy_id)
@@ -221,31 +229,12 @@ def media_buy_detail(tenant_id, media_buy_id):
                 try:
                     from datetime import UTC, datetime, timedelta
 
-                    from src.core.config_loader import set_current_tenant
-                    from src.core.database.models import Tenant
                     from src.core.helpers.adapter_helpers import get_adapter
-                    from src.core.schemas import Principal as PrincipalSchema
                     from src.core.schemas import ReportingPeriod
 
-                    # Get adapter for this principal
-                    if principal:
-                        # Set tenant context before calling get_adapter (required for adapter initialization)
-                        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-                        if tenant:
-                            set_current_tenant(
-                                {
-                                    "tenant_id": tenant_id,
-                                    "ad_server": tenant.ad_server or "mock",
-                                }
-                            )
-
-                        # Convert SQLAlchemy model to Pydantic schema (get_adapter expects schema)
-                        principal_schema = PrincipalSchema(
-                            principal_id=principal.principal_id,
-                            name=principal.name,
-                            platform_mappings=principal.platform_mappings or {},
-                        )
-                        adapter = get_adapter(principal_schema, dry_run=False)
+                    if owner:
+                        # The operator view acts as the buy's owner, resolved above.
+                        adapter = get_adapter(owner)
 
                         # Calculate date range (last 7 days or campaign duration) - always use UTC
                         end_date = datetime.now(UTC)
@@ -331,11 +320,11 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
     from datetime import UTC, datetime
 
     from flask import flash, redirect, request, url_for
-    from sqlalchemy.orm import attributes
 
     from src.core.database.database_session import get_db_session
     from src.core.database.models import Context as DBContext
     from src.core.database.models import ObjectWorkflowMapping, WorkflowStep
+    from src.core.database.repositories.workflow import WorkflowRepository
 
     try:
         action = request.form.get("action")  # "approve" or "reject"
@@ -361,7 +350,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                 return redirect(url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id))
 
             # Extract step data to dict to avoid detached instance errors after commit/nested sessions.
-            # JSONType columns are typed as dict|str|None; narrow before echo_context / .get().
+            # JSONType columns are typed as dict|str|None; narrow before .get().
             request_data = _as_request_dict(step.request_data)
             step_data = {
                 "step_id": step.step_id,
@@ -393,16 +382,11 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                 step.status = "approved"
                 step.updated_at = datetime.now(UTC)
 
-                if not step.comments:
-                    step.comments = []
-                step.comments.append(
-                    {
-                        "user": user_email,
-                        "timestamp": datetime.now(UTC).isoformat(),
-                        "comment": "Approved via media buy detail page",
-                    }
+                # Atomic tenant-scoped append (salesagent-pgqs): the old
+                # whole-list write-back erased concurrent comments.
+                WorkflowRepository(db_session, tenant_id).append_comment(
+                    step.step_id, user=user_email, text="Approved via media buy detail page"
                 )
-                attributes.flag_modified(step, "comments")
 
                 # Commit the step BEFORE calling the writer. The callee opens nested
                 # sessions, and get_db_session()'s exit closes the shared thread-scoped
@@ -441,24 +425,17 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         approve_repo = MediaBuyRepository(db_session, tenant_id)
                         all_packages = approve_repo.get_packages(media_buy_id)
 
-                        # Echo the buyer's request context (shared helper, also used by
-                        # the creative approval webhook in blueprints/creatives.py).
-                        approve_context = echo_context(request_data)
-
                         # Both columns come off the ApprovalResult, not a re-read. The
                         # writer reports what it wrote; a route that re-reads the row after
                         # the call is the shape that made a detached read possible here.
                         create_media_buy_approved_result = CreateMediaBuySuccess.sync_success(
                             media_buy_id=media_buy_id,
+                            message=f"Media buy {media_buy_id} created successfully.",
                             packages=[Package(package_id=x.package_id) for x in all_packages],
                             confirmed_at=approval.confirmed_at,
                             revision=approval.revision,
-                            context=approve_context,
                         )
                         webhook_task = _media_buy_webhook_task(step_data, tenant_id, media_buy_id, media_buy_data)
-                        # The dialect fork moved into notify(); this site passes the protocol it
-                        # already read from the workflow step (salesagent-pldmk.39).
-                        protocol = step_data["request_data"].get("protocol", "mcp")
 
                         try:
                             service = get_protocol_webhook_service()
@@ -468,8 +445,6 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                                     task=webhook_task,
                                     status=AdcpTaskStatus.completed,
                                     result=create_media_buy_approved_result,
-                                    protocol=protocol,
-                                    context_id=step_data["context_id"] or "",
                                 )
                             )
                             logger.info(f"Sent webhook notification for approved media buy {media_buy_id}")
@@ -486,16 +461,10 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                 step.error_message = reason or "Rejected by administrator"
                 step.updated_at = datetime.now(UTC)
 
-                if not step.comments:
-                    step.comments = []
-                step.comments.append(
-                    {
-                        "user": user_email,
-                        "timestamp": datetime.now(UTC).isoformat(),
-                        "comment": f"Rejected: {reason or 'No reason provided'}",
-                    }
+                # Atomic tenant-scoped append (salesagent-pgqs), as in approve.
+                WorkflowRepository(db_session, tenant_id).append_comment(
+                    step.step_id, user=user_email, text=f"Rejected: {reason or 'No reason provided'}"
                 )
-                attributes.flag_modified(step, "comments")
 
                 if media_buy and media_buy.status == "pending_approval":
                     # approve_repo is constructed before the action split, so it is the
@@ -527,18 +496,33 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     # webhook. Spec 3.1.1 create-media-buy-response.json models a non-success
                     # outcome as the CreateMediaBuyError variant — embed that with the reason.
                     #
-                    # Route the code through the typed AdCPError cascade so the buyer sees
-                    # the same WIRE code the tool path emits for this event
-                    # (MEDIA_BUY_REJECTED is internal-only; wire_error_code translates it
-                    # to POLICY_VIOLATION — never hand-pick codes here; PR #1567 round-2 item 1).
-                    rejection = AdCPMediaBuyRejectedError(f"Rejected: {reason or 'No reason provided'}")
+                    # Route the code through the typed AdCPSalesAgentError cascade so the buyer sees
+                    # the same WIRE code the tool path emits for this event — which is now
+                    # MEDIA_BUY_REJECTED itself, not a POLICY_VIOLATION rewrite. Never
+                    # hand-pick codes here (PR #1567 round-2 item 1); the class declares it.
+                    # The seller's typed reason is OPERATOR DATA, not the buyer-facing
+                    # sentence: `message` is a function of the code through CODE_TABLE and so
+                    # cannot carry it. It travels in `details` — without this the buyer is told
+                    # only "The media buy was declined" and never learns why, which is what the
+                    # comment above has always promised ("embed that with the reason").
+                    # DERIVED from the exception, not hand-listed. Error.from_exception takes
+                    # the code, field, details and retry_after off the error that already knows
+                    # them, so the advisory and the transport envelope cannot disagree about the
+                    # same failure -- there is one derivation, not a second copy. Reading the
+                    # three fields separately did exactly that: once salesagent-3dawm.8 made
+                    # suggestion resolve from CODE_TABLE, a hand-built copy that omitted it gave
+                    # the buyer MEDIA_BUY_REJECTED *with* the pin's suggestion on the tool path
+                    # and *without* it on this webhook -- one code, two behaviours, split by
+                    # lane.
+                    rejection = AdCPMediaBuyRejectedError(
+                        details=RejectionReasonDetails(rejection_reason=reason) if reason else None
+                    )
                     create_media_buy_rejected_result = CreateMediaBuyError(
-                        errors=[Error(code=rejection.wire_error_code, message=rejection.message)]
+                        status=AdcpTaskStatus.rejected,
+                        errors=[Error.from_exception(rejection)],
+                        message="Media buy creation encountered 1 error(s).",
                     )
                     webhook_task = _media_buy_webhook_task(step_data, tenant_id, media_buy_id, media_buy_data)
-                    # The dialect fork moved into notify(); this site passes the protocol it
-                    # already read from the workflow step (salesagent-pldmk.39).
-                    protocol = step_data["request_data"].get("protocol", "mcp")
 
                     try:
                         service = get_protocol_webhook_service()
@@ -548,8 +532,6 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                                 task=webhook_task,
                                 status=AdcpTaskStatus.rejected,
                                 result=create_media_buy_rejected_result,
-                                protocol=protocol,
-                                context_id=step_data["context_id"] or "",
                             )
                         )
                         logger.info(f"Sent webhook notification for rejected media buy {media_buy_id}")
@@ -601,7 +583,6 @@ def webhooks(tenant_id, **kwargs):
 
     from src.core.database.database_session import get_db_session
     from src.core.database.models import AuditLog, MediaBuy, Tenant
-    from src.core.database.models import Principal as ModelPrincipal
 
     try:
         with get_db_session() as db:
@@ -637,7 +618,7 @@ def webhooks(tenant_id, **kwargs):
             )
 
             # Get all principals for filter dropdown
-            principals = db.query(ModelPrincipal).filter_by(tenant_id=tenant_id).all()
+            principals = PrincipalRepository(db, tenant_id).list_all()
 
             # Calculate summary stats
             total_webhooks = query.count()

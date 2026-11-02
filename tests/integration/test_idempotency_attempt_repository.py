@@ -40,11 +40,23 @@ def _envelope(status: str, **response_fields) -> dict:
 
 
 def _setup(env: BareIntegrationEnv, tenant_id: str = "idem_t1", principal_id: str = "idem_p1"):
-    """Create a tenant + principal so FK constraints are satisfied."""
+    """Create a tenant + principal so FK constraints are satisfied.
+
+    ``token_hash`` is globally UNIQUE and the factory derives it from the principal_id
+    alone, so the same principal_id seeded in two tenants -- which is exactly what the
+    isolation tests below do -- collides on insert. The token is qualified with the
+    tenant here; nothing in this module presents a credential, so its value only has
+    to be distinct.
+    """
+    from src.core.credentials import hash_token
     from tests.factories import PrincipalFactory, TenantFactory
 
     tenant = TenantFactory(tenant_id=tenant_id)
-    PrincipalFactory(tenant=tenant, principal_id=principal_id)
+    PrincipalFactory(
+        tenant=tenant,
+        principal_id=principal_id,
+        token_hash=hash_token(f"tok_test_{tenant_id}_{principal_id}"),
+    )
     return env.get_session()
 
 

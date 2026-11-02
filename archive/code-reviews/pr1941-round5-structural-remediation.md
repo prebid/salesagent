@@ -42,8 +42,8 @@ the three copies disagree:
   it, and `expire_on_commit` default-True makes the route's `:255` attribute read raise
   `DetachedInstanceError` after the order exists in the ad server).
 - `operations.py:395-460` — creative gate (tenant-scoped, correct), resolver write **before**
-  the adapter call (`:433-452`), so the adapter-failure arm inherits a stamped, write-once
-  `confirmed_at` (R5-28) and the success arm's resolved value is overwritten by `:1241`'s
+  the adapter call (`:433-452`), so the adapter-failure branch inherits a stamped, write-once
+  `confirmed_at` (R5-28) and the success branch's resolved value is overwritten by `:1241`'s
   `ACTIVE` (R5-26 — the resolver adoption is inert). It also executes the adapter even when
   creatives are unapproved, which `workflows.py:228` refuses.
 - `creatives.py:621-645` — the only correct lifecycle shape (execute, then fresh UoW,
@@ -68,7 +68,7 @@ identical assert messages — a DRY defect the review found twice independently.
      in the same `update_status` call (one write, one revision bump).
    - After adapter failure: write `FAILED` here (today only `operations.py:466` does), return
      `FAILED`. Because no committed status was written before the adapter ran, `confirmed_at`
-     stays NULL on this arm — R5-28 closes as a *consequence of ordering*, not a guard.
+     stays NULL on this branch — R5-28 closes as a *consequence of ordering*, not a guard.
 2. New `CreativeRepository.unapproved_creative_ids(media_buy_id) -> list[str]` — tenant-scoped
    by construction (repository carries `tenant_id`). The three open-coded gates
    (`workflows.py:203-215`, `operations.py:397-420`, `creatives.py`'s variant) delegate to it
@@ -121,7 +121,7 @@ nested-UoW caller, but it is engine-level new surface — **filed** (see non-goa
 status/revision inside the UoW and builds `_MediaBuyData`, but the dataclass carries the
 *raw* persisted fields — so the build loop in `_get_media_buys_impl` re-derives everything:
 `_compute_status(buy, today)` again at `:230` under a byte-identical copy of the
-refuse-or-omit policy (`:229-238` vs `:521-530`, R5-23; the first copy's advisory arm is
+refuse-or-omit policy (`:229-238` vs `:521-530`, R5-23; the first copy's advisory branch is
 dead by dataflow), and `_persisted_revision(buy)` again at `:348` with **no covering
 handler** — a second call to a raising function on a value the fetch stage already proved
 valid. The hand-copied `_PINNED_REVISION_MINIMUM = 1` literal (`:601`, R5-17) and the
@@ -191,7 +191,7 @@ to drop it.
 ## RC3 — Remedies delivered as prose claims and bulk sweeps
 
 **The fault.** Two shapes of the same disease. (a) Review responses were closed with
-*sentences asserting facts* — "nothing reads the Success arm" (`_base.py:840`, false: two
+*sentences asserting facts* — "nothing reads the Success branch" (`_base.py:840`, false: two
 `getattr(result, …)` reads at `media_buy_update.py:727-728`), "implemented three times"
 (`_media_buy_transitions.py:8`, it is four and the fourth —
 `admin/services/media_buy_readiness_service.py:270-305` — is what operators see), "raises
@@ -211,7 +211,7 @@ are exempt while the regex bans them (R5-2).
 
 1. Where the prose asserts something checkable, the preceding RCs already moved the fact
    into code (RC2 items 3, 6, 7). The rest are corrections/deletions, all enumerated:
-   - `_base.py:840-842`: replace the false "nothing reads the Success arm" with the true
+   - `_base.py:840-842`: replace the false "nothing reads the Success branch" with the true
      narrow claim — name `media_buy_id`/`affected_packages` as the two `getattr` reads and
      why a placeholder `revision` cannot leak through them (neither reads `revision`; both
      land only in log/bookkeeping paths). **No new AST rule** — R5-6's suggested read-scanner
@@ -312,7 +312,7 @@ three redeclarations it existed to catch (R5-1, restored-and-run: 1 failed at he
 3. **Fix** `test_architecture_media_buy_write_seam.py` — the one new guard the review
    verified live (relocation mutation reds). Close the three shape gaps exactly as R5-5
    specifies: `**`-splat keywords (`kw.arg is None`) on the model name, an
-   `update(MediaBuy).values(...)` arm, and `ImportFrom` asname resolution — each landed as a
+   `update(MediaBuy).values(...)` branch, and `ImportFrom` asname resolution — each landed as a
    `_KNOWN_BAD_SNIPPETS` fixture row so the finder is driven red by its own table. Extract
    the base/callee-resolution helper it already does best (`_called_name`,
    `constructor_keyword_qualified`) into a shared module used by
@@ -320,10 +320,10 @@ three redeclarations it existed to catch (R5-1, restored-and-run: 1 failed at he
    `models.PersistedMediaBuyStatus(...)`) — DRY across the guard family, and the fix lands
    once.
 4. **Fix** `_pinned_fields.required_nullable_fields()` in-file (R5-16): after pointer
-   resolution, if the subschema has no local `required`, walk `allOf` arms (merging
+   resolution, if the subschema has no local `required`, walk `allOf` branches (merging
    `required` + `properties`) before concluding; if still nothing and the schema composes
    via `oneOf`/`anyOf`, **raise** — the docstring already promises it. Widen the nullability
-   predicate to `anyOf`/`oneOf` null-arms. Its three adopters are measured correct today, so
+   predicate to `anyOf`/`oneOf` null-branches. Its three adopters are measured correct today, so
    this is drift-proofing the reader, not changing any wire value.
 5. **Practice, not meta-guard:** every AST guard must contain a fixture table whose rows
    drive its own finder red (the pattern `test_architecture_no_response_side_persisted_defaults.py`
@@ -450,7 +450,7 @@ PR), repositories (changed), upstream feature files.
 | Item | Why filed | Routed to |
 |------|-----------|-----------|
 | R5-29 [BLOCKER, pre-existing] — `@log_admin_action` outside auth at 55/80 admin routes; unauthenticated POST writes `success=True` audit rows | Reviewer's own instruction; 55 unreviewed reorderings across untouched surface. The fix is the seam he names: a decorator-order guard, then reorder behind it — its own PR | New GH issue (P1, security-adjacent) |
-| R5-10 — five success-arm `errors=` sites emit pin-rejected documents; `success = not bool(errors)` makes A2A report `success: false` for a committed buy | Reviewer's own "file rather than fold"; pre-existing; ruling should follow R5-9's | New GH issue, cross-linked to the R5-9 task |
+| R5-10 — five success-branch `errors=` sites emit pin-rejected documents; `success = not bool(errors)` makes A2A report `success: false` for a committed buy | Reviewer's own "file rather than fold"; pre-existing; ruling should follow R5-9's | New GH issue, cross-linked to the R5-9 task |
 | R5-27's conversion of `media_buy_readiness_service.py:270-305` to `resolve_flight_window_status` | `src/admin/services/` is untouched surface and it changes what operators see; this PR corrects the *inventory prose* only (RC3) | New GH issue |
 | R5-32's `user:`-on-`adcp-server` alternative to chmod 666 | Reviewer files it; runtime-user change on the e2e server, own risk profile. This PR deletes the false clause only | New GH issue |
 | Scoped-session nesting hazard — `BaseUoW.__enter__` (`uow.py:89`) re-enters and then closes the caller's thread-scoped session (`database_session.py:151-152`) | Engine-level semantics affecting every nested caller; RC1 removes the only known victim, the general fix (own-session UoW or `expire_on_commit=False` decision) needs its own analysis | New GH issue, citing R5-25's mechanism |

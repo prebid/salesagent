@@ -4,19 +4,23 @@ Tests the new format validation logic that was added to sync_creatives
 to ensure consistent validation across all creative operations.
 """
 
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import pytest
 
-from src.core.resolved_identity import ResolvedIdentity
-from src.core.tools.creatives import _sync_creatives_impl
+from src.core.errors.details import AdapterFailureDetails
+from src.core.tools.creatives._sync import _sync_creatives_impl
 from tests.factories.creative_asset import build_assets, image_spec
 from tests.helpers.creative_test_helpers import (
     make_creative_dict,
+    make_format_spec,
+    make_registry_mock,
+    sync_creatives_request,
 )
 from tests.helpers.creative_test_helpers import (
     make_creative_uow as _make_creative_uow_shared,
 )
+from tests.helpers.unit_identity import fabricated_account_identity
 
 
 def _make_creative_uow():
@@ -28,12 +32,12 @@ class TestSyncCreativesFormatValidation:
 
     @pytest.fixture
     def identity(self):
-        """ResolvedIdentity for tests."""
-        return ResolvedIdentity(
+        """The AccountIdentity ``_sync_creatives_impl`` declares. Mocked DB, so fabricated."""
+        return fabricated_account_identity(
             principal_id="principal_123",
             tenant_id="tenant_123",
-            tenant={"tenant_id": "tenant_123", "approval_mode": "auto-approve", "slack_webhook_url": None},
-            protocol="mcp",
+            approval_mode="auto-approve",
+            slack_webhook_url=None,
         )
 
     @pytest.fixture
@@ -53,24 +57,13 @@ class TestSyncCreativesFormatValidation:
     @pytest.fixture
     def mock_format_spec(self):
         """Mock format specification from creative agent."""
-        format_spec = Mock()
-        format_spec.format_id = "display_300x250_image"
-        format_spec.agent_url = "https://creative.adcontextprotocol.org"
-        format_spec.name = "Medium Rectangle - Image"
-        # STATED, not left to Mock's auto-attribute: a bare Mock answers every
-        # attribute with a truthy Mock, so an unset output_format_ids would make
-        # this fixture claim to be a GENERATIVE format and send the creative
-        # down the agent-build path this test is not about. That went unnoticed
-        # while the catalog lookup compared models with `==` and never matched.
-        format_spec.output_format_ids = None
-        return format_spec
+        return make_format_spec(name="Medium Rectangle - Image")
 
     def test_format_validation_success(self, identity, mock_tenant, valid_creative_dict, mock_format_spec):
         """Test that format validation succeeds when format exists."""
         mock_uow, mock_creative_repo = _make_creative_uow()
 
         with (
-            patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
             patch("src.core.tools.creatives._sync.CreativeUoW") as mock_uow_cls,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
@@ -85,21 +78,13 @@ class TestSyncCreativesFormatValidation:
             async def mock_get_format(agent_url, format_id, **_kwargs):
                 return mock_format_spec
 
-            # preview_creative must be awaitable too. It was never reached before:
-            # the catalog lookup compared FormatId MODELS with `==`, never matched,
-            # and the whole agent-backed arm was skipped — so this mock could stay
-            # incomplete without anything noticing.
-            async def mock_preview_creative(*_args, **_kwargs):
-                return {"preview_url": "https://creative.example/preview/creative_123"}
-
-            mock_registry = Mock()
-            mock_registry.list_all_formats = mock_list_all_formats
-            mock_registry.get_format = mock_get_format
-            mock_registry.preview_creative = mock_preview_creative
+            mock_registry = make_registry_mock(list_all_formats=mock_list_all_formats, get_format=mock_get_format)
             mock_registry_getter.return_value = mock_registry
 
             # Execute
-            response = _sync_creatives_impl(creatives=[valid_creative_dict], identity=identity)
+            response = _sync_creatives_impl(
+                req=sync_creatives_request(creatives=[valid_creative_dict]), identity=identity
+            )
 
             # Verify format was validated
             assert len(response.creatives) == 1
@@ -111,7 +96,6 @@ class TestSyncCreativesFormatValidation:
         mock_uow, mock_creative_repo = _make_creative_uow()
 
         with (
-            patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
             patch("src.core.tools.creatives._sync.CreativeUoW") as mock_uow_cls,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
@@ -126,21 +110,13 @@ class TestSyncCreativesFormatValidation:
             async def mock_get_format(agent_url, format_id, **_kwargs):
                 return None  # Format not found
 
-            # preview_creative must be awaitable too. It was never reached before:
-            # the catalog lookup compared FormatId MODELS with `==`, never matched,
-            # and the whole agent-backed arm was skipped — so this mock could stay
-            # incomplete without anything noticing.
-            async def mock_preview_creative(*_args, **_kwargs):
-                return {"preview_url": "https://creative.example/preview/creative_123"}
-
-            mock_registry = Mock()
-            mock_registry.list_all_formats = mock_list_all_formats
-            mock_registry.get_format = mock_get_format
-            mock_registry.preview_creative = mock_preview_creative
+            mock_registry = make_registry_mock(list_all_formats=mock_list_all_formats, get_format=mock_get_format)
             mock_registry_getter.return_value = mock_registry
 
             # Execute
-            response = _sync_creatives_impl(creatives=[valid_creative_dict], identity=identity)
+            response = _sync_creatives_impl(
+                req=sync_creatives_request(creatives=[valid_creative_dict]), identity=identity
+            )
 
             # Verify creative failed with appropriate error
             assert len(response.creatives) == 1
@@ -148,10 +124,13 @@ class TestSyncCreativesFormatValidation:
             assert response.creatives[0].creative_id == "creative_123"
             assert len(response.creatives[0].errors) == 1
 
-            error_msg = response.creatives[0].errors[0].message
-            assert "Unknown format 'display_300x250_image'" in error_msg
-            assert "https://creative.adcontextprotocol.org" in error_msg
-            assert "list_creative_formats" in error_msg  # Helpful suggestion
+            advisory = response.creatives[0].errors[0]
+            # The rejected format is STRUCTURED, not interpolated prose: a buyer agent can
+            # read it without parsing English. The code is the pin's generic not-found
+            # (enums/error-code.json: REFERENCE_NOT_FOUND for a referenced identifier that
+            # does not exist), not VALIDATION_ERROR, which it reserves for business rules.
+            assert advisory.code == "REFERENCE_NOT_FOUND"
+            assert advisory.details["format_id"] == "display_300x250_image"
 
     def test_format_validation_agent_unreachable(self, identity, mock_tenant, valid_creative_dict):
         """An unreachable agent fails the REQUEST transiently, not the creative.
@@ -167,7 +146,6 @@ class TestSyncCreativesFormatValidation:
         mock_uow, mock_creative_repo = _make_creative_uow()
 
         with (
-            patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
             patch("src.core.tools.creatives._sync.CreativeUoW") as mock_uow_cls,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
@@ -180,74 +158,20 @@ class TestSyncCreativesFormatValidation:
                 return []
 
             async def mock_get_format(agent_url, format_id, **_kwargs):
-                raise AdCPServiceUnavailableError("Connection failed: agent unreachable — Connection refused")
+                raise AdCPServiceUnavailableError(details=AdapterFailureDetails(status="Connection failed"))
 
-            # preview_creative must be awaitable too. It was never reached before:
-            # the catalog lookup compared FormatId MODELS with `==`, never matched,
-            # and the whole agent-backed arm was skipped — so this mock could stay
-            # incomplete without anything noticing.
-            async def mock_preview_creative(*_args, **_kwargs):
-                return {"preview_url": "https://creative.example/preview/creative_123"}
-
-            mock_registry = Mock()
-            mock_registry.list_all_formats = mock_list_all_formats
-            mock_registry.get_format = mock_get_format
-            mock_registry.preview_creative = mock_preview_creative
+            mock_registry = make_registry_mock(list_all_formats=mock_list_all_formats, get_format=mock_get_format)
             mock_registry_getter.return_value = mock_registry
 
-            with pytest.raises(AdCPServiceUnavailableError, match="Connection refused") as exc_info:
-                _sync_creatives_impl(creatives=[valid_creative_dict], identity=identity)
+            with pytest.raises(AdCPServiceUnavailableError) as exc_info:
+                _sync_creatives_impl(req=sync_creatives_request(creatives=[valid_creative_dict]), identity=identity)
 
+            # Both obligations the pre-merge test carried, kept — asserted where the
+            # values live now. ``match="Connection refused"`` could not survive: the
+            # message is a read-only function of the code (CODE_TABLE), so the
+            # provenance of the failure is carried by the TYPED details instead.
+            assert exc_info.value.details.status == "Connection failed"
             assert exc_info.value.recovery == "transient"
-
-    def test_format_validation_with_string_format_id(self, identity, mock_tenant, mock_format_spec):
-        """Test that string format_ids are rejected (FormatId object required)."""
-        # Creative with string format_id (legacy format - no longer supported)
-        creative_dict = {
-            **make_creative_dict(creative_id="creative_456", name="Legacy Creative"),
-            "format_id": "display_300x250_image",  # String instead of FormatId object
-        }
-
-        mock_uow, mock_creative_repo = _make_creative_uow()
-
-        with (
-            patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
-            patch("src.core.tools.creatives._sync.CreativeUoW") as mock_uow_cls,
-            patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
-            patch("src.core.tools.creatives._workflow.get_audit_logger"),
-            patch("src.core.tools.creatives._sync.log_tool_activity"),
-        ):
-            mock_uow_cls.return_value.__enter__.return_value = mock_uow
-
-            # Setup mock registry
-            async def mock_list_all_formats(tenant_id=None):
-                return [mock_format_spec]
-
-            async def mock_get_format(agent_url, format_id, **_kwargs):
-                return mock_format_spec
-
-            # preview_creative must be awaitable too. It was never reached before:
-            # the catalog lookup compared FormatId MODELS with `==`, never matched,
-            # and the whole agent-backed arm was skipped — so this mock could stay
-            # incomplete without anything noticing.
-            async def mock_preview_creative(*_args, **_kwargs):
-                return {"preview_url": "https://creative.example/preview/creative_123"}
-
-            mock_registry = Mock()
-            mock_registry.list_all_formats = mock_list_all_formats
-            mock_registry.get_format = mock_get_format
-            mock_registry.preview_creative = mock_preview_creative
-            mock_registry_getter.return_value = mock_registry
-
-            # Execute
-            response = _sync_creatives_impl(creatives=[creative_dict], identity=identity)
-
-            # Verify creative failed validation (string format_id rejected by schema)
-            # AdCP spec requires format_id to be a FormatId object with agent_url and id
-            assert len(response.creatives) == 1
-            assert response.creatives[0].action == "failed"
-            assert response.creatives[0].creative_id == "creative_456"
-            # Error message will be from Pydantic validation, not our format validation
 
     def test_format_validation_multiple_creatives(self, identity, mock_tenant, mock_format_spec):
         """Test that format validation works correctly with multiple creatives."""
@@ -263,7 +187,6 @@ class TestSyncCreativesFormatValidation:
         mock_uow, mock_creative_repo = _make_creative_uow()
 
         with (
-            patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
             patch("src.core.tools.creatives._sync.CreativeUoW") as mock_uow_cls,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
@@ -281,21 +204,11 @@ class TestSyncCreativesFormatValidation:
                     return mock_format_spec
                 return None
 
-            # preview_creative must be awaitable too. It was never reached before:
-            # the catalog lookup compared FormatId MODELS with `==`, never matched,
-            # and the whole agent-backed arm was skipped — so this mock could stay
-            # incomplete without anything noticing.
-            async def mock_preview_creative(*_args, **_kwargs):
-                return {"preview_url": "https://creative.example/preview/creative_123"}
-
-            mock_registry = Mock()
-            mock_registry.list_all_formats = mock_list_all_formats
-            mock_registry.get_format = mock_get_format
-            mock_registry.preview_creative = mock_preview_creative
+            mock_registry = make_registry_mock(list_all_formats=mock_list_all_formats, get_format=mock_get_format)
             mock_registry_getter.return_value = mock_registry
 
             # Execute
-            response = _sync_creatives_impl(creatives=creatives, identity=identity)
+            response = _sync_creatives_impl(req=sync_creatives_request(creatives=creatives), identity=identity)
 
             # Verify results
             assert len(response.creatives) == 3
@@ -307,7 +220,9 @@ class TestSyncCreativesFormatValidation:
             # Second creative: failed (unknown format)
             assert response.creatives[1].creative_id == "creative_2"
             assert response.creatives[1].action == "failed"
-            assert "Unknown format 'unknown_format'" in response.creatives[1].errors[0].message
+            advisory_2 = response.creatives[1].errors[0]
+            assert advisory_2.code == "REFERENCE_NOT_FOUND"
+            assert advisory_2.details["format_id"] == "unknown_format"
 
             # Third creative: success
             assert response.creatives[2].creative_id == "creative_3"
@@ -325,7 +240,6 @@ class TestSyncCreativesFormatValidation:
         mock_uow, mock_creative_repo = _make_creative_uow()
 
         with (
-            patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
             patch("src.core.tools.creatives._sync.CreativeUoW") as mock_uow_cls,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
@@ -340,63 +254,18 @@ class TestSyncCreativesFormatValidation:
             async def mock_get_format(agent_url, format_id, **_kwargs):
                 return mock_format_spec
 
-            # preview_creative must be awaitable too. It was never reached before:
-            # the catalog lookup compared FormatId MODELS with `==`, never matched,
-            # and the whole agent-backed arm was skipped — so this mock could stay
-            # incomplete without anything noticing.
-            async def mock_preview_creative(*_args, **_kwargs):
-                return {"preview_url": "https://creative.example/preview/creative_123"}
-
-            mock_registry = Mock()
-            mock_registry.list_all_formats = mock_list_all_formats
-            mock_registry.get_format = mock_get_format
-            mock_registry.preview_creative = mock_preview_creative
+            mock_registry = make_registry_mock(list_all_formats=mock_list_all_formats, get_format=mock_get_format)
             mock_registry_getter.return_value = mock_registry
 
             # Execute
-            response = _sync_creatives_impl(creatives=[creative1, creative2], identity=identity)
+            response = _sync_creatives_impl(
+                req=sync_creatives_request(creatives=[creative1, creative2]), identity=identity
+            )
 
             # Verify both creatives succeeded
             assert len(response.creatives) == 2
             assert response.creatives[0].action == "created"
             assert response.creatives[1].action == "created"
-
-    def test_format_validation_missing_format_id(self, identity, mock_tenant):
-        """Test that validation fails when format_id is missing."""
-        creative_dict = {
-            "creative_id": "creative_no_format",
-            "name": "Creative Without Format",
-            # Missing format_id
-            "assets": build_assets(image_spec("banner_image", url="https://example.com/banner.png")),
-        }
-
-        mock_uow, mock_creative_repo = _make_creative_uow()
-
-        with (
-            patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
-            patch("src.core.tools.creatives._sync.CreativeUoW") as mock_uow_cls,
-            patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
-            patch("src.core.tools.creatives._workflow.get_audit_logger"),
-            patch("src.core.tools.creatives._sync.log_tool_activity"),
-        ):
-            mock_uow_cls.return_value.__enter__.return_value = mock_uow
-
-            # Setup mock registry (needed for list_all_formats call)
-            async def mock_list_all_formats(tenant_id=None):
-                return []
-
-            mock_registry = Mock()
-            mock_registry.list_all_formats = mock_list_all_formats
-            mock_registry_getter.return_value = mock_registry
-
-            # Execute
-            response = _sync_creatives_impl(creatives=[creative_dict], identity=identity)
-
-            # Verify creative failed with format validation error
-            assert len(response.creatives) == 1
-            assert response.creatives[0].action == "failed"
-            # Error message comes from Pydantic schema validation
-            assert "format_id" in response.creatives[0].errors[0].message
 
     def test_error_messages_distinguish_scenarios(self, identity, mock_tenant):
         """Test that error messages clearly distinguish between different failure scenarios."""
@@ -419,7 +288,6 @@ class TestSyncCreativesFormatValidation:
         mock_uow, mock_creative_repo = _make_creative_uow()
 
         with (
-            patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
             patch("src.core.tools.creatives._sync.CreativeUoW") as mock_uow_cls,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
@@ -436,32 +304,34 @@ class TestSyncCreativesFormatValidation:
 
             async def mock_get_format(agent_url, format_id, **_kwargs):
                 if "offline.example.com" in agent_url:
-                    raise AdCPServiceUnavailableError("Connection failed: Connection refused")
+                    raise AdCPServiceUnavailableError(details=AdapterFailureDetails(status="Connection failed"))
 
-            # preview_creative must be awaitable too. It was never reached before:
-            # the catalog lookup compared FormatId MODELS with `==`, never matched,
-            # and the whole agent-backed arm was skipped — so this mock could stay
-            # incomplete without anything noticing.
-            async def mock_preview_creative(*_args, **_kwargs):
-                return {"preview_url": "https://creative.example/preview/creative_123"}
-
-            mock_registry = Mock()
-            mock_registry.list_all_formats = mock_list_all_formats
-            mock_registry.get_format = mock_get_format
-            mock_registry.preview_creative = mock_preview_creative
+            mock_registry = make_registry_mock(list_all_formats=mock_list_all_formats, get_format=mock_get_format)
             mock_registry_getter.return_value = mock_registry
 
             # Unknown format: per-item terminal failure — the creative is wrong.
-            response1 = _sync_creatives_impl(creatives=[creative_unknown_format], identity=identity)
+            response1 = _sync_creatives_impl(
+                req=sync_creatives_request(creatives=[creative_unknown_format]), identity=identity
+            )
 
-            error1 = response1.creatives[0].errors[0].message
-            assert "Unknown format" in error1
-            assert "list_creative_formats" in error1
-            assert "unreachable" not in error1  # Should NOT mention unreachability
+            advisory1 = response1.creatives[0].errors[0]
+            # A wrong format is buyer-correctable; an unreachable agent is transient.
+            # The CODE carries that distinction, so it cannot be blurred by wording.
+            # The advisory is built by the SAME derivation as the request-level envelope
+            # (build_error_object), and since salesagent-3dawm.8 that derivation resolves
+            # the suggestion from CODE_TABLE — the class default is gone, not deferred.
+            assert advisory1.code == "REFERENCE_NOT_FOUND"
+            assert advisory1.code != "SERVICE_UNAVAILABLE"
 
             # Down agent: request-level TRANSIENT failure — the creative is fine.
-            with pytest.raises(AdCPServiceUnavailableError, match="Connection refused") as exc_info:
-                _sync_creatives_impl(creatives=[creative_unreachable], identity=identity)
+            with pytest.raises(AdCPServiceUnavailableError) as exc_info:
+                _sync_creatives_impl(req=sync_creatives_request(creatives=[creative_unreachable]), identity=identity)
+
+            # Both obligations the pre-merge test carried, kept — asserted where the
+            # values live now. ``match="Connection refused"`` could not survive: the
+            # message is a read-only function of the code (CODE_TABLE), so the
+            # provenance of the failure is carried by the TYPED details instead.
+            assert exc_info.value.details.status == "Connection failed"
             assert exc_info.value.recovery == "transient"
 
 

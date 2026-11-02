@@ -58,7 +58,7 @@ vacuous. If the assertion is weak, strengthen it to the exact obligation
 ### 6. Trace production
 
 Follow the concrete request through the full call chain: transport wrapper →
-`_impl` → typed `AdCPError` → boundary translation → wire envelope. The
+`_impl` → typed `AdCPSalesAgentError` → boundary translation → wire envelope. The
 xpass must be explained by real production behavior you can point at, not
 inferred from the green mark.
 

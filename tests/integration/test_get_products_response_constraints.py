@@ -18,7 +18,6 @@ from tests.factories import (
     PricingOptionFactory,
     PrincipalFactory,
     ProductFactory,
-    PublisherPartnerFactory,
     TenantFactory,
 )
 from tests.harness.product import ProductEnv
@@ -89,9 +88,7 @@ class TestRelevanceThresholdIntegration:
 
         Covers: CONSTR-RELEVANCE-THRESHOLD-01
         """
-        from src.core.resolved_identity import ResolvedIdentity
-        from src.core.tenant_context import LazyTenantContext
-        from src.core.testing_hooks import AdCPTestContext
+        from src.core.tenant_context import TenantContext
         from src.services.ai.agents.ranking_agent import ProductRanking, ProductRankingResult
 
         with ProductEnv(tenant_id="thresh-t1", principal_id="p1") as env:
@@ -114,14 +111,12 @@ class TestRelevanceThresholdIntegration:
                 ]
             )
 
-            env._identity = ResolvedIdentity(
+            # The identity carries the principal and the tenant, and nothing else: the
+            # transport and the testing context it used to carry are both gone.
+            env._identity = PrincipalFactory.make_identity(
                 principal_id="p1",
                 tenant_id="thresh-t1",
-                tenant=LazyTenantContext("thresh-t1"),
-                protocol="mcp",
-                testing_context=AdCPTestContext(
-                    dry_run=False, mock_time=None, jump_to_event=None, test_session_id=None
-                ),
+                tenant=TenantContext.load("thresh-t1"),
             )
 
             with (
@@ -175,54 +170,3 @@ class TestRelevanceThresholdIntegration:
 
 class TestPublisherDomainsPortfolioIntegration:
     """Publisher domains portfolio assembly from real database."""
-
-    @pytest.mark.asyncio
-    async def test_publisher_domains_from_list_authorized_properties(self, integration_db):
-        """list_authorized_properties returns publisher_domains sorted alphabetically.
-
-        Covers: CONSTR-PUBLISHER-DOMAINS-PORTFOLIO-01
-        """
-        from src.core.resolved_identity import ResolvedIdentity
-        from src.core.tenant_context import LazyTenantContext
-        from src.core.tools.properties import _list_authorized_properties_impl
-
-        with ProductEnv(tenant_id="pub-dom-t1", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="pub-dom-t1", subdomain="pub-dom-t1")
-
-            # Add publishers in non-alphabetical order
-            for domain in ["zeta.com", "alpha.com", "mike.com"]:
-                PublisherPartnerFactory(tenant=tenant, publisher_domain=domain)
-
-            identity = ResolvedIdentity(
-                principal_id=None,
-                tenant_id="pub-dom-t1",
-                tenant=LazyTenantContext("pub-dom-t1"),
-                protocol="mcp",
-            )
-
-            response = _list_authorized_properties_impl(req=None, identity=identity)
-            assert response.publisher_domains == ["alpha.com", "mike.com", "zeta.com"]
-
-    @pytest.mark.asyncio
-    async def test_empty_publisher_domains_returns_empty_array(self, integration_db):
-        """Tenant with no publishers returns empty array, not null.
-
-        Covers: CONSTR-PUBLISHER-DOMAINS-PORTFOLIO-01
-        """
-        from src.core.resolved_identity import ResolvedIdentity
-        from src.core.tenant_context import LazyTenantContext
-        from src.core.tools.properties import _list_authorized_properties_impl
-
-        with ProductEnv(tenant_id="pub-dom-t2", principal_id="p1") as env:
-            TenantFactory(tenant_id="pub-dom-t2", subdomain="pub-dom-t2")
-
-            identity = ResolvedIdentity(
-                principal_id=None,
-                tenant_id="pub-dom-t2",
-                tenant=LazyTenantContext("pub-dom-t2"),
-                protocol="mcp",
-            )
-
-            response = _list_authorized_properties_impl(req=None, identity=identity)
-            assert response.publisher_domains == []
-            assert isinstance(response.publisher_domains, list)

@@ -30,23 +30,21 @@
                 </div>
 
                 <div>
-                    <strong style="color: #666;">Subdomain (auto-generated):</strong><br>
-                    <code style="background: white; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.9rem;">{{ tenant.subdomain }}.{{ sales_agent_domain }}</code>
-                    <br>
-                    <small style="color: #888; font-size: 0.8rem;">You can configure a custom domain in settings</small>
+                    <strong style="color: #666;">Agent Domain:</strong><br>
+                    {% if tenant.virtual_host %}
+                        <code style="background: white; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.9rem;">{{ tenant.virtual_host }}</code>
+                    {% else %}
+                        <code style="background: white; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.9rem;">not configured</code>
+                        <br>
+                        <small style="color: #888; font-size: 0.8rem;">Configure the domain this agent answers on in settings</small>
+                    {% endif %}
                 </div>
 
                 <div>
                     <strong style="color: #666;">Your Dashboard URL:</strong><br>
-                    {% if tenant.subdomain and tenant.subdomain != 'localhost' %}
-                        <a href="https://{{ tenant.subdomain }}.{{ sales_agent_domain }}/admin/" target="_blank" style="color: #4285F4; text-decoration: none; font-weight: 500;">
-                            https://{{ tenant.subdomain }}.{{ sales_agent_domain }}/admin/
-                        </a>
-                    {% else %}
-                        <a href="{{ request.script_root }}/tenant/{{ tenant.tenant_id }}" style="color: #4285F4; text-decoration: none; font-weight: 500;">
-                            View Your Dashboard
-                        </a>
-                    {% endif %}
+                    <a href="{{ request.script_root }}/tenant/{{ tenant.tenant_id }}" style="color: #4285F4; text-decoration: none; font-weight: 500;">
+                        View Your Dashboard
+                    </a>
                 </div>
 
                 <div>
@@ -55,6 +53,20 @@
                 </div>
             </div>
         </div>
+
+        {% if api_token %}
+        <!-- One-time credential reveal. Rendered only on the response that mints the
+             token; the row keeps a hash, so this page is the only place the plaintext
+             ever exists. Reloading this URL shows nothing. -->
+        <div style="background: #fff8e1; border: 1px solid #ffc107; border-radius: 8px; padding: 1.5rem; margin-bottom: 2rem; text-align: left;">
+            <h3 style="margin-bottom: 0.5rem; color: #8a6d00;">🔑 Your demo advertiser's API token</h3>
+            <p style="color: #666; margin-bottom: 1rem;">
+                Copy it now — it is shown only on this page and cannot be retrieved later.
+                Rotate it from Advertisers if you lose it.
+            </p>
+            <code style="display: block; word-break: break-all; background: #fff; border: 1px solid #e0e0e0; border-radius: 4px; padding: 0.75rem; font-size: 1rem;">{{ api_token }}</code>
+        </div>
+        {% endif %}
 
         <!-- Next Steps -->
         <div style="background: #e3f2fd; border-radius: 8px; padding: 1.5rem; margin-bottom: 2rem; text-align: left;">

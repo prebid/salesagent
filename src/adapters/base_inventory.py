@@ -30,22 +30,19 @@ class BaseInventoryManager(ABC):
         self,
         client: Any | None,
         identifier: str,
-        dry_run: bool = False,
         log_func: Callable[[str], None] | None = None,
         cache_timeout: timedelta | None = None,
     ):
         """Initialize the inventory manager.
 
         Args:
-            client: Platform-specific API client (None for dry-run mode)
+            client: Platform-specific API client
             identifier: Network/tenant identifier (e.g., network_id, tenant_id)
-            dry_run: Whether to simulate operations
             log_func: Optional logging function
             cache_timeout: How long to cache inventory data
         """
         self.client = client
         self.identifier = identifier
-        self.dry_run = dry_run
         self.log = log_func or (lambda msg: logger.info(msg))
         self._cache_timeout = cache_timeout or timedelta(hours=24)
         self._last_sync: datetime | None = None
@@ -121,7 +118,6 @@ class BaseInventoryManager(ABC):
         """
         return {
             "identifier": self.identifier,
-            "dry_run": self.dry_run,
             "last_sync": self._last_sync.isoformat() if self._last_sync else None,
             "cache_valid": self.is_cache_valid(),
         }

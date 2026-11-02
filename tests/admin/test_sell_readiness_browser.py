@@ -14,6 +14,7 @@ from fastmcp.client.transports import StreamableHttpTransport
 
 from tests.admin.browser_flow_helpers import browser_page, build_admin_test_session, login_as_tenant_admin
 from tests.e2e.adcp_request_builder import build_adcp_media_buy_request, get_test_date_range, parse_tool_result
+from tests.helpers.credentials import credential_headers
 
 pytestmark = [
     pytest.mark.admin,
@@ -36,10 +37,7 @@ async def _call_mcp_tool(
     tool_name: str,
     arguments: dict[str, Any],
 ) -> dict[str, Any]:
-    headers = {
-        "x-adcp-auth": auth_token,
-        "x-adcp-tenant": TENANT_ID,
-    }
+    headers = credential_headers(token=auth_token, tenant=TENANT_ID)
     transport = StreamableHttpTransport(url=f"{live_server['mcp']}/mcp/", headers=headers)
     async with Client(transport=transport) as client:
         result = await client.call_tool(tool_name, arguments)

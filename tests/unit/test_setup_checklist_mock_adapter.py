@@ -11,6 +11,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tests.utils.database_helpers import vhost_for
+
 
 class TestSetupChecklistMockAdapter:
     """Test setup checklist service handles mock adapter correctly."""
@@ -51,7 +53,7 @@ class TestSetupChecklistMockAdapter:
                 mock_tenant.order_name_template = None
                 mock_tenant.line_item_name_template = None
                 mock_tenant.slack_webhook_url = None
-                mock_tenant.virtual_host = None
+                mock_tenant.virtual_host = vhost_for(tenant_id)
                 mock_tenant.enable_axe_signals = False
                 mock_tenant.policy_settings = {}
                 mock_tenant.auth_setup_mode = True  # Setup mode active
@@ -110,7 +112,7 @@ class TestSetupChecklistMockAdapter:
             mock_tenant.order_name_template = None
             mock_tenant.line_item_name_template = None
             mock_tenant.slack_webhook_url = None
-            mock_tenant.virtual_host = None
+            mock_tenant.virtual_host = vhost_for(tenant_id)
             mock_tenant.enable_axe_signals = False
             mock_tenant.policy_settings = {}
             mock_tenant.auth_setup_mode = True  # Setup mode active
@@ -156,7 +158,7 @@ class TestSetupChecklistMockAdapter:
             mock_tenant.order_name_template = None
             mock_tenant.line_item_name_template = None
             mock_tenant.slack_webhook_url = None
-            mock_tenant.virtual_host = None
+            mock_tenant.virtual_host = vhost_for(tenant_id)
             mock_tenant.enable_axe_signals = False
             mock_tenant.policy_settings = {}
             mock_tenant.auth_setup_mode = True  # Setup mode active
@@ -205,7 +207,7 @@ class TestSetupChecklistMockAdapter:
                 mock_tenant.order_name_template = None
                 mock_tenant.line_item_name_template = None
                 mock_tenant.slack_webhook_url = None
-                mock_tenant.virtual_host = None
+                mock_tenant.virtual_host = vhost_for(tenant_id)
                 mock_tenant.enable_axe_signals = False
                 mock_tenant.policy_settings = {}
                 mock_tenant.auth_setup_mode = True  # Setup mode active
@@ -263,7 +265,7 @@ class TestSetupChecklistMockAdapter:
                 mock_tenant.order_name_template = None
                 mock_tenant.line_item_name_template = None
                 mock_tenant.slack_webhook_url = None
-                mock_tenant.virtual_host = None
+                mock_tenant.virtual_host = vhost_for(tenant_id)
                 mock_tenant.enable_axe_signals = False
                 mock_tenant.policy_settings = {}
                 mock_tenant.auth_setup_mode = True  # Setup mode active
@@ -288,7 +290,7 @@ class TestSetupChecklistMockAdapter:
 
     def test_validate_setup_complete_with_all_requirements(self):
         """validate_setup_complete() passes when all requirements are met (in multi-tenant mode)."""
-        from src.services.setup_checklist_service import SetupIncompleteError, validate_setup_complete
+        from src.services.setup_checklist_service import AdCPConfigurationError, validate_setup_complete
 
         tenant_id = "test_tenant"
 
@@ -310,7 +312,7 @@ class TestSetupChecklistMockAdapter:
                 mock_tenant.order_name_template = None
                 mock_tenant.line_item_name_template = None
                 mock_tenant.slack_webhook_url = None
-                mock_tenant.virtual_host = None
+                mock_tenant.virtual_host = vhost_for(tenant_id)
                 mock_tenant.enable_axe_signals = False
                 mock_tenant.policy_settings = {}
                 mock_tenant.auth_setup_mode = True  # Setup mode still active (SSO is optional in multi-tenant)
@@ -338,12 +340,12 @@ class TestSetupChecklistMockAdapter:
                 with patch("os.getenv") as mock_getenv:
                     mock_getenv.return_value = "fake-api-key"
 
-                    # This should NOT raise SetupIncompleteError when all requirements met
+                    # This should NOT raise AdCPConfigurationError when all requirements met
                     try:
                         validate_setup_complete(tenant_id)
                         # If we get here, validation passed (expected)
                         assert True
-                    except SetupIncompleteError as e:
+                    except AdCPConfigurationError as e:
                         # Should not happen when all requirements met
                         pytest.fail(
                             f"validate_setup_complete raised error unexpectedly: {e.message}. "

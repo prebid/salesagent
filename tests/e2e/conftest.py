@@ -14,7 +14,6 @@ import uuid
 from pathlib import Path
 from urllib.parse import urlparse
 
-import httpx
 import pytest
 import requests
 
@@ -24,6 +23,8 @@ _GETPID = os.getpid
 
 # tests/e2e/conftest.py -> tests/ -> repo root.
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+from scripts.setup.init_database_ci import CI_TEST_TOKEN
 
 # Import contract validation - this automatically validates tool calls at test collection time
 from tests.e2e.conftest_contract_validation import pytest_collection_modifyitems  # noqa: F401
@@ -37,6 +38,19 @@ def e2e_host() -> str:
     the compose network with no published ports (ADCP_TEST_HOST).
     """
     return os.getenv("ADCP_TEST_HOST", "localhost")
+
+
+def e2e_in_network() -> bool:
+    """Whether this process runs INSIDE the compose network rather than on the host.
+
+    The in-network runner addresses the stack by service name (:func:`e2e_host` is a
+    compose alias); the host path reaches published ports on localhost and cannot
+    resolve a compose alias at all. Any claim that depends on compose DNS — reaching a
+    service that publishes NO host port, or resolving a network alias — is only
+    meaningful here. ``./run_all_tests.sh`` runs every suite in-network, so this is the
+    normal path and the host path is the developer convenience.
+    """
+    return e2e_host() not in {"localhost", "127.0.0.1"}
 
 
 def e2e_tls_host() -> str:
@@ -300,10 +314,17 @@ def docker_services_e2e(request):
             f"TLS={tls_port}, WebhookCapture={webhook_capture_port}"
         )
 
-        # Set port env vars in os.environ so that:
-        # 1. docker-compose subprocess inherits them via os.environ.copy()
-        # 2. Tests that read ports via os.getenv() (e.g., test_a2a_endpoints_working.py,
-        #    test_landing_pages.py) pick up the correct dynamic ports
+        # Set port env vars in os.environ for ONE consumer: the docker-compose
+        # subprocess, which inherits them via os.environ.copy() at the call below.
+        # Exporting to a child process is what environment variables are for.
+        #
+        # Tests must NOT read these back. A test receives its port from the fixture
+        # that allocated it — this fixture's yielded ports dict, or the `live_server`
+        # URLs built from it. A process-global carries no sender (this fixture,
+        # docker-compose.e2e.yml:146 and scripts/test-stack.sh:174 all write
+        # ADCP_SALES_PORT), no lifetime (a stale value outlives the fixture instead of
+        # failing) and no multiplicity (one variable cannot hold a port per xdist
+        # worker). Env at the edge, data on the inside.
         os.environ["ADCP_SALES_PORT"] = str(mcp_port)
         os.environ["POSTGRES_PORT"] = str(postgres_port)
         os.environ["ADCP_TLS_PORT"] = str(tls_port)
@@ -562,13 +583,19 @@ def docker_services_e2e(request):
         product_count = cursor.fetchone()[0]
         print(f"   Products in database: {product_count}")
 
-        # Count principals
-        cursor.execute("SELECT COUNT(*) FROM principals WHERE access_token = 'ci-test-token'")
+        # Count principals. BY TOKEN HASH: the row stores sha256(token) and a prefix, never
+        # the plaintext, so `WHERE access_token = ...` names a column that does not exist
+        # and raised UndefinedColumn here -- inside the block that reports whether the
+        # stack is seeded at all.
+        from src.core.credentials import hash_token
+
+        ci_token_hash = hash_token(CI_TEST_TOKEN)
+        cursor.execute("SELECT COUNT(*) FROM principals WHERE token_hash = %s", (ci_token_hash,))
         principal_count = cursor.fetchone()[0]
-        print(f"   Principals with ci-test-token: {principal_count}")
+        print(f"   Principals answering ci-test-token: {principal_count}")
 
         # Get principal's tenant_id
-        cursor.execute("SELECT tenant_id FROM principals WHERE access_token = 'ci-test-token'")
+        cursor.execute("SELECT tenant_id FROM principals WHERE token_hash = %s", (ci_token_hash,))
         result = cursor.fetchone()
         if result:
             principal_tenant = result[0]
@@ -664,11 +691,11 @@ def live_server(docker_services_e2e):
 def test_auth_token(live_server):
     """Create or get a test principal with auth token.
 
-    This token must match the one created by src/core/database/database.py::init_db().
+    Reads the constant the seeding script owns, so this fixture cannot hand out a token
+    the stack was not seeded with (``scripts/setup/init_database_ci.py``, which is also
+    the value ``src/core/database/database.py::init_db()`` creates for the demo tenant).
     """
-    # Return the CI test token that is created by init_db() in database.py
-    # This ensures consistency between database initialization and E2E tests
-    return "ci-test-token"
+    return CI_TEST_TOKEN
 
 
 @pytest.fixture
@@ -717,21 +744,6 @@ async def clean_test_data(live_server, request):
     if not request.config.getoption("--keep-data", False):
         # Could add database cleanup here
         pass
-
-
-@pytest.fixture
-async def a2a_client(live_server, test_auth_token):
-    """Provide A2A client for testing."""
-    async with httpx.AsyncClient() as client:
-        client.base_url = live_server["a2a"]
-        client.headers.update(
-            {
-                "Authorization": f"Bearer {test_auth_token}",
-                "X-Test-Session-ID": str(uuid.uuid4()),
-                "X-Dry-Run": "true",
-            }
-        )
-        yield client
 
 
 @pytest.fixture

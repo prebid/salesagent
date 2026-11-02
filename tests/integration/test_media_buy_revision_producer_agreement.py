@@ -60,9 +60,9 @@ import pytest
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.schemas import UpdateMediaBuyRequest
 from src.core.schemas._base import GetMediaBuysRequest
+from tests.factories.request import fresh_idempotency_key
 from tests.harness.media_buy_create_update_list import MediaBuyCreateUpdateListEnv
 from tests.harness.transport import Transport
-from tests.helpers import assert_envelope_shape
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -72,8 +72,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 # easily drops a field, so excluding it by default is the expensive direction to be
 # wrong in.
 #
-# A2A (artifact DataPart) and MCP (structured_content) stash a REAL wire body;
-# IMPL has no wire by definition.
+# A2A (artifact DataPart) and MCP (structured_content) stash a REAL wire body.
 #
 # Scenarios that POLL get_media_buys stop here: that tool has no REST route, a
 # pre-existing surface fact, so a REST parametrization would grade nothing.
@@ -186,7 +185,7 @@ class _VanishingRow:
             f"{result.wire_response!r}. A success here carries a media_buy_id, a status and a "
             f"revision the seller cannot honour"
         )
-        assert_envelope_shape(result.wire_error_envelope, "MEDIA_BUY_NOT_FOUND", recovery="correctable")
+        result.assert_wire_error("MEDIA_BUY_NOT_FOUND", recovery="correctable")
 
 
 @pytest.mark.parametrize("transport", _GET_MEDIA_BUYS_TRANSPORTS)
@@ -209,8 +208,24 @@ def test_update_responses_and_get_media_buys_report_the_same_revision(integratio
         created = env.call_via(transport, **_create_kwargs(product, domain="revision-agreement.example.com"))
         media_buy_id = created.require_wire()["media_buy_id"]
 
-        first = env.call_via(transport, req=UpdateMediaBuyRequest(media_buy_id=media_buy_id, budget=20000.0))
-        second = env.call_via(transport, req=UpdateMediaBuyRequest(media_buy_id=media_buy_id, budget=30000.0))
+        first = env.call_via(
+            transport,
+            req=UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key=fresh_idempotency_key(),
+                media_buy_id=media_buy_id,
+                end_time="2026-12-01T00:00:00Z",
+            ),
+        )
+        second = env.call_via(
+            transport,
+            req=UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key=fresh_idempotency_key(),
+                media_buy_id=media_buy_id,
+                end_time="2026-12-15T00:00:00Z",
+            ),
+        )
         listed = env.call_via(transport, req=GetMediaBuysRequest(media_buy_ids=[media_buy_id]))
 
         first_revision = first.require_wire()["revision"]
@@ -236,7 +251,7 @@ def test_update_responses_and_get_media_buys_report_the_same_revision(integratio
 def test_create_response_reports_the_persisted_confirmed_at_and_revision(integration_db, transport):
     """The CREATE producer is the same producer, for both persisted fields.
 
-    This module graded update, dry-run and pause/resume, and never the arm the buyer
+    This module graded update, dry-run and pause/resume, and never the branch the buyer
     meets FIRST. That gap is why the create response could mint its own values for
     two years of review rounds: ``confirmed_at`` defaulted to ``datetime.now(UTC)``
     and ``revision`` to ``1``, neither read from the row the repository had just
@@ -274,69 +289,13 @@ def test_create_response_reports_the_persisted_confirmed_at_and_revision(integra
     assert create_body["confirmed_at"] == listed_buy["confirmed_at"], (
         f"{transport}: create reported confirmed_at={create_body['confirmed_at']!r} while "
         f"get_media_buys reports {listed_buy['confirmed_at']!r} for the same buy. Two producers "
-        f"for a field the pin calls stable after it is set; the create arm must read the column, "
+        f"for a field the pin calls stable after it is set; the create branch must read the column, "
         f"not stamp its own clock"
     )
     assert create_body["revision"] == listed_buy["revision"], (
         f"{transport}: create reported revision={create_body['revision']!r} while get_media_buys "
         f"reports {listed_buy['revision']!r}. The pin names the two as interchangeable sources of "
         f"one optimistic-concurrency token"
-    )
-
-
-def test_dry_run_update_reports_the_current_revision_and_moves_nothing(integration_db):
-    """A simulated update reports the token the buy has NOW, not a bump.
-
-    dry_run applies nothing, so the buy's concurrency token is unchanged by
-    definition — reporting a bumped value would hand the buyer a token the seller
-    will reject, and reporting the schema default would hand them one that is wrong
-    in the other direction. Both errors are invisible today because the field is a
-    constant.
-
-    Seeded at a distinctive revision precisely so the assertion discriminates all
-    three answers: the default (1), a bump (``_SEEDED_REVISION + 1``) and the
-    correct current value.
-
-    IMPL only, and the reason is a property of the hook rather than a shortcut:
-    ``dry_run`` is not a spec request field, it is a testing-context flag the
-    harness injects through the env's identity (``BaseTestEnv(dry_run=True)`` ->
-    ``make_identity(dry_run=True)`` -> ``testing_context.dry_run``). The A2A and
-    MCP dispatches resolve identity from the token/headers through the real
-    pipeline, so the env's flag never reaches them — measured: the same call on
-    those transports applies an ordinary update and bumps the token to
-    ``_SEEDED_REVISION + 1``. Grading it there would grade the harness, not the
-    branch. Serialized through ``model_dump(mode="json")`` — the production
-    serializer every transport emits, which is where the constant surfaces.
-    """
-    from tests.factories import MediaBuyFactory
-
-    with MediaBuyCreateUpdateListEnv(dry_run=True) as env:
-        tenant, principal, _product, _pricing = env.setup_media_buy_data()
-        buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active", revision=_SEEDED_REVISION)
-        env._commit_factory_data()  # noqa: SLF001 — the harness's factory/session flush seam
-
-        simulated = env.call_via(
-            Transport.IMPL, req=UpdateMediaBuyRequest(media_buy_id=buy.media_buy_id, budget=20000.0)
-        )
-        listed = env.call_via(Transport.IMPL, req=GetMediaBuysRequest(media_buy_ids=[buy.media_buy_id]))
-
-        assert simulated.is_success, f"dry-run update errored: {simulated.error!r}"
-        assert listed.is_success, f"get_media_buys errored: {listed.error!r}"
-        reported = simulated.payload.model_dump(mode="json")["revision"]
-        persisted = listed.payload.model_dump(mode="json")["media_buys"][0]["revision"]
-
-    # Asserted FIRST because it doubles as the branch proof: the non-dry-run path
-    # writes, and a write bumps the token. An unmoved token is what tells us the
-    # dry-run early return actually ran, so the reported-value assertion below is
-    # not silently grading the ordinary update path.
-    assert persisted == _SEEDED_REVISION, (
-        f"the dry run MOVED the persisted token to {persisted} — it applied a write instead of "
-        f"previewing one (or the dry-run branch was never entered)"
-    )
-    assert reported == _SEEDED_REVISION, (
-        f"the dry-run preview reported revision {reported}, expected the buy's current "
-        f"{_SEEDED_REVISION} — a simulation applies nothing, so it must report neither a bump "
-        f"({_SEEDED_REVISION + 1}) nor the UpdateMediaBuySuccess schema default (1)"
     )
 
 
@@ -356,7 +315,7 @@ def test_update_raises_media_buy_not_found_when_the_row_vanishes_mid_transaction
     ``get_by_id_or_raise``) — the same buyer-facing code for the same fact.
 
     The disappearance is injected at the repository seam rather than simulated
-    with a fake row: ``update_fields`` arms it, so the re-read that follows the
+    with a fake row: ``update_fields`` branches it, so the re-read that follows the
     write returns None exactly as a concurrent DELETE would, while every lookup
     BEFORE the write still resolves normally (ownership, currency).
     """
@@ -371,7 +330,15 @@ def test_update_raises_media_buy_not_found_when_the_row_vanishes_mid_transaction
         with vanish.patched() as patcher:
             patcher.setattr(MediaBuyRepository, "update_fields", vanish.arming(MediaBuyRepository.update_fields))
 
-            result = env.call_via(transport, req=UpdateMediaBuyRequest(media_buy_id=media_buy_id, budget=20000.0))
+            result = env.call_via(
+                transport,
+                req=UpdateMediaBuyRequest(
+                    account={"account_id": "acct_test"},
+                    idempotency_key=fresh_idempotency_key(),
+                    media_buy_id=media_buy_id,
+                    end_time="2026-12-01T00:00:00Z",
+                ),
+            )
 
     vanish.assert_reported_not_found(result, transport)
 
@@ -408,8 +375,24 @@ def test_pause_resume_response_reports_the_rows_revision_and_agrees_with_get_med
         tenant, principal, _product, _pricing = env.setup_media_buy_data()
         buy = _seed_buy(env, tenant, principal, status=seeded_status)
 
-        bumped = env.call_via(transport, req=UpdateMediaBuyRequest(media_buy_id=buy.media_buy_id, budget=20000.0))
-        toggled = env.call_via(transport, req=UpdateMediaBuyRequest(media_buy_id=buy.media_buy_id, paused=paused))
+        bumped = env.call_via(
+            transport,
+            req=UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key=fresh_idempotency_key(),
+                media_buy_id=buy.media_buy_id,
+                end_time="2026-12-01T00:00:00Z",
+            ),
+        )
+        toggled = env.call_via(
+            transport,
+            req=UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key=fresh_idempotency_key(),
+                media_buy_id=buy.media_buy_id,
+                paused=paused,
+            ),
+        )
         listed = env.call_via(transport, req=GetMediaBuysRequest(media_buy_ids=[buy.media_buy_id]))
 
         bumped_revision = bumped.require_wire()["revision"]
@@ -453,7 +436,7 @@ def test_pause_resume_reports_media_buy_not_found_when_the_row_vanishes_mid_tran
     ``AttributeError`` — an untyped INTERNAL_ERROR on the wire for a condition the
     buyer can act on.
 
-    The seam that arms the disappearance is the adapter call, not a repository
+    The seam that branches the disappearance is the adapter call, not a repository
     write: the toggle branch delegates the state change to the ad server and
     writes no column of its own, so the adapter call IS its write. Arming there
     reproduces a DELETE landing between the ad server accepting the toggle and
@@ -469,6 +452,14 @@ def test_pause_resume_reports_media_buy_not_found_when_the_row_vanishes_mid_tran
         adapter.update_media_buy.side_effect = vanish.arming(adapter.update_media_buy.side_effect)
 
         with vanish.patched():
-            result = env.call_via(transport, req=UpdateMediaBuyRequest(media_buy_id=buy.media_buy_id, paused=paused))
+            result = env.call_via(
+                transport,
+                req=UpdateMediaBuyRequest(
+                    account={"account_id": "acct_test"},
+                    idempotency_key=fresh_idempotency_key(),
+                    media_buy_id=buy.media_buy_id,
+                    paused=paused,
+                ),
+            )
 
     vanish.assert_reported_not_found(result, transport)

@@ -2,7 +2,6 @@
 
 import json
 import logging
-import secrets
 import uuid
 from datetime import UTC, datetime
 
@@ -14,8 +13,9 @@ from src.admin.services import DashboardService
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action, record_admin_action_failure
 from src.core.database.database_session import get_db_session
-from src.core.database.models import MediaBuy, Principal, PushNotificationConfig, Tenant
-from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
+from src.core.database.models import MediaBuy, PushNotificationConfig, Tenant
+from src.core.database.repositories.principal import PrincipalRepository
+from src.core.database.repositories.uow import PushNotificationConfigUoW
 from src.core.exceptions import AdCPValidationError
 from src.core.webhook_validator import webhook_url_for_log
 from src.core.webhooks.registration import accept_push_notification_primitives
@@ -43,8 +43,7 @@ def list_principals(tenant_id):
                 flash("Tenant not found", "error")
                 return redirect(url_for("core.index"))
 
-            stmt = select(Principal).filter_by(tenant_id=tenant_id).order_by(Principal.name)
-            principals = db_session.scalars(stmt).all()
+            principals = PrincipalRepository(db_session, tenant_id).list_all()
 
             # Convert to dict format for template
             principals_list = []
@@ -67,7 +66,7 @@ def list_principals(tenant_id):
                 principal_dict = {
                     "principal_id": principal.principal_id,
                     "name": principal.name,
-                    "access_token": principal.access_token,
+                    "token_prefix": principal.token_prefix,
                     "platform_mappings": mappings,
                     "media_buy_count": media_buy_count,
                     "created_at": principal.created_at,
@@ -153,9 +152,7 @@ def create_principal(tenant_id):
             flash("Principal name is required", "error")
             return redirect(request.url)
 
-        # Generate unique ID and token
         principal_id = f"prin_{uuid.uuid4().hex[:8]}"
-        access_token = f"tok_{secrets.token_urlsafe(32)}"
 
         # Build platform mappings
         platform_mappings = {}
@@ -187,27 +184,28 @@ def create_principal(tenant_id):
             }
 
         with get_db_session() as db_session:
-            # Check if principal name already exists
-            existing = db_session.scalars(select(Principal).filter_by(tenant_id=tenant_id, name=principal_name)).first()
-            if existing:
-                flash(f"An advertiser named '{principal_name}' already exists", "error")
-                return redirect(request.url)
+            # No duplicate-name pre-check: advertiser names are human-readable
+            # labels, not keys. AdCP 3.1.1 attaches uniqueness only to ids
+            # (core/account.json: name is "Human-readable account name", e.g.
+            # "Acme c/o Pinnacle"), and no index backs the tenant+name pair, so a
+            # pre-check here read as a guarantee it could not hold under
+            # concurrency. Identity is (tenant_id, principal_id).
 
-            # Create the principal
-            principal = Principal(
-                tenant_id=tenant_id,
+            # The token is minted here and shown ONCE, in the flash below; the row keeps
+            # its hash. An operator who loses it rotates it.
+            principal, token = PrincipalRepository(db_session, tenant_id).issue(
                 principal_id=principal_id,
                 name=principal_name,
-                access_token=access_token,
                 platform_mappings=platform_mappings,  # JSONType handles serialization
                 created_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
-
-            db_session.add(principal)
             db_session.commit()
 
-            flash(f"Advertiser '{principal_name}' created successfully", "success")
+            flash(
+                f"Advertiser '{principal_name}' created. Its API token, shown only now: {token}",
+                "success",
+            )
             return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="advertisers"))
 
     except Exception as e:
@@ -231,9 +229,7 @@ def edit_principal(tenant_id, principal_id):
                 flash("Tenant not found", "error")
                 return redirect(url_for("core.index"))
 
-            principal = db_session.scalars(
-                select(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
-            ).first()
+            principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
             if not principal:
                 flash("Advertiser not found", "error")
                 return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
@@ -261,9 +257,7 @@ def edit_principal(tenant_id, principal_id):
     # POST - Update the principal
     try:
         with get_db_session() as db_session:
-            principal = db_session.scalars(
-                select(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
-            ).first()
+            principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
             if not principal:
                 flash("Advertiser not found", "error")
                 return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
@@ -309,9 +303,7 @@ def get_principal(tenant_id, principal_id):
     """Get principal details including platform mappings (API endpoint)."""
     try:
         with get_db_session() as db_session:
-            principal = db_session.scalars(
-                select(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
-            ).first()
+            principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
 
             if not principal:
                 return jsonify({"error": "Principal not found"}), 404
@@ -331,7 +323,7 @@ def get_principal(tenant_id, principal_id):
                     "principal": {
                         "principal_id": principal.principal_id,
                         "name": principal.name,
-                        "access_token": principal.access_token,
+                        "token_prefix": principal.token_prefix,
                         "platform_mappings": mappings,
                         "created_at": principal.created_at.isoformat() if principal.created_at else None,
                     },
@@ -341,6 +333,38 @@ def get_principal(tenant_id, principal_id):
     except Exception as e:
         logger.error(f"Error getting principal {principal_id}: {e}", exc_info=True)
         return jsonify({"error": f"Failed to get principal: {str(e)}"}), 500
+
+
+@principals_bp.route("/principal/<principal_id>/rotate-token", methods=["POST"])
+# Authorization OUTSIDE the audit decorator, per the convention in
+# src/admin/utils/audit_decorator.py's module docstring. require_tenant_access RETURNS a
+# redirect/401 rather than raising, and log_admin_action only records a failure when the
+# wrapped function RAISES — so with the audit decorator outermost an unauthenticated POST
+# wrote an audit row saying this rotation succeeded. Graded by
+# tests/integration/test_audit_decorator_auth_order.py. The other 54 sites carrying the
+# inverted order, and the ast-grep rule that would refuse it, are GH #2110.
+@require_tenant_access()
+@log_admin_action("rotate_principal_token")
+def rotate_token(tenant_id, principal_id):
+    """Replace the principal's API token. The new token is in the response, once.
+
+    The stored hash is the only record of a token, so a lost token cannot be shown again;
+    rotation is the recovery. The old token stops resolving on commit.
+    """
+    try:
+        with get_db_session() as db_session:
+            principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
+            if not principal:
+                return jsonify({"error": "Principal not found"}), 404
+
+            token = principal.rotate_token()
+            principal.updated_at = datetime.now(UTC)
+            db_session.commit()
+            return jsonify({"success": True, "token": token, "token_prefix": principal.token_prefix})
+
+    except Exception as e:
+        logger.error(f"Error rotating token for principal {principal_id}: {e}", exc_info=True)
+        return jsonify({"error": "Failed to rotate token"}), 500
 
 
 @principals_bp.route("/principal/<principal_id>/update_mappings", methods=["POST"])
@@ -376,9 +400,7 @@ def update_mappings(tenant_id, principal_id):
                     )
 
         with get_db_session() as db_session:
-            principal = db_session.scalars(
-                select(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
-            ).first()
+            principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
 
             if not principal:
                 return jsonify({"error": "Principal not found"}), 404
@@ -481,7 +503,6 @@ def get_gam_advertisers(tenant_id):
                     network_code=tenant.adapter_config.gam_network_code,
                     advertiser_id=None,
                     trafficker_id=tenant.adapter_config.gam_trafficker_id,
-                    dry_run=False,
                     tenant_id=tenant_id,
                 )
 
@@ -515,9 +536,7 @@ def get_principal_config(tenant_id, principal_id):
     """Get principal configuration including platform mappings for testing UI."""
     try:
         with get_db_session() as db_session:
-            principal = db_session.scalars(
-                select(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
-            ).first()
+            principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
 
             if not principal:
                 return jsonify({"error": "Principal not found"}), 404
@@ -555,9 +574,7 @@ def save_testing_config(tenant_id, principal_id):
         hitl_config = data["hitl_config"]
 
         with get_db_session() as db_session:
-            principal = db_session.scalars(
-                select(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
-            ).first()
+            principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
 
             if not principal:
                 return jsonify({"error": "Principal not found"}), 404
@@ -596,9 +613,7 @@ def manage_webhooks(tenant_id, principal_id):
     """Manage webhook configurations for a principal."""
     try:
         with get_db_session() as db_session:
-            principal = db_session.scalars(
-                select(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
-            ).first()
+            principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
             if not principal:
                 flash("Principal not found", "error")
                 return redirect(url_for("principals.list_principals", tenant_id=tenant_id))
@@ -627,6 +642,10 @@ def manage_webhooks(tenant_id, principal_id):
         logger.error(f"Error loading webhook management: {e}", exc_info=True)
         flash(f"Error loading webhooks: {str(e)}", "error")
         return redirect(url_for("principals.list_principals", tenant_id=tenant_id))
+
+
+def _redirect_to_webhooks(tenant_id, principal_id):
+    return redirect(url_for("principals.manage_webhooks", tenant_id=tenant_id, principal_id=principal_id))
 
 
 @principals_bp.route("/principals/<principal_id>/webhooks/register", methods=["POST"])
@@ -666,6 +685,13 @@ def register_webhook(tenant_id, principal_id):
         # PushNotificationConfig(config_id=/auth_type=/auth_config=) — none of them
         # columns — so every registration raised TypeError and the broad except
         # below rendered it as a validation-looking flash.
+        #
+        # This gate also SUBSUMES the hand-written form checks that used to stand
+        # here (URL present, HMAC secret present, secret at least 32 characters):
+        # the pinned schema states each of them once
+        # (core/push-notification-config.json requires `credentials` whenever an
+        # `authentication` block is present, with minLength 32), so restating them
+        # in this route would only be somewhere for the two to drift apart.
         registration = accept_push_notification_primitives(
             request.form.get("url"),
             scheme,
@@ -673,68 +699,66 @@ def register_webhook(tenant_id, principal_id):
             field_prefix="webhook",
         )
 
-        with get_db_session() as db_session:
-            repository = PushNotificationConfigRepository(db_session, tenant_id)
-
-            # active_only=False on purpose: the duplicate check used to run a
-            # hand-written select here that omitted is_active, so a DEACTIVATED
-            # registration still read as "already registered" and the operator
-            # could not re-register the URL at all.
-            #
-            # registration.url, NOT the raw form value: what gets STORED is
-            # str(config.url) off a pydantic AnyUrl, which normalizes -- host
-            # lowercased, trailing slash added, default port stripped. Keyed on
-            # the raw string, this lookup misses the row it just wrote for any
-            # non-canonical spelling, both branches below collapse into "not
-            # found", and a second active row is inserted for the same URL. The
-            # sender then delivers twice, one copy signed with a secret the
-            # receiver cannot verify. The lookup must use the same key the write
-            # uses.
-            existing = repository.find_by_url(principal_id, registration.url, active_only=False)
-
-            if existing is not None and existing.is_active:
-                # A LIVE registration. Refuse, and refuse without touching it:
-                # reusing this row's id below would silently overwrite the stored
-                # HMAC secret with whatever this form posted, rotating a working
-                # credential on what the operator was told was a no-op.
-                flash("Webhook URL already registered for this principal", "warning")
-                return redirect(url_for("principals.manage_webhooks", tenant_id=tenant_id, principal_id=principal_id))
-
-            # Reuse the soft-deleted row's id so upsert takes its reactivation
-            # branch. Inserting under a fresh id would leave two rows for one
-            # (principal, url) -- the sender would deliver twice, and the operator
-            # would have to clear the debris one row at a time.
-            config_id = existing.id if existing is not None else str(uuid.uuid4())
-
-            repository.upsert(
+        # The PRIMARY KEY decides the race, not a pre-check SELECT. register_admin_webhook
+        # derives a deterministic id from (tenant, principal, url) and resolves a lost
+        # insert race into the same polite answer the pre-check would have given, so two
+        # concurrent registrations of one URL cannot leave two active rows behind (which
+        # would make the sender deliver twice). Because the id is derived from the URL, a
+        # SOFT-DELETED row for that URL is found by id and REACTIVATED rather than
+        # duplicated, and a LIVE row is returned untouched -- its stored credential is
+        # never silently rotated by a re-submit.
+        #
+        # The RECEIPT travels whole; this route destructures nothing. The repository
+        # projects it through ValidatedWebhookRegistration.to_columns(), so the stored
+        # url is str(config.url) off a pydantic AnyUrl -- normalized (host lowercased,
+        # trailing slash added, default port stripped) -- and the duplicate lookup and
+        # the derived id are keyed on that same normalized string the write uses. A
+        # route that re-flattened the value into url=/authentication_type=/
+        # authentication_token= kwargs would be re-deriving that key here, where a
+        # non-canonical spelling inserts a second active row for the same URL, and
+        # would put a credential read back at a call site
+        # (tests/unit/test_architecture_no_inline_webhook_auth_resolution.py).
+        #
+        # to_columns() puts the credential in authentication_token. webhook_secret is
+        # passed None EXPLICITLY -- the repository's preserve-if-not-passed sentinel
+        # means omitting it would leave a pre-existing value standing -- because the
+        # egress seam signs from (authentication_type, authentication_token) only:
+        # webhook_secret has no reader left in src/, so a secret written there would be
+        # a registration the operator is told is signed and that goes out unsigned
+        # (GH #1894).
+        with PushNotificationConfigUoW(tenant_id) as uow:
+            assert uow.push_notification_configs is not None
+            existing = uow.push_notification_configs.register_admin_webhook(
                 registration,
-                config_id=config_id,
                 principal_id=principal_id,
+                webhook_secret=None,
             )
-            db_session.commit()
 
-            # registration.url through webhook_url_for_log, not the form value:
-            # two separate rules, both already written down elsewhere in the tree.
-            # (1) What is STORED is the normalized AnyUrl, so the raw string is
-            # not what an operator would be reading back. The form value has no
-            # name in this handler at all now -- it is consumed by the gate.
-            # (2) A webhook URL is rendered into a log record in exactly ONE way,
-            # by webhook_url_for_log (scheme+host+path, never credentials). The
-            # sibling registration path already logs this same attribute of this
-            # same type that way (media_buy_create.py:2231-2234), and the type
-            # uses it in its own __repr__. AnyUrl normalization strips a newline
-            # but PRESERVES ?token=... and user:pw@ -- so without this call an
-            # operator-registered webhook carrying a bearer token in its query
-            # string would write that token into the admin log at INFO.
-            logger.info(
-                "Registered webhook %s for principal %r in tenant %r",
-                webhook_url_for_log(registration.url),
-                principal_id,
-                tenant_id,
-            )
-            flash("Webhook registered successfully", "success")
+        if existing is not None:
+            flash("Webhook URL already registered for this principal", "warning")
+            return _redirect_to_webhooks(tenant_id, principal_id)
 
-        return redirect(url_for("principals.manage_webhooks", tenant_id=tenant_id, principal_id=principal_id))
+        # registration.url through webhook_url_for_log, not the form value:
+        # two separate rules, both already written down elsewhere in the tree.
+        # (1) What is STORED is the normalized AnyUrl, so the raw string is
+        # not what an operator would be reading back. The form value has no
+        # name in this handler at all now -- it is consumed by the gate.
+        # (2) A webhook URL is rendered into a log record in exactly ONE way,
+        # by webhook_url_for_log (scheme+host+path, never credentials). The
+        # sibling registration path already logs this same attribute of this
+        # same type that way (media_buy_create.py), and the type uses it in its
+        # own __repr__. AnyUrl normalization strips a newline but PRESERVES
+        # ?token=... and user:pw@ -- so without this call an operator-registered
+        # webhook carrying a bearer token in its query string would write that
+        # token into the admin log at INFO.
+        logger.info(
+            "Registered webhook %s for principal %r in tenant %r",
+            webhook_url_for_log(registration.url),
+            principal_id,
+            tenant_id,
+        )
+        flash("Webhook registered successfully", "success")
+        return _redirect_to_webhooks(tenant_id, principal_id)
 
     # Only the gate's own refusals are operator-facing. Anything else is a defect
     # in this handler and must reach the logs as a 500 rather than being flashed:
@@ -747,7 +771,7 @@ def register_webhook(tenant_id, principal_id):
         # SUCCESSFUL admin action. Say the action failed explicitly.
         record_admin_action_failure(e)
         flash(f"Error registering webhook: {str(e)}", "error")
-        return redirect(url_for("principals.manage_webhooks", tenant_id=tenant_id, principal_id=principal_id))
+        return _redirect_to_webhooks(tenant_id, principal_id)
 
 
 @principals_bp.route("/principals/<principal_id>/webhooks/<config_id>/delete", methods=["POST"])
@@ -758,28 +782,29 @@ def delete_webhook(tenant_id, principal_id, config_id):
 
     This route never worked. It filtered on ``config_id``, which is not a column
     on ``PushNotificationConfig`` -- the primary key is ``id`` -- so every call
-    raised ``InvalidRequestError``, and the broad ``except`` below rendered that
+    raised ``InvalidRequestError``, and a broad ``except`` rendered that
     programming error as an operator flash. The template passes ``webhook.id``,
     so it was dead for every row, not only soft-deleted ones.
 
     The lookup goes through the repository, which is what removes the
     opportunity to hand-write a filter against a column that does not exist.
+    ``PushNotificationConfigRepository.delete`` IS that lookup
+    (``get_by_id(..., active_only=False)``) plus the delete, so this route holds
+    no session of its own and no broad ``except``: a defect here reaches the
+    logs as a real 500 instead of being reported to the operator as though it
+    were a condition of their request.
     """
-    with get_db_session() as db_session:
-        repository = PushNotificationConfigRepository(db_session, tenant_id)
-        webhook = repository.get_by_id(config_id, principal_id, active_only=False)
+    with PushNotificationConfigUoW(tenant_id) as uow:
+        assert uow.push_notification_configs is not None
+        deleted = uow.push_notification_configs.delete(config_id, principal_id)
 
-        if not webhook:
-            flash("Webhook not found", "error")
-            return redirect(url_for("principals.manage_webhooks", tenant_id=tenant_id, principal_id=principal_id))
+    if not deleted:
+        flash("Webhook not found", "error")
+        return _redirect_to_webhooks(tenant_id, principal_id)
 
-        db_session.delete(webhook)
-        db_session.commit()
-
-        logger.info("Deleted webhook %r for principal %r in tenant %r", config_id, principal_id, tenant_id)
-        flash("Webhook deleted successfully", "success")
-
-    return redirect(url_for("principals.manage_webhooks", tenant_id=tenant_id, principal_id=principal_id))
+    logger.info("Deleted webhook %r for principal %r in tenant %r", config_id, principal_id, tenant_id)
+    flash("Webhook deleted successfully", "success")
+    return _redirect_to_webhooks(tenant_id, principal_id)
 
 
 @principals_bp.route("/principals/<principal_id>/webhooks/<config_id>/toggle", methods=["POST"])
@@ -790,28 +815,30 @@ def toggle_webhook(tenant_id, principal_id, config_id):
 
     Carried the same never-working ``config_id`` filter as :func:`delete_webhook`
     and the same broad ``except`` that turned the resulting programming error
-    into a JSON 500. Both are gone: the lookup is the repository's, and a defect
-    in this handler now reaches the logs as a real 500 instead of being reported
-    to the operator as though it were a condition of their request.
+    into a JSON 500. Both are gone: the lookup is the repository's
+    (``toggle_active`` finds the row by primary key regardless of its current
+    ``is_active``), and a defect in this handler now reaches the logs as a real
+    500 instead of being reported to the operator as though it were a condition
+    of their request.
+
+    ``toggle_active`` returns the NEW value rather than the row, so the response
+    is built from a plain bool and never reads an attribute off an instance whose
+    session has already closed.
     """
-    with get_db_session() as db_session:
-        repository = PushNotificationConfigRepository(db_session, tenant_id)
-        webhook = repository.get_by_id(config_id, principal_id, active_only=False)
+    with PushNotificationConfigUoW(tenant_id) as uow:
+        assert uow.push_notification_configs is not None
+        new_state = uow.push_notification_configs.toggle_active(config_id, principal_id)
 
-        if not webhook:
-            return jsonify({"error": "Webhook not found"}), 404
+    if new_state is None:
+        return jsonify({"error": "Webhook not found"}), 404
 
-        webhook.is_active = not webhook.is_active
-        db_session.commit()
-
-        logger.info(
-            "Toggled webhook %r to %s for principal %r",
-            config_id,
-            "active" if webhook.is_active else "inactive",
-            principal_id,
-        )
-
-        return jsonify({"success": True, "is_active": webhook.is_active})
+    logger.info(
+        "Toggled webhook %r to %s for principal %r",
+        config_id,
+        "active" if new_state else "inactive",
+        principal_id,
+    )
+    return jsonify({"success": True, "is_active": new_state})
 
 
 @principals_bp.route("/principals/<principal_id>/delete", methods=["DELETE", "POST"])
@@ -822,8 +849,7 @@ def delete_principal(tenant_id, principal_id):
     try:
         with get_db_session() as db_session:
             # Find the principal
-            stmt = select(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
-            principal = db_session.scalars(stmt).first()
+            principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
 
             if not principal:
                 return jsonify({"error": "Principal not found"}), 404

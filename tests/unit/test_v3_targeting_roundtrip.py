@@ -3,7 +3,6 @@
 Proves data survives:
 - construct -> model_dump -> reconstruct -> model_dump (identity)
 - construct -> json.dumps -> json.loads -> reconstruct (DB storage simulation)
-- legacy flat -> normalizer -> v3 structured -> dump -> reconstruct (migration path)
 - FrequencyCap with scope through dump -> reconstruct cycle
 """
 
@@ -12,22 +11,19 @@ import json
 from src.core.schemas import FrequencyCap, Targeting
 
 
-def _roundtrip(t: Targeting, *, internal: bool = False) -> Targeting:
-    """Dump a Targeting, reconstruct from dict, return the new instance."""
-    if internal:
-        d = t.model_dump_internal(exclude_none=True)
-    else:
-        d = t.model_dump(exclude_none=True)
-    return Targeting(**d)
+def _roundtrip(t: Targeting) -> Targeting:
+    """Dump a Targeting, reconstruct from dict, return the new instance.
+
+    One dump shape, so no ``internal=`` switch: both helpers used to branch to
+    ``model_dump_internal``, which no longer exists (CLAUDE.md pattern 4 — one
+    serializer seat).
+    """
+    return Targeting(**t.model_dump(exclude_none=True))
 
 
-def _json_roundtrip(t: Targeting, *, internal: bool = False) -> Targeting:
+def _json_roundtrip(t: Targeting) -> Targeting:
     """Simulate DB JSONB storage: model_dump -> json.dumps -> json.loads -> reconstruct."""
-    if internal:
-        d = t.model_dump_internal(exclude_none=True)
-    else:
-        d = t.model_dump(exclude_none=True)
-    raw = json.loads(json.dumps(d))
+    raw = json.loads(json.dumps(t.model_dump(exclude_none=True)))
     return Targeting(**raw)
 
 
@@ -120,19 +116,10 @@ class TestDBStorageSimulation:
         s2 = json.dumps(d2, sort_keys=True)
         assert s1 == s2
 
-    def test_model_dump_internal_json_roundtrip(self):
-        """Internal dump -> json -> reconstruct -> match."""
-        t = Targeting(
-            geo_countries=["US"],
-            geo_metros=[{"system": "nielsen_dma", "values": ["501"]}],
-            key_value_pairs={"k": "v"},
-        )
-        d1 = t.model_dump_internal(exclude_none=True)
-        s1 = json.dumps(d1, sort_keys=True)
-        t2 = _json_roundtrip(t, internal=True)
-        d2 = t2.model_dump_internal(exclude_none=True)
-        s2 = json.dumps(d2, sort_keys=True)
-        assert s1 == s2
+    # REMOVED: test_model_dump_internal_json_roundtrip. It dumped through
+    # ``model_dump_internal`` and seeded ``key_value_pairs``; neither exists. There is one
+    # serializer seat now (CLAUDE.md pattern 4), so there is no second dump shape for a
+    # roundtrip to disagree about, and test_json_roundtrip above grades the one there is.
 
     def test_manual_approval_flow(self):
         """Targeting -> model_dump -> store -> Targeting(**raw) -> MediaPackage roundtrip."""
@@ -141,8 +128,9 @@ class TestDBStorageSimulation:
             geo_metros=[{"system": "nielsen_dma", "values": ["501"]}],
             device_type_any_of=["mobile"],
         )
-        # Simulate DB write (what media_buy_create does)
-        stored = t.model_dump_internal(exclude_none=True)
+        # Simulate DB write (what media_buy_create does). One serializer seat: the shape
+        # that persists is the shape model_dump produces, so this is that call.
+        stored = t.model_dump(exclude_none=True)
         stored_json = json.dumps(stored)
 
         # Simulate DB read + reconstruction
@@ -165,51 +153,17 @@ class TestDBStorageSimulation:
 
 
 # ---------------------------------------------------------------------------
-# Legacy Normalizer Roundtrip
+# REMOVED: TestLegacyNormalizerRoundtrip (flat country / metro / zip / bare region).
+#
+# All four constructed a Targeting from a v2 FLAT geo spelling
+# (``geo_country_any_of``, ``geo_metro_any_of``, ``geo_zip_any_of``, bare region codes)
+# and asserted a normalizer had turned it into the v3 structured field. adcp 3.1.1
+# core/targeting.json declares none of those spellings, and Targeting now reshapes
+# nothing on the way in (src/core/schemas/_base.py:1697), so every one of them raises
+# extra_forbidden. The rejection itself is graded by
+# test_unknown_targeting_fields.py::test_v2_flat_field_rejected; the v3 spellings these
+# were the legacy half of round-trip in TestV3ConstructRoundtrip above.
 # ---------------------------------------------------------------------------
-class TestLegacyNormalizerRoundtrip:
-    def test_flat_country_to_v3_roundtrip(self):
-        """v2 flat geo_country_any_of -> normalizer -> v3 -> dump -> reconstruct -> same."""
-        t = Targeting(geo_country_any_of=["US", "CA"])
-        assert t.geo_countries is not None
-        d1 = t.model_dump(exclude_none=True)
-
-        # Reconstruct from dump (simulates DB read)
-        t2 = Targeting(**d1)
-        d2 = t2.model_dump(exclude_none=True)
-        assert d1 == d2
-
-    def test_flat_metro_to_structured_roundtrip(self):
-        """v2 flat geo_metro_any_of -> normalizer -> structured GeoMetro -> roundtrip stable."""
-        t = Targeting(geo_metro_any_of=["501", "803"])
-        assert t.geo_metros is not None
-        d1 = t.model_dump(exclude_none=True)
-
-        t2 = Targeting(**d1)
-        d2 = t2.model_dump(exclude_none=True)
-        assert d1 == d2
-
-    def test_flat_zip_to_structured_roundtrip(self):
-        """v2 flat geo_zip_any_of -> normalizer -> structured GeoPostalArea -> roundtrip stable."""
-        t = Targeting(geo_zip_any_of=["10001", "90210"])
-        assert t.geo_postal_areas is not None
-        d1 = t.model_dump(exclude_none=True)
-
-        t2 = Targeting(**d1)
-        d2 = t2.model_dump(exclude_none=True)
-        assert d1 == d2
-
-    def test_bare_region_codes_roundtrip(self):
-        """Bare 'CA' -> normalizer prefixes 'US-CA' -> roundtrip stable."""
-        t = Targeting(geo_region_any_of=["CA", "NY"])
-        assert t.geo_regions is not None
-        d1 = t.model_dump(exclude_none=True)
-        # Normalizer should have prefixed with US-
-        assert all(r.startswith("US-") for r in d1["geo_regions"])
-
-        t2 = Targeting(**d1)
-        d2 = t2.model_dump(exclude_none=True)
-        assert d1 == d2
 
 
 # ---------------------------------------------------------------------------

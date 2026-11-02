@@ -10,6 +10,8 @@ from __future__ import annotations
 import os
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 
 class TestBaseClassContract:
     """BaseTestEnv must work in both integration (use_real_db=True) and unit modes."""
@@ -53,22 +55,20 @@ class TestBaseClassContract:
 
         assert env.mock == {}
 
-    def test_integration_env_identity_is_lazy(self):
-        """Identity is built on first access, not in __init__."""
+    def test_integration_env_identity_names_the_env_principal(self):
+        """The call_impl identity carries the env's principal and tenant."""
         from tests.harness._base import IntegrationEnv
 
         env = IntegrationEnv(principal_id="p1", tenant_id="t1")
-        assert env._identity_cache == {}
         identity = env.identity
         assert identity.principal_id == "p1"
         assert identity.tenant_id == "t1"
 
-    def test_unit_env_identity_is_lazy(self):
-        """Identity is built on first access, not in __init__."""
+    def test_unit_env_identity_names_the_env_principal(self):
+        """The call_impl identity carries the env's principal and tenant."""
         from tests.harness._base import BaseTestEnv
 
         env = BaseTestEnv(principal_id="p1", tenant_id="t1")
-        assert env._identity_cache == {}
         identity = env.identity
         assert identity.principal_id == "p1"
         assert identity.tenant_id == "t1"
@@ -113,17 +113,19 @@ class TestBaseClassContract:
 
         env = _TestEnv()
         with env:
-            # A unit env binds no database, so the registry is the patches alone.
-            assert [label for label, _ in env._enter_cleanups] == ["patch:a", "patch:b"]
+            # A unit env binds no database; grade the PATCH entries by label, the
+            # property this test always meant.
+            assert [label for label, _ in env._enter_cleanups if label.startswith("patch:")] == [
+                "patch:a",
+                "patch:b",
+            ]
         assert env._enter_cleanups == []
 
-    def test_identity_respects_dry_run(self):
-        """Both base classes pass dry_run to testing_context."""
-        from tests.harness._base import BaseTestEnv, IntegrationEnv
-
-        for cls in [IntegrationEnv, BaseTestEnv]:
-            env = cls(dry_run=True)
-            assert env.identity.testing_context.dry_run is True
+    # (Retired) test_identity_respects_dry_run asserted both base classes forwarded
+    # ``dry_run=True`` into ``identity.testing_context``. The identity carries no testing
+    # context and no adapter carries a dry-run flag (commit a1b79d22d removed the
+    # testing-hook channel), so there is nothing to forward: ``**tenant_overrides`` now
+    # refuses ``dry_run`` by name, which is the behaviour tested two cases below.
 
     def test_configure_mocks_called_during_enter(self):
         """_configure_mocks is called after patches start."""
@@ -226,47 +228,81 @@ class TestBaseClassContract:
         assert env.mock == {}
         assert env._enter_cleanups == []
 
-    def test_identity_for_returns_correct_protocol(self):
-        """identity_for(transport) sets the correct protocol on identity."""
+    def test_unit_credential_carries_the_built_principals_token_and_the_tenant_id(self):
+        """credential(): Bearer token of the principal the factory built, tenant id in x-adcp-tenant."""
         from tests.harness._base import BaseTestEnv
-        from tests.harness.transport import Transport
+
+        env = BaseTestEnv(principal_id="p1", tenant_id="t1")
+        credential = env.credential()
+
+        # Derived, not read off the row: production stores only sha256(token).
+        from tests.factories.principal import plaintext_token_for
+
+        assert credential["Authorization"] == f"Bearer {plaintext_token_for('p1')}"
+        assert env._unit_principal().principal_id == "p1"
+        assert credential["x-adcp-tenant"] == "t1"
+        assert "x-dry-run" not in credential
+
+    def test_credential_overrides(self):
+        """token=None presents nothing; an invalid token is presented; tenant is overridable.
+
+        There is no ``x-dry-run`` header: requests carry no testing headers at all
+        (commit a1b79d22d), and ``credential_headers`` produces exactly Authorization and
+        x-adcp-tenant.
+        """
+        from tests.harness._base import INVALID_TOKEN, BaseTestEnv
 
         env = BaseTestEnv(principal_id="p1", tenant_id="t1")
 
-        impl_id = env.identity_for(Transport.IMPL)
-        assert impl_id.protocol == "mcp"
+        assert set(env.credential()) == {"Authorization", "x-adcp-tenant"}
+        assert "Authorization" not in env.credential(token=None)
+        assert env.credential(token=None)["x-adcp-tenant"] == "t1"
+        assert env.credential(token=INVALID_TOKEN)["Authorization"] == f"Bearer {INVALID_TOKEN}"
+        assert env.credential(tenant="other")["x-adcp-tenant"] == "other"
 
-        a2a_id = env.identity_for(Transport.A2A)
-        assert a2a_id.protocol == "a2a"
-
-        rest_id = env.identity_for(Transport.REST)
-        assert rest_id.protocol == "rest"
-
-        mcp_id = env.identity_for(Transport.MCP)
-        assert mcp_id.protocol == "mcp"
-
-        # All share same principal/tenant
-        for ident in [impl_id, a2a_id, rest_id, mcp_id]:
-            assert ident.principal_id == "p1"
-            assert ident.tenant_id == "t1"
-
-    def test_identity_for_is_cached_per_protocol(self):
-        """Repeated calls with same transport return same identity object."""
+    def test_switch_principal_changes_the_credential(self):
+        """After switch_principal the credential carries the new principal's token."""
         from tests.harness._base import BaseTestEnv
-        from tests.harness.transport import Transport
 
-        env = BaseTestEnv()
-        id1 = env.identity_for(Transport.REST)
-        id2 = env.identity_for(Transport.REST)
-        assert id1 is id2
+        env = BaseTestEnv(principal_id="p1", tenant_id="t1")
+        before = env.credential()["Authorization"]
+        env.switch_principal("p2")
+        after = env.credential()["Authorization"]
+        assert before != after
+        assert env._unit_principal().principal_id == "p2"
 
-    def test_identity_backward_compat(self):
-        """env.identity still works and returns IMPL protocol."""
+    def test_unit_env_resolves_its_own_credential_on_the_wire(self):
+        """The real resolver, over the substitutes, builds the env's identity from credential()."""
+        from src.core.exceptions import AdCPAuthenticationError
+        from src.core.resolved_identity import _resolve_identity
+        from tests.harness._base import INVALID_TOKEN, BaseTestEnv
+
+        with BaseTestEnv(principal_id="p1", tenant_id="t1") as env:
+            identity = _resolve_identity(env.credential(), require_valid_token=True)
+            assert identity.principal_id == "p1"
+            assert identity.tenant_id == "t1"
+
+            anonymous = _resolve_identity(env.credential(token=None), require_valid_token=False)
+            assert anonymous.principal_id is None
+            assert anonymous.tenant_id == "t1"
+
+            # Presented and rejected: AUTH_INVALID on a public row too, per the pinned enum.
+            with pytest.raises(AdCPAuthenticationError):
+                _resolve_identity(env.credential(token=INVALID_TOKEN), require_valid_token=False)
+
+    def test_identity_carries_the_principal_and_no_transport(self):
+        """``env.identity`` names the caller; the transport is not one of its facts.
+
+        It used to default to ``protocol="mcp"``. The identity answers who is calling and
+        for which seller; which transport carried the request is the boundary's own label
+        (``TransportProtocol``, passed to ``invoke_tool``), so reading it off the identity
+        is not possible any more.
+        """
         from tests.harness._base import BaseTestEnv
 
         env = BaseTestEnv(principal_id="p1")
         assert env.identity.principal_id == "p1"
-        assert env.identity.protocol == "mcp"
+        assert not hasattr(env.identity, "protocol")
 
     def test_call_via_raises_for_unimplemented_transport(self):
         """call_via with Transport.A2A raises NotImplementedError if call_a2a not overridden."""
@@ -312,25 +348,6 @@ class TestBaseClassContract:
         assert result.payload.ok is True
         assert result.envelope.get("transport") == "mcp"
 
-    def test_call_via_impl_uses_call_impl(self):
-        """call_via(Transport.IMPL) routes through call_impl."""
-        from tests.harness._base import BaseTestEnv
-        from tests.harness.transport import Transport
-
-        class _TestEnv(BaseTestEnv):
-            def call_impl(self, **kwargs):
-                from pydantic import BaseModel
-
-                class _Resp(BaseModel):
-                    ok: bool = True
-
-                return _Resp()
-
-        env = _TestEnv()
-        result = env.call_via(Transport.IMPL)
-        assert result.is_success
-        assert result.payload.ok is True
-
     def test_nested_integration_env_raises(self):
         """Nesting two IntegrationEnvs must raise to prevent session corruption."""
         import pytest
@@ -361,12 +378,27 @@ class TestEnvMethodNamingConsistency:
             "IntegrationEnv should have setup_default_data() to reduce boilerplate"
         )
 
-    def test_base_env_has_run_mcp_wrapper(self):
-        """BaseTestEnv exposes _run_mcp_wrapper for DRY MCP dispatch."""
+    def test_base_env_has_no_run_mcp_wrapper(self):
+        """BaseTestEnv must NOT expose a wrapper-bypass dispatch path.
+
+        Inverted from a test that asserted ``_run_mcp_wrapper`` EXISTS -- a test
+        demanding the bypass stay alive was the only thing keeping it alive.
+
+        The method invoked a tool wrapper directly, skipping the FastMCP
+        middleware chain and TypeAdapter validation. On an error path a raised
+        AdCPSalesAgentError therefore never became a ToolError, so the dispatcher captured
+        ``wire_error_envelope=None`` and every mcp error assertion in such an env
+        silently graded a reconstructed exception instead of the wire -- the exact
+        false-green salesagent-3dawm exists to remove. Deleting it makes the
+        bypass unexpressible rather than merely deprecated, which is also why no
+        guard forbidding its use is needed. Use ``_run_mcp_client``.
+        """
         from tests.harness._base import BaseTestEnv
 
-        assert hasattr(BaseTestEnv, "_run_mcp_wrapper"), (
-            "BaseTestEnv should have _run_mcp_wrapper to reduce call_mcp duplication"
+        assert not hasattr(BaseTestEnv, "_run_mcp_wrapper"), (
+            "BaseTestEnv._run_mcp_wrapper is back. It bypasses the FastMCP pipeline, "
+            "so mcp error scenarios capture no wire envelope and grade a reconstructed "
+            "exception instead. Dispatch by tool name through _run_mcp_client."
         )
 
     def test_creative_sync_env_has_set_run_async_result(self):
@@ -461,15 +493,12 @@ class TestPartialEnterUnwind:
         """
         from contextlib import suppress
 
-        for name in ("_fast_backoff", "_egress_hatches", "_origin_ctx", "_ssl_cert_file"):
+        for name in ("_fast_backoff", "_egress_hatches", "_ssl_cert_file"):
             resource = getattr(env, name, None)
             if resource is None:
                 continue
             with suppress(Exception):
-                if name == "_origin_ctx":
-                    resource.__exit__(None, None, None)
-                else:
-                    resource.stop()
+                resource.stop()
         with suppress(Exception):
             env.__exit__(None, None, None)
 
@@ -614,38 +643,44 @@ class TestPartialEnterUnwind:
         """A failed enter must not leave production's retry backoff shortened.
 
         ``OrderApprovalWebhookEnv`` shortens the egress seam's retry base to
-        10ms so its retry cases do not cost wall time. That override is read by
-        the seam at CALL time from the environment, so a copy stranded by a
-        failed enter silently rescales BR-RULE-029's 1s/2s/4s schedule for every
-        later test in this worker -- including the ones that grade the schedule.
+        10ms so its retry cases do not cost wall time. The knob is the SETTINGS
+        field the seam reads (``limits.adcp_outbound_backoff_base_seconds``) --
+        the environment is read once at startup, so the variable this case used
+        to pop is invisible to the seam -- and a patch stranded by a failed
+        enter silently rescales BR-RULE-029's 1s/2s/4s schedule for every later
+        test in this worker, including the ones that grade the schedule.
         """
         import pytest
 
-        from src.core.security.egress.attempts import _BACKOFF_BASE_ENV
+        from src.core.config import get_settings
         from tests.harness.order_approval_webhook import OrderApprovalWebhookEnv
 
+        limits = get_settings().limits
+        before = limits.adcp_outbound_backoff_base_seconds
         env = OrderApprovalWebhookEnv()
-        with patch.dict(os.environ, {}):
-            os.environ.pop(_BACKOFF_BASE_ENV, None)
-            try:
-                with (
-                    patch(
-                        "src.core.database.database_session.get_engine",
-                        side_effect=RuntimeError("engine boom"),
-                    ),
-                    patch("tests.factories.ALL_FACTORIES", []),
-                    pytest.raises(RuntimeError, match="engine boom"),
-                ):
-                    env.__enter__()
+        try:
+            with (
+                patch(
+                    "src.core.database.database_session.get_engine",
+                    side_effect=RuntimeError("engine boom"),
+                ),
+                patch("tests.factories.ALL_FACTORIES", []),
+                pytest.raises(RuntimeError, match="engine boom"),
+            ):
+                env.__enter__()
 
-                leaked_backoff = os.environ.get(_BACKOFF_BASE_ENV)
-            finally:
-                self._force_release(env)
+            stranded = limits.adcp_outbound_backoff_base_seconds
+        finally:
+            self._force_release(env)
 
-            assert leaked_backoff is None, (
-                f"{_BACKOFF_BASE_ENV}={leaked_backoff!r} survived a failed __enter__ -- "
-                f"the egress seam's retry schedule stays shortened for the rest of this worker"
-            )
+        assert stranded == before, (
+            f"adcp_outbound_backoff_base_seconds={stranded!r} survived a failed __enter__ "
+            f"(was {before!r}) -- the egress seam's retry schedule stays shortened for the "
+            f"rest of this worker"
+        )
+        assert stranded != env.FAST_BACKOFF_BASE_SECONDS or before == env.FAST_BACKOFF_BASE_SECONDS, (
+            "the fast base is still in place after a failed enter"
+        )
 
         # The override belongs to one owner, composed into this env -- not to a
         # hand-rolled __enter__/__exit__ pair that test_harness_envs_define_no_enter_exit
@@ -661,8 +696,8 @@ class TestPartialEnterUnwind:
 
         It is not a ``BaseTestEnv`` and keeps its own ``__enter__``; that makes
         it the one place the guarantee is hand-rolled rather than structural, so
-        it needs its own oracle. ``_setup_integration`` opens the test client
-        (an entered context manager) and ``_ensure_tenant`` then hits the
+        it needs its own oracle. ``__enter__`` opens the admin client (an
+        entered Flask test client) and ``_ensure_tenant`` then hits the
         database -- a failure there strands the client.
         """
         import pytest
@@ -677,9 +712,7 @@ class TestPartialEnterUnwind:
             ):
                 env.__enter__()
 
-            assert env._flask_client is None, (
-                "the Flask test client survived a failed __enter__ -- its context was never exited"
-            )
+            assert env._client is None, "the admin client survived a failed __enter__ -- it was never closed"
         finally:
             from contextlib import suppress
 
@@ -782,3 +815,143 @@ class TestHarnessLifecycleRoleDeclaration:
             f"declared lifecycle homes no longer implement the protocol: {missing}. "
             f"The set may shrink -- but shrink it here, deliberately."
         )
+
+
+# ── EXTERNAL_PATCHES declarations ────────────────────────────────────────────
+#
+# Moved here OUT OF A BDD Then. ``then_no_real_api_calls`` in
+# tests/bdd/steps/generic/then_success.py used to assert this, first as
+# ``len(env.EXTERNAL_PATCHES) > 0`` and then as an element-level pair, and both were the
+# test harness grading its own configuration dict: a class attribute fixed at import,
+# identical for every scenario and every run, so no production change could redden it.
+# It is a real invariant -- just the HARNESS's, not a scenario's -- and it belongs
+# wherever it holds for every env class rather than only for the five whose scenarios
+# happened to bind that one step.
+
+
+def _env_classes() -> list[tuple[str, type]]:
+    """Every concrete env class shipped under tests/harness/, by module.
+
+    Keyed on ``obj.__module__ == module`` so a class is graded once, in the module that
+    DEFINES it, rather than once per module that imports it -- and so the test-local
+    doubles defined inside this file's own tests (``_TestEnv``, whose patch target is
+    deliberately ``os.getcwd``) are not swept in. Test modules are skipped for the same
+    reason.
+    """
+    import importlib
+    import inspect
+    from pathlib import Path
+
+    from tests.harness._base import BaseTestEnv
+
+    out: list[tuple[str, type]] = []
+    for path in sorted(Path(__file__).parent.glob("*.py")):
+        if path.name.startswith(("test_", "__")):
+            continue
+        module = f"tests.harness.{path.stem}"
+        mod = importlib.import_module(module)
+        for name, obj in vars(mod).items():
+            if (
+                inspect.isclass(obj)
+                and issubclass(obj, BaseTestEnv)
+                and obj is not BaseTestEnv
+                and obj.__module__ == module
+            ):
+                out.append((f"{path.stem}.{name}", obj))
+    return out
+
+
+_ENV_CLASSES = _env_classes()
+
+
+def test_env_classes_were_enumerated() -> None:
+    """The parametrized test below is only evidence if it was handed some envs.
+
+    A ``_env_classes()`` that silently returned [] would make every row below vanish and
+    the file would still be green -- the dormant-subject failure this repo keeps finding.
+    """
+    assert len(_ENV_CLASSES) >= 25, (
+        f"only {len(_ENV_CLASSES)} env classes enumerated ({[n for n, _ in _ENV_CLASSES]}) -- "
+        "the harness has ~30; a collapsed enumeration would make the per-env assertion vacuous"
+    )
+
+
+@pytest.mark.parametrize(("env_name", "env_cls"), _ENV_CLASSES, ids=[n for n, _ in _ENV_CLASSES])
+def test_external_patch_targets_name_production_seams(env_name: str, env_cls: type) -> None:
+    """Every EXTERNAL_PATCHES target names a production seam under ``src.``.
+
+    A target pointing anywhere else intercepts nothing production calls, so an env
+    declaring one is misconfigured: its scenarios would run against the real collaborator
+    while the harness reports a mock in place.
+
+    ONLY THIS HALF IS ASSERTED, and the omission is measured rather than assumed. The
+    companion clause the BDD step also carried -- "every env declares at least one
+    production seam" -- is FALSE here: seven env classes declare no patches at all
+    (IntegrationEnv, BareIntegrationEnv, MediaBuyAccountEnv, MediaBuyListEnv,
+    OrderApprovalWebhookEnv, ProtocolWebhookEnv, TaskManagementEnv), because they drive a
+    real database and a real wire and have no external collaborator to displace. Asserting
+    it would assert something untrue of a quarter of the envs; it only ever passed in the
+    step because the five envs that step could reach happened to declare something -- and
+    for CreativeListEnv that something was an audit logger, not an ad-platform client.
+    """
+    targets = dict(env_cls.EXTERNAL_PATCHES)
+    outside = sorted(name for name, target in targets.items() if not str(target).startswith("src."))
+    assert outside == [], (
+        f"{env_name} declares EXTERNAL_PATCHES target(s) outside production: "
+        f"{ {n: targets[n] for n in outside} } -- a target that is not a src.* seam "
+        "intercepts nothing production calls, so the env would run against the real "
+        "collaborator while reporting a mock in place"
+    )
+
+
+class TestAResolvedIdentityHasNoWireRepresentation:
+    """``identity=`` on a wire transport is refused, not shipped as a request field.
+
+    A transport carries a CREDENTIAL; the resolver turns it into a ``ResolvedIdentity``
+    inside ``serve``. So there is no wire spelling for an already-resolved identity, and a
+    test cannot inject one through a2a/mcp/rest -- ``credential={}`` (send no headers) and
+    ``credential={...}`` (send these) are the whole of what a caller controls.
+
+    Before this refusal the kwarg was forwarded into the request payload, where the
+    accepted-shape strip refused it as an undeclared field. Production was right, but the
+    diagnosis reaching the test -- ``INVALID_REQUEST`` with ``pointer: /identity`` -- named
+    a spec violation for what is a harness misuse. It has now been read that way three
+    times: two tests in ``tests/integration/test_creative_formats_discovery.py`` assert
+    against it today, and ``MediaBuyDualEnv._flatten_update_params`` carries a paragraph
+    about a UC-003 row that shipped ``identity=None`` into the DTO and "got INVALID_REQUEST
+    on all three transports while asserting AUTH_MISSING" -- fixed there by stripping the
+    key in that one env. This is the same fix at the one place every transport passes.
+
+    The codebase already answers this shape the same way twice more:
+    ``AdapterCreateResult`` sets ``extra="forbid"`` so a kwarg no tool reads raises at
+    construction, and ``PrincipalFactory.make_identity`` refuses unknown keywords rather
+    than dropping them.
+
+    SCOPE: ``_dispatch_core`` is the one dispatch core for a2a, mcp and both e2e
+    transports. The two REST dispatchers hand-assemble the core's own WRAP/DELIVER/UNWRAP
+    around a per-env ``REST_ENDPOINT`` literal instead of calling the assembly, so they do
+    not pass through here and ``identity=`` still reaches a REST payload. Migrating them is
+    the fix; it is not this change.
+    """
+
+    def test_dispatch_core_refuses_identity_in_the_payload(self):
+        from tests.harness.client import _dispatch_core
+        from tests.harness.transport import Transport
+
+        with pytest.raises(TypeError, match="identity"):
+            _dispatch_core(MagicMock(), Transport.A2A, "list_creative_formats", {"identity": object()}, {})
+
+    def test_every_refused_key_names_what_to_use_instead(self):
+        from tests.harness.client import _RESOLVER_OWNED_PAYLOAD_KEYS, _refuse_resolver_owned_payload_keys
+
+        assert set(_RESOLVER_OWNED_PAYLOAD_KEYS) == {"identity", "principal", "tenant"}
+        for key, instead in _RESOLVER_OWNED_PAYLOAD_KEYS.items():
+            assert instead, f"{key} names no alternative"
+            with pytest.raises(TypeError, match=key):
+                _refuse_resolver_owned_payload_keys({key: object()})
+
+    def test_a_real_request_field_still_passes(self):
+        """The refusal is three names, not a general kwargs ban."""
+        from tests.harness.client import _refuse_resolver_owned_payload_keys
+
+        _refuse_resolver_owned_payload_keys({"min_width": 728, "format_ids": ["display_300x250"]})

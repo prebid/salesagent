@@ -4,9 +4,9 @@ Extracted from src/core/schemas/__init__.py to reduce file size.
 All classes are re-exported from src.core.schemas for backward compatibility.
 """
 
-from typing import Any
+from typing import Any, ClassVar
 
-from adcp.types import Catalog as LibraryCatalog
+from adcp.types import BrandReference as LibraryBrandReference
 from adcp.types import GetProductsResponse as LibraryGetProductsResponse
 from adcp.types import GetProductsWholesaleRequest as LibraryGetProductsRequest
 from adcp.types import Placement as LibraryPlacement
@@ -14,35 +14,21 @@ from adcp.types import Product as LibraryProduct
 from adcp.types import ProductCard as LibraryProductCard
 from adcp.types import ProductCardDetailed as LibraryProductCardDetailed
 from adcp.types import ProductFilters as LibraryFilters
-from adcp.types import ReportingCapabilities as LibraryReportingCapabilities
 from pydantic import ConfigDict, Field, model_validator
 
 from src.core.config import get_pydantic_extra_mode
 from src.core.schemas._base import (
+    AdcpResponse,
+    BuyerRequest,
     FormatId,
     NestedModelSerializerMixin,
     SalesAgentBaseModel,
-    _upgrade_legacy_format_ids,
-    strip_none_deep,
 )
 
-
-def _default_reporting_capabilities() -> LibraryReportingCapabilities:
-    """Minimal reporting_capabilities for callers that haven't populated it yet.
-
-    core/product.json requires the field unconditionally, so Product supplies a
-    validated default rather than leaving the attribute None and fabricating a
-    value at serialization time. Returns a fresh instance per call — the field's
-    default_factory — so no lists are shared between products.
-    """
-    return LibraryReportingCapabilities(
-        available_reporting_frequencies=["daily"],
-        expected_delay_minutes=1440,
-        timezone="UTC",
-        supports_webhooks=False,
-        available_metrics=["impressions"],
-        date_range_support="date_range",
-    )
+# Private alias: product.py is star-imported by the package __init__, and a bare
+# `PricingOption` import here would re-export the pricing wrapper over the legacy
+# flat PricingOption that src.core.schemas still exposes (see pricing.py's naming note).
+from src.core.schemas.pricing import PricingOption as _PricingOption
 
 
 class ProductCard(LibraryProductCard):
@@ -97,10 +83,21 @@ class Product(LibraryProduct):
     - Automatic updates when library Product changes
     """
 
-    # adcp 4.3 makes reporting_capabilities required. Callers that don't know it
-    # yet get a validated default from the factory below, so the attribute, the
-    # wire and the persisted row always agree and None is unconstructible.
-    reporting_capabilities: LibraryReportingCapabilities = Field(default_factory=_default_reporting_capabilities)
+    # reporting_capabilities is INHERITED as required (core/product.json /required). It used
+    # to be redeclared here with a default, which relaxed a spec-required field -- the axis
+    # the inheritance guard names -- so a wire model fabricated a value the row did not hold.
+    # The default lives at the row-to-model edge instead (src/core/product_conversion.py
+    # default_reporting_capabilities), for the rows that still store NULL; the NOT NULL
+    # migration that retires it is salesagent-3cs7o.21.
+
+    # Narrowed to the local pricing wrapper (src.core.schemas.pricing) so every
+    # member carries our extra policy and the derived is_fixed property. Same
+    # wire shape and constraints as the SDK field it overrides; the [assignment]
+    # ignore is the expected cost of narrowing a list element type (invariance).
+    pricing_options: list[_PricingOption] = Field(  # type: ignore[assignment]
+        description="Available pricing models for this product",
+        min_length=1,
+    )
 
     # Internal-only fields (not in AdCP spec)
     implementation_config: dict[str, Any] | None = Field(
@@ -116,13 +113,6 @@ class Product(LibraryProduct):
         exclude=True,  # Exclude from serialization by default
     )
     # channels: inherited from library Product as list[MediaChannel] | None (public per AdCP spec)
-
-    # Device type targeting (from targeting_template.device_targets in DB)
-    device_types: list[str] | None = Field(
-        default=None,
-        description="Internal: Device types this product supports (mobile, desktop, tablet, ctv, etc.)",
-        exclude=True,  # Exclude from serialization by default
-    )
 
     # Principal access control
     allowed_principal_ids: list[str] | None = Field(
@@ -162,59 +152,11 @@ class Product(LibraryProduct):
     # - floor_price present = auction pricing with floor
     # The consolidated CpmPricingOption/VcpmPricingOption types handle this automatically.
 
-    def model_dump(self, **kwargs):
-        """Return AdCP-compliant model dump with proper field names, excluding internal fields and null values."""
-        # Exclude internal/non-spec fields
-        kwargs["exclude"] = kwargs.get("exclude", set())
-        if isinstance(kwargs["exclude"], set):
-            kwargs["exclude"].update({"implementation_config", "expires_at"})
-
-        # Turn off AdCPBaseModel's exclude_none=True default and do the null
-        # stripping here instead: it has to run AFTER the formats -> format_ids
-        # rename below, and it has to go deep through nested models whose own
-        # model_dump() overrides the parent's flags don't reach (strip_none_deep).
-        kwargs["exclude_none"] = False
-        data = super().model_dump(**kwargs)
-
-        # Convert formats to format_ids per AdCP spec
-        if "formats" in data:
-            data["format_ids"] = data.pop("formats")
-
-        # Nested optional fields (format_ids[].width, pricing_options[].floor_price,
-        # placements[].*, delivery_measurement.vendors, publisher_properties[].
-        # publisher_domains, ...) are typed by the pinned schema and reject null.
-        # Strip those first, then decide inclusion at this level: strip_none_deep
-        # reaches INTO values, so a top-level key whose value is itself None has
-        # to survive it and be judged by the pass below.
-        data = {key: strip_none_deep(value) for key, value in data.items()}
-
-        # Drop null fields per AdCP spec, and only null ones. Every field the
-        # pinned core/product.json requires unconditionally is non-nullable on
-        # the model, so this cannot drop a required field — pinned by
-        # test_required_fields_are_non_nullable. Falsy-but-present values are
-        # kept deliberately: pricing_options=[] is the anonymous-user shape (no
-        # pricing shown), which the spec requires as an empty array, not an
-        # omission.
-        #
-        # format_ids is the case that makes "null" and "absent" different here:
-        # it is Optional on this model (see the field override above) while the
-        # pinned schema types it "array", which rejects null. An unset
-        # format_ids must therefore be OMITTED, never emitted as null — it is
-        # required only via anyOf with format_options, not unconditionally
-        # (#1868 review).
-        return {key: value for key, value in data.items() if value is not None}
-
-    def model_dump_internal(self, **kwargs):
-        """Return internal model dump including all fields for database operations."""
-        return super().model_dump(**kwargs)
-
-    def model_dump_adcp_compliant(self, **kwargs):
-        """Return model dump for AdCP schema compliance."""
-        return self.model_dump(**kwargs)
-
-    def dict(self, **kwargs):
-        """Override dict to maintain backward compatibility."""
-        return self.model_dump(**kwargs)
+    # No wire shaping of its own. implementation_config is Field(exclude=True) at its
+    # declaration; expires_at is a PINNED field (core/product.json) and stays on the wire
+    # -- a strip of it here used to hide a spec field. Nulls are omitted by exclude_none at
+    # every typed level; pricing_options=[] (the anonymous-user shape) is an empty array,
+    # kept as the spec requires.
 
 
 class ProductFilters(LibraryFilters):
@@ -229,28 +171,19 @@ class ProductFilters(LibraryFilters):
     - min_exposures: Minimum exposures for measurement validity
     - standard_formats_only: Only return IAB standard formats
 
-    Local extensions (not in AdCP product-filters.json):
-    - device_types: Filter by device form factors (mobile, desktop, tablet, ctv, etc.)
-
     This pattern ensures:
     - External requests use library Filters (spec-compliant)
     - We automatically get spec updates when library updates
     - No manual field duplication = no drift from spec
+
+    It declares no local extension. ``device_types`` used to be one, and the boundary made
+    it unreachable: ``core/product-filters.json`` does not declare it, so the
+    accepted-shape strip refuses it in development and drops it in production before the
+    filter could ever run.
     """
 
-    # Local extension: device type filtering
-    device_types: list[str] | None = Field(
-        default=None,
-        description="Filter by device form factors (mobile, desktop, tablet, ctv, dooh, audio)",
-    )
 
-    @model_validator(mode="before")
-    @classmethod
-    def upgrade_legacy_format_ids(cls, values: dict) -> dict:
-        return _upgrade_legacy_format_ids(values)
-
-
-class GetProductsRequest(LibraryGetProductsRequest):
+class GetProductsRequest(BuyerRequest, LibraryGetProductsRequest):
     """Extends library GetProductsWholesaleRequest (adcp 3.9: GetProductsRequest is a union alias).
 
     Base class: GetProductsWholesaleRequest (brief optional, buying_mode='wholesale').
@@ -259,11 +192,33 @@ class GetProductsRequest(LibraryGetProductsRequest):
     Library provides: account, brand, brief, buyer_campaign_ref, catalog,
     context, ext, fields, filters, pagination, property_list, refine.
 
-    Internal-only: product_selectors (excluded from external serialization).
+    No internal-only field is declared here. ``product_selectors`` used to be, under
+    ``exclude=True``; it was a non-spec ALIAS of the inherited spec field ``catalog``
+    (identical annotation), it was read nowhere, no builder accepted it, and
+    ``_get_products_impl`` is typed to the SDK's own request model, which never declared
+    it -- so nothing could set it and nothing could read it. Deleted rather than moved to
+    an extended model, because there is no caller for such a model to serve. See
+    docs/development/building-tools.md.
 
     push_notification_config is inherited from the adcp library parent (added in the
     6.6 SDK / spec 3.1.1); no local redeclaration.
     """
+
+    TAGS: ClassVar[tuple[str, ...]] = (
+        "products",
+        "inventory",
+        "catalog",
+        "adcp",
+    )
+
+    # The spec's type, matching the library parent. This field used to be declared WIDER
+    # (``| dict | str``) so the announced shape would admit the brand shorthand -- a bare
+    # onto the tool's ``__annotations__`` and FastMCP validates against it. Narrowing it
+    # without a replacement is what broke the shorthand twice (18 mcp scenarios, then 16).
+    #
+    # The shorthand is no longer accepted anywhere: the compat layer that coerced it was
+    # deleted whole. This DTO announces the spec's shape and nothing else.
+    brand: LibraryBrandReference | None = Field(default=None, description="Brand reference")
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
@@ -273,15 +228,8 @@ class GetProductsRequest(LibraryGetProductsRequest):
         description="Buyer intent: 'brief' (publisher curates) or 'wholesale' (buyer applies own audiences)",
     )
 
-    # Internal-only fields (not in AdCP spec)
-    product_selectors: LibraryCatalog | None = Field(
-        None,
-        description="Selectors to filter the brand manifest product catalog for product discovery",
-        exclude=True,
-    )
 
-
-class GetProductsResponse(NestedModelSerializerMixin, LibraryGetProductsResponse):
+class GetProductsResponse(NestedModelSerializerMixin, LibraryGetProductsResponse, AdcpResponse):
     """Extends library GetProductsResponse - all fields inherited from AdCP spec.
 
     Per AdCP PR #113, this response contains ONLY domain data.
@@ -293,39 +241,6 @@ class GetProductsResponse(NestedModelSerializerMixin, LibraryGetProductsResponse
     # required. The SDK base declares it optional (list | None); redeclare it
     # required so the model cannot construct an under-specified shape (#1399 Plan-B).
     products: list[LibraryProduct]
-
-    def __str__(self) -> str:
-        """Return human-readable message for protocol layer.
-
-        Used by both MCP (for display) and A2A (for task messages).
-        Provides conversational text without adding non-spec fields to the schema.
-        """
-        count = len(self.products) if self.products else 0
-
-        # Base message
-        if count == 0:
-            base_msg = "No products matched your requirements."
-        elif count == 1:
-            base_msg = "Found 1 product that matches your requirements."
-        else:
-            base_msg = f"Found {count} products that match your requirements."
-
-        # Check if this looks like an anonymous response (all pricing options have no rates)
-        # Import here to avoid circular import (schemas -> helpers -> auth -> schemas)
-        from src.core.helpers.pricing_helpers import pricing_option_has_rate
-
-        if (
-            count > 0
-            and self.products
-            and all(
-                all(not pricing_option_has_rate(po) for po in p.pricing_options)
-                for p in self.products
-                if p.pricing_options
-            )
-        ):
-            return f"{base_msg} Please connect through an authorized buying agent for pricing data."
-
-        return base_msg
 
 
 class ProductCatalog(SalesAgentBaseModel):

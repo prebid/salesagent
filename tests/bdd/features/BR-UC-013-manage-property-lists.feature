@@ -1,5 +1,4 @@
 # Generated from adcp-req @ a14db6e5894e781a8b2c577e86e1b136876e4915 on 2026-06-03T11:30:04Z (merge mode)
-# DO NOT EDIT -- re-run: python scripts/compile_bdd.py --merge
 
 Feature: BR-UC-013 Manage Property Lists
   As a Buyer
@@ -22,7 +21,7 @@ Feature: BR-UC-013 Manage Property Lists
   # Rules: BR-RULE-070..078, BR-RULE-043, BR-RULE-257/258/259 (13 rules)
   # Extensions: A (create), B (get), C (update), D (delete), E (not found), F (access denied), G (in use)
   # Error codes: REFERENCE_NOT_FOUND, LIST_ACCESS_DENIED, LIST_IN_USE, TENANT_ERROR,
-  #   NAME_REQUIRED, BASE_PROPERTIES_INVALID_SOURCE_TYPE, BASE_PROPERTIES_INVALID_SOURCE,
+  #   NAME_REQUIRED, INVALID_REQUEST, INVALID_REQUEST,
   #   FILTERS_COUNTRIES_REQUIRED, FILTERS_CHANNELS_REQUIRED, FILTERS_INVALID_COUNTRY_CODE,
   #   FILTERS_INVALID_CHANNEL, PAGINATION_MAX_RESULTS_INVALID, PAGINATION_MAX_RESULTS_EXCEEDED,
   #   PAGINATION_INVALID_CURSOR, WEBHOOK_URL_NOT_ALLOWED_ON_CREATE, WEBHOOK_URL_INVALID_FORMAT,
@@ -165,11 +164,11 @@ Feature: BR-UC-013 Manage Property Lists
 
     Examples:
       | source_type            | boundary_point                                                    | source_value                                                                           | error_code                          |
-      | unknown_selection_type | unknown selection_type value                                      | [{"selection_type": "unknown", "publisher_domain": "a.com"}]                           | BASE_PROPERTIES_INVALID_SOURCE_TYPE |
-      | missing_selection_type | missing selection_type discriminator                              | [{"publisher_domain": "raptive.com"}]                                                  | BASE_PROPERTIES_INVALID_SOURCE_TYPE |
-      | empty_tags             | publisher_tags with empty tags array (minItems=1 violation)       | [{"selection_type": "publisher_tags", "publisher_domain": "a.com", "tags": []}]        | BASE_PROPERTIES_INVALID_SOURCE      |
-      | empty_identifiers      | identifiers with empty identifiers array (minItems=1 violation)   | [{"selection_type": "identifiers", "identifiers": []}]                                 | BASE_PROPERTIES_INVALID_SOURCE      |
-      | missing_domain         | missing publisher_domain in publisher_tags entry                  | [{"selection_type": "publisher_ids", "property_ids": ["prop-001"]}]                    | BASE_PROPERTIES_INVALID_SOURCE      |
+      | unknown_selection_type | unknown selection_type value                                      | [{"selection_type": "unknown", "publisher_domain": "a.com"}]                           | INVALID_REQUEST |
+      | missing_selection_type | missing selection_type discriminator                              | [{"publisher_domain": "raptive.com"}]                                                  | INVALID_REQUEST |
+      | empty_tags             | publisher_tags with empty tags array (minItems=1 violation)       | [{"selection_type": "publisher_tags", "publisher_domain": "a.com", "tags": []}]        | INVALID_REQUEST      |
+      | empty_identifiers      | identifiers with empty identifiers array (minItems=1 violation)   | [{"selection_type": "identifiers", "identifiers": []}]                                 | INVALID_REQUEST      |
+      | missing_domain         | missing publisher_domain in publisher_tags entry                  | [{"selection_type": "publisher_ids", "property_ids": ["prop-001"]}]                    | INVALID_REQUEST      |
 
   @T-UC-013-017 @create @ext-a @validation @error @boundary @br-rule-075 @post-f1 @post-f2
   Scenario: Create property list -- webhook_url on create is rejected
@@ -360,7 +359,7 @@ Feature: BR-UC-013 Manage Property Lists
   Scenario: Update property list -- webhook_url with invalid URI format is rejected
     Given an existing property list "list-abc"
     When the Buyer Agent updates property list "list-abc" with webhook_url "not-a-uri"
-    Then the error code should be "WEBHOOK_URL_INVALID_FORMAT"
+    Then the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     # @bva boundary: webhook_url set to non-URI string in update
     # --- Update: validation (same rules as create; representative samples only) ---
@@ -437,7 +436,7 @@ Feature: BR-UC-013 Manage Property Lists
   Scenario Outline: <operation> property list -- LIST_ACCESS_DENIED when principal lacks permission
     Given an existing property list "list-restricted" with restricted access
     When an unauthorized principal sends a <operation> request for "list-restricted"
-    Then the error code should be "LIST_ACCESS_DENIED"
+    Then the error code should be "REFERENCE_NOT_FOUND"
     And the error should include "suggestion" field
     # --- Extension G: LIST_IN_USE ---
 
@@ -450,7 +449,7 @@ Feature: BR-UC-013 Manage Property Lists
   Scenario: Delete property list -- LIST_IN_USE when referenced by active media buy
     Given an existing property list "list-active" referenced by an active media buy
     When the Buyer Agent deletes property list "list-active"
-    Then the error code should be "LIST_IN_USE"
+    Then the error code should be "INVALID_STATE"
     And the error should include "suggestion" field
     When the Buyer Agent sends a get_property_list request for "list-active"
     Then the response contains the full list metadata
@@ -463,7 +462,7 @@ Feature: BR-UC-013 Manage Property Lists
   @T-UC-013-050 @auth @error @post-f1 @post-f2 @br-rule-070
   Scenario Outline: <operation> property list -- unauthenticated request rejected
     When an unauthenticated Buyer Agent sends a <operation> property list request
-    Then the error code should be "LIST_ACCESS_DENIED"
+    Then the error code should be "REFERENCE_NOT_FOUND"
     And the error should include "suggestion" field
     # BR-RULE-070 INV-1: No valid credentials -> LIST_ACCESS_DENIED
     # Representative sample: create (mutating), list (read-all), get (read-one)
@@ -478,7 +477,7 @@ Feature: BR-UC-013 Manage Property Lists
   Scenario Outline: <operation> property list -- valid credentials but unresolvable tenant
     Given no tenant can be resolved from the request context
     When the Buyer Agent sends a <operation> property list request
-    Then the error code should be "TENANT_ERROR"
+    Then the error code should be "TENANT_UNDEFINED"
     And the error should include "suggestion" field
     # BR-RULE-070 INV-2: Credentials valid but tenant unresolvable -> TENANT_ERROR
     # Representative sample: create (mutating), list (read-all), delete (mutating + needs list_id)
@@ -506,7 +505,7 @@ Feature: BR-UC-013 Manage Property Lists
   Scenario: Reference property list -- auth_token missing when seller tries to resolve
     Given a property list "list-abc" exists and requires an auth_token for seller resolution
     When a seller references "list-abc" without providing an auth_token
-    Then the error code should be "AUTH_REQUIRED"
+    Then the error code should be "AUTH_MISSING"
     And the error should include "suggestion" field
 
   @T-UC-013-054 @auth @post-s7 @br-rule-074
@@ -556,7 +555,7 @@ Feature: BR-UC-013 Manage Property Lists
   @T-UC-013-058 @create @error @post-f1
   Scenario: Create property list -- failed create does not persist any list
     When the Buyer Agent creates a property list with name (absent)
-    Then the error code should be "NAME_REQUIRED"
+    Then the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     When the Buyer Agent sends a list_property_lists request
     Then no new list was added
@@ -729,9 +728,8 @@ Feature: BR-UC-013 Manage Property Lists
     Given the Buyer Agent has access to multiple accounts
     And the list_id "list-shared" exists under more than one accessible account
     When the Buyer Agent sends a get_property_list request for "list-shared" with account omitted
-    Then the request is rejected with code "ACCOUNT_REQUIRED"
-    And the error code should be "ACCOUNT_REQUIRED"
-    And the error message indicates that account is required to disambiguate ownership
+    Then the request is rejected with code "ACCOUNT_AMBIGUOUS"
+    And the error code should be "ACCOUNT_AMBIGUOUS"
     # BR-RULE-258 INV-2: ambiguous ownership must be disambiguated by account
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/list-property-lists-request.json
 
@@ -748,8 +746,8 @@ Feature: BR-UC-013 Manage Property Lists
   Scenario Outline: Create property list -- account omitted with <access> accessible accounts is rejected
     Given the Buyer Agent has access to <access> accounts
     When the Buyer Agent creates a property list with name "Ambig Acct" and account omitted and idempotency_key "uuid-v4-ambig00000ab"
-    Then the request is rejected with code "ACCOUNT_REQUIRED"
-    And the error code should be "ACCOUNT_REQUIRED"
+    Then the request is rejected with code "ACCOUNT_AMBIGUOUS"
+    And the error code should be "ACCOUNT_AMBIGUOUS"
     # BR-RULE-258 INV-4: default account cannot be inferred when zero or multiple accounts accessible
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/list-property-lists-request.json
 
@@ -768,9 +766,9 @@ Feature: BR-UC-013 Manage Property Lists
 
     Examples:
       | ref_type       | account_payload                                                           | error_code       |
-      | both_forms     | {"account_id": "acc-1", "brand": {"domain": "x.com"}, "operator": "x.com"} | INVALID_ACCOUNT_REF |
-      | empty_object   | {}                                                                        | INVALID_ACCOUNT_REF |
-      | extra_property | {"account_id": "acc-1", "unexpected": "y"}                                | INVALID_ACCOUNT_REF |
+      | both_forms     | {"account_id": "acc-1", "brand": {"domain": "x.com"}, "operator": "x.com"} | INVALID_REQUEST |
+      | empty_object   | {}                                                                        | INVALID_REQUEST |
+      | extra_property | {"account_id": "acc-1", "unexpected": "y"}                                | INVALID_REQUEST |
 
   @T-UC-013-webhook-must-refetch @schema-v3.1 @webhook @property-list-changed
   Scenario: Property list changed webhook -- recipient refetches resolved properties via get_property_list

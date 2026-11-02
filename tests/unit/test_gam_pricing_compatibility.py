@@ -3,6 +3,7 @@
 import pytest
 
 from src.adapters.gam.pricing_compatibility import PricingCompatibility
+from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPConfigurationError
 
 
 class TestCompatibilityMatrix:
@@ -95,8 +96,16 @@ class TestLineItemTypeSelection:
         assert result == "NETWORK"
 
     def test_override_incompatible_type_rejected(self):
-        """Override with incompatible type should raise ValueError."""
-        with pytest.raises(ValueError, match="not compatible with pricing model 'flat_rate'"):
+        """Override with incompatible type is refused as SELLER configuration.
+
+        EXPECTATION REVERSED by salesagent-7et3j, then CORRECTED by review.
+        It first became UNSUPPORTED_FEATURE (buyer-correctable), which was wrong:
+        ``override_type`` comes from PRODUCT CONFIG, per this method's own docstring,
+        and the only production caller passes no override at all. The buyer never
+        sent it, so there is nothing for them to correct. CONFIGURATION_ERROR is the
+        honest code, and the pinned enum makes it terminal.
+        """
+        with pytest.raises(AdCPConfigurationError):
             PricingCompatibility.select_line_item_type(
                 "flat_rate",
                 is_guaranteed=False,
@@ -105,7 +114,7 @@ class TestLineItemTypeSelection:
 
     def test_override_vcpm_with_incompatible_rejected(self):
         """Override VCPM with non-STANDARD type should be rejected."""
-        with pytest.raises(ValueError, match="not compatible with pricing model 'vcpm'"):
+        with pytest.raises(AdCPConfigurationError):
             PricingCompatibility.select_line_item_type(
                 "vcpm",
                 is_guaranteed=False,
@@ -124,9 +133,16 @@ class TestGAMCostTypeMapping:
         assert PricingCompatibility.get_gam_cost_type("flat_rate") == "CPD"
 
     def test_unsupported_pricing_models(self):
-        """Test rejection of unsupported pricing models."""
+        """An unsupported pricing model is a buyer-correctable capability gap.
+
+        Per the pinned spec (v3.1.1 enums/error-code.json) it must surface as
+        UNSUPPORTED_FEATURE / correctable — a bare ValueError gets wrapped
+        into SERVICE_UNAVAILABLE / transient ("retry the unretryable") by the
+        impl's generic handler (salesagent-rdrs; se18 targeting precedent).
+        """
+
         for unsupported in ["cpcv", "cpv", "cpp", "invalid"]:
-            with pytest.raises(ValueError, match="not supported by GAM adapter"):
+            with pytest.raises(AdCPCapabilityNotSupportedError):
                 PricingCompatibility.get_gam_cost_type(unsupported)
 
 

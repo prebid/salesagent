@@ -17,6 +17,7 @@ from typing import get_args
 import pytest
 from pydantic import ValidationError
 
+from src.core.product_conversion import default_reporting_capabilities
 from src.core.schemas import Product
 from tests.helpers import pinned_schema
 from tests.helpers.adcp_factories import (
@@ -56,6 +57,8 @@ class TestPublisherPropertiesValidator:
                 delivery_type="guaranteed",
                 pricing_options=[create_test_cpm_pricing_option()],
                 delivery_measurement={"provider": "test", "notes": "Test"},
+                # Supplied so the rejection under test can only be publisher_properties.
+                reporting_capabilities=default_reporting_capabilities(),
             )
 
     def test_valid_publisher_properties_accepted(self):
@@ -180,6 +183,7 @@ class TestNoForcedInvalidNull:
             format_ids=None,
             delivery_type="guaranteed",
             pricing_options=[create_test_cpm_pricing_option()],
+            reporting_capabilities=default_reporting_capabilities(),
         )
         data = product.model_dump()
 
@@ -269,6 +273,7 @@ class TestOptionalFieldsOmittedWhenUnset:
             delivery_type="guaranteed",
             pricing_options=[create_test_cpm_pricing_option()],
             delivery_measurement=None,
+            reporting_capabilities=default_reporting_capabilities(),
         )
         data = product.model_dump()
 

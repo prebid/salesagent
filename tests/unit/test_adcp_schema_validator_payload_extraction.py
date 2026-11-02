@@ -4,10 +4,10 @@ Regression for PR #1838: the strip-set used to
 remove "message", "context_id", and "errors" before validation, with a
 comment claiming they're transport-layer additions "not part of the AdCP
 spec". All three are genuine spec-defined properties on the pinned schema's
-response envelope (message/context_id on the "Protocol Envelope" allOf arm
+response envelope (message/context_id on the "Protocol Envelope" allOf branch
 every bundled *-response.json schema shares; errors as a top-level property
 on schemas like get-products-response.json, and required on the "failed"
-oneOf arm of schemas like create-media-buy-response.json) — stripping them
+oneOf branch of schemas like create-media-buy-response.json) — stripping them
 meant the validator silently never graded their type/shape, and for
 "errors" specifically, silently masked a payload that would otherwise fail
 validation outright (a "failed" status response missing its required

@@ -23,8 +23,19 @@ BANNED_TRANSPORT_MODULES = {
 
 
 def _find_impl_functions(file_path: Path) -> list[tuple[str, ast.FunctionDef]]:
-    """Find all _impl functions in a Python file."""
-    source = file_path.read_text()
+    """Find all _impl functions in a Python file.
+
+    A file that vanishes between the glob and the read is not an implementation.
+    ``test_ast_grep_identity_rules`` used to write a ``_synthetic_identity_probe_<uuid>.py``
+    into ``src/core/tools`` to prove a rule fires and delete it again, and under xdist that
+    window overlapped this scan; the probes now live in a staged root
+    (``stage_ast_grep_root``), and the skip stays because a file that is gone declares no
+    ``_impl`` for any caller to reach.
+    """
+    try:
+        source = file_path.read_text()
+    except FileNotFoundError:
+        return []
     tree = ast.parse(source, filename=str(file_path))
     results = []
     for node in ast.walk(tree):
@@ -107,18 +118,6 @@ class TestNoTransportImportsInImpl:
 
 class TestNoPresentationLogicInImpl:
     """No _impl function should use console.print or rich formatting."""
-
-    @pytest.mark.arch_guard
-    def test_no_console_print_in_performance_impl(self):
-        """_update_performance_index_impl must not use console.print()."""
-        file_path = TOOLS_DIR / "performance.py"
-        for func_name, func_node in _find_impl_functions(file_path):
-            calls = _get_function_calls(func_node)
-            for lineno, call_name in calls:
-                assert call_name != "console.print", (
-                    f"{func_name} calls console.print() at line {lineno}. "
-                    f"_impl functions must use logger, not presentation logic."
-                )
 
     @pytest.mark.arch_guard
     def test_no_console_print_in_any_impl(self):

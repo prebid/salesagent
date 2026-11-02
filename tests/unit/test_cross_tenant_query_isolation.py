@@ -64,28 +64,21 @@ def _extract_select_calls(
     )
 
 
-class TestAuthUtilsTenantIsolation:
-    """: auth.py Principal lookup missing tenant_id."""
-
-    def test_get_principal_object_scopes_by_tenant(self):
-        """get_principal_object must filter Principal by tenant_id.
-
-        Principal has composite PK (tenant_id, principal_id). Querying by
-        principal_id alone can return a principal from a different tenant.
-        """
-        selects = _extract_select_calls(
-            "src/core/auth.py",
-            "get_principal_object",
-        )
-
-        principal_selects = [s for s in selects if s["model"] == "Principal" or s["model"] == "ModelPrincipal"]
-        assert principal_selects, "Expected at least one Principal select() call"
-
-        for s in principal_selects:
-            assert s["has_tenant_filter"], (
-                f"Principal query at auth.py:{s['lineno']} is missing tenant_id filter. "
-                f"This is a cross-tenant data leak ."
-            )
+# TestAuthUtilsTenantIsolation is DELETED. It scanned auth.py's get_principal_object for a
+# tenant_id filter on its select(Principal); the function was deleted in 47d57e5d6 and
+# auth.py now holds one push-notification header helper and touches no Principal at all.
+# The test could not be retargeted, because the lookup it graded no longer has a raw
+# spelling to scan: the resolver loads the principal through PrincipalRepository, whose
+# tenant_id is constructor-bound and applied by every select in it
+# (repositories/principal.py). Two mechanisms hold what the scan held:
+#   - structurally, ruff-boundary.toml's TID251 ban on src.core.database.models.Principal
+#     (43a205a72) makes a raw select on the model unwritable outside the repositories
+#     package, so there is no un-scoped lookup to find;
+#   - behaviourally, on the wire, by BR-SECURITY-002-tenant-isolation.feature --
+#     @T-SECURITY-002-credential-does-not-cross-tenants grades both directions of a
+#     credential minted for one tenant being refused (AUTH_INVALID) by the other, and
+#     @T-SECURITY-002-own-tenant-only grades that a buyer sees its own tenant's products
+#     AND no other tenant's, which is the leak this scan was a proxy for.
 
 
 class TestMediaBuyUpdateTenantIsolation:
@@ -155,29 +148,19 @@ class TestApproveMediaBuyTenantIsolation:
         )
 
 
-class TestAdapterTenantIsolation:
-    """: adapter queries missing tenant_id (GAM Creative)."""
-
-    # NOTE: Broadstreet MediaPackage queries are NOT tested here because
-    # MediaPackage has no tenant_id column. Its tenant isolation comes through
-    # the media_buy_id FK to MediaBuy (globally unique PK).
-
-    def test_gam_create_line_items_scopes_by_tenant(self):
-        """GAMOrdersManager.create_line_items must filter Creative by tenant_id."""
-        selects = _extract_select_calls(
-            "src/adapters/gam/managers/orders.py",
-            "create_line_items",
-            class_name="GAMOrdersManager",
-        )
-
-        creative_selects = [s for s in selects if s["model"] in ("Creative", "DBCreative", "CreativeModel")]
-        assert creative_selects, "Expected at least one Creative select() call"
-
-        for s in creative_selects:
-            assert s["has_tenant_filter"], (
-                f"Creative query at gam/managers/orders.py:{s['lineno']} is missing tenant_id filter. "
-                f"This is a cross-tenant data leak ."
-            )
+# TestAdapterTenantIsolation is DELETED. Its one test scanned
+# GAMOrdersManager.create_line_items for a tenant_id filter on its select(DBCreative).
+# 43a205a72 moved that query into CreativeRepository.admin_get_by_ids, which applies the
+# SAME two predicates (Creative.tenant_id == self._tenant_id, creative_id.in_(ids)) with
+# tenant_id constructor-bound, so the filter the scan graded survives verbatim one layer
+# down -- only the spelling inside create_line_items is gone, and a function-scoped AST
+# scan has nothing left to read. ("admin_" there means publisher-scoped WITHIN the tenant,
+# not cross-tenant; the call site passes [] when tenant_id is absent, matching the old raw
+# query's NULL comparison, which matched nothing.)
+#
+# The original NOTE, still true: Broadstreet MediaPackage queries are not covered here
+# because MediaPackage has no tenant_id column -- its isolation comes through the
+# media_buy_id FK to MediaBuy (globally unique PK).
 
 
 class TestAdminDeliveryTenantIsolation:

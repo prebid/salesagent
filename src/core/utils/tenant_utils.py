@@ -30,19 +30,16 @@ def serialize_tenant_to_dict(tenant: Tenant) -> dict[str, Any]:
         ...     stmt = select(Tenant).filter_by(tenant_id="example")
         ...     tenant = session.scalars(stmt).first()
         ...     tenant_dict = serialize_tenant_to_dict(tenant)
-        ...     set_current_tenant(tenant_dict)
     """
     return {
         "tenant_id": tenant.tenant_id,
         "name": tenant.name,
-        "subdomain": tenant.subdomain,
         "virtual_host": tenant.virtual_host,
         "ad_server": tenant.ad_server,
         "enable_axe_signals": tenant.enable_axe_signals,
         "authorized_emails": safe_json_loads(tenant.authorized_emails, []),
         "authorized_domains": safe_json_loads(tenant.authorized_domains, []),
         "slack_webhook_url": tenant.slack_webhook_url,
-        "admin_token": tenant.admin_token,
         "auto_approve_formats": safe_json_loads(tenant.auto_approve_format_ids, []),
         "human_review_required": tenant.human_review_required,
         "slack_audit_webhook_url": tenant.slack_audit_webhook_url,
@@ -52,9 +49,11 @@ def serialize_tenant_to_dict(tenant: Tenant) -> dict[str, Any]:
         "approval_mode": tenant.approval_mode,
         "account_approval_mode": tenant.account_approval_mode,
         "supported_billing": safe_json_loads(tenant.supported_billing, None),
+        "account_sandbox": tenant.account_sandbox,
         "gemini_api_key": tenant.gemini_api_key,
         "creative_review_criteria": tenant.creative_review_criteria,
         "brand_manifest_policy": tenant.brand_manifest_policy,
         "advertising_policy": safe_json_loads(tenant.advertising_policy, None),
         "product_ranking_prompt": tenant.product_ranking_prompt,
+        "capability_declarations": safe_json_loads(tenant.capability_declarations, None),
     }

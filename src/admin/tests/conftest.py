@@ -72,7 +72,8 @@ def mock_tenant():
     tenant.tenant_id = "test_tenant"
     tenant.name = "Test Tenant"
     tenant.subdomain = "test"
-    tenant.admin_token = "test_admin_token"
+    # No admin_token: the column is gone (84a86e019). A Mock() accepts any attribute, so
+    # setting it made every consumer pass whether the field existed or not.
     tenant.slack_webhook_url = "https://hooks.slack.com/test"
     tenant.adapter_config = '{"mock": {"enabled": true}}'
     tenant.max_daily_budget = 10000

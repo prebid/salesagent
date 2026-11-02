@@ -2,8 +2,8 @@
 
 Wire-shape decisions live at the transport boundary, not in ``_impl``. Tools and
 adapters that need to surface an error to the buyer MUST raise a typed
-``AdCPError`` subclass; the boundary translator runs
-``build_two_layer_error_envelope()`` once at the boundary.
+``AdCPSalesAgentError`` subclass; the boundary builds one ``AdcpErrorResponse``
+(``AdcpErrorResponse.of``) and serializes it with ``to_wire``.
 
 This guard counts ``Error(code=...)`` literal construction sites in
 ``src/core/tools/`` and ``src/adapters/`` per file, with a per-file CAP frozen
@@ -12,10 +12,12 @@ sweep lands. New code is never added to the cap — the only way to add a new fi
 raise a cap is to land a fix that exceeds it intentionally, which is a code-
 review red flag.
 
-Capped files may carry a ``migrate to typed
-AdCPError raise`` comment at every Error(code=...) site so reviewers can grep
+Capped files may carry a ``# FIXME(#<gh-issue>): migrate to typed
+AdCPSalesAgentError raise`` comment at every Error(code=...) site so reviewers can grep
 their way to the cleanup work. The comments are aspirational; the cap dict
 + ratchet (`assert_caps_only_shrink`) is the actual enforcement mechanism.
+The citation is a GitHub issue, never a local beads id (CLAUDE.md "Rules for
+guards"); check_fixme_citation_count.py ratchets that spelling to zero in src/.
 
 Spec: AdCP 3.0.0 (error-handling.mdx) — two-layer envelope is normative.
 """
@@ -91,7 +93,7 @@ class TestNoErrorConstructionInImpl:
             count_sites=_count_pattern_a_sites,
             scan_dirs=SCAN_DIRS,
             site_label="Pattern A",
-            typed_raise_hint="convert to typed AdCPError raise (e.g., AdCPMediaBuyNotFoundError)",
+            typed_raise_hint="convert to typed AdCPSalesAgentError raise (e.g., AdCPMediaBuyNotFoundError)",
             rel=_rel,
         )
 

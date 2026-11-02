@@ -361,7 +361,16 @@ class TestDeviceTypeBreakdownSchema:
 
 class TestPackageDeliveryNewFields:
     def _make_pkg(self, **kwargs):
-        defaults = {"package_id": "pkg_1", "impressions": 1000, "spend": 5.0}
+        # pricing_model / rate / currency are `required` on the pinned by-package item, so
+        # they belong in the baseline every case here builds on rather than in each case.
+        defaults = {
+            "package_id": "pkg_1",
+            "impressions": 1000,
+            "spend": 5.0,
+            "pricing_model": "cpm",
+            "rate": 5.0,
+            "currency": "USD",
+        }
         defaults.update(kwargs)
         return PackageDelivery(**defaults)
 

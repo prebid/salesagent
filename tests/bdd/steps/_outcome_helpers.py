@@ -15,136 +15,345 @@ from typing import Any
 from tests.harness.transport import TransportResult
 
 
-def error_envelope_or_none(ctx: dict) -> dict | None:
-    """The error envelope for this dispatch, or ``None`` when there is none.
+class _WireMissing:
+    """Type of :data:`WIRE_MISSING` — exists only to give it a readable repr."""
 
-    The ctx-side adapter for :meth:`TransportResult.error_envelope_or_none` —
-    the same relationship :func:`_wire_or_none` has to the success path. Steps
-    hold a ctx and the reader lives on the result, so without this the four
-    ctx-holding call sites each re-spell the ``ctx.get("result")`` dance, which
-    is three copies of the decision this lane exists to make once.
+    def __repr__(self) -> str:  # pragma: no cover - diagnostics only
+        return "<absent from wire>"
 
-    Returns ``None`` rather than raising, because every ctx-side caller branches
-    on envelope-presence as control flow: an MCP dispatch can fail with a
-    ``ToolError`` that is genuinely not an AdCP envelope.
+
+#: Sentinel distinguishing "the path is not on the wire at all" from "the path is
+#: present and carries a JSON null". The two are different contract violations and
+#: must never collapse: an unset optional object is ABSENT on a conformant wire, so
+#: a serialized ``null`` is a schema-invalid serialization, not an absence.
+WIRE_MISSING = _WireMissing()
+
+
+def _wire_body(ctx: dict) -> dict:
+    """The serialized success-path wire body, behind the loud guard.
+
+    Every BDD transport (REST/A2A/MCP and the e2e variants) exposes the real
+    success-path wire dict via ``ctx["wire_response"]``. There is no other kind:
+    a missing wire is always a defect in the env, so this raises rather than
+    falling back.
+
+    It used to serialize the typed payload through ``model_dump`` when the
+    transport was an explicit no-wire IMPL. That fallback turned a wire assertion
+    into a serializer round-trip, and the pseudo-transport it served is deleted —
+    so the branch, and the "is the transport unset or deliberately no-wire?"
+    question it forced on every caller, are gone with it (GH #1744 was the
+    narrower fix for the same hazard).
+
+    When the dispatch stashed a ``TransportResult`` it delegates to that object's
+    :meth:`require_wire`, so the step definitions and the integration tests share
+    one guard rather than two copies free to drift.
+
+    Sole guard implementation for :func:`wire_field`, :func:`wire_dict` and
+    :func:`wire_absent` — three copies of it would be exactly the duplication the
+    canonical-helper rule exists to prevent.
+
+    A success-path helper reached on a scenario that actually ERRORED says so, and
+    names the error. Without this the transport guard below would fire first and
+    report "env does not stash success-path wire" — blaming the harness for what is
+    really a failed request, which is the single most misleading diagnostic these
+    helpers can emit.
     """
     result = ctx.get("result")
-    return result.error_envelope_or_none() if result is not None else None
-
-
-def _wire_or_none(ctx: dict) -> dict | None:
-    """The real wire body for this dispatch, or ``None`` when there is no wire.
-
-    Branches on the DECLARATION the dispatcher made at construction
-    (``TransportResult.has_wire``), never on which transport enum is in play.
-    The old spelling inferred wire-presence from transport IDENTITY — a lookup
-    miss against the in-process transport member — so it would break, or
-    silently reclassify every result, the day that member is removed.
-
-    Two loud failures, both harness bugs rather than test failures:
-
-    * no ``TransportResult`` in ctx — the When step did not dispatch through
-      ``dispatch_request`` or ``when_request._call_via``, so there is no
-      declaration to branch on and any answer here would be a guess;
-    * ``has_wire`` with nothing stashed — the env crossed a wire and failed to
-      capture it. Falling back to re-serializing the typed payload would assert
-      nothing about the wire while looking green, which is the tautology these
-      helpers exist to prevent.
-    """
-    result = ctx.get("result")
-    if not isinstance(result, TransportResult):
-        # Both dispatch seams end in ``except Exception as exc: ctx["error"] = exc``
-        # WITHOUT stashing a result, so a dispatch that THREW arrives here too. Say
-        # so, rather than misreporting it as "never dispatched" and sending the
-        # reader hunting for a wiring bug that does not exist.
-        failure = ctx.get("error")
-        if failure is not None:
-            raise AssertionError(
-                f"no TransportResult in ctx because the dispatch RAISED: {failure!r} — "
-                "there is no wire to read; assert on the error instead"
-            )
+    if result is not None:
+        # The guarded read lives on TransportResult, which is the object that HOLDS
+        # the wire (origin/main). One implementation, so a step definition cannot
+        # drift from an integration test asserting the same thing; it distinguishes
+        # the same two failures this helper does — an error result never had a
+        # success body, and a success result with no stashed body means the dispatch
+        # bypassed the real pipeline.
+        return result.require_wire()
+    wire = ctx.get("wire_response")
+    error = ctx.get("error")
+    # The third conjunct this test used to carry — "and ctx['response'] is None" —
+    # was retired with the ctx["response"] key: it suppressed this raise only so the
+    # deleted IMPL model_dump fallback below could still RETURN a body, and with that
+    # return path gone every wire-less path here raises anyway, so it now chose the
+    # worse of two diagnostics and nothing else.
+    if wire is None and error is not None:
+        raise AssertionError(f"expected a success response, got error: {error!r}")
+    transport = ctx.get("transport")
+    if wire is None:
+        # No serializer fallback any more. It existed for an explicit IMPL
+        # pseudo-transport (no wire), which is deleted: every BDD scenario now
+        # runs on a real wire, so a missing wire is a defect in the env, never a
+        # legitimate no-wire case to serialize around.
         raise AssertionError(
-            "no TransportResult in ctx — the When step did not dispatch through "
-            "dispatch_request/_call_via, so wire-presence cannot be determined"
+            f"{transport}: wire_response missing — the env does not stash success-path "
+            "wire. Every BDD transport is a real wire; there is no no-wire fallback."
         )
-    if not result.has_wire:
-        return None
-    # The guarded read itself lives on TransportResult (#1941): one implementation,
-    # shared with the integration tests asserting the same thing, so a step
-    # definition cannot drift from them. This helper decides only WHETHER a wire
-    # exists — from the dispatcher's declaration — and ``require_wire`` decides
-    # whether the declared wire was actually captured.
-    return result.require_wire()
+    return wire
+
+
+def _dig(doc: Any, path: str) -> Any:
+    """Walk a dotted path through nested JSON objects, or :data:`WIRE_MISSING`.
+
+    The shared resolver behind :func:`wire_lookup` (whole-body reads) and
+    :func:`_locate_entry` (per-entry matches) — one dotted-path convention across
+    every wire helper, defined once.
+    """
+    cur: Any = doc
+    for part in path.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return WIRE_MISSING
+        cur = cur[part]
+    return cur
+
+
+def wire_lookup(ctx: dict, path: str) -> Any:
+    """Resolve a dotted path on the success-path wire, or :data:`WIRE_MISSING` if absent.
+
+    ``"a"`` reads a top-level key; ``"a.b.c"`` walks nested objects. A hop through a
+    non-dict (e.g. a list or a scalar) counts as an absence rather than raising.
+
+    This is the shared resolver behind :func:`wire_field` / :func:`wire_dict` /
+    :func:`wire_absent`, exposed for the genuinely TRI-STATE oracle — one whose
+    contract is "absent, or present with this value" (an outline column grading
+    ``absent or false``; a conditional Then that only grades a block when the seller
+    emits it). It ASSERTS NOTHING, so it is a primitive, not a competing assertion
+    surface: whenever the oracle is binary, reach for wire_field/wire_absent instead,
+    and never rebuild a private dotted-path resolver on top of this one.
+    """
+    return _dig(_wire_body(ctx), path)
 
 
 def wire_field(ctx: dict, field: str) -> Any:
-    """Return a top-level success-response field as the buyer sees it on the wire.
+    """Return a success-response field, by dotted path, as the buyer sees it on the wire.
 
-    A dispatch that crossed a wire exposes the real success-path body; one that
-    did not (an in-process call) has none, so the typed payload is serialized
-    through the production serializer — the same path that produces wire bytes
-    for the other transports. Which case applies is read from the dispatcher's
-    own declaration, not guessed here; see :func:`_wire_or_none`.
+    ``field`` is a dotted path (``"media_buy.features.sandbox"``), of which a bare
+    top-level key is the one-segment case.
+
+    DUAL assert — the path must be both present AND non-null:
+
+    - **absent** fails, naming the top-level keys actually on the wire;
+    - **present but JSON null** fails too. These are optional object/array fields
+      whose schemas do not admit ``null``, so a null on the wire is a serialization
+      defect, not a populated section (observed on MCP ``structured_content``, which
+      serializes unset ``None`` fields; #1592). Downgrading this to a presence-only
+      check would silently reintroduce the vacuous-pass class this helper exists to
+      catch — see :func:`wire_absent` for the symmetric rule.
     """
-    return wire_dict(ctx)[field]
+    value = wire_lookup(ctx, field)
+    assert value is not WIRE_MISSING, f"{field!r} absent from wire response (top-level keys: {sorted(_wire_body(ctx))})"
+    assert value is not None, f"{field!r} is JSON null on the wire — schema-invalid serialization of an unset field"
+    return value
 
 
-def wire_dict(ctx: dict) -> dict:
-    """Return the full success-path wire body as the buyer sees it on the wire.
+def wire_dict(ctx: dict, path: str | None = None) -> dict:
+    """Return the success-path wire body — the whole envelope, or the object at *path*.
 
     The dict analogue of :func:`wire_field` — use when an oracle must test key
     PRESENCE/ABSENCE (e.g. an optional field) rather than read one known field.
-    Shares the same loud guard and the same source of truth: see
-    :func:`_wire_or_none`.
+    With ``path``, resolves the same dotted path :func:`wire_field` does (same
+    absent/null dual assert) and additionally pins that the resolved value IS a
+    JSON object, so a caller that goes on to index it cannot fail with a confusing
+    ``TypeError`` on a scalar. Shares the same loud guard on a non-stashing env.
     """
-    wire = _wire_or_none(ctx)
-    if wire is not None:
-        return wire
-    return require_payload(ctx).model_dump(mode="json")
+    doc = _wire_body(ctx)
+    if path is None:
+        return doc
+    value = wire_field(ctx, path)
+    assert isinstance(value, dict), f"{path!r} is not a JSON object on the wire: {value!r}"
+    return value
 
 
-def assert_wire_rejection(ctx: dict, code: str, *, recovery: str, field: str) -> None:
-    """Assert the wire error envelope is *code* / *recovery* and names *field*.
+def _locate_entry(ctx: dict, collection: str, index: int | None, match: dict[str, Any]) -> dict:
+    """The one locator for a per-entry read inside a SUCCESS envelope.
 
-    One implementation for every "the request is rejected with <CODE> naming
-    field <f>" Then step. Each such step keeps its own literal Gherkin text —
-    replacing them with one ``{code}``-parameterized parser would leave two
-    parsers matching the same sentence, resolved by pytest-bdd's scan order, and
-    the shadowed body would silently stop grading (``test_architecture_bdd_no_shadowed_steps``
-    compares text ACROSS modules, so it would not catch it). Thin steps over a
-    shared helper give DRY without the shadow.
+    Sole implementation behind :func:`wire_entry` and :func:`wire_entry_errors` —
+    two copies of the "find the row, or say what rows there were" logic is exactly
+    the duplication the canonical-helper rule exists to prevent.
+
+    Strict on every miss, and the failure NAMES THE ENTRIES ACTUALLY PRESENT: a
+    bare "no match" sends the reader to the harness, while showing what the wire
+    did carry makes an off-by-one identifier or an unexpected partial-failure row
+    obvious from the output alone.
     """
-    from tests.helpers import assert_envelope_shape
+    entries = wire_field(ctx, collection)
+    assert isinstance(entries, list), f"{collection!r} is not a JSON array on the wire: {entries!r}"
 
-    envelope = _require(ctx, "result", hint="no dispatch was recorded").error_envelope()
-    assert_envelope_shape(envelope, code, recovery=recovery, field=field)
+    def _present() -> list:
+        return [{k: e.get(k) for k in ("account_id", "buyer_ref", "creative_id", "action") if k in e} for e in entries]
+
+    if index is not None:
+        assert 0 <= index < len(entries), (
+            f"{collection}[{index}] is out of range — the wire carried {len(entries)} entr(y/ies): {_present()}"
+        )
+        entry = entries[index]
+    else:
+        assert match, f"wire_entry({collection!r}) needs either index= or a field to match on"
+        matched = [e for e in entries if isinstance(e, dict) and all(_dig(e, k) == v for k, v in match.items())]
+        assert matched, f"no {collection} entry matching {match!r}; the wire carried: {_present()}"
+        assert len(matched) == 1, f"{match!r} matched {len(matched)} {collection} entries, expected exactly one"
+        entry = matched[0]
+    assert isinstance(entry, dict), f"{collection} entry is not a JSON object on the wire: {entry!r}"
+    return entry
+
+
+def wire_entry(ctx: dict, collection: str, *, index: int | None = None, **match: Any) -> dict:
+    """One entry of a per-entry SUCCESS response, located on the wire.
+
+    A partial-success response (e.g. sync-accounts-response oneOf/0) carries its
+    per-entry outcomes at ``accounts[]`` — INSIDE a success envelope — so
+    ``assert_wire_error`` / ``wire_error_envelope``, which grade the error-envelope
+    shape, structurally cannot serve them. Without this primitive the only way to
+    reach an entry is a typed-payload read or a hand-rolled index, which is how the
+    typed ``ctx["last_account"]`` stash grew 28 readers.
+
+    Locate by ``**match`` on the entry's own wire fields — flat
+    (``account_id="acct_1"``) or dotted for a nested one
+    (``**{"brand.domain": "nike.com"}``, the same dotted convention
+    :func:`wire_lookup` uses) — or, for a genuinely single-entry response, by ``index=0`` — in which case pin
+    the count (``len(wire_field(ctx, "accounts")) == 1``) so index 0 is asserted
+    rather than assumed. Built on :func:`wire_field`, so it inherits the loud guard.
+    """
+    return _locate_entry(ctx, collection, index, match)
+
+
+def _errors_array(errors: Any, what: str) -> list:
+    """One ``errors[]`` array read off the wire, with the derived ``message`` stripped.
+
+    Sole implementation behind :func:`wire_entry_errors` and
+    :func:`wire_advisory_errors` — the strip is the reason both are GUARD-SANCTIONED
+    readers, and two copies of it would be free to drift apart.
+    """
+    assert isinstance(errors, list), f"{what} is not a JSON array on the wire: {errors!r}"
+    return [
+        {k: v for k, v in error.items() if k != "message"} if isinstance(error, dict) else error for error in errors
+    ]
+
+
+def wire_entry_errors(ctx: dict, collection: str, *, index: int | None = None, **match: Any) -> list:
+    """The per-entry ``errors[]`` array of one entry, located on the wire.
+
+    Per-entry errors are the partial-failure channel: a rejected row inside an
+    otherwise successful response. Defaults to ``[]`` — an entry that succeeded
+    carries no errors, and that absence is a legitimate outcome to assert on, not
+    a missing-wire defect.
+
+    RESTRICTED: the buyer-facing ``message`` is stripped from every entry before it is
+    returned. This is a GUARD-SANCTIONED per-entry reader (it is blessed in the wire
+    discipline guard's ``_PRIMITIVE_FUNCTIONS``), so handing back the sentence would make it
+    a blessed door through which a step could assert prose — the exact class this
+    reader is sanctioned to replace. The sentence is a function of the entry's CODE through
+    CODE_TABLE, so nothing is lost: assert ``code``, ``recovery``, ``field`` or ``details``.
+    """
+    entry = _locate_entry(ctx, collection, index, match)
+    return _errors_array(entry.get("errors") or [], f"{collection} entry errors")
+
+
+def wire_envelope_errors(ctx: dict) -> list:
+    """The ``errors[]`` of a FAILED response's two-layer envelope, located on the wire.
+
+    The third member of the family, and the one that was missing: :func:`wire_entry_errors`
+    reads a rejected row inside an otherwise successful response, :func:`wire_advisory_errors`
+    reads the task-level advisory array ON a success, and this reads the array on a response
+    that FAILED outright. All three are the same protocol position in different documents,
+    which is precisely why the wire-discipline guard treats ``errors`` as the harness's
+    business rather than each step module's: without this one, a step needing it wrote
+    ``envelope.get("errors")`` itself and the guard flagged it, correctly.
+
+    Goes through ``result.error_envelope()``, which RAISES when no envelope was captured —
+    so a dead wire path fails loudly here instead of returning ``[]`` and letting a caller
+    read "no errors" as "the seller reported none".
+
+    Non-empty is asserted, unlike the entry reader's ``[]`` default: a response that failed
+    and carries no ``errors[]`` has nothing for a buyer to act on, so that is a defect rather
+    than a legitimate outcome to grade.
+
+    ``message`` is stripped by :func:`_errors_array`, same as its siblings — the sentence is
+    a function of the code through CODE_TABLE, so asserting both checks the table against
+    itself.
+    """
+    envelope = ctx["result"].error_envelope()
+    entries = _errors_array(envelope.get("errors"), "error envelope errors")
+    assert entries, f"the error envelope carries no errors[] to grade: {envelope!r}"
+    return entries
+
+
+def wire_advisory_errors(ctx: dict) -> list:
+    """The response's TOP-LEVEL ``errors[]`` — the task-level advisory channel.
+
+    A successful document that still has something to report about part of what was
+    asked: ``get-media-buy-delivery-response.json`` declares the array for exactly this
+    ("Task-specific errors and warnings (e.g., missing delivery data, reporting platform
+    issues)"). Distinct from :func:`wire_entry_errors`, which reads the errors of ONE
+    entry inside a collection, and from ``assert_wire_error``, which grades a REFUSAL —
+    a response carrying advisories is not a refusal and has no error envelope at all.
+
+    Defaults to ``[]``: a request where nothing went wrong carries none, and that
+    absence is an outcome to assert on rather than a missing wire. ``message`` is
+    stripped for the same reason it is stripped per entry.
+    """
+    return _errors_array(_wire_body(ctx).get("errors") or [], "response errors")
+
+
+def wire_absent(ctx: dict, path: str) -> None:
+    """Assert the dotted *path* is not present on the success-path wire at all.
+
+    The strict complement of :func:`wire_field`: only the missing key counts as
+    absent. A path that resolves to a JSON ``null`` is PRESENT and therefore FAILS
+    here — an unset optional section must not appear on the wire at all, and a
+    serialized ``null`` is the schema-invalid emission this asserts against.
+    """
+    value = wire_lookup(ctx, path)
+    assert value is WIRE_MISSING, f"{path!r} unexpectedly present on the wire: {value!r}"
 
 
 def _real_wire_error_envelope(ctx: dict) -> dict | None:
     """Read ``TransportResult.wire_error_envelope`` — the ONE attribute-access site.
 
-    Every reader of this field, anywhere in ``tests/bdd/steps/``, must go
-    through this module (:func:`wire_error_envelope_or_none` or
-    :func:`wire_error_dict`) rather than hand-rolling
+    Every reader of this field, anywhere in ``tests/bdd/steps/``, must go through
+    this module (:func:`error_envelope_or_none`, :func:`wire_error_envelope_or_none`
+    or :func:`wire_error_dict`) rather than hand-rolling
     ``getattr(result, "wire_error_envelope", None)`` — enforced by
-    ``test_architecture_bdd_wire_discipline.py``'s access-pattern check.
+    ``test_architecture_bdd_wire_discipline.py``'s access-pattern check, which
+    exempts this module because it DEFINES the accessors.
+
+    Wire-only, with no synthesized-envelope disjunction behind it. The envelope a
+    boundary translator WOULD have emitted against a caught exception is a
+    reconstruction, not what the buyer received; the IMPL pseudo-transport that was
+    its only consumer is deleted, and with it the fallback that could not fail.
     """
     result = ctx.get("result")
     return getattr(result, "wire_error_envelope", None) if result is not None else None
 
 
+def error_envelope_or_none(ctx: dict) -> dict | None:
+    """The error envelope for this dispatch, or ``None`` when there is none.
+
+    The ctx-side adapter for the error path — the same relationship
+    :func:`_wire_body` has to the success path. Steps hold a ctx and the envelope
+    lives on the result, so without this every ctx-holding call site re-spells the
+    ``ctx.get("result")`` dance, which is N copies of the decision this module
+    exists to make once.
+
+    Returns ``None`` rather than raising, because every ctx-side caller branches on
+    envelope-presence as control flow: an MCP dispatch can fail with a ``ToolError``
+    that is genuinely not an AdCP envelope, and a step that grades THAT needs to see
+    the absence rather than an assertion failure.
+
+    Same single implementation as :func:`wire_error_envelope_or_none`: the two names
+    diverged only while an IMPL result could carry a synthesized envelope this one
+    would have accepted. That transport is gone, so both mean "the real wire
+    envelope, or nothing", and they share one body rather than two that could drift.
+    """
+    return _real_wire_error_envelope(ctx)
+
+
 def wire_error_envelope_or_none(ctx: dict) -> dict | None:
     """Return the REAL wire error envelope (REST/A2A/MCP) captured for this dispatch, or ``None``.
 
-    No loud guard, no IMPL-synthesized fallback — the strict counterpart to
-    :func:`wire_error_dict`. Use this when a caller must distinguish "a real
-    wire envelope was captured" from "only the IMPL-synthesized one exists"
-    before delegating to ``TransportResult.assert_wire_error``, which reads
-    ``wire_error_envelope`` specifically and raises its own (misleading)
-    error if handed a synthesized-only result (``then_error_recovery``'s
-    reason for using this instead of ``wire_error_dict``). Returns ``None``
-    on IMPL and on any scenario where no wire envelope was captured —
-    callers fall back to the reconstructed ``ctx['error']``.
+    No loud guard — the tolerant counterpart to :func:`wire_error_dict`. Use it
+    where a caller must distinguish "a wire envelope was captured" from "none was"
+    BEFORE delegating to ``TransportResult.assert_wire_error``, which reads
+    ``wire_error_envelope`` specifically and would otherwise raise its own, less
+    informative, diagnosis (``then_error_recovery``'s reason for using this rather
+    than :func:`wire_error_dict`).
     """
     return _real_wire_error_envelope(ctx)
 
@@ -152,34 +361,50 @@ def wire_error_envelope_or_none(ctx: dict) -> dict | None:
 def wire_error_dict(ctx: dict) -> dict:
     """Return the full error-path wire envelope as the buyer sees it on the wire.
 
-    The error-path analogue of :func:`wire_dict` — the single guarded accessor
-    for ``TransportResult.wire_error_envelope``, which its own docstring names
-    "the canonical field for error verification" (``tests/CLAUDE.md`` § Error
-    Verification Policy) and whose ``assert_wire_error`` calls "the single
-    harness-provided way to verify an error on the wire — step definitions
-    must not hand-roll envelope parsing." Callers that only need to read a
-    field off the envelope (e.g. ``context.correlation_id`` echo checks) call
-    this directly; callers verifying the error SHAPE should prefer
-    ``result.assert_wire_error(...)``, the single shape authority.
+    The error-path analogue of :func:`wire_dict` — the single guarded accessor for
+    ``TransportResult.wire_error_envelope``, which its own docstring names "the
+    canonical field for error verification" (``tests/CLAUDE.md`` § Error
+    Verification Policy) and whose ``assert_wire_error`` is "the single
+    harness-provided way to verify an error on the wire — step definitions must not
+    hand-roll envelope parsing". Callers that only need to READ a field off the
+    envelope (e.g. a ``context.correlation_id`` echo check) call this; callers
+    verifying the error SHAPE call ``result.assert_wire_error(...)`` — or
+    :func:`assert_wire_rejection` — which is the single shape authority.
 
-    Shares the same loud guard as ``wire_dict``: a dispatch that captured no
-    error envelope raises instead of silently asserting nothing — that
-    combination is a test bug (the operation should have failed through the
-    wire), not a legitimate no-wire case. IMPL has no wire, so it falls back to
-    the synthesized envelope (what the boundary translator WOULD emit against
-    the caught error), consistent with ``wire_dict``'s IMPL fallback to the
-    serialized typed payload.
-
-    Both halves of that guard live on ``TransportResult.error_envelope`` (#1941)
-    — the same reader ``error_envelope_or_none`` wraps — rather than being
-    re-derived here from ``ctx["transport"]``. Branching on transport IDENTITY
-    was the spelling ``wire_dict`` moved off: it infers wire-presence from which
-    enum member is in play instead of from the dispatcher's own ``has_wire``
-    declaration, and it reached for a ``synthesized_error_envelope`` attribute
-    that is now the private ``_synthesized_error_envelope``.
+    Shares the same loud guard as :func:`wire_dict`, for the same reason: a dispatch
+    that captured no error envelope raises instead of silently asserting nothing.
+    There is no no-wire fallback to a synthesized envelope; that reconstruction
+    could not fail, and the pseudo-transport it served is deleted.
     """
     result = _require(ctx, "result", hint="expected an error dispatch")
-    return result.error_envelope()
+    envelope = _real_wire_error_envelope(ctx)
+    assert envelope is not None, (
+        f"no wire error envelope was captured for this dispatch ({result!r}) — the operation "
+        "either succeeded or errored before reaching a transport, so there is nothing the buyer "
+        "received to assert on. Grade the success wire (wire_dict) or fix the dispatch."
+    )
+    return envelope
+
+
+def assert_wire_rejection(ctx: dict, code: str, *, recovery: str, field: str) -> None:
+    """Assert the wire error envelope is *code* / *recovery* and names *field*.
+
+    One implementation for every "the request is rejected with <CODE> naming field
+    <f>" Then step. Each such step keeps its own literal Gherkin text — replacing
+    them with one ``{code}``-parameterized parser would leave two parsers matching
+    the same sentence, resolved by pytest-bdd's scan order, and the shadowed body
+    would silently stop grading (``test_architecture_bdd_no_shadowed_steps``
+    compares text ACROSS modules, so it would not catch it). Thin steps over a
+    shared helper give DRY without the shadow.
+
+    Routes through ``TransportResult.assert_wire_error`` rather than calling
+    ``assert_envelope_shape`` on a hand-fetched envelope: that method forwards to
+    the same shape check and adds two things a direct call drops — the CODE_TABLE
+    emittability check (a code no raise site can put on the wire fails loudly
+    instead of matching nothing) and the no-envelope diagnosis. It is also wire-only,
+    so this oracle can never be satisfied by a harness-side reconstruction.
+    """
+    _require(ctx, "result", hint="no dispatch was recorded").assert_wire_error(code, recovery=recovery, field=field)
 
 
 def _require(ctx: dict, key: str, *, hint: str | None = None) -> object:
@@ -268,7 +493,7 @@ def _require_error(ctx: dict) -> object:
     error = ctx.get("error")
     assert error is not None, (
         "Expected an error to be recorded in ctx but none found — the operation "
-        f"may have succeeded. Response: {ctx.get('response')!r}"
+        f"may have succeeded. Result: {ctx.get('result')!r}"
     )
     return error
 

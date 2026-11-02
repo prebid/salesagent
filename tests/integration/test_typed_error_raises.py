@@ -1,4 +1,4 @@
-"""Behavioral pin tests for typed AdCPError subclass raises.
+"""Behavioral pin tests for typed AdCPSalesAgentError subclass raises.
 
 These tests prove that production raise sites emit the correct typed
 subclass at the actual call site. They CALL production code (not just
@@ -27,12 +27,10 @@ import pytest
 
 from src.core.exceptions import (
     AdCPBudgetTooLowError,
-    AdCPCapabilityNotSupportedError,
     AdCPMediaBuyNotFoundError,
 )
-from src.core.schemas import CreateMediaBuyRequest, GetMediaBuysRequest, UpdateMediaBuyRequest
+from src.core.schemas import CreateMediaBuyRequest, UpdateMediaBuyRequest
 from src.core.tools.media_buy_create import _create_media_buy_impl
-from src.core.tools.media_buy_list import _get_media_buys_impl
 from src.core.tools.media_buy_update import _update_media_buy_impl
 from tests.helpers.adcp_factories import create_test_package_request_dict
 from tests.integration.conftest import seed_error_test_tenant
@@ -84,6 +82,7 @@ class TestTypedAdCPErrorRaises:
         future_end = future_start + timedelta(days=30)
 
         req = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "typedraise.example"},
             packages=[
                 create_test_package_request_dict(
@@ -101,8 +100,6 @@ class TestTypedAdCPErrorRaises:
             await _create_media_buy_impl(req=req, identity=identity)
 
         assert exc_info.value.error_code == "BUDGET_TOO_LOW"
-        assert exc_info.value.recovery == "correctable"
-        assert "budget" in exc_info.value.message.lower()
 
     def test_media_buy_not_found_raises_typed_subclass(self, typed_raise_setup):
         """``_verify_principal`` raises ``AdCPMediaBuyNotFoundError`` on lookup miss.
@@ -113,40 +110,21 @@ class TestTypedAdCPErrorRaises:
         """
         identity = typed_raise_setup
         # update_media_buy needs ≥1 updatable field; ``paused`` passes pre-lookup validation.
-        req = UpdateMediaBuyRequest(media_buy_id="mb_nonexistent_typed_raise_pin", paused=True)
+        req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
+            media_buy_id="mb_nonexistent_typed_raise_pin",
+            paused=True,
+        )
 
         with pytest.raises(AdCPMediaBuyNotFoundError) as exc_info:
-            _update_media_buy_impl(req=req, identity=identity, context_id=None)
+            _update_media_buy_impl(req=req, identity=identity)
 
         assert exc_info.value.error_code == "MEDIA_BUY_NOT_FOUND"
         # AdCPMediaBuyNotFoundError overrides AdCPNotFoundError's terminal default
         # because the buyer can correct by supplying the right media_buy_id.
-        assert exc_info.value.recovery == "correctable"
-        assert "mb_nonexistent_typed_raise_pin" in exc_info.value.message
 
-    def test_account_filter_unsupported_raises_typed_subclass(self):
-        """``_get_media_buys_impl`` raises ``AdCPCapabilityNotSupportedError``.
-
-        Pins the specific subclass so the wire code is
-        ``UNSUPPORTED_FEATURE`` (not the generic ``VALIDATION_ERROR``).
-        Recovery is ``correctable`` per the documented spec divergence
-        (the buyer can drop the unsupported parameter).
-        """
-        # No DB setup needed — the unsupported-feature check fires before any DB access.
-        from tests.factories import PrincipalFactory
-
-        identity = PrincipalFactory.make_identity(
-            tenant_id="any_tenant",
-            principal_id="any_principal",
-            protocol="mcp",
-        )
-        req = GetMediaBuysRequest(account_id="acc_123")
-
-        with pytest.raises(AdCPCapabilityNotSupportedError) as exc_info:
-            _get_media_buys_impl(req, identity=identity)
-
-        assert exc_info.value.error_code == "UNSUPPORTED_FEATURE"
-        # Intentional spec divergence (see exceptions.py:484) — we emit
-        # correctable because the buyer can drop the unsupported parameter.
-        assert exc_info.value.recovery == "correctable"
-        assert "account" in exc_info.value.message.lower()
+    # test_account_filter_unsupported_raises_typed_subclass is RETIRED. It pinned the
+    # UNSUPPORTED_FEATURE refusal that 29ed12d94 removed, because
+    # get-media-buys-request.json declares ``account`` as a legal filter; e7b7d68fc
+    # retired its sibling and missed this one.

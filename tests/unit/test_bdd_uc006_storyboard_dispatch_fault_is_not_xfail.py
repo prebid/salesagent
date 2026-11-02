@@ -37,9 +37,10 @@ from typing import Any
 import pytest
 from _pytest.outcomes import Skipped, XFailed
 
-from src.core.exceptions import AdCPError
+from src.core.exceptions import AdCPInternalError
 from tests.bdd.steps.domain import uc006_storyboard_creative_sync as steps
-from tests.harness.transport import TransportResult
+from tests.harness.wire_fixtures import wire_error_result
+from tests.helpers.envelope_assertions import envelope_for
 
 #: The scenario tags whose Then steps this module mutates. Both are deliberately
 #: UN-ledgered: a ledgered tag would xfail the scenario before the injected fault
@@ -51,19 +52,27 @@ MUTATED_SCENARIO_TAGS = (
 
 #: A wire-faithful 500. ``sync_creatives`` returning this is exactly the class of
 #: failure ``_response_or_xfail`` converted into a green "SPEC-PRODUCTION GAP".
-_INJECTED_500 = AdCPError(
-    "injected fault: sync_creatives blew up inside the seller",
-    error_code="INTERNAL_ERROR",
-    status_code=500,
+#:
+#: Constructed against the post-ADR-010 error API: ``AdCPSalesAgentError.__init__``
+#: is keyword-only and takes no ``message``/``status_code``, because ``error_code``,
+#: ``message``, ``recovery`` and ``status_code`` are read-only properties resolved
+#: from ``CODE_TABLE`` per read. So the 500 is not asserted by the fixture — it is
+#: DERIVED: ``AdCPInternalError`` IS ``AppErrorCode.INTERNAL_ERROR`` by class
+#: identity, and the table classifies that code as status 500, recovery=transient.
+#: The injected fault is the exception the seller would have caught, so it rides the
+#: non-wire ``internal_detail`` slot as itself, never as a sentence.
+_INJECTED_500 = AdCPInternalError(
+    internal_detail=RuntimeError("injected fault: sync_creatives blew up inside the seller"),
 )
 
-_INJECTED_500_ENVELOPE: dict[str, Any] = {
-    "error": {
-        "code": "INTERNAL_ERROR",
-        "message": "injected fault: sync_creatives blew up inside the seller",
-    },
-    "status_code": 500,
-}
+#: The envelope a real boundary would have put on the wire for that exception —
+#: produced by the production ``AdcpErrorResponse.of`` + ``to_wire`` pair rather than
+#: hand-authored, so the mutated steps read a genuine two-layer
+#: ``{"adcp_error": ..., "errors": [...]}`` body through ``locate_envelope_error``.
+#: A hand-rolled shape would resolve to ``None`` there, and a step could then fail
+#: for the wrong reason (missing error region) instead of for the injected 500 this
+#: module is grading.
+_INJECTED_500_ENVELOPE: dict[str, Any] = envelope_for(_INJECTED_500)
 
 
 class _NoSessionEnv:
@@ -89,15 +98,13 @@ def _errored_ctx() -> dict[str, Any]:
     ``ctx['result'].error_envelope()``), and ``response`` is NEVER set. The
     Given-supplied keys are present because the Givens ran before the When.
     """
-    result = TransportResult(
-        # The injected fault is a REST 500 whose body came back over HTTP —
-        # bytes crossed the wire, so the site declares True. No synthesized
-        # envelope: only the IMPL dispatcher, which has no wire, may populate
-        # that field (tests/unit/test_harness_mcp_never_synthesizes.py).
-        has_wire=True,
-        payload=None,
+    result = wire_error_result(
+        # The injected fault is a REST 500 whose body came back over HTTP — bytes
+        # crossed the wire, which the fixture derives from the envelope being present.
+        # No synthesized envelope: only the IMPL dispatcher, which has no wire, may
+        # populate that field (tests/unit/test_harness_mcp_never_synthesizes.py).
+        _INJECTED_500_ENVELOPE,
         error=_INJECTED_500,
-        wire_error_envelope=_INJECTED_500_ENVELOPE,
     )
     return {
         "env": _NoSessionEnv(),

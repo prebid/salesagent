@@ -26,6 +26,7 @@ Feature: BR-UC-006 Creatives Invariants (hand-authored companion)
   Scenario: All creatives fail validation — response is still the success variant
     Given the Buyer has 3 creatives that all fail validation
     When the Buyer Agent syncs the creatives
-    Then the response is the success variant carrying a creatives array
+    Then the response is compliant with the sync_creatives success spec
+    And the response is the success variant carrying a creatives array
     And every creative result has action "failed"
     And the response does not carry an operation-level errors array

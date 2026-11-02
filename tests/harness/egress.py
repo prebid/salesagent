@@ -11,14 +11,12 @@ drift into setting only one hatch.
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
-from src.core.security.egress.attempts import _BACKOFF_BASE_ENV
+from src.core.config import get_settings
 from tests.harness._realize import realize_e2e
-from tests.helpers.egress_hatches import egress_hatch_env
 
 
 def _egress_hatches_on_the_live_stack(self: EgressHatchMixin, *, private: bool) -> None:
@@ -81,7 +79,9 @@ class EgressHatchMixin:
         with everything else and no scenario leaks a posture into the next one —
         including a scenario whose ``__enter__`` failed after this call.
         """
-        patcher = patch.dict(os.environ, egress_hatch_env(private=private))
+        # The hatch is a SETTINGS field, read by the seam at call time; the environment
+        # is read once at startup and never again, so an env patch would be invisible.
+        patcher = patch.object(get_settings().limits, "adcp_outbound_allow_private", private)
         patcher.start()
         self._guard("egress_hatches", patcher.stop)
 
@@ -99,10 +99,9 @@ class FastOutboundBackoffMixin:
     call site that has actually been migrated onto the seam; a call site still
     running its own sleep loop ignores it and its retry cases stay slow.
 
-    The env-var name is IMPORTED from the seam
-    (``src.core.security.egress.attempts._BACKOFF_BASE_ENV``), never re-spelled.
-    A mixin cannot misspell a name it never spells, and a rename at the seam
-    reaches here for free.
+    The knob is the settings field ``limits.adcp_outbound_backoff_base_seconds``,
+    patched on the settings object the seam reads; the environment is read once at
+    startup, so an env patch would be invisible.
 
     COMPOSITION RULE — only envs whose tests do NOT observe the seam's sleep may
     compose this. The two webhook envs qualify. The delivery envs do NOT: they
@@ -111,7 +110,7 @@ class FastOutboundBackoffMixin:
     silently invalidate ~15 assertions rather than fail them.
     """
 
-    FAST_BACKOFF_BASE_SECONDS = "0.01"
+    FAST_BACKOFF_BASE_SECONDS = 0.01
 
     if TYPE_CHECKING:
         # Same declaration as EgressHatchMixin above: composed only with
@@ -123,6 +122,8 @@ class FastOutboundBackoffMixin:
         # the host env's MRO (LocalOriginMixin, then BaseTestEnv). A bare mixin
         # has no such superclass, which is all mypy is objecting to.
         super()._enter_pre()  # type: ignore[misc]
-        backoff = patch.dict(os.environ, {_BACKOFF_BASE_ENV: self.FAST_BACKOFF_BASE_SECONDS})
+        backoff = patch.object(
+            get_settings().limits, "adcp_outbound_backoff_base_seconds", self.FAST_BACKOFF_BASE_SECONDS
+        )
         backoff.start()
         self._guard("fast_backoff", backoff.stop)

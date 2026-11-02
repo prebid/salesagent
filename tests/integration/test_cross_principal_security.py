@@ -18,8 +18,9 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
 from src.core.database.models import MediaBuy, Principal
 from src.core.exceptions import AdCPAuthorizationError
-from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import ListCreativesResponse, UpdateMediaBuyRequest
+from src.core.schemas.creative import ListCreativesRequest
+from tests.factories.principal import PrincipalFactory, plaintext_token_for
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -48,18 +49,18 @@ class TestCrossPrincipalSecurity:
             session.add(tenant)
 
             # Create two different principals (advertisers)
-            principal_a = Principal(
+            principal_a = Principal.with_token(
+                plaintext_token_for("advertiser_a"),
                 tenant_id="security_test_tenant",
                 principal_id="advertiser_a",
                 name="Advertiser A",
-                access_token="token-advertiser-a",
                 platform_mappings={"mock": {"id": "advertiser_a"}},
             )
-            principal_b = Principal(
+            principal_b = Principal.with_token(
+                plaintext_token_for("advertiser_b"),
                 tenant_id="security_test_tenant",
                 principal_id="advertiser_b",
                 name="Advertiser B",
-                access_token="token-advertiser-b",
                 platform_mappings={"mock": {"id": "advertiser_b"}},
             )
             session.add_all([principal_a, principal_b])
@@ -126,17 +127,15 @@ class TestCrossPrincipalSecurity:
 
         SECURITY: Principal B should NOT see Principal A's creatives.
         """
-        from src.core.tools.creatives.listing import _build_list_creatives_request, _list_creatives_impl
+        from src.core.tools.creatives.listing import _list_creatives_impl
 
-        identity_b = ResolvedIdentity(
+        identity_b = PrincipalFactory.make_identity(
             principal_id="advertiser_b",
             tenant_id="security_test_tenant",
             tenant={"tenant_id": "security_test_tenant"},
-            auth_token="token-advertiser-b",
-            protocol="mcp",
         )
 
-        response = _list_creatives_impl(req=_build_list_creatives_request(), identity=identity_b)
+        response = _list_creatives_impl(req=ListCreativesRequest(), identity=identity_b)
 
         assert isinstance(response, ListCreativesResponse)
 
@@ -152,18 +151,18 @@ class TestCrossPrincipalSecurity:
 
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
-        identity_b = ResolvedIdentity(
+        identity_b = PrincipalFactory.make_identity(
             principal_id="advertiser_b",
             tenant_id="security_test_tenant",
             tenant={"tenant_id": "security_test_tenant"},
-            auth_token="token-advertiser-b",
-            protocol="mcp",
         )
 
         # Principal B tries to update Principal A's media buy
         # _verify_principal should raise AdCPAuthorizationError
-        with pytest.raises(AdCPAuthorizationError, match="does not own media buy"):
+        with pytest.raises(AdCPAuthorizationError):
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="media_buy_a",  # Owned by Principal A!
             )
             _update_media_buy_impl(req=req, identity=identity_b)
@@ -185,12 +184,10 @@ class TestCrossPrincipalSecurity:
         from src.core.schemas import GetMediaBuyDeliveryRequest
         from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 
-        identity_b = ResolvedIdentity(
+        identity_b = PrincipalFactory.make_identity(
             principal_id="advertiser_b",
             tenant_id="security_test_tenant",
             tenant={"tenant_id": "security_test_tenant"},
-            auth_token="token-advertiser-b",
-            protocol="mcp",
         )
 
         request = GetMediaBuyDeliveryRequest(
@@ -219,11 +216,11 @@ class TestCrossPrincipalSecurity:
             )
             session.add(tenant2)
 
-            principal_c = Principal(
+            principal_c = Principal.with_token(
+                plaintext_token_for("advertiser_c"),
                 tenant_id="second_tenant",
                 principal_id="advertiser_c",
                 name="Advertiser C",
-                access_token="token-advertiser-c",
                 platform_mappings={"mock": {"id": "advertiser_c"}},
             )
             session.add(principal_c)
@@ -253,17 +250,15 @@ class TestCrossPrincipalSecurity:
         scoped.remove()
 
         # Principal A (from first tenant) tries to access creative from second tenant
-        from src.core.tools.creatives.listing import _build_list_creatives_request, _list_creatives_impl
+        from src.core.tools.creatives.listing import _list_creatives_impl
 
-        identity_a = ResolvedIdentity(
+        identity_a = PrincipalFactory.make_identity(
             principal_id="advertiser_a",
             tenant_id="security_test_tenant",
             tenant={"tenant_id": "security_test_tenant"},
-            auth_token="token-advertiser-a",
-            protocol="mcp",
         )
 
-        response = _list_creatives_impl(req=_build_list_creatives_request(), identity=identity_a)
+        response = _list_creatives_impl(req=ListCreativesRequest(), identity=identity_a)
 
         # Should only see their own creative, not creative_c from other tenant
         creative_ids = [c.creative_id for c in response.creatives]

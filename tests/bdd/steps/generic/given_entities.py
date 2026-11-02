@@ -13,6 +13,7 @@ from pytest_bdd import given, parsers
 
 from tests.bdd.steps.generic._registry import sync_registry as _sync_registry
 from tests.factories.format import (
+    ASSET_TYPES,
     CATEGORY_MAP,
     FormatFactory,
     FormatIdFactory,
@@ -20,6 +21,7 @@ from tests.factories.format import (
     make_fixed_renders,
     make_renders,
     make_responsive_renders,
+    pick_reference_format,
 )
 
 # ── Background steps (apply to every scenario) ──────────────────────
@@ -27,30 +29,43 @@ from tests.factories.format import (
 
 @given("a Seller Agent is operational and accepting requests")
 def given_seller_operational(ctx: dict) -> None:
-    """Seller agent is up and accepting requests (Background)."""
-    ctx["seller_operational"] = True
+    """Seller agent is up and accepting requests (Background).
+
+    The harness env IS the seller agent, so "operational" is not something this
+    sentence configures -- it is something it can check: a scenario reaches this
+    Background with a env carrying the tenant its requests resolve against. The
+    ctx flag it used to set was read by no step.
+    """
+    assert ctx["env"]._tenant_id, (
+        "Background claims a Seller Agent is operational and accepting requests, "
+        "but the harness env carries no tenant for a request to resolve against."
+    )
 
 
 @given("a tenant is resolvable from the request context")
 def given_tenant_resolvable(ctx: dict) -> None:
-    """Tenant can be resolved from request context (Background)."""
-    ctx["has_tenant"] = True
+    """Seed the seller, so the sentence is true.
+
+    It used to set a ctx string and nothing else, which named a tenant without creating
+    one. A request addressing that id resolved anyway, through the loopback fallback to the
+    ``default`` tenant that #2259 removed — so the scenarios reading this Background were
+    served by a tenant they never mentioned, and once the fallback went they were refused
+    TENANT_UNDEFINED for want of a seller. That refusal is correct; the Background was
+    the thing that was wrong.
+
+    ``setup_default_data`` is get-or-create, so an env that already seeded (every e2e env,
+    via ``_seed_identity``) is unaffected, and it seeds the env's OWN tenant id — the one
+    ``env.credential()`` addresses — rather than the ctx string, which is what makes the
+    request resolve.
+    """
     ctx.setdefault("tenant_id", "test_tenant")
+    ctx["env"].setup_default_data()
 
 
-@given("a tenant has completed setup checklist")
 @given("a tenant exists with completed setup checklist")
 def given_tenant_setup_complete(ctx: dict) -> None:
     """Tenant has completed all setup steps (Background)."""
-    ctx["tenant_setup_complete"] = True
     ctx.setdefault("tenant_id", "test_tenant")
-
-
-@given(parsers.parse('an authenticated Buyer with principal_id "{principal_id}"'))
-def given_authenticated_buyer(ctx: dict, principal_id: str) -> None:
-    """Buyer is authenticated with the given principal_id (Background)."""
-    ctx["principal_id"] = principal_id
-    ctx["has_auth"] = True
 
 
 @given(parsers.parse('the principal "{principal_id}" exists in the tenant database'))
@@ -61,20 +76,11 @@ def given_principal_exists(ctx: dict, principal_id: str) -> None:
     This step records the principal_id for later use.
     """
     ctx.setdefault("principal_id", principal_id)
-    ctx["principal_exists"] = True
-
-
-@given(parsers.parse('an authenticated request with principal_id "{principal_id}"'))
-def given_authenticated_request(ctx: dict, principal_id: str) -> None:
-    """An authenticated request with a specific principal_id."""
-    ctx["principal_id"] = principal_id
-    ctx["has_auth"] = True
 
 
 @given("at least one creative agent is registered with format definitions")
 def given_creative_agent_registered(ctx: dict) -> None:
     """At least one creative agent has format definitions (Background)."""
-    ctx["creative_agents_registered"] = True
     ctx.setdefault("registry_formats", [])
 
 
@@ -83,11 +89,18 @@ def given_creative_agent_registered(ctx: dict) -> None:
 
 @given("the creative agent registry has formats across multiple categories")
 def given_registry_multi_categories(ctx: dict) -> None:
-    """Registry has formats spanning multiple categories (display, video, etc.)."""
+    """Registry has formats spanning multiple categories, drawn from the reference catalog.
+
+    Real formats rather than minted ids: the live e2e stack serves only the captured
+    reference catalog, so a minted ``fmt_N`` could never be realized there
+    (E2EUnsupportedSetup, the scenario graded nothing), and a minted format carries no
+    assets, so POST-S2 graded nothing in-process either. The three are chosen without
+    ``pixel_tracker`` assets, which the pinned Format.assets union does not admit
+    (adcp#7338); the catalog has no such audio format, so native stands in for it.
+    """
     ctx["registry_formats"] = [
-        FormatFactory.build(name="banner", type=CATEGORY_MAP["display"]),
-        FormatFactory.build(name="pre-roll", type=CATEGORY_MAP["video"]),
-        FormatFactory.build(name="audio-spot", type=CATEGORY_MAP["audio"]),
+        pick_reference_format(category, without_asset_type="pixel_tracker")
+        for category in ("display", "video", "native")
     ]
     _sync_registry(ctx)
 
@@ -104,20 +117,41 @@ def given_registry_two_types(ctx: dict, type_a: str, type_b: str) -> None:
 
 @given("the seller has additional creative agents beyond the default")
 def given_additional_creative_agents(ctx: dict) -> None:
-    """Seller has additional creative agent referrals."""
+    """One extra creative agent, seeded as the operator ROW production reads.
+
+    ``creative_agents`` on the response is built from
+    ``registry._get_tenant_agents(tenant_id)`` (src/core/tools/creative_formats.py), and
+    that method reads the tenant's enabled ``creative_agents`` rows through
+    ``CreativeAgentRepository``. A referral is therefore ordinary operator
+    configuration, and a factory row is ONE mechanism that realizes this sentence in both
+    worlds -- in process the env's factories write the per-test database, over e2e_rest
+    they write the live server's own -- so no ``@realize_e2e`` branch is needed. Same
+    shape, and the same reason, as the UC-010 channel Given.
+
+    It used to put a DICT in ``ctx`` and write nothing anywhere. Nothing realized it, so
+    the response carried the default agent alone (or, in process, nothing at all), and the
+    comparison in ``then_has_referrals`` -- ``{str(a.agent_url) for a in given_agents}`` --
+    would have been an ``AttributeError`` on a dict rather than an assertion. The ctx value
+    is the ROW.
+
+    No ``capabilities`` here: production advertises
+    ``ADVERTISED_CREATIVE_AGENT_CAPABILITIES`` for every referral it emits, so a per-agent
+    list in the Given would have been a number this step invented and nothing read.
+    """
+    from tests.factories import CreativeAgentFactory
+
+    env = ctx["env"]
+    tenant, _principal = env.setup_default_data()
     ctx["creative_agent_referrals"] = [
-        {
-            "agent_url": "https://extra-creatives.example.com",
-            "capabilities": ["display", "video"],
-        },
+        CreativeAgentFactory(tenant=tenant, agent_url="https://extra-creatives.example.com/mcp")
     ]
+    env._commit_factory_data()
 
 
 @given("no creative agents have any registered formats")
 def given_no_formats(ctx: dict) -> None:
     """No creative agents have any formats registered."""
     ctx["registry_formats"] = []
-    ctx["creative_agents_registered"] = False
     _sync_registry(ctx)
 
 
@@ -255,20 +289,37 @@ def given_seller_various_input_formats(ctx: dict) -> None:
 
 @given("a seller with creative agent formats of various types")
 def given_seller_creative_agent_various_types(ctx: dict) -> None:
-    """Seller has creative agent formats of various types (partition/boundary)."""
-    ctx["creative_agent_formats"] = [
-        {"name": "audio-format", "type": "audio"},
-        {"name": "video-format", "type": "video"},
-        {"name": "display-format", "type": "display"},
-        {"name": "dooh-format", "type": "dooh"},
-    ]
+    """Seller has creative agent formats of various types (partition/boundary).
+
+    The catalog these scenarios query is the harness default reference set, and it
+    has to stay that way: T-UC-005-partition-agent-type and its boundary sibling
+    are ledgered against upstream adcp#7338 precisely because the REFERENCE
+    formats declare ``pixel_tracker``. Replacing the registry here would erase the
+    gap the ledger entry grades.
+
+    So what the sentence can establish is that the variety it claims is real --
+    every type it names must be one the pinned format vocabulary admits. The list
+    of raw dicts this replaced was written into a ctx key no step read (and raw
+    dicts in a registry Given are what ``test_architecture_bdd_no_dict_registry``
+    exists to refuse).
+    """
+    for creative_type in ("audio", "video", "display", "dooh"):
+        assert creative_type in CATEGORY_MAP, (
+            f"Step claims a seller catalog 'of various types', but {creative_type!r} is "
+            f"not a known creative format category: {sorted(CATEGORY_MAP)}"
+        )
 
 
 @given("a seller with creative agent formats containing various asset types")
 def given_seller_creative_agent_various_assets(ctx: dict) -> None:
-    """Seller has creative agent formats with various asset types (partition/boundary)."""
-    ctx["creative_agent_formats"] = [
-        {"name": "image-format", "assets": [{"type": "image"}]},
-        {"name": "video-format", "assets": [{"type": "video"}]},
-        {"name": "text-format", "assets": [{"type": "text"}]},
-    ]
+    """Seller has creative agent formats with various asset types (partition/boundary).
+
+    Same reasoning as ``given_seller_creative_agent_various_types``: the served
+    catalog stays the reference set, so this checks the claimed variety against
+    the pinned asset vocabulary instead of recording it into a dead ctx key.
+    """
+    for asset_type in ("image", "video", "text"):
+        assert asset_type in ASSET_TYPES, (
+            f"Step claims format assets 'of various types', but {asset_type!r} is not "
+            f"a known format asset type: {sorted(ASSET_TYPES)}"
+        )

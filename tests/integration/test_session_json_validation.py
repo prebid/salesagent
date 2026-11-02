@@ -14,11 +14,12 @@ from src.core.json_validators import (
     ensure_json_array,
     ensure_json_object,
 )
+from tests.factories.principal import plaintext_token_for
 from tests.integration.conftest import (
     add_required_setup_data,
     create_test_product_with_pricing,
 )
-from tests.utils.database_helpers import create_tenant_with_timestamps
+from tests.utils.database_helpers import create_tenant_with_timestamps, vhost_for
 
 
 # Test fixtures
@@ -68,6 +69,7 @@ class TestSessionManagement:
                     tenant_id=tenant_id,
                     name=name,
                     subdomain=tenant_id.lower(),
+                    virtual_host=vhost_for(tenant_id.lower()),
                     authorized_emails=[],
                     policy_settings={},
                     created_at=now,
@@ -96,6 +98,7 @@ class TestSessionManagement:
                 tenant_id="test3",
                 name="Test 3",
                 subdomain="test3",
+                virtual_host="test3.adcp.test",
                 authorized_emails=[],
                 policy_settings={},
                 created_at=now,
@@ -121,7 +124,12 @@ class TestSessionManagement:
             tenant1, created1 = get_or_create(
                 session,
                 Tenant,
-                defaults={"name": "Created Tenant", "authorized_emails": [], "policy_settings": {}},
+                defaults={
+                    "name": "Created Tenant",
+                    "authorized_emails": [],
+                    "policy_settings": {},
+                    "virtual_host": "test4.adcp.test",
+                },
                 tenant_id="test4",
                 subdomain="test4",
             )
@@ -200,6 +208,7 @@ class TestJSONValidation:
                 tenant_id="json_test",
                 name="JSON Test",
                 subdomain="jsontest",
+                virtual_host="json-test.adcp.test",
                 authorized_emails=["test@example.com"],  # Valid array
                 authorized_domains=["example.com"],  # Valid array
                 auto_approve_format_ids=["display_300x250"],  # Valid array
@@ -227,6 +236,7 @@ class TestJSONValidation:
                 tenant_id="test_tenant",
                 name="Test",
                 subdomain="test",
+                virtual_host="json-principal.adcp.test",
                 authorized_emails=[],
                 policy_settings={},
                 created_at=now,
@@ -235,11 +245,11 @@ class TestJSONValidation:
             session.add(tenant)
 
             # Valid principal with platform mappings
-            principal = Principal(
+            principal = Principal.with_token(
+                plaintext_token_for("test_principal"),
                 tenant_id="test_tenant",
                 principal_id="test_principal",
                 name="Test Principal",
-                access_token="token123",
                 platform_mappings={"mock": {"enabled": True}},
                 created_at=now,
             )
@@ -254,16 +264,22 @@ class TestJSONValidation:
         """Test WorkflowStep comments validation."""
         with get_db_session() as session:
             # Create tenant and principal first (required for foreign key)
-            import uuid
 
-            tenant = Tenant(tenant_id="test", name="Test Tenant", subdomain="test", ad_server="mock", is_active=True)
+            tenant = Tenant(
+                tenant_id="test",
+                name="Test Tenant",
+                subdomain="test",
+                virtual_host="workflow-comments.adcp.test",
+                ad_server="mock",
+                is_active=True,
+            )
             session.add(tenant)
-            principal = Principal(
+            principal = Principal.with_token(
+                plaintext_token_for("test"),
                 tenant_id="test",
                 principal_id="test",
                 name="Test Principal",
                 platform_mappings={"mock": {"advertiser_id": "test"}},  # Use valid platform mapping
-                access_token=str(uuid.uuid4()),  # Required field
             )
             session.add(principal)
             session.commit()
@@ -306,6 +322,7 @@ class TestIntegration:
                     tenant_id="workflow_test",
                     name="Workflow Test",
                     subdomain="workflow",
+                    virtual_host="workflow-test.adcp.test",
                     authorized_emails=["admin@workflow.com"],
                     authorized_domains=["workflow.com"],
                     auto_approve_format_ids=["display_300x250", "video_16x9"],
@@ -340,11 +357,11 @@ class TestIntegration:
                 )
 
                 # Create principal
-                principal = Principal(
+                principal = Principal.with_token(
+                    plaintext_token_for("buyer_1"),
                     tenant_id="workflow_test",
                     principal_id="buyer_1",
                     name="Test Buyer",
-                    access_token="buyer_token_123",
                     platform_mappings={"google_ad_manager": {"advertiser_id": "12345"}, "mock": {"test_mode": True}},
                     created_at=now,
                 )

@@ -7,11 +7,12 @@ for Google Ad Manager campaigns.
 
 import base64
 import logging
-import random
 from datetime import datetime
 from typing import Any
 from urllib.parse import urlparse
 
+from src.core.errors.details import CreativeRejectionDetails
+from src.core.exceptions import AdCPCreativeRejectedError, AdCPInternalError, AdCPSalesAgentError
 from src.core.schemas import AssetStatus
 
 from ..utils.validation import GAMValidator
@@ -81,19 +82,17 @@ def _extract_product_id_from_package(package_id: str) -> str | None:
 class GAMCreativesManager:
     """Manages creative operations for Google Ad Manager."""
 
-    def __init__(self, client_manager, advertiser_id: str, dry_run: bool = False, log_func=None, adapter=None):
+    def __init__(self, client_manager, advertiser_id: str, log_func=None, adapter=None):
         """Initialize creatives manager.
 
         Args:
             client_manager: GAMClientManager instance
             advertiser_id: GAM advertiser ID
-            dry_run: Whether to run in dry-run mode
             log_func: Optional logging function from adapter
             adapter: Optional reference to the main adapter for delegation
         """
         self.client_manager = client_manager
         self.advertiser_id = advertiser_id
-        self.dry_run = dry_run
         self.validator = GAMValidator()
         self.log_func = log_func
         self.adapter = adapter
@@ -122,10 +121,9 @@ class GAMCreativesManager:
         """
         logger.info(f"Adding {len(assets)} creative assets for order '{media_buy_id}'")
 
-        if not self.dry_run:
-            creative_service = self.client_manager.get_service("CreativeService")
-            lica_service = self.client_manager.get_service("LineItemCreativeAssociationService")
-            line_item_service = self.client_manager.get_service("LineItemService")
+        creative_service = self.client_manager.get_service("CreativeService")
+        lica_service = self.client_manager.get_service("LineItemCreativeAssociationService")
+        line_item_service = self.client_manager.get_service("LineItemService")
 
         created_asset_statuses = []
 
@@ -148,9 +146,7 @@ class GAMCreativesManager:
             )
 
         # Get line item mapping and creative placeholders
-        line_item_map, creative_placeholders = self._get_line_item_info(
-            media_buy_id, line_item_service if not self.dry_run else None
-        )
+        line_item_map, creative_placeholders = self._get_line_item_info(media_buy_id, line_item_service)
 
         # DEBUG: Log what we got from GAM
         logger.info(f"[DEBUG] line_item_map keys: {list(line_item_map.keys())}")
@@ -158,9 +154,7 @@ class GAMCreativesManager:
 
         # AdCP 2.5: Check if any creatives have non-default weights
         # If so, update affected line items to use MANUAL rotation
-        self._update_line_items_for_weighted_creatives(
-            assets, line_item_map, line_item_service if not self.dry_run else None
-        )
+        self._update_line_items_for_weighted_creatives(assets, line_item_map, line_item_service)
 
         for asset in assets:
             logger.info(
@@ -221,37 +215,59 @@ class GAMCreativesManager:
                     continue
 
                 # Create the creative in GAM
-                if self.dry_run:
-                    logger.info(f"Would call: creative_service.createCreatives([{creative.get('name', 'unnamed')}])")
-                    gam_creative_id = f"mock_creative_{random.randint(100000, 999999)}"
-                else:
-                    # DEBUG: Log the exact creative being sent to GAM
-                    logger.info(f"[DEBUG] Creating creative with fields: {list(creative.keys())}")
-                    logger.info(f"[DEBUG] Creative type: {creative.get('xsi_type')}")
-                    logger.info(f"[DEBUG] Creative data: {creative}")
-                    created_creatives = creative_service.createCreatives([creative])
-                    if not created_creatives:
-                        logger.error(f"Failed to create creative {asset['creative_id']} - no creatives returned")
-                        created_asset_statuses.append(AssetStatus(creative_id=asset["creative_id"], status="failed"))
-                        continue
+                # DEBUG: Log the exact creative being sent to GAM
+                logger.info(f"[DEBUG] Creating creative with fields: {list(creative.keys())}")
+                logger.info(f"[DEBUG] Creative type: {creative.get('xsi_type')}")
+                logger.info(f"[DEBUG] Creative data: {creative}")
+                created_creatives = creative_service.createCreatives([creative])
+                if not created_creatives:
+                    logger.error(f"Failed to create creative {asset['creative_id']} - no creatives returned")
+                    created_asset_statuses.append(AssetStatus(creative_id=asset["creative_id"], status="failed"))
+                    continue
 
-                    gam_creative_id = created_creatives[0]["id"]
-                    logger.info(f"✓ Created GAM Creative ID: {gam_creative_id}")
+                gam_creative_id = created_creatives[0]["id"]
+                logger.info(f"✓ Created GAM Creative ID: {gam_creative_id}")
 
                 # Associate creative with line items (includes placement targeting if configured)
                 self._associate_creative_with_line_items(
                     gam_creative_id,
                     asset,
                     line_item_map,
-                    lica_service if not self.dry_run else None,
+                    lica_service,
                     placement_targeting_map,
                 )
 
                 created_asset_statuses.append(_approved(asset["creative_id"]))
 
+            except AdCPSalesAgentError as e:
+                # Typed rejection (e.g. CREATIVE_REJECTED): this surface reports
+                # per-asset partial success, so the buyer-correctable reason
+                # must ride the status — a bare "failed" is unactionable.
+                logger.error(
+                    "Creative %s rejected: %s field=%s details=%s",
+                    asset["creative_id"],
+                    e.message,
+                    e.field,
+                    e.details or {},
+                    exc_info=True,
+                )
+                # AssetStatus has no structured slot, and this surface reports per-asset
+                # partial success, so the offending FIELD rides the status line — read from
+                # the typed ``field`` attribute, never by stringifying ``details``: that
+                # would put every key on the wire, including ones named after local
+                # variables, and hand-roll a serializer in the adapter layer.
+                created_asset_statuses.append(
+                    AssetStatus(
+                        creative_id=asset["creative_id"],
+                        status="failed",
+                        message=f"{e.message} (field: {e.field})" if e.field else e.message,
+                    )
+                )
             except Exception as e:
                 logger.error(f"Error creating creative {asset['creative_id']}: {str(e)}")
-                created_asset_statuses.append(AssetStatus(creative_id=asset["creative_id"], status="failed"))
+                created_asset_statuses.append(
+                    AssetStatus(creative_id=asset["creative_id"], status="failed", message=str(e))
+                )
 
         return created_asset_statuses
 
@@ -260,12 +276,12 @@ class GAMCreativesManager:
 
         Args:
             media_buy_id: GAM order ID
-            line_item_service: GAM LineItemService (None for dry run)
+            line_item_service: GAM LineItemService
 
         Returns:
             Tuple of (line_item_map, creative_placeholders)
         """
-        if not self.dry_run and line_item_service:
+        if line_item_service:
             statement = (
                 self.client_manager.get_statement_builder()
                 .Where("orderId = :orderId")
@@ -380,11 +396,6 @@ class GAMCreativesManager:
 
         if not line_items_needing_manual:
             logger.info("All creatives have default weights - keeping EVEN rotation")
-            return
-
-        if self.dry_run:
-            for li_id in line_items_needing_manual:
-                logger.info(f"Would update line item {li_id} to use MANUAL rotation")
             return
 
         if not line_item_service:
@@ -678,7 +689,10 @@ class GAMCreativesManager:
         # Get the creative URL
         url = asset.get("url")
         if not url:
-            raise Exception("No URL found for hosted asset creative")
+            raise AdCPCreativeRejectedError(
+                field="url",
+                details=CreativeRejectionDetails(creative_id=asset.get("creative_id"), missing_field="url"),
+            )
 
         # Determine asset type
         asset_type = self._determine_asset_type(asset)
@@ -692,16 +706,16 @@ class GAMCreativesManager:
             # ImageRedirectCreative requires both image URL and click-through URL
             # Using asset URL as fallback for click_url (see TODO above)
             if not click_url:
-                raise ValueError(
-                    f"Image creative {asset.get('creative_id')} missing required click_url. "
-                    f"GAM ImageRedirectCreative requires a destination URL."
+                raise AdCPCreativeRejectedError(
+                    field="click_url",
+                    details=CreativeRejectionDetails(creative_id=asset.get("creative_id"), missing_field="click_url"),
                 )
 
             # Validate that image URL is an actual URL, not binary data
             if not url or not isinstance(url, str) or not url.startswith(("http://", "https://")):
-                raise ValueError(
-                    f"Image creative {asset.get('creative_id')} has invalid URL: {url}. "
-                    f"GAM ImageRedirectCreative requires an HTTP(S) URL, not binary data."
+                raise AdCPCreativeRejectedError(
+                    field="url",
+                    details=CreativeRejectionDetails(creative_id=asset.get("creative_id"), invalid_field="url"),
                 )
 
             creative = {
@@ -718,7 +732,10 @@ class GAMCreativesManager:
             # https://adcontextprotocol.org/schemas/v1/core/assets/video-asset.json
             duration = asset.get("duration")
             if not duration:
-                raise ValueError(f"Video creative {asset.get('creative_id')} missing required duration field")
+                raise AdCPCreativeRejectedError(
+                    field="duration",
+                    details=CreativeRejectionDetails(creative_id=asset.get("creative_id"), missing_field="duration"),
+                )
 
             creative = {
                 "xsi_type": "VideoRedirectCreative",
@@ -730,7 +747,11 @@ class GAMCreativesManager:
                 "duration": int(duration * 1000),  # GAM expects milliseconds, AdCP provides seconds
             }
         else:
-            raise Exception(f"Unsupported asset type: {asset_type}")
+            # Internal invariant, not buyer input: _determine_asset_type only
+            # returns "image" or "video", so reaching here is OUR bug. It was
+            # briefly UNSUPPORTED_FEATURE, which is buyer-correctable ("remove the
+            # unsupported field") -- but there is no field for the buyer to remove.
+            raise AdCPInternalError()
 
         self._add_tracking_urls_to_creative(creative, asset)
         return creative
@@ -807,19 +828,10 @@ class GAMCreativesManager:
         if url:
             return f'<iframe src="{url}" width="100%" height="100%" frameborder="0"></iframe>'
 
-        raise Exception("No HTML5 source content found in asset")
+        raise AdCPCreativeRejectedError()
 
     def _upload_binary_asset(self, asset: dict[str, Any]) -> dict[str, Any] | None:
         """Upload binary asset to GAM and return asset info."""
-        if self.dry_run:
-            logger.info("Would upload binary asset to GAM")
-            return {
-                "assetId": f"mock_asset_{random.randint(100000, 999999)}",
-                "fileName": asset.get("name", "mock_asset.jpg"),
-                "fileSize": 12345,
-                "mimeType": self._get_content_type(asset),
-            }
-
         # Implementation would handle actual upload to GAM
         # This is a simplified version
         logger.warning("Binary asset upload not fully implemented")
@@ -971,10 +983,6 @@ class GAMCreativesManager:
         self, media_buy_id: str, asset: dict[str, Any], line_item_map: dict[str, str]
     ) -> None:
         """Configure VAST creative at line item level."""
-        if self.dry_run:
-            logger.info(f"Would configure VAST for line items in order {media_buy_id}")
-            return
-
         # VAST configuration would be implemented here
         logger.info(f"Configuring VAST creative {asset['creative_id']} for line items")
 
@@ -999,7 +1007,7 @@ class GAMCreativesManager:
             gam_creative_id: The GAM creative ID to associate
             asset: Creative asset dictionary (contains package_assignments, placement_ids)
             line_item_map: Map of line item names to IDs
-            lica_service: GAM LICA service (None for dry run)
+            lica_service: GAM LICA service
             placement_targeting_map: Optional map of placement_id → targeting_name for
                 creative-level targeting. Built from product impl_config.placement_targeting.
         """
@@ -1065,38 +1073,31 @@ class GAMCreativesManager:
                             f"only supports one targetingName. Using first: {first_placement_id}"
                         )
 
-            if self.dry_run:
-                weight_info = f" with weight {weight}" if weight != 100 else ""
-                targeting_info = f" with targetingName '{targeting_name}'" if targeting_name else ""
+            # Create Line Item Creative Association (AdCP 2.5 weight support + adcp#208 placement targeting)
+            association: dict[str, str | int] = {
+                "creativeId": gam_creative_id,
+                "lineItemId": line_item_id,
+            }
+
+            # Add weight for manual rotation if not default
+            # GAM uses manualCreativeRotationWeight for MANUAL rotation type
+            if weight != 100:
+                association["manualCreativeRotationWeight"] = weight
+                logger.info(f"Setting creative weight to {weight} for LICA")
+
+            # Add targetingName for creative-level placement targeting (adcp#208)
+            # This links the LICA to a creativeTargetings rule defined on the line item
+            if targeting_name:
+                association["targetingName"] = targeting_name
+                logger.info(f"Setting targetingName '{targeting_name}' for LICA (placement: {first_placement_id})")
+
+            try:
+                lica_service.createLineItemCreativeAssociations([association])
+                weight_info = f" (weight: {weight})" if weight != 100 else ""
+                targeting_info = f" (targetingName: {targeting_name})" if targeting_name else ""
                 logger.info(
-                    f"Would associate creative {gam_creative_id} with line item {line_item_id}{weight_info}{targeting_info}"
+                    f"✓ Associated creative {gam_creative_id} with line item {line_item_id}{weight_info}{targeting_info}"
                 )
-            else:
-                # Create Line Item Creative Association (AdCP 2.5 weight support + adcp#208 placement targeting)
-                association: dict[str, str | int] = {
-                    "creativeId": gam_creative_id,
-                    "lineItemId": line_item_id,
-                }
-
-                # Add weight for manual rotation if not default
-                # GAM uses manualCreativeRotationWeight for MANUAL rotation type
-                if weight != 100:
-                    association["manualCreativeRotationWeight"] = weight
-                    logger.info(f"Setting creative weight to {weight} for LICA")
-
-                # Add targetingName for creative-level placement targeting (adcp#208)
-                # This links the LICA to a creativeTargetings rule defined on the line item
-                if targeting_name:
-                    association["targetingName"] = targeting_name
-                    logger.info(f"Setting targetingName '{targeting_name}' for LICA (placement: {first_placement_id})")
-
-                try:
-                    lica_service.createLineItemCreativeAssociations([association])
-                    weight_info = f" (weight: {weight})" if weight != 100 else ""
-                    targeting_info = f" (targetingName: {targeting_name})" if targeting_name else ""
-                    logger.info(
-                        f"✓ Associated creative {gam_creative_id} with line item {line_item_id}{weight_info}{targeting_info}"
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to associate creative {gam_creative_id} with line item {line_item_id}: {e}")
-                    raise
+            except Exception as e:
+                logger.error(f"Failed to associate creative {gam_creative_id} with line item {line_item_id}: {e}")
+                raise

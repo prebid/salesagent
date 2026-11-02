@@ -31,7 +31,7 @@ import pytest
 from src.core.creative_agent_registry import CreativeAgent, CreativeAgentRegistry
 from src.core.database.models import CreativeAgent as DBCreativeAgent
 from src.core.database.models import SignalsAgent as DBSignalsAgent
-from src.core.exceptions import AdCPConfigurationError
+from src.core.exceptions import AdCPConfigurationError, AdCPServiceUnavailableError
 from src.core.signals_agent_registry import SignalsAgent, SignalsAgentRegistry
 from src.core.utils.mcp_client import _build_auth_headers
 from tests.factories import CreativeAgentFactory, SignalsAgentFactory, TenantFactory
@@ -176,6 +176,13 @@ class TestConfigForCarriesTheWholeRow:
             auth={"type": STORED_AUTH_TYPE, "credentials": STORED_CREDENTIALS},
             auth_header=STORED_AUTH_HEADER,
             timeout=STORED_TIMEOUT,
+            # NAMED, not left to its ``None`` default, and this is the field the
+            # exact-equality style above exists for: ``config_for`` reads tenant_id
+            # because it SELECTS THE SIGNING KEY, so a probe config built without it
+            # dials UNSIGNED while production's config for the same row dials signed
+            # (``signals_agent_registry.config_for`` states exactly this). Defaulting
+            # it here would assert the divergence away.
+            tenant_id=TENANT_ID,
         )
 
     def test_creative_config_for_leaves_auth_absent_when_the_row_stores_none(self, tenant):
@@ -293,7 +300,17 @@ class TestProbeResultSuccessShape:
 
 
 # ---------------------------------------------------------------------------
-# 4. ProbeResult failure shape -- both arms of probe_failure
+# 4. ProbeResult failure shape -- probe_failure's configuration and
+#    non-configuration branches.
+#
+#    ``probe_failure`` grew a THIRD branch with outbound request signing: an
+#    ``AdCPConfigurationError`` whose ``__cause__`` is an ``MCPSigningError``
+#    gets its own sentence, naming the key-ACTIVE and private-half levers
+#    instead of the URL/credentials/egress ones below. Nothing in this file
+#    grades it yet -- the signing branch reaches this seam only through
+#    ``call_operator_mcp_tool``'s ``except MCPSigningError`` chaining, which
+#    needs a tenant with an ACTIVE request_signing key whose material fails to
+#    load, and therefore a signing-key fixture.
 # ---------------------------------------------------------------------------
 
 _OPERATOR_LEVERS = (
@@ -301,34 +318,85 @@ _OPERATOR_LEVERS = (
     "deployment's egress policy allows the address."
 )
 
+# The cause half of the sentence is the text of the raise site's ``internal_detail``
+# (the exception it caught), NOT ``AdCPConfigurationError.message``. Per ADR-010 ``message`` is a read-only
+# property over ``CODE_TABLE`` -- a function of the code -- so it reads
+# "Configuration error" for a handshake refusal, an egress refusal and an
+# unparseable answer alike, naming no lever. ``internal_detail`` is barred from
+# the BUYER-facing wire envelope (AdCP 3.1.1 transport-errors.mdx Security
+# Considerations) and this is not that surface: it is the admin "test connection"
+# dialog, read by the tenant operator who configured the agent. Pinned as one
+# literal rather than recomputed from ``CODE_TABLE`` or from the raised error's
+# own ``internal_detail``: an expectation derived from what production reads
+# would pass for any text at all, including none.
+_CONFIG_FAILURE_SENTENCE = f"Connection failed: Endpoint refused the handshake. {_OPERATOR_LEVERS}"
+
+# The non-configuration branch has the SAME obligation and had the same blindness:
+# ``str()`` of a typed error is its ``CODE_TABLE`` message, which reads "Service
+# temporarily unavailable" for an unreachable endpoint, a rate-limited one and an
+# undelivered request alike. ``raise_mapped_mcp_error`` carries the exception naming
+# WHICH one in ``internal_detail``. No advice is appended here, unlike the
+# configuration branch: none of the operator's levers is known to be the cause.
+# Written out in full rather than composed from the detail the dial raises, for
+# the same reason as above -- an expectation derived from the input would hold
+# for any output.
+_UNREACHABLE_FAILURE_SENTENCE = "Connection failed: creative agent Optable Creative is unreachable."
+
 
 class TestProbeResultFailureShape:
     """A failed probe carries a sentence and an ABSENT count."""
 
     @pytest.mark.asyncio
     async def test_creative_configuration_failure_names_every_operator_lever(self, creative_row):
-        dial = _raising_dial(AdCPConfigurationError("Endpoint refused the handshake."))
+        dial = _raising_dial(
+            AdCPConfigurationError(internal_detail=ConnectionRefusedError("Endpoint refused the handshake."))
+        )
         with patch(_SEAM_DIAL, dial):
             result = await CreativeAgentRegistry().probe_agent(creative_row)
 
         assert result.ok is False
         assert result.count is None
         assert result.samples == ()
-        assert result.message == f"Connection failed: Endpoint refused the handshake. {_OPERATOR_LEVERS}"
+        assert result.message == _CONFIG_FAILURE_SENTENCE
 
     @pytest.mark.asyncio
     async def test_signals_configuration_failure_names_every_operator_lever(self, signals_row):
-        dial = _raising_dial(AdCPConfigurationError("Endpoint refused the handshake."))
+        dial = _raising_dial(
+            AdCPConfigurationError(internal_detail=ConnectionRefusedError("Endpoint refused the handshake."))
+        )
         with patch(_SEAM_DIAL, dial):
             result = await SignalsAgentRegistry().probe_agent(signals_row)
 
         assert result.ok is False
         assert result.count is None
-        assert result.message == f"Connection failed: Endpoint refused the handshake. {_OPERATOR_LEVERS}"
+        assert result.message == _CONFIG_FAILURE_SENTENCE
+
+    @pytest.mark.asyncio
+    async def test_unreachable_endpoint_names_the_endpoint_not_the_code_table_sentence(self, creative_row):
+        """A SERVICE_UNAVAILABLE failure reports which endpoint state it was.
+
+        The probe's second branch admits every failure the configuration branch does
+        not -- unreachable, rate-limited, undelivered -- and all three share one
+        ``CODE_TABLE`` sentence, so reading ``str(exc)`` would tell the operator
+        nothing at all. Graded on the creative registry only because the branch is
+        one shared function; the parity case below covers both.
+        """
+        dial = _raising_dial(
+            AdCPServiceUnavailableError(
+                internal_detail=ConnectionError("creative agent Optable Creative is unreachable.")
+            )
+        )
+        with patch(_SEAM_DIAL, dial):
+            result = await CreativeAgentRegistry().probe_agent(creative_row)
+
+        assert result.ok is False
+        assert result.count is None
+        assert result.samples == ()
+        assert result.message == _UNREACHABLE_FAILURE_SENTENCE
 
     @pytest.mark.asyncio
     async def test_creative_unexpected_failure_reports_the_short_form(self, creative_row):
-        """The non-configuration arm: no advice is offered, because none of the
+        """The non-configuration branch: no advice is offered, because none of the
         operator's levers is known to be the cause."""
         with patch(_SEAM_DIAL, _raising_dial(RuntimeError("socket exploded"))):
             result = await CreativeAgentRegistry().probe_agent(creative_row)
@@ -376,7 +444,7 @@ class TestBothRegistriesReportFailureIdentically:
     @pytest.mark.parametrize(
         "exc",
         [
-            AdCPConfigurationError("Endpoint refused the handshake."),
+            AdCPConfigurationError(internal_detail=ConnectionRefusedError("Endpoint refused the handshake.")),
             RuntimeError("socket exploded"),
         ],
         ids=["configuration", "unexpected"],

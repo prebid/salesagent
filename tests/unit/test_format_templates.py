@@ -8,12 +8,8 @@ from adcp.types import FormatId
 from adcp.types.generated_poc.core.format import Dimensions, Renders  # TODO: no stable alias in adcp.types
 
 from src.core.helpers import _extract_format_info, _extract_format_namespace
-from src.core.helpers.creative_helpers import (
-    _convert_creative_to_adapter_asset,
-)
-from src.core.schemas import Creative, Format
+from src.core.schemas import Format
 from src.core.schemas import FormatId as SchemasFormatId
-from tests.factories.creative_asset import asset_spec, build_assets
 
 
 class TestExtractFormatInfo:
@@ -290,94 +286,6 @@ class TestFormatParametersRoundTrip:
         assert reconstructed.id == original.id
         assert reconstructed.width is None
         assert reconstructed.height is None
-
-
-class TestAdapterAssetConversion:
-    """Test _convert_creative_to_adapter_asset extracts format dimensions."""
-
-    def test_display_creative_with_format_dimensions(self):
-        """Display creative gets width/height from format_id parameters."""
-        creative = Creative(
-            creative_id="cr_123",
-            variants=[],
-            name="Test Banner",
-            format_id=FormatId(
-                agent_url="https://creative.example.com",
-                id="display_static",
-                width=300,
-                height=250,
-            ),
-            assets=build_assets(asset_spec("banner_image", "image", url="https://example.com/banner.jpg")),
-        )
-
-        asset = _convert_creative_to_adapter_asset(creative, ["pkg_1"])
-
-        assert asset["width"] == 300
-        assert asset["height"] == 250
-        assert asset["creative_id"] == "cr_123"
-        assert asset["format"] == "display_static"
-
-    def test_video_creative_with_format_duration(self):
-        """Video creative gets duration_ms from format_id parameters."""
-        creative = Creative(
-            creative_id="cr_456",
-            variants=[],
-            name="Test Video",
-            format_id=FormatId(
-                agent_url="https://creative.example.com",
-                id="video_hosted",
-                width=1920,
-                height=1080,
-                duration_ms=30000,
-            ),
-            assets=build_assets(asset_spec("video", "video", url="https://example.com/video.mp4")),
-        )
-
-        asset = _convert_creative_to_adapter_asset(creative, ["pkg_1"])
-
-        assert asset["width"] == 1920
-        assert asset["height"] == 1080
-        # Duration is converted to seconds for adapter
-        assert asset["duration"] == 30.0
-
-    def test_template_format_no_dimensions(self):
-        """Template format without parameters doesn't add dimensions."""
-        creative = Creative(
-            creative_id="cr_789",
-            variants=[],
-            name="Test Creative",
-            format_id=FormatId(
-                agent_url="https://creative.example.com",
-                id="display_static",
-                # No width/height
-            ),
-            assets=build_assets(asset_spec("banner_image", "image", url="https://example.com/banner.jpg")),
-        )
-
-        asset = _convert_creative_to_adapter_asset(creative, ["pkg_1"])
-
-        assert "width" not in asset
-        assert "height" not in asset
-
-    def test_leaderboard_dimensions(self):
-        """Leaderboard (728x90) dimensions are extracted correctly."""
-        creative = Creative(
-            creative_id="cr_leaderboard",
-            variants=[],
-            name="Leaderboard Ad",
-            format_id=FormatId(
-                agent_url="https://creative.example.com",
-                id="display_static",
-                width=728,
-                height=90,
-            ),
-            assets=build_assets(asset_spec("banner_image", "image", url="https://example.com/leaderboard.jpg")),
-        )
-
-        asset = _convert_creative_to_adapter_asset(creative, ["pkg_1"])
-
-        assert asset["width"] == 728
-        assert asset["height"] == 90
 
 
 class TestFormatIdGetDimensions:

@@ -27,14 +27,15 @@ This guard pins the finished shape:
 
 MEMBERSHIP IS AST-DERIVED, NOT A DIRECTORY GLOB (change-set §5, finding 4).
 A ``tests/harness/*.py`` glob is evadable and the evasion path is ALREADY
-occupied by two env subclasses defined outside it — one in
-``tests/integration/test_request_validation_suggestion_parity.py`` and one
+occupied by env subclasses defined outside it — a dozen of them live under
+``tests/integration/`` (the pinned exemplar is ``_RefusalDialectEnv`` in
+``tests/integration/test_harness_rest_refusal.py``, which reaches an env root
+only TRANSITIVELY, via the harness class ``MediaBuyCreateListEnv``) — plus one
 nested inside a test function in ``tests/harness/test_harness_base.py``. This
 guard resolves class ancestry by name, transitively, across the whole ``tests/``
 tree, so an env is caught wherever it is written. It is also why the scan is
-AST and not text: ``tests/unit/test_architecture_harness_mcp_with_error_logging.py``
-holds a ``def call_mcp`` inside a meta-test STRING literal, which a grep census
-would miscount as a real definition.
+AST and not text: a ``def call_mcp`` inside a STRING literal, which a grep census
+would miscount as a real definition, is not a definition.
 
 """
 
@@ -62,6 +63,12 @@ _DELIVER_METHODS = frozenset({"deliver_mcp", "deliver_a2a"})
 
 # The deleted per-env wire stash (change-set B2 / R3).
 _WIRE_STASH_ATTR = "_last_wire_response"
+
+# The pinned out-of-harness env exemplar for the anti-glob meta-test below.
+# ``_RefusalDialectEnv`` (tests/integration/test_harness_rest_refusal.py) derives
+# from the harness class ``MediaBuyCreateListEnv``, so it reaches an env root only
+# TRANSITIVELY and from a module a tests/harness/*.py glob never opens.
+_EXEMPLAR_OUT_OF_HARNESS_ENV = "_RefusalDialectEnv"
 
 # Shrink-only allowlist of JUSTIFIED deliver_* overrides, as
 # ``(repo_relative_path, class_name, method_name)``. Seeded once by the single-dispatch
@@ -95,14 +102,14 @@ _KNOWN_DELIVER_OVERRIDES: set[tuple[str, str, str]] = {
     # the setup above, not because of a bypass that no longer exists; an allowlist
     # whose recorded reasons drift false cannot be audited.)
     ("tests/harness/creative_sync.py", "CreativeSyncEnv", "deliver_a2a"),
-    # Uses the legacy _run_mcp_wrapper mechanism (mock Context -> async wrapper),
-    # not _run_mcp_client, and observes no structured_content wire.
-    ("tests/harness/media_buy_list.py", "MediaBuyListEnv", "deliver_mcp"),
-    # FIXME(#1928): get_media_buys' wire omits the pinned-required confirmed_at +
-    # revision on every media_buys item, so the core's pinned parse fails. This
-    # entry is removed — not re-justified — when #1928 lands; the override exists
-    # only to keep the gap attributable instead of hidden by loosening the core.
-    ("tests/harness/media_buy_list.py", "MediaBuyListEnv", "deliver_a2a"),
+    # `MediaBuyListEnv`'s deliver_mcp and deliver_a2a were removed here. Their two
+    # recorded reasons were a stale one ("uses the legacy _run_mcp_wrapper", untrue since
+    # GH #1900) and FIXME(#1928) ("the wire omits the pinned-required confirmed_at +
+    # revision on every media_buys item"). The second was measured on the wire rather than
+    # taken on the model: MCP and A2A, seller-confirmed and never-confirmed, all four carry
+    # both fields and parse clean against the pinned GetMediaBuysResponse. The env
+    # delegates and both entries are gone — the allowlist shrank by two, and this time the
+    # claim behind it was checked.
     # FIXME(#2012): by_package entries omit the pinned-required
     # pricing_model/rate/currency, so the core's pinned parse fails on every
     # delivery response. Both entries are removed when #2012 lands.
@@ -110,17 +117,21 @@ _KNOWN_DELIVER_OVERRIDES: set[tuple[str, str, str]] = {
     ("tests/harness/delivery_poll.py", "DeliveryPollEnv", "deliver_a2a"),
     # Their real wire does not satisfy the tool's PINNED response model, which
     # the client core parses into — so joining the core would turn a live
-    # conformance gap into a dispatch error. Each is a schema gap graded
-    # elsewhere (list_creative_formats assets). TaskManagementEnv WAS here for
-    # the list_tasks query_summary/pagination gap; that gap is now fixed in
-    # production, so it delegates and its entry is gone — the allowlist shrank.
+    # conformance gap into a dispatch error (list_creative_formats assets).
     ("tests/harness/creative_formats.py", "CreativeFormatsEnv", "deliver_mcp"),
     ("tests/harness/creative_formats.py", "CreativeFormatsEnv", "deliver_a2a"),
+    # `TaskManagementEnv.deliver_mcp` was removed here. Its FIXME(#2201) reason -- the
+    # list_tasks wire omitting the pinned-required query_summary and pagination -- stopped
+    # being true when #2201 landed and the response started extending the pinned
+    # ListTasksResponse. Confirmed by the self-retiring test that guarded it going RED
+    # ('DID NOT RAISE') rather than by reading the change: the allowlist shrank because an
+    # instrument said so out loud.
     # Test doubles, not real envs: they exist to prove the dispatch contract.
     ("tests/harness/test_harness_base.py", "_TestEnv", "deliver_mcp"),
-    # Contrasts CreativeSyncEnv's bypass by dispatching sync_creatives through
-    # the REAL A2A handler — the divergence IS the point of that test.
-    ("tests/integration/test_request_validation_suggestion_parity.py", "_RealA2AWireCreativeSyncEnv", "deliver_a2a"),
+    # `_RealA2AWireCreativeSyncEnv` in
+    # tests/integration/test_request_validation_suggestion_parity.py was removed
+    # here: that module was retired (its coverage subsumed elsewhere), so the
+    # override it justified no longer exists. The allowlist shrank.
 }
 
 
@@ -193,6 +204,21 @@ def env_class_names() -> set[str]:
     modules = _iter_test_modules()
     index = _class_index(modules)
     return {name for name in index if _is_env_class(name, index)}
+
+
+def _defining_module_paths(class_name: str) -> set[str]:
+    """Repo-relative paths of every module under ``tests/`` defining *class_name*.
+
+    ``ast.walk`` descends into function bodies, so a class nested inside a test
+    function counts as defined by its module — the same membership rule
+    ``_class_index`` uses.
+    """
+    paths: set[str] = set()
+    for path, tree in _iter_test_modules():
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef) and node.name == class_name:
+                paths.add(path)
+    return paths
 
 
 def _scan_method_defs(method_names: frozenset[str]) -> set[tuple[str, str, str]]:
@@ -372,33 +398,34 @@ def test_meta_membership_resolves_transitively_through_a_mixin():
 
 
 def test_meta_membership_is_not_a_directory_glob():
-    """The two env subclasses defined OUTSIDE ``tests/harness/*.py`` are members.
+    """The env subclasses defined OUTSIDE ``tests/harness/*.py`` are members.
 
     These are the evasion path the change-set's finding 4 named as already
     occupied — a ``tests/harness/*.py`` glob would miss both, so the guard
     would grade a strict subset of the real population.
+
+    The out-of-harness exemplar is pinned by NAME, not derived, so the assertion
+    cannot decay into "whatever the scan happens to find". Its second half
+    re-establishes, from the AST, that the exemplar really is defined outside
+    ``tests/harness/`` — otherwise the exemplar could silently migrate into the
+    harness directory and this test would keep passing while grading nothing.
     """
     names = env_class_names()
-    assert "_RealA2AWireCreativeSyncEnv" in names, (
-        "the env subclass in tests/integration/test_request_validation_suggestion_parity.py "
-        "must be derived as a harness env — a directory glob would miss it"
+    assert _EXEMPLAR_OUT_OF_HARNESS_ENV in names, (
+        f"the env subclass {_EXEMPLAR_OUT_OF_HARNESS_ENV} in tests/integration/ must be derived as a "
+        "harness env — a directory glob would miss it"
+    )
+    defining_paths = _defining_module_paths(_EXEMPLAR_OUT_OF_HARNESS_ENV)
+    assert defining_paths and not any(p.startswith("tests/harness/") for p in defining_paths), (
+        f"{_EXEMPLAR_OUT_OF_HARNESS_ENV} is no longer an OUT-OF-HARNESS exemplar (defined in "
+        f"{sorted(defining_paths)}), so it no longer proves membership is derivation-based rather than "
+        "a tests/harness/*.py glob. Re-point this test at another env subclass defined outside "
+        "tests/harness/ — do not delete the assertion."
     )
     assert "_TestEnv" in names, (
         "the env subclass nested inside a test function in tests/harness/test_harness_base.py "
         "must be derived as a harness env — a directory glob would miss it"
     )
-
-
-def test_meta_scan_ignores_definitions_inside_string_literals():
-    """A ``def call_mcp`` inside a meta-test STRING is not a definition.
-
-    ``tests/unit/test_architecture_harness_mcp_with_error_logging.py`` holds
-    exactly that in its ``_BAD_SNIPPET`` constant; a text census would count
-    it, this AST census must not.
-    """
-    offenders = {path for path, _cls, _method in _scan_method_defs(_LEGACY_DISPATCH_METHODS)}
-    offenders |= {path for path, _cls, _method in _scan_method_defs(_DELIVER_METHODS)}
-    assert "tests/unit/test_architecture_harness_mcp_with_error_logging.py" not in offenders
 
 
 def test_meta_scanner_flags_an_override_on_an_env_and_ignores_a_non_env():

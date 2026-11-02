@@ -16,7 +16,8 @@ from typing import Any
 
 from googleads import ad_manager
 
-from .error_handler import GAMAuthenticationError
+from src.core.exceptions import AdCPConfigurationError
+
 from .logging import logger
 
 
@@ -59,9 +60,8 @@ class HealthCheckResult:
 class GAMHealthChecker:
     """Health checker for Google Ad Manager integration."""
 
-    def __init__(self, config: dict[str, Any], dry_run: bool = False):
+    def __init__(self, config: dict[str, Any]):
         self.config = config
-        self.dry_run = dry_run
         self.client = None
         self.last_check_time: datetime | None = None
         self.last_results: list[HealthCheckResult] = []
@@ -72,10 +72,6 @@ class GAMHealthChecker:
         Supports all auth methods via GAMAuthManager: service_account_json,
         service_account_key_file, and refresh_token.
         """
-        if self.dry_run:
-            logger.info("Health check running in dry-run mode")
-            return True
-
         try:
             from src.adapters.gam.auth import GAMAuthManager
 
@@ -95,18 +91,9 @@ class GAMHealthChecker:
         """Check if we can authenticate with GAM."""
         start_time = time.time()
 
-        if self.dry_run:
-            return HealthCheckResult(
-                status=HealthStatus.HEALTHY,
-                check_name="authentication",
-                message="Dry-run mode - authentication check skipped",
-                details={"dry_run": True},
-                duration_ms=0,
-            )
-
         try:
             if not self.client and not self._init_client():
-                raise GAMAuthenticationError("Failed to initialize client")
+                raise AdCPConfigurationError()
 
             # Try a simple API call to verify auth
             assert self.client is not None  # Type narrowing for mypy
@@ -143,18 +130,9 @@ class GAMHealthChecker:
         """Check if we have necessary permissions."""
         start_time = time.time()
 
-        if self.dry_run:
-            return HealthCheckResult(
-                status=HealthStatus.HEALTHY,
-                check_name="permissions",
-                message="Dry-run mode - permissions check skipped",
-                details={"dry_run": True},
-                duration_ms=0,
-            )
-
         try:
             if not self.client:
-                raise GAMAuthenticationError("Client not initialized")
+                raise AdCPConfigurationError()
 
             assert self.client is not None  # Type narrowing for mypy
             permissions_ok = True
@@ -223,15 +201,6 @@ class GAMHealthChecker:
         """Check API quota status."""
         start_time = time.time()
 
-        if self.dry_run:
-            return HealthCheckResult(
-                status=HealthStatus.HEALTHY,
-                check_name="api_quota",
-                message="Dry-run mode - quota check skipped",
-                details={"dry_run": True},
-                duration_ms=0,
-            )
-
         try:
             # GAM doesn't expose quota directly, but we can track our usage
             # In production, this would integrate with quota monitoring
@@ -262,15 +231,6 @@ class GAMHealthChecker:
         """Check if we can access configured ad units."""
         start_time = time.time()
 
-        if self.dry_run:
-            return HealthCheckResult(
-                status=HealthStatus.HEALTHY,
-                check_name="inventory_access",
-                message="Dry-run mode - inventory check skipped",
-                details={"dry_run": True},
-                duration_ms=0,
-            )
-
         if not ad_unit_ids:
             return HealthCheckResult(
                 status=HealthStatus.DEGRADED,
@@ -282,7 +242,7 @@ class GAMHealthChecker:
 
         try:
             if not self.client:
-                raise GAMAuthenticationError("Client not initialized")
+                raise AdCPConfigurationError()
 
             assert self.client is not None  # Type narrowing for mypy
             inventory_service = self.client.GetService("InventoryService")
@@ -351,18 +311,9 @@ class GAMHealthChecker:
         """Check if GAM services are available."""
         start_time = time.time()
 
-        if self.dry_run:
-            return HealthCheckResult(
-                status=HealthStatus.HEALTHY,
-                check_name="service_availability",
-                message="Dry-run mode - service check skipped",
-                details={"dry_run": True},
-                duration_ms=0,
-            )
-
         try:
             if not self.client:
-                raise GAMAuthenticationError("Client not initialized")
+                raise AdCPConfigurationError()
 
             assert self.client is not None  # Type narrowing for mypy
             # Test key services

@@ -232,7 +232,7 @@ class TestThreadSafetyUnderConcurrentWriters:
 class TestProgrammedRejections:
     """POST /control/{key} makes the service reject the next N deliveries to that key.
 
-    THIS IS A SUB-CLAIM, NOT THE REGRESSION TEST FOR salesagent-pldmk.41. It grades
+    THIS IS A SUB-CLAIM, NOT THE REGRESSION TEST FOR #2060. It grades
     the INSTRUMENT — whether the capture service can be made to fail on demand — and
     an instrument that works is not evidence that the thing it measures works. It
     earns its place for the opposite reason: a BROKEN instrument manufactures false
@@ -244,7 +244,7 @@ class TestProgrammedRejections:
     is settled by scripts/mutation-check-webhook-breaker.sh. Nothing in this file
     speaks to either.
 
-    salesagent-pldmk.41 plan step 2. Nothing in the compose stack can currently
+    #2060 plan step 2. Nothing in the compose stack can currently
     make the deployed server's webhook delivery FAIL: this service answers every
     delivery 200, so the server's circuit breaker never records a failure and the
     two circuit-breaker scenarios have no way to open it for real. A per-key

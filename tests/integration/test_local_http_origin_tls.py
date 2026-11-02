@@ -124,9 +124,9 @@ class TestLocalOriginTLSFront:
         gen_test_tls.ensure_test_tls()  # also (re)writes COMBINED_CERT as a side effect
         cert_path = getattr(gen_test_tls, cert_attr)
         if cert_attr == "COMBINED_CERT":
-            # Without this the two arms are indistinguishable: _refresh_combined_cert
+            # Without this the two branches are indistinguishable: _refresh_combined_cert
             # returns silently when no public-root bundle is found, leaving COMBINED_CERT
-            # byte-identical to CA_CERT, and this arm then re-proves the ca-alone case
+            # byte-identical to CA_CERT, and this branch then re-proves the ca-alone case
             # while claiming to prove the outage in the docstring.
             assert cert_path.read_bytes().count(b"-----BEGIN CERTIFICATE-----") > 1, (
                 f"{cert_path} holds only our private CA — the public roots half of the "

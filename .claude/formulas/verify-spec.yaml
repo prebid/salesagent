@@ -65,14 +65,14 @@ iterate:
 
         1. Get the adcp spec repo commit:
            ```bash
-           git -C /Users/konst/projects/adcp log --oneline -1
-           git -C /Users/konst/projects/adcp rev-parse HEAD
+           git -C ../adcp log --oneline -1
+           git -C ../adcp rev-parse HEAD
            ```
 
         2. Get the adcp-client-python repo commit (use upstream remote):
            ```bash
-           git -C /Users/konst/projects/adcp-client-python log --oneline -1 upstream/main
-           git -C /Users/konst/projects/adcp-client-python rev-parse upstream/main
+           git -C ../adcp-client-python log --oneline -1 upstream/main
+           git -C ../adcp-client-python rev-parse upstream/main
            ```
            NOTE: Use the UPSTREAM remote (adcontextprotocol), not the fork.
 
@@ -83,7 +83,7 @@ iterate:
 
         4. Record the adcp-req commit (derivative index, for reference only):
            ```bash
-           git -C /Users/konst/projects/adcp-req log --oneline -1
+           git -C ../adcp-req log --oneline -1
            ```
 
         5. Build the permalink templates:
@@ -163,15 +163,15 @@ iterate:
         ## Sources of Truth (check in this order)
 
         1. **adcp spec repo** (JSON schemas):
-           `/Users/konst/projects/adcp/dist/schemas/3.0.0-beta.3/core/`
+           `../adcp/dist/schemas/3.0.0-beta.3/core/`
            These are the canonical schema definitions.
 
         2. **adcp-client-python** (Pydantic models):
-           `/Users/konst/projects/adcp-client-python/adcp/types/generated_poc/`
+           `../adcp-client-python/adcp/types/generated_poc/`
            These show how the spec translates to Python types.
 
         3. **adcp-req** (as INDEX only):
-           `/Users/konst/projects/adcp-req/docs/requirements/use-cases/`
+           `../adcp-req/docs/requirements/use-cases/`
            Each requirement lists its source — follow those links to (1) or (2).
            Do NOT treat adcp-req assertions as confirmed truth.
 

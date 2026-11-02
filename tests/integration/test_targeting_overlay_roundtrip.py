@@ -25,7 +25,6 @@ from adcp.types import PropertyListReference
 from sqlalchemy import select
 from sqlalchemy.orm import attributes
 
-from src.core.config_loader import set_current_tenant
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaPackage
 from src.core.resolved_identity import ResolvedIdentity
@@ -60,22 +59,13 @@ _ALL_STATUSES = [
 
 
 def _make_identity() -> ResolvedIdentity:
-    """Build identity and set the tenant context var.
+    """The caller ``_get_media_buys_impl`` runs as.
 
-    ``_get_media_buys_impl`` calls ``get_principal_object`` which reads from
-    the ``current_tenant`` ContextVar. In production the transport boundary
-    sets it via ``resolve_identity()``; tests calling ``_impl`` directly
-    must replicate that setup. Side-effect is intentional and localized
-    to the test path.
+    Principal and tenant travel on the identity and nowhere else: the implementation
+    reads ``identity.principal`` and ``identity.tenant``, so there is no ambient tenant to
+    seed and no second principal lookup to satisfy.
     """
-    identity = PrincipalFactory.make_identity(
-        principal_id="test_adv",
-        tenant_id=TENANT_ID,
-        protocol="mcp",
-        dry_run=True,
-    )
-    set_current_tenant(identity.tenant)
-    return identity
+    return PrincipalFactory.make_identity(principal_id="test_adv", tenant_id=TENANT_ID)
 
 
 @pytest.fixture

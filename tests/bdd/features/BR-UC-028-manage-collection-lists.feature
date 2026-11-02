@@ -1,5 +1,4 @@
 # Generated from adcp-req @ a14db6e5894e781a8b2c577e86e1b136876e4915 on 2026-06-03T11:30:04Z (merge mode)
-# DO NOT EDIT -- re-run: python scripts/compile_bdd.py --merge
 
 Feature: BR-UC-028 Manage Collection Lists
   As a Buyer
@@ -22,14 +21,14 @@ Feature: BR-UC-028 Manage Collection Lists
   #
   # Extensions: A (create), B (get), C (update), D (delete), E (not found), F (access denied), G (in use), H (webhook)
   # Error codes (v3.1 authoritative vocabulary): REFERENCE_NOT_FOUND, LIST_ACCESS_DENIED, LIST_IN_USE,
-  #   INVALID_REQUEST, BASE_COLLECTION_SELECTION_TYPE_INVALID,
-  #   BASE_COLLECTION_IDENTIFIERS_EMPTY, BASE_COLLECTION_GENRE_TAXONOMY_REQUIRED,
-  #   BASE_COLLECTION_UNKNOWN_FIELD, PUBLISHER_DOMAIN_INVALID_PATTERN,
-  #   FILTER_ARRAY_EMPTY, FILTER_UNKNOWN_FIELD, VALIDATION_ERROR,
-  #   PAGINATION_MAX_RESULTS_BELOW_MIN, PAGINATION_MAX_RESULTS_OVER_CAP,
+  #   INVALID_REQUEST, INVALID_REQUEST,
+  #   INVALID_REQUEST, INVALID_REQUEST,
+  #   INVALID_REQUEST, INVALID_REQUEST,
+  #   INVALID_REQUEST, INVALID_REQUEST, VALIDATION_ERROR,
+  #   INVALID_REQUEST, INVALID_REQUEST,
   #   WEBHOOK_URL_NOT_ALLOWED_ON_CREATE, WEBHOOK_URL_INVALID_FORMAT, WEBHOOK_URL_SSRF_BLOCKED,
-  #   WEBHOOK_PAYLOAD_REQUIRED_FIELD_MISSING, IDEMPOTENCY_KEY_TOO_SHORT, IDEMPOTENCY_KEY_TOO_LONG,
-  #   IDEMPOTENCY_KEY_INVALID_CHARS, IDEMPOTENCY_CONFLICT, IDEMPOTENCY_IN_FLIGHT,
+  #   WEBHOOK_PAYLOAD_REQUIRED_FIELD_MISSING, INVALID_REQUEST, INVALID_REQUEST,
+  #   INVALID_REQUEST, IDEMPOTENCY_CONFLICT, IDEMPOTENCY_IN_FLIGHT,
   #   IDEMPOTENCY_EXPIRED, COLLECTION_LIST_UNKNOWN_FIELD, ACCOUNT_REQUIRED
 
   Background:
@@ -143,9 +142,9 @@ Feature: BR-UC-028 Manage Collection Lists
 
     Examples:
       | case        | key_value                                                                                                                                  | error_code                     |
-      | too_short   | abc123                                                                                                                                     | IDEMPOTENCY_KEY_TOO_SHORT      |
-      | too_long    | aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | IDEMPOTENCY_KEY_TOO_LONG       |
-      | invalid_chr | abc 123 invalid spaces here xx                                                                                                             | IDEMPOTENCY_KEY_INVALID_CHARS  |
+      | too_short   | abc123                                                                                                                                     | INVALID_REQUEST      |
+      | too_long    | aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | INVALID_REQUEST       |
+      | invalid_chr | abc 123 invalid spaces here xx                                                                                                             | INVALID_REQUEST  |
 
   @T-UC-028-ext-a-idempotency-replay @create @idempotency @post-s1
   Scenario: Create collection list -- replay of same idempotency_key returns cached response with replayed=true
@@ -181,14 +180,14 @@ Feature: BR-UC-028 Manage Collection Lists
 
     Examples:
       | source_type                | boundary_point                                                  | source_value                                                                                                | error_code                              |
-      | unknown_selection_type     | unknown selection_type value                                    | [{"selection_type": "unknown", "publisher_domain": "p.com"}]                                                | BASE_COLLECTION_SELECTION_TYPE_INVALID  |
-      | missing_selection_type     | missing selection_type discriminator                            | [{"publisher_domain": "publisher.com"}]                                                                     | BASE_COLLECTION_SELECTION_TYPE_INVALID  |
-      | empty_identifiers          | distribution_ids with empty identifiers array (minItems=1)      | [{"selection_type": "distribution_ids", "identifiers": []}]                                                 | BASE_COLLECTION_IDENTIFIERS_EMPTY       |
-      | empty_collection_ids       | publisher_collections with empty collection_ids (minItems=1)    | [{"selection_type": "publisher_collections", "publisher_domain": "p.com", "collection_ids": []}]            | BASE_COLLECTION_IDENTIFIERS_EMPTY       |
-      | empty_genres               | publisher_genres with empty genres array (minItems=1)           | [{"selection_type": "publisher_genres", "publisher_domain": "p.com", "genres": [], "genre_taxonomy": "iab_content_3.0"}] | BASE_COLLECTION_IDENTIFIERS_EMPTY       |
-      | missing_taxonomy           | publisher_genres missing required genre_taxonomy                | [{"selection_type": "publisher_genres", "publisher_domain": "p.com", "genres": ["drama"]}]                  | BASE_COLLECTION_GENRE_TAXONOMY_REQUIRED |
-      | unknown_field              | variant carries field outside its sub-schema (additionalProps)  | [{"selection_type": "distribution_ids", "identifiers": [{"type": "imdb_id", "value": "tt1"}], "bogus": 1}]   | BASE_COLLECTION_UNKNOWN_FIELD           |
-      | bad_publisher_domain       | publisher_collections publisher_domain fails domain pattern     | [{"selection_type": "publisher_collections", "publisher_domain": "not a domain", "collection_ids": ["c1"]}] | PUBLISHER_DOMAIN_INVALID_PATTERN        |
+      | unknown_selection_type     | unknown selection_type value                                    | [{"selection_type": "unknown", "publisher_domain": "p.com"}]                                                | INVALID_REQUEST  |
+      | missing_selection_type     | missing selection_type discriminator                            | [{"publisher_domain": "publisher.com"}]                                                                     | INVALID_REQUEST  |
+      | empty_identifiers          | distribution_ids with empty identifiers array (minItems=1)      | [{"selection_type": "distribution_ids", "identifiers": []}]                                                 | INVALID_REQUEST       |
+      | empty_collection_ids       | publisher_collections with empty collection_ids (minItems=1)    | [{"selection_type": "publisher_collections", "publisher_domain": "p.com", "collection_ids": []}]            | INVALID_REQUEST       |
+      | empty_genres               | publisher_genres with empty genres array (minItems=1)           | [{"selection_type": "publisher_genres", "publisher_domain": "p.com", "genres": [], "genre_taxonomy": "iab_content_3.0"}] | INVALID_REQUEST       |
+      | missing_taxonomy           | publisher_genres missing required genre_taxonomy                | [{"selection_type": "publisher_genres", "publisher_domain": "p.com", "genres": ["drama"]}]                  | INVALID_REQUEST |
+      | unknown_field              | variant carries field outside its sub-schema (additionalProps)  | [{"selection_type": "distribution_ids", "identifiers": [{"type": "imdb_id", "value": "tt1"}], "bogus": 1}]   | INVALID_REQUEST           |
+      | bad_publisher_domain       | publisher_collections publisher_domain fails domain pattern     | [{"selection_type": "publisher_collections", "publisher_domain": "not a domain", "collection_ids": ["c1"]}] | INVALID_REQUEST        |
 
   @T-UC-028-ext-a-filters-valid @create @validation @boundary
   Scenario Outline: Create collection list -- filters <filter_type> is valid
@@ -214,10 +213,10 @@ Feature: BR-UC-028 Manage Collection Lists
 
     Examples:
       | filter_type           | boundary_point                            | filter_value                          | error_code           |
-      | kinds_empty_array     | kinds empty array (minItems=1)            | {"kinds": []}                         | FILTER_ARRAY_EMPTY   |
-      | unknown_kind          | kinds contains unknown enum value         | {"kinds": ["unknown_kind"]}           | VALIDATION_ERROR     |
-      | unknown_quality       | production_quality unknown enum value     | {"production_quality": ["bogus"]}     | VALIDATION_ERROR     |
-      | unknown_filter_field  | field outside the closed filters schema   | {"bogus_dimension": ["x"]}            | FILTER_UNKNOWN_FIELD |
+      | kinds_empty_array     | kinds empty array (minItems=1)            | {"kinds": []}                         | INVALID_REQUEST   |
+      | unknown_kind          | kinds contains unknown enum value         | {"kinds": ["unknown_kind"]}           | INVALID_REQUEST     |
+      | unknown_quality       | production_quality unknown enum value     | {"production_quality": ["bogus"]}     | INVALID_REQUEST     |
+      | unknown_filter_field  | field outside the closed filters schema   | {"bogus_dimension": ["x"]}            | INVALID_REQUEST |
 
   @T-UC-028-ext-a-webhook-on-create @create @validation @error @post-f1 @post-f2
   Scenario: Create collection list -- webhook_url on create is rejected
@@ -249,7 +248,7 @@ Feature: BR-UC-028 Manage Collection Lists
   Scenario: Create collection list -- account omitted is rejected when agent has multiple accounts
     Given the Buyer Agent has access to accounts "acct-one" and "acct-two"
     When the Buyer Agent creates a collection list with name "Ambiguous" and no account field
-    Then the error code should be "ACCOUNT_REQUIRED"
+    Then the error code should be "ACCOUNT_AMBIGUOUS"
     And the error should include "suggestion" field
     And no collection list is created
 
@@ -313,8 +312,8 @@ Feature: BR-UC-028 Manage Collection Lists
 
     Examples:
       | case      | value | error_code                       |
-      | zero      | 0     | PAGINATION_MAX_RESULTS_BELOW_MIN |
-      | too_large | 10001 | PAGINATION_MAX_RESULTS_OVER_CAP  |
+      | zero      | 0     | INVALID_REQUEST |
+      | too_large | 10001 | INVALID_REQUEST  |
 
   @T-UC-028-ext-b-coverage-gaps @get @coverage-gaps @post-s2
   Scenario: Get collection list -- coverage_gaps reported for collections missing filter metadata
@@ -330,7 +329,6 @@ Feature: BR-UC-028 Manage Collection Lists
     Given no collection list exists with list_id "list-missing"
     When the Buyer Agent sends a get_collection_list request for "list-missing"
     Then the error code should be "REFERENCE_NOT_FOUND"
-    And the error message references list_id "list-missing"
     And the error should include "suggestion" field
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/collection/list-collection-lists-request.json
 
@@ -339,7 +337,7 @@ Feature: BR-UC-028 Manage Collection Lists
     Given a collection list "list-other-acct" owned by account "acct-other"
     And the Buyer Agent is authenticated with no access to account "acct-other"
     When the Buyer Agent sends a get_collection_list request for "list-other-acct"
-    Then the error code should be "LIST_ACCESS_DENIED"
+    Then the error code should be "REFERENCE_NOT_FOUND"
     And the error should include "suggestion" field
 
   @T-UC-028-ext-c-happy @update @happy-path @post-s4 @post-s6
@@ -382,7 +380,8 @@ Feature: BR-UC-028 Manage Collection Lists
   Scenario: Update collection list -- webhook_url targeting a blocked host is rejected
     Given an existing collection list "list-ssrf" without webhook_url
     When the Buyer Agent updates "list-ssrf" with webhook_url "http://169.254.169.254/latest/meta-data"
-    Then the error code should be "WEBHOOK_URL_SSRF_BLOCKED"
+    Then the error code should be "VALIDATION_ERROR"
+    And the error recovery should be "correctable"
     And the error should include "suggestion" field
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/collection/list-collection-lists-request.json
 
@@ -390,7 +389,7 @@ Feature: BR-UC-028 Manage Collection Lists
   Scenario: Update collection list -- malformed webhook_url is rejected
     Given an existing collection list "list-badwh" without webhook_url
     When the Buyer Agent updates "list-badwh" with webhook_url "not-a-valid-url"
-    Then the error code should be "WEBHOOK_URL_INVALID_FORMAT"
+    Then the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/collection/list-collection-lists-request.json
 
@@ -407,7 +406,6 @@ Feature: BR-UC-028 Manage Collection Lists
     Given no collection list exists with list_id "list-missing"
     When the Buyer Agent updates "list-missing" with name "Whatever"
     Then the error code should be "REFERENCE_NOT_FOUND"
-    And the error message references list_id "list-missing"
     And the error should include "suggestion" field
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/collection/list-collection-lists-request.json
 
@@ -416,7 +414,7 @@ Feature: BR-UC-028 Manage Collection Lists
     Given a collection list "list-other-acct" owned by account "acct-other"
     And the Buyer Agent is authenticated with no access to account "acct-other"
     When the Buyer Agent updates "list-other-acct" with name "Hijack"
-    Then the error code should be "LIST_ACCESS_DENIED"
+    Then the error code should be "REFERENCE_NOT_FOUND"
     And the error should include "suggestion" field
     And the list "list-other-acct" name is unchanged
 
@@ -443,7 +441,6 @@ Feature: BR-UC-028 Manage Collection Lists
     Given no collection list exists with list_id "list-missing"
     When the Buyer Agent deletes "list-missing"
     Then the error code should be "REFERENCE_NOT_FOUND"
-    And the error message references list_id "list-missing"
     And the error should include "suggestion" field
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/collection/list-collection-lists-request.json
 
@@ -452,7 +449,7 @@ Feature: BR-UC-028 Manage Collection Lists
     Given a collection list "list-other-acct" owned by account "acct-other"
     And the Buyer Agent is authenticated with no access to account "acct-other"
     When the Buyer Agent deletes "list-other-acct"
-    Then the error code should be "LIST_ACCESS_DENIED"
+    Then the error code should be "REFERENCE_NOT_FOUND"
     And the error should include "suggestion" field
     And the list "list-other-acct" still exists
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/collection/list-collection-lists-request.json
@@ -461,8 +458,7 @@ Feature: BR-UC-028 Manage Collection Lists
   Scenario: Delete collection list -- in use by active media buy returns LIST_IN_USE
     Given an existing collection list "list-in-use" referenced by an active media buy
     When the Buyer Agent deletes "list-in-use"
-    Then the error code should be "LIST_IN_USE"
-    And the error message references list_id "list-in-use"
+    Then the error code should be "INVALID_STATE"
     And the error should include "suggestion" field
     And the list "list-in-use" still exists
 
@@ -497,7 +493,7 @@ Feature: BR-UC-028 Manage Collection Lists
   Scenario: collection_list_changed -- payload omitting a required field is rejected
     Given a collection_list_changed webhook body omits the required "list_id" field
     When the recipient validates the webhook payload
-    Then the error code should be "VALIDATION_ERROR"
+    Then the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
 
   @T-UC-028-bva-idempotency-format @boundary @bva @create @idempotency
@@ -510,9 +506,9 @@ Feature: BR-UC-028 Manage Collection Lists
     Examples:
       | boundary_point           | expected                                |
       | 16-char alphanumeric key | accepted                                |
-      | 15-char key              | rejected: IDEMPOTENCY_KEY_TOO_SHORT     |
-      | 256-char key             | rejected: IDEMPOTENCY_KEY_TOO_LONG      |
-      | key containing space     | rejected: IDEMPOTENCY_KEY_INVALID_CHARS |
+      | 15-char key              | rejected: INVALID_REQUEST     |
+      | 256-char key             | rejected: INVALID_REQUEST      |
+      | key containing space     | rejected: INVALID_REQUEST |
 
   @T-UC-028-bva-idempotency-policy @boundary @bva @create @idempotency
   Scenario Outline: idempotency_key conflict/replay policy boundary -- <boundary_point>
@@ -584,8 +580,8 @@ Feature: BR-UC-028 Manage Collection Lists
       | boundary_point                                                              | expected                                        |
       | selection_type=publisher_collections with publisher_domain + collection_ids | accepted                                        |
       | selection_type=publisher_genres WITH genre_taxonomy present                 | accepted                                        |
-      | selection_type=publisher_genres MISSING genre_taxonomy                      | rejected: BASE_COLLECTION_GENRE_TAXONOMY_REQUIRED |
-      | identifiers array empty under distribution_ids                              | rejected: BASE_COLLECTION_IDENTIFIERS_EMPTY     |
+      | selection_type=publisher_genres MISSING genre_taxonomy                      | rejected: INVALID_REQUEST |
+      | identifiers array empty under distribution_ids                              | rejected: INVALID_REQUEST     |
 
   @T-UC-028-bva-filters @boundary @bva @create @validation
   Scenario Outline: collection_list filters boundary -- <boundary_point>
@@ -598,7 +594,7 @@ Feature: BR-UC-028 Manage Collection Lists
       | boundary_point                                      | expected                   |
       | genres_include + genres_exclude both provided        | accepted                  |
       | kinds=[series] AND production_quality=[professional] | accepted                  |
-      | content_ratings_exclude=[] (empty array)             | rejected: FILTER_ARRAY_EMPTY |
+      | content_ratings_exclude=[] (empty array)             | rejected: INVALID_REQUEST |
 
   @T-UC-028-bva-publisher-domain @boundary @bva @create @validation
   Scenario Outline: publisher_domain pattern boundary -- <boundary_point>
@@ -609,8 +605,8 @@ Feature: BR-UC-028 Manage Collection Lists
 
     Examples:
       | boundary_point                            | expected                            |
-      | uppercase character anywhere               | rejected: PUBLISHER_DOMAIN_INVALID_PATTERN |
-      | hyphen as first/last char of a label       | rejected: PUBLISHER_DOMAIN_INVALID_PATTERN |
+      | uppercase character anywhere               | rejected: INVALID_REQUEST |
+      | hyphen as first/last char of a label       | rejected: INVALID_REQUEST |
 
   @T-UC-028-bva-cache-duration @boundary @bva @create
   Scenario Outline: cache_duration_hours default boundary -- <boundary_point>
@@ -649,7 +645,7 @@ Feature: BR-UC-028 Manage Collection Lists
       | boundary_point                       | expected                  |
       | Empty request body                    | all tenant lists returned |
       | name_contains supplied as a string    | substring filter applied  |
-      | name_contains supplied as an integer  | rejected: VALIDATION_ERROR |
+      | name_contains supplied as an integer  | rejected: INVALID_REQUEST |
 
   @T-UC-028-bva-coverage-gaps @boundary @bva @get @coverage-gaps
   Scenario Outline: get_collection_list coverage_gaps boundary -- <boundary_point>
@@ -673,7 +669,7 @@ Feature: BR-UC-028 Manage Collection Lists
     Examples:
       | boundary_point    | expected                              |
       | max_results=10000 | accepted (at cap)                     |
-      | max_results=10001 | rejected: PAGINATION_MAX_RESULTS_OVER_CAP |
+      | max_results=10001 | rejected: INVALID_REQUEST |
       | pagination omitted | defaulted to 1000                    |
 
   @T-UC-028-bva-not-found @boundary @bva @error

@@ -7,9 +7,10 @@ Supports two modes:
 
 import json
 import logging
-import os
 from datetime import UTC, datetime
 from typing import Any
+
+from src.core.config import get_settings
 
 
 class ClientDisconnectFilter(logging.Filter):
@@ -95,9 +96,7 @@ def setup_structured_logging() -> None:
     In production (Fly.io), configures all loggers to output single-line JSON.
     This prevents multiline log messages from appearing as separate log entries.
     """
-    is_production = bool(os.environ.get("FLY_APP_NAME") or os.environ.get("PRODUCTION"))
-
-    if is_production:
+    if get_settings().structured_logging:
         # Configure root logger with JSON formatter
         root_logger = logging.getLogger()
         root_logger.setLevel(logging.INFO)

@@ -12,12 +12,12 @@ from typing import Any
 from pytest_bdd import given, parsers, then
 
 from tests.bdd.steps._harness_db import db_session
-from tests.bdd.steps.domain.uc003_update_media_buy import _ensure_update_defaults
+from tests.bdd.steps.domain.uc003_update_media_buy import _ensure_update_defaults, _resolve_media_buy_id
 from tests.bdd.steps.generic._auth import authenticate_env_as
 
 
 def _inject_privilege_error(ctx: dict) -> None:
-    """Arm the adapter to refuse an admin-only update with PERMISSION_DENIED.
+    """Branch the adapter to refuse an admin-only update with PERMISSION_DENIED.
 
     Storyboard BR-UC-003-ext-n grounds the privilege check at the ADAPTER
     (step 9b: "Adapter checks admin privilege requirement — operation requires
@@ -28,7 +28,7 @@ def _inject_privilege_error(ctx: dict) -> None:
     ``PERMISSION_DENIED`` (adcp-req BR-UC-003 impl-coverage), recovery
     correctable, with a buyer-facing "privileges" suggestion.
 
-    So we arm the method production actually calls during update
+    So we branch the method production actually calls during update
     (``adapter.update_media_buy``) with the canonical rejection. This makes the
     test wire-ready: the instant production gates admin-only actions and lets
     the adapter rejection surface on the wire, the strict xfail in conftest
@@ -36,7 +36,7 @@ def _inject_privilege_error(ctx: dict) -> None:
     short-circuits the fields-less ext-n request through the empty-update path
     and never reaches the adapter — hence the documented production gap.
     """
-    from src.core.exceptions import AdCPError
+    from src.core.exceptions import AdCPAuthorizationError
 
     env = ctx["env"]
     # MediaBuyDualEnv keys the UPDATE adapter under "update_adapter" (the create
@@ -45,13 +45,17 @@ def _inject_privilege_error(ctx: dict) -> None:
     # the adapter execution step (media_buy_update.py:628/692/760) — NOT
     # validate_media_buy_request, which the update path never calls.
     mock_adapter = env.mock["update_adapter"].return_value
-    # PERMISSION_DENIED is canonical (pinned enum @04f59d2d5, recovery
-    # correctable) but no typed subclass models it, so synthesize the code.
-    error = AdCPError.synthesize(
-        "This operation requires admin privileges",
-        error_code="PERMISSION_DENIED",
-        details={"suggestion": "Request admin privileges or contact an administrator to perform this action"},
-    )
+    # The CLASS that names PERMISSION_DENIED, not the code named on the base. This read
+    # "no typed subclass models it, so synthesize the code" and that was simply untrue --
+    # AdCPAuthorizationError has carried ``_code = PERMISSION_DENIED`` all along
+    # (exceptions.py). Naming a code on the base is the one way to put a code on the wire
+    # with no class bound to it, so a fixture doing it either hides an absent class or,
+    # here, an unchecked claim that one is absent.
+    #
+    # No details either: ``suggestion`` is a read-only property over CODE_TABLE, so the
+    # ``details={"suggestion": ...}`` block this used to carry reached nothing -- a details
+    # block is a declared ErrorDetails subclass and none of them has a suggestion field.
+    error = AdCPAuthorizationError()
     mock_adapter.update_media_buy.side_effect = error
 
 
@@ -141,6 +145,14 @@ def given_media_buy_owned_by(ctx: dict, media_buy_id: str, owner_id: str) -> Non
     """Set the media buy's principal_id to a DIFFERENT principal than the authenticated one.
 
     Creates the owning principal if needed, then updates the media buy.
+
+    ``media_buy_id`` is a Gherkin LABEL, not necessarily the real persisted id
+    (the Background's ``the Buyer owns an existing media buy with media_buy_id
+    "mb_existing"`` step registers the label -> real-id mapping in
+    ``ctx["media_buy_labels"]`` — see uc003_update_media_buy._resolve_media_buy_id).
+    A literal-string comparison against ``mb.media_buy_id`` was a Given-side
+    wiring bug that failed this scenario before it ever reached the ownership
+    check it exists to grade (#1721 M4 dormancy tripwire).
     """
     from tests.factories import PrincipalFactory
 
@@ -148,7 +160,10 @@ def given_media_buy_owned_by(ctx: dict, media_buy_id: str, owner_id: str) -> Non
     tenant = ctx["tenant"]
     mb = ctx.get("existing_media_buy")
     assert mb is not None, "No existing_media_buy in ctx"
-    assert mb.media_buy_id == media_buy_id, f"Expected media buy '{media_buy_id}' but ctx has '{mb.media_buy_id}'"
+    real_id = _resolve_media_buy_id(ctx, media_buy_id)
+    assert mb.media_buy_id == real_id, (
+        f"Expected media buy '{media_buy_id}' (resolved '{real_id}') but ctx has '{mb.media_buy_id}'"
+    )
     # Create the owning principal in the DB
     owner_principal = PrincipalFactory(
         tenant=tenant,
@@ -391,20 +406,24 @@ def given_package_update_inline_creatives_bare(ctx: dict) -> None:
     asset map.
     """
     from tests.factories.creative_asset import build_assets, image_spec
+    from tests.factories.request import CreativeAssetRequestFactory
 
     kwargs = _ensure_update_defaults(ctx)
     if not kwargs.get("packages"):
         kwargs["packages"] = [{"package_id": "pkg_001"}]
     kwargs["packages"][0]["creatives"] = [
-        {
-            "creative_id": "inline-cr-ext-k",
-            "name": "Inline Creative for Sync Test",
-            "format_id": {
+        CreativeAssetRequestFactory.payload(
+            creative_id="inline-cr-ext-k",
+            name="Inline Creative for Sync Test",
+            # Stated rather than inherited: the factory's own default normalises
+            # AGENT_URL to a trailing slash, and this step names the un-normalised
+            # spelling the sibling inline-creative steps use.
+            format_id={
                 "agent_url": "https://creative.adcontextprotocol.org",
                 "id": "display_300x250",
             },
-            "assets": build_assets(image_spec("primary")),
-        }
+            assets=build_assets(image_spec("primary")),
+        )
     ]
 
 
@@ -423,7 +442,7 @@ def given_creative_sync_fails(ctx: dict) -> None:
 
 def _get_product(ctx: dict) -> Any:
     """Get the product from ctx or from the DB (UC-003 doesn't set default_product in ctx)."""
-    product = ctx.get("default_product") or ctx.get("existing_product")
+    product = ctx.get("default_product")
     if product is not None:
         return product
     # UC-003: product was created by setup_product_chain but not stored in ctx.
@@ -563,7 +582,7 @@ def given_buyer_no_admin(ctx: dict) -> None:
     """
     ctx["buyer_is_admin"] = False
 
-    # If update already requires admin, arm the adapter privilege error now
+    # If update already requires admin, branch the adapter privilege error now
     if ctx.get("update_requires_admin"):
         _inject_privilege_error(ctx)
 
@@ -654,7 +673,6 @@ def given_valid_actions_excludes(ctx: dict, action: str) -> None:
     must be a real valid-action name the gate would consult.
     """
     assert action, "valid_actions exclusion step requires a non-empty action name"
-    ctx.setdefault("excluded_valid_actions", set()).add(action)
 
 
 @given("the media buy has committed delivery that the seller cannot cancel mid-flight")
@@ -662,24 +680,34 @@ def given_media_buy_uncancellable(ctx: dict) -> None:
     """Mark the active media buy as carrying committed delivery + request cancel.
 
     BR-RULE-216 INV-4: a buy not cancellable in its current state must reject a
-    cancel with NOT_CANCELLABLE. Production never reads canceled and has no
-    state-based cancellation check (gap, ext-v). We arm the update adapter to
-    refuse the cancel (the seller-side gate) and set canceled=true so the real
-    cancellation path is exercised on the wire.
+    cancel with NOT_CANCELLABLE.
+
+    TWO CASES CARRY THAT CODE and only one of them is implemented. A RE-CANCEL -- a cancel
+    against a buy already in a terminal state -- is refused by the state-machine guard
+    (``media_buy_update.py``), which now raises ``AdCPNotCancellableError`` for a cancel and
+    keeps INVALID_STATE for every other mutation, the split the pinned enum draws by what was
+    asked. THIS scenario is the other case: an ACTIVE buy the seller will not cancel
+    mid-flight for contractual reasons. There is no such policy in production -- no
+    commitment model to read, so nothing to refuse from -- so the adapter is branched to
+    stand in for the seller-side gate.
+
+    That branch is a fixture manufacturing an outcome production cannot reach, which is
+    exactly what a mock in a BDD Given should not be doing: it makes the scenario runnable
+    without making the behavior real, and what the run then grades is the boundary carrying
+    an adapter's error to the wire rather than any cancellation policy. It stays only
+    because deleting it would silently change what the ledgered entry fails on; the seller
+    commitment model is the actual missing piece.
     """
-    from src.core.exceptions import AdCPError
+    from src.core.exceptions import AdCPNotCancellableError
 
     kwargs = _ensure_update_defaults(ctx)
     kwargs["canceled"] = True
-    ctx["uncancellable"] = True
-    # Arm the seller-side refusal at the update adapter with the canonical code.
     env = ctx["env"]
     mock_adapter = env.mock["update_adapter"].return_value
-    mock_adapter.update_media_buy.side_effect = AdCPError.synthesize(
-        "Media buy cannot be canceled in its current state with committed delivery",
-        error_code="NOT_CANCELLABLE",
-        details={"suggestion": "Pause the buy instead (paused: true) or contact the seller to arrange cancellation"},
-    )
+    # The CLASS, not the code named on the base: AdCPNotCancellableError exists now and has a
+    # production raise site, so a fixture standing in for the seller gate uses the same type
+    # production would. CODE_TABLE owns the suggestion (see the PERMISSION_DENIED step above).
+    mock_adapter.update_media_buy.side_effect = AdCPNotCancellableError()
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -703,10 +731,8 @@ def given_adapter_error_during_update(ctx: dict) -> None:
     # transient / correctable / terminal — and it reached the wire verbatim because
     # the kwarg was a free string. AdCPAdapterError's wire code SERVICE_UNAVAILABLE
     # is pinned transient, which is what this scenario always meant.
-    error = AdCPAdapterError(
-        message="Ad server returned error during update",
-        details={"suggestion": "Retry the operation or contact ad server support"},
-    )
+    # No details, for the same reason recovery is absent — see the PERMISSION_DENIED step.
+    error = AdCPAdapterError()
     # Inject into all adapter methods that update_media_buy_impl might call.
     # Production calls adapter.update_media_buy() for the actual update,
     # and may call validate_media_buy_request() beforehand.
@@ -796,29 +822,22 @@ def given_negative_keyword_cross_dimension_ok(ctx: dict) -> None:
 
 @then(parsers.parse('the error should include "recovery" field with value "{value}"'))
 def then_error_recovery_field(ctx: dict, value: str) -> None:
-    """Assert the error includes a recovery field with the expected value."""
-    error = ctx.get("error")
-    assert error is not None, "No error recorded in ctx"
-    from src.core.exceptions import AdCPError
+    """Assert the WIRE envelope carries the expected recovery hint.
 
-    if isinstance(error, AdCPError):
-        # Same reasoning as then_error.py's terminal-recovery step: the
-        # reconstruction derives its own recovery, so grading it against itself is
-        # a tautology. Read the wire where the transport captured one; IMPL has
-        # none and keeps the class check.
-        from tests.bdd.steps.generic.then_error import _wire_error_object
-
-        wire = _wire_error_object(ctx)
-        if wire is not None:
-            actual_wire = wire.get("recovery")
-            assert actual_wire == value, f"Expected recovery {value!r} on the wire, got {actual_wire!r}: {wire}"
-        else:
-            assert error.recovery == value, f"Expected recovery '{value}', got '{error.recovery}'"
-    elif hasattr(error, "recovery"):
-        actual = error.recovery.value if hasattr(error.recovery, "value") else str(error.recovery)
-        assert actual == value, f"Expected recovery '{value}', got '{actual}'"
-    else:
-        raise AssertionError(f"Cannot check recovery on {type(error).__name__}: no recovery attribute")
+    Reads the envelope the buyer received rather than a reconstructed exception:
+    recovery is a graded wire field, and the reconstruction could only ever
+    re-derive it from the code (salesagent-3dawm.18).
+    """
+    result = ctx["result"]
+    code = result.wire_error_code()
+    assert code is not None, (
+        f"expected a wire rejection carrying recovery {value!r}, but no wire error envelope was "
+        "captured — the operation either succeeded or errored before reaching a transport"
+    )
+    # The CODE is taken from the wire because this step does not name one; the
+    # graded claim is the recovery VALUE the scenario states, which
+    # assert_wire_error pins on both envelope layers.
+    result.assert_wire_error(code, recovery=value)
 
 
 @then("no database records should be modified")
@@ -901,32 +920,8 @@ def given_seller_minimum_budget(ctx: dict, amount: int, currency: str) -> None:
     """
     import pytest
 
-    ctx["expected_min_budget"] = amount
-    ctx["expected_min_budget_currency"] = currency
     pytest.xfail(
         f"SPEC-PRODUCTION GAP: Seller minimum budget ({amount} {currency}) "
         "not carried in production. v3.1 BUDGET_TOO_LOW error details "
         "(minimum_budget, currency) not populated. FIXME"
-    )
-
-
-@then(parsers.parse('the suggestion should contain "{text1}" or "{text2}"'))
-def then_suggestion_contains_either(ctx: dict, text1: str, text2: str) -> None:
-    """Assert error suggestion contains either text1 or text2 (case-insensitive).
-
-    Wire-first (ztl6.6/ztl6.8): read the buyer-facing suggestion from the real
-    wire envelope when the scenario dispatched through a transport, falling back
-    to the reconstructed ``ctx['error']`` only for IMPL/no-wire — matching its
-    wire-first sibling ``then_suggestion_contains``.
-    """
-    from tests.bdd.steps.generic.then_error import _get_error_dict, _wire_suggestion
-
-    suggestion = _wire_suggestion(ctx)
-    if suggestion is None:
-        error = ctx.get("error")
-        assert error is not None, "No error recorded in ctx"
-        suggestion = _get_error_dict(error).get("suggestion") or ""
-    suggestion = suggestion.lower()
-    assert text1.lower() in suggestion or text2.lower() in suggestion, (
-        f"Expected suggestion to contain '{text1}' or '{text2}', got: {suggestion}"
     )

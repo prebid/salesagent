@@ -3,9 +3,10 @@
 Regression for #1417: tools translated pydantic ``ValidationError``
 by hand — ``raise AdCPValidationError(format_validation_error(e, ...))`` —
 which dropped the error.json top-level ``suggestion`` (and ``field``) that the
-shared boundary attaches. The ONE sanctioned translation point is
-``adcp_validation_boundary`` (src/core/validation_helpers.py); this guard
-AST-scans ``src/`` and fails on any ``AdCPValidationError(...)`` construction
+shared mapping attaches. The ONE sanctioned translation point is
+``adcp_error_for`` (src/core/exceptions.py), reached by every transport boundary --
+so the correct thing to do with a ``ValidationError`` is nothing at all: let it
+propagate. This guard AST-scans ``src/`` and fails on any ``AdCPValidationError(...)`` construction
 whose arguments contain a ``format_validation_error(...)`` call — the
 hand-rolled boundary signature — outside validation_helpers.py itself.
 
@@ -78,9 +79,10 @@ def test_no_handrolled_validation_boundary_in_src():
         for offender in find_handrolled_boundaries(tree):
             violations.append(f"{path.relative_to(REPO_ROOT)}: {offender}")
     assert not violations, (
-        "Hand-rolled ValidationError translation — use `with adcp_validation_boundary"
-        "(context=...)` (src/core/validation_helpers.py) so the rejection carries the "
-        "error.json top-level suggestion and field (#1417). Violations:\n  " + "\n  ".join(violations)
+        "Hand-rolled ValidationError translation. Let the ValidationError PROPAGATE: every "
+        "transport boundary converts it through the one adcp_error_for mapping, which is "
+        "what attaches the error.json top-level suggestion and field (#1417). A hand-rolled "
+        "wrapper here discards both. Violations:\n  " + "\n  ".join(violations)
     )
 
 

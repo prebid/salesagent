@@ -2,6 +2,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 from src.adapters.creative_engine import CreativeEngineAdapter
+from src.core.helpers.creative_helpers import asset_value_attr
 from src.core.schemas import Creative, CreativeAdaptation, CreativeApprovalStatus, FormatId
 
 
@@ -19,8 +20,13 @@ class MockCreativeEngine(CreativeEngineAdapter):
         """Simulates processing creatives, returning their status."""
         processed = []
         for creative in creatives:
-            # Check if format is auto-approvable
-            is_auto_approvable = creative.format_id in self.auto_approve_format_ids
+            # The id, not the reference: auto_approve_format_ids holds config STRINGS.
+            # Testing `creative.format_id in <set of str>` hashed a pydantic model, which
+            # is unhashable, so this raised TypeError for every creative on every call --
+            # even with an empty auto-approve list. Extracted ONCE here because the
+            # adaptation-suggestion block below needs exactly the same value.
+            format_id_str = creative.format_id.id if creative.format_id else ""
+            is_auto_approvable = format_id_str in self.auto_approve_format_ids
 
             # Determine status based on format and configuration
             status: Literal["pending_review", "approved", "rejected", "adaptation_required"]
@@ -41,7 +47,6 @@ class MockCreativeEngine(CreativeEngineAdapter):
 
             # Generate adaptation suggestions for video formats
             suggested_adaptations = []
-            format_id_str = creative.format_id.id if creative.format_id else ""
             if format_id_str and "video" in format_id_str.lower():
                 # Suggest vertical version for horizontal videos
                 if "16x9" in format_id_str or "horizontal" in format_id_str:
@@ -65,12 +70,13 @@ class MockCreativeEngine(CreativeEngineAdapter):
                             estimated_performance_lift=35.0,
                         )
                     )
-                # Suggest shorter version for long videos
-                # Extract duration from assets dict if available
+                # Suggest shorter version for long videos: the first asset that carries a
+                # duration decides, read through the one asset-value reader.
                 duration_ms = 0
-                for asset_data in (creative.assets or {}).values():
-                    if isinstance(asset_data, dict) and "duration_ms" in asset_data:
-                        duration_ms = asset_data["duration_ms"]
+                for asset_value in (creative.assets or {}).values():
+                    found = asset_value_attr(asset_value, "duration_ms")
+                    if found:
+                        duration_ms = int(found)
                         break
 
                 if duration_ms / 1000.0 > 15:

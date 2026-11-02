@@ -191,7 +191,6 @@ def save_adapter_config(tenant_id, **kwargs):
 
             # Write to legacy columns for backwards compatibility
             if adapter_type == "mock" and validated_config is not None:
-                adapter_config.mock_dry_run = getattr(validated_config, "dry_run", False)
                 adapter_config.mock_manual_approval_required = getattr(
                     validated_config, "manual_approval_required", False
                 )

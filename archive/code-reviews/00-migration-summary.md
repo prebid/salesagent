@@ -12,7 +12,7 @@
 
 ### Test Obligations (docs/test-obligations/) — 15 files, 412KB
 
-Extracted from `/Users/konst/projects/adcp-req/docs/requirements/` using logical reasoning against the AdCP spec and current salesagent implementation.
+Extracted from `adcp-req/docs/requirements/` using logical reasoning against the AdCP spec and current salesagent implementation.
 
 | File | Scenarios | Key 3.6 Impact |
 |------|-----------|----------------|

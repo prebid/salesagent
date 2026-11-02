@@ -21,7 +21,7 @@ from decimal import Decimal
 
 from src.core.database.models import PricingOption
 from src.core.database.models import Product as ProductModel
-from src.core.product_conversion import convert_product_model_to_schema
+from src.core.product_conversion import convert_product_model_to_schema, default_reporting_capabilities
 from src.core.schemas import Product as ProductSchema
 from tests.helpers.adcp_factories import create_test_db_product
 
@@ -85,6 +85,7 @@ class TestProductAdcp36FieldsPersistence:
                     "fixed_price": 10.0,
                 }
             ],
+            reporting_capabilities=default_reporting_capabilities(),
             delivery_measurement={"provider": "publisher", "notes": "test"},
             signal_targeting_allowed=True,
             property_targeting_allowed=True,
@@ -122,6 +123,7 @@ class TestProductAdcp36FieldsPersistence:
                     "fixed_price": 10.0,
                 }
             ],
+            reporting_capabilities=default_reporting_capabilities(),
             delivery_measurement={"provider": "publisher"},
         )
         assert product.property_targeting_allowed is False
@@ -142,7 +144,7 @@ def _make_db_product_for_conversion(**overrides) -> ProductModel:
         delivery_measurement={"provider": "publisher"},
         **overrides,
     )
-    pricing = PricingOption(
+    pricing = PricingOption.create(
         tenant_id="conv_test",
         product_id="conv_test_001",
         pricing_model="cpm",

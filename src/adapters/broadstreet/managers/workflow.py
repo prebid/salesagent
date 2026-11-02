@@ -7,8 +7,10 @@ Extends BaseWorkflowManager with Broadstreet-specific workflow logic.
 from datetime import datetime
 from typing import Any
 
+from src.adapters.base import AdapterCreateRequest
 from src.adapters.base_workflow import BaseWorkflowManager
-from src.core.schemas import CreateMediaBuyRequest, MediaPackage
+from src.core.helpers.brand_key import brand_key_parts
+from src.core.schemas import MediaPackage
 
 
 class BroadstreetWorkflowManager(BaseWorkflowManager):
@@ -61,7 +63,7 @@ class BroadstreetWorkflowManager(BaseWorkflowManager):
 
     def create_manual_campaign_workflow_step(
         self,
-        request: CreateMediaBuyRequest,
+        request: AdapterCreateRequest,
         packages: list[MediaPackage],
         start_time: datetime,
         end_time: datetime,
@@ -83,13 +85,15 @@ class BroadstreetWorkflowManager(BaseWorkflowManager):
             str: The workflow step ID if created successfully, None otherwise
         """
         # Build campaign name
-        brand_name = (request.brand.domain if request.brand is not None else None) or "Unknown Brand"
+        # Through the canonical accessor: `brand` is declared as the widened union
+        # (BrandReference | dict | str), so reading `.domain` off it is wrong on two of
+        # the three branches.
+        brand_name = brand_key_parts(request.brand)[0] or "Unknown Brand"
         campaign_name = f"{brand_name} - {start_time.strftime('%Y%m%d')}"
         if request.po_number:
             campaign_name = f"AdCP-{request.po_number}"
 
-        # Calculate total budget
-        total_budget = request.get_total_budget()
+        total_budget = request.total_budget
 
         action_details = {
             "action_type": "create_broadstreet_campaign",

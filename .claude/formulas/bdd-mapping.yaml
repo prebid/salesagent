@@ -6,7 +6,7 @@ description: >
   self-contained with a fresh context window — critical for avoiding drift
   when processing 130+ scenarios across 9 use cases.
 
-  The adcp-req project at /Users/konst/projects/adcp-req contains BDD scenarios
+  The sibling adcp-req checkout at ../adcp-req contains BDD scenarios
   derived by AI agents from the AdCP spec, documentation, and salesagent source.
   Each scenario has contextgit metadata linking to UC flows and business rules.
   These are NOT human-verified golden tests — they are the best available
@@ -41,7 +41,7 @@ iterate:
            Extract the feature file path from the description.
 
         2. **Read the feature file**:
-           The file is at `/Users/konst/projects/adcp-req/tests/features/<filename>.feature`
+           The file is at `../adcp-req/tests/features/<filename>.feature`
            Read the ENTIRE file. Parse:
            - Every `Scenario:` and `Scenario Outline:` with their steps
            - Every `@contextgit` tag (e.g., `# @contextgit id=T-UC-XXX-flow upstream=[BR-UC-XXX-flow]`)
@@ -51,9 +51,9 @@ iterate:
 
         3. **Trace contextgit upstream references**:
            For each scenario, read the upstream UC flow document:
-           - Flow docs are at `/Users/konst/projects/adcp-req/docs/requirements/use-cases/`
-           - Business rules at `/Users/konst/projects/adcp-req/docs/requirements/business-rules/`
-           - Field constraints at `/Users/konst/projects/adcp-req/docs/requirements/constraints/`
+           - Flow docs are at `../adcp-req/docs/requirements/use-cases/`
+           - Business rules at `../adcp-req/docs/requirements/business-rules/`
+           - Field constraints at `../adcp-req/docs/requirements/constraints/`
 
            For EACH upstream reference, answer:
            - What source document defines this requirement? (spec JSON schema, salesagent code, or both)
@@ -70,7 +70,7 @@ iterate:
 
         5. **Check implementation coverage mapping**:
            Read the implementation coverage file if it exists:
-           `/Users/konst/projects/adcp-req/.impl-coverage/BR-UC-XXX.yaml`
+           `../adcp-req/.impl-coverage/BR-UC-XXX.yaml`
            This maps UC steps to salesagent code locations — use it to understand
            which code paths each scenario exercises.
 
@@ -478,7 +478,7 @@ finalize:
          ```
 
       3. Write the report to a research artifact:
-         `/Users/konst/projects/salesagent/.claude/research/bdd-coverage-report.md`
+         `.claude/research/bdd-coverage-report.md`
 
       4. Sync beads and verify clean state:
          ```bash

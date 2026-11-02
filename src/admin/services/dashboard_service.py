@@ -12,7 +12,7 @@ from typing import Any
 from src.admin.services.business_activity_service import get_business_activities
 from src.admin.services.media_buy_readiness_service import MediaBuyReadinessService
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Creative, PersistedMediaBuyStatus, Principal, Product, Tenant
+from src.core.database.models import Creative, PersistedMediaBuyStatus, Product, Tenant
 from src.core.database.repositories import MediaBuyRepository
 from src.core.schemas import CreativeStatusEnum
 
@@ -63,9 +63,9 @@ class DashboardService:
                 # Core business metrics
                 from sqlalchemy import func, select
 
-                principals_count = db_session.scalar(
-                    select(func.count()).select_from(Principal).where(Principal.tenant_id == self.tenant_id)
-                )
+                from src.core.database.repositories.principal import PrincipalRepository
+
+                principals_count = PrincipalRepository(db_session, self.tenant_id).count()
                 products_count = db_session.scalar(
                     select(func.count()).select_from(Product).where(Product.tenant_id == self.tenant_id)
                 )

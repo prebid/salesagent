@@ -29,11 +29,17 @@ DEFAULT_AGENT_URL = "https://creative.test.example.com"
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
-def _error_messages(errors: list | None) -> list[str]:
-    """Extract message strings from Error objects or plain strings."""
+def _error_codes(errors: list | None) -> list[str]:
+    """Extract the machine CODE from each per-creative error entry.
+
+    Production emits these entries TYPED — src/core/tools/creatives/_processing.py builds
+    each with build_error_object(), so every element carries a code. The message is not
+    read: it is a function of the code through CODE_TABLE, so asserting both would check
+    the table against itself.
+    """
     if not errors:
         return []
-    return [e.message if hasattr(e, "message") else str(e) for e in errors]
+    return [str(getattr(e, "code", None) or getattr(e, "error_code", "")) for e in errors]
 
 
 def _creative(**overrides) -> dict:
@@ -240,7 +246,7 @@ class TestGenerativeUpdateUserAssets:
                     "status": "draft",
                     "context_id": "ctx-update",
                     "creative_output": {
-                        "assets": {"headline": {"text": "Generated headline"}},
+                        "assets": {"headline": {"asset_type": "text", "content": "Generated headline"}},
                         "output_format": {"url": "https://generated.example.com/creative.html"},
                     },
                 }
@@ -349,8 +355,8 @@ class TestGenerativeUpdateGeminiKeyMissing:
                 ]
             )
 
-            # Remove gemini key for update
-            env.mock["config"].return_value.gemini_api_key = None
+            # Remove gemini key for update — the env owns "is the key configured".
+            env.set_gemini_api_key(None)
 
             result = env.call_impl(
                 creatives=[
@@ -364,7 +370,7 @@ class TestGenerativeUpdateGeminiKeyMissing:
 
             creative_result = result.creatives[0]
             assert creative_result.action == "failed"
-            assert any("GEMINI_API_KEY" in e for e in _error_messages(creative_result.errors))
+            assert "CONFIGURATION_ERROR" in _error_codes(creative_result.errors)
 
 
 # ── Approval Mode UPDATE Tests (covers lines 97-139) ──────────────────────
@@ -380,7 +386,7 @@ class TestApprovalModeUpdate:
         """Update with auto-approve → status=approved in DB."""
         with CreativeSyncEnv() as env:
             env.setup_default_data()
-            env.identity.tenant["approval_mode"] = "auto-approve"
+            env.configure_tenant_field("approval_mode", "auto-approve")
 
             # Create (auto-approve)
             env.call_impl(creatives=[_creative(creative_id="c_auto_up")])
@@ -413,7 +419,7 @@ class TestApprovalModeUpdate:
             env.call_impl(creatives=[_creative(creative_id="c_ai_up")])
 
             # Switch to ai-powered for update
-            env.identity.tenant["approval_mode"] = "ai-powered"
+            env.configure_tenant_field("approval_mode", "ai-powered")
 
             with (
                 patch("src.admin.blueprints.creatives._ai_review_executor", mock_executor),
@@ -488,10 +494,7 @@ class TestStaticPreviewUpdate:
 
             creative_result = result.creatives[0]
             assert creative_result.action == "failed"
-            assert any(
-                "no previews" in e.lower() or "no media_url" in e.lower()
-                for e in _error_messages(creative_result.errors)
-            )
+            assert "CREATIVE_REJECTED" in _error_codes(creative_result.errors)
 
     def test_update_no_format_with_url_succeeds(self, integration_db):
         """Update creative: no matching format BUT has media_url → succeeds.
@@ -507,12 +510,18 @@ class TestStaticPreviewUpdate:
 
             env.call_impl(creatives=[_creative(creative_id="c_url_fallback_up")])
 
-            # Update WITH media_url via 'url' field on creative
+            # The media URL travels INSIDE the asset, which is where core/creative-asset.json
+            # puts it. It was assigned as a top-level ``creative["url"]`` -- a field the
+            # schema does not define on a creative -- and was redundant even then, because
+            # _creative()'s default asset already carries this URL and production reads it
+            # through _extract_url_from_assets. Stated on the asset so the fallback the test
+            # is named for is visible rather than implied.
+            media_url = "https://example.com/banner.png"
             creative = _creative(
                 creative_id="c_url_fallback_up",
                 name="Updated With URL",
+                assets=build_assets(image_spec("banner", url=media_url)),
             )
-            creative["url"] = "https://example.com/banner.png"
 
             result = env.call_impl(creatives=[creative])
             assert result.creatives[0].action == "updated"
@@ -550,9 +559,7 @@ class TestStaticPreviewUpdate:
 
             creative_result = result.creatives[0]
             assert creative_result.action == "failed"
-            assert any(
-                "unreachable" in e.lower() or "retry" in e.lower() for e in _error_messages(creative_result.errors)
-            )
+            assert "SERVICE_UNAVAILABLE" in _error_codes(creative_result.errors)
 
 
 class TestStaticPreviewDimensionExtraction:
@@ -742,7 +749,7 @@ class TestCreateAutoApprove:
         """Create with auto-approve → DB status=approved."""
         with CreativeSyncEnv() as env:
             env.setup_default_data()
-            env.identity.tenant["approval_mode"] = "auto-approve"
+            env.configure_tenant_field("approval_mode", "auto-approve")
 
             result = env.call_impl(creatives=[_creative(creative_id="c_auto_create")])
             assert result.creatives[0].action == "created"
@@ -768,7 +775,7 @@ class TestCreateAIPoweredApproval:
 
         with CreativeSyncEnv() as env:
             env.setup_default_data()
-            env.identity.tenant["approval_mode"] = "ai-powered"
+            env.configure_tenant_field("approval_mode", "ai-powered")
 
             with (
                 patch("src.admin.blueprints.creatives._ai_review_executor", mock_executor),

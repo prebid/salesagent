@@ -33,7 +33,6 @@ QUERY_FILES = [
     "src/core/tools/creatives/listing.py",
     "src/core/tools/creatives/_sync.py",
     "src/core/tools/creatives/_assignments.py",
-    "src/core/tools/performance.py",
     "src/core/tools/signals.py",
     "src/core/tools/task_management.py",
     "src/core/context_manager.py",

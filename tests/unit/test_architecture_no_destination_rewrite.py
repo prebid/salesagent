@@ -281,12 +281,15 @@ def find_env_sourced_destination_violations(tree: ast.Module) -> list[int]:
 #   (``send``/``asend``) at all -- CORS configuration is a different subsystem
 #   than "where a URL this application DIALS comes from" (salesagent-tbrk.6
 #   design correction, found by this atom's own detector run).
-# Only ``app.py`` remains. ``creative_agent_registry.py`` was carried here too
-# until the shared scanner started raising on exemptions that suppress nothing:
-# the detector found no violation in it at all, so the entry read as a
-# considered decision while doing nothing — and would have silently
-# pre-authorized a violation the file ever acquired.
-_ENV_SOURCED_DESTINATION_EXEMPT_FILES = frozenset({"src/app.py"})
+# NOTHING remains, and the set is empty rather than deleted so the next exemption
+# has to be added deliberately. ``creative_agent_registry.py`` went first, when the
+# shared scanner started raising on exemptions that suppress nothing. ``app.py``
+# follows it for the same reason: the ``ALLOWED_ORIGINS`` read described above is
+# gone, because reading the environment once at startup (salesagent-3cs7o.9) moved
+# every env access to the settings loader. The detector now finds nothing there, so
+# the entry suppressed nothing while reading as a sanctioned violation — and would
+# have silently pre-authorized one if the file reacquired it.
+_ENV_SOURCED_DESTINATION_EXEMPT_FILES: frozenset[str] = frozenset()
 
 
 def _scan_env_sourced_destinations() -> dict[str, list[int]]:
@@ -427,15 +430,13 @@ class TestEnvSourcedDestinationDetector:
         assert find_env_sourced_destination_violations(ast.parse(snippet)) != []
 
     @pytest.mark.arch_guard
-    def test_cors_exempted_file_is_skipped_by_the_full_scan(self):
-        """``app.py`` is exempt AND still flagged — a live exemption, not a dead one.
+    def test_the_full_scan_finds_no_env_sourced_destination(self):
+        """Nothing under ``src/`` reads a destination out of the environment.
 
-        The absence half alone would pass on an exemption that suppresses
-        nothing. ``scan_src`` raising on a dead entry is what makes this
-        assertion mean "suppressed", rather than merely "not present".
+        This replaces a test that policed the one exemption (``src/app.py``) by
+        asserting it was both exempt AND still flagged, so a dead entry could not
+        hide. The entry is gone — reading the environment once at startup
+        (salesagent-3cs7o.9) removed the read it covered — and with the exemption set
+        empty the assertion that says the same thing is simply that the scan is clean.
         """
-        offenders = _scan_env_sourced_destinations()
-        assert "src/app.py" not in offenders
-        assert find_env_sourced_destination_violations(parse_module(repo_root() / "src" / "app.py")), (
-            "app.py no longer trips the detector, so its exemption is dead — delete it"
-        )
+        assert _scan_env_sourced_destinations() == {}

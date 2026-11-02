@@ -11,19 +11,19 @@ Handles delivery metrics reporting including:
 import logging
 from datetime import UTC, date, datetime, timedelta
 from math import floor
-from typing import Annotated, Any, cast
+from typing import Any, cast
 
-from fastmcp.server.context import Context
-from pydantic import Field, RootModel
+from pydantic import RootModel
 from rich.console import Console
 
+from src.core.errors.codes import AppErrorCode, ErrorCode
+from src.core.errors.details import EntityRefDetails
 from src.core.exceptions import (
-    AdCPError,
+    AdCPInternalError,
+    AdCPSalesAgentError,
     AdCPValidationError,
-    to_wire_error_code,
 )
 from src.core.helpers import enum_value
-from src.core.tool_context import ToolContext
 
 
 def _validate_attribution_window(attribution_window: "AttributionWindow | None") -> None:
@@ -48,18 +48,14 @@ def _validate_attribution_window(attribution_window: "AttributionWindow | None")
         unit = enum_value(window.unit)
         if unit == "campaign" and window.interval != 1:
             raise AdCPValidationError(
-                "attribution_window: interval must be 1 when unit is 'campaign' "
-                "(the window spans the full campaign flight)",
                 field="attribution_window",
-                suggestion="interval must be 1 when unit is 'campaign'",
             )
 
 
 logger = logging.getLogger(__name__)
 console = Console()
 
-from adcp.types import AccountReference as LibraryAccountReference
-from adcp.types import ContextObject, Duration, Error, MediaBuyStatus
+from adcp.types import Duration, MediaBuyStatus
 from adcp.types.generated_poc.core.attribution_window import (
     AttributionWindow as ResponseAttributionWindow,  # TODO: no stable alias in adcp.types
 )
@@ -69,8 +65,9 @@ from adcp.types.generated_poc.core.duration import (
 from adcp.types.generated_poc.enums.attribution_model import AttributionModel  # TODO: no stable alias in adcp.types
 from adcp.types.generated_poc.media_buy.get_media_buy_delivery_request import (
     AttributionWindow,
-    ReportingDimensions,
 )
+
+from src.core.schemas import Error
 
 # Seller platform default attribution model (BR-RULE-092). The AdCP response
 # AttributionWindow requires a non-null ``model``; when the buyer does not
@@ -82,13 +79,13 @@ PLATFORM_DEFAULT_ATTRIBUTION_MODEL = AttributionModel.last_touch
 # adcp 3.6.0: Use schemas.ReportingPeriod (extends creative ReportingPeriod) for adapter compat.
 # The media-buy-specific ReportingPeriod has identical fields (start, end) but different identity.
 # Adapters are typed to accept schemas.ReportingPeriod, so we use that here.
-from src.core.auth import require_identity, require_principal_id, require_tenant, resolve_principal_or_raise
+
 from src.core.database.models import MediaBuy, PricingOption
 from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
 from src.core.database.repositories.delivery import POLL_SEQUENCE_TASK_TYPE, DeliveryRepository
 from src.core.database.repositories.product import ProductRepository
 from src.core.helpers.adapter_helpers import get_adapter
-from src.core.resolved_identity import ResolvedIdentity
+from src.core.resolved_identity import ResolvedIdentity, identity_of
 from src.core.schemas import (
     AggregatedTotals,
     DeliveryTotals,
@@ -105,60 +102,11 @@ from src.core.schemas import (
 from src.core.schemas import (
     ReportingPeriod as MediaBuyReportingPeriod,
 )
-from src.core.testing_hooks import AdCPTestContext, DeliverySimulator, TimeSimulator, apply_testing_hooks
-from src.core.tools._mcp import mcp_result
 from src.core.tools._media_buy_status import (
     CANONICAL_STATUSES,
     NO_MORE_DATA_STATUSES,
     resolve_canonical_status,
 )
-from src.core.utils import utc_flight_end, utc_flight_start
-from src.core.validation_helpers import adcp_validation_boundary
-
-
-def _simulation_clock(buy: MediaBuy, testing_ctx: "AdCPTestContext", default_dt: datetime) -> tuple[datetime, bool]:
-    """Resolve the (clock, simulate) pair a buy's status is evaluated against.
-
-    The status-filter path (``_get_target_media_buys``) and the per-buy display
-    path MUST use the same clock and simulate flag; otherwise, under
-    ``mock_time`` / ``jump_to_event`` the tool reports a status its own filter
-    excluded (and emits a spurious ``MEDIA_BUY_NOT_FOUND`` for a buy it can see).
-    ``default_dt`` is the real reference datetime used when no simulation is
-    active.
-    """
-    if testing_ctx.mock_time:
-        return testing_ctx.mock_time, True
-    if testing_ctx.jump_to_event:
-        simulated = TimeSimulator.jump_to_event_time(
-            testing_ctx.jump_to_event,
-            utc_flight_start(cast(date, buy.start_date)),
-            # Flight END is end-of-day UTC (utc_flight_end), not midnight: the
-            # last flight day is still serving, so CAMPAIGN_COMPLETE lands at the
-            # last instant of end_date. Mirrors the status scheduler
-            # (media_buy_status_scheduler.py: completed only when now >
-            # utc_flight_end) and resolve_canonical_status's inclusive end.
-            utc_flight_end(cast(date, buy.end_date)),
-        )
-        return simulated, True
-    return default_dt, False
-
-
-def _normalize_advisory_errors(errors: list[Error]) -> list[Error]:
-    """Re-code hand-built ``errors[]`` advisories to guaranteed-standard wire codes.
-
-    Unlike a raised ``AdCPError`` (translated at the transport boundary), advisory
-    entries serialize verbatim, so an internal-only code would leak to the buyer.
-    ``to_wire_error_code`` both translates mapped codes AND collapses anything
-    still non-standard to ``SERVICE_UNAVAILABLE``, so no internal code can reach
-    the buyer even if a future advisory is built with an unmapped internal code.
-    """
-    return [
-        Error(  # structural-guard: advisory per-buy result in GetMediaBuyDeliveryResponse.errors[]
-            code=to_wire_error_code(e.code),
-            message=e.message,
-        )
-        for e in errors
-    ]
 
 
 def _is_circuit_breaker_open(tenant_id: str) -> bool:
@@ -172,38 +120,62 @@ def _is_circuit_breaker_open(tenant_id: str) -> bool:
 
 
 def _get_media_buy_delivery_impl(
-    req: GetMediaBuyDeliveryRequest, identity: ResolvedIdentity | None
+    req: GetMediaBuyDeliveryRequest, identity: ResolvedIdentity
 ) -> GetMediaBuyDeliveryResponse:
-    """Get delivery data for one or more media buys.
+    """Establish who is asking, then delegate to :func:`get_media_buy_delivery`.
 
-    AdCP-compliant implementation that handles start_date/end_date parameters
-    and returns spec-compliant response format.
+    A controller (critical pattern #5): it resolves the caller and validates what only a
+    BUYER request can get wrong, and asks nothing about how delivery is gathered.
     """
-
-    # Validate identity is provided
-    identity = require_identity(identity, context=req.context)
-
     # BR-RULE-092 INV-5: reject a campaign-unit attribution window with interval != 1
     # (cross-field constraint the schema can't express, so it reaches us as valid).
-    # After require_identity so an unauthenticated caller gets AUTH_REQUIRED first.
     _validate_attribution_window(req.attribution_window)
 
-    # Extract testing context for time simulation and event jumping
-    testing_ctx = identity.testing_context or AdCPTestContext()
+    return get_media_buy_delivery(req, identity=identity)
 
-    principal_id = require_principal_id(identity, context=req.context)
 
-    # Get the Principal object
-    principal = resolve_principal_or_raise(principal_id, tenant_id=identity.tenant_id, context=req.context)
+def delivery_for_media_buy(
+    media_buy: MediaBuy,
+    *,
+    start_date: str,
+    end_date: str,
+) -> GetMediaBuyDeliveryResponse:
+    """Delivery for ONE media buy over one window, for a SERVER-initiated read.
 
-    # Tenant is resolved at the transport boundary (resolve_identity_from_context)
-    tenant = require_tenant(identity, context=req.context)
+    The entry point for callers with no buyer and no request envelope -- the delivery
+    webhook scheduler is the one today. They ask a domain question and this answers it;
+    they neither build a buyer request nor re-enter through ``_get_media_buy_delivery_impl``,
+    which would re-run an auth check that no server-initiated read can pass and skip every
+    obligation the boundary performs for the calls that do.
 
-    # Get the appropriate adapter
-    # Use testing_ctx.dry_run if in testing mode, otherwise False
-    adapter = get_adapter(
-        principal, dry_run=testing_ctx.dry_run if testing_ctx else False, testing_context=testing_ctx, tenant=tenant
+    Statuses are active + completed: the caller has already selected serving buys from the
+    database, so an ended campaign must still report rather than come back "not found".
+    ``pending_start`` is excluded -- a future-dated buy has no delivery to report.
+    """
+    return get_media_buy_delivery(
+        GetMediaBuyDeliveryRequest(
+            media_buy_ids=[media_buy.media_buy_id],
+            status_filter=[MediaBuyStatus.active, MediaBuyStatus.completed],
+            start_date=start_date,
+            end_date=end_date,
+        ),
+        # Resolution from stored ids: the job acts as the buy's owner, on the buy's account.
+        identity=identity_of(media_buy.tenant_id, media_buy.principal_id, media_buy.account_id),
     )
+
+
+def get_media_buy_delivery(
+    req: GetMediaBuyDeliveryRequest, *, identity: ResolvedIdentity
+) -> GetMediaBuyDeliveryResponse:
+    """Gather delivery for the buys *req* names, for an already-resolved caller.
+
+    The service half of :func:`_get_media_buy_delivery_impl`. It asks nothing about
+    transports, auth or idempotency, so a server-initiated read can reach it through
+    :func:`delivery_for_media_buy` without the front door.
+    """
+    principal_id = identity.principal.principal_id
+    tenant = identity.tenant
+    adapter = get_adapter(identity)
 
     # Determine reporting period
     if req.start_date and req.end_date:
@@ -212,12 +184,7 @@ def _get_media_buy_delivery_impl(
         end_dt = datetime.strptime(req.end_date, "%Y-%m-%d").replace(tzinfo=UTC)
 
         if start_dt >= end_dt:
-            raise AdCPValidationError(
-                "Start date must be before end date",
-                field="start_date",
-                suggestion="Set start_date to a date before end_date and resend.",
-                context=req.context,
-            )
+            raise AdCPValidationError(field="start_date")
     else:
         # Default to last 30 days
         end_dt = datetime.now(UTC)
@@ -232,11 +199,11 @@ def _get_media_buy_delivery_impl(
     # UoW scope encompasses all code that accesses MediaBuy ORM objects to prevent
     # DetachedInstanceError — the session must stay open while we read attributes
     # like buy.raw_request, buy.start_date, etc.
-    with MediaBuyUoW(tenant["tenant_id"]) as uow:
+    with MediaBuyUoW(tenant.tenant_id) as uow:
         assert uow.media_buys is not None
         repo = uow.media_buys
 
-        target_media_buys = _get_target_media_buys(req, principal_id, repo, reference_date, testing_ctx)
+        target_media_buys = _get_target_media_buys(req, principal_id, repo, reference_date)
 
         # Diff requested IDs vs found IDs to report missing ones
         not_found_errors: list[Error] = []
@@ -248,9 +215,9 @@ def _get_media_buy_delivery_impl(
             for requested_id in req.media_buy_ids:
                 if requested_id not in found_ids:
                     not_found_errors.append(
-                        Error(  # structural-guard: advisory per-buy result in GetMediaBuyDeliveryResponse.errors[]
-                            code="MEDIA_BUY_NOT_FOUND",
-                            message=f"Media buy {requested_id} not found",
+                        Error.of(  # structural-guard: advisory per-buy result in GetMediaBuyDeliveryResponse.errors[]
+                            ErrorCode.MEDIA_BUY_NOT_FOUND,
+                            details=EntityRefDetails(media_buy_id=requested_id),
                         )
                     )
 
@@ -263,15 +230,15 @@ def _get_media_buy_delivery_impl(
                         pricing_option_ids.append(pkg_id)
         # FIXME(#2129): delivery UoW should provide a product repo directly
         assert uow.session is not None
-        product_repo = ProductRepository(uow.session, tenant["tenant_id"])
+        product_repo = ProductRepository(uow.session, tenant.tenant_id)
         pricing_options = _get_pricing_options(
-            pricing_option_ids, tenant_id=tenant["tenant_id"], product_repo=product_repo
+            pricing_option_ids, tenant_id=tenant.tenant_id, product_repo=product_repo
         )
 
         # Per-request invariants, hoisted out of the per-buy loop:
         # - the circuit breaker is tenant-scoped, so one check covers every buy;
         # - packages are fetched in one batch query instead of one per buy.
-        reporting_circuit_open = _is_circuit_breaker_open(tenant["tenant_id"])
+        reporting_circuit_open = _is_circuit_breaker_open(tenant.tenant_id)
         packages_by_buy = repo.get_packages_for_ids([buy_id for buy_id, _ in target_media_buys])
 
         # Collect delivery data for each media buy
@@ -287,21 +254,13 @@ def _get_media_buy_delivery_impl(
 
         for media_buy_id, buy in target_media_buys:
             try:
-                # Time-simulation mode (mock_time / jump_to_event): the buyer is
-                # modeling delivery at a hypothetical clock, so non-terminal buys
-                # follow the simulated flight window to reach "completed"/final.
-                # _simulation_clock is the SAME (clock, simulate) source the
-                # status_filter path uses, so the reported status can never
-                # contradict the filter that selected the buy.
-                simulation_datetime, simulate_time = _simulation_clock(buy, testing_ctx, end_dt)
-
                 # Determine status from the persisted lifecycle column,
                 # date-refined only for serving states — the same single
                 # source of truth (resolve_canonical_status) as the
                 # status_filter path and get_media_buys. A canceled, rejected,
                 # or draft buy inside its flight window must not report "active"
                 # just because the dates line up.
-                status = resolve_canonical_status(buy, simulation_datetime.date(), simulate=simulate_time)
+                status = resolve_canonical_status(buy, end_dt.date())
 
                 # Override status when circuit breaker is open (reporting
                 # degraded). "reporting_delayed" means "delivery data temporarily
@@ -323,87 +282,69 @@ def _get_media_buy_delivery_impl(
                 adapter_conversion_value: float | None = None
                 adapter_viewability: float | None = None
 
-                if not any(
-                    [testing_ctx.dry_run, testing_ctx.mock_time, testing_ctx.jump_to_event, testing_ctx.test_session_id]
-                ):
-                    # Call adapter to get per-package delivery metrics
-                    # Note: Mock adapter returns simulated data, GAM adapter returns real data from Reporting API
-                    try:
-                        adapter_response = adapter.get_media_buy_delivery(
-                            media_buy_id=media_buy_id,
-                            date_range=reporting_period,
-                            today=simulation_datetime,
-                        )
-
-                        # Map adapter's by_package to package_id -> metrics
-                        for adapter_pkg in adapter_response.by_package:
-                            adapter_package_metrics[adapter_pkg.package_id] = {
-                                "impressions": float(adapter_pkg.impressions),
-                                "spend": float(adapter_pkg.spend),
-                                "clicks": None,  # AdapterPackageDelivery doesn't have clicks yet
-                                "by_placement": adapter_pkg.by_placement,
-                                "by_geo": adapter_pkg.by_geo,
-                                "by_device_type": adapter_pkg.by_device_type,
-                            }
-                            total_spend_from_adapter += float(adapter_pkg.spend)
-                            total_impressions_from_adapter += int(adapter_pkg.impressions)
-
-                        # Adapter totals are always present (required field on schema)
-                        spend = float(adapter_response.totals.spend)
-                        impressions = int(adapter_response.totals.impressions)
-                        raw_conversions = getattr(adapter_response.totals, "conversions", None)
-                        adapter_conversions = float(raw_conversions) if raw_conversions is not None else None
-                        raw_conversion_value = getattr(adapter_response.totals, "conversion_value", None)
-                        adapter_conversion_value = (
-                            float(raw_conversion_value) if raw_conversion_value is not None else None
-                        )
-                        adapter_viewability = getattr(adapter_response.totals, "viewability", None)
-
-                    except Exception as e:
-                        logger.error("Error getting delivery for %s: %s", media_buy_id, e)
-                        # Write adapter failure to audit trail (NFR-003)
-                        try:
-                            from src.core.database.models import AuditLog
-
-                            audit_log = AuditLog(
-                                tenant_id=tenant["tenant_id"],
-                                operation="adapter_delivery_failure",
-                                principal_id=principal_id,
-                                success=False,
-                                error_message=str(e),
-                                details={"media_buy_id": media_buy_id},
-                            )
-                            # FIXME(#2129): audit logging should use a repository
-                            if uow.session is not None:
-                                uow.session.add(audit_log)
-                        except Exception as audit_err:
-                            logger.error("Failed to write adapter failure audit log: %s", audit_err)
-                        adapter_errors.append(
-                            Error(  # structural-guard: advisory per-buy result in GetMediaBuyDeliveryResponse.errors[]
-                                code="SERVICE_UNAVAILABLE",
-                                message=f"Error getting delivery for {media_buy_id}",
-                            )
-                        )
-                        continue
-                else:
-                    # Use simulation for testing
-                    # Cast to date to satisfy mypy (SQLAlchemy returns Python date at runtime)
-                    buy_start_date_sim = cast(date, buy.start_date)
-                    buy_end_date_sim = cast(date, buy.end_date)
-                    start_dt = utc_flight_start(buy_start_date_sim)
-                    # End-of-day (utc_flight_end): the flight runs THROUGH the end
-                    # date, so progress reaches 1.0 only after the last flight day,
-                    # matching the scheduler and resolve_canonical_status. Midnight
-                    # would complete the campaign a day early.
-                    end_dt_campaign = utc_flight_end(buy_end_date_sim)
-                    progress = TimeSimulator.calculate_campaign_progress(start_dt, end_dt_campaign, simulation_datetime)
-
-                    simulated_metrics = DeliverySimulator.calculate_simulated_metrics(
-                        float(buy.budget) if buy.budget else 0.0, progress, testing_ctx
+                # Call adapter to get per-package delivery metrics
+                # Note: Mock adapter returns simulated data, GAM adapter returns real data from Reporting API
+                try:
+                    adapter_response = adapter.get_media_buy_delivery(
+                        media_buy_id=media_buy_id,
+                        date_range=reporting_period,
+                        today=end_dt,
                     )
 
-                    spend = simulated_metrics["spend"]
-                    impressions = simulated_metrics["impressions"]
+                    # Map adapter's by_package to package_id -> metrics
+                    for adapter_pkg in adapter_response.by_package:
+                        adapter_package_metrics[adapter_pkg.package_id] = {
+                            "impressions": float(adapter_pkg.impressions),
+                            "spend": float(adapter_pkg.spend),
+                            "clicks": None,  # AdapterPackageDelivery doesn't have clicks yet
+                            "by_placement": adapter_pkg.by_placement,
+                            "by_geo": adapter_pkg.by_geo,
+                            "by_device_type": adapter_pkg.by_device_type,
+                        }
+                        total_spend_from_adapter += float(adapter_pkg.spend)
+                        total_impressions_from_adapter += int(adapter_pkg.impressions)
+
+                    # media-buy-delivery-webhook-result.json makes both required on
+                    # `totals`, but the SDK types them optional, so a None here is a
+                    # non-conformant adapter response rather than a value to coerce.
+                    # `or 0` would silently report zero delivery for one.
+                    totals = adapter_response.totals
+                    if totals.spend is None or totals.impressions is None:
+                        raise AdCPInternalError(details=EntityRefDetails(media_buy_id=media_buy_id))
+                    spend = float(totals.spend)
+                    impressions = int(totals.impressions)
+                    raw_conversions = getattr(adapter_response.totals, "conversions", None)
+                    adapter_conversions = float(raw_conversions) if raw_conversions is not None else None
+                    raw_conversion_value = getattr(adapter_response.totals, "conversion_value", None)
+                    adapter_conversion_value = float(raw_conversion_value) if raw_conversion_value is not None else None
+                    adapter_viewability = getattr(adapter_response.totals, "viewability", None)
+
+                except Exception as e:
+                    logger.error("Error getting delivery for %s: %s", media_buy_id, e)
+                    # Write adapter failure to audit trail (NFR-003)
+                    try:
+                        from src.core.database.models import AuditLog
+
+                        audit_log = AuditLog(
+                            tenant_id=tenant.tenant_id,
+                            operation="adapter_delivery_failure",
+                            principal_id=principal_id,
+                            success=False,
+                            error_message=str(e),
+                            details=EntityRefDetails(media_buy_id=media_buy_id),
+                        )
+                        # FIXME(#2129): audit logging should use a repository
+                        if uow.session is not None:
+                            uow.session.add(audit_log)
+                    except Exception as audit_err:
+                        logger.error("Failed to write adapter failure audit log: %s", audit_err)
+                    adapter_errors.append(
+                        Error.of(  # structural-guard: advisory per-buy result in GetMediaBuyDeliveryResponse.errors[]
+                            ErrorCode.SERVICE_UNAVAILABLE,
+                            details=EntityRefDetails(media_buy_id=media_buy_id),
+                        )
+                    )
+                    continue
 
                 # Create package delivery data
                 package_deliveries = []
@@ -484,14 +425,7 @@ def _get_media_buy_delivery_impl(
                                 clicks=package_clicks,
                                 completed_views=None,  # Optional field, not calculated in this implementation
                                 pacing_index=1.0 if status == "active" else 0.0,
-                                # Add pricing fields from package_config
-                                pricing_model=pricing_info.get("pricing_model") if pricing_info else None,
-                                rate=(
-                                    float(pricing_info.get("rate"))
-                                    if pricing_info and pricing_info.get("rate") is not None
-                                    else None
-                                ),
-                                currency=pricing_info.get("currency") if pricing_info else None,
+                                **_package_pricing(package_id, pricing_info, pricing_option),
                                 by_placement=placement_breakdown,
                                 by_placement_truncated=placement_truncated,
                                 by_geo=geo_breakdown,
@@ -500,21 +434,6 @@ def _get_media_buy_delivery_impl(
                                 by_device_type_truncated=device_type_truncated,
                             )
                         )
-
-                # Collect pricing options for this media buy
-                buy_pricing_options: list[dict[str, Any]] = []
-                if buy.raw_request and isinstance(buy.raw_request, dict):
-                    # Collect from per-package pricing_option_ids
-                    for pkg_data in buy.raw_request.get("packages", []):
-                        pkg_po_id = pkg_data.get("pricing_option_id")
-                        if pkg_po_id and pkg_po_id not in {p["pricing_option_id"] for p in buy_pricing_options}:
-                            if pkg_po_id in pricing_options:
-                                po = pricing_options[pkg_po_id]
-                                buy_pricing_options.append(
-                                    {"pricing_option_id": pkg_po_id, "pricing_model": po.pricing_model}
-                                )
-                            else:
-                                buy_pricing_options.append({"pricing_option_id": pkg_po_id})
 
                 # Calculate clicks and CTR (click-through rate) where applicable
 
@@ -533,7 +452,6 @@ def _get_media_buy_delivery_impl(
                     pricing_model=PricingModel(
                         "cpm"
                     ),  # TODO: @yusuf - remove this from adcp protocol. MediaBuy itself doesn't have pricing model. It is in package level
-                    pricing_options=buy_pricing_options or None,
                     totals=DeliveryTotals(
                         impressions=impressions,
                         spend=spend,
@@ -547,7 +465,6 @@ def _get_media_buy_delivery_impl(
                     ),
                     by_package=package_deliveries,
                     daily_breakdown=None,  # Optional field, not calculated in this implementation
-                    ext=adapter_ext,
                 )
 
                 deliveries.append(delivery_data)
@@ -560,8 +477,8 @@ def _get_media_buy_delivery_impl(
                 if adapter_conversion_value is not None:
                     total_conversion_value = (total_conversion_value or 0.0) + adapter_conversion_value
 
-            except AdCPError:
-                # A typed AdCPError from per-buy processing propagates to the boundary
+            except AdCPSalesAgentError:
+                # A typed AdCPSalesAgentError from per-buy processing propagates to the boundary
                 # translator for a spec-compliant envelope.
                 raise
             except Exception as e:
@@ -570,16 +487,22 @@ def _get_media_buy_delivery_impl(
                 # response — the caller sees an errors[] entry, not a shorter list.
                 logger.error("Error processing delivery for %s: %s", media_buy_id, e)
                 adapter_errors.append(
-                    Error(  # structural-guard: advisory per-buy result in GetMediaBuyDeliveryResponse.errors[]
-                        # SERVICE_UNAVAILABLE (not INTERNAL_ERROR) — advisory
-                        # errors[] entries serialize verbatim (they never pass
-                        # through translate_error_code), and INTERNAL_ERROR is an
-                        # internal-only code (exceptions.INTERNAL_CODES) that must
-                        # not reach the buyer. Matches the sibling adapter handler
-                        # above. The assembly-time normalization below is the
-                        # backstop that keeps any hand-built code on the wire.
-                        code="SERVICE_UNAVAILABLE",
-                        message=f"Error processing delivery for {media_buy_id}",
+                    Error.of(  # structural-guard: advisory per-buy result in GetMediaBuyDeliveryResponse.errors[]
+                        # INTERNAL_ERROR, not SERVICE_UNAVAILABLE. This branch said the
+                        # latter because "the ADAPTER was unreachable ... matches the
+                        # sibling adapter handler above" -- but the adapter cannot reach
+                        # here. Its call at :313 sits in its OWN try whose handler
+                        # (:343) catches Exception and `continue`s, so an adapter
+                        # failure is advised there and never arrives at this outer branch.
+                        # What does arrive is a crash in OUR per-buy processing, which
+                        # is not a downstream outage and which retrying cannot fix.
+                        # The reasoning was copied from the sibling along with the code
+                        # (salesagent-tay20).
+                        #
+                        # WHICH buy failed still travels in details, not in the
+                        # sentence: message is derived from the code.
+                        AppErrorCode.INTERNAL_ERROR,
+                        details=EntityRefDetails(media_buy_id=media_buy_id),
                     )
                 )
                 # Skip this media buy and continue with others
@@ -618,7 +541,7 @@ def _get_media_buy_delivery_impl(
         sequence_number = None
         # FIXME(#2129): delivery UoW should provide DeliveryRepository directly
         if deliveries and uow.session is not None:
-            delivery_repo = DeliveryRepository(uow.session, tenant["tenant_id"])
+            delivery_repo = DeliveryRepository(uow.session, tenant.tenant_id)
             # Use the first media buy's sequence as the response-level sequence
             first_mb_id = deliveries[0].media_buy_id
             max_seq = delivery_repo.get_max_sequence_number(first_mb_id, task_type=POLL_SEQUENCE_TASK_TYPE)
@@ -663,12 +586,10 @@ def _get_media_buy_delivery_impl(
             total_spend / total_conversions if total_conversions is not None and total_conversions > 0 else None
         )
 
-        # Normalize advisory error codes to guaranteed-standard wire codes
-        # (see _normalize_advisory_errors for why this can't leak an internal code).
-        advisory_errors = _normalize_advisory_errors(not_found_errors + adapter_errors)
+        # Normalize advisory error codes to guaranteed-standard wire codes.
+        advisory_errors = not_found_errors + adapter_errors
 
         # Create AdCP-compliant response
-        context_val = req.context
         response = GetMediaBuyDeliveryResponse(
             reporting_period={"start": reporting_period.start, "end": reporting_period.end},
             currency="USD",  # TODO: @yusuf - This is wrong. Currency should be at the media buy delivery level, not on aggregated totals.
@@ -686,180 +607,15 @@ def _get_media_buy_delivery_impl(
             media_buy_deliveries=deliveries,
             attribution_window=attribution_window,
             errors=advisory_errors or None,
-            context=context_val,
             notification_type=notification_type,
             sequence_number=sequence_number,
             next_expected_at=next_expected_at,
+            message=f"Retrieved delivery data for {len(deliveries)} media buy{'s' if len(deliveries) != 1 else ''}."
+            if deliveries
+            else "No delivery data found for the specified period.",
         )
-
-        # Apply testing hooks if needed
-        if any([testing_ctx.dry_run, testing_ctx.mock_time, testing_ctx.jump_to_event, testing_ctx.test_session_id]):
-            # Create campaign info for testing hooks
-            campaign_info = None
-            if target_media_buys:
-                first_buy = target_media_buys[0][1]
-                # Cast to date to satisfy mypy (SQLAlchemy returns Python date at runtime)
-                first_buy_start = cast(date, first_buy.start_date)
-                first_buy_end = cast(date, first_buy.end_date)
-                campaign_info = {
-                    "start_date": utc_flight_start(first_buy_start),
-                    # End-of-day (utc_flight_end) so the testing-hook progress math
-                    # treats the last flight day as still serving — consistent with
-                    # the simulation path above and the scheduler.
-                    "end_date": utc_flight_end(first_buy_end),
-                    "total_budget": float(first_buy.budget) if first_buy.budget else 0.0,
-                }
-
-            # Apply testing hooks for metadata (spend tracking, response headers)
-            # No mutations survive for delivery — response model stays unchanged
-            apply_testing_hooks(
-                testing_ctx,
-                "get_media_buy_delivery",
-                campaign_info,
-                spend_amount=float(response.aggregated_totals.spend or 0),
-            )
 
     return response
-
-
-def _build_get_media_buy_delivery_request(
-    media_buy_ids: list[str] | None,
-    status_filter: MediaBuyStatus | list[MediaBuyStatus] | None,
-    start_date: str | None,
-    end_date: str | None,
-    reporting_dimensions: ReportingDimensions | None,
-    attribution_window: AttributionWindow | None,
-    include_package_daily_breakdown: bool | None,
-    context: ContextObject | None,
-) -> GetMediaBuyDeliveryRequest:
-    """Build a GetMediaBuyDeliveryRequest from individual wire params.
-
-    Shared by the MCP wrapper and the A2A/REST raw wrapper so request
-    construction runs inside the ONE validation boundary — previously the raw
-    wrapper built the request unprotected and REST leaked a raw pydantic
-    ``ValidationError`` with no top-level suggestion (#1417).
-    """
-    with adcp_validation_boundary(context="get_media_buy_delivery request"):
-        return GetMediaBuyDeliveryRequest(
-            media_buy_ids=media_buy_ids,
-            status_filter=cast(MediaBuyStatus | list[MediaBuyStatus] | None, status_filter),
-            start_date=start_date,
-            end_date=end_date,
-            reporting_dimensions=reporting_dimensions,
-            attribution_window=attribution_window,
-            include_package_daily_breakdown=include_package_daily_breakdown,
-            context=cast(ContextObject | None, context),
-        )
-
-
-async def get_media_buy_delivery(
-    media_buy_ids: list[str] | None = None,
-    status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
-    start_date: Annotated[str | None, Field(description="Start date for reporting period in YYYY-MM-DD format")] = None,
-    end_date: Annotated[str | None, Field(description="End date for reporting period in YYYY-MM-DD format")] = None,
-    reporting_dimensions: ReportingDimensions | None = None,
-    attribution_window: AttributionWindow | None = None,
-    include_package_daily_breakdown: Annotated[
-        bool | None, Field(description="When true, include daily breakdown metrics per package")
-    ] = None,
-    account: LibraryAccountReference | None = None,
-    context: ContextObject | None = None,
-    ctx: Context | ToolContext | None = None,
-):
-    """Get delivery data for media buys.
-
-    AdCP-compliant implementation of get_media_buy_delivery tool.
-
-    Args:
-        media_buy_ids: Array of publisher media buy IDs to get delivery data for (optional)
-        status_filter: Filter by status - single status or array of MediaBuyStatus enums (optional)
-        start_date: Start date for reporting period in YYYY-MM-DD format (optional)
-        end_date: End date for reporting period in YYYY-MM-DD format (optional)
-        reporting_dimensions: Request dimensional breakdowns (optional)
-        attribution_window: Attribution window configuration (optional)
-        include_package_daily_breakdown: Include daily breakdown per package (optional)
-        account: Account reference for multi-account scenarios (optional)
-        context: Application level context object (ContextObject)
-        ctx: FastMCP context (automatically provided)
-
-    Returns:
-        ToolResult with GetMediaBuyDeliveryResponse data
-    """
-    identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
-
-    # Handle account resolution at boundary (same as sync_creatives pattern)
-    if account is not None and identity is not None:
-        from src.core.transport_helpers import enrich_identity_with_account
-
-        identity = enrich_identity_with_account(identity, account)
-
-    req = _build_get_media_buy_delivery_request(
-        media_buy_ids=media_buy_ids,
-        status_filter=status_filter,
-        start_date=start_date,
-        end_date=end_date,
-        reporting_dimensions=reporting_dimensions,
-        attribution_window=attribution_window,
-        include_package_daily_breakdown=include_package_daily_breakdown,
-        context=context,
-    )
-    response = _get_media_buy_delivery_impl(req, identity)
-    return mcp_result(response)
-
-
-def get_media_buy_delivery_raw(
-    media_buy_ids: list[str] | None = None,
-    status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
-    start_date: str | None = None,
-    end_date: str | None = None,
-    reporting_dimensions: ReportingDimensions | None = None,
-    attribution_window: AttributionWindow | None = None,
-    include_package_daily_breakdown: bool | None = None,
-    account: LibraryAccountReference | None = None,
-    context: ContextObject | None = None,
-    ctx: Context | ToolContext | None = None,
-    identity: ResolvedIdentity | None = None,
-):
-    """Get delivery metrics for media buys (raw function for A2A server use).
-
-    Args:
-        media_buy_ids: Array of publisher media buy IDs to get delivery data for (optional)
-        status_filter: Filter by status - single status or array of MediaBuyStatus enums (optional)
-        start_date: Start date for reporting period in YYYY-MM-DD format (optional)
-        end_date: End date for reporting period in YYYY-MM-DD format (optional)
-        reporting_dimensions: Request dimensional breakdowns (optional)
-        attribution_window: Attribution window configuration (optional)
-        include_package_daily_breakdown: Include daily breakdown per package (optional)
-        account: Account reference for multi-account scenarios (optional)
-        context: Application level context (ContextObject)
-        ctx: Context for authentication
-        identity: Pre-resolved identity (preferred over ctx)
-
-    Returns:
-        GetMediaBuyDeliveryResponse with delivery metrics
-    """
-    if identity is None:
-        from src.core.transport_helpers import resolve_identity_from_context
-
-        identity = resolve_identity_from_context(ctx)
-
-    # Handle account resolution at boundary (same as sync_creatives pattern)
-    if account is not None and identity is not None:
-        from src.core.transport_helpers import enrich_identity_with_account
-
-        identity = enrich_identity_with_account(identity, account)
-
-    req = _build_get_media_buy_delivery_request(
-        media_buy_ids=media_buy_ids,
-        status_filter=status_filter,
-        start_date=start_date,
-        end_date=end_date,
-        reporting_dimensions=reporting_dimensions,
-        attribution_window=attribution_window,
-        include_package_daily_breakdown=include_package_daily_breakdown,
-        context=context,
-    )
-    return _get_media_buy_delivery_impl(req, identity)
 
 
 def _resolve_delivery_status_filter(
@@ -921,7 +677,6 @@ def _get_target_media_buys(
     principal_id: str,
     repo: MediaBuyRepository,
     reference_date: date,
-    testing_ctx: "AdCPTestContext | None" = None,
 ) -> list[tuple[str, MediaBuy]]:
     # The internal delivery filter vocabulary is exactly the canonical status
     # set (pending_creatives, pending_start, active, paused, completed,
@@ -943,15 +698,10 @@ def _get_target_media_buys(
     else:
         fetched_buys = repo.get_by_principal(principal_id)
 
-    # Filter on the persisted status (authoritative), date-refined against the
-    # SAME clock the reported status uses (_simulation_clock) so a time-simulation
-    # query cannot filter out a buy the display path would report as matching.
-    ctx = testing_ctx or AdCPTestContext()
-    default_dt = utc_flight_start(reference_date)
-
+    # Filter on the persisted status (authoritative), date-refined against the same
+    # reference date the reported status uses.
     def _matches(buy: MediaBuy) -> bool:
-        clock, simulate = _simulation_clock(buy, ctx, default_dt)
-        return resolve_canonical_status(buy, clock.date(), simulate=simulate) in filter_statuses
+        return resolve_canonical_status(buy, reference_date) in filter_statuses
 
     return [(buy.media_buy_id, buy) for buy in fetched_buys if _matches(buy)]
 
@@ -1180,21 +930,41 @@ def _build_device_type_breakdown(
     return limited, truncated
 
 
+def _package_pricing(
+    package_id: str, pricing_info: dict[str, Any] | None, pricing_option: PricingOption | None
+) -> dict[str, Any]:
+    """The three pricing fields the pin REQUIRES on every ``by_package`` entry.
+
+    ``get-media-buy-delivery-response.json`` lists ``pricing_model``, ``rate`` and
+    ``currency`` in the item's ``required`` set and types all three non-nullable, so a
+    delivery report that cannot state them is not a delivery report. This resolves them from
+    the two sources the caller has already looked up, in order of specificity:
+
+    1. ``MediaPackage.package_config["pricing_info"]`` -- what was agreed for THIS package;
+    2. the ``PricingOption`` row the package's ``pricing_option_id`` names -- the product's
+       terms, which the same block already trusts for ``pricing_option.rate`` when it
+       derives clicks from spend.
+
+    Raises rather than defaulting. The call site used to read only source 1 and pass ``None``
+    for all three when it was absent; the model widened them to accept it, the SDK base's
+    ``exclude_none=True`` then dropped the keys, and every buyer got a schema-invalid
+    document. A seller that cannot say what a package cost must say so (GH #2130,
+    salesagent-ioxoc), not emit a report that looks complete.
+    """
+    for source in (pricing_info, pricing_option):
+        if source is None:
+            continue
+        get = source.get if isinstance(source, dict) else lambda k, _s=source: getattr(_s, k, None)
+        model, rate, currency = get("pricing_model"), get("rate"), get("currency")
+        if model is not None and rate is not None and currency is not None:
+            return {"pricing_model": model, "rate": float(rate), "currency": currency}
+    raise AdCPInternalError(details=EntityRefDetails(package_id=package_id))
+
+
 def _get_pricing_options(
     pricing_option_ids: list[str], tenant_id: str, product_repo: ProductRepository
 ) -> dict[str, PricingOption]:
-    # pricing_option_ids are synthetic strings like "cpm_usd_fixed" generated by
-    # product_conversion.py.  The PricingOption table has no pricing_option_id column;
-    # the synthetic ID is derived from (pricing_model, currency, is_fixed).
-    # We fetch all tenant pricing options and match by reconstructing the synthetic ID.
-    string_ids = set(pricing_option_ids)
-    if not string_ids:
+    wanted = set(pricing_option_ids)
+    if not wanted:
         return {}
-    all_options = product_repo.get_all_pricing_options()
-    result: dict[str, PricingOption] = {}
-    for po in all_options:
-        fixed_str = "fixed" if po.is_fixed else "auction"
-        synthetic_id = f"{po.pricing_model}_{po.currency.lower()}_{fixed_str}"
-        if synthetic_id in string_ids:
-            result[synthetic_id] = po
-    return result
+    return {po.pricing_option_id: po for po in product_repo.get_all_pricing_options() if po.pricing_option_id in wanted}

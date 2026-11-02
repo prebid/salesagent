@@ -1,20 +1,41 @@
-"""
-Unit tests proving ALL adapters now return packages with package_id correctly.
+"""Every adapter maps the ad server's response back onto the packages it was asked to place.
 
-Tests that Kevel, Triton, and Xandr adapters all return packages with package_id,
-fixing the "Adapter did not return package_id" error.
+One obligation, three adapters: whatever Kevel, Triton or Xandr calls its unit of
+delivery (a flight, a flight, a line item), ``create_media_buy`` must hand the tool back
+one package per requested package, under the ids the request used — none dropped, none
+duplicated, none invented.
+
+This file used to be titled "proving ALL adapters now return packages with package_id,
+fixing the 'Adapter did not return package_id' error", and each test asserted
+``packages is not None``, ``isinstance(packages, list)`` and a per-package
+``hasattr(pkg, "package_id")``. None of those can fail any more: the carrier split made
+``AdapterCreateResult.packages`` a required ``list[ResponsePackage]`` whose
+``package_id`` is a required ``str``, so pydantic refuses such a result at construction.
+The bug became a type invariant, and the assertions that named it graded pydantic.
+
+Two other tests are gone with them. Each adapter had a second test that built it without
+its required config (Kevel without ``network_id``, Triton without ``auth_token``) to
+reach a dry-run branch that answered without calling the vendor. No such branch exists —
+both fields are required at construction — so those tests asserted the same package-id
+obligation as their live siblings through a mode the design does not have. The refusal
+they now run into is graded below instead.
 """
 
-from datetime import UTC, datetime, timedelta
+from collections.abc import Iterator
+from contextlib import contextmanager
+from datetime import datetime, timedelta
+from decimal import Decimal
 from unittest.mock import Mock, patch
 
 import pytest
 
+from src.adapters.base import AdapterCreateRequest
 from src.adapters.kevel import Kevel
 from src.adapters.triton_digital import TritonDigital
 from src.adapters.vendor_http import VendorHttpClient
 from src.adapters.xandr import XandrAdapter
-from src.core.schemas import CreateMediaBuyRequest, FormatId, MediaPackage
+from src.core.exceptions import AdCPConfigurationError
+from src.core.schemas import FormatId, MediaPackage
 
 
 @pytest.fixture
@@ -28,22 +49,14 @@ def mock_principal():
 
 @pytest.fixture
 def sample_request():
-    """Sample CreateMediaBuyRequest."""
-    from tests.helpers.adcp_factories import create_test_package_request
+    """What the create path hands an adapter.
 
-    start_time = datetime.now(UTC)
-    end_time = start_time + timedelta(days=30)
-    # adcp 3.6.0: brand_manifest → brand (BrandReference with domain field)
-    return CreateMediaBuyRequest(
-        brand={"domain": "testbrand.com"},
-        idempotency_key="unit-test-key-adapters-0001",
-        packages=[
-            create_test_package_request(product_id="prod_123"),
-            create_test_package_request(product_id="prod_456"),
-        ],
-        start_time=start_time,
-        end_time=end_time,
-    )
+    The carrier, not a ``CreateMediaBuyRequest``: an adapter takes the buy to place.
+    ``total_budget`` is already summed by the caller (the tool sums the request's
+    packages; the approval replay reads the row's column), so an adapter that divides
+    by it — Xandr's daily-budget split — gets a number rather than a null.
+    """
+    return AdapterCreateRequest(brand={"domain": "testbrand.com"}, total_budget=Decimal("10000.00"))
 
 
 @pytest.fixture
@@ -69,280 +82,133 @@ def sample_packages():
     ]
 
 
-class TestKevelAdapterPackages:
-    """Test Kevel adapter returns packages correctly."""
-
-    def test_kevel_returns_packages_with_package_ids(self, mock_principal, sample_request, sample_packages):
-        """Kevel adapter must return packages with package_id for each package."""
-        # Arrange
-        config = {"api_key": "test_key", "base_url": "https://api.kevel.com"}
-
-        # Mock principal to return advertiser ID
-        mock_principal.get_adapter_id = Mock(return_value="123")
-
-        adapter = Kevel(
-            config=config,
-            principal=mock_principal,
-            dry_run=True,  # Use dry_run to avoid API calls
-            tenant_id="tenant_123",
-        )
-
-        # Act
-        start_time = datetime.now()
-        end_time = start_time + timedelta(days=30)
-        response = adapter.create_media_buy(
-            request=sample_request, packages=sample_packages, start_time=start_time, end_time=end_time
-        )
-
-        # Assert - Response must have packages field
-        assert response.packages is not None, "Kevel response must have packages field"
-        assert isinstance(response.packages, list), "Kevel packages must be a list"
-
-        # Assert - Must have same number of packages as input
-        assert len(response.packages) == len(sample_packages), f"Expected {len(sample_packages)} packages"
-
-        # Assert - Each package must have package_id
-        for i, pkg in enumerate(response.packages):
-            assert hasattr(pkg, "package_id") and pkg.package_id is not None, f"Kevel package {i} missing package_id"
-
-        # Assert - Package IDs must match input packages
-        returned_ids = {pkg.package_id for pkg in response.packages}
-        expected_ids = {pkg.package_id for pkg in sample_packages}
-        assert returned_ids == expected_ids, f"Package IDs don't match. Got {returned_ids}, expected {expected_ids}"
-
-    def test_kevel_live_mode_returns_packages_with_flight_ids(self, mock_principal, sample_request, sample_packages):
-        """Kevel adapter in live mode must return packages with platform_line_item_id."""
-        # Arrange
-        config = {
-            "api_key": "test_key",
-            "base_url": "https://api.kevel.com",
-            "network_id": "456",  # Required for live mode
-        }
-
-        # Mock principal to return advertiser ID
-        mock_principal.get_adapter_id = Mock(return_value="123")
-
-        adapter = Kevel(
-            config=config,
-            principal=mock_principal,
-            dry_run=False,  # Live mode
-            tenant_id="tenant_123",
-        )
-
-        # Swap the adapter's frozen vendor client for a Mock: production no
-        # longer calls requests.post, and the client's .call() returns an
-        # OutboundResult whose .json() is the only thing these paths read.
-        # A frozen slotted dataclass refuses patch.object on an instance
-        # attribute, so the client itself is replaced rather than patched.
-        # What this test grades is unchanged — every returned package must
-        # carry a package_id.
-        adapter._vendor = Mock(spec=VendorHttpClient)
-
-        # Mock campaign creation
-        campaign_response = Mock()
-        campaign_response.json.return_value = {"Id": 999}
-
-        # Mock flight creation (one per package)
-        flight_response_1 = Mock()
-        flight_response_1.json.return_value = {"Id": 111}
-
-        flight_response_2 = Mock()
-        flight_response_2.json.return_value = {"Id": 222}
-
-        # Return campaign response first, then flight responses
-        adapter._vendor.call.side_effect = [campaign_response, flight_response_1, flight_response_2]
-
-        # Act
-        start_time = datetime.now()
-        end_time = start_time + timedelta(days=30)
-        response = adapter.create_media_buy(
-            request=sample_request, packages=sample_packages, start_time=start_time, end_time=end_time
-        )
-
-        # Assert - Each package must have package_id (AdCP spec requirement)
-        # Note: platform_line_item_id is internal tracking data, not part of AdCP Package spec
-        for i, pkg in enumerate(response.packages):
-            assert hasattr(pkg, "package_id") and pkg.package_id is not None, f"Package {i} missing package_id"
-
-        # Assert - Should have expected number of packages
-        assert len(response.packages) == 2, f"Expected 2 packages, got {len(response.packages)}"
+def _vendor_reply(payload: dict) -> Mock:
+    """One ``VendorHttpClient.call`` result — these paths read only ``.json()``."""
+    reply = Mock()
+    reply.json.return_value = payload
+    return reply
 
 
-class TestTritonAdapterPackages:
-    """Test Triton adapter returns packages correctly."""
+@contextmanager
+def _kevel(mock_principal) -> Iterator[Kevel]:
+    """Kevel over a stubbed vendor client: a campaign, then one flight per package.
 
-    def test_triton_returns_packages_with_package_ids(self, mock_principal, sample_request, sample_packages):
-        """Triton adapter must return packages with package_id for each package."""
-        # Arrange
-        config = {"api_key": "test_key", "base_url": "https://api.tritondigital.com"}
+    The client is REPLACED rather than patched: it is a frozen slotted dataclass, so
+    ``patch.object`` on the instance attribute is refused.
+    """
+    mock_principal.get_adapter_id = Mock(return_value="123")
+    adapter = Kevel(
+        config={"api_key": "test_key", "base_url": "https://api.kevel.com", "network_id": "456"},
+        principal=mock_principal,
+        tenant_id="tenant_123",
+    )
+    adapter._vendor = Mock(spec=VendorHttpClient)
+    adapter._vendor.call.side_effect = [
+        _vendor_reply({"Id": 999}),
+        _vendor_reply({"Id": 111}),
+        _vendor_reply({"Id": 222}),
+    ]
+    yield adapter
 
-        # Mock principal to return advertiser ID
-        mock_principal.get_adapter_id = Mock(return_value="123")
 
-        adapter = TritonDigital(
-            config=config,
-            principal=mock_principal,
-            dry_run=True,  # Use dry_run to avoid API calls
-            tenant_id="tenant_123",
-        )
-
-        # Act
-        start_time = datetime.now()
-        end_time = start_time + timedelta(days=30)
-        response = adapter.create_media_buy(
-            request=sample_request, packages=sample_packages, start_time=start_time, end_time=end_time
-        )
-
-        # Assert - Response must have packages field
-        assert response.packages is not None, "Triton response must have packages field"
-        assert isinstance(response.packages, list), "Triton packages must be a list"
-
-        # Assert - Must have same number of packages as input
-        assert len(response.packages) == len(sample_packages), f"Expected {len(sample_packages)} packages"
-
-        # Assert - Each package must have package_id
-        for i, pkg in enumerate(response.packages):
-            assert hasattr(pkg, "package_id") and pkg.package_id is not None, f"Triton package {i} missing package_id"
-
-        # Assert - Package IDs must match input packages
-        returned_ids = {pkg.package_id for pkg in response.packages}
-        expected_ids = {pkg.package_id for pkg in sample_packages}
-        assert returned_ids == expected_ids, f"Package IDs don't match. Got {returned_ids}, expected {expected_ids}"
-
-    def test_triton_live_mode_returns_packages_with_flight_ids(self, mock_principal, sample_request, sample_packages):
-        """Triton adapter in live mode must return packages with platform_line_item_id."""
-        # Arrange
-        config = {
+@contextmanager
+def _triton(mock_principal) -> Iterator[TritonDigital]:
+    """Triton over a stubbed vendor client, same shape as Kevel's with lowercase ids."""
+    mock_principal.get_adapter_id = Mock(return_value="123")
+    adapter = TritonDigital(
+        config={
             "api_key": "test_key",
             "base_url": "https://api.tritondigital.com",
-            "auth_token": "test_auth_token",  # Required for live mode
-        }
+            "auth_token": "test_auth_token",
+        },
+        principal=mock_principal,
+        tenant_id="tenant_123",
+    )
+    adapter._vendor = Mock(spec=VendorHttpClient)
+    adapter._vendor.call.side_effect = [
+        _vendor_reply({"id": 888}),
+        _vendor_reply({"id": 333}),
+        _vendor_reply({"id": 444}),
+    ]
+    yield adapter
 
-        # Mock principal to return advertiser ID
-        mock_principal.get_adapter_id = Mock(return_value="123")
 
-        adapter = TritonDigital(
-            config=config,
+@contextmanager
+def _xandr(mock_principal) -> Iterator[XandrAdapter]:
+    """Xandr over a stubbed ``_make_request``: an insertion order, then two line items.
+
+    Only ``create_media_buy`` has been moved to the current adapter API (see the notes
+    in ``src/adapters/xandr.py``), so the class is still abstract and the remaining
+    abstract methods are stubbed to let it be built at all.
+    """
+    mock_principal.platform_mappings = {"xandr": {"advertiser_id": "789"}}
+    with patch.multiple("src.adapters.xandr.XandrAdapter", __abstractmethods__=set()):
+        adapter = XandrAdapter(
+            config={
+                "api_endpoint": "https://api.appnexus.com",
+                "username": "test_user",
+                "password": "test_pass",
+                "member_id": "123",
+            },
             principal=mock_principal,
-            dry_run=False,  # Live mode
-            tenant_id="tenant_123",
+            tenant_id="test_tenant",
         )
+        adapter.add_creative_assets = Mock()
+        adapter.associate_creatives = Mock()
+        adapter.check_media_buy_status = Mock()
+        adapter.update_media_buy_performance_index = Mock()
+        adapter._log_operation = Mock()
+        adapter.token = "test_token"
+        adapter.token_expiry = datetime.now() + timedelta(hours=2)
+        with patch.object(adapter, "_make_request") as make_request:
+            make_request.side_effect = [
+                {"response": {"insertion-order": {"id": 555}}},
+                {"response": {"line-item": {"id": 666}}},
+                {"response": {"line-item": {"id": 777}}},
+            ]
+            yield adapter
 
-        # Swap the adapter's frozen vendor client for a Mock: production no
-        # longer calls requests.post, and the client's .call() returns an
-        # OutboundResult whose .json() is the only thing these paths read.
-        # A frozen slotted dataclass refuses patch.object on an instance
-        # attribute, so the client itself is replaced rather than patched.
-        # What this test grades is unchanged — every returned package must
-        # carry a package_id.
-        adapter._vendor = Mock(spec=VendorHttpClient)
 
-        # Mock campaign creation
-        campaign_response = Mock()
-        campaign_response.json.return_value = {"id": 888}
+@pytest.mark.parametrize("build_adapter", [_kevel, _triton, _xandr], ids=["kevel", "triton", "xandr"])
+def test_adapter_returns_one_package_per_requested_package(
+    build_adapter, mock_principal, sample_request, sample_packages
+):
+    """The ad server's response is mapped back onto the requested package ids."""
+    start_time = datetime.now()
+    end_time = start_time + timedelta(days=30)
 
-        # Mock flight creation (one per package)
-        flight_response_1 = Mock()
-        flight_response_1.json.return_value = {"id": 333}
-
-        flight_response_2 = Mock()
-        flight_response_2.json.return_value = {"id": 444}
-
-        # Return campaign response first, then flight responses
-        adapter._vendor.call.side_effect = [campaign_response, flight_response_1, flight_response_2]
-
-        # Act
-        start_time = datetime.now()
-        end_time = start_time + timedelta(days=30)
+    with build_adapter(mock_principal) as adapter:
         response = adapter.create_media_buy(
             request=sample_request, packages=sample_packages, start_time=start_time, end_time=end_time
         )
 
-        # Assert - Each package must have package_id (AdCP spec requirement)
-        # Note: platform_line_item_id is internal tracking data, not part of AdCP Package spec
-        for i, pkg in enumerate(response.packages):
-            assert hasattr(pkg, "package_id") and pkg.package_id is not None, f"Package {i} missing package_id"
-
-        # Assert - Should have expected number of packages (matches number of flights created)
-        assert len(response.packages) == 2, f"Expected 2 packages, got {len(response.packages)}"
+    assert len(response.packages) == len(sample_packages)
+    assert {pkg.package_id for pkg in response.packages} == {pkg.package_id for pkg in sample_packages}
 
 
-class TestXandrAdapterPackages:
-    """Test Xandr adapter returns packages correctly.
+def test_kevel_without_a_network_id_refuses_to_be_built(mock_principal):
+    """No network id, no Kevel adapter: there is no offline mode to fall back to."""
+    mock_principal.get_adapter_id = Mock(return_value="123")
 
-    NOTE: Xandr adapter is marked for full refactor (see src/adapters/xandr.py comments).
-    Only create_media_buy has been updated to new API, other methods still use old schemas.
-    Testing is limited until full refactor is complete.
-    """
+    with pytest.raises(AdCPConfigurationError) as exc:
+        Kevel(
+            config={"api_key": "test_key", "base_url": "https://api.kevel.com"},
+            principal=mock_principal,
+            tenant_id="tenant_123",
+        )
 
-    def test_xandr_returns_packages_with_package_ids_and_line_item_ids(
-        self, mock_principal, sample_request, sample_packages
-    ):
-        """Xandr adapter must return packages with package_id and platform_line_item_id."""
-        # Arrange
-        config = {
-            "api_endpoint": "https://api.appnexus.com",
-            "username": "test_user",
-            "password": "test_pass",
-            "member_id": "123",
-        }
+    assert exc.value.field == "network_id"
 
-        # Mock principal platform_mappings
-        mock_principal.platform_mappings = {"xandr": {"advertiser_id": "789"}}
 
-        # Create adapter - need to mock abstract methods to allow instantiation
-        with patch.multiple(
-            "src.adapters.xandr.XandrAdapter",
-            __abstractmethods__=set(),  # Allow instantiation of abstract class
-        ):
-            adapter = XandrAdapter(config=config, principal=mock_principal, tenant_id="test_tenant")
-            # advertiser_id is set automatically from platform_mappings
+def test_triton_without_an_auth_token_refuses_to_be_built(mock_principal):
+    """No auth token, no Triton adapter: there is no offline mode to fall back to."""
+    mock_principal.get_adapter_id = Mock(return_value="123")
 
-            # Mock abstract methods
-            adapter.add_creative_assets = Mock()
-            adapter.associate_creatives = Mock()
-            adapter.check_media_buy_status = Mock()
-            adapter.update_media_buy_performance_index = Mock()
-            adapter._log_operation = Mock()  # Mock logging method
+    with pytest.raises(AdCPConfigurationError) as exc:
+        TritonDigital(
+            config={"api_key": "test_key", "base_url": "https://api.tritondigital.com"},
+            principal=mock_principal,
+            tenant_id="tenant_123",
+        )
 
-            # Mock authentication
-            adapter.token = "test_token"
-            adapter.token_expiry = datetime.now() + timedelta(hours=2)
-
-            # Mock _make_request to simulate IO and line item creation
-            with patch.object(adapter, "_make_request") as mock_request:
-                # Mock insertion order creation
-                io_response = {"response": {"insertion-order": {"id": 555}}}
-
-                # Mock line item creation (one per package)
-                li_response_1 = {"response": {"line-item": {"id": 666}}}
-                li_response_2 = {"response": {"line-item": {"id": 777}}}
-
-                # Return IO response first, then line item responses
-                mock_request.side_effect = [io_response, li_response_1, li_response_2]
-
-                # Act
-                start_time = datetime.now()
-                end_time = start_time + timedelta(days=30)
-                response = adapter.create_media_buy(
-                    request=sample_request, packages=sample_packages, start_time=start_time, end_time=end_time
-                )
-
-            # Assert - Response must have packages field
-            assert response.packages is not None, "Xandr response must have packages field"
-            assert isinstance(response.packages, list), "Xandr packages must be a list"
-
-            # Assert - Must have same number of packages as input
-            assert len(response.packages) == len(sample_packages), f"Expected {len(sample_packages)} packages"
-
-            # Assert - Each package must have package_id (AdCP spec requirement)
-            # Note: platform_line_item_id is internal tracking data, not part of AdCP Package spec
-            for i, pkg in enumerate(response.packages):
-                assert hasattr(pkg, "package_id") and pkg.package_id is not None, (
-                    f"Xandr package {i} missing package_id"
-                )
-
-            # Assert - Package IDs must match input packages
-            returned_ids = {pkg.package_id for pkg in response.packages}
-            expected_ids = {pkg.package_id for pkg in sample_packages}
-            assert returned_ids == expected_ids, f"Package IDs don't match. Got {returned_ids}, expected {expected_ids}"
+    assert exc.value.field == "auth_token"

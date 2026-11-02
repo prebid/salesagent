@@ -16,38 +16,30 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 @pytest.fixture
 def mock_api_key_auth(integration_db):
-    """Mock API key authentication to always pass.
+    """A known-good tenant-management API key, stored the way production stores one.
 
-    This fixture bypasses the require_tenant_management_api_key decorator
-    by creating a valid API key in the database that all tests can use.
+    The table keeps sha256(key) plus a display prefix, never the key, so this fixture
+    stores the digest of a key it alone knows and hands the plaintext to the test. A
+    fixture that wrote the plaintext into config_value would authenticate nothing —
+    the decorator hashes what the request presents (salesagent-3cs7o.18).
 
-    API key is provisioned via TENANT_MANAGEMENT_API_KEY env var in production.
+    In production the key is either minted through sync_api/auth_helpers or supplied
+    via the TENANT_MANAGEMENT_API_KEY env var.
     """
-    from datetime import UTC, datetime
-
+    from src.core.credentials import hash_token, token_prefix
     from src.core.database.database_session import get_db_session
-    from src.core.database.models import TenantManagementConfig
+    from src.core.database.repositories.tenant_management_config import TenantManagementConfigRepository
 
-    # Create a test API key in the database
     test_api_key = "sk-test-integration-key"
 
     with get_db_session() as session:
-        # Check if key already exists
-        from sqlalchemy import select
-
-        stmt = select(TenantManagementConfig).filter_by(config_key="tenant_management_api_key")
-        existing = session.scalars(stmt).first()
-
-        if not existing:
-            config = TenantManagementConfig(
-                config_key="tenant_management_api_key",
-                config_value=test_api_key,
-                description="Test API key for integration tests",
-                updated_at=datetime.now(UTC),
-                updated_by="pytest",
-            )
-            session.add(config)
-            session.commit()
+        TenantManagementConfigRepository(session).store_api_key(
+            "tenant_management_api_key",
+            digest=hash_token(test_api_key),
+            prefix=token_prefix(test_api_key),
+            description="Test API key for integration tests",
+        )
+        session.commit()
 
     return test_api_key
 
@@ -81,6 +73,8 @@ def test_tenant(integration_db):
             tenant_id="test_tenant",
             name="Test Tenant",
             subdomain="test",
+            # A tenant declares the host it is served at; the column refuses NULL.
+            virtual_host="test-tenant.adcp.test",
             ad_server="mock",
             enable_axe_signals=True,
             auto_approve_format_ids=[],
@@ -121,6 +115,9 @@ class TestTenantManagementAPIIntegration:
         tenant_data = {
             "name": "Test Sports Publisher",
             "subdomain": "test-sports",
+            # Required: a tenant declares the host it is served at, and the API refuses a
+            # payload that names none (400) before it reaches anything these cases grade.
+            "virtual_host": "test-sports.adcp.test",
             "ad_server": "google_ad_manager",
             "gam_refresh_token": "1//test-refresh-token",
             "creator_email": "test@sports.com",  # Required for access control
@@ -139,7 +136,8 @@ class TestTenantManagementAPIIntegration:
         assert "tenant_id" in data
         assert data["name"] == "Test Sports Publisher"
         assert data["subdomain"] == "test-sports"
-        assert "admin_token" in data
+        # "admin_token" is no longer returned: 84a86e019 dropped the tenant admin
+        # credential, so the create response carries only the principal token below.
         assert "admin_ui_url" in data
         assert "default_principal_token" in data
 
@@ -150,6 +148,7 @@ class TestTenantManagementAPIIntegration:
         tenant_data = {
             "name": "Test News Publisher",
             "subdomain": "test-news",
+            "virtual_host": "test-news.adcp.test",
             "ad_server": "google_ad_manager",
             "gam_refresh_token": "1//test-refresh-token-full",
             "gam_network_code": "123456789",
@@ -172,6 +171,92 @@ class TestTenantManagementAPIIntegration:
         # Verify response
         assert data["name"] == "Test News Publisher"
         assert data["subdomain"] == "test-news"
+
+    def test_authorized_lists_persist_through_create_and_update(self, client, mock_api_key_auth):
+        """Authorized lists survive the round trip as real arrays.
+
+        Both writers used to pass ``json.dumps(list)`` into the JSONB columns;
+        JSONType's bind coerced that string to ``{}``, which the GET endpoint
+        masked back to ``[]`` — so the values silently vanished (and on a
+        migrated schema, the tenants array CHECK constraints made the write a
+        500 instead). The GET assertions below fail against either behavior.
+        """
+        create_response = client.post(
+            "/api/v1/tenant-management/tenants",
+            headers={"X-Tenant-Management-API-Key": mock_api_key_auth},
+            json={
+                "name": "Test AuthList Publisher",
+                "subdomain": "test-authlist",
+                "virtual_host": "test-authlist.adcp.test",
+                "ad_server": "mock",
+                "authorized_emails": ["ops@authlist.com"],
+                "authorized_domains": ["authlist.com"],
+            },
+        )
+        assert create_response.status_code == 201
+        tenant_id = create_response.json["tenant_id"]
+
+        detail = client.get(
+            f"/api/v1/tenant-management/tenants/{tenant_id}",
+            headers={"X-Tenant-Management-API-Key": mock_api_key_auth},
+        ).json
+        assert detail["settings"]["authorized_emails"] == ["ops@authlist.com"]
+        assert detail["settings"]["authorized_domains"] == ["authlist.com"]
+
+        update_response = client.put(
+            f"/api/v1/tenant-management/tenants/{tenant_id}",
+            headers={"X-Tenant-Management-API-Key": mock_api_key_auth},
+            json={
+                "authorized_emails": ["ops@authlist.com", "eng@authlist.com"],
+                "authorized_domains": ["authlist.com", "eng.authlist.com"],
+            },
+        )
+        assert update_response.status_code == 200
+
+        detail = client.get(
+            f"/api/v1/tenant-management/tenants/{tenant_id}",
+            headers={"X-Tenant-Management-API-Key": mock_api_key_auth},
+        ).json
+        assert detail["settings"]["authorized_emails"] == ["ops@authlist.com", "eng@authlist.com"]
+        assert detail["settings"]["authorized_domains"] == ["authlist.com", "eng.authlist.com"]
+
+    def test_duplicate_subdomain_returns_409(self, client, mock_api_key_auth):
+        """A subdomain that is already taken answers 409, not 500.
+
+        This route had no pre-check at all: its only duplicate branch matched
+        ``"UNIQUE constraint failed: tenants.subdomain"``, which is SQLite
+        wording. This project is PostgreSQL-exclusive, so that branch was dead
+        and EVERY duplicate subdomain returned ``500 {"error": "Failed to create
+        tenant"}`` — race or no race. No race harness here: asserting a race
+        against a defect that is not a race would grade nothing.
+        """
+        tenant_data = {
+            "name": "First Claimant",
+            "subdomain": "contested-subdomain",
+            "virtual_host": "first-claimant.adcp.test",
+            "ad_server": "mock",
+            "creator_email": "first@example.com",
+        }
+        headers = {"X-Tenant-Management-API-Key": mock_api_key_auth}
+
+        assert client.post("/api/v1/tenant-management/tenants", headers=headers, json=tenant_data).status_code == 201
+
+        # A DIFFERENT virtual_host on the second claim, deliberately: ix_tenants_virtual_host
+        # is UNIQUE too, so reusing the first host would collide on THAT index and this case
+        # would grade the wrong constraint. The subdomain must be the only thing contested.
+        response = client.post(
+            "/api/v1/tenant-management/tenants",
+            headers=headers,
+            json={
+                **tenant_data,
+                "name": "Second Claimant",
+                "virtual_host": "second-claimant.adcp.test",
+                "creator_email": "second@example.com",
+            },
+        )
+
+        assert response.status_code == 409
+        assert response.json == {"error": "Subdomain already exists"}
 
     def test_list_tenants(self, client, mock_api_key_auth, test_tenant):
         """Test listing all tenants."""
@@ -198,6 +283,7 @@ class TestTenantManagementAPIIntegration:
             json={
                 "name": "Test Detail Publisher",
                 "subdomain": "test-detail",
+                "virtual_host": "test-detail.adcp.test",
                 "ad_server": "google_ad_manager",
                 "gam_refresh_token": "1//test-detail-token",
                 "creator_email": "test@detail.com",
@@ -235,6 +321,7 @@ class TestTenantManagementAPIIntegration:
             json={
                 "name": "Test Update Publisher",
                 "subdomain": "test-update",
+                "virtual_host": "test-update.adcp.test",
                 "ad_server": "google_ad_manager",
                 "gam_refresh_token": "1//test-update-token",
                 "creator_email": "test@update.com",
@@ -279,6 +366,7 @@ class TestTenantManagementAPIIntegration:
             json={
                 "name": "Test Delete Publisher",
                 "subdomain": "test-delete",
+                "virtual_host": "test-delete.adcp.test",
                 "ad_server": "mock",
                 "creator_email": "test@delete.com",
             },

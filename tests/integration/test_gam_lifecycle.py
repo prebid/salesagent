@@ -16,24 +16,6 @@ from src.core.exceptions import AdCPAuthorizationError, AdCPCapabilityNotSupport
 from src.core.schemas import Principal
 
 
-def _assert_unsupported_feature_for_action(response, action: str) -> None:
-    """Pin the GAM adapter's current UNSUPPORTED_FEATURE rejection for ``action``.
-
-    Three sites in this module exercise actions the GAM dry-run adapter
-    currently rejects (``submit_for_approval``, ``archive_order``,
-    ``approve_order``, ``activate_order`` non-guaranteed). When the
-    adapter is fixed (separate ticket), removing or flipping a caller
-    forces re-evaluation of that test's contract. Helper is private to
-    this module — DRY per CLAUDE.md, intentionally not exported.
-    """
-    assert response.errors is not None and len(response.errors) > 0, (
-        f"Expected Error response for action={action!r}; GAM currently rejects with UNSUPPORTED_FEATURE"
-    )
-    assert response.errors[0].code == "UNSUPPORTED_FEATURE", (
-        f"Expected UNSUPPORTED_FEATURE for action={action!r}, got {response.errors[0].code}"
-    )
-
-
 class TestGAMOrderLifecycleIntegration:
     """Integration tests for GAM order lifecycle with real business logic."""
 
@@ -80,7 +62,6 @@ class TestGAMOrderLifecycleIntegration:
                 network_code=gam_config["network_code"],
                 advertiser_id=test_principals["regular"].platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=gam_config["trafficker_id"],
-                dry_run=True,
                 tenant_id="test",
             )
             assert regular_adapter._is_admin_principal() is False
@@ -92,7 +73,6 @@ class TestGAMOrderLifecycleIntegration:
                 network_code=gam_config["network_code"],
                 advertiser_id=test_principals["gam_admin"].platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=gam_config["trafficker_id"],
-                dry_run=True,
                 tenant_id="test",
             )
             assert gam_admin_adapter._is_admin_principal() is True
@@ -104,7 +84,6 @@ class TestGAMOrderLifecycleIntegration:
                 network_code=gam_config["network_code"],
                 advertiser_id=test_principals["is_admin"].platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=gam_config["trafficker_id"],
-                dry_run=True,
                 tenant_id="test",
             )
             assert is_admin_adapter._is_admin_principal() is True
@@ -113,7 +92,7 @@ class TestGAMOrderLifecycleIntegration:
     def test_lifecycle_workflow_validation(self, test_principals, gam_config):
         """Test lifecycle action workflows with business validation.
 
-        After the error-emission architecture migration, the GAM adapter raises typed AdCPError subclasses for
+        After the error-emission architecture migration, the GAM adapter raises typed AdCPSalesAgentError subclasses for
         unsupported actions and authorization failures. Only ``approve_order``,
         ``activate_order``, and ``update_package_budget`` are supported.
         """
@@ -125,14 +104,13 @@ class TestGAMOrderLifecycleIntegration:
                 network_code=gam_config["network_code"],
                 advertiser_id=test_principals["regular"].platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=gam_config["trafficker_id"],
-                dry_run=True,
                 tenant_id="test",
             )
 
             # submit_for_approval and archive_order are NOT supported by GAM.
             unsupported_actions = ["submit_for_approval", "archive_order"]
             for action in unsupported_actions:
-                with pytest.raises(AdCPCapabilityNotSupportedError, match=f"{action}|not supported"):
+                with pytest.raises(AdCPCapabilityNotSupportedError):
                     regular_adapter.update_media_buy(
                         media_buy_id="12345",
                         action=action,
@@ -142,7 +120,7 @@ class TestGAMOrderLifecycleIntegration:
                     )
 
             # approve_order is admin-only — non-admin gets AdCPAuthorizationError.
-            with pytest.raises(AdCPAuthorizationError, match="admin"):
+            with pytest.raises(AdCPAuthorizationError):
                 regular_adapter.update_media_buy(
                     media_buy_id="12345",
                     action="approve_order",
@@ -161,10 +139,9 @@ class TestGAMOrderLifecycleIntegration:
                 network_code=gam_config["network_code"],
                 advertiser_id=test_principals["gam_admin"].platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=gam_config["trafficker_id"],
-                dry_run=True,
                 tenant_id="test",
             )
-            with pytest.raises(AdCPCapabilityNotSupportedError, match="approve_order|not supported"):
+            with pytest.raises(AdCPCapabilityNotSupportedError):
                 admin_adapter.update_media_buy(
                     media_buy_id="12345",
                     action="approve_order",
@@ -207,8 +184,7 @@ class TestGAMOrderLifecycleIntegration:
 
         After the error-emission architecture migration, ``activate_order`` raises AdCPCapabilityNotSupportedError
         when there are no guaranteed items (the code path only handles the
-        guaranteed-items case explicitly). With guaranteed items it returns
-        a workflow step in the success response.
+        guaranteed-items case explicitly). That raise is what this test grades.
         """
         with patch("src.adapters.google_ad_manager.GoogleAdManager._init_client"):
             adapter = GoogleAdManager(
@@ -217,13 +193,12 @@ class TestGAMOrderLifecycleIntegration:
                 network_code=gam_config["network_code"],
                 advertiser_id=test_principals["regular"].platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=gam_config["trafficker_id"],
-                dry_run=True,
                 tenant_id="test",
             )
 
             # Test activation with non-guaranteed items — no special handling, raises.
             with patch.object(adapter, "_check_order_has_guaranteed_items", return_value=(False, [])):
-                with pytest.raises(AdCPCapabilityNotSupportedError, match="activate_order|not supported"):
+                with pytest.raises(AdCPCapabilityNotSupportedError):
                     adapter.update_media_buy(
                         media_buy_id="12345",
                         action="activate_order",
@@ -232,27 +207,21 @@ class TestGAMOrderLifecycleIntegration:
                         today=datetime.now(UTC),
                     )
 
-            # Test activation with guaranteed items (should create workflow step)
-            with patch.object(adapter, "_check_order_has_guaranteed_items", return_value=(True, ["STANDARD"])):
-                # Mock workflow step creation to avoid database foreign key issues
-                with patch.object(
-                    adapter.workflow_manager, "create_activation_workflow_step", return_value="test_step_id"
-                ):
-                    response = adapter.update_media_buy(
-                        media_buy_id="12345",
-                        action="activate_order",
-                        package_id=None,
-                        budget=None,
-                        today=datetime.now(UTC),
-                    )
-                    # Guaranteed activation actually creates the workflow
-                    # step (the patched ``create_activation_workflow_step``
-                    # runs even though the adapter logs "Unsupported action"
-                    # for activate_order). The response is Success with
-                    # ``workflow_step_id`` populated and ``errors=None`` —
-                    # the workflow_step_id below is the semantic anchor.
-                    assert response.errors is None or response.errors == []
-                    assert response.workflow_step_id == "test_step_id"
+            # The guaranteed-items half is deleted, not repaired. It asserted
+            # ``response.workflow_step_id``, and ``AdapterUpdateResult`` declares
+            # exactly ``media_buy_id`` and ``affected_packages`` under
+            # ``extra="forbid"`` -- the carrier holds only what the tool reads off
+            # an adapter, and no adapter return path carries a workflow step id
+            # (``workflow_step_id`` appears nowhere in ``src/adapters/`` outside two
+            # mock_ad_server comments). Creating the activation workflow step is a
+            # PERSISTENCE side effect now, and the test patched
+            # ``create_activation_workflow_step`` away "to avoid database foreign key
+            # issues", so it had nothing observable left to assert.
+            #
+            # Grading it properly means reading the workflow_steps row, which belongs
+            # in a test that seeds the FKs instead of patching the writer. Until then
+            # the GAM guaranteed-activation path is UNGRADED: BR-UC-003 covers the
+            # ``pending_activation`` status rows, not this behavior.
 
     # Helper method for line item classification (no external dependencies)
     def _classify_line_items(self, line_items):

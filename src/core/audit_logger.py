@@ -11,7 +11,6 @@ Implements security-compliant logging with:
 
 import json
 import logging
-import os
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -19,6 +18,7 @@ from typing import Any
 
 from sqlalchemy import select
 
+from src.core.config import RuntimeSettings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AuditLog
 
@@ -37,7 +37,12 @@ from src.core.database.models import AuditLog
 # ADCP_LOG_DIR exists so a process that SHARES its working directory with another
 # process running as a different uid can be pointed somewhere private, instead of
 # the two contending over the same files. Default is unchanged.
-LOG_DIR = Path(os.environ.get("ADCP_LOG_DIR") or "logs")
+#
+# A log directory is a process fact, read once here; the handlers below are built
+# from it at import. Read off RuntimeSettings alone, the way the schema modules read
+# their extra mode: importing this module must not compose the whole Settings.
+_runtime = RuntimeSettings()
+LOG_DIR = _runtime.adcp_log_dir
 
 
 def _ensure_log_dir(directory: Path) -> Path:
@@ -121,7 +126,7 @@ audit_logger.addHandler(error_handler)
 
 # In development, also log to console for debugging
 # In production, the root logger already handles console output with JSON formatting
-if not os.environ.get("FLY_APP_NAME") and not os.environ.get("PRODUCTION"):
+if not _runtime.structured_logging:
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(logging.Formatter(LOG_FORMAT, DATE_FORMAT))
     audit_logger.addHandler(console_handler)
@@ -401,7 +406,7 @@ class AuditLogger:
                     adapter_id=None,  # adapter_id not applicable
                     success=False,  # Security violations are failures
                     error_message=f"Attempted to access resource '{resource_id}' - {reason}",
-                    details=json.dumps({"resource_id": resource_id, "reason": reason}),
+                    details={"resource_id": resource_id, "reason": reason},
                 )
                 db_session.add(audit_log)
                 db_session.commit()

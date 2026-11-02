@@ -113,64 +113,8 @@ class TestListCreativeFormatsNewFilters:
         assert req.name_search == "banner"
 
 
-class TestListCreativeFormatsMCPToolSignature:
-    """Test that MCP tool accepts AdCP-compliant parameter types.
-
-    MCP tools receive JSON primitives, not Pydantic objects. These tests verify
-    that the tool function signature accepts the types that clients actually send.
-    """
-
-    async def test_mcp_tool_accepts_format_ids_as_typed_objects(self):
-        """Test that list_creative_formats MCP tool accepts format_ids as FormatId objects.
-
-        MCP tools use typed signatures for proper schema exposure in tools/list.
-        MCP validates types from JSON input and coerces to the appropriate Pydantic models.
-        The tool then converts these to dicts internally for the request.
-        """
-        from unittest.mock import patch
-
-        from adcp import FormatId
-
-        from src.core.schemas import ListCreativeFormatsResponse
-        from src.core.tools.creative_formats import list_creative_formats
-
-        # MCP validates and coerces JSON to FormatId objects
-        format_ids = [
-            FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_15s_hosted"),
-            FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
-        ]
-
-        # Use a real response model instead of MagicMock — tests behavior, not implementation
-        with patch("src.core.tools.creative_formats._list_creative_formats_impl") as mock_impl:
-            mock_impl.return_value = ListCreativeFormatsResponse(formats=[])
-
-            # This should NOT raise a validation error
-            result = await list_creative_formats(format_ids=format_ids)
-
-            # Verify the impl was called with FormatId objects
-            call_args = mock_impl.call_args
-            req = call_args[0][0]  # First positional arg is the request
-            assert req.format_ids is not None
-            assert len(req.format_ids) == 2
-            # Verify FormatId objects were passed through correctly
-            assert req.format_ids[0].id == "video_15s_hosted"
-            assert req.format_ids[1].id == "display_300x250"
-
-    def test_mcp_tool_format_ids_parameter_type_is_typed(self):
-        """Verify the MCP tool signature uses proper AdCP types for format_ids.
-
-        This ensures the tool exposes typed schemas in tools/list for MCP clients.
-        """
-        import inspect
-
-        from src.core.tools.creative_formats import list_creative_formats
-
-        sig = inspect.signature(list_creative_formats)
-        format_ids_param = sig.parameters["format_ids"]
-
-        # The annotation should be list[FormatId] | None for proper schema exposure
-        # adcp 4.3: FormatId is an alias for FormatReferenceStructuredObject
-        annotation_str = str(format_ids_param.annotation)
-        assert "FormatId" in annotation_str or "FormatReference" in annotation_str, (
-            f"Expected list[FormatId] or list[FormatReferenceStructuredObject], got {annotation_str}"
-        )
+# Nothing here dispatches list_creative_formats with NO HEADERS to watch typed FormatId
+# objects reach the impl: a request presenting no host and no tenant header is REFUSED
+# (CONFIGURATION_ERROR), so that premise describes no request a buyer can make. The filter
+# is graded by BR-UC-005, whose format_ids scenarios assert that it SELECTS on the
+# (agent_url, id) federation pair, on every transport including MCP.

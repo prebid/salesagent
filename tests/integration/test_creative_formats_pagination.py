@@ -12,7 +12,7 @@ import pytest
 from adcp.types import PaginationRequest
 
 from src.core.schemas import Format, FormatId, ListCreativeFormatsRequest
-from tests.factories import TenantFactory
+from tests.factories import CreativeAgentFactory, TenantFactory
 from tests.harness import CreativeFormatsEnv
 
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
@@ -50,26 +50,12 @@ class TestCreativeAgentReferrals:
     Covers: UC-005-MAIN-MCP-13
     """
 
-    @staticmethod
-    def _configure_registry_agents(env):
-        """Configure mock registry to return agent list for _get_tenant_agents."""
-        from src.core.creative_agent_registry import CreativeAgent as RegistryAgent
-
-        mock_agents = [
-            RegistryAgent(
-                agent_url="https://creative.adcontextprotocol.org",
-                name="AdCP Standard Creative Agent",
-                enabled=True,
-                priority=1,
-            ),
-            RegistryAgent(
-                agent_url="https://custom-dco.example.com",
-                name="Custom DCO Agent",
-                enabled=True,
-                priority=2,
-            ),
-        ]
-        env.mock["registry"].return_value._get_tenant_agents.return_value = mock_agents
+    # There is no ``_configure_registry_agents`` helper any more. ``_get_tenant_agents``
+    # is the REAL bound method on the registry mock (tests/harness/creative_formats.py),
+    # deliberately: stubbed, it returned a MagicMock that production walked as an empty
+    # iterable, so every in-process transport answered ``creative_agents: []``. The
+    # referrals now come from the registry's default agent plus the tenant's enabled
+    # ``creative_agents`` rows, which is what a test seeds when it needs a second one.
 
     def test_response_includes_creative_agents(self, integration_db):
         """UC-005-MAIN-MCP-13: response includes creative_agents with agent info."""
@@ -77,7 +63,6 @@ class TestCreativeAgentReferrals:
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
             env.set_registry_formats(formats)
-            self._configure_registry_agents(env)
             response = env.call_impl()
 
         assert response.creative_agents is not None
@@ -89,7 +74,6 @@ class TestCreativeAgentReferrals:
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
             env.set_registry_formats(formats)
-            self._configure_registry_agents(env)
             response = env.call_impl()
 
         assert response.creative_agents is not None
@@ -109,7 +93,6 @@ class TestCreativeAgentReferrals:
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
             env.set_registry_formats(formats)
-            self._configure_registry_agents(env)
             response = env.call_impl()
 
         assert response.creative_agents is not None
@@ -129,7 +112,6 @@ class TestCreativeAgentReferrals:
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
             env.set_registry_formats(formats)
-            self._configure_registry_agents(env)
             response = env.call_impl()
 
         assert response.creative_agents is not None
@@ -137,18 +119,28 @@ class TestCreativeAgentReferrals:
             assert agent.agent_name is not None
 
     def test_multiple_agents_in_referrals(self, integration_db):
-        """UC-005-MAIN-MCP-13: multiple agents appear as referrals."""
+        """UC-005-MAIN-MCP-13: multiple agents appear as referrals.
+
+        The second agent is a real enabled ``creative_agents`` row, which is the
+        only way a tenant gets one: ``_get_tenant_agents`` answers with the
+        registry's default agent plus the tenant's enabled rows.
+        """
         formats = [_make_format("d1", "Display Banner")]
         with CreativeFormatsEnv() as env:
-            TenantFactory(tenant_id="test_tenant")
+            tenant = TenantFactory(tenant_id="test_tenant")
+            CreativeAgentFactory(
+                tenant=tenant,
+                agent_url="https://custom-dco.example.com/mcp",
+                name="Custom DCO Agent",
+                priority=2,
+            )
             env.set_registry_formats(formats)
-            self._configure_registry_agents(env)
             response = env.call_impl()
 
         assert response.creative_agents is not None
         assert len(response.creative_agents) == 2
         urls = {str(a.agent_url) for a in response.creative_agents}
-        assert "https://creative.adcontextprotocol.org/" in urls or "https://creative.adcontextprotocol.org" in urls
+        assert "https://custom-dco.example.com/mcp" in urls, f"the seeded tenant agent is missing from {urls}"
 
 
 # ---------------------------------------------------------------------------

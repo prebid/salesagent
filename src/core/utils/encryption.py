@@ -1,9 +1,10 @@
 """Encryption utilities for sensitive data."""
 
 import logging
-import os
 
 from cryptography.fernet import Fernet, InvalidToken
+
+from src.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +18,7 @@ def _get_encryption_key() -> bytes:
     Raises:
         ValueError: If ENCRYPTION_KEY environment variable is not set.
     """
-    key = os.environ.get("ENCRYPTION_KEY")
+    key = get_settings().auth.encryption_key
     if not key:
         raise ValueError(
             "ENCRYPTION_KEY environment variable not set. "
@@ -95,7 +96,7 @@ def is_encrypted(value: str | None) -> bool:
     try:
         decrypt_api_key(value)
         return True
-    except (ValueError, TypeError, Exception):
+    except Exception:
         return False
 
 

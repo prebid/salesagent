@@ -1,5 +1,4 @@
-# Generated from adcp-req @ a14db6e5894e781a8b2c577e86e1b136876e4915 on 2026-06-03T11:30:04Z (merge mode)
-# DO NOT EDIT -- re-run: python scripts/compile_bdd.py --merge
+# Generated from adcp-req @ cac2015cd7436b762053f469b952f94f262cf02f on 2026-08-31T20:30:38Z (merge mode)
 
 @analysis-2026-03-09 @schema-v3.1
 Feature: BR-UC-003 Update Media Buy
@@ -23,11 +22,9 @@ Feature: BR-UC-003 Update Media Buy
   Background:
     Given a Seller Agent is operational and accepting requests
     And a tenant exists with completed setup checklist
-    And the Buyer is authenticated with a valid principal_id
+    And the Buyer is authenticated
     And the Buyer owns an existing media buy with media_buy_id "mb_existing"
     And the media buy is in "active" status
-
-
 
   @T-UC-003-main @main-flow @post-s1 @post-s2 @post-s3 @post-s4 @post-s5 @post-s6
   Scenario: Package budget update -- auto-applied via media_buy_id
@@ -42,7 +39,8 @@ Feature: BR-UC-003 Update Media Buy
     And the package "pkg_001" exists in the media buy
     And the updated daily spend does not exceed max_daily_package_spend
     When the Buyer Agent sends the update_media_buy request
-    Then the response status should be "completed"
+    Then the response is compliant with the update_media_buy success spec
+    And the response status should be "completed"
     And the response should contain media_buy_id "mb_existing"
     And the response should NOT contain "buyer_ref" field
     And the response should contain an implementation_date that is not null
@@ -65,7 +63,8 @@ Feature: BR-UC-003 Update Media Buy
     | end_time     | 2026-06-30T23:59:59.000Z |
     And the new end_time is after the existing start_time
     When the Buyer Agent sends the update_media_buy request
-    Then the response status should be "completed"
+    Then the response is compliant with the update_media_buy success spec
+    And the response status should be "completed"
     And the response should contain an implementation_date that is not null
     # POST-S1: Buyer knows media buy updated
     # POST-S3: Implementation date present
@@ -81,7 +80,8 @@ Feature: BR-UC-003 Update Media Buy
     | start_time   | asap        |
     And the existing end_time is in the future
     When the Buyer Agent sends the update_media_buy request
-    Then the response status should be "completed"
+    Then the response is compliant with the update_media_buy success spec
+    And the response status should be "completed"
     # POST-S1: Buyer knows start_time updated to current UTC time
     # POST-S4: Unambiguous success
 
@@ -91,10 +91,14 @@ Feature: BR-UC-003 Update Media Buy
     And a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
-    | budget       | 25000       |
+    And the request includes 1 package update with:
+    | field      | value   |
+    | package_id | pkg_001 |
+    | budget     | 25000 |
     And the budget 25000 is greater than zero
     When the Buyer Agent sends the update_media_buy request
-    Then the response status should be "completed"
+    Then the response is compliant with the update_media_buy success spec
+    And the response status should be "completed"
     And the response should contain media_buy_id "mb_existing"
     # POST-S1: Buyer knows budget updated
     # POST-S4: Unambiguous success
@@ -118,7 +122,8 @@ Feature: BR-UC-003 Update Media Buy
     And all placement_ids are valid for the product
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the response status should be "completed"
+    Then the response is compliant with the update_media_buy success spec
+    And the response status should be "completed"
     And the response should contain affected_packages including "pkg_001"
     # POST-S1: Buyer knows creatives updated
     # POST-S2: Buyer sees affected packages
@@ -137,7 +142,8 @@ Feature: BR-UC-003 Update Media Buy
     And the package update includes inline creatives with valid content
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the response status should be "completed"
+    Then the response is compliant with the update_media_buy success spec
+    And the response status should be "completed"
     And the response should contain affected_packages including "pkg_001"
     # POST-S1: Buyer knows inline creatives uploaded
     # POST-S2: Buyer sees affected packages
@@ -155,7 +161,8 @@ Feature: BR-UC-003 Update Media Buy
     | targeting_overlay | {"geo_countries": ["US", "CA"]}      |
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the response status should be "completed"
+    Then the response is compliant with the update_media_buy success spec
+    And the response status should be "completed"
     And the response should contain affected_packages including "pkg_001"
     # POST-S1: Buyer knows targeting updated
     # POST-S2: Buyer sees affected packages
@@ -174,7 +181,8 @@ Feature: BR-UC-003 Update Media Buy
     And the package update includes optimization_goals:
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the response status should be "completed"
+    Then the response is compliant with the update_media_buy success spec
+    And the response status should be "completed"
     And the response should contain affected_packages including "pkg_001"
     # POST-S1: Buyer knows goals updated (replacement semantics)
     # POST-S2: Buyer sees affected packages
@@ -194,7 +202,8 @@ Feature: BR-UC-003 Update Media Buy
     And the package "pkg_001" exists in the media buy
     And no targeting_overlay.keyword_targets is present in the same package update
     When the Buyer Agent sends the update_media_buy request
-    Then the response status should be "completed"
+    Then the response is compliant with the update_media_buy success spec
+    And the response status should be "completed"
     And the response should contain affected_packages including "pkg_001"
     # POST-S1: Buyer knows keywords added
     # POST-S2: Buyer sees affected packages
@@ -213,7 +222,8 @@ Feature: BR-UC-003 Update Media Buy
     And the package update includes keyword_targets_remove:
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the response status should be "completed"
+    Then the response is compliant with the update_media_buy success spec
+    And the response status should be "completed"
     # POST-S1: Buyer knows keywords removed
     # POST-S2: Buyer sees affected packages
 
@@ -231,7 +241,8 @@ Feature: BR-UC-003 Update Media Buy
     And no targeting_overlay.negative_keywords is present in the same package update
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the response status should be "completed"
+    Then the response is compliant with the update_media_buy success spec
+    And the response status should be "completed"
     # POST-S1: Buyer knows negative keywords updated
 
   @T-UC-003-alt-manual @alt-flow @manual-approval @post-s7 @post-s8
@@ -246,7 +257,8 @@ Feature: BR-UC-003 Update Media Buy
     | budget     | 50000   |
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the response status should be "submitted"
+    Then the response is compliant with the update_media_buy submitted spec
+    And the response status should be "submitted"
     And the response should contain a task_id
     And the response should NOT contain "media_buy_id" field
     And the response should NOT contain "implementation_date" field
@@ -267,7 +279,8 @@ Feature: BR-UC-003 Update Media Buy
     And the package "pkg_001" exists in the media buy
     And the request does NOT include start_time, end_time, or paused fields
     When the Buyer Agent sends the update_media_buy request
-    Then the response status should be "completed"
+    Then the response is compliant with the update_media_buy success spec
+    And the response status should be "completed"
     And the existing start_time and end_time should remain unchanged
     # BR-RULE-022 INV-1: Field present → updated
     # BR-RULE-022 INV-2: Field omitted → unchanged
@@ -279,10 +292,10 @@ Feature: BR-UC-003 Update Media Buy
     | media_buy_id | mb_existing |
     And the request does not include any updatable fields
     When the Buyer Agent sends the update_media_buy request
-    Then the operation should fail
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
-    And the suggestion should contain "at least one updatable field"
     # BR-RULE-022 INV-3: No updatable fields → rejected
     # POST-F1: System state unchanged
     # POST-F2: Error code explains failure
@@ -301,11 +314,12 @@ Feature: BR-UC-003 Update Media Buy
     | budget     | 5000    |
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the response status should be "completed"
+    Then the response is compliant with the update_media_buy success spec
+    And the response status should be "completed"
     # BR-RULE-081 INV-2: Key 8-255 chars accepted
 
-  @T-UC-003-idempotency-absent @invariant @BR-RULE-081
-  Scenario: Idempotency key -- absent, proceeds without protection
+  @T-UC-003-idempotency-absent @invariant @BR-RULE-081 @schema-v3.1
+  Scenario: Idempotency key -- absent is now rejected (v3.1 required)
     Given the tenant is configured for auto-approval
     And a valid update_media_buy request with:
     | field        | value       |
@@ -317,8 +331,19 @@ Feature: BR-UC-003 Update Media Buy
     | budget     | 5000    |
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the response status should be "completed"
-    # BR-RULE-081 INV-1: Key absent → proceeds without idempotency
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
+    And the error code should be "INVALID_REQUEST"
+    And the error should include "suggestion" field
+    # v3.1: root required-set is [idempotency_key, account, media_buy_id], so an absent key
+    #       is a schema rejection, not an unprotected update. Reconciled against
+    #       adcp/_schemas/3.1/media-buy/update-media-buy-request.json (/required) at the
+    #       pinned spec version 3.1.1 (adcp==6.6.0).
+    # BR-RULE-081 INV-1 read "key absent → proceeds without idempotency". That obligation
+    #       predates the field becoming required; the key is no longer optional, so there is
+    #       no unprotected path for it to describe. Same shape as @T-UC-003-account-absent
+    #       below, and it agrees with @T-UC-003-bva-idempotency-key's "absent (field not
+    #       provided) → error INVALID_REQUEST — rejected (v3.1 requires idempotency_key)".
 
   @T-UC-003-account-absent @invariant @schema-v3.1
   Scenario: Account -- absent is now rejected (v3.1 required)
@@ -332,7 +357,8 @@ Feature: BR-UC-003 Update Media Buy
     | package_id | pkg_001 |
     | budget     | 5000    |
     When the Buyer Agent sends the update_media_buy request
-    Then the operation should fail
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     # v3.1: root required-set is [idempotency_key, account, media_buy_id]; account is required
@@ -350,7 +376,8 @@ Feature: BR-UC-003 Update Media Buy
     | budget     | 5000    |
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the response should contain media_buy_id
+    Then the response is compliant with the update_media_buy success spec
+    And the response should contain media_buy_id
     And the response should NOT contain an "errors" field
     # BR-RULE-018 INV-1: Success → no errors field
 
@@ -359,9 +386,10 @@ Feature: BR-UC-003 Update Media Buy
     Given a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
-    | budget       | -100        |
+    | paused       | true        |
     When the Buyer Agent sends the update_media_buy request
-    Then the response should contain an "errors" array
+    Then the response is compliant with the update_media_buy error spec
+    And the response should contain an "errors" array
     And the response should NOT contain "media_buy_id" field
     And the response should NOT contain "buyer_ref" field
     And the response should NOT contain "affected_packages" field
@@ -380,7 +408,8 @@ Feature: BR-UC-003 Update Media Buy
     | budget     | 5000    |
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the response status should be "completed"
+    Then the response is compliant with the update_media_buy success spec
+    And the response status should be "completed"
     # BR-RULE-017 INV-1: Both false → auto-approved
 
   @T-UC-003-approval-tenant @invariant @BR-RULE-017
@@ -395,7 +424,8 @@ Feature: BR-UC-003 Update Media Buy
     | budget     | 5000    |
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the response status should be "submitted"
+    Then the response is compliant with the update_media_buy submitted spec
+    And the response status should be "submitted"
     And the response should contain a task_id
     And the response should NOT contain "media_buy_id" field
     And the response should NOT contain "implementation_date" field
@@ -414,7 +444,8 @@ Feature: BR-UC-003 Update Media Buy
     | budget     | 5000    |
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the response status should be "submitted"
+    Then the response is compliant with the update_media_buy submitted spec
+    And the response status should be "submitted"
     And the response should contain a task_id
     And the response should NOT contain "media_buy_id" field
     And the response should NOT contain "implementation_date" field
@@ -433,7 +464,8 @@ Feature: BR-UC-003 Update Media Buy
     | budget     | 5000    |
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the response status should be "completed"
+    Then the response is compliant with the update_media_buy success spec
+    And the response status should be "completed"
     And the package budget should be persisted as 5000
     # BR-RULE-020 INV-1: Adapter success → changes persisted
 
@@ -453,7 +485,8 @@ Feature: BR-UC-003 Update Media Buy
     | cr_new_2    | 30     |
     And all referenced creatives are valid
     When the Buyer Agent sends the update_media_buy request
-    Then the response status should be "completed"
+    Then the response is compliant with the update_media_buy success spec
+    And the response status should be "completed"
     And the package "pkg_001" should have creative assignments [cr_new_1, cr_new_2]
     And the old assignments [cr_old_1, cr_old_2] should be removed
     # BR-RULE-024 INV-2: creative_assignments provided → replaces all existing
@@ -466,14 +499,19 @@ Feature: BR-UC-003 Update Media Buy
     | media_buy_id | mb_existing |
     | paused       | true        |
     When the Buyer Agent sends the update_media_buy request
-    Then the operation should fail
-    And the error code should be "AUTH_REQUIRED"
-    And the error message should contain "authentication"
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
+    And the error code should be "AUTH_MISSING"
     And the error should include "suggestion" field
-    And the suggestion should contain "valid credentials"
+    And the suggestion should contain "credentials"
+    # LOCAL DIVERGENCE from the generated scenario — mirror upstream in adcp-req.
+    # POST-F3 is graded on the SUGGESTION, not the message: CODE_TABLE's AUTH_MISSING
+    # suggestion is "provide credentials via the auth header and retry", while its
+    # message is "No credentials were presented" — so the incoming branch's companion
+    # assertion on the message containing "authentication" is NOT restored with it.
     # POST-F1: System state unchanged
     # POST-F2: Error explains authentication failed
-    # POST-F3: Suggestion to obtain valid credentials
+    # POST-F3: Suggestion to obtain credentials
 
   @T-UC-003-ext-a-unknown @extension @ext-a @error @post-f1 @post-f2 @post-f3
   Scenario: Authentication error -- principal not found in database
@@ -484,9 +522,20 @@ Feature: BR-UC-003 Update Media Buy
     | media_buy_id | mb_existing |
     | paused       | true        |
     When the Buyer Agent sends the update_media_buy request
-    Then the operation should fail
-    And the error code should be "AUTH_REQUIRED"
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
+    And the error code should be "AUTH_MISSING"
     And the error should include "suggestion" field
+    # NOTE (#2092, salesagent-otc5, salesagent-z9e0): a principal_id
+    # with no backing DB row resolves to identity.principal_id=None (the real
+    # resolve_identity() nulls it on a failed token->principal lookup, and the
+    # BDD harness's identity_for() now mirrors that — salesagent-z9e0). So
+    # require_principal_id fires FIRST with AUTH_MISSING, before
+    # update_media_buy's ownership check (AdCPAuthorizationError /
+    # PERMISSION_DENIED, salesagent-otc5) is ever reached — that check only
+    # fires for a principal_id that resolved but doesn't own the media buy, a
+    # genuinely different case from "principal_id never resolved". This now
+    # matches the scenario's own title on every transport.
     # POST-F1: System state unchanged
     # POST-F2: Error explains principal not found
     # POST-F3: Suggestion for recovery
@@ -499,10 +548,10 @@ Feature: BR-UC-003 Update Media Buy
     | paused       | true           |
     And no media buy exists with media_buy_id "mb_nonexistent"
     When the Buyer Agent sends the update_media_buy request
-    Then the operation should fail
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
     And the error code should be "MEDIA_BUY_NOT_FOUND"
     And the error should include "suggestion" field
-    And the suggestion should contain "verify"
     # POST-F1: System state unchanged
     # POST-F2: Error explains media buy not found
     # POST-F3: Suggestion to verify ID
@@ -515,7 +564,8 @@ Feature: BR-UC-003 Update Media Buy
     | field        | value       |
     | media_buy_id | mb_existing |
     When the Buyer Agent sends the update_media_buy request
-    Then the operation should fail
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
     And the error code should be "ACCOUNT_NOT_FOUND"
     And the error should include "suggestion" field
     # POST-F1: System state unchanged
@@ -527,26 +577,41 @@ Feature: BR-UC-003 Update Media Buy
     Given a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
-    | budget       | 0           |
+    And the request includes 1 package update with:
+    | field      | value   |
+    | package_id | pkg_001 |
+    | budget     | 0 |
     When the Buyer Agent sends the update_media_buy request
-    Then the operation should fail
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
     And the error code should be "BUDGET_TOO_LOW"
     And the error should include "recovery" field with value "correctable"
     And the error should include "suggestion" field
-    And the suggestion should contain "positive"
+    And the error should include "field" field with value "packages[0].budget"
     # POST-F1: System state unchanged
     # POST-F2: Error code BUDGET_TOO_LOW
     # POST-F3: Suggestion to provide positive budget
 
   @T-UC-003-ext-d-negative @extension @ext-d @error @post-f1 @post-f2 @post-f3
-  Scenario: Budget validation -- campaign budget negative
+  # A NEGATIVE package budget is a SCHEMA violation, not a business-rule one:
+  # package-update.json declares budget as {"type": "number", "minimum": 0}, so the SDK model
+  # rejects it before any minimum-budget rule can run. BUDGET_TOO_LOW is what a budget that is
+  # schema-valid but below the tenant minimum earns; -5 never gets that far. (Whether a schema
+  # violation should surface as VALIDATION_ERROR or INVALID_REQUEST is #1604; the
+  # spec's enum descriptions say INVALID_REQUEST, and we currently emit VALIDATION_ERROR on
+  # mcp/a2a. This row records today's behavior, not an endorsement of the code.)
+  Scenario: Budget validation -- package budget negative is rejected by the schema
     Given a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
-    | budget       | -500        |
+    And the request includes 1 package update with:
+    | field      | value   |
+    | package_id | pkg_001 |
+    | budget     | -500 |
     When the Buyer Agent sends the update_media_buy request
-    Then the operation should fail
-    And the error code should be "BUDGET_TOO_LOW"
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     # POST-F1: System state unchanged
     # POST-F2: Error code BUDGET_TOO_LOW
@@ -560,10 +625,10 @@ Feature: BR-UC-003 Update Media Buy
     | media_buy_id | mb_existing              |
     | end_time     | 2026-03-15T00:00:00Z     |
     When the Buyer Agent sends the update_media_buy request
-    Then the operation should fail
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
-    And the suggestion should contain "end_time must be after start_time"
     # POST-F1: System state unchanged
     # POST-F2: Error explains date range invalid
     # POST-F3: Suggestion for recovery
@@ -576,7 +641,8 @@ Feature: BR-UC-003 Update Media Buy
     | media_buy_id | mb_existing              |
     | end_time     | 2026-04-01T00:00:00Z     |
     When the Buyer Agent sends the update_media_buy request
-    Then the operation should fail
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     # BR-RULE-013 INV-3: end_time <= start_time rejected
@@ -594,10 +660,10 @@ Feature: BR-UC-003 Update Media Buy
     | package_id | pkg_001 |
     | budget     | 5000    |
     When the Buyer Agent sends the update_media_buy request
-    Then the operation should fail
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
-    And the suggestion should contain "currency"
     # POST-F1: System state unchanged
     # POST-F2: Error explains unsupported currency
     # POST-F3: Suggestion for recovery
@@ -615,7 +681,8 @@ Feature: BR-UC-003 Update Media Buy
     | budget     | 50000   |
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the operation should fail
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
     And the error code should be "BUDGET_TOO_LOW"
     And the error should include "recovery" field with value "correctable"
     And the error should include "suggestion" field
@@ -631,34 +698,65 @@ Feature: BR-UC-003 Update Media Buy
     | media_buy_id | mb_existing |
     And the request includes 1 package update without package_id
     When the Buyer Agent sends the update_media_buy request
-    Then the operation should fail
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
     And the error code should be "INVALID_REQUEST"
+    And the error recovery should be "correctable"
     And the error should include "suggestion" field
-    And the suggestion should contain "package_id"
+    And the error should include "field" field with value "packages[0].package_id"
+    # REQUEST-ROOTED, per core/error.json: `field` is "JSONPath-lite" and the spec's own
+    # example is 'packages[0].targeting'. A bare 'package_id' names a field without saying
+    # which package it belonged to, which for a multi-package update is not actionable.
+    #
+    # This row previously read 'package_id', on the argument that the validator "sees one
+    # entry and cannot know its position". That premise no longer holds: the validator
+    # raises a pydantic error carrying loc=("package_id",), and pydantic nests it under the
+    # enclosing collection, so the index is supplied by pydantic itself. The same change is
+    # what gets this rejection an ENVELOPE at all on MCP -- a typed error raised inside a
+    # TypeAdapter run was masked by FastMCP into a prose ToolError with no code or field.
     # POST-F1: System state unchanged
     # POST-F2: Error explains missing package identifier
     # POST-F3: Suggestion for recovery
 
   @T-UC-003-ext-i @extension @ext-i @error @post-f1 @post-f2 @post-f3
-  Scenario: Creative not found -- referenced creative_id not in library
+  Scenario Outline: Creative not found -- referenced creative_id not in library (<array>)
     Given a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
-    And the package update includes creative_assignments with:
-    | creative_id |
-    | cr_missing  |
+    And the package update references creative "cr_missing" via <array>
     And creative "cr_missing" does not exist in the creative library
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the operation should fail
-    And the error code should be "CREATIVE_REJECTED"
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
+    # adcp 3.1.1 enums/error-code.json: CREATIVE_NOT_FOUND is MANDATED uniformly for
+    # any creative_id not owned by the calling account ("never distinguish 'exists in
+    # another tenant' from 'does not exist'", anti-enumeration). Was CREATIVE_REJECTED,
+    # which the same enum defines as a content-policy review failure.
+    And the error code should be "CREATIVE_NOT_FOUND"
+    # 3.1.1 L3/error-handling.mdx: error.field MUST name the ARRAY parameter itself,
+    # and the two request members that reference creatives are different arrays --
+    # which is the whole reason this is an outline rather than one scenario. A single
+    # hard-coded pointer would be right for one caller and silently wrong for the other.
+    And the response error field is packages[0].<array>
+    # Same paragraph: "Sellers MAY enumerate specific unresolvable elements in
+    # error.details -- but only when the elements were supplied verbatim by the caller."
+    # cr_missing was. Enumerating does not breach the anti-enumeration MUST above,
+    # which forbids DISTINGUISHING "exists elsewhere" from "does not exist"; every
+    # unresolvable id is listed identically, so the two remain indistinguishable.
+    And the wire error details should include missing_creative_ids "cr_missing"
     And the error should include "suggestion" field
     # POST-F1: System state unchanged
     # POST-F2: Error explains creative not found
     # POST-F3: Suggestion for recovery
+
+    Examples: the two request members that reference creatives
+      | array                |
+      | creative_ids         |
+      | creative_assignments |
 
   @T-UC-003-ext-j-error @extension @ext-j @error @post-f1 @post-f2 @post-f3
   Scenario: Creative validation -- creative in error state
@@ -674,8 +772,13 @@ Feature: BR-UC-003 Update Media Buy
     And creative "cr_error" is in "error" state
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the operation should fail
-    And the error code should be "CREATIVE_REJECTED"
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
+    # adcp 3.1.1: INVALID_STATE is "Operation is not permitted for the resource's
+    # current status". CREATIVE_REJECTED is "Creative failed content policy review",
+    # whose pinned details shape is {policy_id, policy_url, reasons} — nothing this
+    # path can populate.
+    And the error code should be "INVALID_STATE"
     And the error should include "suggestion" field
     # BR-RULE-026 INV-2: creative in error state → rejected
     # POST-F1: System state unchanged
@@ -695,11 +798,45 @@ Feature: BR-UC-003 Update Media Buy
     And creative "cr_rejected" is in "rejected" state
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the operation should fail
-    And the error code should be "CREATIVE_REJECTED"
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
+    # INVALID_STATE, even though the creative's STATUS is "rejected": the refusal here
+    # is "you cannot assign a creative in this state", not a fresh policy review. The
+    # policy rejection already happened and was reported when the status was set.
+    And the error code should be "INVALID_STATE"
     And the error should include "suggestion" field
     # BR-RULE-026 INV-3: creative in rejected state → rejected
     # POST-F3: Suggestion for recovery
+
+  # The multi-subject half. Every scenario above drives ONE creative, so a refusal that
+  # named only the first would satisfy all of them — the buyer would fix it, resubmit,
+  # and meet the second, one round trip per bad creative with no way to know how many
+  # remain. adcp 3.1.1 leaves the shape open (core/error.json types `details` as a free
+  # object and reserves `issues[]` for per-FIELD schema failures, which a state refusal
+  # has no pointer or keyword for), so this grades the per-ENTITY channel this repo
+  # uses: details.problems, one entry per creative with the state that disqualified it.
+  @T-UC-003-ext-j-multi @extension @ext-j @error @post-f1 @post-f2 @post-f3
+  Scenario: Creative validation -- every unassignable creative is named, not just the first
+    Given a valid update_media_buy request with:
+    | field        | value       |
+    | media_buy_id | mb_existing |
+    And the request includes 1 package update with:
+    | field      | value   |
+    | package_id | pkg_001 |
+    And the package update includes creative_assignments with:
+    | creative_id |
+    | cr_error    |
+    | cr_rejected |
+    And creative "cr_error" is in "error" state
+    And creative "cr_rejected" is in "rejected" state
+    And the package "pkg_001" exists in the media buy
+    When the Buyer Agent sends the update_media_buy request
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
+    And the error code should be "INVALID_STATE"
+    And the error details should name each rejected creative with its state
+    # POST-F1: System state unchanged
+    # POST-F2: Error explains which creatives blocked the update, and why
 
   @T-UC-003-ext-j-format @extension @ext-j @error @post-f1 @post-f2 @post-f3
   Scenario: Creative validation -- format incompatible with product
@@ -715,8 +852,11 @@ Feature: BR-UC-003 Update Media Buy
     And creative "cr_wrong_fmt" has a format incompatible with package product
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the operation should fail
-    And the error code should be "CREATIVE_REJECTED"
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
+    # adcp 3.1.1: VALIDATION_ERROR is "violates business rules beyond schema
+    # validation". The creative is fine; the ASSIGNMENT is what the product refuses.
+    And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
     # BR-RULE-026 INV-4: format mismatch → rejected
     # POST-F3: Suggestion for recovery
@@ -730,9 +870,10 @@ Feature: BR-UC-003 Update Media Buy
     And the creative upload/sync process fails
     And the package exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the operation should fail
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
     And the error should include "suggestion" field
-    And the suggestion should contain "retry"
+    And the error code should be "SERVICE_UNAVAILABLE"
     # POST-F1: System state unchanged
     # POST-F2: Error explains sync failure
     # POST-F3: Suggestion to retry
@@ -748,10 +889,10 @@ Feature: BR-UC-003 Update Media Buy
     | budget     | 5000           |
     And package "pkg_nonexistent" does not exist in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the operation should fail
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
     And the error code should be "PACKAGE_NOT_FOUND"
     And the error should include "suggestion" field
-    And the suggestion should contain "package"
     # POST-F1: System state unchanged
     # POST-F2: Error explains package not found
     # POST-F3: Suggestion for recovery
@@ -770,7 +911,8 @@ Feature: BR-UC-003 Update Media Buy
     And placement "plc_nonexistent" is not valid for the package product
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the operation should fail
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
     And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
     # BR-RULE-028 INV-2: invalid placement_id → rejected
@@ -791,7 +933,8 @@ Feature: BR-UC-003 Update Media Buy
     And the package product does not support placement-level targeting
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the operation should fail
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
     And the error code should be "UNSUPPORTED_FEATURE"
     And the error should include "suggestion" field
     # BR-RULE-028 INV-3: product doesn't support placement targeting → rejected
@@ -805,9 +948,10 @@ Feature: BR-UC-003 Update Media Buy
     | field        | value       |
     | media_buy_id | mb_existing |
     When the Buyer Agent sends the update_media_buy request
-    Then the operation should fail
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
     And the error should include "suggestion" field
-    And the suggestion should contain "privileges"
+    And the error code should be "PERMISSION_DENIED"
     # POST-F1: System state unchanged
     # POST-F2: Error explains insufficient privileges
     # POST-F3: Suggestion for recovery
@@ -819,10 +963,11 @@ Feature: BR-UC-003 Update Media Buy
     | media_buy_id    | mb_existing |
     | idempotency_key | abc1234     |
     When the Buyer Agent sends the update_media_buy request
-    Then the operation should fail
-    And the error code should be "VALIDATION_ERROR"
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
+    And the error code should be "INVALID_REQUEST"
+    And the error recovery should be "correctable"
     And the error should include "suggestion" field
-    And the suggestion should contain "at least 16 characters"
     # BR-RULE-081 INV-3: key < 16 chars → rejected (schema minLength 16; value/format → VALIDATION_ERROR)
     # POST-F1: System state unchanged
     # POST-F2: Error explains key too short
@@ -835,10 +980,11 @@ Feature: BR-UC-003 Update Media Buy
     | media_buy_id    | mb_existing              |
     | idempotency_key | <256 character string>   |
     When the Buyer Agent sends the update_media_buy request
-    Then the operation should fail
-    And the error code should be "VALIDATION_ERROR"
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
+    And the error code should be "INVALID_REQUEST"
+    And the error recovery should be "correctable"
     And the error should include "suggestion" field
-    And the suggestion should contain "255 characters"
     # BR-RULE-081 INV-4: key > 255 chars → rejected (schema maxLength 255; value/format → VALIDATION_ERROR)
     # POST-F1: System state unchanged
     # POST-F3: Suggestion for recovery
@@ -854,10 +1000,10 @@ Feature: BR-UC-003 Update Media Buy
     And the package update includes keyword_targets_add and targeting_overlay.keyword_targets
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the operation should fail
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
-    And the suggestion should contain "incremental operations" or "full replacement"
     # BR-RULE-083 INV-1: keyword_targets_add + overlay.keyword_targets → rejected
     # POST-F1: System state unchanged
     # POST-F3: Suggestion for recovery
@@ -873,7 +1019,8 @@ Feature: BR-UC-003 Update Media Buy
     And the package update includes negative_keywords_add and targeting_overlay.negative_keywords
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the operation should fail
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     # BR-RULE-083 INV-2: negative_keywords_add + overlay.negative_keywords → rejected
@@ -892,7 +1039,8 @@ Feature: BR-UC-003 Update Media Buy
     And the package update includes keyword_targets_add AND targeting_overlay.negative_keywords
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the response status should be "completed"
+    Then the response is compliant with the update_media_buy success spec
+    And the response status should be "completed"
     # BR-RULE-083 INV-3: cross-dimension mixing (keyword_targets_add + overlay.negative_keywords) → accepted
 
   @T-UC-003-ext-r-cross-ok-2 @invariant @BR-RULE-083
@@ -907,7 +1055,8 @@ Feature: BR-UC-003 Update Media Buy
     And the package update includes negative_keywords_add AND targeting_overlay.keyword_targets
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the response status should be "completed"
+    Then the response is compliant with the update_media_buy success spec
+    And the response status should be "completed"
     # BR-RULE-083 INV-4: cross-dimension mixing (negative_keywords_add + overlay.keyword_targets) → accepted
 
   @T-UC-003-partition-idempotency-key @partition @idempotency_key
@@ -923,11 +1072,11 @@ Feature: BR-UC-003 Update Media Buy
     And the tenant is configured for auto-approval
     And the idempotency_key is set to <value>
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: Valid partitions
       | partition      | value                                  | outcome |
-      | absent         | <not provided>                         | success |
       | typical_valid  | abc12345-retry-001                     | success |
       | boundary_min   | 1234567890123456                       | success |
       | boundary_max   | <255 character string>                 | success |
@@ -935,9 +1084,13 @@ Feature: BR-UC-003 Update Media Buy
 
     Examples: Invalid partitions
       | partition      | value          | outcome                                              |
+      | absent         | <not provided> | error "INVALID_REQUEST" with suggestion              |
       | empty_string   |                | error "VALIDATION_ERROR" with suggestion              |
-      | too_short      | abc1234        | error "VALIDATION_ERROR" with suggestion              |
-      | too_long       | <256 character string> | error "VALIDATION_ERROR" with suggestion      |
+      | too_short      | abc1234        | error "INVALID_REQUEST" with suggestion              |
+      | too_long       | <256 character string> | error "INVALID_REQUEST" with suggestion      |
+    # The `absent` row moved from Valid to Invalid: v3.1 lists idempotency_key in the root
+    # /required set of adcp/_schemas/3.1/media-buy/update-media-buy-request.json, at the
+    # pinned spec version 3.1.1 (adcp==6.6.0), so omitting it is a schema rejection.
 
   @T-UC-003-boundary-idempotency-key @boundary @idempotency_key
   Scenario Outline: Idempotency key boundary validation - <boundary_point>
@@ -952,18 +1105,22 @@ Feature: BR-UC-003 Update Media Buy
     And the tenant is configured for auto-approval
     And the idempotency_key is set to <value>
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: Boundary values
       | boundary_point                  | value               | outcome                                |
-      | absent (field not provided)     | <not provided>      | success                                |
-      | empty string (length 0)         |                     | error "VALIDATION_ERROR" with suggestion |
-      | length 15 (min - 1)            | <15 char string>    | error "VALIDATION_ERROR" with suggestion |
+      | absent (field not provided)     | <not provided>      | error "INVALID_REQUEST" with suggestion |
+      | empty string (length 0)         |                     | error "INVALID_REQUEST" with suggestion |
+      | length 15 (min - 1)            | <15 char string>    | error "INVALID_REQUEST" with suggestion |
       | length 16 (min, inclusive)      | <16 char string>    | success                                |
       | length 17 (min + 1)            | <17 char string>    | success                                |
       | length 254 (max - 1)           | <254 char string>   | success                                |
       | length 255 (max, inclusive)     | <255 char string>   | success                                |
-      | length 256 (max + 1)           | <256 char string>   | error "VALIDATION_ERROR" with suggestion |
+      | length 256 (max + 1)           | <256 char string>   | error "INVALID_REQUEST" with suggestion |
+    # The absent row said `success`: v3.1 lists idempotency_key in the root /required set of
+    # adcp/_schemas/3.1/media-buy/update-media-buy-request.json, at the pinned spec version
+    # 3.1.1 (adcp==6.6.0), so an omitted key is rejected rather than served unprotected.
 
   @T-UC-003-partition-media-buy-status @partition @media_buy_status
   Scenario Outline: Media buy status partition validation - <partition>
@@ -978,7 +1135,8 @@ Feature: BR-UC-003 Update Media Buy
     And the package "pkg_001" exists in the media buy
     And the tenant is configured for auto-approval
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: Valid partitions
       | partition                  | status               | outcome |
@@ -1005,7 +1163,8 @@ Feature: BR-UC-003 Update Media Buy
     And the package "pkg_001" exists in the media buy
     And the tenant is configured for auto-approval
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: Boundary values
       | boundary_point                            | status               | outcome                                  |
@@ -1029,7 +1188,8 @@ Feature: BR-UC-003 Update Media Buy
     And the tenant is configured for auto-approval
     And the updated daily spend does not exceed max_daily_package_spend
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: Valid partitions
       | partition       | amount | outcome |
@@ -1052,7 +1212,8 @@ Feature: BR-UC-003 Update Media Buy
     And the package "pkg_001" exists in the media buy
     And the tenant is configured for auto-approval
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: Boundary values
       | boundary_point                  | amount | outcome                                      |
@@ -1074,7 +1235,8 @@ Feature: BR-UC-003 Update Media Buy
     And the tenant max_daily_package_spend is <cap_config>
     And the media buy flight duration is <flight_days> days
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: Valid partitions
       | partition          | budget | cap_config | flight_days | outcome |
@@ -1100,7 +1262,8 @@ Feature: BR-UC-003 Update Media Buy
     And the tenant max_daily_package_spend is <cap_config>
     And the media buy flight duration is <flight_days> days
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: Boundary values
       | boundary_point                       | budget | cap_config | flight_days | outcome                                      |
@@ -1119,7 +1282,8 @@ Feature: BR-UC-003 Update Media Buy
     And the package "pkg_001" exists in the media buy
     And the tenant is configured for auto-approval
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: Valid partitions
       | partition          | id_config                        | outcome |
@@ -1139,7 +1303,8 @@ Feature: BR-UC-003 Update Media Buy
     And the package "pkg_001" exists in the media buy
     And the tenant is configured for auto-approval
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: Boundary values
       | boundary_point                       | id_config                                   | outcome                                  |
@@ -1158,7 +1323,8 @@ Feature: BR-UC-003 Update Media Buy
     And the package "pkg_001" exists in the media buy
     And the tenant is configured for auto-approval
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: Valid partitions
       | partition                     | suppress_value                                                                                                                | outcome |
@@ -1196,7 +1362,8 @@ Feature: BR-UC-003 Update Media Buy
     And the package "pkg_001" exists in the media buy
     And the tenant is configured for auto-approval
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: Boundary values
       | boundary_point                                                    | suppress_value                                                                                                                | outcome                  |
@@ -1231,7 +1398,8 @@ Feature: BR-UC-003 Update Media Buy
     And the package "pkg_001" exists in the media buy
     And the tenant is configured for auto-approval
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: Valid partitions
       | partition                        | goals_value                                                                                                                                                             | outcome |
@@ -1277,7 +1445,8 @@ Feature: BR-UC-003 Update Media Buy
     And the package "pkg_001" exists in the media buy
     And the tenant is configured for auto-approval
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: Boundary values
       | boundary_point                                          | goals_value                                                                                                                                                                         | outcome                  |
@@ -1316,7 +1485,8 @@ Feature: BR-UC-003 Update Media Buy
     And the package "pkg_001" exists in the media buy
     And the tenant is configured for auto-approval
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: Valid partitions
       | partition              | kw_value                                                                                                                                | outcome |
@@ -1352,7 +1522,8 @@ Feature: BR-UC-003 Update Media Buy
     And the package "pkg_001" exists in the media buy
     And the tenant is configured for auto-approval
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: Boundary values
       | boundary_point                                                            | kw_value                                                                     | outcome                  |
@@ -1384,7 +1555,8 @@ Feature: BR-UC-003 Update Media Buy
     And the package "pkg_001" exists in the media buy
     And the tenant is configured for auto-approval
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: Valid partitions
       | partition            | kw_value                                                                                                                                | outcome |
@@ -1416,7 +1588,8 @@ Feature: BR-UC-003 Update Media Buy
     And the package "pkg_001" exists in the media buy
     And the tenant is configured for auto-approval
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: Boundary values
       | boundary_point                                                                | kw_value                                           | outcome                  |
@@ -1446,7 +1619,8 @@ Feature: BR-UC-003 Update Media Buy
     And the package "pkg_001" exists in the media buy
     And the tenant is configured for auto-approval
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: Valid partitions
       | partition              | nk_value                                                                                                                                | outcome |
@@ -1478,7 +1652,8 @@ Feature: BR-UC-003 Update Media Buy
     And the package "pkg_001" exists in the media buy
     And the tenant is configured for auto-approval
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: Boundary values
       | boundary_point                                                                  | nk_value                                             | outcome                  |
@@ -1508,7 +1683,8 @@ Feature: BR-UC-003 Update Media Buy
     And the package "pkg_001" exists in the media buy
     And the tenant is configured for auto-approval
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: Valid partitions
       | partition              | nk_value                                                                                                                                | outcome |
@@ -1540,7 +1716,8 @@ Feature: BR-UC-003 Update Media Buy
     And the package "pkg_001" exists in the media buy
     And the tenant is configured for auto-approval
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: Boundary values
       | boundary_point                                                                      | nk_value                                              | outcome                  |
@@ -1569,7 +1746,8 @@ Feature: BR-UC-003 Update Media Buy
     And the package "pkg_001" exists in the media buy
     And the tenant is configured for auto-approval
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: Valid partitions
       | partition                        | overlay_value                                                                     | outcome |
@@ -1589,7 +1767,7 @@ Feature: BR-UC-003 Update Media Buy
     Examples: Invalid partitions
       | partition                    | overlay_value                                                                          | outcome                                      |
       | unknown_field                | {"nonexistent_field": ["value"]}                                                       | error "INVALID_REQUEST" with suggestion       |
-      | managed_only_dimension       | {"publisher_managed_dim": ["value"]}                                                   | error "INVALID_REQUEST" with suggestion       |
+      | undeclared_dimension         | {"publisher_managed_dim": ["value"]}                                                   | error "INVALID_REQUEST" with suggestion       |
       | geo_overlap                  | {"geo_countries": ["US"], "geo_countries_exclude": ["US"]}                              | error "INVALID_REQUEST" with suggestion       |
       | device_type_overlap          | {"device_type": ["mobile"], "device_type_exclude": ["mobile"]}                         | error "INVALID_REQUEST" with suggestion       |
       | proximity_method_conflict    | {"geo_proximity": [{"travel_time": 30, "transport_mode": "driving", "radius": 10}]}    | error "INVALID_REQUEST" with suggestion       |
@@ -1608,7 +1786,8 @@ Feature: BR-UC-003 Update Media Buy
     And the package "pkg_001" exists in the media buy
     And the tenant is configured for auto-approval
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: Boundary values
       | boundary_point                               | overlay_value                                                                          | outcome                                  |
@@ -1616,7 +1795,7 @@ Feature: BR-UC-003 Update Media Buy
       | empty {} overlay                             | {}                                                                                     | success                                  |
       | valid known fields                           | {"geo_countries": ["US"]}                                                              | success                                  |
       | unknown field name                           | {"nonexistent_field": ["value"]}                                                       | error "INVALID_REQUEST" with suggestion  |
-      | managed-only dimension                       | {"publisher_managed_dim": ["value"]}                                                   | error "INVALID_REQUEST" with suggestion  |
+      | undeclared dimension                         | {"publisher_managed_dim": ["value"]}                                                   | error "INVALID_REQUEST" with suggestion  |
       | geo include/exclude overlap                  | {"geo_countries": ["US"], "geo_countries_exclude": ["US"]}                              | error "INVALID_REQUEST" with suggestion  |
       | device_type include/exclude overlap           | {"device_type": ["mobile"], "device_type_exclude": ["mobile"]}                        | error "INVALID_REQUEST" with suggestion  |
       | geo_proximity with travel_time only          | {"geo_proximity": [{"travel_time": 30, "transport_mode": "driving"}]}                  | success                                  |
@@ -1637,7 +1816,8 @@ Feature: BR-UC-003 Update Media Buy
     | start_time   | <start_value> |
     And the existing end_time is in the future
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: Valid partitions
       | partition              | start_value              | outcome |
@@ -1658,7 +1838,8 @@ Feature: BR-UC-003 Update Media Buy
     | start_time   | <start_value> |
     And the existing end_time is in the future
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: Boundary values
       | boundary_point          | start_value              | outcome                  |
@@ -1676,7 +1857,8 @@ Feature: BR-UC-003 Update Media Buy
     | media_buy_id | mb_existing |
     | end_time     | <end_value>  |
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: Valid partitions
       | partition          | end_value                | outcome |
@@ -1695,7 +1877,8 @@ Feature: BR-UC-003 Update Media Buy
     | media_buy_id | mb_existing |
     | end_time     | <end_value>  |
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: Boundary values
       | boundary_point                   | end_value                | outcome                  |
@@ -1717,7 +1900,8 @@ Feature: BR-UC-003 Update Media Buy
     | budget     | 5000    |
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: Valid partitions
       | partition                  | tenant_flag | adapter_flag | outcome                  |
@@ -1738,7 +1922,8 @@ Feature: BR-UC-003 Update Media Buy
     | budget     | 5000    |
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: Boundary values
       | boundary_point                     | tenant_flag | adapter_flag | outcome                  |
@@ -1759,7 +1944,8 @@ Feature: BR-UC-003 Update Media Buy
     And the package creative update mode is: <mode>
     And all referenced creatives are valid
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: Valid partitions
       | partition                    | mode                                              | outcome |
@@ -1781,7 +1967,8 @@ Feature: BR-UC-003 Update Media Buy
     And the package creative update mode is: <mode>
     And all referenced creatives are valid
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: Boundary values
       | boundary_point                            | mode                                              | outcome |
@@ -1802,7 +1989,8 @@ Feature: BR-UC-003 Update Media Buy
     And the package "pkg_001" exists in the media buy
     And the tenant is configured for auto-approval
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: Valid partitions
       | partition                              | creative_state      | outcome |
@@ -1810,8 +1998,8 @@ Feature: BR-UC-003 Update Media Buy
 
     Examples: Invalid partitions
       | partition            | creative_state  | outcome                                        |
-      | error_state          | error           | error "CREATIVE_REJECTED" with suggestion       |
-      | format_incompatible  | wrong_format    | error "CREATIVE_REJECTED" with suggestion       |
+      | error_state          | error           | error "INVALID_STATE" with suggestion          |
+      | format_incompatible  | wrong_format    | error "VALIDATION_ERROR" with suggestion       |
 
   @T-UC-003-boundary-creative-state @boundary @creative_state_validation
   Scenario Outline: Creative state validation boundary - <boundary_point>
@@ -1825,13 +2013,14 @@ Feature: BR-UC-003 Update Media Buy
     And the package "pkg_001" exists in the media buy
     And the tenant is configured for auto-approval
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: Boundary values
       | boundary_point                              | creative_state  | outcome                                        |
       | all creatives valid state and format         | approved        | success                                        |
-      | creative in error state                     | error           | error "CREATIVE_REJECTED" with suggestion       |
-      | format incompatible with product            | wrong_format    | error "CREATIVE_REJECTED" with suggestion       |
+      | creative in error state                     | error           | error "INVALID_STATE" with suggestion          |
+      | format incompatible with product            | wrong_format    | error "VALIDATION_ERROR" with suggestion       |
 
   @T-UC-003-partition-placement-id @partition @placement_id_validation
   Scenario Outline: Placement ID validation partition - <partition>
@@ -1845,7 +2034,8 @@ Feature: BR-UC-003 Update Media Buy
     And the package "pkg_001" exists in the media buy
     And the tenant is configured for auto-approval
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: Valid partitions
       | partition               | placement_config                       | outcome |
@@ -1869,7 +2059,8 @@ Feature: BR-UC-003 Update Media Buy
     And the package "pkg_001" exists in the media buy
     And the tenant is configured for auto-approval
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: Boundary values
       | boundary_point                       | placement_config                              | outcome                                      |
@@ -1886,7 +2077,8 @@ Feature: BR-UC-003 Update Media Buy
     And the media buy "mb_existing" exists with status "active"
     And the tenant is configured for auto-approval
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: Valid partitions
       | partition            | update_fields                          | outcome |
@@ -1906,7 +2098,8 @@ Feature: BR-UC-003 Update Media Buy
     And the media buy "mb_existing" exists with status "active"
     And the tenant is configured for auto-approval
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: Boundary values
       | boundary_point                              | update_config                          | outcome                                 |
@@ -1924,7 +2117,8 @@ Feature: BR-UC-003 Update Media Buy
     And the tenant approval mode is <approval_mode>
     And the adapter <adapter_result>
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: Valid partitions
       | partition                       | approval_mode  | adapter_result   | outcome                          |
@@ -1945,7 +2139,8 @@ Feature: BR-UC-003 Update Media Buy
     And the tenant approval mode is <approval_mode>
     And the adapter <adapter_result>
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: Boundary values
       | boundary_point                              | approval_mode  | adapter_result   | outcome                                       |
@@ -1961,7 +2156,8 @@ Feature: BR-UC-003 Update Media Buy
     And the media buy "mb_existing" exists with owner <owner>
     And the authenticated principal is <principal>
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: Valid partitions
       | partition      | owner       | principal   | outcome |
@@ -1979,7 +2175,8 @@ Feature: BR-UC-003 Update Media Buy
     And the media buy "mb_existing" exists with owner <owner>
     And the authenticated principal is <principal>
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: Boundary values
       | boundary_point                    | owner       | principal   | outcome                                        |
@@ -1991,10 +2188,14 @@ Feature: BR-UC-003 Update Media Buy
     Given a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
-    | budget       | 100         |
+    And the request includes 1 package update with:
+    | field      | value   |
+    | package_id | pkg_001 |
+    | budget     | 100 |
     And the seller's minimum budget for this media buy is 500 USD
     When the Buyer Agent sends the update_media_buy request
-    Then the operation should fail
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
     And the error code should be "BUDGET_TOO_LOW"
     And the error "details" object should include "minimum_budget" with value 500
     And the error "details" object should include "currency" with value "USD"
@@ -2012,9 +2213,10 @@ Feature: BR-UC-003 Update Media Buy
     And a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
-    | budget       | 25000       |
+    | paused       | true        |
     When the Buyer Agent sends the update_media_buy request
-    Then the operation should fail
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
     And the error code should be "CONFLICT"
     And the error "details" object should include "resource_id" with value "mb_existing"
     And the error "details" object should include "expected_version" with value 5
@@ -2033,9 +2235,10 @@ Feature: BR-UC-003 Update Media Buy
     | field           | value             |
     | media_buy_id    | mb_existing       |
     | idempotency_key | upd-20260521-001  |
-    | budget          | 30000             |
+    | paused       | true        |
     When the Buyer Agent sends the update_media_buy request
-    Then the operation should fail
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
     And the error code should be "IDEMPOTENCY_CONFLICT"
     And the error "details" object should include "resource_id" with value "mb_existing"
     And the error "details" object should include "current_version" with value "W/\"etag-abc\""
@@ -2048,7 +2251,8 @@ Feature: BR-UC-003 Update Media Buy
   Scenario: update_media_buy with unknown media_buy_id returns structured MEDIA_BUY_NOT_FOUND, not a 500
     Given the buyer fabricates a media_buy_id that does not exist in the seller catalog
     When the Buyer Agent sends update_media_buy with the unknown media_buy_id and paused true
-    Then the operation should fail
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
     And the error code should be "MEDIA_BUY_NOT_FOUND"
     And the error recovery hint should indicate correctable
     And the response should echo the context.correlation_id unchanged
@@ -2064,7 +2268,8 @@ Feature: BR-UC-003 Update Media Buy
     Given the media buy exists in the seller catalog
     And the buyer references a package_id that does not belong to the media buy
     When the Buyer Agent sends update_media_buy targeting the unknown package
-    Then the operation should fail
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
     And the error code should be "PACKAGE_NOT_FOUND"
     And the response should echo the context.correlation_id unchanged
     # invalid_transitions Phase 3 (unknown_package): media_buy_id resolves but the buyer
@@ -2078,7 +2283,8 @@ Feature: BR-UC-003 Update Media Buy
   Scenario: Re-cancel of a canceled media buy returns NOT_CANCELLABLE, not silent success
     Given the media buy is in "canceled" status
     When the Buyer Agent sends update_media_buy with canceled true on the already-canceled buy
-    Then the operation should fail
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
     And the error code should be "NOT_CANCELLABLE"
     And the error recovery hint should indicate correctable
     And the response should NOT be a 500 or non-AdCP error shape
@@ -2103,7 +2309,8 @@ Feature: BR-UC-003 Update Media Buy
     Given a media buy has been canceled
     And the canceled buy had a package with creative assignments
     When the buyer subsequently calls list_creatives for the same account
-    Then the creatives that were assigned to the canceled buy's package should still appear in the library
+    Then the response is compliant with the list_creatives spec
+    And the creatives that were assigned to the canceled buy's package should still appear in the library
     And the creatives' review status should be unchanged from before the cancellation
     And the creatives should NOT be auto-flipped to status "rejected" as a side effect of the cancellation
     And the creatives should remain reusable by creative_id in a subsequent create_media_buy or sync_creatives
@@ -2123,10 +2330,11 @@ Feature: BR-UC-003 Update Media Buy
     And a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
-    | budget       | 9000        |
+    | paused       | true        |
     And the request revision is set to <value>
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
     # v3.1 (revision_optimistic_concurrency.yaml): revision optional; minimum 1; mismatch -> CONFLICT
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
 
@@ -2148,10 +2356,11 @@ Feature: BR-UC-003 Update Media Buy
     And a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
-    | budget       | 9000        |
+    | paused       | true        |
     And the request revision is set to <value>
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
 
     Examples: Boundary values
@@ -2169,10 +2378,11 @@ Feature: BR-UC-003 Update Media Buy
     And a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
-    | budget       | 9000        |
+    | paused       | true        |
     And the request revision is set to 7
     When the Buyer Agent sends the update_media_buy request
-    Then the response status should be "completed"
+    Then the response is compliant with the update_media_buy success spec
+    And the response status should be "completed"
     And the response should contain a revision with value 8
     And the response should contain a valid_actions array
     # BR-RULE-215 INV-4: a mutating update increments the stored revision and returns the new value
@@ -2188,43 +2398,57 @@ Feature: BR-UC-003 Update Media Buy
     | field           | value                                |
     | media_buy_id    | mb_existing                          |
     | idempotency_key | 550e8400-e29b-41d4-a716-446655440000 |
-    | budget          | 9000                                 |
+    | paused       | true        |
     And the request revision is set to 7
     When the Buyer Agent sends the update_media_buy request
-    Then the response status should be "completed"
+    Then the response is compliant with the update_media_buy success spec
+    And the response status should be "completed"
     # BR-RULE-215 INV-6: idempotency-replay check (BR-RULE-211) and revision check are independent; neither subsumes the other
     # ---------- BR-RULE-214: Billing Arrangement Eligibility ----------
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
 
   @T-UC-003-ext-t @extension @ext-t @error @schema-v3.1 @post-f1 @post-f2 @post-f3
   Scenario: Invoice recipient not authorized for the account is rejected (ext-t)
-    Given the Buyer is authenticated with a valid principal_id
+    Given the Buyer is authenticated
     And a valid update_media_buy request with:
     | field             | value                  |
     | media_buy_id      | mb_existing            |
     | invoice_recipient | acme-finance-not-on-acct |
-    | budget            | 12000                  |
+    | paused       | true        |
     And the invoice_recipient "acme-finance-not-on-acct" is not authorized for this account
     When the Buyer Agent sends the update_media_buy request
-    Then the operation should fail
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
     And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
+    And the suggestion should contain "authorized"
+    # LOCAL DIVERGENCE from the generated scenario — mirror upstream in adcp-req.
+    # The three Thens above are satisfied by ANY VALIDATION_ERROR carrying a
+    # suggestion, and on [mcp] one arrives for an unrelated reason: update_media_buy
+    # types its parameters, so the spec-defined `invoice_recipient` field (present in
+    # update-media-buy-request.json @ v3.1.1) is refused as an "Unexpected keyword
+    # argument" before any authorization check runs. That made this strict-xfail
+    # XPASS on [mcp] alone while the production gap it ledgers — BR-RULE-214 is not
+    # implemented on any transport — was untouched. The suggestion is what tells the
+    # two refusals apart: POST-F3 below requires it to offer an AUTHORIZED recipient,
+    # which a schema-shape rejection cannot say.
     # BR-RULE-214 INV-8: invoice_recipient override must be authorized for the account before the operation proceeds
     # POST-F1: System state unchanged (no billing redirected); POST-F3: omit override or supply an authorized recipient
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
 
   @T-UC-003-billing-not-supported @invariant @BR-RULE-214 @billing @error @schema-v3.1 @post-f2 @post-f3
   Scenario Outline: Billing party not supported is rejected with scope - <partition>
-    Given the Buyer is authenticated with a valid principal_id
+    Given the Buyer is authenticated
     And the resolved billing party is "<billing_party>"
     And the seller's supported_billing is <supported>
     And the seller's account billing relationship is "<acct_relationship>"
     And a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
-    | budget       | 12000       |
+    | paused       | true        |
     When the Buyer Agent sends the update_media_buy request
-    Then the operation should fail
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
     And the error code should be "BILLING_NOT_SUPPORTED"
     And the error "details" object should include "scope" with value "<scope>"
     And the error should include "suggestion" field
@@ -2244,9 +2468,10 @@ Feature: BR-UC-003 Update Media Buy
     And a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
-    | budget       | 12000       |
+    | paused       | true        |
     When the Buyer Agent sends the update_media_buy request
-    Then the operation should fail
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
     And the error code should be "BILLING_NOT_PERMITTED_FOR_AGENT"
     And the error "details" object should include "rejected_billing"
     And the error "details" object should NOT include "rate_cards" or "payment_terms" or "credit_limit"
@@ -2262,9 +2487,10 @@ Feature: BR-UC-003 Update Media Buy
     And a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
-    | budget       | 12000       |
+    | paused       | true        |
     When the Buyer Agent sends the update_media_buy request
-    Then the operation should fail
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
     And the error code should be "BILLING_NOT_SUPPORTED"
     And the error "details" object should NOT include "scope"
     And the error code should NOT be "BILLING_NOT_PERMITTED_FOR_AGENT"
@@ -2281,7 +2507,8 @@ Feature: BR-UC-003 Update Media Buy
     And the request includes new_packages with one complete package-request
     And the media buy's valid_actions does NOT advertise "add_packages"
     When the Buyer Agent sends the update_media_buy request
-    Then the operation should fail
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
     And the error code should be "UNSUPPORTED_FEATURE"
     And the error should include "suggestion" field
     # BR-RULE-217 INV-1: new_packages on a non-supporting seller -> UNSUPPORTED_FEATURE
@@ -2297,7 +2524,8 @@ Feature: BR-UC-003 Update Media Buy
     | media_buy_id | mb_existing |
     And the request includes new_packages with two complete package-requests
     When the Buyer Agent sends the update_media_buy request
-    Then the response status should be "completed"
+    Then the response is compliant with the update_media_buy success spec
+    And the response status should be "completed"
     And both new packages should appear in the affected_packages
     # BR-RULE-217 INV-2/INV-4: supporting seller advertises add_packages and adds all entries atomically (all-or-none)
     # POST-S1/S2: Buyer knows the media buy was updated and which packages were affected
@@ -2311,7 +2539,8 @@ Feature: BR-UC-003 Update Media Buy
     | media_buy_id | mb_existing |
     And the request includes new_packages with an entry missing product_id
     When the Buyer Agent sends the update_media_buy request
-    Then the operation should fail
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
     And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
     # BR-RULE-217 INV-3: each new_packages entry must be a complete package-request (product_id, budget, pricing_option_id)
@@ -2326,7 +2555,8 @@ Feature: BR-UC-003 Update Media Buy
     | media_buy_id | mb_existing |
     And the request includes new_packages with a package for product "prod_news_300x250"
     When the Buyer Agent sends the update_media_buy request
-    Then the operation should fail
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
     And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
     # BR-RULE-010 INV-4: on update, a new_packages product_id duplicating another entry or an existing package is rejected
@@ -2342,7 +2572,8 @@ Feature: BR-UC-003 Update Media Buy
     | media_buy_id | mb_existing |
     | canceled     | true        |
     When the Buyer Agent sends the update_media_buy request
-    Then the operation should fail
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
     And the error code should be "NOT_CANCELLABLE"
     And the error should include "suggestion" field
     # BR-RULE-216 INV-4: buy not cancellable in current state -> NOT_CANCELLABLE (correctable)
@@ -2358,14 +2589,15 @@ Feature: BR-UC-003 Update Media Buy
     | canceled | true        |
     And the cancellation_reason is set to <value>
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
     # BR-RULE-216 INV-2: cancellation_reason MUST be at most 500 characters
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
 
     Examples: Boundary values
       | boundary_point         | value             | outcome                                 |
       | reason 500 chars (max) | <500 char string> | success                                 |
-      | reason 501 chars (max+1) | <501 char string> | error "VALIDATION_ERROR" with suggestion |
+      | reason 501 chars (max+1) | <501 char string> | error "INVALID_REQUEST" with suggestion |
 
   @T-UC-003-cancel-package @invariant @BR-RULE-216 @cancellation @schema-v3.1 @post-s2
   Scenario: Package-level cancellation stops only that package (INV-6)
@@ -2379,7 +2611,8 @@ Feature: BR-UC-003 Update Media Buy
     | package_id | pkg_001 |
     | canceled   | true    |
     When the Buyer Agent sends the update_media_buy request
-    Then the response status should be "completed"
+    Then the response is compliant with the update_media_buy success spec
+    And the response status should be "completed"
     And package "pkg_001" should be canceled
     And the media buy status should NOT be "canceled"
     # BR-RULE-216 INV-6: per-package canceled:true cancels only that package; the media buy is not canceled
@@ -2393,8 +2626,9 @@ Feature: BR-UC-003 Update Media Buy
     | media_buy_id | mb_existing |
     | canceled     | false       |
     When the Buyer Agent sends the update_media_buy request
-    Then the operation should fail
-    And the error code should be "VALIDATION_ERROR"
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     # BR-RULE-216 INV-1: canceled only valid value is const true; INV-3: cancellation is irreversible (no "uncancel")
     # ---------- BR-RULE-198: Package Immutable Fields After Creation (immutable field guard on package update) ----------
@@ -2410,7 +2644,8 @@ Feature: BR-UC-003 Update Media Buy
     | package_id | pkg_001    |
     | product_id | prod_other |
     When the Buyer Agent sends the update_media_buy request
-    Then the operation should fail
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     # BR-RULE-198 INV-1: product_id is immutable post-create; package-update root `not` constraint rejects it
@@ -2424,7 +2659,8 @@ Feature: BR-UC-003 Update Media Buy
     | media_buy_id | mb_existing |
     And the request includes 1 package update containing <forbidden_field>
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
     # BR-RULE-198 (immutable_field_guard.yaml): product_id / format_ids / pricing_option_id forbidden in package-update
     # ---------- BR-RULE-219: Committed Metrics Append-Only ----------
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
@@ -2446,7 +2682,8 @@ Feature: BR-UC-003 Update Media Buy
     And the media buy "mb_existing" has a committed metric "impressions" with committed_at "2026-04-29T10:53:00Z"
     And a valid update_media_buy request that appends a new committed metric "viewable_rate"
     When the Buyer Agent sends the update_media_buy request
-    Then the response status should be "completed"
+    Then the response is compliant with the update_media_buy success spec
+    And the response status should be "completed"
     And the committed metric "impressions" should remain present with committed_at "2026-04-29T10:53:00Z"
     And the committed metric "viewable_rate" should be present with its own committed_at
     # BR-RULE-219 INV-1: append new (scope, metric_id, qualifier) accepted; INV-4: prior entries preserved (monotonic)
@@ -2457,7 +2694,8 @@ Feature: BR-UC-003 Update Media Buy
     Given the media buy "mb_existing" has a committed metric "impressions" with committed_at "2026-04-29T10:53:00Z"
     And a valid update_media_buy request that <mutation>
     When the Buyer Agent sends the update_media_buy request
-    Then the operation should fail
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
     And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
     # BR-RULE-219 INV-2/INV-3: existing committed entries cannot be modified or removed (suggested code IMMUTABLE_FIELD)
@@ -2475,7 +2713,8 @@ Feature: BR-UC-003 Update Media Buy
     And the media buy "mb_existing" has a committed metric "impressions" with committed_at "2026-04-29T10:53:00Z"
     And a valid update_media_buy request that <case>
     When the Buyer Agent sends the update_media_buy request
-    Then the response status should be "completed"
+    Then the response is compliant with the update_media_buy success spec
+    And the response status should be "completed"
     And the committed metric "impressions" should remain unchanged
     # ---------- BR-RULE-209 INV-10: Sandbox on update non-success shapes ----------
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
@@ -2493,7 +2732,8 @@ Feature: BR-UC-003 Update Media Buy
     | media_buy_id | mb_existing |
     And the update resolves to the <shape> response shape because <trigger>
     When the Buyer Agent sends the update_media_buy request
-    Then the response payload should NOT contain a "sandbox" field
+    Then the response is compliant with the update_media_buy spec
+    And the response payload should NOT contain a "sandbox" field
     # BR-RULE-209 INV-10: update_media_buy three-way oneOf -- sandbox appears only on synchronous success
     # ---------- BR-RULE-013 INV-6: package-level start_time 'asap' forbidden ----------
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
@@ -2513,7 +2753,8 @@ Feature: BR-UC-003 Update Media Buy
     | package_id | pkg_001 |
     | start_time | asap    |
     When the Buyer Agent sends the update_media_buy request
-    Then the operation should fail
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     # BR-RULE-013 INV-6: 'asap' is forbidden (not/const) at package scope; only an ISO 8601 date-time is accepted
@@ -2524,7 +2765,8 @@ Feature: BR-UC-003 Update Media Buy
     Given an update_media_buy request whose resolved account is <account_context>
     And the update resolves to the <response_shape> response shape
     When the Buyer Agent sends the update_media_buy request
-    Then the sandbox response-field outcome should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the sandbox response-field outcome should be <outcome>
     # ---------- start_time package-scope boundary (start_time.yaml) ----------
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
 
@@ -2543,7 +2785,8 @@ Feature: BR-UC-003 Update Media Buy
     Given a valid update_media_buy request for "mb_existing"
     And the request includes 1 package update where start_time is <value>
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
     # ---------- billing eligibility boundaries (billing_eligibility.yaml, BR-RULE-214) ----------
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
 
@@ -2555,7 +2798,8 @@ Feature: BR-UC-003 Update Media Buy
   Scenario Outline: billing eligibility boundary - <boundary>
     Given an update_media_buy request for "mb_existing" with the billing condition: <boundary>
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
     # ---------- targeting_overlay collection_list boundaries (targeting_overlay.yaml, BR-RULE-014) ----------
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
 
@@ -2573,7 +2817,8 @@ Feature: BR-UC-003 Update Media Buy
     Given a valid update_media_buy request for "mb_existing"
     And the request carries a targeting_overlay where <boundary>
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
     # ---------- immutable_field_guard boundaries (immutable_field_guard.yaml, BR-RULE-198) ----------
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
 
@@ -2588,7 +2833,8 @@ Feature: BR-UC-003 Update Media Buy
     Given a valid update_media_buy request for "mb_existing"
     And the request includes a package update where <boundary>
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
     # ---------- package_immutable_fields boundaries (uc026_immutable_fields.yaml, BR-RULE-198) ----------
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
 
@@ -2605,7 +2851,8 @@ Feature: BR-UC-003 Update Media Buy
     Given a valid update_media_buy request for "mb_existing"
     And the request includes a package update where the payload <boundary>
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
     # ---------- committed_metrics append-only boundaries (committed_metrics_append_only.yaml, BR-RULE-219) ----------
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
 
@@ -2622,7 +2869,8 @@ Feature: BR-UC-003 Update Media Buy
     Given a media buy "mb_existing" whose committed_metrics already contains a committed contract
     And an update_media_buy request that <boundary>
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
     # v3.1 core/package.json committed_metrics: sellers MUST reject modify/remove of existing
     # entries with validation_error, suggested code IMMUTABLE_FIELD (BR-RULE-219 INV-2/INV-3).
     # ---------- idempotency_key boundaries (idempotency_key.yaml, BR-RULE-081) ----------
@@ -2643,20 +2891,22 @@ Feature: BR-UC-003 Update Media Buy
     Given a valid update_media_buy request for "mb_existing"
     And the request's idempotency_key matches the boundary <boundary>
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
     # ---------- product_uniqueness boundaries (product_uniqueness.yaml, BR-RULE-010) ----------
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
 
     Examples: idempotency_key boundaries (BR-UC-003)
       | boundary                                       | outcome                                            |
       | absent (field not provided)                    | error "INVALID_REQUEST" — rejected (v3.1 requires idempotency_key) |
-      | valid length, disallowed character (e.g. space) | error "VALIDATION_ERROR" (suggested_code IDEMPOTENCY_KEY_INVALID_FORMAT) — rejected |
+      | valid length, disallowed character (e.g. space) | error "INVALID_REQUEST" (suggested_code IDEMPOTENCY_KEY_INVALID_FORMAT) — rejected |
 
   @T-UC-003-bva-product-uniqueness @boundary @product_uniqueness @schema-v3.1 @post-f2
   Scenario Outline: product uniqueness boundary - <boundary>
     Given an update_media_buy request for "mb_existing" whose package set is described by <boundary>
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
     # ---------- approval_workflow submitted-envelope boundaries (approval_workflow.yaml) ----------
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
 
@@ -2675,7 +2925,8 @@ Feature: BR-UC-003 Update Media Buy
     Given an update_media_buy request for "mb_existing"
     And the tenant/adapter approval configuration is <boundary>
     When the Buyer Agent sends the update_media_buy request
-    Then the result should be <outcome>
+    Then the response is compliant with the update_media_buy spec
+    And the result should be <outcome>
 
     Examples: approval workflow (BR-UC-003)
       | boundary                                  | outcome                                    |

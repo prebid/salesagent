@@ -77,7 +77,7 @@ A human doing a planned rewrite would not cite Python line numbers in TypeScript
 |-----------|--------|-----------|
 | Business logic isolation | `_impl()` functions — zero transport imports (enforced by AST guard) | Mixed — MCP tools in 370-line monolith (`mcpProtocol.ts`), A2A skills in separate modules |
 | Identity resolution | `ResolvedIdentity` frozen model, resolved once at boundary | 3 parallel auth systems, MCP duplicates auth inline (20-line copy at `mcpProtocol.ts:328-351`) |
-| Error hierarchy | `AdCPError` with 6 subclasses, HTTP codes, transport mapping | **14** independent `extends Error` classes (up from 7 after Mar 7-9 push), no shared base, no HTTP codes |
+| Error hierarchy | `AdCPSalesAgentError` with 6 subclasses, HTTP codes, transport mapping | **14** independent `extends Error` classes (up from 7 after Mar 7-9 push), no shared base, no HTTP codes |
 | Data access | Repository pattern with auto tenant-scoping | Raw `db` import in 81+ files, manual tenant filter per query |
 | Serialization boundary | `model_dump()` only at transport wrappers (guard tracks 25 remaining violations) | Three mechanisms: `stripInternalFields()`, `serializeNested()`, Zod `.parse()` |
 
@@ -211,7 +211,7 @@ Additionally, a 344-line `AGENTS.md` documents extensive rules for security, per
 | Python Guard | What it enforces | TS equivalent? |
 |---|---|---|
 | No transport imports in `_impl` | Business logic can't import from fastmcp/a2a | **None** |
-| No `ToolError` in `_impl` | Must use `AdCPError` hierarchy | **None** |
+| No `ToolError` in `_impl` | Must use `AdCPSalesAgentError` hierarchy | **None** |
 | `_impl` accepts `ResolvedIdentity` | Not raw `Context` objects | **None** |
 | Wrappers forward all `_impl` params | MCP/A2A completeness | **None** |
 | No `.model_dump()` in `_impl` | No serialization in business logic | **None** |
@@ -364,7 +364,7 @@ The TypeScript "cross-tenant" tests (`adminSchemaBound.validation.spec.ts`) veri
 - Multi-transport test harness (same test runs 4x across IMPL/A2A/REST/MCP)
 - Repository + UoW pattern for data access
 - Frozen `ResolvedIdentity` model for transport-agnostic business logic
-- 6-class `AdCPError` hierarchy with transport mapping
+- 6-class `AdCPSalesAgentError` hierarchy with transport mapping
 - Factory-based test fixtures (11 ORM factories)
 - Per-domain scoped coverage (creative >95%, delivery 97.9%)
 - REST API with full parity to MCP/A2A
@@ -479,7 +479,7 @@ The TypeScript rewrite — even after the weekend hardening push — is evidence
 | Obligation coverage allowlist | `tests/unit/obligation_coverage_allowlist.json` |
 | Cross-tenant guard | `tests/unit/test_cross_tenant_query_isolation.py` |
 | ResolvedIdentity model | `src/core/resolved_identity.py` |
-| AdCPError hierarchy | `src/core/exceptions.py` |
+| AdCPSalesAgentError hierarchy | `src/core/exceptions.py` |
 | Requirements derivation | `adcp-req` repository |
 
 ### TypeScript Repository (SigmaSalesAgent) — verified against commit `3f40c92` (Mar 9)

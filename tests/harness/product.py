@@ -7,7 +7,7 @@ real egress seam.
 
 Patches: PolicyCheckService, generate_variants_for_brief,
          get_factory (ranking), resolve_property_list.
-Real: ProductUoW, get_principal_object, convert_product_model_to_schema,
+Real: ProductUoW, convert_product_model_to_schema,
       DynamicPricingService, adapter metadata, audit logger, get_db_session.
 
 Requires: integration_db fixture (creates test PostgreSQL DB).
@@ -33,7 +33,7 @@ Available mocks via env.mock:
 
 Transport support:
     call_impl(**kw)          -- direct _get_products_impl (sync wrapper around async)
-    call_a2a(**kw)           -- get_products_raw A2A wrapper
+    call_a2a(**kw)           -- dispatch get_products through the A2A handler
     call_mcp(**kw)           -- get_products via the registered MCP client
     build_rest_body(**kw)    -- POST /api/v1/products body
     parse_rest_response(d)   -- JSON -> GetProductsResponse
@@ -48,16 +48,17 @@ from unittest.mock import MagicMock
 from src.core.schemas import GetProductsResponse
 from tests.harness._base import IntegrationEnv
 from tests.harness._mixins import ProductMixin
+from tests.harness.database_faults import DatabaseFaultMixin
 from tests.harness.egress import EgressHatchMixin
 
 
-class ProductEnv(ProductMixin, IntegrationEnv):
+class ProductEnv(DatabaseFaultMixin, ProductMixin, IntegrationEnv):
     """Integration test environment for _get_products_impl.
 
     Only mocks external services (policy, dynamic variants,
     AI ranking, property list resolution). Everything else is real:
     - Real ProductUoW -> real DB queries
-    - Real get_principal_object -> real DB queries
+    - The principal comes off the identity; nothing looks one up
     - Real convert_product_model_to_schema -> real conversion
     - Real DynamicPricingService -> real DB queries (FormatPerformanceMetrics)
     - Real audit logging
@@ -86,6 +87,8 @@ class ProductEnv(ProductMixin, IntegrationEnv):
     ASYNC_PATCHES = {"dynamic_variants", "resolve_property_list"}
 
     REST_ENDPOINT = "/api/v1/products"
+
+    #: Dotted path to the skill's _impl function, for inject_untyped_exception().
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -137,9 +140,9 @@ class ProductEnv(ProductMixin, IntegrationEnv):
         """
         return {k: v for k, v in kwargs.items() if v is not None}
 
-    def parse_rest_response(self, data: dict[str, Any]) -> GetProductsResponse:
-        """Parse REST JSON response into GetProductsResponse."""
-        return GetProductsResponse(**data)
+    # parse_rest_response: the base's, which revives RESPONSE_MODEL. The one-line override
+    # here read GetProductsResponse(**data), which the served document's boundary-stamped
+    # `context` makes impossible to construct.
 
 
 class RealResolverProductEnv(EgressHatchMixin, ProductEnv):

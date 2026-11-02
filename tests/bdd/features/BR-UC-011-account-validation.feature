@@ -4,7 +4,7 @@
 # derivation is blind to: the pinned 3.1 spec marks every accounts[] entry
 # required:[brand,operator,billing] (sync-accounts-request.json @ v3.1-04f59d2d5),
 # yet BR-UC-011 has no scenario for a brandless entry. SDK 5.7 added an
-# account-reference arm (Accounts3) that makes brand optional, so a brandless
+# account-reference branch (Accounts3) that makes brand optional, so a brandless
 # entry must be rejected as a clean buyer-correctable 400 — not crash with a 500.
 #
 # Companion files in this directory survive `python scripts/compile_bdd.py --merge`
@@ -23,6 +23,7 @@ Feature: BR-UC-011 Account Validation (hand-authored companion)
 
   @T-UC-011-sync-brandless @sync @validation @post-f1 @post-f2
   Scenario: Sync rejects an account entry that omits brand
-    Given the Buyer Agent has an authenticated connection
+    Given the Buyer is authenticated
     When the Buyer Agent sends a sync_accounts request with a brandless account entry
-    Then the brandless entry is rejected with a correctable VALIDATION_ERROR
+    Then the response is compliant with the sync_accounts error spec
+    And the brandless entry is rejected with a correctable VALIDATION_ERROR

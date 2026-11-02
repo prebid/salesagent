@@ -16,13 +16,48 @@ from pytest_bdd import given, then, when
 from tests.bdd.steps._outcome_helpers import wire_error_dict
 from tests.bdd.steps.generic._dispatch import dispatch_via_client
 from tests.bdd.steps.generic.then_error import then_error_recovery
+from tests.factories.mint import mint
 from tests.harness.transport import DERIVED_STATUS_ADCP_ERROR, DERIVED_STATUS_TRANSPORT_FAULT
+
+
+def _dispatch_update(ctx: dict, payload: dict) -> None:
+    """Stamp the spec-required update fields onto *payload* and dispatch it.
+
+    Written once for both When steps below because both send the same KIND of
+    document and differ only in what they ask the seller to change; a second copy
+    of the stamping is the shape the DRY invariant forbids, and it is how the two
+    would drift into sending differently-valid documents.
+
+    AdCP 3.1.1 ``media-buy/update-media-buy-request.json`` /required is
+    ``[idempotency_key, account, media_buy_id]``. A payload carrying only
+    ``media_buy_id`` is therefore a MALFORMED DOCUMENT, and production refuses it
+    with INVALID_REQUEST before it ever resolves the media buy — so a scenario
+    grading MEDIA_BUY_NOT_FOUND (or a terminal-state refusal) was grading its own
+    missing fields on every transport. The fields are stamped HERE, at the
+    dispatch, rather than written into each payload literal, so the scenario's
+    payload stays the thing the scenario is about.
+
+    ``idempotency_key`` is fresh per dispatch: the pinned shape is a
+    client-generated at-most-once token (16-255 chars, ``[A-Za-z0-9_.:-]``), so
+    two scenarios sharing one key would be asking the seller to treat them as the
+    same request.
+    """
+    # The SEEDED account, not a literal. ``acct_test`` was a fabricated id: the boundary
+    # RESOLVES the reference now (it used to accept and drop it), so every scenario here
+    # came back PERMISSION_DENIED before reaching what it grades. env.default_account_reference
+    # is the row the seeder created, with this principal's access to it.
+    payload = {
+        "account": ctx["env"].default_account_reference().model_dump(mode="json"),
+        "idempotency_key": mint(f"uc003-storyboard-{uuid4().hex}"),
+        **payload,
+    }
+    dispatch_via_client(ctx, "update_media_buy", payload)
 
 
 @given("the buyer fabricates a media_buy_id that does not exist in the seller catalog")
 def given_fabricated_nonexistent_media_buy_id(ctx: dict) -> None:
     """Stash a guaranteed-nonexistent media_buy_id — nothing to seed against."""
-    ctx["fabricated_media_buy_id"] = f"mb_does_not_exist_{uuid4()}"
+    ctx["fabricated_media_buy_id"] = mint(f"mb_does_not_exist_{uuid4()}")
 
 
 @when("the Buyer Agent sends update_media_buy with the unknown media_buy_id and paused true")
@@ -34,14 +69,14 @@ def when_update_media_buy_with_unknown_id(ctx: dict) -> None:
     T-UC-003-storyboard-package-not-found, which reuses the correlation_id-echo
     Then step below, can graduate later without a rewrite.
     """
-    correlation_id = str(uuid4())
+    correlation_id = mint(str(uuid4()))
     ctx["correlation_id"] = correlation_id
     payload = {
         "media_buy_id": ctx["fabricated_media_buy_id"],
         "paused": True,
         "context": {"correlation_id": correlation_id},
     }
-    dispatch_via_client(ctx, "update_media_buy", payload)
+    _dispatch_update(ctx, payload)
 
 
 @when("the Buyer Agent sends update_media_buy with canceled true on the already-canceled buy")
@@ -60,7 +95,7 @@ def when_update_media_buy_recancel(ctx: dict) -> None:
     the same contract the sibling storyboard When step uses, so the shared
     correlation-echo Then step below works unmodified.
     """
-    correlation_id = str(uuid4())
+    correlation_id = mint(str(uuid4()))
     ctx["correlation_id"] = correlation_id
     media_buy = ctx["existing_media_buy"]
     assert media_buy is not None, (
@@ -72,7 +107,7 @@ def when_update_media_buy_recancel(ctx: dict) -> None:
         "canceled": True,
         "context": {"correlation_id": correlation_id},
     }
-    dispatch_via_client(ctx, "update_media_buy", payload)
+    _dispatch_update(ctx, payload)
 
 
 @then("the error recovery hint should indicate correctable")
@@ -133,6 +168,14 @@ def then_response_not_500_or_non_adcp_shape(ctx: dict) -> None:
     invariant (``adcp_error.code == errors[0].code``), that the code is canonical
     (pinned ``error-code.json``), and that recovery matches the pinned
     classification.
+
+    That read goes through ``TransportResult.wire_error_code()``, the harness
+    reader, not a hand-rolled ``envelope.get("adcp_error")``: WHERE the spec puts
+    the code is the harness's business (one ``locate_envelope_error``), and
+    re-deciding it here would be a second answer to the same question that could
+    drift from the one ``assert_wire_error`` uses on the very next line. Reading
+    the payload layer costs nothing, because the two-layer invariant that
+    ``assert_wire_error`` then checks is what makes the mirror equivalent.
     """
     result = ctx.get("result")
     assert result is not None, (
@@ -159,6 +202,6 @@ def then_response_not_500_or_non_adcp_shape(ctx: dict) -> None:
         assert status_code != 500, f"Expected a non-500 status, got {status_code}"
 
     envelope = wire_error_dict(ctx)
-    code = (envelope.get("adcp_error") or {}).get("code")
-    assert code, f"Expected a non-empty adcp_error.code in the wire envelope, got {envelope}"
+    code = result.wire_error_code()
+    assert code, f"Expected a non-empty error code in the wire envelope, got {envelope}"
     result.assert_wire_error(code)

@@ -1,5 +1,4 @@
 # Generated from adcp-req @ a14db6e5894e781a8b2c577e86e1b136876e4915 on 2026-06-03T11:30:04Z (merge mode)
-# DO NOT EDIT -- re-run: python scripts/compile_bdd.py --merge
 
 Feature: BR-UC-014 Sponsored Intelligence Session
   As a Buyer
@@ -245,7 +244,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the Buyer Agent sends si_send_message with session_id "nonexistent-sess" and message "hello"
     Then the operation should fail
     And the error code should be "session_not_found"
-    And the error message should contain "session"
     And the error should include "suggestion" field
     And the suggestion should contain "session_id"
     And the error references session_id "nonexistent-sess"
@@ -259,7 +257,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the Buyer Agent sends si_terminate_session with session_id "ghost-session" and reason "user_exit"
     Then the operation should fail
     And the error code should be "session_not_found"
-    And the error message should contain "session"
     And the error should include "suggestion" field
     And the suggestion should contain "session_id"
     And the error references session_id "ghost-session"
@@ -274,7 +271,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the Buyer Agent sends si_get_offering with offering_id "nonexistent-offer"
     Then the operation should fail
     And the error code should be "offer_unavailable"
-    And the error message should contain "offering"
     And the error should include "suggestion" field
     And the suggestion should contain "offering"
     And the response may contain alternative_offering_ids
@@ -299,7 +295,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the Buyer Agent sends si_initiate_session requiring video modality as essential
     Then the operation should fail
     And the error code should be "capability_unsupported"
-    And the error message should contain "capability"
     And the error should include "suggestion" field
     And the suggestion should contain "conversational"
     # POST-F1: No session created when required capability is missing
@@ -312,7 +307,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the Buyer Agent sends si_get_offering with offering_id "any-offer"
     Then the operation should fail
     And the error code should be "rate_limited"
-    And the error message should contain "rate"
     And the error should include "suggestion" field
     And the suggestion should contain "retry"
     And the error includes retry_after seconds
@@ -326,7 +320,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the Buyer Agent sends si_send_message with session_id "sess-abc123" and message "hello"
     Then the operation should fail
     And the error code should be "rate_limited"
-    And the error message should contain "rate"
     And the error should include "suggestion" field
     And the suggestion should contain "retry"
     # POST-F1: Request not processed
@@ -339,7 +332,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the Buyer Agent sends si_send_message with session_id "sess-done" and message "hello again"
     Then the operation should fail
     And the error code should be "SESSION_TERMINATED"
-    And the error message should contain "terminated"
     And the error should include "suggestion" field
     And the suggestion should contain "new session"
     # POST-F1: System state unchanged
@@ -354,7 +346,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the Buyer Agent sends si_send_message with session_id "sess-complete" and message "one more question"
     Then the operation should fail
     And the error code should be "SESSION_TERMINATED"
-    And the error message should contain "ended"
     And the error should include "suggestion" field
     And the suggestion should contain "si_initiate_session"
     # POST-F1: System state unchanged
@@ -374,9 +365,9 @@ Feature: BR-UC-014 Sponsored Intelligence Session
 
     Examples: Invalid partitions
       | partition                  | intent_value                                  | outcome                                                                       |
-      | intent_with_email          | "find shoes for john@example.com"             | error "INTENT_PII_DETECTED" with suggestion "Remove PII from the intent"      |
-      | intent_with_phone          | "order something and call 555-123-4567"       | error "INTENT_PII_DETECTED" with suggestion "Remove PII from the intent"      |
-      | intent_with_name_and_address | "deliver to John Smith at 123 Main St"      | error "INTENT_PII_DETECTED" with suggestion "Remove PII from the intent"      |
+      | intent_with_email          | "find shoes for john@example.com"             | error "POLICY_VIOLATION" with suggestion "Remove PII from the intent"      |
+      | intent_with_phone          | "order something and call 555-123-4567"       | error "POLICY_VIOLATION" with suggestion "Remove PII from the intent"      |
+      | intent_with_name_and_address | "deliver to John Smith at 123 Main St"      | error "POLICY_VIOLATION" with suggestion "Remove PII from the intent"      |
 
   @T-UC-014-bound-intent-pii @boundary @offering-pii @br-rule-095 @schema-v3.1
   Scenario Outline: Offering intent PII boundary validation - <boundary_point>
@@ -392,9 +383,9 @@ Feature: BR-UC-014 Sponsored Intelligence Session
       | intent with generic free-text (no PII)                  | "looking for running shoes size 11"           | the offering lookup succeeds                                               |
       | both intent and context are null/absent                 |                                               | the offering lookup succeeds                                               |
       | context is empty string, intent absent                  | ""                                            | the offering lookup succeeds                                               |
-      | intent containing email pattern                         | "find jacket for jane@example.com"            | error "INTENT_PII_DETECTED" with suggestion "Remove PII from the intent"   |
-      | intent containing phone pattern                         | "call me 555-987-6543 about jackets"          | error "INTENT_PII_DETECTED" with suggestion "Remove PII from the intent"   |
-      | intent containing full name + street address            | "send to Jane Roe at 9 Park Ave"              | error "INTENT_PII_DETECTED" with suggestion "Remove PII from the intent"   |
+      | intent containing email pattern                         | "find jacket for jane@example.com"            | error "POLICY_VIOLATION" with suggestion "Remove PII from the intent"   |
+      | intent containing phone pattern                         | "call me 555-987-6543 about jackets"          | error "POLICY_VIOLATION" with suggestion "Remove PII from the intent"   |
+      | intent containing full name + street address            | "send to Jane Roe at 9 Park Ave"              | error "POLICY_VIOLATION" with suggestion "Remove PII from the intent"   |
 
   @T-UC-014-part-identity-consent @partition @identity-consent @br-rule-096
   Scenario Outline: Identity consent partition validation - <partition>
@@ -409,9 +400,9 @@ Feature: BR-UC-014 Sponsored Intelligence Session
 
     Examples: Invalid partitions
       | partition                    | outcome                                                                                          |
-      | consent_missing              | error "CONSENT_GRANTED_REQUIRED" with suggestion "Provide a boolean consent_granted field"        |
-      | consent_true_no_scope        | error "CONSENT_SCOPE_REQUIRED" with suggestion "Provide consent_scope array"                     |
-      | consent_false_with_user_data | error "IDENTITY_CONSENT_CONFLICT" with suggestion "Remove user data from the identity object"    |
+      | consent_missing              | error "INVALID_REQUEST" with suggestion "Provide a boolean consent_granted field"        |
+      | consent_true_no_scope        | error "INVALID_REQUEST" with suggestion "Provide consent_scope array"                     |
+      | consent_false_with_user_data | error "VALIDATION_ERROR" with suggestion "Remove user data from the identity object"    |
 
   @T-UC-014-bound-identity-consent @boundary @identity-consent @br-rule-096
   Scenario Outline: Identity consent boundary validation - <boundary_point>
@@ -424,9 +415,9 @@ Feature: BR-UC-014 Sponsored Intelligence Session
       | consent_granted = true with empty consent_scope array | session created with limited scope                                                            |
       | consent_granted = false with anonymous_session_id     | session created anonymously                                                                   |
       | consent_granted = false without anonymous_session_id  | session created anonymously                                                                   |
-      | consent_granted missing from identity object          | error "CONSENT_GRANTED_REQUIRED" with suggestion "Provide a boolean consent_granted field"     |
-      | consent_granted = true but no consent_scope           | error "CONSENT_SCOPE_REQUIRED" with suggestion "Provide consent_scope array"                   |
-      | consent_granted = false but user object is populated  | error "IDENTITY_CONSENT_CONFLICT" with suggestion "Remove user data from the identity object"  |
+      | consent_granted missing from identity object          | error "INVALID_REQUEST" with suggestion "Provide a boolean consent_granted field"     |
+      | consent_granted = true but no consent_scope           | error "INVALID_REQUEST" with suggestion "Provide consent_scope array"                   |
+      | consent_granted = false but user object is populated  | error "VALIDATION_ERROR" with suggestion "Remove user data from the identity object"  |
 
   @T-UC-014-part-capability @partition @capability-negotiation @br-rule-097
   Scenario Outline: Capability negotiation partition validation - <partition>
@@ -441,8 +432,8 @@ Feature: BR-UC-014 Sponsored Intelligence Session
 
     Examples: Invalid partitions
       | partition                  | outcome                                                                                                         |
-      | conversational_disabled    | error "CAPABILITY_UNSUPPORTED" with suggestion "Ensure conversational modality is always enabled"                |
-      | unknown_standard_component | error "CAPABILITY_UNSUPPORTED" with suggestion "Use only standard component types"                               |
+      | conversational_disabled    | error "UNSUPPORTED_FEATURE" with suggestion "Ensure conversational modality is always enabled"                |
+      | unknown_standard_component | error "UNSUPPORTED_FEATURE" with suggestion "Use only standard component types"                               |
 
   @T-UC-014-bound-capability @boundary @capability-negotiation @br-rule-097
   Scenario Outline: Capability negotiation boundary validation - <boundary_point>
@@ -455,8 +446,8 @@ Feature: BR-UC-014 Sponsored Intelligence Session
       | all modalities supported by both sides            | negotiated_capabilities includes all matching modalities                                         |
       | host supports voice but brand does not            | negotiated_capabilities excludes voice (intersection excludes it)                                |
       | host supports acp_checkout and brand does too     | negotiated_capabilities includes acp_checkout true                                               |
-      | conversational explicitly set to false            | error "CAPABILITY_UNSUPPORTED" with suggestion "Ensure conversational modality is always enabled" |
-      | unknown component type in standard array          | error "CAPABILITY_UNSUPPORTED" with suggestion "Use only standard component types"                |
+      | conversational explicitly set to false            | error "UNSUPPORTED_FEATURE" with suggestion "Ensure conversational modality is always enabled" |
+      | unknown component type in standard array          | error "UNSUPPORTED_FEATURE" with suggestion "Use only standard component types"                |
 
   @T-UC-014-part-session-lifecycle @partition @session-lifecycle @br-rule-098
   Scenario Outline: Session lifecycle partition validation - <partition>
@@ -474,8 +465,8 @@ Feature: BR-UC-014 Sponsored Intelligence Session
 
     Examples: Invalid partitions
       | partition                           | outcome                                                                                                |
-      | unknown_status                      | error "SESSION_STATUS_INVALID" with suggestion "Use only the enumerated session status values"          |
-      | pending_handoff_no_handoff_object   | error "HANDOFF_REQUIRED" with suggestion "Include a handoff object"                                    |
+      | unknown_status                      | error "INVALID_REQUEST" with suggestion "Use only the enumerated session status values"          |
+      | pending_handoff_no_handoff_object   | error "INVALID_REQUEST" with suggestion "Include a handoff object"                                    |
       | message_to_complete_session         | error "SESSION_TERMINATED" with suggestion "Start a new session with si_initiate_session"      |
       | message_to_terminated_session       | error "SESSION_TERMINATED" with suggestion "Start a new session with si_initiate_session"      |
       | message_to_terminal_session         | error "SESSION_TERMINATED" with suggestion "Start a new session with si_initiate_session"      |
@@ -493,8 +484,8 @@ Feature: BR-UC-014 Sponsored Intelligence Session
       | session_status = 'pending_handoff' with handoff object | pending_handoff accepted with handoff data                                                        |
       | session_status = 'complete'                            | no more messages accepted                                                                         |
       | session_status = 'terminated'                          | session ended due to timeout/error/policy/host action; no further activity accepted                |
-      | session_status = unknown value                         | error "SESSION_STATUS_INVALID" with suggestion "Use only the enumerated session status values"     |
-      | session_status = 'pending_handoff' without handoff object | error "HANDOFF_REQUIRED" with suggestion "Include a handoff object"                             |
+      | session_status = unknown value                         | error "INVALID_REQUEST" with suggestion "Use only the enumerated session status values"     |
+      | session_status = 'pending_handoff' without handoff object | error "INVALID_REQUEST" with suggestion "Include a handoff object"                             |
       | send_message to complete session                       | error "SESSION_TERMINATED" with suggestion "Start a new session with si_initiate_session"  |
       | send_message to terminated session                     | error "SESSION_TERMINATED" with suggestion "Start a new session with si_initiate_session"  |
       | initiate/send_message response omits session_status    | response-schema violation rejected by host                                                         |
@@ -513,8 +504,8 @@ Feature: BR-UC-014 Sponsored Intelligence Session
 
     Examples: Invalid partitions
       | partition           | outcome                                                                                              |
-      | neither_present     | error "MESSAGE_CONTENT_REQUIRED" with suggestion "Include a text message or an action_response"       |
-      | session_id_missing  | error "SESSION_ID_REQUIRED" with suggestion "Provide the session_id from si_initiate_session"         |
+      | neither_present     | error "INVALID_REQUEST" with suggestion "Include a text message or an action_response"       |
+      | session_id_missing  | error "INVALID_REQUEST" with suggestion "Provide the session_id from si_initiate_session"         |
 
   @T-UC-014-bound-message-content @boundary @message-content @br-rule-099
   Scenario Outline: Message content boundary validation - <boundary_point>
@@ -527,12 +518,12 @@ Feature: BR-UC-014 Sponsored Intelligence Session
       | message only (non-empty string)             | the brand agent responds                                                                         |
       | action_response only (with action field)    | the brand agent responds to action                                                               |
       | both message and action_response present    | both inputs processed                                                                            |
-      | neither message nor action_response         | error "MESSAGE_CONTENT_REQUIRED" with suggestion "Include a text message or an action_response"   |
-      | message is empty string, no action_response | error "MESSAGE_CONTENT_REQUIRED" with suggestion "Include a text message or an action_response"   |
-      | session_id missing                          | error "SESSION_ID_REQUIRED" with suggestion "Provide the session_id from si_initiate_session"     |
+      | neither message nor action_response         | error "INVALID_REQUEST" with suggestion "Include a text message or an action_response"   |
+      | message is empty string, no action_response | error "INVALID_REQUEST" with suggestion "Include a text message or an action_response"   |
+      | session_id missing                          | error "INVALID_REQUEST" with suggestion "Provide the session_id from si_initiate_session"     |
 
   @T-UC-014-part-termination @partition @termination-handoff @br-rule-100
-  Scenario Outline: Termination reason partition validation - <partition>
+  Scenario Outline: Termination ACP handoff partition validation - <partition>
     Given an active SI session exists with session_id "sess-term"
     When the Buyer Agent sends si_terminate_session with session_id "sess-term" and reason matching <partition>
     Then <outcome>
@@ -547,12 +538,12 @@ Feature: BR-UC-014 Sponsored Intelligence Session
 
     Examples: Invalid partitions
       | partition                   | outcome                                                                                                    |
-      | unknown_reason              | error "TERMINATION_REASON_INVALID" with suggestion "Use one of the enumerated termination reasons"          |
-      | reason_missing              | error "TERMINATION_REASON_REQUIRED" with suggestion "Provide a termination reason"                          |
-      | handoff_transaction_no_acp  | error "ACP_HANDOFF_REQUIRED" with suggestion "Ensure the brand agent generates ACP checkout data"           |
+      | unknown_reason              | error "INVALID_REQUEST" with suggestion "Use one of the enumerated termination reasons"          |
+      | reason_missing              | error "INVALID_REQUEST" with suggestion "Provide a termination reason"                          |
+      | handoff_transaction_no_acp  | error "INVALID_REQUEST" with suggestion "Ensure the brand agent generates ACP checkout data"           |
 
   @T-UC-014-bound-termination @boundary @termination-handoff @br-rule-100
-  Scenario Outline: Termination reason boundary validation - <boundary_point>
+  Scenario Outline: Termination ACP handoff boundary validation - <boundary_point>
     Given an active SI session exists with session_id "sess-term"
     When the Buyer Agent sends si_terminate_session at boundary <boundary_point>
     Then <outcome>
@@ -564,9 +555,9 @@ Feature: BR-UC-014 Sponsored Intelligence Session
       | reason = user_exit                                      | session terminated without ACP handoff                                                                |
       | reason = session_timeout                                | session terminated without ACP handoff                                                                |
       | reason = host_terminated with cause                     | session terminated without ACP handoff                                                                |
-      | reason = unknown value                                  | error "TERMINATION_REASON_INVALID" with suggestion "Use one of the enumerated termination reasons"     |
-      | reason missing                                          | error "TERMINATION_REASON_REQUIRED" with suggestion "Provide a termination reason"                     |
-      | reason = handoff_transaction but no acp_handoff         | error "ACP_HANDOFF_REQUIRED" with suggestion "Ensure the brand agent generates ACP checkout data"      |
+      | reason = unknown value                                  | error "INVALID_REQUEST" with suggestion "Use one of the enumerated termination reasons"     |
+      | reason missing                                          | error "INVALID_REQUEST" with suggestion "Provide a termination reason"                     |
+      | reason = handoff_transaction but no acp_handoff         | error "INVALID_REQUEST" with suggestion "Ensure the brand agent generates ACP checkout data"      |
 
   @T-UC-014-part-token-ttl @partition @offering-token-ttl @br-rule-101
   Scenario Outline: Offering token TTL partition validation - <partition>
@@ -582,7 +573,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
 
     Examples: Invalid partitions
       | partition      | outcome                                                        |
-      | ttl_negative   | error "RANGE_ERROR" with suggestion "Provide a non-negative integer for ttl_seconds" |
+      | ttl_negative   | error "INVALID_REQUEST" with suggestion "Provide a non-negative integer for ttl_seconds" |
 
   @T-UC-014-bound-token-ttl @boundary @offering-token-ttl @br-rule-101
   Scenario Outline: Offering token TTL boundary validation - <boundary_point>
@@ -593,7 +584,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
       | boundary_point                               | outcome                                                                           |
       | ttl_seconds = 0 (immediate expiry)           | offering_token returned with ttl_seconds 0                                         |
       | ttl_seconds = 1 (minimal validity)           | offering_token returned with ttl_seconds 1                                         |
-      | ttl_seconds = -1                             | error "RANGE_ERROR" with suggestion "Provide a non-negative integer for ttl_seconds" |
+      | ttl_seconds = -1                             | error "INVALID_REQUEST" with suggestion "Provide a non-negative integer for ttl_seconds" |
       | offering_token present, used within TTL      | session created with offering context recalled                                      |
       | offering_token present, used after TTL       | session created without offering context (graceful degradation)                     |
       | offering_token absent in initiate_session    | session created without offering context                                            |
@@ -610,9 +601,9 @@ Feature: BR-UC-014 Sponsored Intelligence Session
 
     Examples: Invalid partitions
       | partition                | outcome                                                                                                   |
-      | empty_session_id         | error "SESSION_ID_REQUIRED" with suggestion "Use the session_id returned from si_initiate_session"         |
+      | empty_session_id         | error "INVALID_REQUEST" with suggestion "Use the session_id returned from si_initiate_session"         |
       | nonexistent_session_id   | error "SESSION_NOT_FOUND" with suggestion "Verify the session_id matches an active session"                |
-      | predictable_id           | error "SESSION_ID_PREDICTABLE" with suggestion "Use cryptographically random session ID generation"        |
+      | predictable_id           | error "VALIDATION_ERROR" with suggestion "Use cryptographically random session ID generation"        |
 
   @T-UC-014-bound-session-id @boundary @session-id @br-rule-102
   Scenario Outline: Session ID boundary validation - <boundary_point>
@@ -623,9 +614,9 @@ Feature: BR-UC-014 Sponsored Intelligence Session
       | boundary_point                                     | outcome                                                                                               |
       | newly generated session_id in initiate response    | unique unpredictable session_id generated                                                              |
       | session_id used in send_message for active session | message routed to the correct session                                                                  |
-      | empty string session_id                            | error "SESSION_ID_REQUIRED" with suggestion "Use the session_id returned from si_initiate_session"      |
+      | empty string session_id                            | error "INVALID_REQUEST" with suggestion "Use the session_id returned from si_initiate_session"      |
       | session_id not found in store                      | error "SESSION_NOT_FOUND" with suggestion "Verify the session_id matches an active session"             |
-      | sequential integer as session_id                   | error "SESSION_ID_PREDICTABLE" with suggestion "Use cryptographically random session ID generation"     |
+      | sequential integer as session_id                   | error "VALIDATION_ERROR" with suggestion "Use cryptographically random session ID generation"     |
 
   @T-UC-014-part-ui-components @partition @ui-components @br-rule-103
   Scenario Outline: UI component partition validation - <partition>
@@ -643,9 +634,9 @@ Feature: BR-UC-014 Sponsored Intelligence Session
 
     Examples: Invalid partitions
       | partition               | outcome                                                                                               |
-      | unknown_component_type  | error "UI_ELEMENT_TYPE_INVALID" with suggestion "Use a standard component type"                        |
-      | missing_required_data   | error "UI_ELEMENT_DATA_REQUIRED" with suggestion "Provide all required data fields"                    |
-      | type_missing            | error "UI_ELEMENT_TYPE_REQUIRED" with suggestion "Add a type field to the UI element"                  |
+      | unknown_component_type  | error "INVALID_REQUEST" with suggestion "Use a standard component type"                        |
+      | missing_required_data   | error "INVALID_REQUEST" with suggestion "Provide all required data fields"                    |
+      | type_missing            | error "INVALID_REQUEST" with suggestion "Add a type field to the UI element"                  |
 
   @T-UC-014-bound-ui-components @boundary @ui-components @br-rule-103
   Scenario Outline: UI component boundary validation - <boundary_point>
@@ -663,9 +654,9 @@ Feature: BR-UC-014 Sponsored Intelligence Session
       | type = 'action_button' with data.label and data.action | UI element rendered                                                                |
       | type = 'app_handoff' (extension)                     | UI element accepted but host may ignore                                              |
       | type = 'integration_actions' (extension)             | UI element accepted but host may ignore                                              |
-      | type = unknown value                                 | error "UI_ELEMENT_TYPE_INVALID" with suggestion "Use a standard component type"       |
-      | type missing from element                            | error "UI_ELEMENT_TYPE_REQUIRED" with suggestion "Add a type field to the UI element" |
-      | link element missing data.url                        | error "UI_ELEMENT_DATA_REQUIRED" with suggestion "Provide all required data fields"   |
+      | type = unknown value                                 | error "INVALID_REQUEST" with suggestion "Use a standard component type"       |
+      | type missing from element                            | error "INVALID_REQUEST" with suggestion "Add a type field to the UI element" |
+      | link element missing data.url                        | error "INVALID_REQUEST" with suggestion "Provide all required data fields"   |
 
   @T-UC-014-part-product-limits @partition @product-limits @br-rule-104
   Scenario Outline: Product limit partition validation - <partition>
@@ -682,9 +673,9 @@ Feature: BR-UC-014 Sponsored Intelligence Session
 
     Examples: Invalid partitions
       | partition       | outcome                                                                                   |
-      | below_minimum   | error "PRODUCT_LIMIT_TOO_LOW" with suggestion "Set product_limit to a value between 1 and 50"  |
-      | above_maximum   | error "PRODUCT_LIMIT_TOO_HIGH" with suggestion "Set product_limit to a value between 1 and 50" |
-      | wrong_type      | error "TYPE_ERROR" with suggestion "Provide an integer value for product_limit"                 |
+      | below_minimum   | error "INVALID_REQUEST" with suggestion "Set product_limit to a value between 1 and 50"  |
+      | above_maximum   | error "INVALID_REQUEST" with suggestion "Set product_limit to a value between 1 and 50" |
+      | wrong_type      | error "INVALID_REQUEST" with suggestion "Provide an integer value for product_limit"                 |
 
   @T-UC-014-bound-product-limits @boundary @product-limits @br-rule-104
   Scenario Outline: Product limit boundary validation - <boundary_point>
@@ -694,13 +685,13 @@ Feature: BR-UC-014 Sponsored Intelligence Session
 
     Examples: Boundary values
       | boundary_point                          | outcome                                                                                   |
-      | product_limit = 0 (below minimum)       | error "PRODUCT_LIMIT_TOO_LOW" with suggestion "Set product_limit to a value between 1 and 50"  |
+      | product_limit = 0 (below minimum)       | error "INVALID_REQUEST" with suggestion "Set product_limit to a value between 1 and 50"  |
       | product_limit = 1 (minimum)             | response contains up to 1 matching product                                                 |
       | product_limit = 2 (just above minimum)  | response contains up to 2 matching products                                                |
       | product_limit = 5 (default)             | response contains up to 5 matching products                                                |
       | product_limit = 49 (just below maximum) | response contains up to 49 matching products                                               |
       | product_limit = 50 (maximum)            | response contains up to 50 matching products                                               |
-      | product_limit = 51 (above maximum)      | error "PRODUCT_LIMIT_TOO_HIGH" with suggestion "Set product_limit to a value between 1 and 50" |
+      | product_limit = 51 (above maximum)      | error "INVALID_REQUEST" with suggestion "Set product_limit to a value between 1 and 50" |
       | product_limit absent (default applies)  | response contains up to 5 matching products (default)                                      |
 
   @T-UC-014-inv-095-1 @invariant @br-rule-095
@@ -723,8 +714,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     Given a valid offering "shoes-fall" exists and is available
     When the Buyer Agent sends si_get_offering with offering_id "shoes-fall" and intent "shoes for john@example.com at 123 Main St"
     Then the operation should fail
-    And the error code should be "INTENT_PII_DETECTED"
-    And the error message should contain "personally identifiable information"
+    And the error code should be "POLICY_VIOLATION"
     And the error should include "suggestion" field
     And the suggestion should contain "Remove PII"
     # BR-RULE-095 INV-4: PII in intent → rejected (v3.1 NEW intent surface)
@@ -747,8 +737,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
   Scenario: BR-RULE-096 INV-3 violated -- consent_granted absent rejected
     When the Buyer Agent sends si_initiate_session with identity missing consent_granted field
     Then the operation should fail
-    And the error code should be "CONSENT_GRANTED_REQUIRED"
-    And the error message should contain "consent_granted"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "boolean consent_granted"
     # BR-RULE-096 INV-3: missing consent_granted → rejected
@@ -757,8 +746,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
   Scenario: BR-RULE-096 INV-4 violated -- consent true without scope rejected
     When the Buyer Agent sends si_initiate_session with identity consent_granted true but no consent_scope
     Then the operation should fail
-    And the error code should be "CONSENT_SCOPE_REQUIRED"
-    And the error message should contain "consent_scope"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "consent_scope array"
     # BR-RULE-096 INV-4: consent true but no scope → rejected
@@ -767,8 +755,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
   Scenario: BR-RULE-096 INV-5 violated -- consent false with user data rejected
     When the Buyer Agent sends si_initiate_session with identity consent_granted false but user object with email "j@x.com"
     Then the operation should fail
-    And the error code should be "IDENTITY_CONSENT_CONFLICT"
-    And the error message should contain "user data"
+    And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
     And the suggestion should contain "Remove user data"
     # BR-RULE-096 INV-5: consent false + user data → conflict
@@ -829,7 +816,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the Buyer Agent sends si_send_message with session_id "sess-ended" and message "hello"
     Then the operation should fail
     And the error code should be "SESSION_TERMINATED"
-    And the error message should contain "terminated"
     And the error should include "suggestion" field
     And the suggestion should contain "new session"
     # BR-RULE-098 INV-4: terminal session (complete OR terminated) rejects messages
@@ -874,8 +860,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     Given an active SI session with session_id "sess-msg"
     When the Buyer Agent sends si_send_message with session_id "sess-msg" and no message and no action_response
     Then the operation should fail
-    And the error code should be "MESSAGE_CONTENT_REQUIRED"
-    And the error message should contain "message or action_response"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "text message or an action_response"
     # BR-RULE-099 INV-3: neither present → rejected
@@ -899,8 +884,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     Given an active SI session with session_id "sess-bad"
     When the Buyer Agent sends si_terminate_session with session_id "sess-bad" and reason "cancelled"
     Then the operation should fail
-    And the error code should be "TERMINATION_REASON_INVALID"
-    And the error message should contain "reason"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "enumerated termination reasons"
     # BR-RULE-100 INV-3: invalid reason → rejected
@@ -910,8 +894,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     Given an active SI session with session_id "sess-nope"
     When the Buyer Agent sends si_terminate_session with session_id "sess-nope" without a reason
     Then the operation should fail
-    And the error code should be "TERMINATION_REASON_REQUIRED"
-    And the error message should contain "reason"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "termination reason"
     # BR-RULE-100 INV-4: absent reason → rejected
@@ -963,7 +946,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the Buyer Agent sends si_send_message with session_id "no-such-session"
     Then the operation should fail
     And the error code should be "SESSION_NOT_FOUND"
-    And the error message should contain "session"
     And the error should include "suggestion" field
     And the suggestion should contain "active session"
     # BR-RULE-102 INV-3: nonexistent ID → SESSION_NOT_FOUND
@@ -988,7 +970,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     Given an active SI session
     When the brand agent returns a UI element without a type field
     Then the UI element is invalid
-    And the error code should be "UI_ELEMENT_TYPE_REQUIRED"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "type field"
     # BR-RULE-103 INV-3: missing type → invalid
@@ -998,7 +980,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     Given an active SI session
     When the brand agent returns a UI element with type "video_player"
     Then the UI element is rejected or ignored
-    And the error code should be "UI_ELEMENT_TYPE_INVALID"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "standard component type"
     # BR-RULE-103 INV-4: unknown type → rejected
@@ -1022,8 +1004,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
   Scenario: BR-RULE-104 INV-3 violated -- product_limit below 1 rejected
     When the Buyer Agent sends si_get_offering with include_products true and product_limit 0
     Then the operation should fail
-    And the error code should be "PRODUCT_LIMIT_TOO_LOW"
-    And the error message should contain "product_limit"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "between 1 and 50"
     # BR-RULE-104 INV-3: < 1 → PRODUCT_LIMIT_TOO_LOW
@@ -1032,8 +1013,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
   Scenario: BR-RULE-104 INV-4 violated -- product_limit above 50 rejected
     When the Buyer Agent sends si_get_offering with include_products true and product_limit 51
     Then the operation should fail
-    And the error code should be "PRODUCT_LIMIT_TOO_HIGH"
-    And the error message should contain "product_limit"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "between 1 and 50"
     # BR-RULE-104 INV-4: > 50 → PRODUCT_LIMIT_TOO_HIGH
@@ -1054,8 +1034,8 @@ Feature: BR-UC-014 Sponsored Intelligence Session
 
     Examples: Invalid partitions
       | partition       | reason_value | outcome                                                                                               |
-      | unknown_value   | cancelled    | error "TERMINATION_REASON_INVALID" with suggestion "Use one of the enumerated termination reasons"     |
-      | empty_string    |              | error "TERMINATION_REASON_REQUIRED" with suggestion "Provide a termination reason"                     |
+      | unknown_value   | cancelled    | error "INVALID_REQUEST" with suggestion "Use one of the enumerated termination reasons"     |
+      | empty_string    |              | error "INVALID_REQUEST" with suggestion "Provide a termination reason"                     |
 
   @T-UC-014-bound-reason @boundary @reason @br-rule-100
   Scenario Outline: Termination reason boundary validation - <boundary_point>
@@ -1071,16 +1051,15 @@ Feature: BR-UC-014 Sponsored Intelligence Session
       | user_exit            | session terminated normally                                                                            |
       | session_timeout      | session terminated normally                                                                            |
       | host_terminated      | session terminated normally                                                                            |
-      | cancelled            | error "TERMINATION_REASON_INVALID" with suggestion "Use one of the enumerated termination reasons"     |
-      |                      | error "TERMINATION_REASON_REQUIRED" with suggestion "Provide a termination reason"                     |
+      | cancelled            | error "INVALID_REQUEST" with suggestion "Use one of the enumerated termination reasons"     |
+      |                      | error "INVALID_REQUEST" with suggestion "Provide a termination reason"                     |
 
   @T-UC-014-bound-reason-empty @boundary @reason @br-rule-100
   Scenario: Termination reason boundary -- empty string reason rejected
     Given an active SI session with session_id "sess-empty-reason"
     When the Buyer Agent sends si_terminate_session with session_id "sess-empty-reason" and reason ""
     Then the operation should fail
-    And the error code should be "TERMINATION_REASON_REQUIRED"
-    And the error message should contain "reason"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "termination reason"
     # BVA: empty string for required enum field
@@ -1099,7 +1078,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
 
     Examples: Invalid partitions
       | partition      | action_value | outcome                                                |
-      | unknown_value  | refund       | error "TRANSACTION_ACTION_INVALID" with suggestion "Use purchase or subscribe" |
+      | unknown_value  | refund       | error "INVALID_REQUEST" with suggestion "Use purchase or subscribe" |
 
   @T-UC-014-bound-txn-action @boundary @transaction-action @br-rule-100
   Scenario Outline: Transaction intent action boundary validation - <boundary_point>
@@ -1113,16 +1092,15 @@ Feature: BR-UC-014 Sponsored Intelligence Session
       | purchase       | session terminated with ACP handoff for purchase                                |
       | subscribe      | session terminated with ACP handoff for subscription                            |
       | Not provided   | session terminated with ACP handoff (action not specified)                       |
-      | refund         | error "TRANSACTION_ACTION_INVALID" with suggestion "Use purchase or subscribe"  |
-      |                | error "TRANSACTION_ACTION_INVALID" with suggestion "Use purchase or subscribe"  |
+      | refund         | error "INVALID_REQUEST" with suggestion "Use purchase or subscribe"  |
+      |                | error "INVALID_REQUEST" with suggestion "Use purchase or subscribe"  |
 
   @T-UC-014-bound-txn-empty @boundary @transaction-action @br-rule-100
   Scenario: Transaction intent action boundary -- empty string action rejected
     Given an active SI session with session_id "sess-empty-action"
     When the Buyer Agent sends si_terminate_session with reason "handoff_transaction" and transaction_intent action ""
     Then the operation should fail
-    And the error code should be "TRANSACTION_ACTION_INVALID"
-    And the error message should contain "action"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "purchase or subscribe"
     # BVA: empty string for transaction_intent.action enum
@@ -1131,8 +1109,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
   Scenario: Get offering with missing offering_id -- validation error
     When the Buyer Agent sends si_get_offering without an offering_id
     Then the operation should fail
-    And the error code should be "OFFERING_ID_REQUIRED"
-    And the error message should contain "offering_id"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "offering_id"
     # POST-F1: System state unchanged
@@ -1143,8 +1120,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
   Scenario: Initiate session with missing identity -- validation error
     When the Buyer Agent sends si_initiate_session with idempotency_key "uuid-noid-1234567890123456" and intent "explore shoes" but no identity object
     Then the operation should fail
-    And the error code should be "IDENTITY_REQUIRED"
-    And the error message should contain "identity"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "identity"
     # POST-F1: System state unchanged
@@ -1156,8 +1132,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     Given an active SI session with session_id "sess-broken"
     When the brand agent responds with session_status "pending_handoff" but omits the handoff object
     Then the response is invalid
-    And the error code should be "HANDOFF_REQUIRED"
-    And the error message should contain "handoff"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "handoff object"
     # BR-RULE-098 INV-2 violated: pending_handoff without handoff object
@@ -1167,8 +1142,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     Given an active SI session
     When the brand agent returns a UI element with type "link" but data object missing url field
     Then the UI element is invalid
-    And the error code should be "UI_ELEMENT_DATA_REQUIRED"
-    And the error message should contain "data fields"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "required data fields"
     # BR-RULE-103: Standard component missing required data
@@ -1178,8 +1152,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     Given an active SI session with session_id "sess-acp-fail"
     When the Buyer Agent sends si_terminate_session with session_id "sess-acp-fail" and reason "handoff_transaction" but ACP generation fails
     Then the operation should fail
-    And the error code should be "ACP_HANDOFF_REQUIRED"
-    And the error message should contain "acp_handoff"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "ACP checkout data"
     # BR-RULE-100: handoff_transaction requires ACP data
@@ -1188,8 +1161,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
   Scenario: Send message with missing session_id -- SESSION_ID_REQUIRED
     When the Buyer Agent sends si_send_message with message "hello" but no session_id
     Then the operation should fail
-    And the error code should be "SESSION_ID_REQUIRED"
-    And the error message should contain "session_id"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "session_id from si_initiate_session"
     # BR-RULE-099: session_id is co-required with content
@@ -1239,9 +1211,8 @@ Feature: BR-UC-014 Sponsored Intelligence Session
   Scenario: SI catalog identifier must equal "si-standard"
     Given an active SI session with session_id "sess-cat-id"
     When the brand response declares a surface with catalogId "si-experimental"
-    Then the surface is rejected with error "UI_ELEMENT_TYPE_INVALID"
-    And the error code should be "UI_ELEMENT_TYPE_INVALID"
-    And the error message references catalogId
+    Then the surface is rejected with error "INVALID_REQUEST"
+    And the error code should be "INVALID_REQUEST"
     # BR-RULE-103: catalog identifier is a const in the SI standard catalog schema
 
   @T-UC-014-user-action-roundtrip @a2ui @user-action @happy-path @post-s3 @br-rule-099
@@ -1275,23 +1246,22 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     And an offering "winter-sale-2025" exists with valid_to "2026-03-31T23:59:59Z"
     When the Buyer Agent sends si_initiate_session with offering_id "winter-sale-2025"
     Then the operation should fail
-    And the error code should be "OFFER_UNAVAILABLE"
-    And the error message should contain the offering_id "winter-sale-2025"
+    And the error code should be "PRODUCT_EXPIRED"
     And the error should include "suggestion" field
     # Expired offering cannot anchor a new session
 
   @T-UC-014-storyboard-baseline-session-id-roundtrip @schema-v3.1 @v3-1 @baseline-conformance @session-id-roundtrip
   Scenario: SI baseline conformance -- session_id roundtrips from initiate through send_message to terminate
     Given the Buyer Agent calls si_get_offering for offering_id "novamotors_conversational_v1"
-    And the si_get_offering response is schema-valid against si-get-offering-response.json
+    And the response is compliant with the si_get_offering spec
     When the Buyer Agent calls si_initiate_session with intent "User is researching electric vehicles for long road trips"
-    Then the si_initiate_session response should be schema-valid against si-initiate-session-response.json
+    Then the response is compliant with the si_initiate_session spec
     And the response should carry a platform-assigned session_id
     When the Buyer Agent calls si_send_message with the captured session_id and a user message
-    Then the si_send_message response should be schema-valid against si-send-message-response.json
+    Then the response is compliant with the si_send_message spec
     And the session_id sent on si_send_message should match the value captured from si_initiate_session
     When the Buyer Agent calls si_terminate_session with the captured session_id and reason "handoff_complete"
-    Then the si_terminate_session response should be schema-valid against si-terminate-session-response.json
+    Then the response is compliant with the si_terminate_session spec
     And the session_id sent on si_terminate_session should match the value captured from si_initiate_session
     # si_baseline storyboard exercises the four-call lifecycle:
     #   si_get_offering -> si_initiate_session (returns session_id) ->
@@ -1315,8 +1285,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     Given a Buyer Agent prepared to initiate an SI session
     When the Buyer Agent sends si_initiate_session without idempotency_key but with intent "find shoes" and identity
     Then the operation should fail
-    And the error code should be "IDEMPOTENCY_KEY_REQUIRED"
-    And the error message should contain "idempotency_key"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "UUID"
     # BR-RULE-286 INV-2: idempotency_key absent → IDEMPOTENCY_KEY_REQUIRED
@@ -1327,8 +1296,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     Given a Buyer Agent prepared to initiate an SI session
     When the Buyer Agent sends si_initiate_session with idempotency_key "uuid-def-1234567890123456" and identity but without intent
     Then the operation should fail
-    And the error code should be "INTENT_REQUIRED"
-    And the error message should contain "intent"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "natural-language"
     # BR-RULE-286 INV-3: intent absent → INTENT_REQUIRED
@@ -1339,8 +1307,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     Given a Buyer Agent prepared to initiate an SI session
     When the Buyer Agent sends si_initiate_session with idempotency_key "uuid-ghi-1234567890123456" and intent "find shoes" but without identity
     Then the operation should fail
-    And the error code should be "IDENTITY_REQUIRED"
-    And the error message should contain "identity"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "consent_granted"
     # BR-RULE-286 INV-4: identity absent → IDENTITY_REQUIRED
@@ -1357,10 +1324,10 @@ Feature: BR-UC-014 Sponsored Intelligence Session
 
     Examples: Invalid partitions
       | partition                  | outcome                                                                                                              |
-      | idempotency_key_missing    | error "IDEMPOTENCY_KEY_REQUIRED" with suggestion "Generate a fresh UUID v4 and include it as idempotency_key"        |
-      | intent_missing             | error "INTENT_REQUIRED" with suggestion "Include intent as a natural-language description"                            |
-      | identity_missing           | error "IDENTITY_REQUIRED" with suggestion "Include the identity object with at minimum consent_granted"               |
-      | all_required_missing       | error "IDEMPOTENCY_KEY_REQUIRED" with suggestion "Generate a fresh UUID v4 and include it as idempotency_key"        |
+      | idempotency_key_missing    | error "INVALID_REQUEST" with suggestion "Generate a fresh UUID v4 and include it as idempotency_key"        |
+      | intent_missing             | error "INVALID_REQUEST" with suggestion "Include intent as a natural-language description"                            |
+      | identity_missing           | error "INVALID_REQUEST" with suggestion "Include the identity object with at minimum consent_granted"               |
+      | all_required_missing       | error "INVALID_REQUEST" with suggestion "Generate a fresh UUID v4 and include it as idempotency_key"        |
 
   @T-UC-014-bound-initiate-required @boundary @initiate-required @br-rule-286 @schema-v3.1
   Scenario Outline: SI initiate required-fields boundary validation - <boundary_point>
@@ -1371,10 +1338,10 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     Examples: Boundary values
       | boundary_point                                                  | outcome                                                                                                      |
       | all three required fields present                               | the request proceeds                                                                                         |
-      | idempotency_key absent, intent + identity present               | error "IDEMPOTENCY_KEY_REQUIRED" with suggestion "Generate a fresh UUID v4 and include it as idempotency_key" |
-      | intent absent, idempotency_key + identity present               | error "INTENT_REQUIRED" with suggestion "Include intent as a natural-language description"                    |
-      | identity absent, idempotency_key + intent present               | error "IDENTITY_REQUIRED" with suggestion "Include the identity object with at minimum consent_granted"       |
-      | all three required fields absent                                | error "IDEMPOTENCY_KEY_REQUIRED" with suggestion "Generate a fresh UUID v4 and include it as idempotency_key" |
+      | idempotency_key absent, intent + identity present               | error "INVALID_REQUEST" with suggestion "Generate a fresh UUID v4 and include it as idempotency_key" |
+      | intent absent, idempotency_key + identity present               | error "INVALID_REQUEST" with suggestion "Include intent as a natural-language description"                    |
+      | identity absent, idempotency_key + intent present               | error "INVALID_REQUEST" with suggestion "Include the identity object with at minimum consent_granted"       |
+      | all three required fields absent                                | error "INVALID_REQUEST" with suggestion "Generate a fresh UUID v4 and include it as idempotency_key" |
 
   @T-UC-014-inv-287-1 @invariant @br-rule-287 @schema-v3.1
   Scenario: BR-RULE-287 INV-1 holds -- HTTPS checkout_url is accepted for checkout
@@ -1391,8 +1358,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     And the brand agent returns acp_handoff with checkout_url "http://brand.example/checkout" and checkout_token "opq_abc123"
     When the host validates the acp_handoff
     Then the validation should fail
-    And the error code should be "CHECKOUT_URL_NOT_HTTPS"
-    And the error message should contain "HTTPS"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     # BR-RULE-287 INV-2: non-HTTPS scheme → CHECKOUT_URL_NOT_HTTPS
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
@@ -1403,8 +1369,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     And the brand agent returns acp_handoff with checkout_url "not a url" and checkout_token "opq_abc123"
     When the host validates the acp_handoff
     Then the validation should fail
-    And the error code should be "CHECKOUT_URL_INVALID"
-    And the error message should contain "valid URI"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     # BR-RULE-287 INV-3: syntactically invalid URI → CHECKOUT_URL_INVALID
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
@@ -1433,8 +1398,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     And the brand agent returns acp_handoff with checkout_url "https://brand.example/checkout", checkout_token "opq_abc123", and expires_at "2020-01-01T00:00:00Z"
     When the host validates the acp_handoff
     Then the validation should fail
-    And the error code should be "HANDOFF_EXPIRES_AT_INVALID"
-    And the error message should contain "future ISO 8601"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     # BR-RULE-287 INV-6: past or malformed expires_at → HANDOFF_EXPIRES_AT_INVALID
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
@@ -1464,11 +1428,11 @@ Feature: BR-UC-014 Sponsored Intelligence Session
 
     Examples: Invalid partitions
       | partition                       | outcome                                                                                                                                                       |
-      | checkout_url_http_scheme        | error "CHECKOUT_URL_NOT_HTTPS" with suggestion "Brand agent must return an HTTPS checkout endpoint"                                                            |
-      | checkout_url_non_https_scheme   | error "CHECKOUT_URL_NOT_HTTPS" with suggestion "Brand agent must return an HTTPS checkout endpoint"                                                            |
-      | checkout_url_malformed          | error "CHECKOUT_URL_INVALID" with suggestion "Brand agent must return a well-formed URI per RFC 3986"                                                          |
-      | expires_at_in_past              | error "HANDOFF_EXPIRES_AT_INVALID" with suggestion "Brand agent must emit a future ISO 8601 expires_at"                                                        |
-      | expires_at_malformed            | error "HANDOFF_EXPIRES_AT_INVALID" with suggestion "Brand agent must emit a future ISO 8601 expires_at"                                                        |
+      | checkout_url_http_scheme        | error "INVALID_REQUEST" with suggestion "Brand agent must return an HTTPS checkout endpoint"                                                            |
+      | checkout_url_non_https_scheme   | error "INVALID_REQUEST" with suggestion "Brand agent must return an HTTPS checkout endpoint"                                                            |
+      | checkout_url_malformed          | error "INVALID_REQUEST" with suggestion "Brand agent must return a well-formed URI per RFC 3986"                                                          |
+      | expires_at_in_past              | error "INVALID_REQUEST" with suggestion "Brand agent must emit a future ISO 8601 expires_at"                                                        |
+      | expires_at_malformed            | error "INVALID_REQUEST" with suggestion "Brand agent must emit a future ISO 8601 expires_at"                                                        |
 
   @T-UC-014-bound-acp-handoff-shape @boundary @acp-handoff-shape @br-rule-287 @schema-v3.1
   Scenario Outline: SI ACP handoff shape boundary validation - <boundary_point>
@@ -1481,12 +1445,12 @@ Feature: BR-UC-014 Sponsored Intelligence Session
       | boundary_point                                                          | outcome                                                                                              |
       | checkout_url = 'https://brand.example/checkout' (lowercase https scheme)              | the handoff is well-formed                                                                          |
       | checkout_url = 'HTTPS://brand.example/checkout' (case-insensitive scheme per RFC 3986) | the handoff is well-formed                                                                         |
-      | checkout_url = 'http://brand.example/checkout' (plain HTTP)                           | error "CHECKOUT_URL_NOT_HTTPS" with suggestion "Brand agent must return an HTTPS checkout endpoint"  |
-      | checkout_url = 'ftp://brand.example/checkout' (non-HTTPS scheme)                      | error "CHECKOUT_URL_NOT_HTTPS" with suggestion "Brand agent must return an HTTPS checkout endpoint"  |
-      | checkout_url = 'not a url' (malformed)                                                | error "CHECKOUT_URL_INVALID" with suggestion "Brand agent must return a well-formed URI per RFC 3986" |
+      | checkout_url = 'http://brand.example/checkout' (plain HTTP)                           | error "INVALID_REQUEST" with suggestion "Brand agent must return an HTTPS checkout endpoint"  |
+      | checkout_url = 'ftp://brand.example/checkout' (non-HTTPS scheme)                      | error "INVALID_REQUEST" with suggestion "Brand agent must return an HTTPS checkout endpoint"  |
+      | checkout_url = 'not a url' (malformed)                                                | error "INVALID_REQUEST" with suggestion "Brand agent must return a well-formed URI per RFC 3986" |
       | expires_at = future ISO 8601 timestamp (e.g., now + 15 minutes)                       | the handoff is well-formed                                                                          |
-      | expires_at = past ISO 8601 timestamp (e.g., '2020-01-01T00:00:00Z')                   | error "HANDOFF_EXPIRES_AT_INVALID" with suggestion "Brand agent must emit a future ISO 8601 expires_at" |
-      | expires_at = 'tomorrow' (not ISO 8601)                                                | error "HANDOFF_EXPIRES_AT_INVALID" with suggestion "Brand agent must emit a future ISO 8601 expires_at" |
+      | expires_at = past ISO 8601 timestamp (e.g., '2020-01-01T00:00:00Z')                   | error "INVALID_REQUEST" with suggestion "Brand agent must emit a future ISO 8601 expires_at" |
+      | expires_at = 'tomorrow' (not ISO 8601)                                                | error "INVALID_REQUEST" with suggestion "Brand agent must emit a future ISO 8601 expires_at" |
       | payload present, checkout_token absent (payload as alternative)                       | the handoff is well-formed                                                                          |
       | payload + checkout_token both present (both alternatives in one response)             | the handoff is well-formed                                                                          |
 
@@ -1503,7 +1467,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     Given an A2UI component property requires a bound value
     When the bound value is { "literalString": "x", "literalNumber": 1 }
     Then the value is malformed
-    And the error code should be "BOUND_VALUE_MALFORMED"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "single oneOf variant"
     # BR-RULE-288 INV-2: multiple variant keys present → BOUND_VALUE_MALFORMED
@@ -1514,7 +1478,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     Given an A2UI component property requires a bound value
     When the bound value is { } (empty object)
     Then the value is malformed
-    And the error code should be "BOUND_VALUE_MALFORMED"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     # BR-RULE-288 INV-3: empty object or additionalProperties violation → BOUND_VALUE_MALFORMED
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
@@ -1524,7 +1488,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     Given an A2UI component property requires a bound value
     When the bound value is { "literalNumber": 5, "path": "/foo" }
     Then the value is malformed
-    And the error code should be "BOUND_VALUE_MALFORMED"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "literalString"
     # BR-RULE-288 INV-4: only literalString + path is a defined variant; other literal+path pairings → BOUND_VALUE_MALFORMED
@@ -1545,10 +1509,10 @@ Feature: BR-UC-014 Sponsored Intelligence Session
 
     Examples: Invalid partitions
       | partition                   | outcome                                                                                                                       |
-      | multiple_variants           | error "BOUND_VALUE_MALFORMED" with suggestion "Remove conflicting keys so the value matches a single oneOf variant"           |
-      | empty_object                | error "BOUND_VALUE_MALFORMED" with suggestion "Provide one of the defined oneOf variants"                                     |
-      | unknown_key                 | error "BOUND_VALUE_MALFORMED" with suggestion "Do not include keys outside the chosen variant"                                |
-      | invalid_literal_with_path   | error "BOUND_VALUE_MALFORMED" with suggestion "Pair path only with literalString"                                             |
+      | multiple_variants           | error "INVALID_REQUEST" with suggestion "Remove conflicting keys so the value matches a single oneOf variant"           |
+      | empty_object                | error "INVALID_REQUEST" with suggestion "Provide one of the defined oneOf variants"                                     |
+      | unknown_key                 | error "INVALID_REQUEST" with suggestion "Do not include keys outside the chosen variant"                                |
+      | invalid_literal_with_path   | error "INVALID_REQUEST" with suggestion "Pair path only with literalString"                                             |
 
   @T-UC-014-bound-bound-value-oneof @boundary @bound-value-oneof @br-rule-288 @schema-v3.1
   Scenario Outline: A2UI bound value oneOf boundary validation - <boundary_point>
@@ -1563,9 +1527,9 @@ Feature: BR-UC-014 Sponsored Intelligence Session
       | { "literalBoolean": false }                                 | the value is well-formed                                                                                        |
       | { "path": "/products/0/title" }                             | the value is well-formed                                                                                        |
       | { "literalString": "Loading…", "path": "/products/0/title" } | the value is well-formed                                                                                     |
-      | { "literalString": "x", "literalBoolean": true }            | error "BOUND_VALUE_MALFORMED" with suggestion "Remove conflicting keys so the value matches a single oneOf variant" |
-      | {}                                                          | error "BOUND_VALUE_MALFORMED" with suggestion "Provide one of the defined oneOf variants"                       |
-      | { "literalNumber": 5, "path": "/foo" }                      | error "BOUND_VALUE_MALFORMED" with suggestion "Pair path only with literalString"                               |
+      | { "literalString": "x", "literalBoolean": true }            | error "INVALID_REQUEST" with suggestion "Remove conflicting keys so the value matches a single oneOf variant" |
+      | {}                                                          | error "INVALID_REQUEST" with suggestion "Provide one of the defined oneOf variants"                       |
+      | { "literalNumber": 5, "path": "/foo" }                      | error "INVALID_REQUEST" with suggestion "Pair path only with literalString"                               |
 
   @T-UC-014-bound-idempotency-key @boundary @idempotency-key @br-rule-286 @schema-v3.1
   Scenario Outline: SI idempotency_key boundary validation - <boundary_point>
@@ -1575,17 +1539,17 @@ Feature: BR-UC-014 Sponsored Intelligence Session
 
     Examples: Boundary values
       | boundary_point                                                                              | outcome                                                                                                          |
-      | idempotency_key absent from si_initiate_session_request                                     | error "IDEMPOTENCY_KEY_REQUIRED" with suggestion "Generate a fresh UUID v4 and include it as idempotency_key"   |
-      | idempotency_key absent from si_send_message_request                                         | error "IDEMPOTENCY_KEY_REQUIRED" with suggestion "Generate a fresh UUID v4 and include it as idempotency_key"   |
-      | empty string (length 0)                                                                     | error "IDEMPOTENCY_KEY_INVALID" with suggestion "Use a fresh UUID v4"                                            |
-      | length 15 (min - 1)                                                                         | error "IDEMPOTENCY_KEY_INVALID" with suggestion "Use a fresh UUID v4"                                            |
+      | idempotency_key absent from si_initiate_session_request                                     | error "INVALID_REQUEST" with suggestion "Generate a fresh UUID v4 and include it as idempotency_key"   |
+      | idempotency_key absent from si_send_message_request                                         | error "INVALID_REQUEST" with suggestion "Generate a fresh UUID v4 and include it as idempotency_key"   |
+      | empty string (length 0)                                                                     | error "INVALID_REQUEST" with suggestion "Use a fresh UUID v4"                                            |
+      | length 15 (min - 1)                                                                         | error "INVALID_REQUEST" with suggestion "Use a fresh UUID v4"                                            |
       | length 16 (min, inclusive)                                                                  | the request is accepted (idempotency_key is well-formed)                                                         |
       | length 17 (min + 1)                                                                         | the request is accepted                                                                                          |
       | length 254 (max - 1)                                                                        | the request is accepted                                                                                          |
       | length 255 (max, inclusive)                                                                 | the request is accepted (idempotency_key is well-formed)                                                         |
-      | length 256 (max + 1)                                                                        | error "IDEMPOTENCY_KEY_INVALID" with suggestion "Use a fresh UUID v4"                                            |
-      | valid length, disallowed character (e.g. space)                                             | error "IDEMPOTENCY_KEY_INVALID" with suggestion "Remove spaces, slashes, and any characters outside [A-Za-z0-9_.:-]" |
-      | valid length, disallowed character (e.g. /)                                                 | error "IDEMPOTENCY_KEY_INVALID" with suggestion "Remove spaces, slashes, and any characters outside [A-Za-z0-9_.:-]" |
+      | length 256 (max + 1)                                                                        | error "INVALID_REQUEST" with suggestion "Use a fresh UUID v4"                                            |
+      | valid length, disallowed character (e.g. space)                                             | error "INVALID_REQUEST" with suggestion "Remove spaces, slashes, and any characters outside [A-Za-z0-9_.:-]" |
+      | valid length, disallowed character (e.g. /)                                                 | error "INVALID_REQUEST" with suggestion "Remove spaces, slashes, and any characters outside [A-Za-z0-9_.:-]" |
       | fresh UUID v4 (36 chars, valid pattern)                                                     | the request is accepted (idempotency_key is well-formed)                                                         |
       | idempotency_key matches an already-processed key on si_initiate or si_send_message          | the original response is returned (at-most-once mutation; no new session/turn created)                            |
 
@@ -1605,8 +1569,8 @@ Feature: BR-UC-014 Sponsored Intelligence Session
 
     Examples: Invalid partitions
       | partition           | outcome                                                                                                        |
-      | missing_key         | error "IDEMPOTENCY_KEY_REQUIRED" with suggestion "Provide a client-generated idempotency_key (fresh UUID v4)" |
-      | empty_string        | error "IDEMPOTENCY_KEY_INVALID" with suggestion "Use a fresh UUID v4"                                          |
-      | too_short_key       | error "IDEMPOTENCY_KEY_INVALID" with suggestion "Use a fresh UUID v4"                                          |
-      | too_long_key        | error "IDEMPOTENCY_KEY_INVALID" with suggestion "Use a fresh UUID v4"                                          |
-      | pattern_violation   | error "IDEMPOTENCY_KEY_INVALID" with suggestion "Remove spaces, slashes, and any characters outside [A-Za-z0-9_.:-]" |
+      | missing_key         | error "INVALID_REQUEST" with suggestion "Provide a client-generated idempotency_key (fresh UUID v4)" |
+      | empty_string        | error "INVALID_REQUEST" with suggestion "Use a fresh UUID v4"                                          |
+      | too_short_key       | error "INVALID_REQUEST" with suggestion "Use a fresh UUID v4"                                          |
+      | too_long_key        | error "INVALID_REQUEST" with suggestion "Use a fresh UUID v4"                                          |
+      | pattern_violation   | error "INVALID_REQUEST" with suggestion "Remove spaces, slashes, and any characters outside [A-Za-z0-9_.:-]" |

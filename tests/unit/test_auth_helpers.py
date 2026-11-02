@@ -9,181 +9,143 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.core.exceptions import AdCPAuthenticationError
-from tests.factories import PrincipalFactory
+# (Retired) TestRequirePrincipalId and TestRequireTenant graded two helpers in
+# src/core/auth.py that every _impl called at entry: one returned identity.principal_id or
+# raised AUTH_MISSING, the other did the same for identity.tenant. Both are deleted
+# (see the note at the end of src/core/auth.py). They re-checked inside every protected
+# tool what the resolver had already decided, which made them a SECOND minting site for
+# the refusal, and the branch they guarded was unreachable. The type carries the decision
+# now: a protected implementation takes ``ResolvedIdentity``, whose principal and tenant
+# are not optional, and reads them directly; a public one takes ``PublicIdentity`` and
+# branches on ``identity.principal``. The refusal itself is minted only by the resolver
+# (ruff-boundary.toml bans the two auth errors elsewhere) and graded on the wire.
+#
+# What remains in this module is the operator API-key helper, which is unrelated and live.
 
 
-class TestRequirePrincipalId:
-    """The require_principal_id entry guard (gh-1307).
+class _FakeConfigStore:
+    """Stands in for TenantManagementConfigRepository over a dict.
 
-    Single source of truth for the "identity has no principal_id" guard that
-    every _impl runs at entry. Returns the validated principal_id or raises
-    AdCPAuthenticationError with one canonical message.
+    The repository's own interface, so what these tests grade is what auth_helpers
+    hands the store and what it asks back — not a mock's call log. Keyed the way the
+    real rows are keyed, via the shared ``prefix_config_key``, so a change to that
+    derivation breaks here too.
     """
 
-    CANONICAL_MESSAGE = (
-        "Authentication required: Principal ID not found in identity. Provide a valid x-adcp-auth token."
-    )
+    rows: dict[str, str] = {}
 
-    def test_returns_principal_id_when_present(self):
-        from src.core.auth import require_principal_id
+    def __init__(self, session=None):
+        pass
 
-        identity = PrincipalFactory.make_identity(principal_id="p1", tenant_id="t1")
+    def api_key_digest(self, config_key):
+        return self.rows.get(config_key)
 
-        assert require_principal_id(identity) == "p1"
+    def api_key_prefix(self, config_key):
+        from src.core.database.repositories.tenant_management_config import prefix_config_key
 
-    def test_raises_canonical_error_when_identity_is_none(self):
-        from src.core.auth import require_principal_id
+        return self.rows.get(prefix_config_key(config_key))
 
-        with pytest.raises(AdCPAuthenticationError) as exc_info:
-            require_principal_id(None)
+    def store_api_key(self, config_key, *, digest, prefix, description):
+        from src.core.database.repositories.tenant_management_config import prefix_config_key
 
-        assert exc_info.value.message == self.CANONICAL_MESSAGE
-
-    def test_raises_canonical_error_when_principal_id_is_none(self):
-        from src.core.auth import require_principal_id
-
-        identity = PrincipalFactory.make_identity(principal_id=None, tenant_id="t1")
-
-        with pytest.raises(AdCPAuthenticationError) as exc_info:
-            require_principal_id(identity)
-
-        assert exc_info.value.message == self.CANONICAL_MESSAGE
-
-    def test_raises_canonical_error_when_principal_id_is_empty(self):
-        from src.core.auth import require_principal_id
-
-        identity = PrincipalFactory.make_identity(principal_id="", tenant_id="t1")
-
-        with pytest.raises(AdCPAuthenticationError) as exc_info:
-            require_principal_id(identity)
-
-        assert exc_info.value.message == self.CANONICAL_MESSAGE
-
-    def test_preserves_context_kwarg_onto_the_exception(self):
-        from src.core.auth import require_principal_id
-
-        sentinel_context = {"request_id": "req-123"}
-
-        with pytest.raises(AdCPAuthenticationError) as exc_info:
-            require_principal_id(None, context=sentinel_context)
-
-        assert exc_info.value.context == sentinel_context
+        self.rows[config_key] = digest
+        self.rows[prefix_config_key(config_key)] = prefix
 
 
-class TestRequireTenant:
-    """The require_tenant entry guard (gh-1307).
+@pytest.fixture
+def fake_config_store():
+    """auth_helpers wired to an in-memory store, with its session context neutralized."""
+    _FakeConfigStore.rows = {}
+    with (
+        patch("src.admin.auth_helpers.TenantManagementConfigRepository", _FakeConfigStore),
+        patch("src.admin.auth_helpers.get_db_session") as mock_db,
+    ):
+        # A session whose only job is to be commit-able; the store above is the state.
+        mock_db.return_value.__enter__ = MagicMock(return_value=MagicMock())
+        mock_db.return_value.__exit__ = MagicMock(return_value=False)
+        yield _FakeConfigStore.rows
 
-    Single source of truth for the "no tenant context available" guard — the
-    most-repeated _impl prologue. Returns identity.tenant or raises
-    AdCPAuthenticationError with one canonical, actionable message.
+
+class TestStoredApiKeyIsHashed:
+    """The operator API key is minted once, stored as sha256, and matched by hash.
+
+    Same treatment as a principal token (salesagent-3cs7o.7): the row used to hold the
+    plaintext and hand it back on every call, so anyone who could read the table — or
+    call the initializer — held a working credential.
     """
 
-    CANONICAL_MESSAGE = "No tenant context available. Check x-adcp-auth token and host headers."
+    def test_mint_stores_sha256_and_prefix_and_returns_the_plaintext_once(self, fake_config_store):
+        import hashlib
 
-    def test_returns_tenant_when_present(self):
-        from src.core.auth import require_tenant
+        from src.admin.auth_helpers import mint_stored_api_key
 
-        identity = PrincipalFactory.make_identity(principal_id="p1", tenant_id="t1")
+        key = mint_stored_api_key("test_config_key", "a description")
 
-        assert require_tenant(identity) == identity.tenant
+        assert key.startswith("sk_")
+        assert fake_config_store["test_config_key"] == hashlib.sha256(key.encode("utf-8")).hexdigest()
+        assert fake_config_store["test_config_key_prefix"] == key[:12]
+        # The plaintext exists in the return value and NOWHERE in the store. The prefix
+        # row is a 12-character head, which is not the key and cannot be presented as one.
+        assert key not in fake_config_store.values()
 
-    def test_raises_canonical_error_when_identity_is_none(self):
-        from src.core.auth import require_tenant
+    def test_matching_hashes_the_presented_key_rather_than_comparing_a_stored_plaintext(self, fake_config_store):
+        from src.admin.auth_helpers import api_key_matches, mint_stored_api_key
 
-        with pytest.raises(AdCPAuthenticationError) as exc_info:
-            require_tenant(None)
+        key = mint_stored_api_key("test_config_key", "a description")
 
-        assert exc_info.value.message == self.CANONICAL_MESSAGE
+        assert api_key_matches(key, None, "test_config_key") is True
+        assert api_key_matches("sk_not-the-key", None, "test_config_key") is False
+        # The stored digest itself is not a credential: presenting it does not authenticate.
+        assert api_key_matches(fake_config_store["test_config_key"], None, "test_config_key") is False
 
-    def test_raises_canonical_error_when_tenant_is_none(self):
-        from src.core.auth import require_tenant
+    def test_rotation_invalidates_the_previous_key(self, fake_config_store):
+        from src.admin.auth_helpers import api_key_matches, mint_stored_api_key
 
-        identity = PrincipalFactory.make_identity(principal_id="p1", tenant_id="t1", tenant=None)
+        first = mint_stored_api_key("test_config_key", "a description")
+        second = mint_stored_api_key("test_config_key", "a description")
 
-        with pytest.raises(AdCPAuthenticationError) as exc_info:
-            require_tenant(identity)
+        assert first != second
+        assert api_key_matches(first, None, "test_config_key") is False
+        assert api_key_matches(second, None, "test_config_key") is True
 
-        assert exc_info.value.message == self.CANONICAL_MESSAGE
+    def test_the_settings_value_wins_and_is_compared_as_the_plaintext_it_is(self, fake_config_store):
+        from src.admin.auth_helpers import api_key_matches, mint_stored_api_key
 
-    def test_preserves_context_kwarg_onto_the_exception(self):
-        from src.core.auth import require_tenant
+        stored = mint_stored_api_key("test_config_key", "a description")
 
-        sentinel_context = {"request_id": "req-456"}
+        # An operator-supplied deployment secret is a plaintext this process was handed,
+        # not a row this application minted, so it is compared directly — and it wins.
+        assert api_key_matches("env-key", "env-key", "test_config_key") is True
+        assert api_key_matches(stored, "env-key", "test_config_key") is False
 
-        with pytest.raises(AdCPAuthenticationError) as exc_info:
-            require_tenant(None, context=sentinel_context)
+    def test_configured_check_answers_existence_without_recovering_a_key(self, fake_config_store):
+        from src.admin.auth_helpers import api_key_is_configured, api_key_prefix, mint_stored_api_key
 
-        assert exc_info.value.context == sentinel_context
+        assert api_key_is_configured(None, "test_config_key") is False
+        assert api_key_prefix("test_config_key") is None
 
+        key = mint_stored_api_key("test_config_key", "a description")
 
-class TestGetApiKeyFromConfig:
-    """Test the key retrieval function (env var → DB fallback)."""
-
-    def test_env_var_takes_priority_over_db(self):
-        """When both env var and DB have keys, env var wins."""
-        from src.admin.auth_helpers import get_api_key_from_config
-
-        with patch.dict("os.environ", {"TEST_API_KEY": "env-key"}):
-            with patch("src.admin.auth_helpers.get_db_session") as mock_db:
-                mock_session = MagicMock()
-                mock_config = MagicMock()
-                mock_config.config_value = "db-key"
-                mock_session.scalars.return_value.first.return_value = mock_config
-                mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
-                mock_db.return_value.__exit__ = MagicMock(return_value=False)
-
-                result = get_api_key_from_config("TEST_API_KEY", "test_config_key")
-                assert result == "env-key"
-
-    def test_falls_back_to_db_when_no_env_var(self):
-        """When env var not set, falls back to DB lookup."""
-        from src.admin.auth_helpers import get_api_key_from_config
-
-        with patch.dict("os.environ", {}, clear=False):
-            # Ensure TEST_API_KEY is not in env
-            import os
-
-            os.environ.pop("TEST_API_KEY", None)
-
-            with patch("src.admin.auth_helpers.get_db_session") as mock_db:
-                mock_session = MagicMock()
-                mock_config = MagicMock()
-                mock_config.config_value = "db-key"
-                mock_session.scalars.return_value.first.return_value = mock_config
-                mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
-                mock_db.return_value.__exit__ = MagicMock(return_value=False)
-
-                result = get_api_key_from_config("TEST_API_KEY", "test_config_key")
-                assert result == "db-key"
-
-    def test_returns_none_when_neither_configured(self):
-        """When neither env var nor DB has a key, returns None."""
-        from src.admin.auth_helpers import get_api_key_from_config
-
-        with patch.dict("os.environ", {}, clear=False):
-            import os
-
-            os.environ.pop("TEST_API_KEY", None)
-
-            with patch("src.admin.auth_helpers.get_db_session") as mock_db:
-                mock_session = MagicMock()
-                mock_session.scalars.return_value.first.return_value = None
-                mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
-                mock_db.return_value.__exit__ = MagicMock(return_value=False)
-
-                result = get_api_key_from_config("TEST_API_KEY", "test_config_key")
-                assert result is None
+        assert api_key_is_configured(None, "test_config_key") is True
+        assert api_key_prefix("test_config_key") == key[:12]
 
 
 class TestRequireApiKeyAuth:
-    """Test the decorator factory."""
+    """Test the decorator factory.
+
+    ``require_api_key_auth`` takes ``setting=``: the name of the ``AuthSettings`` field
+    carrying the key, read per request off the settings object. It took ``env_var=`` and
+    read ``os.environ`` directly until the environment collapsed to one reader
+    (``src/core/config.py``), which is why these cases set the SETTING rather than a
+    variable -- the variable an operator sets is that field's name upper-cased, and the
+    503 body still names it.
+    """
 
     def test_missing_header_returns_401(self):
         """Request without the auth header returns 401."""
         from src.admin.auth_helpers import require_api_key_auth
 
-        decorator = require_api_key_auth(env_var="TEST_KEY", config_key="test_key", header="X-Test-Key")
+        decorator = require_api_key_auth(setting="sync_api_key", config_key="test_key", header="X-Test-Key")
 
         @decorator
         def protected_view():
@@ -198,10 +160,11 @@ class TestRequireApiKeyAuth:
             assert resp.status_code == 401
 
     def test_unconfigured_key_returns_503(self):
-        """When no key is configured anywhere, returns 503."""
+        """When no key is configured anywhere, returns 503 naming the variable."""
         from src.admin.auth_helpers import require_api_key_auth
+        from src.core.config import get_settings
 
-        decorator = require_api_key_auth(env_var="UNCONFIGURED_KEY_XYZ", config_key="nonexistent", header="X-Test-Key")
+        decorator = require_api_key_auth(setting="sync_api_key", config_key="nonexistent", header="X-Test-Key")
 
         @decorator
         def protected_view():
@@ -212,7 +175,10 @@ class TestRequireApiKeyAuth:
         app = Flask(__name__)
         app.add_url_rule("/test", view_func=protected_view)
 
-        with patch("src.admin.auth_helpers.get_db_session") as mock_db:
+        with (
+            patch.object(get_settings().auth, "sync_api_key", None),
+            patch("src.admin.auth_helpers.get_db_session") as mock_db,
+        ):
             mock_session = MagicMock()
             mock_session.scalars.return_value.first.return_value = None
             mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
@@ -221,12 +187,14 @@ class TestRequireApiKeyAuth:
             with app.test_client() as client:
                 resp = client.get("/test", headers={"X-Test-Key": "any-key"})
                 assert resp.status_code == 503
+                assert "SYNC_API_KEY" in resp.get_json()["error"]
 
     def test_valid_key_passes_through(self):
         """Correct key allows request through."""
         from src.admin.auth_helpers import require_api_key_auth
+        from src.core.config import get_settings
 
-        decorator = require_api_key_auth(env_var="TEST_VALID_KEY", config_key="test_key", header="X-Test-Key")
+        decorator = require_api_key_auth(setting="sync_api_key", config_key="test_key", header="X-Test-Key")
 
         @decorator
         def protected_view():
@@ -237,7 +205,7 @@ class TestRequireApiKeyAuth:
         app = Flask(__name__)
         app.add_url_rule("/test", view_func=protected_view)
 
-        with patch.dict("os.environ", {"TEST_VALID_KEY": "correct-key"}):
+        with patch.object(get_settings().auth, "sync_api_key", "correct-key"):
             with app.test_client() as client:
                 resp = client.get("/test", headers={"X-Test-Key": "correct-key"})
                 assert resp.status_code == 200
@@ -245,8 +213,9 @@ class TestRequireApiKeyAuth:
     def test_wrong_key_returns_401(self):
         """Incorrect key returns 401."""
         from src.admin.auth_helpers import require_api_key_auth
+        from src.core.config import get_settings
 
-        decorator = require_api_key_auth(env_var="TEST_WRONG_KEY", config_key="test_key", header="X-Test-Key")
+        decorator = require_api_key_auth(setting="sync_api_key", config_key="test_key", header="X-Test-Key")
 
         @decorator
         def protected_view():
@@ -257,42 +226,7 @@ class TestRequireApiKeyAuth:
         app = Flask(__name__)
         app.add_url_rule("/test", view_func=protected_view)
 
-        with patch.dict("os.environ", {"TEST_WRONG_KEY": "correct-key"}):
+        with patch.object(get_settings().auth, "sync_api_key", "correct-key"):
             with app.test_client() as client:
                 resp = client.get("/test", headers={"X-Test-Key": "wrong-key"})
                 assert resp.status_code == 401
-
-
-class TestResolvePrincipalOrRaise:
-    """resolve_principal_or_raise (gh-1307) — the shared "look up principal, fail auth if absent" guard.
-
-    Collapses the identical lookup the create/update/delivery media-buy tools
-    share. Returns the Principal or raises AdCPAuthenticationError
-    (AUTH_REQUIRED), echoing the request context into the error envelope.
-    """
-
-    def test_returns_principal_when_found(self):
-        from src.core.auth import resolve_principal_or_raise
-
-        principal = MagicMock(principal_id="p1")
-        with patch("src.core.auth.get_principal_object", return_value=principal):
-            assert resolve_principal_or_raise("p1", tenant_id="t1") is principal
-
-    def test_missing_principal_raises_authentication_error(self):
-        from src.core.auth import resolve_principal_or_raise
-
-        with patch("src.core.auth.get_principal_object", return_value=None):
-            with pytest.raises(AdCPAuthenticationError, match="ghost") as exc_info:
-                resolve_principal_or_raise("ghost", tenant_id="t1")
-
-        assert exc_info.value.error_code == "AUTH_REQUIRED"
-
-    def test_echoes_context_into_error(self):
-        from src.core.auth import resolve_principal_or_raise
-
-        ctx = {"request_id": "req-123"}
-        with patch("src.core.auth.get_principal_object", return_value=None):
-            with pytest.raises(AdCPAuthenticationError) as exc_info:
-                resolve_principal_or_raise("ghost", tenant_id="t1", context=ctx)
-
-        assert exc_info.value.context == ctx

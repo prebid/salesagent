@@ -22,24 +22,10 @@ from .constants import (
     GAMTargetingType,
 )
 from .error_handler import (
-    GAMAuthenticationError,
-    GAMConfigurationError,
-    GAMDuplicateResourceError,
-    GAMError,
-    GAMErrorType,
-    GAMNetworkError,
     GAMOperationTracker,
-    GAMPermissionError,
-    GAMQuotaError,
-    GAMResourceNotFoundError,
-    GAMTimeoutError,
     RetryConfig,
     map_gam_exception,
-    validate_gam_response,
     with_retry,
-)
-from .error_handler import (
-    GAMValidationError as GAMErrorValidationError,
 )
 from .formatters import (
     format_currency,
@@ -60,7 +46,6 @@ from .logging import (
     GAMOperation,
     log_api_call,
     log_configuration,
-    log_dry_run,
     log_gam_operation,
     log_validation_error,
 )
@@ -69,37 +54,23 @@ from .macros import (
     substitute_macros,
     substitute_tracking_urls,
 )
-from .validation import GAMValidationError, GAMValidator, validate_gam_creative
+from .validation import GAMValidator, validate_gam_creative
 
 __all__ = [
     # Validation
     "GAMValidator",
-    "GAMValidationError",
     "validate_gam_creative",
     # Error handling
-    "GAMError",
-    "GAMErrorType",
-    "GAMAuthenticationError",
-    "GAMPermissionError",
-    "GAMErrorValidationError",
-    "GAMQuotaError",
-    "GAMNetworkError",
-    "GAMTimeoutError",
-    "GAMResourceNotFoundError",
-    "GAMDuplicateResourceError",
-    "GAMConfigurationError",
     "RetryConfig",
     "GAMOperationTracker",
     "map_gam_exception",
     "with_retry",
-    "validate_gam_response",
     # Logging
     "GAMOperation",
     "GAMLogContext",
     "GAMMetrics",
     "log_gam_operation",
     "log_api_call",
-    "log_dry_run",
     "log_validation_error",
     "log_configuration",
     # Health checking

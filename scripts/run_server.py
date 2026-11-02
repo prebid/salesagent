@@ -5,12 +5,17 @@ Starts the unified FastAPI application via uvicorn, serving MCP, A2A,
 and Admin UI from a single process.
 """
 
-import os
+import argparse
 import sys
 
 
 def main():
     """Run the server with configurable port."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--port", type=int, default=None, help="Listen port (default: ADCP_SALES_PORT).")
+    parser.add_argument("--host", default=None, help="Bind address (default: ADCP_SALES_HOST).")
+    args = parser.parse_args()
+
     # Initialize application with startup validation
     try:
         # Add current directory to path for imports
@@ -28,13 +33,14 @@ def main():
         print(f"Startup error: {e}")
         sys.exit(1)
 
-    port = int(os.environ.get("ADCP_SALES_PORT", "8080"))
-    host = os.environ.get("ADCP_SALES_HOST", "0.0.0.0")
+    # initialize_application read the environment; this is the same object.
+    from src.core.config import get_settings
 
-    # Check if we're in production (Docker or Fly.io)
-    is_production = bool(os.environ.get("FLY_APP_NAME") or os.environ.get("PRODUCTION"))
+    runtime = get_settings().runtime
+    port = args.port if args.port is not None else runtime.adcp_sales_port
+    host = args.host if args.host is not None else runtime.adcp_sales_host
 
-    if is_production:
+    if runtime.is_production:
         # In production, bind to all interfaces
         host = "0.0.0.0"
 

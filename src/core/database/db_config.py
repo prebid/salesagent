@@ -4,43 +4,30 @@ Production exclusively uses PostgreSQL. No SQLite support.
 This aligns with our principle: "No fallbacks - if it's in our control, make it work."
 """
 
-import os
 from typing import Any
 from urllib.parse import urlparse
 
-
-def int_env(name: str, default: str) -> int:
-    """Parse an integer environment variable with a friendly error on invalid values."""
-    raw = os.environ.get(name, default)
-    if raw == "":
-        raw = default
-    try:
-        return int(raw)
-    except ValueError as exc:
-        raise ValueError(f"Invalid integer value for {name}: {raw!r}") from exc
+from src.core.config import get_settings
 
 
 class DatabaseConfig:
-    """PostgreSQL database configuration."""
+    """PostgreSQL database configuration, read off the settings."""
 
     @staticmethod
     def get_db_config() -> dict[str, Any]:
-        """Get PostgreSQL configuration from environment."""
+        """The connection parameters: DATABASE_URL when set, the DB_* fields otherwise."""
+        db = get_settings().database
+        if db.database_url:
+            return DatabaseConfig._parse_database_url(db.database_url)
 
-        # Support DATABASE_URL for easy deployment (Heroku, Railway, Fly.io, etc.)
-        database_url = os.environ.get("DATABASE_URL")
-        if database_url:
-            return DatabaseConfig._parse_database_url(database_url)
-
-        # Individual environment variables (fallback)
         return {
             "type": "postgresql",
-            "host": os.environ.get("DB_HOST", "localhost"),
-            "port": int_env("DB_PORT", "5432"),
-            "database": os.environ.get("DB_NAME", "adcp"),
-            "user": os.environ.get("DB_USER", "adcp"),
-            "password": os.environ.get("DB_PASSWORD", ""),
-            "sslmode": os.environ.get("DB_SSLMODE", "prefer"),
+            "host": db.db_host,
+            "port": db.db_port,
+            "database": db.db_name,
+            "user": db.db_user,
+            "password": db.db_password,
+            "sslmode": db.db_sslmode,
         }
 
     @staticmethod

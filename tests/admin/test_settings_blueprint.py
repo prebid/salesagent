@@ -22,8 +22,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.admin.app import create_app
+from src.admin.blueprints import settings as settings_module
 from src.core.database.models import Tenant
 from tests.factories import TenantFactory
+from tests.helpers import concurrent_commit_in_write_window, operator_answer
 
 app = create_app()
 
@@ -51,12 +53,6 @@ def _auth_session(client, tenant_id: str) -> None:
         sess["test_user_role"] = "super_admin"
         sess["test_user_name"] = "Test User"
         sess["test_tenant_id"] = tenant_id
-
-
-@pytest.fixture(autouse=True)
-def _enable_test_mode(monkeypatch):
-    """Enable global test auth so require_tenant_access accepts the test session."""
-    monkeypatch.setenv("ADCP_AUTH_TEST_MODE", "true")
 
 
 class TestAuthorizedDomainsAdd:
@@ -330,7 +326,7 @@ class TestApproximatedToken:
         # get_dns_token (src.services.approximated_client, imported into this
         # blueprint since salesagent-47n9.7) never catches OutboundError -- every
         # status it can receive is a genuine failure -- so the exception reaches
-        # this route's own except OutboundError arm unchanged.
+        # this route's own except OutboundError branch unchanged.
         from src.core.security.outbound_http import OutboundDeliveryFailed
 
         with patch(
@@ -342,6 +338,83 @@ class TestApproximatedToken:
         assert response.status_code == 401
         body = response.get_json()
         assert body["success"] is False
+
+
+class TestGeneralSettingsVirtualHostTaken:
+    """POST /tenant/<id>/settings/general — virtual_host already claimed.
+
+    ``ix_tenants_virtual_host`` is the authority. This site's contested write is
+    an UPDATE of an already dirty tenant, not an insert, and its pre-check
+    predicate depends on the WINNER's identity (``existing.tenant_id !=
+    tenant_id``) — so the race branch has to re-run the predicate, not repeat a
+    canned message. The race is timed on ``begin_nested`` because the handler
+    never calls ``add()``, and ``flush`` would fire on the pre-check's own
+    autoflush — committing the winner BEFORE the pre-check reads, which would
+    grade the fast path instead of the race.
+
+    The loser runs first, so its pre-check is genuinely clean.
+    """
+
+    VIRTUAL_HOST = "contested-vhost.example.com"
+
+    def _post_general(self, client, tenant_id):
+        return client.post(
+            f"/tenant/{tenant_id}/settings/general",
+            data={"name": "Contested Publisher", "virtual_host": self.VIRTUAL_HOST},
+            follow_redirects=False,
+        )
+
+    def test_winner_and_loser_get_the_same_answer(self, client, factory_session):
+        tenant = TenantFactory()
+        own_host = tenant.virtual_host
+        _auth_session(client, tenant.tenant_id)
+
+        def commit_conflicting_row():
+            TenantFactory(virtual_host=self.VIRTUAL_HOST)
+
+        with concurrent_commit_in_write_window(settings_module, commit_conflicting_row, trigger="begin_nested"):
+            loser = operator_answer(client, self._post_general(client, tenant.tenant_id))
+
+        winner = operator_answer(client, self._post_general(client, tenant.tenant_id))
+
+        assert winner[0] == 302
+        assert winner[2] == [("error", "This virtual host is already in use by another tenant")]
+        assert loser == winner
+
+        # The losing request must not have committed the virtual host it failed
+        # to claim, nor the other form fields it dirtied on the way there: the tenant
+        # still holds the host it arrived with.
+        factory_session.expire_all()
+        refreshed = factory_session.get(Tenant, tenant.tenant_id)
+        assert refreshed.virtual_host == own_host
+
+
+class TestGeneralSettingsLeavesOtherSectionsAlone:
+    """POST /tenant/<id>/settings/general must not touch flags its form does not carry.
+
+    The account settings form sends only name, subdomain and virtual_host.
+    human_review_required is saved by /business-rules and enable_axe_signals by the
+    Inventory page; treating their absence here as "unchecked" switched a tenant to
+    auto-approve on every account save. The factory defaults human_review_required
+    to False, so the test seeds True explicitly to observe the transition.
+    """
+
+    def test_account_save_keeps_manual_approval_and_axe_signals(self, client, factory_session):
+        tenant = TenantFactory(human_review_required=True, enable_axe_signals=True)
+        _auth_session(client, tenant.tenant_id)
+
+        response = client.post(
+            f"/tenant/{tenant.tenant_id}/settings/general",
+            data={"name": "Renamed Publisher", "subdomain": tenant.subdomain},
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 302
+        factory_session.expire_all()
+        refreshed = factory_session.get(Tenant, tenant.tenant_id)
+        assert refreshed.name == "Renamed Publisher"
+        assert refreshed.human_review_required is True
+        assert refreshed.enable_axe_signals is True
 
 
 class TestApproximatedDomainTenantOwnership:

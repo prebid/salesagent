@@ -10,12 +10,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError
-from src.core.resolved_identity import ResolvedIdentity
-from src.core.tenant_context import LazyTenantContext
-from src.core.testing_hooks import AdCPTestContext
+from src.core.exceptions import AdCPAuthorizationError
+from src.core.resolved_identity import PublicIdentity, ResolvedIdentity
+from src.core.tenant_context import TenantContext
 from src.services.policy_check_service import PolicyCheckResult, PolicyStatus
 from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
+from tests.harness._identity import make_identity
 from tests.harness.product import ProductEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -24,14 +24,17 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 def _lazy_identity(
     tenant_id: str,
     principal_id: str | None = "p1",
-) -> ResolvedIdentity:
-    """Create a ResolvedIdentity using LazyTenantContext for real DB tenant lookup."""
-    return ResolvedIdentity(
+) -> ResolvedIdentity | PublicIdentity:
+    """An identity carrying the tenant row the database holds for *tenant_id*.
+
+    Through the canonical harness helper, so ``principal_id=None`` builds the
+    ``PublicIdentity`` a public tool takes rather than a ``ResolvedIdentity`` whose
+    principal is None -- a shape the type no longer has.
+    """
+    return make_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
-        tenant=LazyTenantContext(tenant_id),
-        protocol="mcp",
-        testing_context=AdCPTestContext(dry_run=False, mock_time=None, jump_to_event=None, test_session_id=None),
+        tenant=TenantContext.load(tenant_id),
     )
 
 
@@ -46,26 +49,24 @@ class TestBrandManifestPolicyRequireAuth:
     Covers: BR-RULE-001-01
     """
 
-    @pytest.mark.asyncio
-    async def test_require_auth_rejects_anonymous(self, integration_db):
-        """Covers: BR-RULE-001-01
-
-        When brand_manifest_policy=require_auth and caller is anonymous,
-        request is rejected with AdCPAuthenticationError.
-        """
-        with ProductEnv(tenant_id="bmp-auth-anon", principal_id=None) as env:
-            tenant = TenantFactory(
-                tenant_id="bmp-auth-anon",
-                subdomain="bmp-auth-anon",
-                brand_manifest_policy="require_auth",
-            )
-            p = ProductFactory(tenant=tenant, product_id="p1")
-            PricingOptionFactory(product=p)
-
-            env._identity = _lazy_identity("bmp-auth-anon", principal_id=None)
-
-            with pytest.raises(AdCPAuthenticationError, match="Authentication required"):
-                await env.call_impl(brief="campaign")
+    # test_require_auth_rejects_anonymous is REMOVED. It built an anonymous identity against a
+    # tenant whose brand_manifest_policy is "require_auth" and asserted _get_products_impl
+    # raised AdCPAuthenticationError itself.
+    #
+    # Neither half is constructible now. The anonymous caller of a public tool is a
+    # PublicIdentity, not a ResolvedIdentity with a None principal (the field is required),
+    # and the seller policy is no longer read in the implementation at all --
+    # src/core/tools/products.py:214 says so, and the refusal is minted by the resolver,
+    # which asks ToolSpec.requires_credential(tenant) once the tenant row is loaded
+    # (registry.py:195). ruff-boundary.toml bans raising AUTH_MISSING / AUTH_INVALID
+    # anywhere but the resolver.
+    #
+    # The obligation (BR-RULE-001-01: a require_auth seller makes get_products need a
+    # caller) is graded where it is decided -- the resolver, for every transport at once --
+    # by the transport-blind auth scenarios asserting the AUTH_MISSING wire envelope across
+    # a2a, mcp and rest. The authenticated half of each pair is untouched and still runs
+    # here; for the default-policy pair, test_require_auth_accepts_authenticated above
+    # covers the same production path, the DB default being "require_auth".
 
     @pytest.mark.asyncio
     async def test_require_auth_accepts_authenticated(self, integration_db):
@@ -126,7 +127,7 @@ class TestBrandManifestPolicyRequireBrand:
                 brand=None,
                 filters={"delivery_type": "guaranteed"},
             )
-            with pytest.raises(AdCPAuthorizationError, match="Brand manifest required"):
+            with pytest.raises(AdCPAuthorizationError):
                 await _get_products_impl(req, env.identity)
 
     @pytest.mark.asyncio
@@ -182,33 +183,24 @@ class TestBrandManifestPolicyPublic:
         assert len(response.products) >= 1
 
 
-class TestBrandManifestPolicyDefault:
-    """Default (no policy set) behaves as require_auth.
-
-    Covers: BR-RULE-001-01
-    """
-
-    @pytest.mark.asyncio
-    async def test_default_policy_rejects_anonymous(self, integration_db):
-        """Covers: BR-RULE-001-01
-
-        When no brand_manifest_policy is explicitly set, the default
-        require_auth behavior rejects anonymous requests.
-        """
-        with ProductEnv(tenant_id="bmp-def-anon", principal_id=None) as env:
-            # Do not set brand_manifest_policy -- rely on DB default "require_auth"
-            tenant = TenantFactory(
-                tenant_id="bmp-def-anon",
-                subdomain="bmp-def-anon",
-            )
-            p = ProductFactory(tenant=tenant, product_id="p1")
-            PricingOptionFactory(product=p)
-
-            env._identity = _lazy_identity("bmp-def-anon", principal_id=None)
-
-            with pytest.raises(AdCPAuthenticationError, match="Authentication required"):
-                await env.call_impl(brief="campaign")
-
+# TestBrandManifestPolicyDefault (its only test, test_default_policy_rejects_anonymous) is REMOVED. It built an anonymous identity against a
+# tenant whose brand_manifest_policy is unset, i.e. the DB default "require_auth", and asserted _get_products_impl
+# raised AdCPAuthenticationError itself.
+#
+# Neither half is constructible now. The anonymous caller of a public tool is a
+# PublicIdentity, not a ResolvedIdentity with a None principal (the field is required),
+# and the seller policy is no longer read in the implementation at all --
+# src/core/tools/products.py:214 says so, and the refusal is minted by the resolver,
+# which asks ToolSpec.requires_credential(tenant) once the tenant row is loaded
+# (registry.py:195). ruff-boundary.toml bans raising AUTH_MISSING / AUTH_INVALID
+# anywhere but the resolver.
+#
+# The obligation (BR-RULE-001-01: a require_auth seller makes get_products need a
+# caller) is graded where it is decided -- the resolver, for every transport at once --
+# by the transport-blind auth scenarios asserting the AUTH_MISSING wire envelope across
+# a2a, mcp and rest. The authenticated half of each pair is untouched and still runs
+# here; for the default-policy pair, test_require_auth_accepts_authenticated above
+# covers the same production path, the DB default being "require_auth".
 
 # ---------------------------------------------------------------------------
 # BR-RULE-002: Brief Policy Compliance

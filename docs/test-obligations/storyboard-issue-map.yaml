@@ -49,10 +49,6 @@ storyboards:
       #1442 is scoped to api_v1 REST *Body models. The storyboard grades
       unknown-field handling on every transport, and the SDK-generated request
       models carry no extra= policy at all.
-  universal/schema-validation-signals.yaml:
-    issues: [1442]
-    coverage: partial
-    note: Same as universal/schema-validation.yaml, on the signals tools.
 
   universal/security.yaml:
     issues: [1859]
@@ -125,10 +121,6 @@ storyboards:
       #1604/#1680 align the code enum; #1753 covers scenarios asserting codes
       production never emits. The storyboard's per-code recovery-hint grading
       is untracked.
-  universal/error-compliance-signals.yaml:
-    issues: [1604, 1680]
-    coverage: partial
-    note: Same enum work, signals tools. No signals-specific tracking.
 
   universal/capability-discovery.yaml:
     issues: [1825, 1684, 1408, 1525, 1724]
@@ -210,9 +202,6 @@ storyboards:
   universal/get-media-buys-pagination-integrity.yaml:
     coverage: none
     note: get_media_buys pagination integrity is graded by 3.1.1 and untracked.
-  universal/get-signals-pagination-integrity.yaml:
-    coverage: none
-    note: get_signals pagination integrity is graded by 3.1.1 and untracked.
   universal/pagination-integrity-creative-formats.yaml:
     coverage: none
     note: >-

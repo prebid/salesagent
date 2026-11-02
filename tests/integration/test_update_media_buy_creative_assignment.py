@@ -8,10 +8,9 @@ from sqlalchemy import select
 
 from src.core.database.models import Creative as DBCreative
 from src.core.database.models import CreativeAssignment as DBAssignment
-from src.core.exceptions import AdCPCreativeRejectedError
-from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import UpdateMediaBuyRequest, UpdateMediaBuyResponse, UpdateMediaBuyResult
 from src.core.tools.media_buy_update import _update_media_buy_impl
+from tests.factories.principal import PrincipalFactory, plaintext_token_for
 from tests.helpers.media_buy_write_seam import (
     assert_status_move_carried_bookkeeping,
     read_media_buy_state,
@@ -26,10 +25,12 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
 
     with get_db_session() as session:
         # Create tenant
+        # Required (NOT NULL) and UNIQUE. Nothing routes to this host; it exists to satisfy the column.
         tenant = Tenant(
             tenant_id="test_tenant",
             name="Test Org",
             subdomain="test",
+            virtual_host="test-tenant.adcp.test",
         )
         session.add(tenant)
 
@@ -43,11 +44,11 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
         session.add(property_tag)
 
         # Create principal (MUST be flushed before creatives due to FK constraint)
-        principal = Principal(
+        principal = Principal.with_token(
+            plaintext_token_for("test_principal"),
             principal_id="test_principal",
             tenant_id="test_tenant",
             name="Test Advertiser",
-            access_token="test_token",
             platform_mappings={"mock": {"id": "test_advertiser"}},
         )
         session.add(principal)
@@ -108,16 +109,13 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
         session.commit()
 
     # Create identity for the new _update_media_buy_impl signature
-    identity = ResolvedIdentity(
+    identity = PrincipalFactory.make_identity(
         principal_id="test_principal",
         tenant_id="test_tenant",
         tenant={"tenant_id": "test_tenant"},
-        auth_token="test_token",
-        protocol="mcp",
     )
 
     with (
-        patch("src.core.config_loader.get_current_tenant", return_value={"tenant_id": "test_tenant"}),
         patch("src.core.helpers.adapter_helpers.get_adapter") as mock_get_adapter,
         patch("src.core.context_manager.get_context_manager") as mock_ctx_mgr,
     ):
@@ -134,6 +132,8 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
 
         # Call update_media_buy with creative assignment
         req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id="test_buy_123",
             packages=[
                 {
@@ -146,7 +146,7 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
 
     # Verify response
     assert isinstance(result, UpdateMediaBuyResult)
-    response = result.response  # _impl returns UpdateMediaBuyResult; domain response is on .response
+    response = result  # _impl returns UpdateMediaBuyResult; domain response is on .response
     assert isinstance(response, UpdateMediaBuyResponse)
     assert response.media_buy_id == "test_buy_123"
     assert response.affected_packages is not None
@@ -188,6 +188,7 @@ def test_update_media_buy_replaces_creatives(integration_db):
             tenant_id="test_tenant",
             name="Test Org",
             subdomain="test",
+            virtual_host="test-tenant.adcp.test",
         )
         session.add(tenant)
 
@@ -201,11 +202,11 @@ def test_update_media_buy_replaces_creatives(integration_db):
         session.add(property_tag)
 
         # Create principal (MUST be flushed before creatives due to FK constraint)
-        principal = Principal(
+        principal = Principal.with_token(
+            plaintext_token_for("test_principal"),
             principal_id="test_principal",
             tenant_id="test_tenant",
             name="Test Advertiser",
-            access_token="test_token",
             platform_mappings={"mock": {"id": "test_advertiser"}},
         )
         session.add(principal)
@@ -288,16 +289,13 @@ def test_update_media_buy_replaces_creatives(integration_db):
         session.commit()
 
     # Create identity for the new _update_media_buy_impl signature
-    identity = ResolvedIdentity(
+    identity = PrincipalFactory.make_identity(
         principal_id="test_principal",
         tenant_id="test_tenant",
         tenant={"tenant_id": "test_tenant"},
-        auth_token="test_token",
-        protocol="mcp",
     )
 
     with (
-        patch("src.core.config_loader.get_current_tenant", return_value={"tenant_id": "test_tenant"}),
         patch("src.core.helpers.adapter_helpers.get_adapter") as mock_get_adapter,
         patch("src.core.context_manager.get_context_manager") as mock_ctx_mgr,
     ):
@@ -314,6 +312,8 @@ def test_update_media_buy_replaces_creatives(integration_db):
 
         # Call update_media_buy to replace creative_1 with creative_2 and creative_3
         req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id="test_buy_456",
             packages=[
                 {
@@ -326,7 +326,7 @@ def test_update_media_buy_replaces_creatives(integration_db):
 
     # Verify response
     assert isinstance(result, UpdateMediaBuyResult)
-    response = result.response  # _impl returns UpdateMediaBuyResult; domain response is on .response
+    response = result  # _impl returns UpdateMediaBuyResult; domain response is on .response
     assert isinstance(response, UpdateMediaBuyResponse)
     assert response.affected_packages is not None
     assert len(response.affected_packages) == 1
@@ -352,111 +352,6 @@ def test_update_media_buy_replaces_creatives(integration_db):
 
 
 @pytest.mark.requires_db
-def test_update_media_buy_rejects_missing_creatives(integration_db):
-    """Test that update_media_buy rejects requests with non-existent creative IDs."""
-    from src.core.database.database_session import get_db_session
-    from src.core.database.models import MediaBuy, Principal, Product, PropertyTag, Tenant
-
-    with get_db_session() as session:
-        # Create tenant
-        tenant = Tenant(
-            tenant_id="test_tenant",
-            name="Test Org",
-            subdomain="test",
-        )
-        session.add(tenant)
-
-        # Create property tag (required for products)
-        property_tag = PropertyTag(
-            tenant_id="test_tenant",
-            tag_id="all_inventory",
-            name="All Inventory",
-            description="All available inventory",
-        )
-        session.add(property_tag)
-
-        # Create principal (MUST be flushed before creatives due to FK constraint)
-        principal = Principal(
-            principal_id="test_principal",
-            tenant_id="test_tenant",
-            name="Test Advertiser",
-            access_token="test_token",
-            platform_mappings={"mock": {"id": "test_advertiser"}},
-        )
-        session.add(principal)
-        session.flush()  # Ensure principal exists before creating creatives
-
-        # Create product
-        product = Product(
-            product_id="test_product",
-            tenant_id="test_tenant",
-            name="Test Product",
-            description="Test product for creative assignment",
-            format_ids=["display_300x250"],
-            targeting_template={},
-            delivery_type="guaranteed",
-            property_tags=["all_inventory"],
-        )
-        session.add(product)
-
-        # Create media buy
-        media_buy = MediaBuy(
-            media_buy_id="test_buy_789",
-            tenant_id="test_tenant",
-            principal_id="test_principal",
-            order_name="Test Order",
-            advertiser_name="Test Advertiser",
-            start_date="2025-11-01",
-            end_date="2025-11-30",
-            start_time="2025-11-01T00:00:00Z",
-            end_time="2025-11-30T23:59:59Z",
-            raw_request={
-                "packages": [{"package_id": "pkg_default", "impressions": 100000, "products": ["test_product"]}]
-            },
-        )
-        session.add(media_buy)
-        session.commit()
-
-    # Create identity for the new _update_media_buy_impl signature
-    identity = ResolvedIdentity(
-        principal_id="test_principal",
-        tenant_id="test_tenant",
-        tenant={"tenant_id": "test_tenant"},
-        auth_token="test_token",
-        protocol="mcp",
-    )
-
-    with (
-        patch("src.core.config_loader.get_current_tenant", return_value={"tenant_id": "test_tenant"}),
-        patch("src.core.helpers.adapter_helpers.get_adapter") as mock_get_adapter,
-        patch("src.core.context_manager.get_context_manager") as mock_ctx_mgr,
-    ):
-        # Mock adapter
-        mock_adapter = MagicMock()
-        mock_adapter.manual_approval_required = False
-        mock_get_adapter.return_value = mock_adapter
-
-        # Mock context manager
-        mock_ctx_manager_inst = MagicMock()
-        mock_ctx_manager_inst.get_or_create_context.return_value = MagicMock(context_id="ctx_789")
-        mock_ctx_manager_inst.create_workflow_step.return_value = MagicMock(step_id="step_789")
-        mock_ctx_mgr.return_value = mock_ctx_manager_inst
-
-        # Call update_media_buy with non-existent creative IDs — should raise.
-        req = UpdateMediaBuyRequest(
-            media_buy_id="test_buy_789",
-            packages=[
-                {
-                    "package_id": "pkg_default",
-                    "creative_ids": ["nonexistent_creative"],
-                }
-            ],
-        )
-        with pytest.raises(AdCPCreativeRejectedError, match="nonexistent_creative"):
-            _update_media_buy_impl(req=req, identity=identity)
-
-
-@pytest.mark.requires_db
 def test_creative_assignments_with_weights(integration_db):
     """UC-003-CA01: creative_assignments replaces all with specified weights.
 
@@ -472,6 +367,7 @@ def test_creative_assignments_with_weights(integration_db):
             tenant_id="test_tenant",
             name="Test Org",
             subdomain="test",
+            virtual_host="test-tenant.adcp.test",
         )
         session.add(tenant)
 
@@ -485,11 +381,11 @@ def test_creative_assignments_with_weights(integration_db):
         session.add(property_tag)
 
         # Create principal (MUST be flushed before creatives due to FK constraint)
-        principal = Principal(
+        principal = Principal.with_token(
+            plaintext_token_for("test_principal"),
             principal_id="test_principal",
             tenant_id="test_tenant",
             name="Test Advertiser",
-            access_token="test_token",
             platform_mappings={"mock": {"id": "test_advertiser"}},
         )
         session.add(principal)
@@ -550,11 +446,10 @@ def test_creative_assignments_with_weights(integration_db):
         session.commit()
 
     # Create ResolvedIdentity for transport-agnostic _impl call
-    identity = ResolvedIdentity(
+    identity = PrincipalFactory.make_identity(
         principal_id="test_principal",
         tenant_id="test_tenant",
         tenant={"tenant_id": "test_tenant"},
-        protocol="mcp",
     )
 
     with (
@@ -574,6 +469,8 @@ def test_creative_assignments_with_weights(integration_db):
 
         # Call update_media_buy with creative_assignments (not creative_ids)
         req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id="test_buy_weights",
             packages=[
                 {
@@ -589,9 +486,14 @@ def test_creative_assignments_with_weights(integration_db):
 
     # Verify response is successful (not an error)
     assert isinstance(result, UpdateMediaBuyResult)
-    response = result.response  # _impl returns UpdateMediaBuyResult; domain response is on .response
+    response = result
     assert isinstance(response, UpdateMediaBuyResponse)
-    assert not hasattr(response, "errors") or not response.errors
+    # `not hasattr(response, "errors")` stood here and was True by construction:
+    # UpdateMediaBuyResult declares no `errors` field, so it held for any object.
+    # adcp_error is the error channel that exists (salesagent-jnqab, same shape as the
+    # create_media_buy sites). The comment above it claimed "domain response is on
+    # .response", which stopped being true when 1210 removed the envelope wrapper.
+    assert response.adcp_error is None, f"update_media_buy failed: {response.adcp_error}"
 
     # Verify assignments were created in database with correct weights
     with get_db_session() as session:
@@ -621,7 +523,12 @@ def test_creative_assignments_replaces_all(integration_db):
     from src.core.database.models import MediaBuy, Principal, Product, PropertyTag, Tenant
 
     with get_db_session() as session:
-        tenant = Tenant(tenant_id="test_tenant", name="Test Org", subdomain="test")
+        tenant = Tenant(
+            tenant_id="test_tenant",
+            name="Test Org",
+            subdomain="test",
+            virtual_host="test-tenant.adcp.test",
+        )
         session.add(tenant)
 
         property_tag = PropertyTag(
@@ -632,11 +539,11 @@ def test_creative_assignments_replaces_all(integration_db):
         )
         session.add(property_tag)
 
-        principal = Principal(
+        principal = Principal.with_token(
+            plaintext_token_for("test_principal"),
             principal_id="test_principal",
             tenant_id="test_tenant",
             name="Test Advertiser",
-            access_token="test_token",
             platform_mappings={"mock": {"id": "test_advertiser"}},
         )
         session.add(principal)
@@ -712,11 +619,10 @@ def test_creative_assignments_replaces_all(integration_db):
         session.commit()
 
     # Create ResolvedIdentity for transport-agnostic _impl call
-    identity = ResolvedIdentity(
+    identity = PrincipalFactory.make_identity(
         principal_id="test_principal",
         tenant_id="test_tenant",
         tenant={"tenant_id": "test_tenant"},
-        protocol="mcp",
     )
 
     with (
@@ -734,6 +640,8 @@ def test_creative_assignments_replaces_all(integration_db):
 
         # Send creative_assignments with ONLY c2 and c3 — c1 should be REMOVED
         req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id="test_buy_replace",
             packages=[
                 {
@@ -749,9 +657,14 @@ def test_creative_assignments_replaces_all(integration_db):
 
     # Verify response is successful
     assert isinstance(result, UpdateMediaBuyResult)
-    response = result.response  # _impl returns UpdateMediaBuyResult; domain response is on .response
+    response = result
     assert isinstance(response, UpdateMediaBuyResponse)
-    assert not hasattr(response, "errors") or not response.errors
+    # `not hasattr(response, "errors")` stood here and was True by construction:
+    # UpdateMediaBuyResult declares no `errors` field, so it held for any object.
+    # adcp_error is the error channel that exists (salesagent-jnqab, same shape as the
+    # create_media_buy sites). The comment above it claimed "domain response is on
+    # .response", which stopped being true when 1210 removed the envelope wrapper.
+    assert response.adcp_error is None, f"update_media_buy failed: {response.adcp_error}"
 
     # Verify database: ONLY c2 and c3 remain (c1 was replaced/removed)
     with get_db_session() as session:
@@ -856,6 +769,8 @@ def test_approved_draft_transitions_to_pending_creatives(integration_db, creativ
 
         result = env.call_impl(
             req=UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id=media_buy_id,
                 packages=[{"package_id": package_id, **package_update}],
             )

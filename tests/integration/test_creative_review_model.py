@@ -22,6 +22,8 @@ from src.core.database.queries import (
     get_creative_reviews,
     get_creative_with_latest_review,
 )
+from tests.factories.principal import plaintext_token_for
+from tests.utils.database_helpers import vhost_for
 
 
 def _create_test_tenant_with_creative(session, tenant_id: str, creative_id: str):
@@ -37,16 +39,17 @@ def _create_test_tenant_with_creative(session, tenant_id: str, creative_id: str)
         tenant_id=tenant_id,
         name=f"Test Tenant {tenant_id}",
         subdomain=tenant_id,
+        virtual_host=vhost_for(tenant_id),
         is_active=True,
     )
     session.add(tenant)
     session.commit()
 
-    principal = Principal(
+    principal = Principal.with_token(
+        plaintext_token_for(principal_id),
         tenant_id=tenant_id,
         principal_id=principal_id,
         name="Test Principal",
-        access_token=access_token,
         platform_mappings={"mock": {"id": "test_advertiser"}},
     )
     session.add(principal)

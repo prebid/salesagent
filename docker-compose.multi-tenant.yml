@@ -82,7 +82,6 @@ services:
       timeout: 10s
       retries: 3
       # See docker-compose.e2e.yml's adcp-server healthcheck for why 60s
-
       start_period: 60s
 
   admin-ui:
@@ -100,7 +99,7 @@ services:
       SUPER_ADMIN_EMAILS: ${SUPER_ADMIN_EMAILS:-}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
-      ADCP_AUTH_TEST_MODE: ${ADCP_AUTH_TEST_MODE:-true}
+      FLASK_SECRET_KEY: "${FLASK_SECRET_KEY:-adcp-test-stack-session-signing-key}"
     depends_on:
       postgres:
         condition: service_healthy

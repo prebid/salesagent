@@ -144,11 +144,16 @@ machinery. See [Add a guard](#add-a-guard).
 
 | Test file | What it enforces |
 |-----------|-----------------|
-| `test_no_toolerror_in_impl.py` | `_impl` functions raise `AdCPError`, never `ToolError` from FastMCP |
+| `ruff-boundary.toml` (TID251) | Nothing under `src/` imports `ToolError` except the two edge modules that mint and render it. Replaced an AST scan over a hand-written list of 14 files, which was blind to every module not on it. Proven live by `tests/unit/test_ruff_boundary_bans.py`. |
 | `test_transport_agnostic_impl.py` | `_impl` functions have zero transport imports (no fastmcp, a2a, starlette) |
-| `test_impl_resolved_identity.py` | `_impl` functions accept `ResolvedIdentity`, not `Context`/`ToolContext` |
+| `ToolImpl` protocol (`src/core/tools/registry.py`, mypy) + `.ast-grep/rules/impl-signature-is-request-and-identity.yml` | Every implementation is exactly `(req: <DTO>, identity: ResolvedIdentity)` (protected) or `(req: <DTO>, identity: PublicIdentity)` (public), the DTO matching its registry row; the annotation is the row's credential policy, derived by `ToolSpec.requires_credential`. Replaced `test_impl_resolved_identity.py` and `test_architecture_boundary_completeness.py`, which read the same fact off `inspect.signature`. |
+| `.ast-grep/rules/resolved-identity-constructed-only-by-its-owners.yml` | `ResolvedIdentity(...)` and `PublicIdentity(...)` are constructed only by the resolver and `PrincipalFactory`. Replaced two AST guards (a zero cap over A2A test files and a per-file cap dict over the rest); ruff cannot take it because TID251 bans the import, which forty modules need for annotations. |
+| `ruff-boundary.toml` (TID251 on `AdCPAuthRequiredError` / `AdCPAuthenticationError`) | The auth refusals are minted by the resolver alone: a protected tool's `ResolvedIdentity` carries principal and tenant by type, so nothing downstream re-checks; the seller policy that makes `get_products` need a caller is asked by the resolver (`ToolSpec.requires_credential(tenant)`) once it holds the tenant row. Replaced `test_architecture_no_handrolled_identity_guard.py`, which modelled the `if identity is None: raise` shapes and missed the two helper sites the ban found on landing. |
+| `ruff-boundary.toml` (TID251 on `src.core.database.repositories.account_lookup`) | The account a request names is resolved by the resolver alone, which builds the identity with it inside (`AccountIdentity` / `ResolvedIdentity.account`); the lookup module can be imported nowhere else under `src/` and `scripts/`. |
+| `ruff-ownership.toml` (TID251 on `repositories.principal`, `repositories.principal_lookup`, `auth_utils`, `repositories.account`, `uow.AccountUoW`) + `ruff-boundary.toml` (TID251 on `models.Principal`) | A tool obtains its principal, tenant and account from the identity and nowhere else. A third config rather than more rows in `ruff-boundary.toml` because ruff exempts a whole rule per path: the admin UI and the setup scripts, which manage principals and accounts as data, are exempt from the ownership bans and from nothing in the boundary config. The ORM `Principal` model, whose only exemption is the four repository modules that query it, is banned in the boundary config so the admin tree cannot import it. Proven live by `tests/unit/test_ruff_boundary_bans.py`, which reads both tables. |
+| `ruff-boundary.toml` (TID251 on `adcp.types.ContextObject`) + `.ast-grep/rules/context-is-written-by-the-boundary-alone.yml` + `AdcpResponse`'s two refusals | The buyer's `context` object is written by `_boundary._served` alone. The import ban stops business logic naming the type (the schemas and the boundary are exempt), the rule stops a `context=` keyword at any call site outside the boundary, and the response class refuses the field on construction and on assignment, so a dict-splat cannot slip past the rule. Proven by `tests/unit/test_ast_grep_identity_rules.py`, `test_ruff_boundary_bans.py` and `test_response_context_is_boundary_owned.py`. |
 
-These three guards enforce Critical Pattern #5: shared `_impl` functions are
+These guards enforce Critical Pattern #5: shared `_impl` functions are
 transport-agnostic. They don't know whether they're called from MCP, A2A, or
 a REST endpoint.
 
@@ -170,78 +175,42 @@ library parent, so it consults no import spelling. The companion
 `src/core/schemas` and asserts that the local class with the unprefixed name
 inherits from the library type; that half is alias-keyed, and an import
 under a different alias goes unexamined by it.
-`test_pydantic_schema_alignment.py` separately grades declared fields and
-`model_dump` survival against the pinned schema, so any drift that reaches
-the wire is caught there.
+This guard is the only grader of redeclarations. The alignment suite that
+used to be the backstop — `test_pydantic_schema_alignment.py`, which graded
+declared fields and `model_dump` survival against the pinned schema — was
+deleted in full ([Building a tool](building-tools.md)),
+because a design in which the DTO IS the pinned model minus a declared
+omission leaves it nothing to compare.
 
-### Boundary completeness guard
+### Implementation signature
 
-**File:** `tests/unit/test_architecture_boundary_completeness.py`
+**Where:** the `ToolImpl` protocol typing `ToolSpec.impl` in `src/core/tools/registry.py`,
+graded by mypy, plus `.ast-grep/rules/impl-signature-is-request-and-identity.yml`.
 
-**What it enforces:** When an `_impl` function accepts a parameter, both its
-MCP wrapper and A2A wrapper must pass that parameter at the call site.
+**What it enforces:** An `_impl` function declares exactly `(req: <DTO>,
+identity: ResolvedIdentity)`, and the DTO is the one its registry row names.
 
-**Why it matters:** The codebase follows Critical Pattern #5 — every tool has
-a shared `_impl` function called by both MCP and A2A wrappers. If a wrapper
-doesn't forward a parameter, that transport layer silently loses access to
-the functionality.
+**Why it matters:** Every transport reaches an implementation through
+`src/core/tools/_boundary.py`, which calls it as `impl(req=..., identity=...)` and nothing
+else. A third parameter can never be filled, so it silently takes its default on every call;
+an `identity` declared Optional or defaulted describes a state the boundary never produces
+and invites a `None` branch that re-derives what the resolver decided.
 
 #### How it works
 
-The guard maintains a registry of all `_impl` functions:
+The generic `ToolSpec[Req]` ties `dto: type[Req]` to `impl: ToolImpl[Req]`, so mypy checks
+each row's implementation against that row's DTO and against `ResolvedIdentity`, and rejects
+an extra parameter with no default. A protocol accepts a callable that takes MORE than it
+asks for, so the ast-grep rule matches the parameter list exactly: no Optional, no default,
+no third parameter.
 
-```python
-IMPL_REGISTRY = [
-    ("src.core.tools.media_buy_create", "_create_media_buy_impl"),
-    ("src.core.tools.creatives._sync", "_sync_creatives_impl"),
-    # ... 13 total
-]
-```
+#### What it replaced
 
-For each `_impl`:
-
-1. **Get the signature** via `inspect.signature()` to find all parameter names
-2. **Derive wrapper names** from the `_impl` name:
-   - `_create_media_buy_impl` → MCP: `create_media_buy`, A2A: `create_media_buy_raw`
-3. **Parse the wrapper file's AST** to find the wrapper function, then locate
-   the `_impl(...)` call inside it
-4. **Extract the keyword arguments** actually passed at the call site
-5. **Flag any `_impl` parameter** not present in the call arguments
-
-#### Example of what it catches
-
-```python
-# _impl accepts push_notification_config:
-async def _create_media_buy_impl(
-    req, push_notification_config=None, identity=None, context_id=None
-): ...
-
-# MCP wrapper forgets to pass it:
-@mcp.tool()
-async def create_media_buy(...):
-    return await _create_media_buy_impl(
-        req=req,
-        identity=identity,
-        context_id=context_id,
-        # push_notification_config is MISSING — MCP callers can never use it
-    )
-```
-
-#### Tests
-
-| Test | What it checks |
-|------|---------------|
-| `test_mcp_wrappers_pass_all_impl_params` | Every MCP wrapper passes all `_impl` parameters |
-| `test_a2a_wrappers_pass_all_impl_params` | Every A2A wrapper passes all `_impl` parameters |
-| `test_known_violations_are_still_violations` | Allowlisted violations haven't been fixed (stale entry detection) |
-
-#### Current known violations (3)
-
-| Wrapper | Missing parameter | Tracked by |
-|---------|------------------|------------|
-| `create_media_buy` (MCP) | `push_notification_config` | salesagent-v0kb |
-| `create_media_buy_raw` (A2A) | `context_id` | salesagent-v0kb |
-| `update_media_buy_raw` (A2A) | `context_id` | salesagent-v0kb |
+`test_impl_resolved_identity.py` and `test_architecture_boundary_completeness.py` read the
+same signature off `inspect.signature` at test time. The latter is the cautionary one: it
+used to scan each `*_raw` wrapper for the arguments it forwarded, and its wrapper lookup
+returned `None` — "nothing to check" — when it found no wrapper, so the day the wrappers were
+deleted it went green while grading nothing.
 
 ### Query type safety guard
 
@@ -304,44 +273,55 @@ The fix is to cast at the boundary: `[int(x) for x in pricing_option_ids]`.
 |------|---------|------------|
 | `media_buy_delivery.py` | `PricingOption.id.in_(string_list)` | salesagent-mq3n |
 
-### No model_dump() in _impl guard
+### internal_detail is an exception
 
-**File:** `tests/unit/test_architecture_no_model_dump_in_impl.py`
+**Files:** `.ast-grep/rules/internal-detail-is-an-exception.yml`
 
-**What it enforces:** `_impl` functions must not call `.model_dump()` or
-`.model_dump_internal()`. Serialization is the transport wrapper's job.
+**What it enforces:** `AdCPSalesAgentError.internal_detail` takes the caught exception
+and nothing else. The rule matches the keyword argument `internal_detail=` and the
+attribute assignment `x.internal_detail =` whose value is an authored string in any
+spelling: a string or f-string literal, an implicitly concatenated string, a `+` with a
+string on either side, `%` formatting of a string, `.format(...)` on a string, `str(...)`,
+a conditional expression with a string arm, or any of those in parentheses, nested to any
+depth, under `src/`, `scripts/` and `tests/`. The parameter is typed
+`BaseException | None`, so mypy already refuses a string under `src/`; the rule is what
+covers the harness and the tests, which mypy does not check.
 
-**Why it matters:** When business logic calls `model_dump()`, it takes on
-responsibility for serialization format (JSON mode, aliases, exclude rules).
-This couples the _impl layer to a specific output format. The transport
-wrapper should receive a model object and decide how to serialize it.
+**Why it matters:** An authored sentence there says nothing the error code, the
+exception class and the typed details do not already say, and it reopens the door
+ADR-010 closed: the wire fields are functions of the code. A fact (an id, a count, a
+status) belongs on the declared details class. The boundary's `record_boundary_error`
+writes one record per failure, with the traceback attached when the error has a
+`__cause__` or an `internal_detail`; there is no second log record for `internal_detail`
+(salesagent-3cs7o.24, proven by `tests/unit/test_tool_error_logging.py`).
 
-#### How it works
+### Serialize only at the edges
 
-The guard scans all `*_impl()` functions under `src/core/tools/` using AST,
-looking for method calls where the method name is `model_dump` or
-`model_dump_internal`.
+**Files:** `ruff-serialization.toml` and `.ast-grep/rules/serialize-only-at-the-edges.yml`
 
-#### Tests
+**What it enforces:** a model is serialized at a named edge and nowhere else. The
+ruff config bans the two bare-call spellings that are importable names,
+`pydantic_core.to_jsonable_python` and `pydantic_core.to_json`, everywhere under
+`src/` and `scripts/`, with per-file-ignores for exactly the edge modules. The
+ast-grep rule matches the method-call spellings, `.model_dump(...)` and
+`.model_dump_json(...)`, under `src/` with the same edge list as its `ignores`,
+because a method call on an instance imports nothing and ruff cannot see it. The
+edge list is the definition of "edge"; it lives in those two files and nowhere else.
 
-| Test | What it checks |
-|------|---------------|
-| `test_no_new_model_dump_violations` | No new `.model_dump()` calls beyond the allowlist |
-| `test_known_violations_not_stale` | Allowlisted violations haven't been fixed (stale entry detection) |
-| `test_violation_count_documented` | Total count matches allowlist (catches both directions) |
+**Why it matters:** When business logic serializes, it takes on the serialization
+format (JSON mode, aliases, exclude rules) and produces a second representation of
+the value that drifts from the model. The model is handed through; the edge that
+owns the format serializes it once.
 
-#### Current known violations (29)
+#### What it replaced
 
-| File | Count | Primary use |
-|------|-------|-------------|
-| `media_buy_update.py` | 23 | `response_data=X.model_dump()` for workflow step storage |
-| `media_buy_create.py` | 4 | `raw_request=req.model_dump()` for DB storage + workflow |
-| `products.py` | 1 | `filters.model_dump()` in logging |
-| `creatives/listing.py` | 1 | `filters.model_dump()` for dict conversion |
-
-20 of the 29 violations are `response_data=response.model_dump(mode="json")`
-calls that serialize workflow step responses for DB storage. These should be
-replaced with typed repository methods that accept model objects directly.
+An AST guard under `tests/unit/` walked from `*_impl` entrypoints under
+`src/core/tools/` and saw only calls named `model_dump`. A call
+reached through a helper outside that walk, or spelled `to_jsonable_python`, was a
+hole, and `src/core/tools/creatives/_validation.py` escaped it that way. Its
+allowlist was already empty. The ruff table is proven live by
+`tests/unit/test_ruff_boundary_bans.py`; the ast-grep rule by a manual fire probe,
+recorded on salesagent-3cs7o.12.
 
 ### Repository pattern guard
 
@@ -510,6 +490,54 @@ uv run alembic merge -m "Merge migration heads" heads
 The smoke test in `tests/smoke/test_database_migrations.py` also checks this,
 providing coverage in the CI smoke-tests job before unit tests run.
 
+### No request-supplied session default guard
+
+**File:** `tests/unit/test_architecture_no_request_session_default.py`
+
+**What it enforces:** A Flask session lookup — `session.get`, `session.pop` or
+`session.setdefault` with a string key, anywhere under `src/` — never defaults
+(positionally or by `default=`) to a value the request supplied: a `request.*`
+expression, a parameter of the enclosing function (route arguments arrive that
+way), or a name bound from `request.*` in that function. Nor is such a lookup
+followed by `or <any of those>`.
+
+**Why it matters:** The default is taken exactly when the request carries no
+session, which is the request that must not be trusted.
+`session.pop("gam_oauth_tenant_id", state)` in the GAM OAuth callback was the
+whole of [#2205](https://github.com/prebid/salesagent/issues/2205): with no
+session, the tenant came from the attacker-controlled `state` parameter and
+that tenant's ad-server credential was overwritten. The line read as a
+harmless fallback in review and failed nothing at runtime.
+
+#### How it works
+
+For every function the guard collects its parameters and every name assigned
+from an expression rooted at `request`. It then walks the module with
+`walk_with_enclosing_function` and flags two shapes. First, a call to
+`.get`/`.pop`/`.setdefault` on `session`, `flask_session` or `<module>.session`
+whose first argument is a string constant (which is what separates the Flask
+session from SQLAlchemy's `Session.get(Model, pk)`) and whose default — the
+second positional argument or the `default=` keyword, which Flask's session
+accepts on `pop` and `setdefault` — mentions one of those names or is itself
+rooted at `request`. Second, an `or` expression in which such a lookup is
+followed by an operand that mentions one of those names or is rooted at
+`request`.
+A default computed from the session itself — `session.get("user_name",
+email.split("@")[0].title())` with `email = session["user"]` — is not flagged.
+
+#### Tests
+
+| Test | What it checks |
+|------|---------------|
+| `test_no_request_supplied_session_default` | No violation under `src/` beyond `KNOWN_VIOLATIONS` (empty) |
+| `test_detector_catches_known_bad` | The detector fires on a route-parameter default, a name bound from `request.args`, a `request.args.get(...)` default, a `default=` keyword, `setdefault`, the `or request...` form, `or` with a request-bound name or a route parameter, and the `flask_session` alias |
+| `test_detector_ignores_session_derived_defaults_and_orm_sessions` | Literal and session-derived defaults, `session.pop(...) or session.get(...)`, and `db_session.get(Tenant, pk)` are not flagged |
+
+#### No allowlist
+
+`KNOWN_VIOLATIONS` is empty and stays empty: the one violation was the bug
+the guard was written for.
+
 ### Hook-relocation guards
 
 These guards run via `pytest -m arch_guard` or as part of `make quality`.
@@ -524,7 +552,7 @@ They replaced grep-based pre-commit hooks (issue #1234).
 | `test_architecture_query_type_safety.py` | `enforce-sqlalchemy-2-0` (partial) | `test_no_legacy_session_query`, `test_models_use_mapped_not_column` |
 | `test_architecture_pre_commit_hook_count.py` | — | Commit-stage hook count ≤12 (D27) |
 | `test_architecture_pre_commit_no_additional_deps.py` | — | No `additional_dependencies` in pre-commit config |
-| `tests/collection/test_architecture_ci_bdd_shard_manifest.py` | — | BDD CI shards partition suite; matrix matches `SHARD_COUNTS` |
+| `test_architecture_ci_bdd_shard_manifest.py` | — | BDD CI shards partition suite; matrix matches `SHARD_COUNTS` |
 | `test_architecture_repo_invariants.py` | `repo-invariants` (partial) | Self-tests for `.fn()` detection in consolidated hook |
 
 Guards use the `@pytest.mark.arch_guard` marker (distinct from the
@@ -734,7 +762,7 @@ make quality
 uv run pytest tests/unit/test_architecture_*.py tests/unit/test_*impl*.py -v
 
 # Single guard
-uv run pytest tests/unit/test_pydantic_schema_alignment.py -v
+uv run pytest tests/unit/test_architecture_schema_inheritance.py -v
 ```
 
 ## Relationship to other quality mechanisms

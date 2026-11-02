@@ -1,6 +1,6 @@
 """The registration carrier does not render the buyer's credential.
 
-Covers salesagent-pldmk.6, Move 1.
+Covers #1617, Move 1.
 
 ``ValidatedWebhookRegistration`` is a frozen slotted dataclass holding the
 pinned ``PushNotificationConfig``. With the dataclass-generated ``__repr__``
@@ -20,8 +20,8 @@ repr nothing can be diagnosed from. Hence the positive assertions below.
 
 SCOPE, deliberately partial. This module grades the OUTER carrier only.
 ``repr(r.config)`` -- the inner pydantic model -- still discloses the
-credential, and that is a RATIFIED residual, not an oversight: the frozen plan
-(``.claude/notes/pr1802-epic-lens-review.md`` § Residual risk (4)) defers it to
+credential, and that is a RATIFIED residual, not an oversight: PR #1802's review
+(§ Residual risk (4)) defers it to
 a ``SecretStr`` escalation, blocked on three facts (``credentials: str`` lives
 on a GENERATED SDK model, a nested re-annotation is CLAUDE.md Pattern #4
 territory, and ``SecretStr.model_dump()`` would write ``**********`` into a

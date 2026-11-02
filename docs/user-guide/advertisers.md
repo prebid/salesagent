@@ -15,13 +15,16 @@ Advertisers (also called "principals") are the entities that can access your MCP
 
 ### API Token
 
-Each advertiser gets a unique API token for MCP access:
+Each advertiser gets a unique API token, sent as `Authorization: Bearer <token>` on every
+transport. The server stores only a hash of it, so the token is shown exactly once, when the
+advertiser is created. The advertisers list shows the first characters of each token so you
+can tell them apart, never the whole token.
+
+If a token is lost or compromised, rotate it:
 
 1. Go to **Advertisers** > select advertiser
-2. Click **View Token**
-3. Copy the token for use in MCP client configuration
-
-Tokens can be regenerated if compromised.
+2. Click **Rotate token**
+3. Copy the new token now; it is not shown again, and the old one stops working at once
 
 ## Platform Mappings
 
@@ -61,7 +64,7 @@ from fastmcp.client import Client, StreamableHttpTransport
 
 transport = StreamableHttpTransport(
     url="https://your-domain.com/mcp/",
-    headers={"x-adcp-auth": "advertiser-api-token"}
+    headers={"Authorization": "Bearer advertiser-api-token"}
 )
 
 async with Client(transport=transport) as client:

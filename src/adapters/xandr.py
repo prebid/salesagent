@@ -11,18 +11,18 @@ from typing import Any
 from dateutil import parser as dateutil_parser
 from pydantic import JsonValue
 
-from src.adapters.base import AdServerAdapter
+from src.adapters.base import AdapterCreateRequest, AdapterCreateResult, AdapterUpdateResult, AdServerAdapter
+from src.adapters.utils.pricing import resolve_package_rate
 from src.adapters.vendor_http import VendorHttpClient, require_vendor
+from src.core.exceptions import AdCPAdapterError, AdCPConfigurationError, AdCPInternalError
+from src.core.helpers.brand_key import brand_key_parts
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
-    CreateMediaBuyRequest,
-    CreateMediaBuyResponse,
     MediaPackage,
     Principal,
     Product,
     ReportingPeriod,
     Targeting,
-    UpdateMediaBuyResponse,
     url,
 )
 from src.core.security.outbound_http import OutboundError
@@ -279,7 +279,7 @@ class XandrAdapter(AdServerAdapter):
                 )
                 logger.info("Successfully authenticated with Xandr")
             else:
-                raise Exception(f"Authentication failed: {data}")
+                raise AdCPAdapterError()
 
         except Exception as e:
             logger.error(f"Xandr authentication error: {e}")
@@ -290,7 +290,7 @@ class XandrAdapter(AdServerAdapter):
         self._authenticate()
 
         if method not in ("GET", "POST", "PUT", "DELETE"):
-            raise ValueError(f"Unsupported method: {method}")
+            raise AdCPInternalError()
 
         try:
             # The verb branch is gone: the client already takes method=, and a GET
@@ -353,14 +353,15 @@ class XandrAdapter(AdServerAdapter):
         """Get available products (placement groups in Xandr)."""
         try:
             # Use V3 consolidated pricing types
-            # FIXME(#1388): SDK types have local subclasses; import from src.core.schemas (Pattern #7/#4).
-            from adcp.types import CpmPricingOption, DeliveryMeasurement, DeliveryType
+            # FIXME(#1388): DeliveryMeasurement has a local subclass; import from src.core.schemas (Pattern #7/#4).
+            from adcp.types import DeliveryMeasurement, DeliveryType
             from adcp.types import PriceGuidance as AdCPPriceGuidance
             from adcp.types.generated_poc.core.publisher_property_selector import (
                 PublisherPropertySelector1,
             )  # TODO: no stable alias in adcp.types
 
-            from src.core.schemas import FormatId
+            from src.core.product_conversion import default_reporting_capabilities
+            from src.core.schemas import CpmPricingOption, FormatId
 
             # In Xandr, products map to placement groups or custom deals
             # For now, return standard IAB formats as products
@@ -390,6 +391,7 @@ class XandrAdapter(AdServerAdapter):
                     brief_relevance=None,
                     estimated_exposures=None,
                     delivery_measurement=DeliveryMeasurement(provider="Xandr Reporting"),
+                    reporting_capabilities=default_reporting_capabilities(),
                     product_card=None,
                     product_card_detailed=None,
                     placements=None,
@@ -418,6 +420,7 @@ class XandrAdapter(AdServerAdapter):
                     brief_relevance=None,
                     estimated_exposures=None,
                     delivery_measurement=DeliveryMeasurement(provider="Xandr Reporting"),
+                    reporting_capabilities=default_reporting_capabilities(),
                     product_card=None,
                     product_card_detailed=None,
                     placements=None,
@@ -446,6 +449,7 @@ class XandrAdapter(AdServerAdapter):
                     brief_relevance=None,
                     estimated_exposures=None,
                     delivery_measurement=DeliveryMeasurement(provider="Xandr Reporting"),
+                    reporting_capabilities=default_reporting_capabilities(),
                     product_card=None,
                     product_card_detailed=None,
                     placements=None,
@@ -475,6 +479,7 @@ class XandrAdapter(AdServerAdapter):
                     brief_relevance=None,
                     estimated_exposures=None,
                     delivery_measurement=DeliveryMeasurement(provider="Xandr Reporting"),
+                    reporting_capabilities=default_reporting_capabilities(),
                     product_card=None,
                     product_card_detailed=None,
                     placements=None,
@@ -489,47 +494,45 @@ class XandrAdapter(AdServerAdapter):
 
     def create_media_buy(
         self,
-        request: CreateMediaBuyRequest,
+        request: AdapterCreateRequest,
         packages: list[MediaPackage],
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
-    ) -> CreateMediaBuyResponse:
+    ) -> AdapterCreateResult:
         """Create insertion order and line items in Xandr."""
         if self._requires_manual_approval("create_media_buy"):
             task_id = self._create_human_task(
                 "create_media_buy",
-                {"request": request.dict(), "principal": self.principal.name, "advertiser_id": self.advertiser_id},
+                # The model, handed through: the task details are read for media_buy_id only,
+                # and nothing serializes them (CLAUDE.md pattern 4).
+                {"request": request, "principal": self.principal.name, "advertiser_id": self.advertiser_id},
             )
 
             return self._build_create_success(
-                request,
                 f"xandr_pending_{task_id}",
                 packages,
                 creative_deadline_days=None,
             )
 
         try:
-            # Calculate total budget from package budgets (AdCP v2.2.0)
-            total_budget = request.get_total_budget()
+            # Already summed by whoever built the carrier (the request's packages, or the
+            # persisted row on an approval replay).
+            total_budget = request.total_budget
             days = (end_time.date() - start_time.date()).days
             if days == 0:
                 days = 1
 
             # Create insertion order
             if not self.advertiser_id:
-                raise ValueError("Advertiser ID is required for Xandr operations")
+                raise AdCPConfigurationError()
 
-            # campaign_name is no longer on CreateMediaBuyRequest per AdCP spec
-            # Use brand domain as fallback
-            campaign_name = None
-            if hasattr(request, "brand") and request.brand:
-                brand = request.brand
-                if hasattr(brand, "domain"):
-                    campaign_name = brand.domain
-                elif isinstance(brand, dict):
-                    campaign_name = brand.get("domain")
-            campaign_name = campaign_name or "AdCP Campaign"
+            # The AdCP request carries no campaign name, so the brand's domain is the
+            # name. Through the canonical accessor: `brand` is the widened union
+            # (BrandReference | dict | str | None), and the four-branch narrowing this
+            # replaces was one of the hand-rolled copies brand_key_parts exists to
+            # delete — it read nothing off the bare-string branch.
+            campaign_name = brand_key_parts(request.brand)[0] or "AdCP Campaign"
 
             io_data = {
                 "insertion-order": {
@@ -556,16 +559,9 @@ class XandrAdapter(AdServerAdapter):
             # Create line items for each package
             for _idx, package in enumerate(packages):
                 if not self.advertiser_id:
-                    raise ValueError("Advertiser ID is required for creating line items")
+                    raise AdCPConfigurationError()
 
-                # Get pricing for this package
-                pricing_info = package_pricing_info.get(package.package_id) if package_pricing_info else None
-                if pricing_info:
-                    rate = (
-                        pricing_info["rate"] if pricing_info["is_fixed"] else pricing_info.get("bid_price", package.cpm)
-                    )
-                else:
-                    rate = package.cpm
+                rate = resolve_package_rate(package, package_pricing_info)
 
                 li_data = {
                     "line-item": {
@@ -590,7 +586,7 @@ class XandrAdapter(AdServerAdapter):
 
                 self._make_request("POST", "/line-item", li_data)
 
-            return self._build_create_success(request, f"xandr_io_{io_id}", packages)
+            return self._build_create_success(f"xandr_io_{io_id}", packages)
 
         except Exception as e:
             logger.error(f"Failed to create Xandr media buy: {e}")
@@ -625,9 +621,9 @@ class XandrAdapter(AdServerAdapter):
             profile["region_targets"] = [r.root for r in targeting.geo_regions]
 
         # Map device types to Xandr numeric codes
-        if targeting.device_type_any_of:
+        if targeting.device_form_factors:
             device_map = {"desktop": "1", "mobile": "2", "tablet": "3", "ctv": "4"}
-            profile["device_type_targets"] = [device_map.get(d, "1") for d in targeting.device_type_any_of]
+            profile["device_type_targets"] = [device_map.get(d, "1") for d in targeting.device_form_factors]
 
         response = self._make_request("POST", "/profile", profile_data)
         return response["response"]["profile"]["id"]
@@ -639,7 +635,7 @@ class XandrAdapter(AdServerAdapter):
         package_id: str | None,
         budget: int | None,
         today: datetime,
-    ) -> UpdateMediaBuyResponse:
+    ) -> AdapterUpdateResult:
         """Update insertion order in Xandr."""
         # NOTE: This is a stub implementation - needs full refactor to match current API
         raise NotImplementedError("Xandr update_media_buy needs refactor to match current API")
@@ -703,7 +699,7 @@ class XandrAdapter(AdServerAdapter):
 
         try:
             if not self.advertiser_id:
-                raise ValueError("Advertiser ID is required for creating creatives")
+                raise AdCPConfigurationError()
 
             for asset in assets:
                 # Create creative
@@ -795,77 +791,12 @@ class XandrAdapter(AdServerAdapter):
             logger.error(f"Failed to get Xandr media buys: {e}")
             return []
 
-    def update_package(self, media_buy_id: str, packages: list[dict[str, Any]]) -> dict[str, Any]:
-        """Update package settings for line items."""
-        if self._requires_manual_approval("update_package"):
-            task_id = self._create_human_task(
-                "update_package", {"media_buy_id": media_buy_id, "packages": packages, "principal": self.principal.name}
-            )
-
-            return {"status": "accepted", "task_id": task_id, "detail": "Package updates require manual approval"}
-
-        try:
-            updated_packages = []
-
-            for package_update in packages:
-                package_id = package_update.get("package_id")
-                if not package_id or not package_id.startswith("xandr_li_"):
-                    continue
-
-                li_id = package_id.replace("xandr_li_", "")
-
-                # Get current line item
-                current = self._make_request("GET", f"/line-item?id={li_id}")
-                li = current["response"]["line-item"]
-
-                # Apply updates
-                if "active" in package_update:
-                    li["state"] = "active" if package_update["active"] else "inactive"
-
-                if "budget" in package_update:
-                    li["lifetime_budget"] = float(package_update["budget"])
-                    # Recalculate daily budget
-                    days = (dateutil_parser.parse(li["end_date"]) - dateutil_parser.parse(li["start_date"])).days
-                    li["daily_budget"] = float(package_update["budget"]) / days if days > 0 else 0
-
-                if "impressions" in package_update:
-                    # Update revenue value based on new impression goal
-                    if package_update.get("budget"):
-                        li["revenue_value"] = package_update["budget"] / package_update["impressions"] * 1000
-
-                if "pacing" in package_update:
-                    # Map pacing to Xandr pacing type
-                    pacing_map = {"even": "even", "asap": "aggressive", "front_loaded": "accelerated"}
-                    li["pacing"] = pacing_map.get(package_update["pacing"], "even")
-
-                # Update line item
-                self._make_request("PUT", f"/line-item?id={li_id}", {"line-item": li})
-
-                # Handle creative updates
-                if "creative_ids" in package_update:
-                    # Remove existing associations
-                    current_creatives = self._make_request("GET", f"/line-item/{li_id}/creative")
-                    for creative in current_creatives.get("response", {}).get("creatives", []):
-                        self._make_request("DELETE", f"/line-item/{li_id}/creative/{creative['id']}")
-
-                    # Add new associations
-                    for creative_id in package_update["creative_ids"]:
-                        if creative_id.startswith("xandr_creative_"):
-                            xandr_creative_id = creative_id.replace("xandr_creative_", "")
-                            self._make_request("POST", f"/line-item/{li_id}/creative/{xandr_creative_id}")
-
-                updated_packages.append({"package_id": package_id, "status": "updated"})
-
-            return {
-                "status": "accepted",
-                "implementation_date": datetime.now(UTC).isoformat(),
-                "detail": f"Updated {len(updated_packages)} packages in Xandr",
-                "affected_packages": [p["package_id"] for p in updated_packages],
-            }
-
-        except Exception as e:
-            logger.error(f"Failed to update Xandr packages: {e}")
-            raise
+    # update_package: deleted. It answered to no caller (nothing in src/, tests/ or
+    # scripts/ named it, and AdServerAdapter declares no such method), and it returned
+    # a hand-built dict — the last place in src/adapters/ where a seller-facing shape,
+    # the update response's effective-date field included, was assembled by an adapter
+    # rather than by the tool off the persisted row. The package path a caller does
+    # reach is update_media_buy.
 
     def resume_media_buy(self, media_buy_id: str) -> bool:
         """Resume paused insertion order in Xandr."""
@@ -892,7 +823,7 @@ class XandrAdapter(AdServerAdapter):
         """Get comprehensive reporting data for the advertiser."""
         try:
             if not self.advertiser_id:
-                raise ValueError("Advertiser ID is required for reporting")
+                raise AdCPConfigurationError()
 
             # Create advertiser-level report
             report_data = {

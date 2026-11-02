@@ -1,0 +1,50 @@
+# ENVIRONMENT import bans: the process environment is read once, by the settings loader,
+# and nowhere else (salesagent-3cs7o.9).
+#
+# Run as its own line in `make quality` and `make quality-ci`, beside ruff-boundary.toml,
+# ruff-ownership.toml, ruff-serialization.toml and ruff-egress.toml:
+#
+#     uv run ruff check --config ruff-environment.toml --no-respect-gitignore src/ scripts/
+#
+# WHAT THIS BANS. `os.environ` and `os.getenv`, and their POSIX bytes variants `os.environb`
+# and `os.getenvb`, under either import form (`os.environ.get`, `os.environ["X"] = ...`,
+# `os.environ.copy()`, `from os import environ` are all caught, because TID251 bans the
+# NAME wherever it is spelled). `src/core/config.py` reads the
+# environment into typed groups (`RuntimeSettings`, `TestingSettings`, ...) composed into
+# one `Settings` by `load_settings()` at each root; a module reads a named fact off that
+# object, or is handed the component the root selected for that fact. A raw read anywhere
+# else is a second reader, and a second reader is how request-time `if os.getenv(...)`
+# branches grew to 154 sites across 40 files.
+#
+# WHY A FIFTH CONFIG. ruff's per-file-ignores exempt a RULE per path, and every ban here is
+# the same rule (TID251), so a file exempted from one ban is exempted from all bans in the
+# same config. The three files exempted below must stay under every other ban table, and
+# the files the other tables exempt (the registry, src/app.py, the schemas, src/admin/**,
+# scripts/**) must stay under this one. Keeping the environment ban in a config of its own
+# is what makes both true, the same separation the other four configs already make.
+#
+# THE EXEMPTIONS. The loader, because it is the reader. Two WRITES the ban would otherwise
+# catch: src/admin/server.py sets Werkzeug's own flags (FLASK_ENV, FLASK_DEBUG,
+# WERKZEUG_DEBUG_PIN, WERKZEUG_SERVER_FD) for Werkzeug to read, and
+# src/services/gcp_service_account_service.py sets GOOGLE_APPLICATION_CREDENTIALS for the
+# Google client library to read. Neither is this application reading its configuration.
+# A script is a composition root of its own: it calls `load_settings()` (or reads a
+# `ToolingSettings()` for a repo-tooling knob) where it starts, and gets no exemption.
+#
+# Proven live by tests/unit/test_ruff_boundary_bans.py, which reads this table as well as
+# the other four; there is no allowlist and no other guard.
+
+[lint]
+select = ["TID251"]
+
+[lint.per-file-ignores]
+"src/core/config.py" = ["TID251"]
+"src/admin/server.py" = ["TID251"]
+"src/services/gcp_service_account_service.py" = ["TID251"]
+
+[lint.flake8-tidy-imports.banned-api]
+"os.environ".msg = "The environment is read once, by src/core/config.py, into typed settings. Read the named fact off get_settings() (or the object the composition root handed you); add a field to the matching group if none names it (salesagent-3cs7o.9)."
+"os.getenv".msg = "The environment is read once, by src/core/config.py, into typed settings. Read the named fact off get_settings() (or the object the composition root handed you); add a field to the matching group if none names it (salesagent-3cs7o.9)."
+# The POSIX bytes variants are the same read under another name.
+"os.environb".msg = "The environment is read once, by src/core/config.py, into typed settings; os.environb is os.environ under another name (salesagent-3cs7o.9)."
+"os.getenvb".msg = "The environment is read once, by src/core/config.py, into typed settings; os.getenvb is os.getenv under another name (salesagent-3cs7o.9)."

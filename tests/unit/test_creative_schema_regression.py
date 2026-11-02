@@ -36,7 +36,6 @@ class TestCreativeSchemaRegression:
                     "agent_url": "https://creative.adcontextprotocol.org",
                     "id": "display_300x250",
                 },
-                variants=[],
                 status="pending_review",
                 created_date=datetime.now(UTC),
                 updated_date=datetime.now(UTC),
@@ -56,7 +55,6 @@ class TestCreativeSchemaRegression:
                     "agent_url": "https://creative.adcontextprotocol.org",
                     "id": "display_300x250",
                 },
-                variants=[],
                 status="pending_review",
                 created_date=datetime.now(UTC),
                 updated_date=datetime.now(UTC),
@@ -77,7 +75,6 @@ class TestCreativeSchemaRegression:
                 "agent_url": "https://creative.adcontextprotocol.org",
                 "id": "display_300x250",
             },
-            variants=[],
             status="pending_review",
         )
 
@@ -96,7 +93,6 @@ class TestCreativeSchemaRegression:
                 "agent_url": "https://creative.adcontextprotocol.org",
                 "id": "display_300x250",
             },
-            variants=[],
             status="pending_review",
             created_date=datetime.now(UTC),
             updated_date=datetime.now(UTC),

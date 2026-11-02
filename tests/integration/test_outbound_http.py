@@ -25,7 +25,6 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import json
-import logging
 from typing import Any
 from urllib.parse import urlparse
 
@@ -42,10 +41,18 @@ from adcp.signing.digest import content_digest_matches
 from adcp.signing.keygen import generate_signing_keypair
 from adcp.webhook_auth import JwkSignerStrategy
 
-from src.core.exceptions import AdCPBlockedUrlError, build_two_layer_error_envelope
+from src.core.exceptions import AdCPBlockedUrlError
 from src.core.security.outbound_http import CounterpartyUrl
 from tests.helpers import assert_backoff_schedule, assert_envelope_shape
-from tests.helpers.egress_hatches import egress_hatch_env
+from tests.helpers.egress_backoff import (
+    _RATE_LIMITED_BODY,
+    fast_backoff,
+    pin_jitter,
+    rate_limited,
+    set_backoff_base,
+    set_flags,
+)
+from tests.helpers.envelope_assertions import envelope_for
 from tests.helpers.local_http_origin import hangs_up, responds, sends_chunked_body
 
 # Both entry points get every case. Parametrising instead of duplicating the
@@ -61,22 +68,13 @@ METADATA_URL = "https://169.254.169.254/"
 # seam cannot derive it and why this file grades the carrying, not the path.
 _CALLER_FIELD_PATH = "property_list.agent_url"
 
-# The test-speed knob for the retry backoff base. Written as a literal here for
-# the same reason `set_flags` writes the escape-hatch names as literals: the
-# tests drive the seam's env surface from outside, not through its privates.
-BACKOFF_BASE_ENV = "ADCP_OUTBOUND_BACKOFF_BASE_SECONDS"
-
-# The seam's logger, for grading the fallback warning on a malformed knob value.
-SEAM_LOGGER = "src.core.security.outbound_http"
-
-# The retry SCHEDULE's own logger — env_float's fallback warning for the
-# backoff-base knob logs from here now that egress.attempts owns the schedule
-# (GH #1802), not from SEAM_LOGGER.
-SCHEDULE_LOGGER = "src.core.security.egress.attempts"
-
-# A rate-limited answer, as the origin sends it. The body is asserted against in
-# the opacity cases, so it carries a marker rather than a plausible payload.
-_RATE_LIMITED_BODY = b'{"error": "slow down"}'
+# The settings FIELD the seam reads for its retry backoff base
+# (``src/core/security/outbound_http.py`` -> ``egress.attempts._backoff_seconds``).
+#
+# It is a field name, not the ``ADCP_OUTBOUND_BACKOFF_BASE_SECONDS`` environment variable
+# this file used to write. The comment that stood here said the tests "drive the seam's env
+# surface from outside, not through its privates" — but the seam HAS no env surface: no
+# production code reads the environment (``ruff-environment.toml``), only the settings
 
 # The spec bound on the value CARRIED to the buyer: ``core/error.json`` @3.1.1
 # declares ``retry_after`` top-level, ``"type": "number"``, ``minimum: 1``,
@@ -109,53 +107,6 @@ def call_seam(seam_call: str, url: str, **kwargs: Any):
     return asyncio.run(seam.asend(url, **kwargs))
 
 
-def set_flags(monkeypatch, *, private: bool = False) -> None:
-    """Set the private-range escape hatch explicitly.
-
-    Always writing it — including the off case, as the literal ``"false"`` the
-    repo's ``== "true"`` convention treats as off — pins the test against
-    ambient environment rather than assuming the variable is unset. The name
-    and literal come from :func:`tests.helpers.egress_hatches.egress_hatch_env`,
-    which is the only place in the test tree that spells it.
-
-    There is no ``insecure`` parameter anymore (GH #1757): the scheme
-    gate is unconditional in production, so there is nothing left to relax —
-    a caller that used to pass ``insecure=True`` needed a real https origin
-    (see the ``local_origin_tls`` fixture) instead.
-    """
-    for name, value in egress_hatch_env(private=private).items():
-        monkeypatch.setenv(name, value)
-
-
-def pin_jitter(monkeypatch, value: float) -> list[tuple]:
-    """Freeze the seam's jitter draw and record how it was called.
-
-    BR-RULE-029's jitter is a real ``random.uniform(0, 1)`` draw, so any test
-    that asserts a delay's magnitude has to pin it — otherwise the assertion is
-    graded against a number the test does not know.
-
-    The patch target is the module attribute ``egress.attempts.random``, which
-    is also the string target the UC-004 circuit-breaker harness patches
-    (``tests/harness/delivery_circuit_breaker.py``) — the schedule moved there
-    with ``_backoff_seconds`` (GH #1802). Pinning it here for the same
-    obligation keeps the seam suite and the BDD suite grading one implementation:
-    a ``from random import uniform`` in ``egress.attempts`` would break both at
-    once, which is the point.
-
-    Returns the list of ``(args)`` tuples the seam passed to ``uniform``, so a
-    caller can grade the draw itself — one draw per sleep, with the literal
-    ``(0, 1)`` bounds the rule names.
-    """
-    calls: list[tuple] = []
-
-    def _pinned(*args):
-        calls.append(args)
-        return value
-
-    monkeypatch.setattr(_attempts_module().random, "uniform", _pinned)
-    return calls
-
-
 def record_sleeps(monkeypatch, seam_call: str) -> list[float]:
     """Capture the durations the seam actually sleeps, without waiting them out.
 
@@ -181,38 +132,6 @@ def record_sleeps(monkeypatch, seam_call: str) -> list[float]:
 
     monkeypatch.setattr(seam.asyncio, "sleep", _record)
     return durations
-
-
-def fast_backoff(monkeypatch) -> None:
-    """Make a retry test's real sleeps negligible without weakening what it grades.
-
-    For the retry tests that grade attempt COUNTS: they have to sleep between
-    attempts, but what they sleep is not their obligation — BR-RULE-029's
-    magnitudes are graded once, by the schedule section below.
-
-    BOTH halves are required. The base override alone does not make these tests
-    fast, because the jitter is an additive ``uniform(0, 1)`` draw independent of
-    the base: at a 1ms base each sleep would still average half a second.
-
-    The base is written EXPLICITLY, exactly as ``set_flags`` writes the literal
-    ``"false"``, so an ambient value in the shell cannot change what these tests
-    wait — the variable is deliberately absent from ``tox.ini``'s ``pass_env``,
-    but a bare host ``pytest`` inherits the whole environ.
-    """
-    monkeypatch.setenv(BACKOFF_BASE_ENV, "0.001")
-    pin_jitter(monkeypatch, 0.0)
-
-
-def rate_limited(local_origin, retry_after: str | None = None) -> None:
-    """Program the origin to answer 429, optionally with a ``Retry-After`` header.
-
-    The header is sent by a server that really wrote it, not injected into a
-    mocked response object: "the seam honoured Retry-After" is a claim about
-    what it does with bytes off the wire, and a stubbed ``response.headers``
-    could only restate the number the test already chose.
-    """
-    headers = {"Retry-After": retry_after} if retry_after is not None else None
-    local_origin.respond_with(429, body=_RATE_LIMITED_BODY, headers=headers)
 
 
 def honoured_ceiling() -> float:
@@ -491,13 +410,13 @@ def test_backoff_schedule_is_br_rule_029_by_default(seam_call, monkeypatch, loca
     case grades the magnitudes and proves randomisation is actually applied,
     without the test knowing what was drawn.
 
-    The knob is ``delenv``'d rather than assumed absent — the explicit form of
-    "unset", matching how ``set_flags`` writes the literal ``"false"``. A bare
-    host ``pytest`` inherits the whole environ, and an ambient value here would
-    turn a passing default into a silently unrelated assertion.
+    The base is INJECTED as the shipped default rather than assumed — the explicit form
+    of "unconfigured". Reading it off the settings field means an ambient value cannot
+    turn a passing default into a silently unrelated assertion, and the default itself
+    is never restated here.
     """
     set_flags(monkeypatch, private=True)
-    monkeypatch.delenv(BACKOFF_BASE_ENV, raising=False)
+    set_backoff_base(monkeypatch)
     local_origin_tls.respond_with(503, body=b'{"error": "unavailable"}')
     durations = record_sleeps(monkeypatch, seam_call)
 
@@ -525,7 +444,7 @@ def test_backoff_draws_one_uniform_0_1_jitter_per_sleep(seam_call, monkeypatch, 
       step's ``_pinned_jitter`` grading requires of production.
     """
     set_flags(monkeypatch, private=True)
-    monkeypatch.delenv(BACKOFF_BASE_ENV, raising=False)
+    set_backoff_base(monkeypatch)
     local_origin_tls.respond_with(503, body=b'{"error": "unavailable"}')
     durations = record_sleeps(monkeypatch, seam_call)
     draws = pin_jitter(monkeypatch, 0.25)
@@ -539,73 +458,47 @@ def test_backoff_draws_one_uniform_0_1_jitter_per_sleep(seam_call, monkeypatch, 
 
 
 @pytest.mark.parametrize("seam_call", SEAM_CALLS)
-def test_backoff_base_env_knob_moves_the_base_and_nothing_else(seam_call, monkeypatch, local_origin_tls):
-    """The knob scales the base; the doubling and the jitter term are untouched.
+def test_backoff_base_moves_the_base_and_nothing_else(seam_call, monkeypatch, local_origin_tls):
+    """A configured base scales the base; the doubling and the jitter term are untouched.
 
-    This case grades the KNOB, not the rule — the rule is graded two cases above,
-    by ``assert_backoff_schedule``. That is why the expected delays are spelled
+    This case grades the SETTING'S EFFECT, not the rule — the rule is graded two cases
+    above, by ``assert_backoff_schedule``. That is why the expected delays are spelled
     out here rather than taken from the grader: the grader encodes 1/2/4, which
     is precisely what an overridden base is not.
 
     The jitter is pinned as well as the base, because the two are independent: an
     unpinned ``uniform(0, 1)`` dwarfs a 10ms base, and asserting on the sum would
-    then be an assertion about the draw, not about the knob.
+    then be an assertion about the draw, not about the setting.
+
+    This is the one shape worth a test for this knob, and the reason the three env-var
+    cases above it are deleted: the value is injected typed, and what is graded is what
+    the seam DID with it — three real waits against a real origin.
     """
     set_flags(monkeypatch, private=True)
-    monkeypatch.setenv(BACKOFF_BASE_ENV, "0.01")
+    base = set_backoff_base(monkeypatch, 0.01)
     local_origin_tls.respond_with(503, body=b'{"error": "unavailable"}')
     durations = record_sleeps(monkeypatch, seam_call)
     pin_jitter(monkeypatch, 0.005)
 
     assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=4)
 
-    assert durations == pytest.approx([0.015, 0.025, 0.045]), (
-        f"expected base 0.01 doubled per attempt plus a pinned 0.005 jitter, got {durations}"
+    expected = [base * 2**step + 0.005 for step in range(3)]
+    assert durations == pytest.approx(expected), (
+        f"expected base {base} doubled per attempt plus a pinned 0.005 jitter, got {durations}"
     )
 
 
-@pytest.mark.parametrize("seam_call", SEAM_CALLS)
-@pytest.mark.parametrize("bad_value", ["abc", "-1", "0"])
-def test_unusable_backoff_base_falls_back_to_the_rule_and_warns(
-    seam_call, bad_value, monkeypatch, local_origin_tls, caplog
-):
-    """A knob value that is not a strictly positive number is ignored, loudly.
-
-    The failure mode this closes is silent disarmament: the knob exists only for
-    test speed, so a value the seam cannot use must never quietly become "no
-    backoff" or "some other backoff" — it falls back to BR-RULE-029 and says so.
-
-    Zero is rejected with the malformed values on purpose. Read literally it asks
-    for "jitter only, no base delay", and honouring that would delete the
-    invariant this ticket restores; falling back silently would instead hand the
-    caller a 1s base it did not ask for. Refusing it out loud is the only reading
-    that surprises nobody.
-
-    The warning must name the variable — an operator who cannot see which knob
-    was ignored cannot fix it.
-    """
-    set_flags(monkeypatch, private=True)
-    monkeypatch.setenv(BACKOFF_BASE_ENV, bad_value)
-    local_origin_tls.respond_with(503, body=b'{"error": "unavailable"}')
-    durations = record_sleeps(monkeypatch, seam_call)
-    pin_jitter(monkeypatch, 0.25)
-
-    with caplog.at_level(logging.WARNING, logger=SCHEDULE_LOGGER):
-        assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=4)
-
-    assert_backoff_schedule(durations, jitter=0.25)
-
-    warnings = [
-        record.getMessage()
-        for record in caplog.records
-        if record.name == SCHEDULE_LOGGER
-        and record.levelno >= logging.WARNING
-        and BACKOFF_BASE_ENV in record.getMessage()
-    ]
-    assert warnings, (
-        f"{bad_value!r} was ignored silently: no WARNING from {SCHEDULE_LOGGER} naming {BACKOFF_BASE_ENV}. "
-        f"Records seen: {[(r.name, r.levelname, r.getMessage()) for r in caplog.records]}"
-    )
+# ``test_unusable_backoff_base_*`` IS DELETED, all three of its cases, and nothing
+# replaces it. It asked for a fallback-and-warn on an unusable backoff base — the pattern
+# § No Quiet Failures bans — so its premise had no subject; and repaired into "the value is
+# refused" it graded the settings LOADER parsing a string, not any seller behaviour:
+# ``"abc"`` grades pydantic refusing a non-numeric float, and ``"-1"`` / ``"0"`` grade
+# pydantic enforcing our own ``Field(gt=0)`` declaration. No production code reads the
+# environment at all (``ruff-environment.toml``), so there was no path from any of those
+# strings to an obligation. What the base DOES to a delivery — the 1s/2s/4s schedule and the
+# base moving it — is graded below by ``test_backoff_schedule_is_br_rule_029_by_default``
+# and ``test_backoff_base_moves_the_base_and_nothing_else``, both driven by injecting the
+# typed value rather than by writing a string into the environ.
 
 
 # ---------------------------------------------------------------------------
@@ -693,8 +586,9 @@ def test_oversized_response_body_is_refused_and_not_retried(seam_call, monkeypat
 # 9. Error opacity, asserted on the wire envelope (spec point 6)
 #
 # The repo's error-verification policy makes the envelope the authority, not
-# `.message` — `details` rides to the buyer too, via
-# build_two_layer_error_envelope -> adcp_error(details=...).
+# `.message` — `details` rides to the buyer too: the boundary builds an
+# `AdcpErrorResponse` from the exception and `to_wire` serializes it, which is
+# what `envelope_for` does here.
 # ---------------------------------------------------------------------------
 
 
@@ -720,8 +614,8 @@ def test_blocked_envelope_hides_the_resolved_address_and_the_reason(seam_call, m
     reserved = assert_blocked(seam_call, "https://127.0.0.1/webhook")
     unresolvable = assert_blocked(seam_call, "https://no-such-host.invalid/webhook")
 
-    reserved_envelope = build_two_layer_error_envelope(reserved)
-    unresolvable_envelope = build_two_layer_error_envelope(unresolvable)
+    reserved_envelope = envelope_for(reserved)
+    unresolvable_envelope = envelope_for(unresolvable)
 
     assert_envelope_shape(reserved_envelope, "VALIDATION_ERROR", recovery="correctable")
     assert_envelope_shape(unresolvable_envelope, "VALIDATION_ERROR", recovery="correctable")
@@ -781,8 +675,8 @@ def test_carried_field_does_not_discriminate_the_refusal_cause(seam_call, monkey
         seam_call, "https://no-such-host.invalid/webhook", provenance=CounterpartyUrl(field=_CALLER_FIELD_PATH)
     )
 
-    reserved_envelope = build_two_layer_error_envelope(reserved)
-    unresolvable_envelope = build_two_layer_error_envelope(unresolvable)
+    reserved_envelope = envelope_for(reserved)
+    unresolvable_envelope = envelope_for(unresolvable)
 
     assert_envelope_shape(reserved_envelope, "VALIDATION_ERROR", recovery="correctable", field=_CALLER_FIELD_PATH)
     assert reserved_envelope == unresolvable_envelope, (
@@ -796,7 +690,7 @@ def test_carried_field_does_not_discriminate_the_refusal_cause(seam_call, monkey
     ):
         assert forbidden not in json.dumps(envelope), f"{forbidden!r} leaked into {envelope}"
 
-    fieldless = build_two_layer_error_envelope(assert_blocked(seam_call, "https://127.0.0.1/webhook"))
+    fieldless = envelope_for(assert_blocked(seam_call, "https://127.0.0.1/webhook"))
 
     assert "field" not in fieldless["adcp_error"], f"adcp_error carries a field key with no caller field: {fieldless}"
     assert "field" not in fieldless["errors"][0], f"errors[0] carries a field key with no caller field: {fieldless}"
@@ -837,7 +731,7 @@ def test_a_jsonpath_lite_field_is_carried(seam_call, monkeypatch):
     error = assert_blocked(seam_call, "https://127.0.0.1/webhook", provenance=CounterpartyUrl(field=_CALLER_FIELD_PATH))
 
     assert_envelope_shape(
-        build_two_layer_error_envelope(error),
+        envelope_for(error),
         "VALIDATION_ERROR",
         recovery="correctable",
         field=_CALLER_FIELD_PATH,
@@ -851,7 +745,7 @@ def test_delivery_failure_envelope_hides_the_origin_response(seam_call, monkeypa
     local_origin_tls.respond_with(503, body=b'{"detail": "LEAKED-ORIGIN-BODY-MARKER"}')
 
     error = assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=2)
-    envelope = build_two_layer_error_envelope(error)
+    envelope = envelope_for(error)
 
     assert_envelope_shape(envelope, "SERVICE_UNAVAILABLE", recovery="transient")
     assert envelope["errors"][0]["details"] == {"attempts": 2, "last_status": 503}
@@ -874,7 +768,7 @@ def test_transport_failure_envelope_hides_the_httpx_error(seam_call, monkeypatch
         timeout=0.5,
         max_attempts=1,
     )
-    envelope = build_two_layer_error_envelope(error)
+    envelope = envelope_for(error)
 
     assert_envelope_shape(envelope, "SERVICE_UNAVAILABLE", recovery="transient")
     assert envelope["errors"][0]["details"] == {"attempts": 1, "last_status": None}
@@ -901,7 +795,7 @@ def test_disconnect_envelope_is_indistinguishable_from_a_timeout_envelope(seam_c
     local_origin_tls.close_without_responding()
 
     error = assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=1)
-    envelope = build_two_layer_error_envelope(error)
+    envelope = envelope_for(error)
 
     assert_envelope_shape(envelope, "SERVICE_UNAVAILABLE", recovery="transient")
     assert envelope["errors"][0]["details"] == {"attempts": 1, "last_status": None}
@@ -1013,8 +907,8 @@ def test_validate_url_refusal_envelope_hides_the_resolved_address_and_the_reason
     with pytest.raises(seam.OutboundRequestBlocked) as unresolvable_info:
         seam.validate_url("https://no-such-host.invalid/webhook")
 
-    reserved_envelope = build_two_layer_error_envelope(reserved_info.value)
-    unresolvable_envelope = build_two_layer_error_envelope(unresolvable_info.value)
+    reserved_envelope = envelope_for(reserved_info.value)
+    unresolvable_envelope = envelope_for(unresolvable_info.value)
 
     assert_envelope_shape(reserved_envelope, "VALIDATION_ERROR", recovery="correctable")
     assert_envelope_shape(unresolvable_envelope, "VALIDATION_ERROR", recovery="correctable")
@@ -1526,7 +1420,7 @@ def test_retry_after_zero_does_not_shorten_the_br_rule_029_floor(seam_call, monk
     exists to prevent.
     """
     set_flags(monkeypatch, private=True)
-    monkeypatch.delenv(BACKOFF_BASE_ENV, raising=False)
+    set_backoff_base(monkeypatch)
     rate_limited(local_origin_tls, retry_after="0")
     durations = record_sleeps(monkeypatch, seam_call)
     pin_jitter(monkeypatch, 0.25)
@@ -1549,7 +1443,7 @@ def test_retry_after_lengthens_a_wait_the_geometric_base_would_have_cut_short(se
     orders of magnitude above anything the schedule would have chosen.
     """
     set_flags(monkeypatch, private=True)
-    monkeypatch.setenv(BACKOFF_BASE_ENV, "0.001")
+    set_backoff_base(monkeypatch, 0.001)
     rate_limited(local_origin_tls, retry_after="5")
     durations = record_sleeps(monkeypatch, seam_call)
     pin_jitter(monkeypatch, 0.0)
@@ -1573,7 +1467,7 @@ def test_an_enormous_retry_after_cannot_pin_the_caller(seam_call, monkeypatch, l
     refuses.
     """
     set_flags(monkeypatch, private=True)
-    monkeypatch.setenv(BACKOFF_BASE_ENV, "0.001")
+    set_backoff_base(monkeypatch, 0.001)
     rate_limited(local_origin_tls, retry_after=str(_SPEC_RETRY_AFTER_MAX))
     durations = record_sleeps(monkeypatch, seam_call)
     pin_jitter(monkeypatch, 0.0)
@@ -1606,8 +1500,7 @@ def test_the_retry_after_ceiling_never_cuts_the_geometric_wait(seam_call, monkey
     the arithmetic at today's numbers is not the invariant.
     """
     set_flags(monkeypatch, private=True)
-    base = honoured_ceiling() * 2
-    monkeypatch.setenv(BACKOFF_BASE_ENV, str(base))
+    base = set_backoff_base(monkeypatch, honoured_ceiling() * 2)
     rate_limited(local_origin_tls, retry_after=str(int(honoured_ceiling()) + 1))
     durations = record_sleeps(monkeypatch, seam_call)
     pin_jitter(monkeypatch, 0.0)
@@ -1647,7 +1540,7 @@ def test_the_carried_retry_after_is_clamped_to_the_spec_bound(seam_call, sent, c
     burn a second of real time it cannot get back.
     """
     set_flags(monkeypatch, private=True)
-    monkeypatch.setenv(BACKOFF_BASE_ENV, "0.001")
+    set_backoff_base(monkeypatch, 0.001)
     rate_limited(local_origin_tls, retry_after=sent)
     record_sleeps(monkeypatch, seam_call)
     pin_jitter(monkeypatch, 0.0)
@@ -1673,13 +1566,13 @@ def test_retry_after_rides_the_envelope_top_level_not_details(seam_call, monkeyp
     each of them in the wild.
     """
     set_flags(monkeypatch, private=True)
-    monkeypatch.setenv(BACKOFF_BASE_ENV, "0.001")
+    set_backoff_base(monkeypatch, 0.001)
     rate_limited(local_origin_tls, retry_after="30")
     record_sleeps(monkeypatch, seam_call)
     pin_jitter(monkeypatch, 0.0)
 
     error = assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=2)
-    envelope = build_two_layer_error_envelope(error)
+    envelope = envelope_for(error)
 
     assert_envelope_shape(envelope, "SERVICE_UNAVAILABLE", recovery="transient")
     assert envelope["adcp_error"].get("retry_after") == 30, f"adcp_error carries no top-level retry_after: {envelope}"
@@ -1693,31 +1586,40 @@ def test_retry_after_rides_the_envelope_top_level_not_details(seam_call, monkeyp
 def test_details_carries_exactly_the_declared_detail_keys(seam_call, monkeypatch, local_origin_tls):
     """``_DETAIL_KEYS`` is a promise about the buyer-visible payload — asserted, not commented.
 
-    ``details`` rides to the buyer through ``build_two_layer_error_envelope``, so
-    the seam's rule is that nothing derived from the origin's response or from an
-    httpx error string may be added to it (spec point 6). That rule is a comment
+    ``details`` rides to the buyer on the ``AdcpErrorResponse`` the boundary builds
+    from the exception and serializes with ``to_wire``, so the seam's rule is that
+    nothing derived from the origin's response or from an httpx error string may
+    be added to it (spec point 6). That rule is a comment
     on a ClassVar referenced nowhere else, and the call sites migrating onto the
     seam lean on it — including this ticket's, which carries ``retry_after`` in
-    ``AdCPError``'s own slot precisely so ``details`` does not grow.
+    ``AdCPSalesAgentError``'s own slot precisely so ``details`` does not grow.
 
     Graded on a 429 WITH a Retry-After, which is the answer most likely to leak a
     fourth key.
     """
     set_flags(monkeypatch, private=True)
-    monkeypatch.setenv(BACKOFF_BASE_ENV, "0.001")
+    set_backoff_base(monkeypatch, 0.001)
     rate_limited(local_origin_tls, retry_after="30")
     record_sleeps(monkeypatch, seam_call)
     pin_jitter(monkeypatch, 0.0)
 
     error = assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=2)
-    envelope = build_two_layer_error_envelope(error)
+    envelope = envelope_for(error)
 
     declared = _seam().OutboundDeliveryFailed._DETAIL_KEYS
     assert declared == ("attempts", "last_status"), (
         f"the declared buyer-visible detail keys changed to {declared} — "
         "every migrated call site's envelope shifts with them"
     )
-    assert tuple(error.details) == declared, f"details keys {tuple(error.details)} do not match {declared}"
+    # Graded through ``to_wire()``, which IS the buyer-visible projection
+    # ``_DETAIL_KEYS`` is a promise about. This read used to be ``tuple(error.details)``,
+    # which yielded keys only while ``details`` was a bare dict; it is now a declared
+    # ``OutboundDeliveryDetails``, over which ``tuple()`` yields (name, value) pairs for
+    # every inherited field. The obligation is unchanged and is now graded twice — at the
+    # projection here, and at the fully serialized envelope on the next line.
+    assert tuple(error.details.to_wire()) == declared, (
+        f"details keys {tuple(error.details.to_wire())} do not match {declared}"
+    )
     assert tuple(envelope["errors"][0]["details"]) == declared, (
         f"wire details keys {tuple(envelope['errors'][0]['details'])} do not match {declared}: {envelope}"
     )
@@ -1734,7 +1636,7 @@ def test_a_transport_failure_after_a_rate_limit_carries_no_stale_retry_after(sea
     of a 429 that is no longer the failure being reported.
     """
     set_flags(monkeypatch, private=True)
-    monkeypatch.setenv(BACKOFF_BASE_ENV, "0.001")
+    set_backoff_base(monkeypatch, 0.001)
     local_origin_tls.respond_in_sequence(
         [
             responds(429, body=_RATE_LIMITED_BODY, headers={"Retry-After": "30"}),
@@ -1762,13 +1664,13 @@ def test_a_rate_limit_without_the_header_carries_no_retry_after(seam_call, monke
     ``retry_after`` is honest: ``core/error.json`` makes it optional.
     """
     set_flags(monkeypatch, private=True)
-    monkeypatch.setenv(BACKOFF_BASE_ENV, "0.001")
+    set_backoff_base(monkeypatch, 0.001)
     rate_limited(local_origin_tls)
     durations = record_sleeps(monkeypatch, seam_call)
     pin_jitter(monkeypatch, 0.0)
 
     error = assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=2)
-    envelope = build_two_layer_error_envelope(error)
+    envelope = envelope_for(error)
 
     assert error.retry_after is None, f"a retry_after appeared with no Retry-After header: {error.retry_after!r}"
     assert "retry_after" not in envelope["errors"][0], f"errors[0] carries an invented retry_after: {envelope}"
@@ -1786,11 +1688,11 @@ def test_an_unparseable_retry_after_is_treated_as_absent(seam_call, header, monk
     only — an HTTP-date drags clock-skew policy into the one module that must not
     grow policy — and the limitation is stated rather than half-implemented. The
     code this ticket deletes called ``int()`` on the raw header, so a spec-legal
-    date form raised ``ValueError`` out of an ``except httpx`` arm and crashed the
+    date form raised ``ValueError`` out of an ``except httpx`` branch and crashed the
     fetch: this is a latent bug fix, not only a migration.
     """
     set_flags(monkeypatch, private=True)
-    monkeypatch.setenv(BACKOFF_BASE_ENV, "0.001")
+    set_backoff_base(monkeypatch, 0.001)
     rate_limited(local_origin_tls, retry_after=header)
     durations = record_sleeps(monkeypatch, seam_call)
     pin_jitter(monkeypatch, 0.0)
@@ -1950,20 +1852,7 @@ def _machine():
     return Attempts
 
 
-def _attempts_module():
-    """Import ``egress.attempts`` (the MODULE, not the class) lazily.
-
-    :func:`pin_jitter` needs the module object itself, to patch
-    ``random.uniform`` where ``_backoff_seconds`` now reads it — the same
-    lazy-import rationale as :func:`_machine`, which returns the ``Attempts``
-    class rather than this module.
-    """
-    from src.core.security.egress import attempts
-
-    return attempts
-
-
-def record_machine_run(monkeypatch, seam_call: str, *, base: str) -> tuple[list[float], list]:
+def record_machine_run(monkeypatch, seam_call: str, *, base: float) -> tuple[list[float], list]:
     """Set up this section's two observation points: the waits, and the decisions.
 
     The waits come from the recorders section 6 and 13 already use. The
@@ -1978,11 +1867,10 @@ def record_machine_run(monkeypatch, seam_call: str, *, base: str) -> tuple[list[
     its own ``Attempts`` and a test never gets to see the object — which is also
     why this grades both paths from outside without either loop knowing.
 
-    ``base`` is written explicitly for ``fast_backoff``'s reason: a bare host
-    ``pytest`` inherits the whole environ, and an ambient value would silently
-    change the magnitudes these cases assert.
+    ``base`` is stated explicitly for ``fast_backoff``'s reason: an unstated base is
+    decided elsewhere, and would silently change the magnitudes these cases assert.
     """
-    monkeypatch.setenv(BACKOFF_BASE_ENV, base)
+    set_backoff_base(monkeypatch, base)
     durations = record_sleeps(monkeypatch, seam_call)
     pin_jitter(monkeypatch, 0.0)
 
@@ -2008,11 +1896,11 @@ def record_machine_run(monkeypatch, seam_call: str, *, base: str) -> tuple[list[
 # Spelled as literals rather than derived from the base: a test that recomputed
 # ``max(base * 2 ** step, header)`` would restate the implementation it grades,
 # and would agree with a machine that had the ordering backwards.
-_CROSSING_BASE = "4"
+_CROSSING_BASE = 4.0
 _CROSSING_RETRY_AFTER = "6"
 _CROSSING_WAITS = [6.0, 8.0]
 
-# The rate-limited answer that precedes every multi-arm sequence below. The
+# The rate-limited answer that precedes every multi-branch sequence below. The
 # header is the state a later attempt must not inherit: 30 seconds is a number
 # the buyer would act on, and it belongs to a 429 that is not the failure being
 # reported by the time these sequences end.
@@ -2077,7 +1965,7 @@ def test_a_size_cap_abort_after_a_rate_limit_carries_no_stale_retry_after(seam_c
             sends_chunked_body(_seam()._MAX_RESPONSE_BYTES + 1),
         ]
     )
-    _durations, decisions = record_machine_run(monkeypatch, seam_call, base="0.001")
+    _durations, decisions = record_machine_run(monkeypatch, seam_call, base=0.001)
 
     error = assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=3)
 
@@ -2099,12 +1987,12 @@ def test_a_size_cap_abort_after_a_rate_limit_carries_no_stale_retry_after(seam_c
 
 @pytest.mark.parametrize("seam_call", SEAM_CALLS)
 def test_both_paths_walk_retry_retry_terminal_through_the_same_machine(seam_call, monkeypatch, local_origin_tls):
-    """503, then 429, then 404: two retries and a terminal arm, identically on both paths.
+    """503, then 429, then 404: two retries and a terminal branch, identically on both paths.
 
-    One origin exercising two of the machine's three arms in sequence, at
+    One origin exercising two of the machine's three branches in sequence, at
     ``max_attempts=5`` so that what stops the walk is the TERMINAL decision and
     not exhaustion — with the attempt budget spent, a machine that never routed
-    to the terminal arm would look the same from outside.
+    to the terminal branch would look the same from outside.
 
     ``retry_after`` is None on the reported failure even though attempt 2 sent
     one: the value belongs to the response being reported, and the 404 sent
@@ -2119,7 +2007,7 @@ def test_both_paths_walk_retry_retry_terminal_through_the_same_machine(seam_call
             responds(404, body=b'{"error": "no such hook"}'),
         ]
     )
-    _durations, decisions = record_machine_run(monkeypatch, seam_call, base="0.001")
+    _durations, decisions = record_machine_run(monkeypatch, seam_call, base=0.001)
 
     error = assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=5)
 
@@ -2137,11 +2025,11 @@ def test_both_paths_walk_retry_retry_terminal_through_the_same_machine(seam_call
 
 @pytest.mark.parametrize("seam_call", SEAM_CALLS)
 def test_both_paths_walk_retry_retry_success_through_the_same_machine(seam_call, monkeypatch, local_origin_tls):
-    """503, then 429, then 200: the same two retries and the machine's third arm.
+    """503, then 429, then 200: the same two retries and the machine's third branch.
 
     The sibling of the terminal walk above, and the reason the fork has three
-    arms rather than a boolean: "not retryable" splits into a delivered response
-    and a failure, and a machine that returned the terminal arm where success is
+    branches rather than a boolean: "not retryable" splits into a delivered response
+    and a failure, and a machine that returned the terminal branch where success is
     due would fail every migrated call site's happy path. Graded on the same
     scripted prefix so the two cases differ only in the final answer.
     """
@@ -2153,7 +2041,7 @@ def test_both_paths_walk_retry_retry_success_through_the_same_machine(seam_call,
             responds(200, body=b'{"ok": true}'),
         ]
     )
-    _durations, decisions = record_machine_run(monkeypatch, seam_call, base="0.001")
+    _durations, decisions = record_machine_run(monkeypatch, seam_call, base=0.001)
 
     result = call_seam(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=5)
 

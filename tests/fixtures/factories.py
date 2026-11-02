@@ -234,65 +234,17 @@ class MediaBuyFactory:
         return MediaBuyFactory.create(**kwargs)
 
 
-class CreativeFactory:
-    """Factory for creating test creatives."""
-
-    @staticmethod
-    def create(
-        tenant_id: str | None = None,
-        creative_id: str | None = None,
-        principal_id: str | None = None,
-        format_id: str = "display_300x250",
-        status: str = "pending",
-        **kwargs,
-    ) -> dict[str, Any]:
-        """Create a test creative."""
-        tenant_id = tenant_id or f"tenant_{uuid.uuid4().hex[:8]}"
-        creative_id = creative_id or f"creative_{uuid.uuid4().hex[:8]}"
-        principal_id = principal_id or f"principal_{uuid.uuid4().hex[:8]}"
-
-        default_content = {
-            "headline": "Test Ad Headline",
-            "body": "This is a test advertisement.",
-            "image_url": "https://example.com/image.jpg",
-            "click_url": "https://example.com/landing",
-            "advertiser": "Test Advertiser",
-        }
-
-        content = kwargs.get("content", default_content)
-
-        return {
-            "tenant_id": tenant_id,
-            "creative_id": creative_id,
-            "principal_id": principal_id,
-            "format_id": format_id,
-            "status": status,
-            "content": json.dumps(content) if isinstance(content, dict) else content,
-            "name": kwargs.get("name", f"Test Creative {creative_id[-4:]}"),
-            "created_at": kwargs.get("created_at", datetime.now(UTC).isoformat()),
-            "updated_at": kwargs.get("updated_at", datetime.now(UTC).isoformat()),
-            "approved_at": kwargs.get("approved_at"),
-            "approved_by": kwargs.get("approved_by"),
-            **kwargs,
-        }
-
-    @staticmethod
-    def create_approved(**kwargs) -> dict[str, Any]:
-        """Create an approved creative."""
-        kwargs["status"] = "approved"
-        kwargs["approved_at"] = datetime.now(UTC).isoformat()
-        kwargs["approved_by"] = "auto_approval"
-        return CreativeFactory.create(**kwargs)
-
-    @staticmethod
-    def create_video_creative(**kwargs) -> dict[str, Any]:
-        """Create a video creative."""
-        video_content = {
-            "video_url": "https://example.com/video.mp4",
-            "duration": 30,
-            "click_url": "https://example.com/landing",
-            "advertiser": "Test Advertiser",
-        }
-        kwargs["format_id"] = "video_16x9"
-        kwargs["content"] = video_content
-        return CreativeFactory.create(**kwargs)
+# ``CreativeFactory`` was here and is DELETED. It emitted the pre-3.1.1 creative shape --
+# a bare ``format_id`` string, content inline as a JSON-dumped ``content`` blob, no
+# ``assets`` slot map at all -- and ``create_video_creative`` seeded ``"duration": 30``,
+# another field the pinned model cannot carry. Its dict did not even match the ORM
+# ``Creative`` columns (``format``/``agent_url``/``data``, not ``format_id``/``content``).
+#
+# It had no working consumer: ``tests/integration/conftest.py::test_media_buy_workflow``
+# called ``CreativeFactory.create_batch``, which never existed on this class, and no test
+# requested that fixture; ``TestDataBuilder.with_creatives`` and the ``creative_factory``
+# fixture were likewise unreferenced.
+#
+# The live creative seeder is the factory-boy ORM ``CreativeFactory`` in
+# ``tests/factories/creative.py`` -- see tests/CLAUDE.md, "Dict-based factories from
+# tests/fixtures/".

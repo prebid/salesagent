@@ -49,14 +49,66 @@ def test_valid_partition_with_known_field_still_passes() -> None:
     then_partition_filtering_result(_valid_uc005_ctx(), field="format_ids", expected="valid")
 
 
-def test_invalid_partition_with_real_rejection_still_passes() -> None:
+def _wire_rejection_ctx(code: str = "INVALID_REQUEST") -> dict:
+    """A ctx as a real WIRE rejection leaves it: a TransportResult with an envelope."""
+    from tests.harness.transport import Transport
+    from tests.harness.wire_fixtures import wire_error_result
+
+    envelope = {
+        "transport": Transport.A2A.value,
+        "status": "adcp_error",
+        "adcp_error": {"code": code, "message": "Invalid request parameters", "recovery": "correctable"},
+        "errors": [{"code": code, "message": "Invalid request parameters", "recovery": "correctable"}],
+    }
+    return {"result": wire_error_result(envelope, error=Exception(code), envelope=envelope)}
+
+
+def test_invalid_partition_with_real_wire_rejection_still_passes() -> None:
+    """Control for the REJECTION half: a real wire envelope naming the code passes.
+
+    THE OLD BAR WAS A WAYPOINT, NOT THE TARGET. This test used to build a pydantic
+    ValidationError from a RESPONSE model in the test process and assert the step
+    accepted it — an earlier de-vacuuming pass had raised the bar from "any
+    exception" to "a real ValidationError" and froze it there. That bar could never
+    have caught the actual defect, because a client-side ValidationError is exactly
+    what a step produced when the payload NEVER REACHED THE SELLER: the harness
+    built every request through the typed model, so an invalid payload died in this
+    process and production was never executed (salesagent-prkv.65).
+
+    The contract now is the buyer's two-layer envelope carrying the NAMED code from
+    the Examples column, so the control is a wire rejection and the outcome cell is
+    a code rather than a bare "invalid".
+    """
+    then_partition_filtering_result(_wire_rejection_ctx(), field="asset_types", expected="INVALID_REQUEST")
+
+
+def test_invalid_partition_rejects_bare_invalid_outcome_cell() -> None:
+    """A bare 'invalid' cell no longer grades anything and must fail loudly."""
+    with pytest.raises(AssertionError, match="Name the AdCP error code"):
+        then_partition_filtering_result(_wire_rejection_ctx(), field="asset_types", expected="invalid")
+
+
+def test_invalid_partition_rejects_client_side_exception() -> None:
+    """A test-process exception is NOT a rejection: no envelope means no evidence.
+
+    This is the case the old bar admitted and the whole migration exists to close.
+    """
     from pydantic import ValidationError
 
     try:
         ListCreativeFormatsResponse(formats="not-a-list")  # type: ignore[arg-type]
     except ValidationError as exc:
         ctx = {"error": exc}
-    then_partition_filtering_result(ctx, field="asset_types", expected="invalid")
+    with pytest.raises(AssertionError, match="never reached the seller"):
+        then_partition_filtering_result(ctx, field="asset_types", expected="INVALID_REQUEST")
+
+
+def test_invalid_partition_rejects_wrong_code_on_the_wire() -> None:
+    """A real envelope carrying a DIFFERENT code must fail — the code is the contract."""
+    with pytest.raises(AssertionError):
+        then_partition_filtering_result(
+            _wire_rejection_ctx("VALIDATION_ERROR"), field="asset_types", expected="INVALID_REQUEST"
+        )
 
 
 # ── De-vacuumization: broken inputs that used to pass must now FAIL ──────

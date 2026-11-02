@@ -76,6 +76,26 @@ select = ["TID251", "ANN401"]
 "src/core/security/egress/policy.py" = ["TID251"]
 "src/core/utils/mcp_client.py" = ["TID251"]
 
+# TID251 — vendored third-party source (src/vendor/, see its __init__ and
+# tests/unit/test_architecture_vendored_code.py). Copied upstream code, which this
+# repo is forbidden to edit, so a finding here could never be acted on — the only
+# available response would be this row.
+#
+# The one import it trips is `ipaddress` in adcp_canonical/_idna_canonicalize.py, and
+# it is PARSING, not policy: `ipaddress.ip_address(host)` is used to RECOGNISE an IP
+# literal so UTS-46/IDNA encoding is skipped for it (IDNA-2008 rejects purely-numeric
+# labels), then returns `str(ip)` as the canonical spelling. No range set, no
+# classification, no address decision, and nothing here dials — the module is a pure
+# string->string host canonicalizer feeding identity comparison.
+#
+# That is materially different from what the ban below exists to stop: "a second range
+# set added five CIDRs with no check going red". A second copy of address POLICY is the
+# disease; recognising that "2001:db8::1" is not a domain name is not.
+#
+# This row leaves with the vendored copy (salesagent-3xcdk). It is scoped to the vendor
+# subtree, so it cannot drift into first-party code.
+"src/vendor/**" = ["TID251"]
+
 # TID251 — scripts/ debt, NOT a seam. Retire these, do not grow them.
 #   gen_test_tls.py      builds certificate IP SANs, not address classification
 #   sync_all_tenants.py  ops-plane self-call to a hardcoded loopback URL; the

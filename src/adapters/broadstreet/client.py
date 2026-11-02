@@ -7,36 +7,85 @@ Auth: Access token passed as query parameter.
 
 import logging
 from types import MappingProxyType
-from typing import Any
+from typing import Any, NoReturn
 
 from pydantic import JsonValue
 
 from src.adapters.vendor_http import VendorHttpClient
-from src.core.security.outbound_http import OutboundDeliveryFailed, OutboundError, QueryParams
+from src.core.exceptions import (
+    AdCPAdapterError,
+    AdCPAdapterResourceNotFoundError,
+    AdCPAuthorizationError,
+    AdCPSalesAgentError,
+)
+from src.core.security.outbound_http import (
+    OperatorEndpoint,
+    OutboundDeliveryFailed,
+    OutboundError,
+    QueryParams,
+)
 
 logger = logging.getLogger(__name__)
 
 
-class BroadstreetAPIError(Exception):
-    """Exception raised for Broadstreet API errors."""
+def _raise_broadstreet_error(exc: OutboundError) -> NoReturn:
+    """Re-raise an egress-seam failure as the AdCP error the upstream status warrants.
 
-    def __init__(self, message: str, status_code: int | None = None, response_body: Any = None):
-        super().__init__(message)
-        self.status_code = status_code
-        self.response_body = response_body
+    AdCP 3.1.1 ``transport-errors.mdx`` Rule 1 mandates translating a vendor's
+    HTTP status into an AdCP code. Three rows are Broadstreet's own, because a
+    vendor ad server's 4xx carries RESOURCE semantics the shared
+    operator-endpoint table cannot express -- it reads every non-429 4xx as
+    ``CONFIGURATION_ERROR``, "this deployment is misconfigured":
 
+    * 403 is the access token being denied -> ``PERMISSION_DENIED``.
+    * 404 is an advertiser, campaign, advertisement or zone the ad server says
+      does not exist -> ``REFERENCE_NOT_FOUND``, the case
+      :class:`AdCPAdapterResourceNotFoundError` was minted for.
+    * any other terminal 4xx -> ``AdCPAdapterError``.
 
-def _broadstreet_error_for_status(status: int | None) -> BroadstreetAPIError:
-    """Rebuild the status-specific API error the seam's typed failure replaced."""
+    Every remaining row delegates to
+    :func:`~src.core.helpers.outbound_error_mapping.raise_mapped_outbound_error`,
+    which already produces exactly the classes this client wants -- 429 ->
+    ``AdCPRateLimitError`` carrying the clamped ``retry_after``; a 5xx or a dial
+    that never reached the wire -> the seam's own
+    ``AdCPServiceUnavailableError``, re-raised with its ``attempts``/
+    ``last_status`` intact; an egress-policy refusal ->
+    ``AdCPConfigurationError``. Copying those rows here is the drift that module
+    exists to prevent, so they are not copied. 429 is tested BEFORE the 4xx
+    range below for the same reason: the range then needs no second copy of the
+    retryable-status set to exclude it.
+
+    The vendor's response BODY appears in none of these errors. It used to ride
+    in ``internal_detail`` (non-wire by construction, because a third party's
+    body has no provenance guarantee -- AdCP 3.1.1 Security Considerations
+    MUST-NOT list); the egress seam now declines to carry a counterparty's error
+    body back at all, so operators keep the status and lose the vendor's message
+    text.
+
+    Imported inside the function, not at module level: ``src.core.helpers``'s
+    package ``__init__`` pulls in ``adapter_helpers``, which imports the
+    adapters -- including the one that owns this client.
+    """
+    status = exc.http_status if isinstance(exc, OutboundDeliveryFailed) else None
+
+    error: AdCPSalesAgentError[Any] | None = None
     if status == 403:
-        return BroadstreetAPIError("Broadstreet API Auth Denied (HTTP 403)", status_code=403)
-    if status == 404:
-        return BroadstreetAPIError("Resource not found (HTTP 404)", status_code=404)
-    if status is not None and status >= 500:
-        return BroadstreetAPIError(f"Broadstreet API server error (HTTP {status})", status_code=status)
-    if status is not None:
-        return BroadstreetAPIError(f"Broadstreet API error (HTTP {status})", status_code=status)
-    return BroadstreetAPIError("Broadstreet API request was not delivered")
+        error = AdCPAuthorizationError(internal_detail=exc)
+    elif status == 404:
+        error = AdCPAdapterResourceNotFoundError(internal_detail=exc)
+    elif status == 429:
+        # Owned by the shared table (see the docstring): delegating keeps the
+        # clamped retry_after a locally-built AdCPRateLimitError would drop.
+        pass
+    elif status is not None and 400 <= status < 500:
+        error = AdCPAdapterError(internal_detail=exc)
+
+    if error is not None:
+        raise error from exc
+
+    from src.core.helpers.outbound_error_mapping import raise_mapped_outbound_error
+
+    raise_mapped_outbound_error(exc, provenance=OperatorEndpoint("Broadstreet"), logger=logger)
 
 
 class BroadstreetClient:
@@ -99,19 +148,15 @@ class BroadstreetClient:
             Parsed response body
 
         Raises:
-            BroadstreetAPIError: If request fails
+            AdCPSalesAgentError: The subclass for the upstream failure — see
+                :func:`_raise_broadstreet_error`.
         """
         try:
             result = self._vendor.call(method, path, json=data if data else None, params=query_params)
-        except OutboundDeliveryFailed as e:
-            # The seam raises on a non-2xx and discards the response, so the
-            # status-specific errors below are rebuilt from the typed failure.
-            # response_body is now None: a counterparty's error body is exactly what
-            # the seam declines to carry back. Operators keep the status; they lose
-            # the vendor's message text.
-            raise _broadstreet_error_for_status(e.http_status) from e
         except OutboundError as e:
-            raise BroadstreetAPIError(f"Request failed: {e}") from e
+            # One branch, not two: OutboundDeliveryFailed is an OutboundError, and
+            # the status it carries is the only thing the classifier reads.
+            _raise_broadstreet_error(e)
 
         body = result.json() if result.content else None
         return body

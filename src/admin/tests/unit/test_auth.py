@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
+import src.core.config as config_module
 from src.admin.blueprints.auth import auth_bp, init_oauth
 from src.admin.utils import is_super_admin, is_tenant_admin
 
@@ -29,30 +30,42 @@ class TestAuthBlueprint:
         assert auth_bp is not None
 
     @patch("src.admin.blueprints.auth.OAuth")
-    def test_init_oauth_with_env_vars(self, mock_oauth):
+    def test_init_oauth_with_env_vars(self, mock_oauth, monkeypatch):
         """Test OAuth initialization with environment variables."""
         mock_app = Mock()
 
-        with patch.dict(
-            "os.environ", {"GOOGLE_CLIENT_ID": "test_client_id", "GOOGLE_CLIENT_SECRET": "test_client_secret"}
-        ):
-            oauth = init_oauth(mock_app)
+        monkeypatch.setenv("GOOGLE_CLIENT_ID", "test_client_id")
+        monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "test_client_secret")
+        # The settings are read once; drop the cached object so the next read sees the
+        # patched environment, and let monkeypatch restore the previous object after.
+        monkeypatch.setattr(config_module, "_settings", None)
 
-            # Verify OAuth was initialized
-            mock_oauth.assert_called_once_with(mock_app)
-            assert oauth is not None
+        oauth = init_oauth(mock_app)
+
+        # Verify OAuth was initialized
+        mock_oauth.assert_called_once_with(mock_app)
+        assert oauth is not None
 
     @patch("src.admin.blueprints.auth.OAuth")
-    def test_init_oauth_without_config(self, mock_oauth):
+    def test_init_oauth_without_config(self, mock_oauth, monkeypatch):
         """Test OAuth initialization without configuration."""
         mock_app = Mock()
 
-        with patch.dict("os.environ", {}, clear=True):
-            with patch("src.admin.blueprints.auth.os.path.exists", return_value=False):
-                oauth = init_oauth(mock_app)
+        for name in (
+            "OAUTH_DISCOVERY_URL",
+            "OAUTH_CLIENT_ID",
+            "OAUTH_CLIENT_SECRET",
+            "GOOGLE_CLIENT_ID",
+            "GOOGLE_CLIENT_SECRET",
+        ):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setattr(config_module, "_settings", None)
 
-                # Should return None when no config is available
-                assert oauth is None
+        with patch("src.admin.blueprints.auth.os.path.exists", return_value=False):
+            oauth = init_oauth(mock_app)
+
+            # Should return None when no config is available
+            assert oauth is None
 
 
 class TestAuthUtilities:

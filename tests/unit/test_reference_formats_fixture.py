@@ -3,8 +3,12 @@
 The checked-in fixture (tests/fixtures/creative_formats/reference_formats.json) is what
 ADCP_TESTING=true serves via creative_agent_registry._get_reference_formats(). These tests
 assert the registry serves exactly the fixture, the fixture's structural invariants hold,
-load_reference_formats() memoizes and fails loud, and the legacy_id_map still backs
-upgrade_legacy_format_id.
+and load_reference_formats() memoizes and fails loud.
+
+``test_legacy_id_map_backs_upgrade`` was deleted with ``upgrade_legacy_format_id``: it
+graded that every ``legacy_id_map`` key upgrades to a namespaced FormatId, and nothing
+performs that upgrade. The map itself is gone from the fixture, from
+``format_cache.load_format_cache``, and from the refresh script that preserved it.
 """
 
 from __future__ import annotations
@@ -17,9 +21,7 @@ import pytest
 from src.core.format_cache import (
     CACHE_FILE,
     DEFAULT_AGENT_URL,
-    load_format_cache,
     load_reference_formats,
-    upgrade_legacy_format_id,
 )
 from src.core.schemas import Format
 
@@ -94,7 +96,7 @@ def test_load_reference_formats_fails_loud_on_empty_formats(monkeypatch, tmp_pat
     from src.core import format_cache
 
     bad = tmp_path / "empty.json"
-    bad.write_text(json.dumps({"schema_version": 2, "legacy_id_map": {}, "formats": []}))
+    bad.write_text(json.dumps({"schema_version": 2, "formats": []}))
     load_reference_formats.cache_clear()
     monkeypatch.setattr(format_cache, "CACHE_FILE", bad)
     try:
@@ -102,15 +104,3 @@ def test_load_reference_formats_fails_loud_on_empty_formats(monkeypatch, tmp_pat
             load_reference_formats()
     finally:
         load_reference_formats.cache_clear()
-
-
-def test_legacy_id_map_backs_upgrade(fixture_data: dict) -> None:
-    """legacy_id_map keys still upgrade to namespaced FormatId (test_format_cache regression)."""
-    legacy_map = load_format_cache()
-    assert legacy_map == fixture_data["legacy_id_map"]
-    assert legacy_map, "legacy_id_map must be preserved for upgrade_legacy_format_id"
-
-    for legacy_id in legacy_map:
-        upgraded = upgrade_legacy_format_id(legacy_id)
-        assert upgraded.id == legacy_id
-        assert str(upgraded.agent_url).rstrip("/") == DEFAULT_AGENT_URL.rstrip("/")

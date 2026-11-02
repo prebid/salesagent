@@ -1,132 +1,44 @@
 """
 Enhanced error handling for Google Ad Manager adapter.
 
-This module provides production-ready error handling including:
-- Structured exception hierarchy
-- Retry logic with exponential backoff
-- Comprehensive error mapping
-- Recovery strategies
+This module classifies GAM API faults and retries the ones worth retrying.
+
+It defines NO exception classes. A GAM fault is an AdCP error like any other:
+``map_gam_exception`` sorts an upstream fault into the ``AdCP*Error`` the buyer
+should receive, which is what AdCP 3.1.1 mandates --
+``building/operating/transport-errors.mdx`` Rule 1: "Translate upstream errors
+into AdCP error codes. Do not pass through raw upstream errors ... The buyer
+should never see error formats from systems it has no relationship with."
+
+A previous version defined ``GAMError`` plus nine subclasses that mirrored the
+AdCP hierarchy. Nothing converted them, no ``except GAMError`` existed outside
+this module, and every GAM fault therefore reached the buyer as one collapsed
+code with the diagnosis discarded.
 """
 
 import logging
 import time
-import traceback
 from collections.abc import Callable
 from datetime import UTC, datetime
-from enum import Enum
 from functools import wraps
 from typing import Any, TypeVar
+
+from src.core.exceptions import (
+    AdCPAdapterResourceNotFoundError,
+    AdCPAuthorizationError,
+    AdCPConfigurationError,
+    AdCPConflictError,
+    AdCPInternalError,
+    AdCPRateLimitError,
+    AdCPSalesAgentError,
+    AdCPServiceUnavailableError,
+    AdCPValidationError,
+)
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
-
-
-class GAMErrorType(Enum):
-    """Categorized error types for GAM operations."""
-
-    AUTHENTICATION = "AUTH_REQUIRED"
-    PERMISSION = "PERMISSION_ERROR"
-    VALIDATION = "VALIDATION_ERROR"
-    QUOTA_EXCEEDED = "QUOTA_EXCEEDED"
-    NETWORK = "NETWORK_ERROR"
-    TIMEOUT = "TIMEOUT_ERROR"
-    RESOURCE_NOT_FOUND = "RESOURCE_NOT_FOUND"
-    DUPLICATE_RESOURCE = "DUPLICATE_RESOURCE"
-    INTERNAL_ERROR = "INTERNAL_ERROR"
-    CONFIGURATION = "CONFIGURATION_ERROR"
-    UNKNOWN = "UNKNOWN_ERROR"
-
-
-class GAMError(Exception):
-    """Base exception for all GAM adapter errors."""
-
-    def __init__(
-        self,
-        message: str,
-        error_type: GAMErrorType = GAMErrorType.UNKNOWN,
-        details: dict[str, Any] | None = None,
-        recoverable: bool = True,
-    ):
-        super().__init__(message)
-        self.error_type = error_type
-        self.details = details or {}
-        self.recoverable = recoverable
-        self.timestamp = datetime.now(UTC)
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert error to dictionary for logging/monitoring."""
-        return {
-            "error_type": self.error_type.value,
-            "message": str(self),
-            "details": self.details,
-            "recoverable": self.recoverable,
-            "timestamp": self.timestamp.isoformat(),
-        }
-
-
-class GAMAuthenticationError(GAMError):
-    """Raised when authentication with GAM fails."""
-
-    def __init__(self, message: str, details: dict[str, Any] | None = None):
-        super().__init__(message, GAMErrorType.AUTHENTICATION, details, recoverable=False)
-
-
-class GAMPermissionError(GAMError):
-    """Raised when operation is not permitted."""
-
-    def __init__(self, message: str, details: dict[str, Any] | None = None):
-        super().__init__(message, GAMErrorType.PERMISSION, details, recoverable=False)
-
-
-class GAMValidationError(GAMError):
-    """Raised when request validation fails."""
-
-    def __init__(self, message: str, details: dict[str, Any] | None = None):
-        super().__init__(message, GAMErrorType.VALIDATION, details, recoverable=False)
-
-
-class GAMQuotaError(GAMError):
-    """Raised when API quota is exceeded."""
-
-    def __init__(self, message: str, details: dict[str, Any] | None = None):
-        super().__init__(message, GAMErrorType.QUOTA_EXCEEDED, details, recoverable=True)
-
-
-class GAMNetworkError(GAMError):
-    """Raised for network-related issues."""
-
-    def __init__(self, message: str, details: dict[str, Any] | None = None):
-        super().__init__(message, GAMErrorType.NETWORK, details, recoverable=True)
-
-
-class GAMTimeoutError(GAMError):
-    """Raised when operation times out."""
-
-    def __init__(self, message: str, details: dict[str, Any] | None = None):
-        super().__init__(message, GAMErrorType.TIMEOUT, details, recoverable=True)
-
-
-class GAMResourceNotFoundError(GAMError):
-    """Raised when requested resource doesn't exist."""
-
-    def __init__(self, message: str, details: dict[str, Any] | None = None):
-        super().__init__(message, GAMErrorType.RESOURCE_NOT_FOUND, details, recoverable=False)
-
-
-class GAMDuplicateResourceError(GAMError):
-    """Raised when trying to create duplicate resource."""
-
-    def __init__(self, message: str, details: dict[str, Any] | None = None):
-        super().__init__(message, GAMErrorType.DUPLICATE_RESOURCE, details, recoverable=False)
-
-
-class GAMConfigurationError(GAMError):
-    """Raised for configuration issues."""
-
-    def __init__(self, message: str, details: dict[str, Any] | None = None):
-        super().__init__(message, GAMErrorType.CONFIGURATION, details, recoverable=False)
 
 
 class RetryConfig:
@@ -147,47 +59,74 @@ class RetryConfig:
         self.jitter = jitter
 
 
-def map_gam_exception(exception: Exception) -> GAMError:
+def map_gam_exception(exception: Exception) -> AdCPSalesAgentError:
+    """Classify an upstream GAM fault into the AdCP error the buyer should read.
+
+    Sorting the fault is the adapter's job and this is the only place that does
+    it. The returned error is raised as-is: the tool layer re-raises a typed
+    ``AdCPSalesAgentError`` untouched, so this decision is the one the buyer receives.
+
+    Carries NO upstream text into the error. A SOAP fault's string is a third
+    party's, and AdCP 3.1.1 transport-errors.mdx forbids putting it on the wire
+    (Security Considerations; restated for CONFIGURATION_ERROR as "MUST NOT
+    include credentials, connection strings, full file paths, or stack traces").
+    The fault travels in ``internal_detail``, which is non-wire by construction,
+    and the buyer reads CODE_TABLE's sentence for the code.
     """
-    Map GAM API exceptions to our structured error types.
+    name = type(exception).__name__
+    message = str(exception).lower()
 
-    Args:
-        exception: The original exception from GAM API
+    def matches(*needles: str) -> bool:
+        return any(n in name for n in needles) or any(n in message for n in needles)
 
-    Returns:
-        Appropriate GAMError subclass
-    """
-    error_message = str(exception)
-    error_details = {"original_type": type(exception).__name__, "traceback": traceback.format_exc()}
-
-    # Map based on exception type and message patterns
-    if "AuthError" in type(exception).__name__ or "authentication" in error_message.lower():
-        return GAMAuthenticationError(f"GAM authentication failed: {error_message}", error_details)
-
-    elif "PermissionError" in type(exception).__name__ or "permission" in error_message.lower():
-        return GAMPermissionError(f"GAM permission denied: {error_message}", error_details)
-
-    elif "ValidationError" in type(exception).__name__ or "invalid" in error_message.lower():
-        return GAMValidationError(f"GAM validation failed: {error_message}", error_details)
-
-    elif "QuotaError" in type(exception).__name__ or "quota" in error_message.lower():
-        return GAMQuotaError(f"GAM quota exceeded: {error_message}", error_details)
-
-    elif "NetworkError" in type(exception).__name__ or "network" in error_message.lower():
-        return GAMNetworkError(f"GAM network error: {error_message}", error_details)
-
-    elif "TimeoutError" in type(exception).__name__ or "timeout" in error_message.lower():
-        return GAMTimeoutError(f"GAM operation timed out: {error_message}", error_details)
-
-    elif "NotFoundError" in type(exception).__name__ or "not found" in error_message.lower():
-        return GAMResourceNotFoundError(f"GAM resource not found: {error_message}", error_details)
-
-    elif "DuplicateError" in type(exception).__name__ or "already exists" in error_message.lower():
-        return GAMDuplicateResourceError(f"GAM resource already exists: {error_message}", error_details)
-
-    else:
-        # Default to unknown error
-        return GAMError(f"GAM error: {error_message}", GAMErrorType.UNKNOWN, error_details)
+    # Order matters: the first match wins, and "invalid" appears inside many
+    # unrelated fault strings, so the specific families are tested ahead of it.
+    if matches(
+        "AuthError",
+        "RefreshError",
+        "authentication",
+        "invalid_grant",
+        "invalid_client",
+        "credential",
+    ):
+        # The SELLER's OAuth to Google failed, not the buyer's token. AUTH_INVALID
+        # is defined by the pin as the CALLER's credentials being rejected
+        # ("Caller's signed envelope did not verify"), and it is terminal -- so
+        # reporting it here would send the buyer to rotate credentials they do not
+        # hold and stop them retrying. CONFIGURATION_ERROR is the pin's code for
+        # "seller-side deployment ... an operator at the seller has to" fix it.
+        #
+        # This row MUST stay ahead of the validation row below, and must match the
+        # OAuth vocabulary as well as the SOAP one. Google's canonical expired- or
+        # revoked-refresh-token failure is `RefreshError: invalid_grant`, which
+        # names neither "AuthError" nor "authentication" -- so on keyword order
+        # alone it used to fall through to the validation row and told the buyer
+        # their request was malformed while the seller's token sat expired. That is
+        # the most common credential failure this adapter sees.
+        #
+        # No details object: the pin says CONFIGURATION_ERROR "carries no
+        # error.details shape".
+        return AdCPConfigurationError(internal_detail=exception)
+    if matches("PermissionError", "permission"):
+        return AdCPAuthorizationError(internal_detail=exception)
+    if matches("QuotaError", "quota"):
+        return AdCPRateLimitError(internal_detail=exception)
+    if matches("NotFoundError", "not found"):
+        return AdCPAdapterResourceNotFoundError(internal_detail=exception)
+    if matches("DuplicateError", "already exists"):
+        return AdCPConflictError(internal_detail=exception)
+    if matches("NetworkError", "network", "TimeoutError", "timeout"):
+        # Network and timeout collapse to one code. Rule 1 in the pin: "A database
+        # connection timeout becomes SERVICE_UNAVAILABLE".
+        return AdCPServiceUnavailableError(internal_detail=exception)
+    if matches("ValidationError", "invalid"):
+        return AdCPValidationError(internal_detail=exception)
+    # Unclassifiable. NOT AdCPAdapterError: that is SERVICE_UNAVAILABLE, which is
+    # both the network row above AND a member of with_retry's default retry set,
+    # so routing an unknown fault there would retry it three times with backoff
+    # for no reason. The pin: "Opaque crashes that don't fit that profile remain
+    # catalog-uncoded".
+    return AdCPInternalError(internal_detail=exception)
 
 
 def with_retry(
@@ -210,12 +149,19 @@ def with_retry(
         retry_config = RetryConfig()
 
     if retry_on is None:
-        retry_on = [GAMNetworkError, GAMTimeoutError, GAMQuotaError]
+        # Retryability is THIS list, never the buyer-facing ``recovery`` hint from
+        # CODE_TABLE: RATE_LIMITED carries recovery=None there, yet a quota fault
+        # is exactly what should be retried. They answer different questions.
+        #
+        # Network and timeout collapse into AdCPServiceUnavailableError, so this
+        # list is one shorter than the three GAM classes it replaces while
+        # covering the same faults.
+        retry_on = [AdCPServiceUnavailableError, AdCPRateLimitError]
 
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
         @wraps(func)
         def wrapper(*args, **kwargs) -> T:
-            last_exception: GAMError | None = None
+            last_exception: AdCPSalesAgentError | None = None
             op_name = operation_name or func.__name__
 
             for attempt in range(retry_config.max_attempts):
@@ -234,14 +180,13 @@ def with_retry(
                     return result
 
                 except Exception as e:
-                    # Map to GAM error
-                    gam_error = map_gam_exception(e) if not isinstance(e, GAMError) else e
-                    last_exception = gam_error
+                    # Classify once. An already-typed AdCPSalesAgentError is the raise site's
+                    # own decision and is never reclassified.
+                    adcp_error = e if isinstance(e, AdCPSalesAgentError) else map_gam_exception(e)
+                    last_exception = adcp_error
 
-                    # Check if we should retry
                     should_retry = (
-                        gam_error.recoverable
-                        and any(isinstance(gam_error, exc_type) for exc_type in retry_on)
+                        any(isinstance(adcp_error, exc_type) for exc_type in retry_on)
                         and attempt < retry_config.max_attempts - 1
                     )
 
@@ -259,32 +204,28 @@ def with_retry(
                             delay = delay * (0.5 + random.random())
 
                         logger.warning(
-                            f"{op_name} failed with {gam_error.error_type.value}: {str(gam_error)}. "
-                            f"Retrying in {delay:.1f} seconds..."
+                            f"{op_name} failed with {adcp_error.error_code}. Retrying in {delay:.1f} seconds..."
                         )
 
                         time.sleep(delay)
                     else:
-                        # Don't retry - log and raise
-                        error_dict = gam_error.to_dict()
-                        # Remove 'message' key to avoid conflict with logging system
-                        error_dict.pop("message", None)
-                        logger.error(
-                            f"{op_name} failed with {gam_error.error_type.value}: {str(gam_error)}", extra=error_dict
-                        )
-                        raise gam_error
+                        # The error's own code identifies the fault. A mapped error is
+                        # raised ``from`` the upstream fault so the boundary's one record
+                        # carries its traceback; an already-typed error is re-raised as
+                        # itself (``raise e from e`` would chain it to itself).
+                        logger.error(f"{op_name} failed with {adcp_error.error_code}")
+                        if adcp_error is e:
+                            raise
+                        raise adcp_error from e
 
             # All retries exhausted
             if last_exception is None:
                 # This should never happen, but handle it gracefully
-                raise RuntimeError(
-                    f"{op_name} failed after {retry_config.max_attempts} attempts with no exception recorded"
-                )
+                raise AdCPInternalError()
 
-            error_dict = last_exception.to_dict()
-            # Remove 'message' key to avoid conflict with logging system
-            error_dict.pop("message", None)
-            logger.error(f"{op_name} failed after {retry_config.max_attempts} attempts", extra=error_dict)
+            logger.error(
+                f"{op_name} failed after {retry_config.max_attempts} attempts with {last_exception.error_code}"
+            )
             raise last_exception
 
         return wrapper
@@ -360,29 +301,3 @@ class GAMOperationTracker:
                 for step in self.steps
             ],
         }
-
-
-def validate_gam_response(response: Any, expected_fields: list[str]) -> None:
-    """
-    Validate GAM API response has expected structure.
-
-    Args:
-        response: The API response
-        expected_fields: List of field names that should be present
-
-    Raises:
-        GAMValidationError: If response is invalid
-    """
-    if not response:
-        raise GAMValidationError("Empty response from GAM API")
-
-    missing_fields = []
-    for field in expected_fields:
-        if field not in response:
-            missing_fields.append(field)
-
-    if missing_fields:
-        raise GAMValidationError(
-            f"GAM response missing required fields: {', '.join(missing_fields)}",
-            {"response": str(response)[:500]},  # Truncate for logging
-        )

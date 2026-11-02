@@ -38,6 +38,7 @@ def _future(days: int) -> str:
 
 def _make_request(product_id: str) -> CreateMediaBuyRequest:
     return CreateMediaBuyRequest(
+        account={"account_id": "acct_test"},
         brand={"domain": "testbrand.com"},
         start_time=_future(1),
         end_time=_future(8),
@@ -60,7 +61,12 @@ class TestGAMAutoConfigDeliveryTypeNormalization:
             captured["config"] = config
             return config
 
-        with MediaBuyCreateEnv(tenant_id=_TENANT_ID, principal_id=_PRINCIPAL_ID, human_review_required=False) as env:
+        # No ``human_review_required=`` kwarg: it only ever seeded an in-memory tenant
+        # override, and this env's ``call_impl`` dispatches at ``invoke_tool``, so the REAL
+        # resolver loads the tenant from its row. The kwarg agreed with the row
+        # (``TenantFactory.human_review_required = False``) purely by accident, so it
+        # decided nothing; the row is the one source.
+        with MediaBuyCreateEnv(tenant_id=_TENANT_ID, principal_id=_PRINCIPAL_ID) as env:
             tenant, _principal = env.setup_default_data()
             PropertyTagFactory(tenant=tenant, tag_id="all_inventory", name="All Inventory")
             product = ProductFactory(

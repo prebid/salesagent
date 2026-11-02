@@ -1,15 +1,15 @@
 """Guard: raise a typed AdCPNotFoundError subclass, never the base class.
 
-The base ``AdCPNotFoundError`` carries the internal ``NOT_FOUND`` code (wire →
-``INVALID_REQUEST``, recovery=terminal). Entity-specific subclasses carry a typed
-identity and recovery=correctable:
+The base ``AdCPNotFoundError`` emits ``REFERENCE_NOT_FOUND`` with
+recovery=correctable -- it is the pin's fallback for a resource type with no
+dedicated code. What it does NOT carry is a typed identity: it cannot say WHICH
+resource was missing. Entity-specific subclasses can:
 
     AdCPMediaBuyNotFoundError, AdCPPackageNotFoundError, AdCPProductNotFoundError,
     AdCPAccountNotFoundError, AdCPContextNotFoundError, AdCPCreativeNotFoundError,
     AdCPFormatNotFoundError, AdCPTaskNotFoundError
 
-Raising the BASE class in business logic loses that identity and emits a generic
-terminal not-found. This guard forbids ``raise AdCPNotFoundError(...)`` anywhere
+Raising the BASE class in business logic loses that identity. This guard forbids ``raise AdCPNotFoundError(...)`` anywhere
 in ``src/`` — use (or create) a specific subclass.
 
 Only a fresh ``raise`` of the base is flagged. Catching it in an ``except``

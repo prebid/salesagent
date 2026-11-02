@@ -52,11 +52,11 @@ class TestPinnedSchemaTracksSDKVersion:
         schema_path = _resolve_filename("get-products-response.json")
         data = json.loads(schema_path.read_text())
 
-        # Flatten oneOf/allOf arms into one property set for this check.
+        # Flatten oneOf/allOf branches into one property set for this check.
         all_props: set[str] = set(data.get("properties", {}) or {})
         for arm_key in ("oneOf", "allOf", "anyOf"):
-            for arm in data.get(arm_key, []) or []:
-                all_props |= set(arm.get("properties", {}) or {})
+            for branch in data.get(arm_key, []) or []:
+                all_props |= set(branch.get("properties", {}) or {})
 
         assert "cache_scope" in all_props, (
             "get-products-response.json resolved by pinned_schema.py is missing "

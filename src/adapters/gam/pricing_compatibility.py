@@ -14,6 +14,9 @@ Source: https://developers.google.com/ad-manager/api/reference/ForecastService.C
 
 from typing import Literal
 
+from src.core.errors.details import CapabilityRefusalDetails, ConfigurationDetails
+from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPConfigurationError
+
 # Type aliases for clarity
 PricingModel = Literal["cpm", "vcpm", "cpc", "flat_rate"]  # AdCP pricing models only
 GAMCostType = Literal["CPM", "VCPM", "CPC", "CPD"]  # GAM internal types
@@ -97,15 +100,21 @@ class PricingCompatibility:
             Recommended line item type
 
         Raises:
-            ValueError: If override_type is incompatible with pricing_model
+            AdCPConfigurationError: If ``override_type`` is incompatible with
+                ``pricing_model``. SELLER-side: the override comes from product
+                config (see the arg above), not from the request, so the buyer has
+                nothing to correct. It was briefly UNSUPPORTED_FEATURE, which tells
+                the buyer to change something they never sent.
         """
         # Validate override if provided
         if override_type:
             if not cls.is_compatible(override_type, pricing_model):
-                compatible = cls.get_compatible_line_item_types(pricing_model)
-                raise ValueError(
-                    f"Line item type '{override_type}' is not compatible with pricing model '{pricing_model}'. "
-                    f"GAM supports {pricing_model.upper()} with: {', '.join(sorted(compatible))}"
+                raise AdCPConfigurationError(
+                    details=ConfigurationDetails(
+                        capability=f"line_item_type_for:{pricing_model}",
+                        rejected_value=override_type,
+                        accepted_values=sorted(cls.get_compatible_line_item_types(pricing_model)),
+                    )
                 )
             return override_type
 
@@ -139,11 +148,16 @@ class PricingCompatibility:
             GAM cost type (CPM, VCPM, CPC, or CPD)
 
         Raises:
-            ValueError: If pricing model not supported
+            AdCPCapabilityNotSupportedError: If pricing model not supported —
+                a buyer-correctable capability gap (UNSUPPORTED_FEATURE /
+                correctable per the pinned spec), never a bare ValueError,
+                which generic handlers wrap into SERVICE_UNAVAILABLE/transient.
         """
         cost_type = cls.ADCP_TO_GAM_COST_TYPE.get(pricing_model)
         if not cost_type:
-            raise ValueError(f"Pricing model '{pricing_model}' not supported by GAM adapter")
+            raise AdCPCapabilityNotSupportedError(
+                details=CapabilityRefusalDetails(capability="pricing_model", rejected_value=pricing_model)
+            )
         return cost_type
 
     @classmethod

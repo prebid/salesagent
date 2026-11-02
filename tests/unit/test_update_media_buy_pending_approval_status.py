@@ -41,7 +41,7 @@ def test_pending_approval_update_reports_submitted_not_completed():
         adapter.manual_approval_operations = ["update_media_buy"]
         env.set_media_buy(media_buy_id="mb-001", status="active")
 
-        result = env.call_impl(media_buy_id="mb-001", budget=5000.0)
+        result = env.call_impl(media_buy_id="mb-001", paused=True)
 
     envelope = result.model_dump(mode="json")
 

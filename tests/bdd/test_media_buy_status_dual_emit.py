@@ -6,7 +6,7 @@ update_media_buy success responses carry the preferred DOMAIN ``media_buy_status
 PROTOCOL TaskStatus — DIFFERENT namespaces, NOT identical. This is the GA model
 graded by the published 3.1.0 storyboard; it diverges from the pinned SDK's
 beta.3 storyboard, which graded the two identical during the deprecation window
-(#4908). See docs/adcp-spec-version.md "Behavior target vs SDK pin".
+(#4908). See docs/adcp-spec-version.md "`status` vs `media_buy_status` on media-buy responses".
 
 Step definitions come from the registered plugins in conftest.py (UC-002 create,
 UC-003 update, and the generic given/when steps).

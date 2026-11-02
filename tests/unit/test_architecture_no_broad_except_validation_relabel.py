@@ -16,14 +16,14 @@ mean the operation could not be performed, and let everything else propagate to
 whatever handles internal errors at the boundary. #1868 did this for
 ``tests/helpers/adcp_schema_validator.py``: it now maps a fixed
 ``_INSTRUMENT_FAILURES`` tuple to ``SchemaError`` and has no ``except Exception``
-arm at all.
+branch at all.
 
 NOT violations, deliberately:
 
 - ``except Exception: raise ValueError(...)`` — ``ValueError`` is an internal
   Python signal, not a buyer-facing contract verdict.
 - ``except Exception: raise AdCPAdapterError(...)`` (and
-  ``AdCPServiceUnavailableError``, ``_internal_error_for``, ...) — these types
+  ``AdCPServiceUnavailableError``, ...) — these types
   already mean "something outside this code broke", which is the honest reading
   of an unexpected exception. Broad catch, correct label.
 - ``except (SchemaError, KeyError): raise SomeValidationError(...)`` — a NAMED
@@ -137,7 +137,7 @@ def test_no_broad_except_relabels_as_validation_error():
         "violates the contract'.\n\n"
         + "\n".join(f"  {path}::{func} — except Exception -> raise {raised}" for path, func, raised in sorted(new))
         + "\n\nFix: name the failure types that genuinely mean the operation could not be "
-        "performed, and delete the broad arm so anything else propagates. See "
+        "performed, and delete the broad branch so anything else propagates. See "
         "tests/helpers/adcp_schema_validator.py::_INSTRUMENT_FAILURES."
     )
 
@@ -178,9 +178,9 @@ _POSITIVE_SAMPLES = {
     # A tuple is only narrow when every member is narrow. Naming a specific type
     # alongside Exception buys nothing — Exception already subsumes it — so this
     # is the bare broad catch wearing one extra token. Without this sample the
-    # tuple arm of _is_broad_handler has no failing oracle: every other positive
+    # tuple branch of _is_broad_handler has no failing oracle: every other positive
     # is a None/Name/Attribute handler, and the one tuple in _NEGATIVE_SAMPLES
-    # stays correctly permitted whichever way that arm goes.
+    # stays correctly permitted whichever way that branch goes.
     "tuple-with-Exception": "try:\n    f()\nexcept (KeyError, Exception) as e:\n    raise MyValidationError('x') from e\n",
 }
 

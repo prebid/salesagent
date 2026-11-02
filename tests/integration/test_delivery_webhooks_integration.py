@@ -17,14 +17,14 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import (
     AdapterConfig,
     MediaBuy,
-    PricingOption,
     Principal,
     Product,
     Tenant,
 )
-from src.core.resolved_identity import ResolvedIdentity
-from src.core.testing_hooks import AdCPTestContext
 from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
+from tests.factories import PricingOptionFactory
+from tests.factories.principal import plaintext_token_for
+from tests.utils.database_helpers import vhost_for
 
 
 def _create_test_tenant_and_principal(ad_server: str | None = None) -> tuple[str, str]:
@@ -33,14 +33,18 @@ def _create_test_tenant_and_principal(ad_server: str | None = None) -> tuple[str
 
     with get_db_session() as session:
         tenant = Tenant(
-            tenant_id=tenant_id, name="Integration Tenant", subdomain="gam-pricing-test", ad_server="ad_server"
+            tenant_id=tenant_id,
+            name="Integration Tenant",
+            subdomain="gam-pricing-test",
+            virtual_host=vhost_for(tenant_id),
+            ad_server="ad_server",
         )
-        principal = Principal(
+        principal = Principal.with_token(
+            plaintext_token_for(principal_id),
             tenant_id=tenant_id,
             principal_id=principal_id,
             name="Integration Principal",
             platform_mappings={"mock": {"advertiser_id": "adv_123"}},
-            access_token="test-token",
         )
 
         if ad_server == "google_ad_manager":
@@ -89,9 +93,12 @@ def _create_basic_media_buy_with_webhook(
             format_ids=[],
             targeting_template={},
             delivery_type="",
+            # ck_product_properties_xor: a product states EITHER properties OR
+            # property_tags, never neither.
+            property_tags=["all_inventory"],
         )
 
-        pricing_option = PricingOption(
+        pricing_option = PricingOptionFactory.build(
             tenant_id=tenant_id,
             pricing_model="cpm",
             rate=15.0,
@@ -113,16 +120,28 @@ def _create_basic_media_buy_with_webhook(
             end_date=end_date,
             status="active",
             raw_request={
-                "packages": [{"product_id": product.product_id, "pricing_option_id": pricing_option.id}],
+                "packages": [
+                    {
+                        "package_id": "pkg_integration",
+                        "product_id": product.product_id,
+                        # The option's own id, not its integer primary key: that is what
+                        # the delivery report resolves the package's required
+                        # pricing_model/rate/currency through.
+                        "pricing_option_id": pricing_option.pricing_option_id,
+                    }
+                ],
                 "reporting_webhook": {
                     "url": "https://example.com/webhook",  # outbound HTTP will be mocked
-                    "frequency": "daily",
+                    "reporting_frequency": "daily",
                 },
             },
         )
 
-        # session.add(product)
-        # session.add(pricing_option)
+        # The product and its pricing option are persisted, not just constructed: the
+        # option is the buy's only pricing source, and an unflushed one resolves to
+        # nothing when the delivery report asks what the package cost.
+        session.add(product)
+        session.add(pricing_option)
         session.add(media_buy)
         session.commit()
 
@@ -349,37 +368,6 @@ async def test_dont_call_get_media_buy_delivery_tool_unless_media_buy_start_date
 
 @pytest.mark.requires_db
 @pytest.mark.asyncio
-async def test_call_get_media_buy_delivery_for_ended_campaign(integration_db):
-    """Test webhook behavior for ended campaigns."""
-    tenant_id, principal_id = _create_test_tenant_and_principal()
-
-    # Ended yesterday
-    yesterday = datetime.now(UTC).date() - timedelta(days=1)
-    start_date = yesterday - timedelta(days=7)
-
-    _create_basic_media_buy_with_webhook(tenant_id, principal_id, start_date=start_date, end_date=yesterday)
-
-    scheduler = DeliveryWebhookScheduler()
-
-    async def fake_send_notification(*args, **kwargs):
-        return True
-
-    with patch.object(scheduler.webhook_service, "send_notification", new_callable=AsyncMock) as mock_send:
-        await scheduler._send_reports()
-
-        # It should send a report because status is active in DB
-        assert mock_send.call_count == 1
-
-        # With current implementation, dynamic status="completed" -> filtered out of active list -> empty deliveries
-        args, kwargs = mock_send.call_args
-        payload = kwargs.get("payload")
-        result = payload.result
-        # Just verify result structure is valid
-        assert result is not None
-
-
-@pytest.mark.requires_db
-@pytest.mark.asyncio
 async def test_scheduler_status_filter_includes_completed_campaigns(integration_db):
     """Regression: scheduler delivery query must include ended (completed) campaigns.
 
@@ -432,39 +420,3 @@ async def test_scheduler_status_filter_includes_completed_campaigns(integration_
         )
         assert deliveries[0]["media_buy_id"] == media_buy_id
         assert deliveries[0]["status"] == "completed"
-
-
-@pytest.mark.requires_db
-@pytest.mark.asyncio
-async def test_scheduler_uses_simulated_path_in_testing_mode(integration_db):
-    """Test we pick up simulated path when context is in testing mode."""
-    tenant_id, principal_id = _create_test_tenant_and_principal()
-    _create_basic_media_buy_with_webhook(tenant_id, principal_id)
-
-    scheduler = DeliveryWebhookScheduler()
-
-    async def fake_send_notification(*args, **kwargs):
-        return True
-
-    # Helper to inject testing_context into ResolvedIdentity
-    _original_resolved_identity = ResolvedIdentity
-
-    def create_test_identity(**kwargs):
-        kwargs["testing_context"] = AdCPTestContext(dry_run=True)
-        return _original_resolved_identity(**kwargs)
-
-    with (
-        patch(
-            "src.core.resolved_identity.ResolvedIdentity",
-            side_effect=create_test_identity,
-        ),
-        patch.object(scheduler.webhook_service, "send_notification", new_callable=AsyncMock) as mock_send,
-        patch("src.core.tools.media_buy_delivery.DeliverySimulator.calculate_simulated_metrics") as mock_sim,
-    ):
-        mock_sim.return_value = {"impressions": 1234, "spend": 50.0}
-
-        await scheduler._send_reports()
-
-        # Verify simulator was called (proof that testing_ctx.dry_run was respected)
-        assert mock_sim.called
-        assert mock_send.call_count == 1

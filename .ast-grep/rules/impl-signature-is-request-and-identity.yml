@@ -1,0 +1,60 @@
+# Every tool implementation is called one way: impl(req=<DTO>, identity=<identity>).
+#
+# `src/core/tools/registry.ToolSpec.impl` is typed as the `ToolImpl` protocol, so mypy
+# already pins that an implementation ACCEPTS the row's DTO and one of the two identity
+# types by keyword, and rejects an extra parameter with no default. What a protocol cannot
+# pin is the two things this rule adds, because a callable that accepts MORE is still a
+# subtype:
+#
+#   - `identity: ResolvedIdentity | None` or `identity: ResolvedIdentity = ...` -- an
+#     implementation declaring a state the boundary never produces, which invites an
+#     `if identity is None` branch that re-derives what the resolver decided;
+#   - a third parameter with a default -- something no transport supplies, silently
+#     taking its default on every call.
+#
+# The parameter list is therefore matched EXACTLY, against the three identity types and
+# nothing else. `identity: ResolvedIdentity` is a protected tool -- the resolver refused an
+# anonymous caller before it ran, and the fields are not optional. `identity: AccountIdentity`
+# is a protected tool whose DTO REQUIRES an account, so the resolved account is not optional
+# either (the registry refuses the annotation at load if the DTO disagrees).
+# `identity: PublicIdentity` is a public tool, which branches on `identity.principal` itself.
+# The registry DERIVES the row's credential policy from that annotation
+# (`ToolSpec.requires_credential`), so the annotation is not a hint: it is the policy, and
+# any other spelling is refused here.
+# The request annotation is free (`$R`) because each tool has its own DTO and mypy checks
+# that one against the registry row. `async def` and `def` both match: the selector is the
+# parameters node, not the def.
+#
+# Replaces tests/unit/test_impl_resolved_identity.py and
+# tests/unit/test_architecture_boundary_completeness.py, which read the same fact off
+# `inspect.signature` at test time.
+id: impl-signature-is-request-and-identity
+language: Python
+severity: error
+message: >-
+  A tool implementation declares exactly (req: <Request>, identity: ResolvedIdentity) for a
+  protected tool, (req: <Request>, identity: AccountIdentity) when its DTO requires an account,
+  or (req: <Request>, identity: PublicIdentity) for a public one: no Optional, no default, no
+  third parameter. The boundary (src/core/tools/_boundary.py) calls
+  impl(req=..., identity=...) and nothing else; put a value on the request DTO if a buyer
+  sends it, or teach the boundary to derive it if a transport knows it.
+files:
+  - "src/core/tools/**/*.py"
+rule:
+  kind: function_definition
+  has:
+    field: name
+    regex: '^_\w+_impl$'
+  not:
+    has:
+      field: parameters
+      any:
+        - pattern:
+            context: 'def f(req: $R, identity: ResolvedIdentity): pass'
+            selector: parameters
+        - pattern:
+            context: 'def f(req: $R, identity: AccountIdentity): pass'
+            selector: parameters
+        - pattern:
+            context: 'def f(req: $R, identity: PublicIdentity): pass'
+            selector: parameters

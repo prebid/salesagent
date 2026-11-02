@@ -177,7 +177,10 @@ class TestMediaBuyAccountId:
         with _AccountEnv() as env:
             tenant = TenantFactory(tenant_id="mb_acc_test")
             principal = PrincipalFactory(tenant=tenant, principal_id="agent_mb")
-            MediaBuyFactory(tenant=tenant, principal=principal)
+            # account_id=None EXPLICITLY, against the factory's default: this test grades
+            # that the COLUMN is nullable, so it has to write a NULL. The factory now
+            # defaults an account because a buy created by a conformant request carries one.
+            MediaBuyFactory(tenant=tenant, principal=principal, account_id=None)
             session = env.get_session()
 
             result = session.scalars(select(MediaBuy).filter_by(tenant_id="mb_acc_test")).first()

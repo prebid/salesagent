@@ -10,38 +10,45 @@ from pydantic import Field
 
 from src.adapters.base import (
     AdapterCapabilities,
+    AdapterCreateRequest,
+    AdapterCreateResult,
+    AdapterUpdateResult,
     AdServerAdapter,
     BaseConnectionConfig,
     BaseProductConfig,
     TargetingCapabilities,
 )
+from src.adapters.utils.pricing import resolve_package_rate
+from src.core.errors.codes import ErrorCode
+from src.core.errors.details import (
+    CapabilityRefusalDetails,
+    CreativeRejectionDetails,
+    EntityRefDetails,
+    ErrorProblem,
+    RejectionReasonDetails,
+    ValidationDetails,
+)
 from src.core.exceptions import (
-    AdCPBudgetExhaustedError,
+    AdCPAdapterError,
     AdCPCapabilityNotSupportedError,
     AdCPCreativeRejectedError,
-    AdCPError,
-    AdCPInventoryUnavailableError,
     AdCPMediaBuyNotFoundError,
     AdCPMediaBuyRejectedError,
     AdCPServiceUnavailableError,
     AdCPValidationError,
 )
+from src.core.helpers.brand_key import brand_key_parts
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
     AssetStatus,
     CheckMediaBuyStatusResponse,
-    CreateMediaBuyRequest,
-    CreateMediaBuyResponse,
-    CreateMediaBuySuccess,
     DeliveryTotals,
     MediaPackage,
-    PackagePerformance,
     ReportingPeriod,
     Snapshot,
-    UpdateMediaBuyResponse,
-    UpdateMediaBuySuccess,
 )
 from src.core.security.webhook_egress import deliver_webhook
+from src.core.validation_helpers import package_field_path
 
 
 def simulate_breakdowns(impressions: float, spend: float) -> tuple[list[dict], list[dict]]:
@@ -73,9 +80,13 @@ def simulate_breakdowns(impressions: float, spend: float) -> tuple[list[dict], l
 
 
 class MockConnectionConfig(BaseConnectionConfig):
-    """Connection config for Mock adapter."""
+    """Connection config for Mock adapter.
 
-    dry_run: bool = Field(default=False, description="When true, simulates operations without persisting state")
+    Adds nothing to the base: ``manual_approval_required`` is the whole of the mock
+    adapter's connection configuration. It once carried ``dry_run``, which the
+    adapter stopped reading when the testing-hook channel went away (a1b79d22d);
+    the field and the adapter-config column behind it are gone.
+    """
 
 
 class MockProductConfig(BaseProductConfig):
@@ -126,68 +137,20 @@ class MockAdServer(AdServerAdapter):
     SUPPORTED_DEVICE_TYPES = {"mobile", "desktop", "tablet", "ctv", "dooh", "audio"}
     SUPPORTED_MEDIA_TYPES = {"olv", "display", "social", "streaming_audio", "dooh"}
 
-    def __init__(self, config, principal, dry_run=False, creative_engine=None, tenant_id=None, strategy_context=None):
+    def __init__(self, config, principal, creative_engine=None, tenant_id=None):
         """Initialize mock adapter with GAM-like objects."""
-        super().__init__(config, principal, dry_run, creative_engine, tenant_id)
-
-        # Store strategy context for simulation behavior
-        self.strategy_context = strategy_context
-        self._current_simulation_time = None
+        super().__init__(config, principal, creative_engine, tenant_id)
 
         # Initialize HITL configuration from principal's platform_mappings
         self._initialize_hitl_config()
 
-    def _is_simulation(self) -> bool:
-        """Check if we're running in simulation mode."""
-        return (
-            self.strategy_context
-            and hasattr(self.strategy_context, "is_simulation")
-            and hasattr(self.strategy_context, "strategy_id")
-            and self.strategy_context.is_simulation
-            and self.strategy_context.strategy_id.startswith("sim_")
-        )
-
-    def _should_force_error(self, error_type: str) -> bool:
-        """Check if strategy should force a specific error."""
-        if not self._is_simulation() or not self.strategy_context:
-            return False
-        if hasattr(self.strategy_context, "should_force_error"):
-            return self.strategy_context.should_force_error(error_type)
-        return False
-
-    def _get_simulation_scenario(self) -> str:
-        """Get current simulation scenario."""
-        if not self._is_simulation() or not self.strategy_context:
-            return "normal"
-        if hasattr(self.strategy_context, "get_config_value"):
-            return self.strategy_context.get_config_value("scenario", "normal")
-        return "normal"
-
-    def _apply_strategy_multipliers(self, base_value: float, multiplier_key: str) -> float:
-        """Apply strategy-based multipliers to base values."""
-        if not self.strategy_context:
-            return base_value
-
-        if hasattr(self.strategy_context, "get_config_value"):
-            multiplier = self.strategy_context.get_config_value(multiplier_key, 1.0)
-            return base_value * multiplier
-        return base_value
-
-    def _simulate_time_progression(self) -> datetime:
-        """Get current time for simulation (real or simulated)."""
-        if self._is_simulation() and self._current_simulation_time:
-            return self._current_simulation_time
-        return datetime.now(UTC)
-
-    def set_simulation_time(self, simulation_time: datetime):
-        """Set the current simulation time."""
-        self._current_simulation_time = simulation_time
-
-    def get_supported_pricing_models(self) -> set[str]:
+    @staticmethod
+    def get_supported_pricing_models() -> set[str]:
         """Mock adapter supports all pricing models (AdCP PR #88)."""
         return {"cpm", "vcpm", "cpcv", "cpp", "cpc", "cpv", "flat_rate"}
 
-    def get_targeting_capabilities(self) -> TargetingCapabilities:
+    @staticmethod
+    def get_targeting_capabilities() -> TargetingCapabilities:
         """Mock adapter supports all targeting for testing flexibility."""
         return TargetingCapabilities(
             geo_countries=True,
@@ -200,6 +163,8 @@ class MockAdServer(AdServerAdapter):
             gb_outward=True,
             gb_full=True,
             de_plz=True,
+            ch_plz=True,
+            at_plz=True,
             fr_code_postal=True,
             au_postcode=True,
             eurostat_nuts2=True,
@@ -209,45 +174,81 @@ class MockAdServer(AdServerAdapter):
 
     def validate_media_buy_request(
         self,
-        request: CreateMediaBuyRequest,
+        request: AdapterCreateRequest,
         packages: list[MediaPackage],
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
-    ) -> list[str]:
-        """Validate media buy request with GAM-like validation rules."""
-        errors = super().validate_media_buy_request(request, packages, start_time, end_time, package_pricing_info)
+    ) -> list[ErrorProblem]:
+        """Validate media buy request with GAM-like validation rules.
+
+        The GAM-shaped tokens these checks used to append -- "NotNullError.NULL @
+        lineItem[0].endDateTime" and friends -- were an ad server's internal error
+        vocabulary reaching a buyer as prose. They are structured now
+        (salesagent-rys3u.4): the same facts, in fields a machine can read, with the
+        sentence coming from CODE_TABLE.
+        """
+        problems = super().validate_media_buy_request(request, packages, start_time, end_time, package_pricing_info)
 
         # Date validation (like GAM)
         if start_time >= end_time:
-            errors.append("NotNullError.NULL @ lineItem[0].endDateTime")
+            problems.append(
+                ErrorProblem(
+                    code=ErrorCode.VALIDATION_ERROR,
+                    field="end_time",
+                    rejected_value=end_time.isoformat(),
+                )
+            )
 
         current_time = datetime.now(UTC)
         if end_time <= current_time:
-            errors.append("InvalidArgumentError @ lineItem[0].endDateTime")
+            problems.append(
+                ErrorProblem(
+                    code=ErrorCode.VALIDATION_ERROR,
+                    field="end_time",
+                    rejected_value=end_time.isoformat(),
+                )
+            )
 
         # Goal validation (like GAM limits)
-        for package in packages:
+        for pkg_index, package in enumerate(packages):
             pricing_model = None
             if package_pricing_info and package.package_id in package_pricing_info:
                 pricing_model = package_pricing_info[package.package_id].get("pricing_model")
 
             limit = 100000000 if pricing_model in ["cpcv", "cpv", "cpp"] else 1000000
             if package.impressions > limit:
-                errors.append(
-                    f"ReservationDetailsError.PERCENTAGE_UNITS_BOUGHT_TOO_HIGH "
-                    f"@ lineItem[0].primaryGoal.units; trigger:'{package.impressions}'"
+                problems.append(
+                    ErrorProblem(
+                        code=ErrorCode.VALIDATION_ERROR,
+                        subject_type="package",
+                        subject_id=package.package_id,
+                        field=package_field_path("impressions", pkg_index),
+                        rejected_value=str(package.impressions),
+                    )
                 )
 
         # Budget validation (AdCP v2.2.0: sum package budgets)
-        budget_amount = request.get_total_budget()
+        budget_amount = request.total_budget
         if budget_amount > 0:
             if budget_amount > 1000000:
-                errors.append("InvalidArgumentError.VALUE_TOO_LARGE @ order.totalBudget")
+                problems.append(
+                    ErrorProblem(
+                        code=ErrorCode.VALIDATION_ERROR,
+                        field="budget",
+                        rejected_value=str(budget_amount),
+                    )
+                )
         else:
-            errors.append("InvalidArgumentError @ order.totalBudget")
+            problems.append(
+                ErrorProblem(
+                    code=ErrorCode.VALIDATION_ERROR,
+                    field="budget",
+                    rejected_value=str(budget_amount),
+                )
+            )
 
-        return errors
+        return problems
 
     def _initialize_hitl_config(self):
         """Initialize Human-in-the-Loop configuration from principal platform_mappings."""
@@ -329,11 +330,16 @@ class MockAdServer(AdServerAdapter):
         the same fault the in-process mock raises via side_effect. No-op when
         the flag is absent.
 
-        The buyer suggestion rides the first-class ``suggestion=`` param —
-        error.json places it at the top level of the error object, so a copy
-        buried in ``details`` never reaches the protocol position
-        (#1417, same disease as cx41/58hl). ``error_details`` from
-        test behavior stays in ``details`` for any other injected keys.
+        The buyer suggestion reaches error.json's top-level position on its own,
+        because the raised code resolves it from CODE_TABLE. This used to pass a
+        first-class ``suggestion=`` param for that; the param was deleted
+        (salesagent-3dawm.12) and the derivation replaced it, so a copy buried in
+        ``details`` is still wrong but there is no longer anything to hand over.
+        The injected ``recovery`` knob selects the exception CLASS rather than a
+        wire value (#1802): ``recovery`` is derived from the raised code, so
+        "give me a terminal failure" is expressible only as "raise the class the
+        pin classifies terminal". ``error_details``/``error_message`` from test
+        behavior are server-side diagnostics and ride ``internal_detail``.
         """
         test_behavior = self._read_test_behavior()
         if not test_behavior.get(flag):
@@ -359,19 +365,41 @@ class MockAdServer(AdServerAdapter):
             # Typed, not ValueError: a bad knob is deployment/test configuration,
             # which is what CONFIGURATION_ERROR means, and src/ may not grow new
             # bare ValueError raises (test_architecture_no_value_error_in_impl).
-            raise AdCPConfigurationError(
-                f"test_behavior recovery={requested!r} is not a recovery classification. "
-                f"Use one of {sorted(recovery_to_class)} — each selects the exception class "
-                f"whose pinned enumMetadata recovery is that value."
-            ) from None
+            # The rejected spelling is a test fixture's own string and stays off
+            # the buyer's wire; the class and code are the whole diagnosis.
+            raise AdCPConfigurationError() from None
 
-        details = test_behavior.get("error_details")
-        suggestion = (details or {}).pop("suggestion", None) if isinstance(details, dict) else None
-        raise error_cls(
-            test_behavior.get("error_message", "Test adapter failure"),
-            suggestion=suggestion or "Retry the operation or contact ad server support",
-            details=details or None,
-        )
+        # The injected error_message is fault-injection text, not a cause: it
+        # neither reaches the buyer's wire nor the server log. Selecting the
+        # exception class is what the knob does.
+        raise error_cls()
+
+    def _raise_injected_rejection(self) -> None:
+        """Raise a SELLER REJECTION when the injected ``reject_on_create`` flag is set.
+
+        Sibling of :meth:`_raise_injected_failure`, and it exists for the same reason: the
+        E2E path runs this real adapter inside Docker, so a BDD Given can only reach it
+        through ``AdapterConfig.config_json["test_behavior"]``. Without this, a rejection
+        could only be produced in-process (via the harness MagicMock) and the e2e_rest
+        transport would silently grade nothing.
+
+        A rejection is NOT an adapter failure: it is a seller decision, so it raises
+        AdCPMediaBuyRejectedError (MEDIA_BUY_REJECTED, terminal) rather than
+        AdCPAdapterError. The buyer-facing reason rides ``details`` — the buyer needs to
+        know WHY the seller declined, and the sentence is a function of the code.
+
+        The adapter's other rejection trigger, ``approval_simulation``, is reachable only
+        from the sync-with-delay and async workflow paths, never from
+        ``_create_media_buy_immediate`` — so it cannot serve a scenario that dispatches an
+        immediate create.
+        """
+        test_behavior = self._read_test_behavior()
+        if not test_behavior.get("reject_on_create"):
+            return
+        from src.core.exceptions import AdCPMediaBuyRejectedError
+
+        reason = test_behavior.get("rejection_reason")
+        raise AdCPMediaBuyRejectedError(details=RejectionReasonDetails(rejection_reason=reason) if reason else None)
 
     def _validate_targeting(self, targeting_overlay):
         """Mock adapter accepts all targeting."""
@@ -401,15 +429,12 @@ class MockAdServer(AdServerAdapter):
             tenant_id=self.tenant_id or "unknown", principal_id=self.principal.principal_id
         )
 
-        # Add protocol field for webhook payload creation (mock adapter defaults to MCP)
-        request_data_with_protocol = {**request_data, "protocol": "mcp"}
-
         # Create workflow step
         step = ctx_manager.create_workflow_step(
             context_id=context.context_id,
             step_type=step_type,
             tool_name=step_type.replace("mock_", ""),
-            request_data=request_data_with_protocol,
+            request_data=request_data,
             status=status,
             owner="mock_adapter",
         )
@@ -509,7 +534,17 @@ class MockAdServer(AdServerAdapter):
         thread.start()
 
     def _send_completion_webhook(self, step_id: str, approved: bool, rejection_reason: str | None = None):
-        """Send webhook notification when async task completes."""
+        """Send webhook notification when async task completes.
+
+        FIXME(#1291): this POSTs to a URL the buyer registered, so it is an AdCP
+        webhook and must be authenticated by the mode that registration selects —
+        through ``src.core.signing.webhook_sender_factory``, like the three
+        production senders. It is not routed yet because the async-completion URL
+        arrives on the adapter config rather than as a ``PushNotificationConfig``
+        row, so which registration governs it is a decision, not a refactor
+        (tracked as salesagent-hop4). Allowlisted in
+        ``tests/unit/test_architecture_webhook_sender_boundary.py``.
+        """
         if not self.async_webhook_url:
             return
 
@@ -550,12 +585,12 @@ class MockAdServer(AdServerAdapter):
 
     def create_media_buy(
         self,
-        request: CreateMediaBuyRequest,
+        request: AdapterCreateRequest,
         packages: list[MediaPackage],
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
-    ) -> CreateMediaBuyResponse:
+    ) -> AdapterCreateResult:
         """Simulates the creation of a media buy using GAM-like templates.
 
         Args:
@@ -567,12 +602,13 @@ class MockAdServer(AdServerAdapter):
                 Maps package_id → {pricing_model, rate, currency, is_fixed, bid_price}
 
         Returns:
-            CreateMediaBuyResponse with simulated media buy
+            AdapterCreateResult for the simulated media buy
         """
         from src.adapters.test_scenario_parser import has_test_keywords, parse_test_scenario
 
         # Check DB-driven test_behavior (injected by BDD Given steps for E2E)
         self._raise_injected_failure("fail_on_create")
+        self._raise_injected_rejection()
 
         # Log pricing model info if provided (AdCP PR #88)
         if package_pricing_info:
@@ -588,8 +624,10 @@ class MockAdServer(AdServerAdapter):
         scenario = None
         test_message = None
         if request.brand:
-            # BrandReference.domain is a str
-            test_message = str(request.brand.domain) if request.brand.domain else None
+            # Through the canonical accessor: `brand` is declared as the widened union
+            # (BrandReference | dict | str), so reading `.domain` off it is wrong on two
+            # of the three branches. The comment this replaces asserted the narrow branch.
+            test_message = brand_key_parts(request.brand)[0] or None
 
         if test_message and isinstance(test_message, str) and has_test_keywords(test_message):
             scenario = parse_test_scenario(test_message, "create_media_buy")
@@ -599,18 +637,21 @@ class MockAdServer(AdServerAdapter):
         if scenario:
             # Handle error simulation
             if scenario.error_message:
-                raise AdCPError(scenario.error_message)
+                raise AdCPAdapterError()
 
             # Handle rejection
             if scenario.should_reject:
-                raise AdCPMediaBuyRejectedError(f"Media buy rejected: {scenario.rejection_reason or 'Test rejection'}")
+                reason = scenario.rejection_reason
+                raise AdCPMediaBuyRejectedError(
+                    details=RejectionReasonDetails(rejection_reason=reason) if reason else None
+                )
 
             # Handle question asking (return pending with question)
             if scenario.should_ask_question:
                 # For question-asking scenario, return success with pending media_buy_id
                 # The media buy hasn't been created yet - we need input first
                 # The workflow_step_id will track this pending operation
-                return CreateMediaBuySuccess.carrier(
+                return AdapterCreateResult(
                     media_buy_id="pending",  # Placeholder for pending manual approval
                     creative_deadline=None,
                     packages=[],  # No packages yet - operation not complete
@@ -645,34 +686,38 @@ class MockAdServer(AdServerAdapter):
             targeting = package.targeting_overlay
             if targeting:
                 # Mock adapter mirrors GAM behavior - these targeting types are not supported
-                if getattr(targeting, "device_type_any_of", None):
+                if targeting.device_form_factors:
                     raise AdCPCapabilityNotSupportedError(
-                        f"Device targeting requested but not supported. "
-                        f"Cannot fulfill buyer contract for device types: {targeting.device_type_any_of}."
+                        details=CapabilityRefusalDetails(
+                            capability="device_type_any_of" if targeting.device_type_any_of else "device_platform",
+                            rejected_value=targeting.device_form_factors,
+                        )
                     )
 
                 if getattr(targeting, "os_any_of", None):
                     raise AdCPCapabilityNotSupportedError(
-                        f"OS targeting requested but not supported. "
-                        f"Cannot fulfill buyer contract for OS types: {targeting.os_any_of}."
+                        details=CapabilityRefusalDetails(capability="os_any_of", rejected_value=targeting.os_any_of)
                     )
 
                 if getattr(targeting, "browser_any_of", None):
                     raise AdCPCapabilityNotSupportedError(
-                        f"Browser targeting requested but not supported. "
-                        f"Cannot fulfill buyer contract for browsers: {targeting.browser_any_of}."
+                        details=CapabilityRefusalDetails(
+                            capability="browser_any_of", rejected_value=targeting.browser_any_of
+                        )
                     )
 
                 if getattr(targeting, "content_cat_any_of", None):
                     raise AdCPCapabilityNotSupportedError(
-                        f"Content category targeting requested but not supported. "
-                        f"Cannot fulfill buyer contract for categories: {targeting.content_cat_any_of}."
+                        details=CapabilityRefusalDetails(
+                            capability="content_cat_any_of", rejected_value=targeting.content_cat_any_of
+                        )
                     )
 
                 if getattr(targeting, "keywords_any_of", None):
                     raise AdCPCapabilityNotSupportedError(
-                        f"Keyword targeting requested but not supported. "
-                        f"Cannot fulfill buyer contract for keywords: {targeting.keywords_any_of}."
+                        details=CapabilityRefusalDetails(
+                            capability="keywords_any_of", rejected_value=targeting.keywords_any_of
+                        )
                     )
 
         # GAM-like validation (based on real GAM behavior)
@@ -680,8 +725,7 @@ class MockAdServer(AdServerAdapter):
             request, packages, start_time, end_time, package_pricing_info
         )
         if validation_errors:
-            error_message = "[" + ", ".join(validation_errors) + "]"
-            raise AdCPValidationError(error_message)
+            raise AdCPValidationError(details=ValidationDetails(reasons=validation_errors))
 
         # If no AI scenario or scenario accepts, proceed with normal flow
         # HITL Mode Processing
@@ -697,11 +741,11 @@ class MockAdServer(AdServerAdapter):
 
     def _create_media_buy_async(
         self,
-        request: CreateMediaBuyRequest,
+        request: AdapterCreateRequest,
         packages: list[MediaPackage],
         start_time: datetime,
         end_time: datetime,
-    ) -> CreateMediaBuyResponse:
+    ) -> AdapterCreateResult:
         """Create media buy in async HITL mode."""
         self.log("🤖 Processing create_media_buy in ASYNC mode")
 
@@ -731,7 +775,7 @@ class MockAdServer(AdServerAdapter):
         # The media buy hasn't been created yet - it's being processed asynchronously
         # The workflow_step_id (from step['step_id']) will track this pending operation
         # Client can poll the step or wait for webhook notification when complete
-        return CreateMediaBuySuccess.carrier(
+        return AdapterCreateResult(
             media_buy_id="pending",  # Placeholder for async processing in progress
             creative_deadline=None,
             packages=[],  # No packages yet - operation not complete
@@ -739,12 +783,12 @@ class MockAdServer(AdServerAdapter):
 
     def _create_media_buy_sync_with_delay(
         self,
-        request: CreateMediaBuyRequest,
+        request: AdapterCreateRequest,
         packages: list[MediaPackage],
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
-    ) -> CreateMediaBuyResponse:
+    ) -> AdapterCreateResult:
         """Create media buy in sync HITL mode with configurable delay."""
         self.log(f"🤖 Processing create_media_buy in SYNC mode ({self.sync_delay_ms}ms delay)")
 
@@ -767,7 +811,7 @@ class MockAdServer(AdServerAdapter):
         approved, rejection_reason = self._simulate_approval()
         if not approved:
             self.log(f"❌ Simulated rejection: {rejection_reason}")
-            raise AdCPMediaBuyRejectedError(f"Media buy rejected: {rejection_reason}")
+            raise AdCPMediaBuyRejectedError(details=RejectionReasonDetails(rejection_reason=rejection_reason))
 
         # Continue with immediate processing
         self.log("✅ SYNC delay completed, proceeding with creation")
@@ -777,13 +821,13 @@ class MockAdServer(AdServerAdapter):
 
     def _create_media_buy_immediate(
         self,
-        request: CreateMediaBuyRequest,
+        request: AdapterCreateRequest,
         packages: list[MediaPackage],
         start_time: datetime,
         end_time: datetime,
         scenario=None,
         package_pricing_info: dict[str, dict] | None = None,
-    ) -> CreateMediaBuyResponse:
+    ) -> AdapterCreateResult:
         """Create media buy immediately (original behavior)."""
         # DEBUG: Log packages received
         self.log(f"[DEBUG] MockAdapter._create_media_buy_immediate called with {len(packages)} packages")
@@ -828,26 +872,6 @@ class MockAdServer(AdServerAdapter):
         )
         order_name = apply_naming_template(order_name_template, context)
 
-        # Strategy-aware behavior modifications
-        if self._is_simulation():
-            strategy_id = getattr(self.strategy_context, "strategy_id", "unknown")
-            self.log(f"🧪 Running in simulation mode with strategy: {strategy_id}")
-            scenario = self._get_simulation_scenario()
-            self.log(f"   Simulation scenario: {scenario}")
-
-            # Check for forced errors
-            if self._should_force_error("budget_exceeded"):
-                raise AdCPBudgetExhaustedError("Simulated error: Campaign budget exceeds available funds")
-
-            if self._should_force_error("targeting_invalid"):
-                raise AdCPValidationError(
-                    "Simulated error: Invalid targeting parameters",
-                    field="targeting",
-                )
-
-            if self._should_force_error("inventory_unavailable"):
-                raise AdCPInventoryUnavailableError("Simulated error: Requested inventory not available")
-
         # Default priority for campaigns (standard = 8, guaranteed = 4)
         priority = 4 if any(p.delivery_type == "guaranteed" for p in packages) else 8
 
@@ -877,25 +901,7 @@ class MockAdServer(AdServerAdapter):
                 total_budget += budget_amount
             elif p.delivery_type == "guaranteed":
                 # Fallback: calculate from CPM * impressions (legacy)
-                # Use pricing_info if available (pricing_option_id flow), else fallback to package.cpm
-                pricing_info = package_pricing_info.get(p.package_id) if package_pricing_info else None
-                if pricing_info:
-                    # Use rate from pricing option (fixed) or bid_price (auction)
-                    rate = pricing_info["rate"] if pricing_info["is_fixed"] else pricing_info.get("bid_price", p.cpm)
-                else:
-                    # Fallback to legacy package.cpm
-                    rate = p.cpm
-                total_budget += rate * p.impressions / 1000
-
-        # Apply strategy-based bid adjustment
-        if self.strategy_context and hasattr(self.strategy_context, "get_bid_adjustment"):
-            bid_adjustment = self.strategy_context.get_bid_adjustment()
-            if bid_adjustment != 1.0:
-                adjusted_budget = total_budget * bid_adjustment
-                self.log(
-                    f"📈 Strategy bid adjustment: {bid_adjustment:.2f} (${total_budget:,.2f} → ${adjusted_budget:,.2f})"
-                )
-                total_budget = adjusted_budget
+                total_budget += resolve_package_rate(p, package_pricing_info) * p.impressions / 1000
 
         self.log(f"Creating media buy with ID: {media_buy_id}")
         self.log(f"Order name: {order_name}")
@@ -903,66 +909,34 @@ class MockAdServer(AdServerAdapter):
         self.log(f"Budget: ${total_budget:,.2f}")
         self.log(f"Flight dates: {start_time.date()} to {end_time.date()}")
 
-        # Simulate API call details
-        if self.dry_run:
-            self.log("Would call: MockAdServer.createCampaign()")
-            self.log("  API Request: {")
-            self.log(f"    'advertiser_id': '{self.adapter_principal_id}',")
-            self.log(f"    'campaign_name': '{order_name}',")
-            self.log(f"    'budget': {total_budget},")
-            self.log(f"    'start_date': '{start_time.isoformat()}',")
-            self.log(f"    'end_date': '{end_time.isoformat()}',")
-            self.log("    'targeting': {")
-            # Log targeting from packages (per AdCP spec, targeting is at package level)
-            for package in packages:
-                if package.targeting_overlay:
-                    targeting = package.targeting_overlay
-                    if targeting.geo_countries:
-                        self.log(f"      'countries': {targeting.geo_countries},")
-                    if targeting.geo_regions:
-                        self.log(f"      'regions': {targeting.geo_regions},")
-                    if targeting.geo_metros:
-                        self.log(f"      'metros': {targeting.geo_metros},")
-                    if getattr(targeting, "key_value_pairs", None):
-                        self.log(f"      'key_values': {targeting.key_value_pairs},")
-                    if getattr(targeting, "media_type_any_of", None):
-                        self.log(f"      'media_types': {targeting.media_type_any_of},")
-                    break  # Log first package's targeting only to avoid repetition
-            self.log("    }")
-            self.log("  }")
+        self._media_buys[media_buy_id] = {
+            "id": media_buy_id,
+            "name": order_name,
+            "po_number": request.po_number,
+            "packages": packages,
+            "total_budget": total_budget,
+            "start_time": start_time,
+            "end_time": end_time,
+            "creatives": [],
+            "test_scenario": scenario.__dict__ if scenario else None,
+        }
+        self.log("✓ Media buy created successfully")
+        self.log(f"  Campaign ID: {media_buy_id}")
+        self.log(f"  Campaign Name: {order_name}")
+        # Log successful creation
+        self.audit_logger.log_success(f"Created Mock Order ID: {media_buy_id}")
 
-        if not self.dry_run:
-            self._media_buys[media_buy_id] = {
-                "id": media_buy_id,
-                "name": order_name,
-                "po_number": request.po_number,
-                "packages": packages,
-                "total_budget": total_budget,
-                "start_time": start_time,
-                "end_time": end_time,
-                "creatives": [],
-                "test_scenario": scenario.__dict__ if scenario else None,
-            }
-            self.log("✓ Media buy created successfully")
-            self.log(f"  Campaign ID: {media_buy_id}")
-            self.log(f"  Campaign Name: {order_name}")
-            # Log successful creation
-            self.audit_logger.log_success(f"Created Mock Order ID: {media_buy_id}")
-
-            # Start delivery simulation if enabled in config
-            self._start_delivery_simulation(
-                media_buy_id=media_buy_id,
-                tenant_id=tenant_id,
-                start_time=start_time,
-                end_time=end_time,
-                total_budget=total_budget,
-            )
-        else:
-            self.log(f"Would return: Campaign ID '{media_buy_id}' with status 'pending_creative'")
+        # Start delivery simulation if enabled in config
+        self._start_delivery_simulation(
+            media_buy_id=media_buy_id,
+            tenant_id=tenant_id,
+            start_time=start_time,
+            end_time=end_time,
+            total_budget=total_budget,
+        )
 
         self.log(f"[DEBUG] MockAdapter: Returning {len(packages)} packages in response")
         return self._build_create_success(
-            request,
             media_buy_id,
             packages,
             include_product_id=True,
@@ -1074,8 +1048,12 @@ class MockAdServer(AdServerAdapter):
 
         if rejected_assets and not approved_assets:
             # All rejected
-            reasons = [reason if reason else "unknown" for _, reason in rejected_assets]
-            raise AdCPCreativeRejectedError(f"All creatives rejected: {', '.join(reasons)}")
+            raise AdCPCreativeRejectedError(
+                # `reasons` is creative-rejected.json's own name for this.
+                details=CreativeRejectionDetails(
+                    reasons=[reason if reason else "unknown" for _, reason in rejected_assets]
+                )
+            )
         elif rejected_assets:
             # Some rejected - log warnings but continue with approved ones
             for asset, reason in rejected_assets:
@@ -1103,26 +1081,14 @@ class MockAdServer(AdServerAdapter):
 
         self.log(
             f"[bold]MockAdServer.add_creative_assets[/bold] for campaign '{media_buy_id}'",
-            dry_run_prefix=False,
         )
         self.log(f"Adding {len(assets)} creative assets")
 
-        if self.dry_run:
-            for i, asset in enumerate(assets):
-                self.log("Would call: MockAdServer.uploadCreative()")
-                self.log(f"  Creative {i + 1}:")
-                self.log(f"    'creative_id': '{asset['id']}',")
-                self.log(f"    'name': '{asset['name']}',")
-                self.log(f"    'format': '{asset['format']}',")
-                self.log(f"    'media_url': '{asset['media_url']}',")
-                self.log(f"    'click_url': '{asset['click_url']}'")
-            self.log(f"Would return: All {len(assets)} creatives with status 'approved'")
-        else:
-            if media_buy_id not in self._media_buys:
-                raise AdCPMediaBuyNotFoundError(f"Media buy {media_buy_id} not found.")
+        if media_buy_id not in self._media_buys:
+            raise AdCPMediaBuyNotFoundError(details=EntityRefDetails(media_buy_id=media_buy_id))
 
-            self._media_buys[media_buy_id]["creatives"].extend(assets)
-            self.log(f"✓ Successfully uploaded {len(assets)} creatives")
+        self._media_buys[media_buy_id]["creatives"].extend(assets)
+        self.log(f"✓ Successfully uploaded {len(assets)} creatives")
 
         # Process each creative individually with keyword-based test scenarios
         # Keywords: [APPROVE], [REJECT:reason], [ASK:field needed]
@@ -1164,7 +1130,7 @@ class MockAdServer(AdServerAdapter):
     def check_media_buy_status(self, media_buy_id: str, today: datetime) -> CheckMediaBuyStatusResponse:
         """Simulates checking the status of a media buy."""
         if media_buy_id not in self._media_buys:
-            raise AdCPMediaBuyNotFoundError(f"Media buy {media_buy_id} not found.")
+            raise AdCPMediaBuyNotFoundError(details=EntityRefDetails(media_buy_id=media_buy_id))
 
         buy = self._media_buys[media_buy_id]
         start_date = buy["start_time"]
@@ -1196,13 +1162,13 @@ class MockAdServer(AdServerAdapter):
         The live server's Mock adapter reads it here so in-process and e2e
         return byte-identical payloads. No row -> None -> legacy behavior.
 
-        Gated behind ADCP_TESTING: the table has no production writer, so the
-        per-poll DB read is pure test plumbing — a production deployment must
-        not query it at all (#1430: simulation-read gating).
+        Read only where the deployment allows it: the table has no production writer, so
+        the per-poll DB read is pure test plumbing — a production deployment must not
+        query it at all (#1430: simulation-read gating).
         """
-        import os
+        from src.core.config import get_settings
 
-        if os.environ.get("ADCP_TESTING", "").lower() != "true":
+        if not get_settings().mock_delivery_seed_enabled:
             return None
         if not self.tenant_id:
             return None
@@ -1222,19 +1188,8 @@ class MockAdServer(AdServerAdapter):
         """Simulates getting delivery data for a media buy with testing hooks support."""
         self.log(
             f"[bold]MockAdServer.get_media_buy_delivery[/bold] for principal '{self.principal.name}' and media buy '{media_buy_id}'",
-            dry_run_prefix=False,
         )
         self.log(f"Reporting date: {today}")
-
-        # Apply testing hooks if strategy context contains them
-        if self.strategy_context and hasattr(self.strategy_context, "force_error"):
-            if self.strategy_context.force_error == "platform_error":
-                self.log("[red]Simulating platform error[/red]")
-                raise AdCPServiceUnavailableError("Platform connectivity error (simulated)")
-            elif self.strategy_context.force_error == "budget_exceeded":
-                self.log("[yellow]Simulating budget exceeded scenario[/yellow]")
-            elif self.strategy_context.force_error == "low_delivery":
-                self.log("[yellow]Simulating low delivery scenario[/yellow]")
 
         # Server-side delivery seeding (#1418): if the live server has a seeded
         # row for this (tenant, media_buy), return it verbatim. This lets the
@@ -1244,19 +1199,7 @@ class MockAdServer(AdServerAdapter):
         if seeded is not None:
             return seeded
 
-        # Simulate API call
-        if self.dry_run:
-            self.log("Would call: MockAdServer.getDeliveryReport()")
-            self.log("  API Request: {")
-            self.log(f"    'advertiser_id': '{self.adapter_principal_id}',")
-            self.log(f"    'campaign_id': '{media_buy_id}',")
-            start_str = date_range.start.date()
-            end_str = date_range.end.date()
-            self.log(f"    'start_date': '{start_str}',")
-            self.log(f"    'end_date': '{end_str}'")
-            self.log("  }")
-        else:
-            self.log(f"Retrieving delivery data for campaign {media_buy_id}")
+        self.log(f"Retrieving delivery data for campaign {media_buy_id}")
 
         # Get the media buy details
         if media_buy_id in self._media_buys:
@@ -1290,7 +1233,10 @@ class MockAdServer(AdServerAdapter):
             # Check for test scenario outage simulation
             if test_scenario and test_scenario.simulate_outage:
                 self.log(f"🚨 Test Scenario: Simulating platform outage on day {current_day}")
-                raise AdCPServiceUnavailableError(f"Simulated platform outage on day {current_day} (test scenario)")
+                # The simulated day is in the log line above. It is mock-harness state,
+                # not something a buyer can act on, and nothing reads it off the
+                # envelope -- so it does not earn a field on the shared adapter shape.
+                raise AdCPServiceUnavailableError()
 
             if elapsed_duration <= 0:
                 # Campaign hasn't started
@@ -1324,51 +1270,16 @@ class MockAdServer(AdServerAdapter):
                     spend = total_budget * delivery_progress
                     impressions = int(spend / 0.01)  # $10 CPM
                 else:
-                    # Normal pacing logic
-                    # Apply strategy-based pacing multiplier
-                    pacing_multiplier = 1.0
-                    if self.strategy_context and hasattr(self.strategy_context, "get_pacing_multiplier"):
-                        pacing_multiplier = self.strategy_context.get_pacing_multiplier()
-                        if self._is_simulation():
-                            self.log(f"🚀 Strategy pacing multiplier: {pacing_multiplier:.2f}")
-
-                    # Strategy-aware spend calculation
-                    if self._is_simulation():
-                        scenario = self._get_simulation_scenario()
-
-                        # Check for forced budget exceeded error
-                        if self._should_force_error("budget_exceeded"):
-                            spend = total_budget * 1.15  # Overspend by 15%
-                            self.log("🚨 Simulating budget exceeded scenario")
-                        elif scenario == "high_performance":
-                            spend = daily_budget * elapsed_duration * pacing_multiplier * 1.3
-                            self.log("📈 High performance scenario - accelerated spend")
-                        elif scenario == "underperforming":
-                            spend = daily_budget * elapsed_duration * pacing_multiplier * 0.6
-                            self.log("📉 Underperforming scenario - reduced spend")
-                        else:
-                            # Normal variance with strategy pacing
-                            daily_variance = random.uniform(0.8, 1.2)
-                            spend = daily_budget * elapsed_duration * daily_variance * pacing_multiplier
-                    else:
-                        # Production mode - normal variance with strategy pacing
-                        daily_variance = random.uniform(0.8, 1.2)
-                        spend = daily_budget * elapsed_duration * daily_variance * pacing_multiplier
-
-                    # Cap at total budget (unless simulating budget exceeded)
-                    if not self._should_force_error("budget_exceeded"):
-                        spend = min(spend, total_budget)
-
+                    # Normal pacing: daily variance, capped at the total budget
+                    daily_variance = random.uniform(0.8, 1.2)
+                    spend = min(daily_budget * elapsed_duration * daily_variance, total_budget)
                     impressions = int(spend / 0.01)  # $10 CPM
         else:
             # Fallback for missing media buy
             impressions = random.randint(8000, 12000)
             spend = impressions * 0.01  # $10 CPM
 
-        if not self.dry_run:
-            self.log(f"✓ Retrieved delivery data: {impressions:,} impressions, ${spend:,.2f} spend")
-        else:
-            self.log("Would retrieve delivery data from ad server")
+        self.log(f"✓ Retrieved delivery data: {impressions:,} impressions, ${spend:,.2f} spend")
 
         # Build per-package breakdown if packages are available
         from src.core.schemas import AdapterPackageDelivery
@@ -1473,11 +1384,6 @@ class MockAdServer(AdServerAdapter):
 
         return result
 
-    def update_media_buy_performance_index(
-        self, media_buy_id: str, package_performance: list[PackagePerformance]
-    ) -> bool:
-        return True
-
     def update_media_buy(
         self,
         media_buy_id: str,
@@ -1485,7 +1391,7 @@ class MockAdServer(AdServerAdapter):
         package_id: str | None,
         budget: int | None,
         today: datetime,
-    ) -> UpdateMediaBuyResponse:
+    ) -> AdapterUpdateResult:
         """Update media buy in database (Mock adapter implementation)."""
         import logging
 
@@ -1515,10 +1421,9 @@ class MockAdServer(AdServerAdapter):
                 else:
                     logger.warning(f"[MockAdapter] Package {package_id} not found for media buy {media_buy_id}")
 
-        return UpdateMediaBuySuccess.carrier(
+        return AdapterUpdateResult(
             media_buy_id=media_buy_id,
             affected_packages=[],
-            implementation_date=today,
         )
 
     def get_config_ui_endpoint(self) -> str | None:

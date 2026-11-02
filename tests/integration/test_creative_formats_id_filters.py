@@ -23,13 +23,13 @@ THIRD_PARTY_AGENT_URL = "https://other-creative-agent.example.com"
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
-ALL_TRANSPORTS = [Transport.IMPL, Transport.A2A, Transport.MCP, Transport.REST]
+ALL_TRANSPORTS = [Transport.A2A, Transport.MCP, Transport.REST]
 
 # REST now transmits filter kwargs too: CreativeFormatsEnv inherits the base
 # build_rest_body, which serializes the request, and the /creative-formats route
 # maps format_ids + filters into ListCreativeFormatsRequest. So filter-specific
 # tests run on all four transports.
-FILTER_TRANSPORTS = [Transport.IMPL, Transport.A2A, Transport.MCP, Transport.REST]
+FILTER_TRANSPORTS = [Transport.A2A, Transport.MCP, Transport.REST]
 
 
 def _fmt(

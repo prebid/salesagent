@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -11,19 +10,20 @@ from typing import Any
 from adcp.webhooks import GeneratedTaskStatus
 from pydantic import BaseModel
 from rich.console import Console
-from sqlalchemy import select
+from sqlalchemy import literal, select
+from sqlalchemy import update as sa_update
+from sqlalchemy.sql import func
 
 from src.core.async_utils import pin_task
 from src.core.database.database_session import DatabaseManager
+from src.core.database.jsonb_append import jsonb_list_append
 from src.core.database.models import Context, ObjectWorkflowMapping, WorkflowStep
 from src.core.database.models import Context as DBContext
-from src.core.exceptions import (
-    AdCPError,
-    AdCPValidationError,
-    build_two_layer_error_envelope,
-    normalize_to_adcp_error,
-)
+from src.core.database.repositories.workflow import append_step_comment, build_context, build_workflow_step
+from src.core.exceptions import AdCPValidationError, adcp_error_for
+from src.core.schemas._base import AdcpErrorResponse
 from src.core.security.outbound_http import OutboundError
+from src.core.tools._wire import to_wire
 from src.core.webhook_validator import (
     webhook_url_for_log,
 )
@@ -81,18 +81,19 @@ class ContextManager(DatabaseManager):
         Returns:
             The created Context object
         """
-        context_id = f"ctx_{uuid.uuid4().hex[:12]}"
-
-        context = Context(
-            context_id=context_id,
+        # Row construction lives in the repository layer so this manager and
+        # WorkflowRepository cannot drift apart (#2002). The
+        # commit/refresh/expunge behaviour below is unchanged for the callers
+        # that still hold a ContextManager.
+        context = build_context(
+            self.session,
             tenant_id=tenant_id,
             principal_id=principal_id,
-            conversation_history=initial_conversation or [],
-            last_activity_at=datetime.now(UTC),
+            initial_conversation=initial_conversation,
         )
+        context_id = context.context_id
 
         try:
-            self.session.add(context)
             self.session.commit()
             console.print(f"[green]Created context {context_id} for principal {principal_id}[/green]")
             # Refresh to get any database-generated values
@@ -206,54 +207,31 @@ class ContextManager(DatabaseManager):
         Returns:
             The created WorkflowStep object
         """
-        # Serialize Pydantic models at the DB boundary
-        from pydantic import BaseModel
-
-        if isinstance(request_data, BaseModel):
-            request_data = request_data.model_dump(mode="json")
-        if request_metadata and request_data is not None:
-            request_data.update(request_metadata)
-        step_id = f"step_{uuid.uuid4().hex[:12]}"
-
-        # Initialize comments array with initial comment if provided
-        comments = []
-        if initial_comment:
-            comments.append({"user": "system", "timestamp": datetime.now(UTC).isoformat(), "text": initial_comment})
-
-        step = WorkflowStep(
-            step_id=step_id,
-            context_id=context_id,
-            step_type=step_type,
-            owner=owner,
-            status=status,
-            tool_name=tool_name,
-            request_data=request_data if request_data is not None else {},
-            response_data=response_data if response_data is not None else {},
-            assigned_to=assigned_to,
-            error_message=error_message,
-            transaction_details=transaction_details if transaction_details is not None else {},
-            comments=comments,
-            created_at=datetime.now(UTC),
-        )
-
-        if status == "completed":
-            step.completed_at = datetime.now(UTC)
-
+        # Row construction (Pydantic boundary serialization, request_metadata
+        # merge, comments seeding, completed_at rule, object mappings) lives in
+        # the repository layer so this manager and WorkflowRepository cannot
+        # drift apart (#2002). The commit/refresh/expunge/close
+        # behaviour below is unchanged for the callers that still hold a
+        # ContextManager.
         session = self.session
         try:
-            session.add(step)
-
-            # Create object mappings if provided
-            if object_mappings:
-                for mapping in object_mappings:
-                    obj_mapping = ObjectWorkflowMapping(
-                        object_type=mapping["object_type"],
-                        object_id=mapping["object_id"],
-                        step_id=step_id,
-                        action=mapping.get("action", step_type),
-                        created_at=datetime.now(UTC),
-                    )
-                    session.add(obj_mapping)
+            step = build_workflow_step(
+                session,
+                context_id=context_id,
+                step_type=step_type,
+                owner=owner,
+                status=status,
+                tool_name=tool_name,
+                request_data=request_data,
+                response_data=response_data,
+                assigned_to=assigned_to,
+                error_message=error_message,
+                transaction_details=transaction_details,
+                object_mappings=object_mappings,
+                initial_comment=initial_comment,
+                request_metadata=request_metadata,
+            )
+            step_id = step.step_id
 
             session.commit()
             session.refresh(step)
@@ -272,7 +250,7 @@ class ContextManager(DatabaseManager):
         self,
         step_id: str,
         status: str | None = None,
-        response_data: dict[str, Any] | Any | None = None,
+        response_data: BaseModel | dict[str, Any] | None = None,
         error_message: str | None = None,
         transaction_details: dict[str, Any] | None = None,
         add_comment: dict[str, str] | None = None,
@@ -283,23 +261,19 @@ class ContextManager(DatabaseManager):
         Args:
             step_id: The step ID
             status: New status
-            response_data: Response/result data. Accepts Pydantic models (serialized
-                automatically) or plain dicts. Callers should NOT call .model_dump()
-                — pass the model directly.
+            response_data: Response/result data: the response MODEL, or a document a
+                caller composed (``record_step_result`` composes response plus request
+                into one; the approval services write small status documents). A caller
+                holding a model hands it over as is and never calls ``.model_dump()``.
             error_message: Error message if failed
             transaction_details: Actual API calls made
             add_comment: Optional comment to add {user, comment}
             tenant_id: Tenant scope — joins through Context for isolation.
                 If provided, the step must belong to this tenant or no update occurs.
         """
-        # Infrastructure-boundary serialization: _impl functions pass Pydantic
-        # models, this method serializes to dict for DB storage.
-        # MIGRATION IN PROGRESS: pre-refactor callers still pass pre-serialized
-        # dicts. As _impl callers migrate (tracked by the shrinking allowlist in
-        # test_architecture_no_model_dump_in_impl), the dict branch becomes dead.
-        # When allowlist hits zero, tighten the type to BaseModel-only and remove
-        # the isinstance branch.
-        if response_data is not None and hasattr(response_data, "model_dump"):
+        # The persistence edge: a model becomes the stored document HERE, by type, and
+        # nowhere upstream (CLAUDE.md pattern 4). A composed dict is stored as composed.
+        if isinstance(response_data, BaseModel):
             response_data = response_data.model_dump(mode="json")
         session = self.session
         try:
@@ -324,19 +298,18 @@ class ContextManager(DatabaseManager):
                     step.transaction_details = transaction_details
 
                 if add_comment:
-                    # Ensure comments is a list
-                    if not isinstance(step.comments, list):
-                        step.comments = []
-                    # Create a new list to trigger SQLAlchemy change detection
-                    new_comments = list(step.comments)
-                    new_comments.append(
-                        {
-                            "user": add_comment.get("user", "system"),
-                            "timestamp": datetime.now(UTC).isoformat(),
-                            "text": add_comment.get("text", add_comment.get("comment", "")),
-                        }
+                    # Single-statement atomic append (salesagent-pgqs): the
+                    # old whole-list write-back erased concurrent comments.
+                    # Autoflush pushes the pending field updates above first;
+                    # the instance's stale comments are expired below.
+                    append_step_comment(
+                        session,
+                        step_id,
+                        user=add_comment.get("user", "system"),
+                        text=add_comment.get("text", add_comment.get("comment", "")),
+                        tenant_id=tenant_id,
                     )
-                    step.comments = new_comments
+                    session.expire(step, ["comments"])
 
                 # DEBUG: Log the condition check values BEFORE commit
                 console.print("[magenta]🔍 PRE-COMMIT WEBHOOK DEBUG:[/magenta]")
@@ -364,7 +337,7 @@ class ContextManager(DatabaseManager):
                 # Send push notifications if status changed
                 if status and step:
                     console.print(f"[blue]🚀 WEBHOOK: Calling _send_push_notifications for step {step_id}[/blue]")
-                    self._send_push_notifications(step, status, session)
+                    self._send_push_notifications(step, status)
                 else:
                     console.print(f"[yellow]⚠️ WEBHOOK SKIPPED: status={status}, step={step is not None}[/yellow]")
         finally:
@@ -376,42 +349,23 @@ class ContextManager(DatabaseManager):
         The webhook delivery path at ``_send_push_notifications`` emits
         ``step.response_data`` to push notification subscribers. Without
         structured payload, async subscribers receive ``status=failed`` with
-        an empty body. This helper builds the full two-layer envelope
-        (``adcp_error`` + ``errors[]``) via ``build_two_layer_error_envelope``
-        so async and sync paths see the same wire shape.
+        an empty body. This helper serializes the same ``AdcpErrorResponse`` the
+        boundary answers a synchronous failure with, so async and sync paths see
+        the same wire shape.
 
-        Untyped exceptions are normalized to ``AdCPError`` via
-        ``normalize_to_adcp_error``. Wire-code enforcement ensures webhook
-        subscribers only see codes in ``WIRE_STANDARD_CODES``.
+        Untyped exceptions are normalized to ``AdCPSalesAgentError`` via
+        ``adcp_error_for``. Wire-code enforcement ensures webhook
+        subscribers only see codes the pinned table classifies.
 
         Wraps the ``update_workflow_step`` call in ``try/except`` so a DB
         hiccup during audit doesn't replace the original exception that the
         caller is about to re-raise.
         """
-        from src.core.exceptions import WIRE_STANDARD_CODES
 
         try:
-            source = normalize_to_adcp_error(exc)
+            source = adcp_error_for(exc)
 
-            # Defensive wire-code enforcement: webhook subscribers must only
-            # see codes in ``WIRE_STANDARD_CODES``. If the wire code falls
-            # outside the standard set, override with SERVICE_UNAVAILABLE
-            # so async subscribers never receive an internal-only code.
-            # Structured fields (details/field/suggestion/context) carry
-            # forward so buyer agents and webhook subscribers retain
-            # machine-actionable correction context across the rewrite.
-            wire_code = source.wire_error_code
-            if wire_code not in WIRE_STANDARD_CODES:
-                source = AdCPError.synthesize(
-                    source.message or str(source),
-                    error_code="SERVICE_UNAVAILABLE",
-                    details=source.details,
-                    field=source.field,
-                    suggestion=source.suggestion,
-                    context=source.context,
-                )
-
-            response_data = build_two_layer_error_envelope(source)
+            response_data = to_wire(AdcpErrorResponse.of(source))
             error_message = source.message or str(source)
 
             self.update_workflow_step(
@@ -523,7 +477,6 @@ class ContextManager(DatabaseManager):
             request_data={
                 "reason": reason,
                 "details": clarification_details,
-                "protocol": "mcp",  # Default to MCP for internal system actions
             },
             initial_comment=reason,
         )
@@ -638,18 +591,28 @@ class ContextManager(DatabaseManager):
         """
         session = self.session
         try:
-            stmt = select(Context).filter_by(context_id=context_id)
-
-            context = session.scalars(stmt).first()
-            if context:
-                if not isinstance(context.conversation_history, list):
-                    context.conversation_history = []
-
-                context.conversation_history.append(
-                    {"role": role, "content": content, "timestamp": datetime.now(UTC).isoformat()}
+            # Single-statement atomic append: the old load-append-write-back
+            # lost concurrent messages (and an in-place append on an
+            # already-list history was never even flushed) — salesagent-pgqs.
+            entry = func.jsonb_build_object(
+                "role",
+                literal(role),
+                "content",
+                literal(content),
+                "timestamp",
+                literal(datetime.now(UTC).isoformat()),
+            )
+            stmt = (
+                sa_update(Context)
+                .where(Context.context_id == context_id)
+                .values(
+                    conversation_history=jsonb_list_append(Context.conversation_history, entry),
+                    last_activity_at=datetime.now(UTC),
                 )
-                context.last_activity_at = datetime.now(UTC)
-                session.commit()
+                .execution_options(synchronize_session=False)
+            )
+            session.execute(stmt)
+            session.commit()
         finally:
             session.close()
 
@@ -785,17 +748,14 @@ class ContextManager(DatabaseManager):
         finally:
             session.close()
 
-    def _send_push_notifications(self, step: WorkflowStep, new_status: str, session: Any) -> None:
-        """Send push notifications via registered webhooks for workflow step status changes.
+    def _send_push_notifications(self, step: WorkflowStep, new_status: str) -> None:
+        """Send the push notification this step's request registered, once per mapping.
 
         Args:
             step: The workflow step that was updated
             new_status: The new status value
-            session: Active database session
         """
         try:
-            from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
-
             # step.object_mappings and step.context, not two hand-written selects:
             # both relationships already exist on WorkflowStep and express exactly
             # these two queries, keyed on the same columns.
@@ -811,161 +771,188 @@ class ContextManager(DatabaseManager):
                 return
 
             tenant_id = context.tenant_id
-            principal_id = context.principal_id
 
-            # Through the repository, which owns the (tenant, principal) scope this
-            # hand-written filter_by was retyping. NOTE: PushNotificationConfig has
-            # no object_type/object_id columns -- those are on ObjectWorkflowMapping,
-            # which `mappings` already holds.
-            webhooks = PushNotificationConfigRepository(session, tenant_id).list_active_by_principal(principal_id)
-
-            console.print(f"[cyan]🔍 Found {len(webhooks)} active webhook configs for principal {principal_id}[/cyan]")
-
-            # Send notifications for each mapping (media buy, creative, etc.)
+            # ONE delivery per mapping, to the config the BUYER put on THIS request.
+            #
+            # This used to loop a second time over every active PushNotificationConfig the
+            # principal had, and send the step's own stashed registration once per row —
+            # the loop variable was never read. Every operation registers a config, so the
+            # rows accumulate and the duplication grows with them: measured on the
+            # storyboard tenant (run innet_200926_0647), one create emitted the same
+            # payload to the same URL 3 times within 17ms, and AdCP 3.1.1
+            # `compliance/universal/webhook-emission.yaml`'s
+            # `expect_no_duplicate_webhook_on_replay` caps a logical event at one delivery.
+            #
+            # The registration is per REQUEST: `push_notification_config` names where the
+            # answer to THIS operation goes. Persisted rows are the delivery-reporting
+            # channel's fan-out (`webhook_delivery_service._deliver_to_config`, which does
+            # read each config), and are not a second destination for a protocol
+            # notification.
             for mapping in mappings:
                 console.print(
                     f"[cyan]📦 Processing mapping: {mapping.object_type} {mapping.object_id} action={mapping.action}[/cyan]"
                 )
 
-                for _webhook_config in webhooks:
-                    # Rehydrate the registration by RE-RUNNING the ingest gate. The
-                    # stash is buyer data that has sat in JSONB, possibly across a
-                    # deploy, possibly written by a producer that stores the wire
-                    # shape directly — so it is parsed by the one gate, never
-                    # re-plucked here into loose strings. That re-pluck is what let
-                    # an HMAC registration resolve to Unauthenticated and go out
-                    # unsigned if any producer's shape drifted.
-                    cfg_dict = (step.request_data or {}).get("push_notification_config") or {}
-                    if not str(cfg_dict.get("url") or "").strip():
-                        console.print("[red]No push notification URL present; skipping webhook[/red]")
-                        continue
+                # Rehydrate the registration by RE-RUNNING the ingest gate. The
+                # stash is buyer data that has sat in JSONB, possibly across a
+                # deploy, possibly written by a producer that stores the wire
+                # shape directly — so it is parsed by the one gate, never
+                # re-plucked here into loose strings. That re-pluck is what let
+                # an HMAC registration resolve to Unauthenticated and go out
+                # unsigned if any producer's shape drifted.
+                cfg_dict = (step.request_data or {}).get("push_notification_config") or {}
+                if not str(cfg_dict.get("url") or "").strip():
+                    console.print("[red]No push notification URL present; skipping webhook[/red]")
+                    continue
 
+                try:
+                    push_notification_config = ValidatedWebhookRegistration.from_stash(cfg_dict)
+                except AdCPValidationError as exc:
+                    # FAIL CLOSED: this runs inside a status update. A stashed
+                    # config that no longer passes the gate must cost the
+                    # webhook, never the status transition.
+                    #
+                    # logger.error, NOT console.print, and that is load-bearing
+                    # rather than tidiness. This refusal produces no
+                    # WebhookDeliveryOutcome and no delivery-log row — the
+                    # outcome type has exactly one producer, the egress seam,
+                    # and this path never reaches it. With no durable record and
+                    # no migration for the rows this affects, THIS LINE IS THE
+                    # ONLY SURFACE the refusal has, so it must be enumerable
+                    # from the logs: an operator has to be able to list which
+                    # buyers stopped receiving webhooks and why.
+                    #
+                    # The refusal's STRUCTURED facts, and neither ``message`` nor
+                    # ``internal_detail``. Post-ADR-010 an ``AdCPSalesAgentError``'s
+                    # ``message`` is a read-only property over ``CODE_TABLE`` — a
+                    # function of the CODE, not of the raise site — so it reads
+                    # "Request validation failed" for every stash refusal alike and
+                    # names nothing an operator can act on. ``internal_detail`` is
+                    # worse than useless HERE: ``from_stash`` puts pydantic's own
+                    # ``ValidationError`` there, whose text renders ``input_value=``
+                    # — the BUYER'S CREDENTIAL — into this log line whenever the
+                    # objection is about ``credentials``, and names no scheme at all
+                    # unless the objection happened to be about ``schemes``.
+                    #
+                    # The two facts that make the affected rows enumerable are
+                    # carried as VALUES by the refusal itself: ``field`` names the
+                    # sub-field at fault, and ``details.rejected_value`` holds the
+                    # stored scheme(s) — the pin's canonical rejection key, written
+                    # by ``from_stash``'s "NAME THE SCHEME" branch
+                    # (``webhooks/registration.py``) precisely so the name does not
+                    # have to ride buyer-facing text.
+                    #
+                    # ``getattr`` rather than a branch, by the same idiom as
+                    # ``operator_mcp._operator_cause``: a refusal may carry no details
+                    # at all (the missing-URL branch), and nothing here may raise
+                    # inside an error-handling path. A detail-less refusal still logs
+                    # a whole sentence naming its field.
+                    field = exc.field or "push_notification_config"
+                    stored_schemes = getattr(exc.details, "rejected_value", None)
+                    cause = f"{field} was refused" + (f"; stored scheme(s): {stored_schemes}" if stored_schemes else "")
+                    stash_context = getattr(step, "context", None)
+                    logger.error(
+                        "Stashed push notification config is not deliverable (%s); "
+                        "skipping webhook (tenant=%s, principal=%s, step=%s)",
+                        cause,
+                        tenant_id or getattr(stash_context, "tenant_id", None),
+                        getattr(stash_context, "principal_id", None),
+                        getattr(step, "step_id", None),
+                    )
+                    continue
+
+                # Derive principal/tenant from the step context if available
+                context_obj = getattr(step, "context", None)
+                derived_tenant_id = tenant_id or (getattr(context_obj, "tenant_id", None))
+                derived_principal_id = getattr(context_obj, "principal_id", None)
+
+                service = get_protocol_webhook_service()
+
+                safe_webhook_url = webhook_url_for_log(push_notification_config.url)
+                console.print(
+                    f"[cyan]📤 Sending webhook to {safe_webhook_url} for {mapping.object_type} {mapping.object_id}[/cyan]"
+                )
+
+                # Build webhook payload based on protocol type.
+                # task_type_str is the ORIGINAL action label — it keys the
+                # delivery-webhook guards + audit log and must NOT be rewritten
+                # by the SDK fallback . wire_task_type is the
+                # validated COPY passed to the SDK payload builder.
+                task_type_str = step.tool_name or mapping.action or "unknown"
+                try:
+                    status_enum = GeneratedTaskStatus(new_status)
+                except ValueError:
+                    status_enum = GeneratedTaskStatus.unknown
+
+                # The ORIGINAL task_type_str reaches the context and the guards
+                # that key on it; the SDK payload gets validate_webhook_task_type's
+                # coerced COPY, inside notify() (salesagent-yi3s).
+                webhook_task = WebhookTaskContext(
+                    task_id=step.step_id,
+                    task_type=task_type_str,
+                    tenant_id=derived_tenant_id,
+                    principal_id=derived_principal_id,
+                    media_buy_id=None,
+                    sequence_number=1,
+                    notification_type=None,
+                )
+
+                try:
+                    # If we're already in an event loop, schedule the send; otherwise run it directly
                     try:
-                        push_notification_config = ValidatedWebhookRegistration.from_stash(cfg_dict)
-                    except AdCPValidationError as exc:
-                        # FAIL CLOSED: this runs inside a status update. A stashed
-                        # config that no longer passes the gate must cost the
-                        # webhook, never the status transition.
-                        #
-                        # logger.error, NOT console.print, and that is load-bearing
-                        # rather than tidiness. This refusal produces no
-                        # WebhookDeliveryOutcome and no delivery-log row — the
-                        # outcome type has exactly one producer, the egress seam,
-                        # and this path never reaches it. With no durable record and
-                        # no migration for the rows this affects, THIS LINE IS THE
-                        # ONLY SURFACE the refusal has, so it must be enumerable
-                        # from the logs: an operator has to be able to list which
-                        # buyers stopped receiving webhooks and why.
-                        stash_context = getattr(step, "context", None)
-                        logger.error(
-                            "Stashed push notification config is not deliverable (%s); "
-                            "skipping webhook (tenant=%s, principal=%s, step=%s)",
-                            exc.message,
-                            tenant_id or getattr(stash_context, "tenant_id", None),
-                            getattr(stash_context, "principal_id", None),
-                            getattr(step, "step_id", None),
+                        loop = asyncio.get_running_loop()
+                        task = loop.create_task(
+                            service.notify(
+                                push_notification_config,
+                                task=webhook_task,
+                                status=status_enum,
+                                result=step.response_data or {},
+                            )
                         )
-                        continue
 
-                    # Derive principal/tenant from the step context if available
-                    context_obj = getattr(step, "context", None)
-                    derived_tenant_id = tenant_id or (getattr(context_obj, "tenant_id", None))
-                    derived_principal_id = getattr(context_obj, "principal_id", None)
+                        def _log_task_result(
+                            t: asyncio.Task,
+                            raw_url: str = push_notification_config.url,
+                            safe_url: str = safe_webhook_url,
+                        ) -> None:
+                            # Runs AFTER pin_task's discard (see pin_task
+                            # docstring), so this log-and-swallow can't hold
+                            # the strong ref past completion.
+                            # Pass raw URL — _log_webhook_send_outcome owns sanitize.
+                            try:
+                                _log_webhook_send_outcome(raw_url, t.result())
+                            except Exception as e:
+                                console.print(f"[red]❌ Webhook failed for {safe_url}: {str(e)}[/red]")
 
-                    service = get_protocol_webhook_service()
-
-                    safe_webhook_url = webhook_url_for_log(push_notification_config.url)
-                    console.print(
-                        f"[cyan]📤 Sending webhook to {safe_webhook_url} for {mapping.object_type} {mapping.object_id}[/cyan]"
-                    )
-
-                    # Build webhook payload based on protocol type.
-                    # task_type_str is the ORIGINAL action label — it keys the
-                    # delivery-webhook guards + audit log and must NOT be rewritten
-                    # by the SDK fallback . wire_task_type is the
-                    # validated COPY passed to the SDK payload builder.
-                    task_type_str = step.tool_name or mapping.action or "unknown"
-                    protocol = (step.request_data or {}).get("protocol", "mcp")  # Default to MCP
-                    try:
-                        status_enum = GeneratedTaskStatus(new_status)
-                    except ValueError:
-                        status_enum = GeneratedTaskStatus.unknown
-
-                    # The dialect fork and the metadata dict both moved into
-                    # notify() (salesagent-pldmk.39). It keeps this site's
-                    # salesagent-yi3s invariant intact: the ORIGINAL task_type_str
-                    # reaches the metadata and the guards that key on it, while the
-                    # SDK payload gets validate_webhook_task_type's coerced COPY.
-                    webhook_task = WebhookTaskContext(
-                        task_id=step.step_id,
-                        task_type=task_type_str,
-                        tenant_id=derived_tenant_id,
-                        principal_id=derived_principal_id,
-                        media_buy_id=None,
-                        sequence_number=1,
-                        notification_type=None,
-                    )
-
-                    try:
-                        # If we're already in an event loop, schedule the send; otherwise run it directly
-                        try:
-                            loop = asyncio.get_running_loop()
-                            task = loop.create_task(
-                                service.notify(
-                                    push_notification_config,
-                                    task=webhook_task,
-                                    status=status_enum,
-                                    result=step.response_data or {},
-                                    protocol=protocol,
-                                    context_id=step.context_id or "",
-                                )
+                        # Strong-ref pin against asyncio's weak-ref task
+                        # tracker; discard runs before _log_task_result.
+                        pin_task(task, on_done=_log_task_result)
+                    except RuntimeError:
+                        # No running loop; safe to run synchronously
+                        sent = asyncio.run(
+                            service.notify(
+                                push_notification_config,
+                                task=webhook_task,
+                                status=status_enum,
+                                result=step.response_data or {},
                             )
+                        )
+                        _log_webhook_send_outcome(push_notification_config.url, sent)
 
-                            def _log_task_result(
-                                t: asyncio.Task,
-                                raw_url: str = push_notification_config.url,
-                                safe_url: str = safe_webhook_url,
-                            ) -> None:
-                                # Runs AFTER pin_task's discard (see pin_task
-                                # docstring), so this log-and-swallow can't hold
-                                # the strong ref past completion.
-                                # Pass raw URL — _log_webhook_send_outcome owns sanitize.
-                                try:
-                                    _log_webhook_send_outcome(raw_url, t.result())
-                                except Exception as e:
-                                    console.print(f"[red]❌ Webhook failed for {safe_url}: {str(e)}[/red]")
-
-                            # Strong-ref pin against asyncio's weak-ref task
-                            # tracker; discard runs before _log_task_result.
-                            pin_task(task, on_done=_log_task_result)
-                        except RuntimeError:
-                            # No running loop; safe to run synchronously
-                            sent = asyncio.run(
-                                service.notify(
-                                    push_notification_config,
-                                    task=webhook_task,
-                                    status=status_enum,
-                                    result=step.response_data or {},
-                                    protocol=protocol,
-                                    context_id=step.context_id or "",
-                                )
-                            )
-                            _log_webhook_send_outcome(push_notification_config.url, sent)
-
-                    except OutboundError as e:
-                        # The seam's two failure classes (OutboundRequestBlocked /
-                        # OutboundDeliveryFailed) replaced the requests exceptions
-                        # this used to catch — including the separate Timeout arm,
-                        # which was a property of requests' taxonomy and has no
-                        # counterpart here (a timeout arrives as
-                        # OutboundDeliveryFailed with http_status=None, and its
-                        # str() carries the attempt count). The send_notification
-                        # path cannot raise these any more — it catches them and
-                        # returns False, which is exactly why
-                        # _log_webhook_send_outcome must never read False as
-                        # success. Kept as a safety net; the URL is sanitized to
-                        # scheme://host/path for the log (AdCP L1 SSRF log hygiene).
-                        console.print(f"[red]❌ Webhook failed for {safe_webhook_url}: {str(e)}[/red]")
+                except OutboundError as e:
+                    # The seam's two failure classes (OutboundRequestBlocked /
+                    # OutboundDeliveryFailed) replaced the requests exceptions
+                    # this used to catch — including the separate Timeout branch,
+                    # which was a property of requests' taxonomy and has no
+                    # counterpart here (a timeout arrives as
+                    # OutboundDeliveryFailed with http_status=None, and its
+                    # str() carries the attempt count). The send_notification
+                    # path cannot raise these any more — it catches them and
+                    # returns False, which is exactly why
+                    # _log_webhook_send_outcome must never read False as
+                    # success. Kept as a safety net; the URL is sanitized to
+                    # scheme://host/path for the log (AdCP L1 SSRF log hygiene).
+                    console.print(f"[red]❌ Webhook failed for {safe_webhook_url}: {str(e)}[/red]")
 
         except Exception as e:
             console.print(f"[red]Error sending push notifications: {e}[/red]")

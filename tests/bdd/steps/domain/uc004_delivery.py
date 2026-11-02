@@ -15,28 +15,31 @@ import json
 import re
 from typing import Any
 
+import httpx
 import pytest
 from adcp.types import AuthenticationScheme
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import error_envelope_or_none, payload_or_none, require_payload
+from tests.bdd.steps._outcome_helpers import (
+    error_envelope_or_none,
+    payload_or_none,
+    require_payload,
+    wire_advisory_errors,
+    wire_entry,
+    wire_field,
+)
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.then_error import _get_error_message
 from tests.bdd.steps.generic.then_payload import register_boundary_handler
+from tests.factories.webhook import ReportingWebhookRequestFactory
 from tests.harness._mixins import LocalOriginMixin
-from tests.helpers.backoff_assertions import assert_backoff_schedule
+from tests.helpers import locate_envelope_error
 from tests.helpers.egress_hatches import UNDIALLED_PUBLIC_HTTPS_ORIGIN
+from tests.helpers.hmac_assertions import assert_signature_verifies_over_wire_body
+from tests.helpers.signing import verify_as_conformant_receiver
+from tests.helpers.webhook_wire import CapturedWebhook, signature_input_label, signature_input_params
 
 # ── Helpers ──────────────────────────────────────────────────────────
-
-
-def _pending(ctx: dict, step: str) -> None:
-    """Mark a step as pending implementation (harness not yet wired for BDD).
-
-    Using this instead of bare ``pass`` avoids triggering the duplicate-body
-    structural guard while clearly documenting which steps need harness work.
-    """
-    ctx.setdefault("pending_steps", []).append(step)
 
 
 def _parse_json_list(text: str) -> list[str]:
@@ -49,20 +52,112 @@ def _webhook_deliveries(ctx: dict) -> list[Any]:
     return ctx["env"].delivered_requests
 
 
-def _get_last_webhook_payload(ctx: dict) -> dict[str, Any]:
-    """The JSON body of the most recent webhook delivery, as it crossed the socket."""
+def _last_webhook_delivery(ctx: dict) -> Any:
+    """The most recent request the endpoint received. Fails loudly when there was none.
+
+    ONE read path for every delivery assertion in this module. The env owns WHO made the
+    delivery and HOW it is read back per transport (``LocalOriginMixin.delivered_requests``
+    — a REAL local origin in process, the compose stack's capture service over e2e); this
+    step layer only knows that a delivery has one shape and never learns which transport
+    produced it.
+    """
     deliveries = _webhook_deliveries(ctx)
     assert deliveries, "No webhook POST was made"
-    payload = deliveries[-1].json()
-    assert payload, f"Webhook POST had no JSON payload: {deliveries[-1].body!r}"
+    return deliveries[-1]
+
+
+def _sent_payload(delivery: Any) -> dict[str, Any]:
+    """The body of one delivery, parsed from the BYTES that arrived.
+
+    Reading the bytes rather than a dict a client was asked to serialize is what
+    lets a payload assertion be about what the receiver got (#1441). Tolerates an
+    empty body — a reader that scans EVERY delivery for one media_buy_id
+    (``then_skip_no_webhook``) must not die on a bodyless one.
+    """
+    if not delivery.body:
+        return {}
+    return json.loads(delivery.body)
+
+
+def _captured_delivery(ctx: dict) -> CapturedWebhook:
+    """The last delivery in the shape every RFC 9421 grader in this repo consumes.
+
+    ``tests/helpers/webhook_wire.CapturedWebhook`` is what
+    ``verify_as_conformant_receiver`` / ``signature_input_label`` take, so the signature
+    assertions below run against the same object ``tests/e2e/test_webhook_signature_e2e.py``
+    and ``tests/integration/test_notification_proof_challenge.py`` verify. One grader shape,
+    one verifier — a second one here would let this surface be graded more weakly.
+
+    Nothing is RECONSTRUCTED: the headers and the body bytes come straight off the request
+    the endpoint received, and the ``@target-uri`` is :func:`_webhook_url` — the very string
+    the scenario registered as the destination and production read back out of
+    ``PushNotificationConfig.url``, not a URL rebuilt from wire fragments. A signature
+    covers ``@target-uri`` and the body, so either being reconstructed would mean verifying
+    a message that never went out.
+    """
+    delivery = _last_webhook_delivery(ctx)
+    return CapturedWebhook(
+        url=_webhook_url(ctx["env"]),
+        headers=httpx.Headers(delivery.headers.items()),
+        content=delivery.body,
+    )
+
+
+def _get_last_webhook_payload(ctx: dict) -> dict[str, Any]:
+    """The JSON body of the most recent webhook delivery, as it crossed the socket.
+
+    This is the ENVELOPE (``core/mcp-webhook-payload.json``). Delivery-report fields are
+    not here -- read them through :func:`_webhook_result` -- because AdCP 3.1.1
+    ``L3/webhooks.mdx`` :217 puts the report under ``result`` and says it "is not valid as
+    the top-level POST body by itself".
+    """
+    delivery = _last_webhook_delivery(ctx)
+    payload = _sent_payload(delivery)
+    assert payload, f"Webhook POST had no JSON payload: {delivery.body!r}"
     return payload
 
 
+def _webhook_result(body: dict[str, Any]) -> dict[str, Any]:
+    """The delivery report carried by one webhook envelope.
+
+    THE one place the two layers are separated, so no step re-decides where a report field
+    lives. A step that read the envelope for ``notification_type`` or ``media_buy_id``
+    found neither and said the payload was missing them -- which is what fourteen scenarios
+    could not tell you while they were ledgered.
+    """
+    result = body.get("result")
+    assert isinstance(result, dict), (
+        f"the webhook envelope carries no `result` object, so there is no delivery report to "
+        f"grade: got {type(result).__name__} at `result`, envelope keys {sorted(body)}"
+    )
+    return result
+
+
+def _get_last_webhook_result(ctx: dict) -> dict[str, Any]:
+    """The delivery report inside the most recent webhook POST."""
+    return _webhook_result(_get_last_webhook_payload(ctx))
+
+
+def _delivery_entries(result: dict[str, Any]) -> list[dict[str, Any]]:
+    """``media_buy_deliveries[]`` off one delivery report, which the pin makes required."""
+    entries = result.get("media_buy_deliveries")
+    assert isinstance(entries, list) and entries, (
+        f"the delivery report carries no media_buy_deliveries[]: got {entries!r}"
+    )
+    return entries
+
+
 def _get_last_webhook_headers(ctx: dict) -> Any:
-    """The headers of the most recent webhook delivery, as the endpoint received them."""
-    deliveries = _webhook_deliveries(ctx)
-    assert deliveries, "No webhook POST was made"
-    return deliveries[-1].headers
+    """Headers of the most recent webhook delivery, as the endpoint received them.
+
+    CASE-INSENSITIVELY, and that is a decision rather than an accident: the origin keeps
+    the raw ``http.client.HTTPMessage``, so ``X-AdCP-Timestamp`` / ``X-AdCP-Signature`` /
+    ``X-ADCP-Signature`` lookups that were exact-match dict reads no longer depend on the
+    casing the sender happened to choose. That is HTTP-correct — RFC 9110 makes field names
+    case-insensitive — and it stops these assertions grading the sender's FORMATTING
+    instead of the wire contract (salesagent-n78j0.1.4).
+    """
+    return _last_webhook_delivery(ctx).headers
 
 
 def _collect_all_packages(resp: Any) -> list[Any]:
@@ -85,8 +180,18 @@ def _extract_webhook_success(ctx: dict) -> bool:
 def _assert_placements_sorted_by(packages: list[Any], metric: str, *, fallback: bool) -> None:
     """Assert by_placement entries are sorted by the given metric descending.
 
-    If by_placement is not populated or the metric is absent from entries,
-    xfails with a targeted production gap message.
+    THE ABSENCE OF THE SUBJECT IS NOT AN EXCUSE. Both guards here used to xfail: one
+    when the entries lacked the metric, one when NO package carried by_placement at
+    all -- so a seller that stopped emitting placement breakdowns entirely, which is
+    precisely the regression this step exists to catch, turned it green-by-xfail
+    instead of red (the archetype).
+
+    The pinned 3.1 get-media-buy-delivery-response.json makes by_placement conditional
+    -- "Available when the buyer requests placement breakdown via reporting_dimensions
+    and the seller supports it" -- so its absence is legal IN GENERAL. It is not legal
+    HERE: a scenario that asks whether the breakdown is SORTED has already asserted the
+    breakdown exists, and if this seller does not support it the scenario does not
+    belong, rather than belonging and excusing itself.
     """
     checked = False
     for pkg in packages:
@@ -98,12 +203,10 @@ def _assert_placements_sorted_by(packages: list[Any], metric: str, *, fallback: 
             first_val = placements[0].get(metric)
         else:
             first_val = getattr(placements[0], metric, None)
-        if first_val is None:
-            suffix = " (fallback)" if fallback else ""
-            pytest.xfail(
-                f"PRODUCTION GAP: by_placement entries lack metric '{metric}'"
-                f"{suffix} for sort verification — sorting not implemented"
-            )
+        suffix = " (fallback)" if fallback else ""
+        assert first_val is not None, (
+            f"by_placement entries lack metric {metric!r}{suffix}; a sort assertion needs the value it sorts by"
+        )
         values = []
         for p in placements:
             val = p.get(metric) if isinstance(p, dict) else getattr(p, metric, None)
@@ -113,8 +216,10 @@ def _assert_placements_sorted_by(packages: list[Any], metric: str, *, fallback: 
             f"Placement breakdown not sorted by '{metric}' descending: {values}"
         )
         checked = True
-    if not checked:
-        pytest.xfail("PRODUCTION GAP: no packages have by_placement data to verify sort")
+    assert checked, (
+        "no package carried by_placement data, so the sort claim graded nothing. A seller "
+        "that stopped emitting placement breakdowns entirely would reach this line."
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -131,6 +236,45 @@ def given_media_buy_with_status(ctx: dict, mb_id: str, owner: str, status: str) 
         "status": status,
     }
     _ensure_media_buy_in_db(ctx, mb_id, owner, status)
+
+
+@given(
+    parsers.parse(
+        'package "{pkg_id}" uses pricing_model "{pricing_model}" with rate {rate:g} and currency "{currency}"'
+    )
+)
+def given_package_pricing(ctx: dict, pkg_id: str, pricing_model: str, rate: float, currency: str) -> None:
+    """The most recently seeded buy carries ONE package bought on these terms.
+
+    Rewrites the buy's persisted request to name *pkg_id* and stores the matching
+    ``MediaPackage`` row, both through the fixture machinery: the request package comes
+    from ``request_package`` (bound to ``PackageRequest``), the option is named by
+    the option row's own ``pricing_option_id``, and its ``pricing_info`` is the same projection
+    production writes. Nothing here restates a shape.
+
+    Fixed-rate terms. The auction Given below is separate because auction pricing carries
+    a bid and the rate the buyer is owed is derived, not agreed.
+    """
+    _seed_package_terms(ctx, pkg_id, pricing_model=pricing_model, rate=rate, currency=currency, is_fixed=True)
+
+
+@given(
+    parsers.parse(
+        'package "{pkg_id}" is bought at auction on pricing_model "{pricing_model}" '
+        'with bid_price {bid_price:g} and currency "{currency}"'
+    )
+)
+def given_package_auction_pricing(ctx: dict, pkg_id: str, pricing_model: str, bid_price: float, currency: str) -> None:
+    """The most recently seeded buy carries ONE package bought at AUCTION.
+
+    An auction package has a bid, not an agreed rate: ``get-media-buy-delivery-response.json``
+    says of ``by_package[].rate`` that "For auction-based pricing, this represents the
+    effective rate based on actual delivery" — so the rate the buyer is owed is computed
+    from what delivered, and no rate is stored for it up front.
+    """
+    _seed_package_terms(
+        ctx, pkg_id, pricing_model=pricing_model, rate=None, currency=currency, is_fixed=False, bid_price=bid_price
+    )
 
 
 @given(parsers.parse('a media buy "{mb_id}" owned by "{owner}" with status "{status}" and reach_unit "{reach_unit}"'))
@@ -150,7 +294,6 @@ def given_media_buy_with_status_and_reach_unit(ctx: dict, mb_id: str, owner: str
         "status": status,
         "reach_unit": reach_unit,
     }
-    ctx.setdefault("reach_units", {})[mb_id] = reach_unit
     _ensure_media_buy_in_db(ctx, mb_id, owner, status)
 
 
@@ -186,16 +329,31 @@ def given_media_buy_known_owner(ctx: dict, mb_id: str) -> None:
     _ensure_media_buy_in_db(ctx, mb_id, owner)
 
 
+def _assert_media_buy_unseeded(ctx: dict, mb_id: str) -> None:
+    """The scenario must not have seeded the media buy it calls nonexistent.
+
+    Absence is the default -- a UC-004 scenario creates every media buy it wants
+    through a Given, so anything unseeded does not exist. The falsifiable half is
+    the other direction: a scenario that seeds ``mb-001`` and then declares it
+    absent is testing nothing, and used to say so into a ctx list no step read.
+    """
+    seeded = ctx.get("media_buys", {})
+    assert mb_id not in seeded, (
+        f"Step claims no media buy exists with id {mb_id!r}, but this scenario seeded it. Seeded ids: {sorted(seeded)}"
+    )
+
+
 @given(parsers.parse('no media buy exists with id "{mb_id}"'))
 def given_no_media_buy(ctx: dict, mb_id: str) -> None:
     """Ensure no media buy with this ID exists."""
-    ctx.setdefault("nonexistent_media_buys", []).append(mb_id)
+    _assert_media_buy_unseeded(ctx, mb_id)
 
 
 @given(parsers.parse('no media buy exists with id "{mb_id1}" or "{mb_id2}"'))
 def given_no_media_buys(ctx: dict, mb_id1: str, mb_id2: str) -> None:
     """Ensure neither media buy exists."""
-    ctx.setdefault("nonexistent_media_buys", []).extend([mb_id1, mb_id2])
+    _assert_media_buy_unseeded(ctx, mb_id1)
+    _assert_media_buy_unseeded(ctx, mb_id2)
 
 
 @given(parsers.parse('the principal "{principal_id}" has no media buys'))
@@ -204,11 +362,13 @@ def given_principal_no_buys(ctx: dict, principal_id: str) -> None:
     ctx["media_buys"] = {}
 
 
-@given(parsers.parse('no principal "{principal_id}" exists in the tenant database'))
-def given_no_principal(ctx: dict, principal_id: str) -> None:
-    """No principal with this ID exists."""
-    ctx["principal_exists"] = False
-    ctx["nonexistent_principal"] = principal_id
+# REMOVED with the scenario it served: `no principal "<id>" exists in the tenant
+# database`. The harness seeds exactly one principal -- the authenticated one -- so any
+# other id is absent by construction and the step could only assert that the scenario did
+# not name THAT one. Naming an absent id changed nothing about the request, so ext-b went
+# out as the real authenticated principal and graded a successful read while claiming to
+# grade a refusal. It now uses the generic `a presented credential that resolves to no
+# principal`, which the resolver actually rejects (AUTH_INVALID).
 
 
 def _create_unique_media_buy(
@@ -242,6 +402,8 @@ def _create_unique_media_buy(
 # query and the status_filter="pending_start" row returns nothing. Pre-serving
 # states (pending_creatives/pending_start) are pre-flight; completed is
 # post-flight; everything else uses the factory's mid-flight default.
+# Applied in _ensure_media_buy_in_db, which every Given that seeds a buy goes through,
+# so no call site carries its own copy of this rule.
 _PRE_FLIGHT = ("2099-01-01", "2099-12-31")
 _POST_FLIGHT = ("2020-01-01", "2020-12-31")
 _STATUS_FLIGHT_WINDOW: dict[str, tuple[str, str]] = {
@@ -262,10 +424,7 @@ def given_multiple_buys_various_statuses(ctx: dict, owner: str) -> None:
     transports.
     """
     for status in ("active", "completed", "paused", "rejected", "canceled", "pending_creatives", "pending_start"):
-        window = _STATUS_FLIGHT_WINDOW.get(status, (None, None))
-        _create_unique_media_buy(
-            ctx, label=f"mb-{status}", owner=owner, status=status, start_date=window[0], end_date=window[1]
-        )
+        _create_unique_media_buy(ctx, label=f"mb-{status}", owner=owner, status=status)
 
 
 @given(parsers.parse('media buys owned by "{owner}"'))
@@ -283,6 +442,23 @@ def given_adapter_has_data(ctx: dict, mb_id: str) -> None:
     """Configure adapter mock to return delivery data for the media buy."""
     env = ctx["env"]
     env.set_adapter_response(media_buy_id=mb_id)
+
+
+@given(parsers.parse('the ad server adapter reports {impressions:d} impressions and {spend:g} spend for "{pkg_id}"'))
+def given_adapter_package_metrics(ctx: dict, impressions: int, spend: float, pkg_id: str) -> None:
+    """The adapter reports exactly these metrics for *pkg_id* of the seeded buy.
+
+    Per-package, because an effective rate is a ratio of what THIS package delivered; a
+    buy-level total would not pin it.
+    """
+    mb_id = next(reversed(ctx.get("media_buys", {})), None)
+    assert mb_id, "adapter metrics need a media buy — the scenario must seed one first"
+    ctx["env"].set_adapter_response(
+        media_buy_id=mb_id,
+        impressions=impressions,
+        spend=spend,
+        packages=[{"package_id": pkg_id, "impressions": impressions, "spend": spend}],
+    )
 
 
 @given("the ad server adapter has delivery data for both media buys")
@@ -364,23 +540,87 @@ def _webhook_url(env: Any) -> str:
     Envs that merely CARRY a webhook config through a create or poll request
     (``DeliveryPollEnv``, ``MediaBuyCreateEnv``) never fetch it: for them the URL
     is data being validated, and the declared literal is the honest value.
+
+    Realized per transport by the env itself (``LocalOriginMixin.webhook_url``), never by
+    a literal in this module: over e2e the destination is the compose stack's capture
+    origin, so a hard-coded in-process URL would name an endpoint no delivery ever touched
+    — and a symbol called IN_PROCESS_* sitting in ``tests/bdd/steps/`` IS the step layer
+    naming a transport (salesagent-n78j0.1.4).
     """
     return env.webhook_url if isinstance(env, LocalOriginMixin) else _DECLARED_WEBHOOK_URL
+
+
+def _circuit_breaker_endpoint_key(ctx: dict, webhook_url: str | None = None) -> str:
+    """The key production files this scenario's circuit breaker under.
+
+    ``WebhookDeliveryService`` keys breakers ``f"{tenant_id}:{webhook_url}"``, so a step
+    that names one must name the SAME url production delivered to — :func:`_webhook_url`,
+    realized per transport.
+
+    *webhook_url* overrides the destination for the two Givens that CREATE the breaker
+    from a url the scenario itself configured. Readers pass nothing and pick up whichever
+    key those Givens stashed, falling back to the env's own key when no Given ran.
+
+    Only ever used to NAME a breaker. Seeding and reading go through the env's breaker
+    accessors — no step reaches into ``WebhookDeliveryService._circuit_breakers``, which
+    is process-local and therefore unfalsifiable across a process boundary
+    (``test_architecture_bdd_wire_discipline.py`` Check C, allowlist permanently empty).
+    """
+    stashed = ctx.get("circuit_breaker_endpoint_key")
+    if webhook_url is None and stashed:
+        return str(stashed)
+    env = ctx["env"]
+    if webhook_url is None:
+        # The env derives it, because the origin's port is only known at runtime
+        # (:meth:`LocalOriginMixin.endpoint_key`) — one place it is built.
+        return str(env.endpoint_key())
+    return f"{env._tenant_id}:{webhook_url}"
 
 
 def _set_active_webhook(ctx: dict, mb_id: str) -> None:
     """Shared: configure an active webhook for a media buy.
 
-    Also persists PushNotificationConfig to DB when running inside an
-    integration env (CircuitBreakerEnv) so send_delivery_webhook can find it.
+    Persists PushNotificationConfig to the DB whenever the env has a bound
+    session. That includes E2E: BaseTestEnv binds ``_session`` to the LIVE
+    server's database when ``e2e_config`` is present (``_base.py`` :1198-1212), so
+    the row this writes is one the running server reads — the same mechanism
+    ``_persist_simulation_config`` uses for delivery-poll responses.
     """
+    env = ctx["env"]
     ctx.setdefault("webhook_config", {})[mb_id] = {
-        "url": _webhook_url(ctx["env"]),
+        "url": _webhook_url(env),
         "active": True,
     }
-    env = ctx["env"]
     if getattr(env, "_session", None) is not None:
         _persist_webhook_config_if_needed(ctx, env)
+        _ensure_delivery_log_parent(env)
+
+
+def _ensure_delivery_log_parent(env: Any) -> None:
+    """Give ``webhook_delivery_log.media_buy_id`` the ``media_buys`` row it references.
+
+    The senders SWALLOW the integrity error and log it, so without the parent row the
+    insert fails silently, leaves zero rows, and every delivery-log assertion grades
+    nothing -- which is how ``assert_rejection_logged`` came to pass while scanning a
+    ForeignKeyViolation message for the very status code it was supposed to be grading.
+
+    LAZY, and from this Given rather than from the env's ``__enter__``. Seeding at enter
+    pre-created the tenant, and the 18 tests in
+    ``tests/integration/test_delivery_service_behavioral.py`` that build their own with a
+    raw ``TenantFactory(tenant_id="t1")`` then died on a duplicate key. The Given runs
+    after the test's own setup, which is exactly why it belongs here.
+
+    ``deliver_webhook``'s default id, because that is what the senders stamp on the row --
+    the scenario's own "mb-001" spelling never reaches the database.
+    """
+    if not hasattr(env, "make_media_buy"):
+        return
+    from sqlalchemy import select
+
+    from src.core.database.models import MediaBuy
+
+    if env._session.scalars(select(MediaBuy).filter_by(media_buy_id="mb_001")).first() is None:
+        env.make_media_buy(media_buy_id="mb_001")
 
 
 def _canonical_scheme(scheme: str) -> AuthenticationScheme:
@@ -433,7 +673,11 @@ def _auth_scheme_to_db_fields(scheme: str | None, ctx: dict) -> dict[str, Any]:
 
     ONE pair of columns for every scheme: ``authentication_type`` plus
     ``authentication_token``, which is where AdCP 3.1.1 puts the credential
-    (``push_notification_config.authentication.credentials``).
+    (``push_notification_config.authentication.credentials``) — and the one
+    selector the spec defines (security.mdx @ v3.1.1 :1424, "Mode selection is a
+    switch, not both"). The HMAC arm used to seed a separate ``webhook_secret``
+    column instead, which production never wrote and which #1291 C1 retired: a
+    second selector is precisely the "signed two ways" shape :1425 forbids.
 
     Three outcomes, and nothing else:
 
@@ -528,22 +772,16 @@ def _persist_webhook_config_if_needed(ctx: dict, env: Any) -> None:
 
 
 @given(parsers.parse('a media buy "{mb_id}" with an active reporting_webhook configured'))
-def given_webhook_configured(ctx: dict, mb_id: str) -> None:
-    """Media buy has an active webhook endpoint configured."""
-    _set_active_webhook(ctx, mb_id)
-
-
 @given(parsers.parse('a media buy "{mb_id}" with an active reporting_webhook'))
-def given_webhook_active(ctx: dict, mb_id: str) -> None:
-    """Media buy has an active webhook (same as configured)."""
-    ctx.setdefault("webhook_variant", "active")
-    _set_active_webhook(ctx, mb_id)
-
-
 @given(parsers.parse('a media buy "{mb_id}" with webhook delivery configured'))
-def given_webhook_delivery_configured(ctx: dict, mb_id: str) -> None:
-    """Media buy has webhook delivery configured."""
-    ctx.setdefault("webhook_variant", "delivery")
+def given_webhook_configured(ctx: dict, mb_id: str) -> None:
+    """Media buy has an active webhook endpoint configured.
+
+    Three sentences, one precondition. They were three functions with the same
+    body plus a ``webhook_variant`` flag ("active" / "delivery") that no step
+    read -- so the variant was a distinction the scenarios could see in their
+    Gherkin and the harness could not act on. One owner, three spellings.
+    """
     _set_active_webhook(ctx, mb_id)
 
 
@@ -555,8 +793,22 @@ def given_no_webhook(ctx: dict, mb_id: str) -> None:
 
 @given(parsers.parse('the reporting_frequency is "{frequency}"'))
 def given_reporting_frequency(ctx: dict, frequency: str) -> None:
-    """Set the reporting frequency for webhook delivery."""
-    ctx["reporting_frequency"] = frequency
+    """The scenario's reporting webhook fires at this frequency.
+
+    Nothing on this path reaches a per-scenario frequency switch, so what the step
+    establishes is that the frequency the scenario names is one the pinned
+    ``ReportingWebhook.reporting_frequency`` enum admits. That is not ceremony:
+    ``tests/factories/webhook.py`` records the live bug where a webhook config
+    spelled this field ``frequency``, the model dropped the unknown key, and a
+    scenario that "configures daily reporting" configured nothing. The top-level
+    ctx flag this replaced was read by no step.
+    """
+    from adcp.types import ReportingFrequency
+
+    allowed = {m.value for m in ReportingFrequency}
+    assert frequency in allowed, (
+        f"reporting_frequency {frequency!r} is not in the pinned ReportingFrequency enum: {sorted(allowed)}"
+    )
 
 
 @given(parsers.parse('a media buy "{mb_id}" with webhook authentication scheme "{scheme}"'))
@@ -567,24 +819,92 @@ def given_webhook_auth_scheme(ctx: dict, mb_id: str, scheme: str) -> None:
     ``given_shared_secret_valid`` / ``given_bearer_token_valid`` step can
     update the same row in-place with the auth credentials.
     """
+    env = ctx["env"]
     wh = ctx.setdefault("webhook_config", {}).setdefault(mb_id, {})
     wh["auth_scheme"] = scheme
     wh["active"] = True
-    env = ctx["env"]
     wh["url"] = _webhook_url(env)
     if getattr(env, "_session", None) is not None:
         _persist_webhook_config_if_needed(ctx, env)
+
+
+@given("the reporting_webhook registers no authentication block")
+def given_webhook_no_authentication(ctx: dict) -> None:
+    """The RFC 9421 selector: :1424 makes the ABSENCE of the block the mode switch.
+
+    Stated rather than assumed. The registration this scenario needs is not "some
+    webhook" but specifically one carrying NEITHER ``authentication_type`` NOR
+    ``authentication_token`` — with either set, ``_headers_for``
+    (``src/core/security/webhook_egress.py``) takes the legacy arm and the whole scenario
+    grades HMAC while claiming to grade 9421. So the
+    persisted row is read back and checked, which also makes this Given fail loudly if
+    a preceding Given ever starts seeding a default credential.
+    """
+    from sqlalchemy import select
+
+    from src.core.database.models import PushNotificationConfig
+
+    configs = ctx.get("webhook_config", {})
+    assert configs, "a preceding Given must have registered a reporting_webhook"
+    for cfg in configs.values():
+        cfg.pop("auth_scheme", None)
+    ctx.pop("webhook_secret", None)
+    ctx.pop("webhook_bearer_token", None)
+
+    env = ctx["env"]
+    session = getattr(env, "_session", None)
+    assert session is not None, "the 9421 arm reads the persisted registration, so it needs the integration env"
+    _persist_webhook_config_if_needed(ctx, env)
+    row = session.scalars(
+        select(PushNotificationConfig).where(
+            PushNotificationConfig.tenant_id == env._tenant_id,
+            PushNotificationConfig.principal_id == env._principal_id,
+            PushNotificationConfig.url == _webhook_url(env),
+        )
+    ).first()
+    assert row is not None, f"no PushNotificationConfig was registered for {_webhook_url(env)}"
+    assert (row.authentication_type, row.authentication_token) == (None, None), (
+        "this registration must carry no authentication block — it is the ABSENCE that selects "
+        f"RFC 9421 (:1424) — but it carries type={row.authentication_type!r} token set: "
+        f"{row.authentication_token is not None}"
+    )
+
+
+@given("the tenant publishes an RFC 9421 webhook signing key")
+def given_tenant_publishes_signing_key(ctx: dict, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Opt IN to signing material for THIS scenario.
+
+    Deliberately a per-scenario step and not an env default: every other UC-004 webhook
+    scenario must keep its current posture byte-for-byte, and
+    ``@T-UC-004-webhook-notification-type`` asserts exactly that by requiring no
+    ``Signature`` header on a delivery where this step never ran.
+
+    Both halves matter and the env owns both: an ACTIVE key row, and an origin the key
+    can be PUBLISHED from. Without the publishable origin ``origin_is_publishable``
+    is false, ``delivery_signer_for_tenant`` (``src/core/signing/outbound.py``) returns
+    ``None``, ``_headers_for`` has no signer to hand ``send``, the delivery goes out
+    unsigned — and a
+    sibling that skipped this would pass vacuously on headers that were simply absent.
+
+    *monkeypatch* is requested like any other fixture — pytest-bdd step functions can
+    depend on additional fixtures beyond ``ctx`` — and threaded through to the env's
+    provisioner, which needs it to configure the deployment KEK
+    (``provision_signing_key`` refuses to mint without one).
+    """
+    env = ctx["env"]
+    ctx["webhook_signing_kid"] = env.provision_webhook_signing_key(monkeypatch)
 
 
 @given("the shared secret is a valid 32+ character string")
 def given_shared_secret_valid(ctx: dict) -> None:
     """A valid shared secret for HMAC."""
     secret = "a" * 32
+    # ONE key. ``then_hmac_computation`` reproduces the signature from
+    # ``ctx['webhook_secret']`` -- the same value production uses to generate the
+    # header. A second ``signing_secret`` mirror used to be written here "so both
+    # keys stay in lockstep"; nothing ever read it, so it was a copy that could
+    # only ever drift.
     ctx["webhook_secret"] = secret
-    # ``then_hmac_computation`` reproduces the signature from
-    # ``ctx['signing_secret']`` (the production code uses the same value to
-    # generate the header). Mirror it here so both keys stay in lockstep.
-    ctx["signing_secret"] = secret
     env = ctx["env"]
     if getattr(env, "_session", None) is not None:
         _persist_webhook_config_if_needed(ctx, env)
@@ -670,21 +990,19 @@ def given_webhook_unauthorized(ctx: dict, status_code: int) -> None:
 def given_webhook_failed_n_times(ctx: dict, n: int) -> None:
     """Trigger n consecutive delivery failures on the circuit breaker."""
     env = ctx["env"]
-    webhook_url = next(iter(ctx.get("webhook_config", {}).values()), {}).get("url", _webhook_url(env))
-    endpoint_key = f"{env._tenant_id}:{webhook_url}"
+    configured_url = next(iter(ctx.get("webhook_config", {}).values()), {}).get("url")
+    endpoint_key = _circuit_breaker_endpoint_key(ctx, configured_url)
     env.seed_breaker_failures(endpoint_key, n)
     ctx["circuit_breaker_endpoint_key"] = endpoint_key
-    ctx["webhook_failure_count"] = n
 
 
 @given(parsers.parse('a media buy "{mb_id}" with circuit breaker in "{state}" state'))
 def given_circuit_breaker_state(ctx: dict, mb_id: str, state: str) -> None:
     """Start the scenario with the breaker already in *state* (a seed, not an effect)."""
     env = ctx["env"]
-    webhook_url = ctx.get("webhook_config", {}).get(mb_id, {}).get("url", _webhook_url(env))
-    endpoint_key = f"{env._tenant_id}:{webhook_url}"
+    configured_url = ctx.get("webhook_config", {}).get(mb_id, {}).get("url")
+    endpoint_key = _circuit_breaker_endpoint_key(ctx, configured_url)
     env.set_breaker_state(endpoint_key, state)
-    ctx["circuit_breaker_state"] = state
     ctx["circuit_breaker_endpoint_key"] = endpoint_key
 
 
@@ -697,9 +1015,8 @@ def given_circuit_breaker_timeout(ctx: dict) -> None:
     here would skip the very transition the scenario exercises.
     """
     env = ctx["env"]
-    endpoint_key = ctx.get("circuit_breaker_endpoint_key", env.endpoint_key())
+    endpoint_key = _circuit_breaker_endpoint_key(ctx)
     env.elapse_breaker_timeout(endpoint_key)
-    ctx["circuit_breaker_timeout_elapsed"] = True
 
 
 @given("the webhook endpoint has recovered and returns 200")
@@ -719,16 +1036,79 @@ def given_webhook_flaky(ctx: dict) -> None:
 # ── Reporting dimensions / attribution / seller capabilities ──────
 
 
+def _assert_wire_carries_dimension(dimension: str) -> None:
+    """The named reporting dimension must be one the delivery wire can carry.
+
+    Derived from ``PackageDelivery`` rather than a literal list, so the vocabulary
+    cannot drift from what a package breakdown can actually hold: a ``by_<dim>``
+    field IS the dimension's wire surface.
+
+    This is all a seller-capability sentence can establish here, and it is why the
+    positive and negative sentences check the same thing: production has NO
+    per-seller reporting-capability gate (there is no column, no adapter flag and
+    no capabilities field for it), so a dimension is never "unsupported" by a
+    seller -- it is either expressible on the wire or misspelled. Each of these
+    steps used to record a ctx flag instead, and no step anywhere read one.
+    """
+    from src.core.schemas.delivery import PackageDelivery
+
+    carried = {
+        name[3:] for name in PackageDelivery.model_fields if name.startswith("by_") and not name.endswith("_truncated")
+    }
+    assert dimension in carried, (
+        f"Step names reporting dimension {dimension!r}, which no PackageDelivery "
+        f"breakdown field can carry. Known dimensions: {sorted(carried)}"
+    )
+
+
+def _assert_wire_carries_metric(metric: str) -> None:
+    """The named delivery metric must be a field a breakdown entry can carry.
+
+    Same derivation and same reason as ``_assert_wire_carries_dimension``:
+    ``PlacementBreakdown`` is the pinned per-entry metric surface, and production
+    has no per-seller metric capability gate for either sentence to configure.
+    """
+    from src.core.schemas.delivery import PlacementBreakdown
+
+    assert metric in PlacementBreakdown.model_fields, (
+        f"Step names delivery metric {metric!r}, which is not a field on "
+        f"PlacementBreakdown -- no breakdown entry could ever report it."
+    )
+
+
+def _assert_attribution_window_has_no_seller_toggle() -> None:
+    """attribution_window is buyer-configurable, with no seller-side opt-out.
+
+    Both "the seller supports configurable attribution windows" and its negation
+    reduce to this one production fact, so both establish it: the buyer sends the
+    window on the request and nothing on the seller side can refuse it. What the
+    two scenarios then grade is production's actual echo behaviour, not a
+    precondition either sentence could set.
+    """
+    from src.core.schemas.delivery import GetMediaBuyDeliveryRequest
+
+    assert "attribution_window" in GetMediaBuyDeliveryRequest.model_fields, (
+        "Step claims attribution windows are configurable, but the delivery "
+        "request carries no attribution_window field."
+    )
+    toggles = [f for f in GetMediaBuyDeliveryRequest.model_fields if "attribution" in f and f != "attribution_window"]
+    assert not toggles, (
+        f"The request now carries an attribution capability toggle ({toggles}) -- "
+        "the supports/does-NOT-support sentences can finally differ, so they must "
+        "stop sharing this body."
+    )
+
+
 @given(parsers.parse('the seller supports reporting dimension "{dimension}"'))
 def given_seller_supports_dimension(ctx: dict, dimension: str) -> None:
     """Seller supports a specific reporting dimension."""
-    ctx.setdefault("supported_dimensions", []).append(dimension)
+    _assert_wire_carries_dimension(dimension)
 
 
 @given(parsers.parse('the seller does NOT support reporting dimension "{dimension}"'))
 def given_seller_no_dimension(ctx: dict, dimension: str) -> None:
     """Seller does not support a specific reporting dimension."""
-    ctx.setdefault("unsupported_dimensions", []).append(dimension)
+    _assert_wire_carries_dimension(dimension)
 
 
 @given(parsers.parse('the seller supports reporting dimensions "{dim1}" and "{dim2}"'))
@@ -738,7 +1118,8 @@ def given_seller_supports_dimensions(ctx: dict, dim1: str, dim2: str) -> None:
     Also configures the adapter with simulated breakdown data so that
     multi-dimension requests (BR-RULE-091 INV-1) return non-empty arrays.
     """
-    ctx.setdefault("supported_dimensions", []).extend([dim1, dim2])
+    _assert_wire_carries_dimension(dim1)
+    _assert_wire_carries_dimension(dim2)
     env = ctx["env"]
     for mb_id in ctx.get("media_buys", {}):
         env.set_adapter_response(media_buy_id=mb_id)
@@ -746,32 +1127,32 @@ def given_seller_supports_dimensions(ctx: dict, dim1: str, dim2: str) -> None:
 
 @given(parsers.parse('the seller does NOT support "{capability}"'))
 def given_seller_no_capability(ctx: dict, capability: str) -> None:
-    """Seller does not support a capability."""
-    ctx.setdefault("unsupported_capabilities", []).append(capability)
+    """Seller does not support a capability (used for reporting dimensions)."""
+    _assert_wire_carries_dimension(capability)
 
 
 @given("the seller supports configurable attribution windows")
 def given_seller_supports_attribution(ctx: dict) -> None:
     """Seller supports configurable attribution windows."""
-    ctx["supports_attribution_windows"] = True
+    _assert_attribution_window_has_no_seller_toggle()
 
 
 @given("the seller does NOT support configurable attribution windows")
 def given_seller_no_attribution(ctx: dict) -> None:
     """Seller does not support configurable attribution windows."""
-    ctx["supports_attribution_windows"] = False
+    _assert_attribution_window_has_no_seller_toggle()
 
 
 @given(parsers.parse('the seller does NOT report metric "{metric}"'))
 def given_seller_no_metric(ctx: dict, metric: str) -> None:
     """Seller does not report a specific metric."""
-    ctx.setdefault("unsupported_metrics", []).append(metric)
+    _assert_wire_carries_metric(metric)
 
 
 @given(parsers.parse('the seller reports metric "{metric}"'))
 def given_seller_reports_metric(ctx: dict, metric: str) -> None:
     """Seller reports a specific metric."""
-    ctx.setdefault("supported_metrics", []).append(metric)
+    _assert_wire_carries_metric(metric)
 
 
 @given("there are more geo breakdown entries than the requested limit")
@@ -805,8 +1186,14 @@ def given_device_type_under_limit(ctx: dict) -> None:
 
 @when(parsers.re(r"the Buyer Agent requests delivery metrics for media_buy_ids (?P<ids_json>\[.+?\])"))
 def when_request_by_ids(ctx: dict, ids_json: str) -> None:
-    """Request delivery metrics by media_buy_ids."""
+    """Request delivery metrics by media_buy_ids, recording the ids it sent.
+
+    ``ctx["requested_media_buy_ids"]`` is the request as sent, and the non-disclosure
+    Then needs it: it used to look for ``target_media_buy_id`` or ``media_buy_id``,
+    neither of which any step writes (salesagent-b9hi1.1).
+    """
     media_buy_ids = _parse_json_list(ids_json)
+    ctx["requested_media_buy_ids"] = media_buy_ids
     dispatch_request(ctx, media_buy_ids=media_buy_ids)
 
 
@@ -847,12 +1234,23 @@ def when_request_with_status_filter(ctx: dict, filter_value: str) -> None:
     can reconstruct it. The "(field absent)" / "(omitted)" sentinels mean "send
     no status_filter at all" — dispatching the literal would resolve to an empty
     filter and drop every buy.
+
+    An Examples cell that SPELLS an array ("[]") means that array, not a
+    one-element list holding its literal text. Wrapping it produced
+    ``status_filter=["[]"]``, which the pinned MediaBuyStatus enum rejects as an
+    unknown value — the very rejection the ``unknown_value`` sibling row already
+    grades — so the ``empty_array`` row passed without ever exercising the
+    minItems obligation it is named for (pinned v3.1.1 StatusFilter: "List
+    should have at least 1 item after validation, not 0").
     """
-    ctx.setdefault("request_params", {})["status_filter"] = [filter_value]
     if filter_value in ("(field absent)", "(omitted)"):
+        ctx.setdefault("request_params", {})["status_filter"] = [filter_value]
         dispatch_request(ctx)
-    else:
-        dispatch_request(ctx, status_filter=[filter_value])
+        return
+
+    status_filter = _parse_json_list(filter_value) if filter_value.startswith("[") else [filter_value]
+    ctx.setdefault("request_params", {})["status_filter"] = status_filter
+    dispatch_request(ctx, status_filter=status_filter)
 
 
 @when(parsers.re(r"the Buyer Agent requests delivery metrics with status_filter (?P<filter_json>\[.+?\])"))
@@ -893,55 +1291,49 @@ def when_request_end_only(ctx: dict, end: str) -> None:
 def when_request_delivery_default(ctx: dict) -> None:
     """Request delivery metrics (generic, uses ctx media_buys).
 
-    Respects ctx["principal_id"] override for scenarios like 'principal not found'.
+    Dispatches as the principal the env points at. A scenario that authenticated as a
+    named principal switched the env there already (``authenticate_env_as``), so the
+    credential presents that principal's token, and a principal with no row presents
+    none and is refused by the resolver.
     """
     media_buys = ctx.get("media_buys", {})
     mb_ids = list(media_buys.keys()) or None
     kwargs: dict = {}
     if mb_ids:
         kwargs["media_buy_ids"] = mb_ids
-    # Override identity if ctx has a custom principal_id (e.g. "unknown-buyer")
-    if "principal_id" in ctx:
-        from src.core.resolved_identity import ResolvedIdentity
-
-        env = ctx["env"]
-        kwargs["identity"] = ResolvedIdentity(
-            principal_id=ctx["principal_id"],
-            tenant_id=env._tenant_id,
-            protocol="impl",
-        )
     dispatch_request(ctx, **kwargs)
 
 
-@when("the Buyer Agent sends a delivery metrics request without authentication")
-def when_request_no_auth(ctx: dict) -> None:
-    """Request delivery metrics with missing principal (authenticated but no principal_id).
-
-    The feature scenario 'Authentication error - missing principal' expects the
-    principal_id_missing error code, which requires identity to exist but have
-    no principal_id. identity=None would trigger a different error (VALIDATION_ERROR).
-    """
-    from src.core.resolved_identity import ResolvedIdentity
-
-    ctx["has_auth"] = False
-    env = ctx["env"]
-    no_principal = ResolvedIdentity(
-        principal_id=None,
-        tenant_id=env._tenant_id,
-        protocol="mcp",
-    )
-    dispatch_request(ctx, identity=no_principal)
+# "the Buyer Agent sends a delivery metrics request without authentication" is bound by
+# steps/generic/given_auth.py::when_dispatch_without_credential, together with UC-011's
+# list_accounts spelling. Both were functions here and there with byte-identical bodies:
+# presenting no credential is tool-agnostic, because the tool is the env's declaration.
 
 
 # ── Webhook When steps ─────────────────────────────────────────────
 
 
+def _deliver_for_label(ctx: dict, mb_id: str) -> tuple[bool, dict[str, Any]]:
+    """Ask the env to deliver for the Gherkin LABEL *mb_id*, resolved to its real id.
+
+    THE RESOLUTION IS NOT OPTIONAL, and it is here so no caller can forget it. Gherkin
+    labels ("mb-001") are not database ids: ``_resolve_media_buy_id`` maps them through
+    ``ctx["media_buy_labels"]`` to whatever the Given actually created. A When that passed
+    the raw label reached the e2e action with an id no row has, and that action SEEDS the
+    row it is asked about (:func:`tests.harness._mixins._seed_media_buy_for_delivery`) —
+    so it fabricated a SECOND media buy at the literal id "mb-001" alongside the Given's
+    real one, delivered for the fabricated one, and the Thens graded that. Same scenario,
+    two media buys, and the one under test was not the one measured
+    (salesagent-n78j0.1.4).
+    """
+    return ctx["env"].deliver_webhook(media_buy_id=_resolve_media_buy_id(ctx, mb_id))
+
+
 @when(parsers.parse('the webhook scheduler fires for "{mb_id}"'))
 def when_webhook_fires(ctx: dict, mb_id: str) -> None:
     """Webhook scheduler fires for a media buy."""
-    env = ctx["env"]
     try:
-        ctx["webhook_result"] = env.call_deliver(media_buy_id=mb_id)
+        ctx["webhook_result"] = _deliver_for_label(ctx, mb_id)
     except Exception as exc:
         ctx["error"] = exc
 
@@ -959,14 +1351,8 @@ def when_deliver_webhook(ctx: dict, mb_id: str) -> None:
 @when(parsers.parse('the system delivers a "{report_type}" webhook report for "{mb_id}"'))
 def when_deliver_typed_webhook(ctx: dict, report_type: str, mb_id: str) -> None:
     """System delivers a typed webhook report via WebhookDeliveryService."""
-    ctx["report_type"] = report_type
     try:
-        result = _call_webhook_service(
-            ctx,
-            mb_id=mb_id,
-            is_final=(report_type == "final"),
-            is_adjusted=(report_type == "adjusted"),
-        )
+        result = _call_webhook_service(ctx, mb_id=mb_id, report_type=report_type)
         ctx["webhook_result"] = result
     except Exception as exc:
         ctx["error"] = exc
@@ -976,10 +1362,9 @@ def when_deliver_typed_webhook(ctx: dict, report_type: str, mb_id: str) -> None:
 def when_deliver_three_reports(ctx: dict, mb_id: str) -> None:
     """Deliver three consecutive webhook reports."""
     ctx["webhook_reports"] = []
-    env = ctx["env"]
     for _ in range(3):
         try:
-            result = env.call_deliver(media_buy_id=mb_id)
+            result = _deliver_for_label(ctx, mb_id)
             ctx["webhook_reports"].append(result)
         except Exception as exc:
             ctx["error"] = exc
@@ -991,7 +1376,7 @@ def when_attempt_webhook(ctx: dict) -> None:
     """System attempts webhook delivery."""
     env = ctx["env"]
     try:
-        ctx["webhook_result"] = env.call_deliver()
+        ctx["webhook_result"] = env.deliver_webhook()
     except Exception as exc:
         ctx["error"] = exc
 
@@ -1004,7 +1389,7 @@ def when_evaluate_circuit_breaker(ctx: dict) -> None:
     (OPEN → HALF_OPEN), then attempts delivery via call_send().
     """
     env = ctx["env"]
-    endpoint_key = ctx.get("circuit_breaker_endpoint_key", env.endpoint_key())
+    endpoint_key = _circuit_breaker_endpoint_key(ctx)
     env.drive_breaker_transition(endpoint_key)
     try:
         env.call_send()
@@ -1045,6 +1430,10 @@ def when_deliver_probe_reports(ctx: dict, n: int) -> None:
 
     delivered = env.delivery_attempts - attempts_before
     assert delivered == n, f"the scenario says {n} reports were delivered; the endpoint saw {delivered}"
+    # Nothing is left in ctx: the count this step establishes is graded HERE, by the
+    # assertion above, and no Then reads it. A `ctx["probe_count"] = n` stood here and was
+    # read by nothing on either side of this merge -- a claim that cannot be wrong
+    # (test_architecture_bdd_ctx_keys.py).
 
 
 @when("the system delivers a webhook report with retry")
@@ -1072,11 +1461,11 @@ def when_validate_webhook_config(ctx: dict) -> None:
 
     secret = ctx.get("webhook_secret", "")
     kwargs = harness_create_request_kwargs(ctx)
-    kwargs["reporting_webhook"] = {
-        "url": _DECLARED_WEBHOOK_URL,
-        "reporting_frequency": "daily",
-        "authentication": {"schemes": ["Bearer"], "credentials": secret},
-    }
+    kwargs["reporting_webhook"] = ReportingWebhookRequestFactory.payload(
+        url=_DECLARED_WEBHOOK_URL,
+        reporting_frequency="daily",
+        authentication={"schemes": ["Bearer"], "credentials": secret},
+    )
     # Dispatch the flat body (no typed construction) so a short credential reaches
     # the production transport boundary instead of being rejected in test code.
     dispatch_request(ctx, **kwargs)
@@ -1084,12 +1473,28 @@ def when_validate_webhook_config(ctx: dict) -> None:
 
 @when(parsers.parse('the webhook scheduler evaluates "{mb_id}"'))
 def when_webhook_evaluates(ctx: dict, mb_id: str) -> None:
-    """Webhook scheduler evaluates a media buy for delivery."""
-    wh = ctx.get("webhook_config", {}).get(mb_id, {})
-    if not wh.get("active"):
-        ctx["webhook_skipped"] = True
-    else:
-        ctx["webhook_evaluated"] = mb_id
+    """Ask the system under test to deliver for *mb_id*, and let PRODUCTION decide.
+
+    This step used to be test-local bookkeeping — it read ``ctx["webhook_config"]``
+    and set ``ctx["webhook_skipped"]``, calling no production code on any transport.
+    The Thens behind it ("the system should skip", "no delivery attempt should be
+    made") were therefore true because NOTHING RAN, not because production declined:
+    an assertion change to such a Then cannot mean anything (salesagent-n78j0.1.4).
+
+    The evaluation IS a delivery request: production's own skip lives at
+    ``WebhookDeliveryService._send_webhook_enhanced``, which looks up this
+    principal's active ``PushNotificationConfig`` rows and returns False without a
+    POST when there are none. Driving :meth:`deliver_webhook` is what puts that
+    branch under the scenario — the same seam every other delivery When uses, so the
+    step still names no transport.
+    """
+    # Recorded so the Then can pin that the verdict it grades belongs to the media buy
+    # the scenario named, rather than to whatever the step happened to ask about.
+    ctx["webhook_evaluated_media_buy"] = _resolve_media_buy_id(ctx, mb_id)
+    try:
+        ctx["webhook_result"] = _deliver_for_label(ctx, mb_id)
+    except Exception as exc:
+        ctx["error"] = exc
 
 
 # ── Reporting dimensions When steps ─────────────────────────────────
@@ -1108,20 +1513,23 @@ def when_request_with_dimensions(ctx: dict, mb_id: str, dims_json: str) -> None:
 
 
 def _request_single_mb(ctx: dict, mb_id: str) -> None:
-    """Shared: request delivery for a single media buy."""
+    """Shared: request delivery for a single media buy, recording the id it sent."""
+    ctx["requested_media_buy_ids"] = [mb_id]
     dispatch_request(ctx, media_buy_ids=[mb_id])
 
 
 @when(parsers.parse('the Buyer Agent requests delivery metrics for "{mb_id}"'))
+@when(parsers.parse('the Buyer Agent queries delivery metrics for media buy "{mb_id}"'))
+@when(parsers.re(r'the Buyer Agent requests delivery metrics for media_buy_ids \["(?P<mb_id>[^"]+)"\]$'))
 def when_request_single_mb(ctx: dict, mb_id: str) -> None:
-    """Request delivery metrics for a single media buy."""
-    _request_single_mb(ctx, mb_id)
+    """Request delivery metrics for a single media buy.
 
-
-@when(parsers.parse('the Buyer Agent requests delivery metrics for "{mb_id}" without attribution_window'))
-def when_request_no_attribution(ctx: dict, mb_id: str) -> None:
-    """Request without attribution window."""
-    ctx.setdefault("omitted_fields", []).append("attribution_window")
+    Three spellings of one dispatch -- "requests ... for", "queries ... for media
+    buy", and the quoted ``media_buy_ids [...]`` form. They were three functions
+    with the same body, each also stashing a flag naming its own spelling
+    (``query_variant``, ``id_format``) that no step read: the wire call is
+    identical, so there was nothing for a Then to tell apart.
+    """
     _request_single_mb(ctx, mb_id)
 
 
@@ -1132,8 +1540,17 @@ def when_request_no_attribution(ctx: dict, mb_id: str) -> None:
     )
 )
 def when_request_with_attribution(ctx: dict, mb_id: str, aw_json: str) -> None:
-    """Request with attribution window."""
+    """Request with attribution window, recording what was sent for the echo Then.
+
+    ``ctx["request_attribution"]`` is the REQUEST AS SENT, and it is written here
+    because this is the only step that knows it. ``then_attribution_echo`` read that
+    key with hardcoded fallbacks (``7`` / ``"days"``) and nothing wrote it, so it
+    compared the response against constants that happened to match this scenario's
+    Examples — a seller that ignored the buyer's window entirely and always answered
+    7 days would have passed (salesagent-b9hi1.1).
+    """
     aw = json.loads(aw_json)
+    ctx["request_attribution"] = aw
     dispatch_request(ctx, media_buy_ids=[mb_id], attribution_window=aw)
 
 
@@ -1179,13 +1596,6 @@ def when_boundary_daily_breakdown(ctx: dict, value: str) -> None:
 @when(parsers.parse("the Buyer Agent requests delivery metrics with account {value}"))
 def when_partition_account(ctx: dict, value: str) -> None:
     """Partition test: account value."""
-    _seed_valid_account_if_named(ctx, value)
-    _dispatch_partition(ctx, "account", value)
-
-
-@when(parsers.parse("the Buyer Agent requests delivery metrics at account boundary {value}"))
-def when_boundary_account(ctx: dict, value: str) -> None:
-    """Boundary test: account value."""
     _seed_valid_account_if_named(ctx, value)
     _dispatch_partition(ctx, "account", value)
 
@@ -1243,40 +1653,29 @@ def when_partition_principal(ctx: dict, partition: str) -> None:
 
 @when(parsers.re(r'the Buyer Agent requests delivery metrics at ownership boundary "(?P<boundary_point>[^"]+)"'))
 def when_boundary_ownership(ctx: dict, boundary_point: str) -> None:
-    """Boundary test: ownership."""
-    _dispatch_partition(ctx, "ownership", boundary_point)
+    """Boundary test: ownership — swap identity, same as the partition outline.
+
+    This used to send the Gherkin label as a literal ``ownership=`` kwarg. That
+    is not a request field, so FastMCP's TypeAdapter rejected it as unrecognized
+    before _get_media_buy_delivery_impl ever ran — matching "invalid" for the
+    mismatch row no matter what production does about cross-principal access
+    (debt item B3). Ownership is decided by the caller's IDENTITY, so the
+    boundary now routes through the same reconciled dispatcher as its partition
+    twin.
+    """
+    _dispatch_ownership_partition(ctx, boundary_point)
 
 
-@when(parsers.re(r'the Buyer Agent queries delivery artifacts with sampling method "(?P<partition_value>[^"]+)"'))
-def when_partition_sampling(ctx: dict, partition_value: str) -> None:
-    """Partition test: sampling method."""
-    _dispatch_partition(ctx, "sampling_method", partition_value)
-
-
-@when(parsers.re(r'the Buyer Agent queries delivery artifacts at sampling boundary "(?P<boundary_value>[^"]+)"'))
-def when_boundary_sampling(ctx: dict, boundary_value: str) -> None:
-    """Boundary test: sampling method."""
-    _dispatch_partition(ctx, "sampling_method", boundary_value)
-
-
-@when(parsers.parse('the Buyer Agent queries delivery metrics for media buy "{mb_id}"'))
-def when_query_single_mb(ctx: dict, mb_id: str) -> None:
-    """Query delivery metrics for a single media buy (sandbox scenarios)."""
-    ctx.setdefault("query_variant", True)
-    _request_single_mb(ctx, mb_id)
+# The two sampling When steps are deleted with the scenarios that bound them
+# (2026-09-15). They dispatched `sampling_method`, which AdCP 3.1.1 declares nowhere,
+# so nothing they sent could be graded against the pin. BR-UC-004 records the full
+# reasoning where the outlines stood.
 
 
 @when("the Buyer Agent queries delivery metrics for a non-existent media buy")
 def when_query_nonexistent(ctx: dict) -> None:
     """Query delivery metrics for a non-existent media buy."""
     dispatch_request(ctx, media_buy_ids=["mb-nonexistent"])
-
-
-@when(parsers.re(r'the Buyer Agent requests delivery metrics for media_buy_ids \["(?P<mb_id>[^"]+)"\]$'))
-def when_request_single_id_quoted(ctx: dict, mb_id: str) -> None:
-    """Request for a single media buy ID (quoted format)."""
-    ctx.setdefault("id_format", "quoted")
-    _request_single_mb(ctx, mb_id)
 
 
 @when(
@@ -1286,8 +1685,25 @@ def when_request_single_id_quoted(ctx: dict, mb_id: str) -> None:
     )
 )
 def when_request_without_field(ctx: dict, mb_id: str, field: str) -> None:
-    """Request without a specific optional field (attribution_window etc)."""
-    ctx.setdefault("omitted_fields", []).append(field)
+    """Request without a specific optional field (attribution_window etc).
+
+    Also owns the "without attribution_window" sentence, which used to have its
+    own ``parsers.parse`` step shadowing this regex with an identical body plus
+    an ``omitted_fields`` list no step read.
+
+    Omitting a field is only meaningful if the request HAS one to omit, so the
+    named field must be real: "without frobnicator" would otherwise dispatch a
+    perfectly ordinary request and grade whatever came back.
+    """
+    from src.core.schemas.delivery import GetMediaBuyDeliveryRequest
+
+    assert field in GetMediaBuyDeliveryRequest.model_fields, (
+        f"Step omits {field!r} from the delivery request, but the request carries "
+        f"no such field: {sorted(GetMediaBuyDeliveryRequest.model_fields)}"
+    )
+    assert field not in (ctx.get("request_kwargs") or {}), (
+        f"Step claims the request goes out without {field!r}, but a prior step put it there."
+    )
     _request_single_mb(ctx, mb_id)
 
 
@@ -1326,24 +1742,26 @@ def then_includes_delivery_data_only(ctx: dict, mb_id: str) -> None:
 
 @then(parsers.parse('the response should NOT include delivery data for "{mb_id}"'))
 def then_excludes_delivery_data(ctx: dict, mb_id: str) -> None:
-    """Assert response does NOT include delivery data for the media buy."""
-    resp = payload_or_none(ctx)
-    if resp is None:
-        return  # No response at all = not included
-    deliveries = getattr(resp, "media_buy_deliveries", None) or []
-    mb_ids = [d.media_buy_id for d in deliveries]
-    assert mb_id not in mb_ids, f"Expected no delivery data for '{mb_id}', but found it"
+    """Assert the response arrived and carries no delivery row for *mb_id*.
 
+    ``require_payload``, not ``payload_or_none``: every scenario binding this
+    sentence asserts ``the response is compliant with the get_media_buy_delivery
+    spec`` first, so a dispatch that produced no payload is a failed request, not
+    an omission. The previous ``if resp is None: return`` graded that failure as
+    a pass — silent omission and total failure are the two outcomes this step
+    exists to tell apart (BR-RULE-030 INV-5: non-owned media buys are omitted
+    from a SUCCESSFUL partial result, never turned into a rejection).
 
-@then(parsers.parse('the response should not include delivery data for "{mb_id}"'))
-def then_no_delivery_data(ctx: dict, mb_id: str) -> None:
-    """Assert response does not include delivery data for the media buy."""
-    resp = payload_or_none(ctx)
-    if resp is None:
-        return
-    deliveries = getattr(resp, "media_buy_deliveries", None) or []
-    mb_ids = [d.media_buy_id for d in deliveries]
-    assert mb_id not in mb_ids, f"Expected no delivery data for '{mb_id}'"
+    One definition, both spellings: ``parsers.parse`` matches case-insensitively,
+    so this binds the "should NOT" sentence of
+    @T-UC-004-identify-mixed-ownership and the "should not" sentence of
+    @T-UC-004-status-filter-multi alike. The verbatim second copy that used to
+    sit here (``then_no_delivery_data``) competed for both of them, and which one
+    ran was decided by plugin registration order.
+    """
+    resp = require_payload(ctx)
+    mb_ids = [d.media_buy_id for d in (getattr(resp, "media_buy_deliveries", None) or [])]
+    assert mb_id not in mb_ids, f"Expected no delivery data for '{mb_id}', got: {mb_ids}"
 
 
 @then("the response should have an empty media_buy_deliveries array")
@@ -1429,6 +1847,22 @@ def then_has_mb_status(ctx: dict, status: str) -> None:
     resp = require_payload(ctx)
     d = resp.media_buy_deliveries[0]
     assert d.status == status, f"Expected status '{status}', got '{d.status}'"
+
+
+@then(parsers.parse('buyers MAY treat the legacy alias "{legacy_status}" as equivalent to "{status}"'))
+def then_legacy_status_alias(ctx: dict, legacy_status: str, status: str) -> None:
+    """Buyer-side compatibility note, not a seller behavior: confirms the
+    response actually carries the NEW v3.1 canonical status name (the
+    precondition for "buyers who used to check for the legacy name MAY treat
+    the new one as equivalent" to be meaningful at all) rather than silently
+    also emitting the retired legacy value.
+    """
+    resp = require_payload(ctx)
+    d = resp.media_buy_deliveries[0]
+    assert d.status == status, f"Expected canonical status {status!r}, got {d.status!r}"
+    assert d.status != legacy_status, (
+        f"response carries the retired legacy status {legacy_status!r} instead of canonical {status!r}"
+    )
 
 
 @then("the response should include aggregated totals across both media buys")
@@ -1534,15 +1968,68 @@ def then_aggregated_spend(ctx: dict) -> None:
 
 @then(parsers.parse('the response should not include an error for "{mb_id}"'))
 def then_no_error_for_mb(ctx: dict, mb_id: str) -> None:
-    """Assert no error for a specific media buy — checks both global ctx and per-delivery errors."""
-    assert "error" not in ctx, f"Expected no error for '{mb_id}' but got: {ctx.get('error')}"
+    """No entry in the response's ``errors[]`` names *mb_id*.
+
+    The buyer-facing side of the advisory contract its twin
+    (``the response errors include code ... for media buy ...``) grades: the delivery
+    verb answers about EVERY id it was asked about, naming an unresolved one in
+    ``errors[]`` — "Task-specific errors and warnings (e.g., missing delivery data,
+    reporting platform issues)", ``get-media-buy-delivery-response.json`` — and saying
+    nothing there about the ones it delivered.
+
+    Read BY VALUE off the wire array (through the sanctioned reader), not off
+    ``ctx["error"]``: the sibling step promotes the entry it matched into ``ctx``, so a
+    ctx-presence check would report a failure for THIS id whenever another id in the
+    same response had one.
+    """
+    named = [err for err in wire_advisory_errors(ctx) if (err.get("details") or {}).get("media_buy_id") == mb_id]
+    assert not named, f"Response errors[] names media buy {mb_id!r}: {named}"
+
+
+@then(parsers.re(r'the response errors include code "(?P<code>[^"]+)" for media buy "(?P<mb_id>[^"]+)"$'))
+def then_response_errors_include_for_mb(ctx: dict, code: str, mb_id: str) -> None:
+    """A TASK-LEVEL error in a SUCCESSFUL delivery response names *code* for *mb_id*.
+
+    The delivery verb reports a per-buy failure INSIDE a completed response rather than
+    refusing the call: get-media-buy-delivery-response.json declares ``errors[]`` as
+    "Task-specific errors and warnings (e.g., missing delivery data, reporting platform
+    issues)", and an unavailable ad server is a reporting platform issue. A request for
+    five buys where one platform is down still answers for the other four.
+
+    So this is NOT ``the response contains error code`` with a different spelling. That
+    primitive grades the ENVELOPE — ``adcp_error`` — and a response like this one
+    deliberately has none. Asserting envelope failure here is what the scenario used to
+    do, and it only ever passed because ``the operation should fail`` promoted this very
+    object into ``ctx["error"]`` and ``the error code should be`` then read it back off
+    the reconstruction rather than off the wire.
+
+    The item is identified by ``details.media_buy_id``, which is where the delivery verb
+    puts it -- the buy has no entry in ``media_buy_deliveries`` at all when its platform
+    is unreachable, so a per-delivery lookup (``the response should not include an error
+    for``) would find nothing and pass vacuously.
+
+    Sets ``ctx["error"]`` to the MATCHED error so the per-error Thens that follow grade
+    that object. That is the same promotion ``then_operation_fails`` performs, made
+    explicit and narrowed to the error this step actually found.
+    """
     resp = payload_or_none(ctx)
-    if resp is not None:
-        deliveries = getattr(resp, "media_buy_deliveries", None) or []
-        for d in deliveries:
-            if getattr(d, "media_buy_id", None) == mb_id:
-                per_delivery_errors = getattr(d, "errors", None) or []
-                assert not per_delivery_errors, f"Delivery '{mb_id}' has errors: {per_delivery_errors}"
+    assert resp is not None, (
+        f"No response payload to read errors[] from -- the dispatch produced nothing. ctx: {list(ctx)}"
+    )
+    errors = list(getattr(resp, "errors", None) or [])
+    assert errors, (
+        f"Response carries an EMPTY errors[], so it reports no task-level failure at all. "
+        f"Expected {code!r} for media buy {mb_id!r}."
+    )
+    for err in errors:
+        details = getattr(err, "details", None) or {}
+        if getattr(err, "code", None) == code and details.get("media_buy_id") == mb_id:
+            ctx["error"] = err
+            return
+    raise AssertionError(
+        f"No errors[] entry with code {code!r} for media buy {mb_id!r}. Carried: "
+        f"{[(getattr(e, 'code', None), (getattr(e, 'details', None) or {}).get('media_buy_id')) for e in errors]}"
+    )
 
 
 @then(parsers.parse('no error should be returned for "{mb_id}"'))
@@ -1636,47 +2123,37 @@ def then_webhook_payload_has_metrics(ctx: dict, mb_id: str) -> None:
     values (impressions, spend) — not just structural presence.  The
     reporting_period check is left to its dedicated Then step.
     """
-    payload = _get_last_webhook_payload(ctx)
+    result = _get_last_webhook_result(ctx)
     real_id = _resolve_media_buy_id(ctx, mb_id)
-    # ID mapping: payload media_buy_id must match the requested buy
-    assert payload.get("media_buy_id") == real_id, (
-        f"Expected payload media_buy_id == {real_id!r}, got {payload.get('media_buy_id')!r}"
+    entries = _delivery_entries(result)
+
+    # ID mapping, at the nesting media-buy-delivery-webhook-result.json declares it:
+    # media_buy_id is a property of a media_buy_deliveries[] ENTRY, never of the report.
+    entry = next((e for e in entries if e.get("media_buy_id") == real_id), None)
+    assert entry is not None, (
+        f"no media_buy_deliveries[] entry for {real_id!r}: got {[e.get('media_buy_id') for e in entries]!r}"
     )
 
-    # Metrics: the payload must carry concrete numeric delivery data.
-    # Look in totals, then by_package, then top-level — whatever the payload shape.
-    totals = payload.get("totals") or payload.get("aggregated_totals") or {}
-    impressions = totals.get("impressions") if isinstance(totals, dict) else None
-    spend = totals.get("spend") if isinstance(totals, dict) else None
+    # Metrics live in the entry's `totals`. There is no fallback chain: the pin gives one
+    # location, and an "or wherever else it might be" search passes against a shape the
+    # buyer's own schema validation would reject.
+    totals = entry.get("totals")
+    assert isinstance(totals, dict), f"delivery entry for {real_id!r} carries no totals object: got {totals!r}"
+    impressions = totals.get("impressions")
+    spend = totals.get("spend")
 
-    # Fallback: check by_package or top-level keys
-    if impressions is None:
-        pkgs = payload.get("by_package") or []
-        if pkgs:
-            impressions = sum(p.get("impressions", 0) for p in pkgs if isinstance(p, dict))
-            spend = sum(p.get("spend", 0) for p in pkgs if isinstance(p, dict))
-        else:
-            impressions = payload.get("impressions")
-            spend = payload.get("spend")
-
-    assert impressions is not None, (
-        f"Webhook payload for {real_id!r} missing delivery metric 'impressions': payload keys={list(payload.keys())}"
-    )
     assert isinstance(impressions, (int, float)) and impressions > 0, (
-        f"Expected positive numeric impressions for {real_id!r}, got {impressions!r}"
-    )
-    assert spend is not None, (
-        f"Webhook payload for {real_id!r} missing delivery metric 'spend': payload keys={list(payload.keys())}"
+        f"Expected positive numeric totals.impressions for {real_id!r}, got {impressions!r}"
     )
     assert isinstance(spend, (int, float)) and spend > 0, (
-        f"Expected positive numeric spend for {real_id!r}, got {spend!r}"
+        f"Expected positive numeric totals.spend for {real_id!r}, got {spend!r}"
     )
 
 
 @then("the payload should include the reporting_period")
 def then_webhook_payload_has_period(ctx: dict) -> None:
     """Assert webhook payload includes a reporting_period with start and end."""
-    payload = _get_last_webhook_payload(ctx)
+    payload = _get_last_webhook_result(ctx)
     period = payload.get("reporting_period")
     assert period is not None, f"Webhook payload missing 'reporting_period': {list(payload.keys())}"
     assert period.get("start") is not None and period.get("end") is not None, (
@@ -1687,7 +2164,7 @@ def then_webhook_payload_has_period(ctx: dict) -> None:
 @then(parsers.parse('the payload notification_type should be "{ntype}"'))
 def then_notification_type(ctx: dict, ntype: str) -> None:
     """Assert notification type matches expected value."""
-    payload = _get_last_webhook_payload(ctx)
+    payload = _get_last_webhook_result(ctx)
     assert payload.get("notification_type") == ntype, (
         f"Expected notification_type={ntype!r}, got {payload.get('notification_type')!r}"
     )
@@ -1696,7 +2173,7 @@ def then_notification_type(ctx: dict, ntype: str) -> None:
 @then(parsers.re(r"the payload (?P<next_expected>.+) include next_expected_at"))
 def then_next_expected(ctx: dict, next_expected: str) -> None:
     """Assert next_expected_at is present or absent based on 'should'/'should not'."""
-    payload = _get_last_webhook_payload(ctx)
+    payload = _get_last_webhook_result(ctx)
     should_include = "should not" not in next_expected
     has_key = "next_expected_at" in payload
     if should_include:
@@ -1709,10 +2186,16 @@ def then_next_expected(ctx: dict, next_expected: str) -> None:
 
 @then("each report should have a higher sequence_number than the previous")
 def then_sequence_ascending(ctx: dict) -> None:
-    """Assert sequence numbers are strictly increasing across consecutive deliveries."""
+    """Assert sequence numbers are strictly increasing across consecutive deliveries.
+
+    A MULTI-call read: it needs the whole stream the endpoint received, not just the
+    last one. [5/5 routed — salesagent-n78j0.1.4]
+    """
     deliveries = _webhook_deliveries(ctx)
-    assert len(deliveries) >= 2, f"Expected at least 2 webhook POSTs for sequence check, got {len(deliveries)}"
-    seq_nums = [req.json().get("sequence_number") for req in deliveries]
+    assert len(deliveries) >= 2, f"Expected at least 2 webhook deliveries for sequence check, got {len(deliveries)}"
+    # Read at the REPORT layer: ``sequence_number`` is a field of ``result``, not of the
+    # envelope, so an envelope-level read is None for every delivery and grades nothing.
+    seq_nums = [_webhook_result(_sent_payload(delivery)).get("sequence_number") for delivery in deliveries]
     for i in range(1, len(seq_nums)):
         assert seq_nums[i] is not None, f"POST call {i} payload missing sequence_number"
         assert seq_nums[i] > seq_nums[i - 1], (
@@ -1722,21 +2205,39 @@ def then_sequence_ascending(ctx: dict) -> None:
 
 @then("the first sequence_number should be >= 1")
 def then_first_sequence(ctx: dict) -> None:
-    """Assert first webhook POST has sequence_number >= 1."""
+    """Assert the FIRST delivery of the stream has sequence_number >= 1.
+
+    A MULTI-call read for the same reason as its sibling: "first" is only meaningful
+    against the whole stream. [5/5 routed — salesagent-n78j0.1.4]
+    """
     deliveries = _webhook_deliveries(ctx)
-    assert deliveries, "No webhook POSTs were made"
-    first_payload = deliveries[0].json()
+    assert deliveries, "No webhook deliveries were made"
+    first_payload = _webhook_result(_sent_payload(deliveries[0]))
     seq = first_payload.get("sequence_number")
-    assert seq is not None, f"First webhook POST payload missing sequence_number: {list(first_payload.keys())}"
+    assert seq is not None, f"First webhook delivery payload missing sequence_number: {list(first_payload.keys())}"
     assert seq >= 1, f"Expected sequence_number >= 1, got {seq}"
 
 
 @then('the payload should not include "aggregated_totals" field')
 def then_no_aggregated_in_payload(ctx: dict) -> None:
-    """Assert webhook payload excludes aggregated_totals (polling-only field)."""
-    payload = _get_last_webhook_payload(ctx)
-    assert "aggregated_totals" not in payload, (
-        f"Webhook payload should not contain 'aggregated_totals' (polling-only field): got keys {list(payload.keys())}"
+    """Assert the delivery REPORT excludes aggregated_totals (polling-only field).
+
+    Graded on ``result``, not on the envelope. The envelope's field set is fixed by
+    ``core/mcp-webhook-payload.json``, so ``aggregated_totals`` is structurally impossible
+    there and an assertion against the POST body could not fail whatever production did --
+    which is exactly how this read while the scenario was ledgered.
+
+    The result layer is where the field could actually appear:
+    ``media-buy-delivery-webhook-result.json`` sets ``additionalProperties: true`` and does
+    not declare it, so an emitted value is schema-VALID and no schema check can catch it.
+    The obligation is prose only -- ``L3/webhooks.mdx`` :253, "API-only for
+    get_media_buy_delivery responses and must not be emitted in reporting webhook result
+    payloads" -- which is why it needs a named-field assertion here.
+    """
+    result = _get_last_webhook_result(ctx)
+    assert "aggregated_totals" not in result, (
+        f"the delivery report carries 'aggregated_totals', which L3/webhooks.mdx :253 forbids "
+        f"in a reporting webhook result: got keys {sorted(result)}"
     )
 
 
@@ -1755,44 +2256,6 @@ def then_retry_3_times(ctx: dict) -> None:
     assert call_count <= 4, f"Expected at most 4 calls (1+3 retries), got {call_count}"
 
 
-def _pinned_jitter(ctx: dict) -> float:
-    """The jitter offset this env pins production's ``random.uniform`` draw to.
-
-    CircuitBreakerEnv patches ``random.uniform`` to a constant so the schedule is
-    deterministic. That constant is part of the expected delay, not something to
-    tolerate: grading ``base + pinned`` exactly is what keeps a magnitude
-    regression from hiding inside a jitter window.
-    """
-    return float(ctx["env"].mock["random"].return_value)
-
-
-def _assert_exponential_backoff(ctx: dict, *, expected_sleeps: int = 2) -> list[float]:
-    """Assert the mocked sleep calls match BR-RULE-029's 1s/2s/4s schedule.
-
-    Production sleeps between retries. This reads the recorded sleep durations,
-    asserts there were exactly ``expected_sleeps`` of them (= ``expected_sleeps + 1``
-    total attempts), and grades the durations against the rule's actual magnitudes
-    via the shared grader. Returns them for any further per-step assertions.
-
-    Magnitudes, not ratios: a ratio check passes for any geometric schedule, so
-    0.1/0.2/0.4 would satisfy it while breaking the invariant the scenario names.
-
-    ``sleep`` is the one thing these scenarios still mock. It is not a transport:
-    the delivery attempts themselves reach a real endpoint and are counted there.
-    Mocking the clock is what keeps a 1s/2s/4s schedule assertable in a test that
-    finishes in milliseconds — the alternative is to wait it out, and a schedule
-    nobody waits for cannot be graded at all.
-    """
-    sleep_calls = ctx["env"].mock["sleep"].call_args_list
-    assert sleep_calls, "Expected at least one sleep call for backoff"
-    durations = [float(c[0][0]) for c in sleep_calls]
-    assert len(durations) == expected_sleeps, (
-        f"Expected {expected_sleeps} backoff sleeps (for {expected_sleeps + 1} total attempts), got {len(durations)}"
-    )
-    assert_backoff_schedule(durations, jitter=_pinned_jitter(ctx))
-    return durations
-
-
 @then("retries should use exponential backoff (1s, 2s, 4s + jitter)")
 def then_exponential_backoff(ctx: dict) -> None:
     """Assert sleep durations are 1s/2s/4s and that jitter is actually drawn.
@@ -1804,16 +2267,17 @@ def then_exponential_backoff(ctx: dict) -> None:
     step is graded by the draw itself: production must ask for a jitter value in
     [0, 1) per retry. Deleting ``+ random.uniform(0, 1)`` from the delay makes
     this step red, which is the whole point of grading the step text.
-    """
-    durations = _assert_exponential_backoff(ctx)
 
-    jitter_draws = ctx["env"].mock["random"].call_args_list
-    assert len(jitter_draws) == len(durations), (
-        f"Expected one jitter draw per backoff sleep ({len(durations)}), got {len(jitter_draws)} — "
-        "BR-RULE-029 requires randomisation so retries do not thunder"
-    )
-    for i, call in enumerate(jitter_draws):
-        assert call.args == (0, 1), f"Jitter draw {i + 1} was random.uniform{call.args}, expected random.uniform(0, 1)"
+    Read through ``env.assert_retry_backoff_schedule()``, the sibling of
+    ``assert_no_retry_schedule_entered``, because the durations come off the
+    RUNNER's patched clock: under e2e_rest the sender is the live server (the
+    e2e realization of ``deliver_webhook`` drives the deployment's own delivery),
+    whose waits happen in another process. The env declares that, rather than
+    this step reaching into the patched clock itself, so the one unobservable
+    assertion is named where it lives and the scenario's wire-observable Thens
+    above still grade the live server.
+    """
+    ctx["env"].assert_retry_backoff_schedule(grade_jitter_draws=True)
 
 
 @then("the system should retry up to 3 times with exponential backoff")
@@ -1826,7 +2290,7 @@ def then_retry_with_backoff(ctx: dict) -> None:
     """
     env = ctx["env"]
     assert env.delivery_attempts <= 4, f"Expected at most 4 calls (1 + 3 retries), got {env.delivery_attempts}"
-    _assert_exponential_backoff(ctx)
+    env.assert_retry_backoff_schedule()
 
 
 @then("the system should not retry the delivery")
@@ -1842,23 +2306,23 @@ def then_no_retry(ctx: dict) -> None:
 def then_log_auth_rejection(ctx: dict) -> None:
     """Assert the system logged the authentication rejection.
 
-    CircuitBreakerEnv captures WARNING+ log records from the webhook delivery
-    service. This step verifies a log record about the 401/client error was
-    emitted during the delivery attempt.
+    Two facts, both wire- or database-observable on EVERY transport including
+    e2e_rest: the delivery failed, and the sender RECORDED the rejection with the
+    status code it received.
+
+    The record is read out of ``webhook_delivery_log`` rather than off this
+    process's logger. Under e2e_rest the sender is the live server, so a log line
+    is emitted inside the container and never reaches the runner's handler --
+    which is why the log form needed an e2e escape hatch. The row does not: it is
+    written by whichever process delivered, into the database both share.
     """
     env = ctx["env"]
     # 1. Confirm delivery failed (precondition)
     success = _extract_webhook_success(ctx)
     assert success is False, f"Expected webhook delivery to fail on auth rejection, got success={success!r}"
 
-    # 2. Verify auth rejection was logged
-    log_records = getattr(env, "captured_logs", None) or ctx.get("captured_logs")
-    assert log_records is not None, "CircuitBreakerEnv.captured_logs not available — harness must capture logs"
-    found_auth_log = any("client error" in r.lower() or "401" in r or "unauthorized" in r.lower() for r in log_records)
-    assert found_auth_log, (
-        f"Expected a WARNING log record about auth rejection (401/client error/unauthorized), "
-        f"but captured {len(log_records)} records: {log_records[:5]}"
-    )
+    # 2. The sender attributed the rejection, with the status the receiver sent.
+    env.assert_rejection_logged(http_status=401)
 
 
 @then("the webhook should be marked as failed")
@@ -1922,16 +2386,8 @@ def then_circuit_breaker_recorded_failure(ctx: dict) -> None:
     all.
     """
     env = ctx["env"]
-    endpoint_key = ctx.get("circuit_breaker_endpoint_key", env.endpoint_key())
+    endpoint_key = _circuit_breaker_endpoint_key(ctx)
     env.assert_circuit_breaker_failure_recorded(endpoint_key)
-
-
-@then(parsers.parse('the circuit breaker should be in "{state}" state'))
-def then_circuit_breaker_state(ctx: dict, state: str) -> None:
-    """Assert circuit breaker state matches expected value."""
-    env = ctx["env"]
-    actual = env.get_breaker_state()
-    assert actual.lower() == state.lower(), f"Expected CB state '{state.lower()}', got '{actual}'"
 
 
 @then("subsequent scheduled deliveries should be suppressed")
@@ -1969,11 +2425,11 @@ def then_single_probe(ctx: dict) -> None:
     "A probe delivery was attempted" is a claim about a DELIVERY, so it is graded
     on the endpoint, the same way ``then_deliveries_resume`` below grades its own.
 
-    What stood here was a three-way branch whose last two arms could not run. It
+    What stood here was a three-way branch whose last two branches could not run. It
     looked for ``env.mock["httpx_post"]`` or ``env.mock["webhook_post"]``; a
     ``CircuitBreakerEnv`` holds neither, because it delivers over real HTTP to a
-    real origin rather than through a POST mock. So the second arm was dead, and
-    the third arm — a ``pytest.xfail("HARNESS GAP")`` guarded by
+    real origin rather than through a POST mock. So the second branch was dead, and
+    the third branch — a ``pytest.xfail("HARNESS GAP")`` guarded by
     ``ctx["cb_can_attempt"]``, a key no step in this module writes — was dead
     twice over. A dormant xfail on a branch that cannot execute grades nothing
     while reading, in the report, exactly like a scenario that does.
@@ -2072,35 +2528,85 @@ def then_delivery_successful(ctx: dict) -> None:
 
 @then("the circuit breaker state should remain healthy")
 def then_circuit_healthy(ctx: dict) -> None:
-    """Assert circuit breaker remains in healthy (closed) state."""
+    """Assert the breaker is CLOSED *and* carries no recorded failure.
+
+    "Healthy" is two facts, and the state alone is the weaker one: the default
+    failure_threshold is 5, so a delivery that succeeded but was ALSO counted as
+    a failure still reports CLOSED. The failure count is what says the retried
+    delivery was recorded as the single success it was.
+
+    Both reads go through the production public API
+    (``WebhookDeliveryService.get_circuit_breaker_state``). Neither can tell "no
+    breaker exists" from "a breaker with zero failures" — stated at
+    ``breaker_snapshot`` and unchanged here — so this does NOT grade that a
+    success was recorded at all; that half is prebid/salesagent#2060's, and it
+    needs a wire surface (``reporting_delayed``) this scenario does not touch.
+    """
     env = ctx["env"]
     actual = env.get_breaker_state()
     assert actual == "closed", f"Expected CB to remain 'closed' (healthy), got '{actual}'"
+    _state, failure_count = env.breaker_snapshot()
+    assert failure_count == 0, (
+        f"Expected the successful (retried) delivery to leave no recorded failure, got "
+        f"failure_count={failure_count} — a delivery that succeeded is being counted against the endpoint"
+    )
 
 
 @then("the configuration should be rejected")
 def then_config_rejected(ctx: dict) -> None:
-    """Assert production rejected the webhook config on the wire (VALIDATION_ERROR).
+    """Assert production rejected the webhook config on the wire (INVALID_REQUEST).
 
     The short credential is rejected by production's Pydantic boundary
     (Authentication.credentials MinLen=32) — assert the real two-layer AdCP
     wire envelope, not a reconstructed/hand-built exception.
+
+    Graded STRUCTURALLY on the pin's own channel: `issues[].keyword` carries the
+    JSON Schema keyword that rejected the payload, never a substring of the
+    buyer-facing sentence, which is derived from the code through CODE_TABLE.
+
+    This read `details.validation_errors[].type` and pydantic's own error token
+    (`string_too_short`). The wire now carries `issues[].keyword` = `minLength`,
+    which is what core/error.json asks for -- "drawn from the JSON Schema
+    vocabulary ... Matches the keyword names emitted by JSON Schema validators".
     """
-    result = ctx["result"]
-    result.assert_wire_error("VALIDATION_ERROR", recovery="correctable", message_substr="32")
+    # INVALID_REQUEST, and this step's OWN evidence is why: it asserts
+    # issues[].keyword == "minLength", a JSON Schema keyword. A rejection carrying a JSON
+    # Schema keyword is by definition a "violates schema constraints" rejection, which
+    # 3.1/enums/error-code.json assigns to INVALID_REQUEST. VALIDATION_ERROR is for
+    # business rules "beyond schema validation" -- there is no such rule here, only
+    # Authentication.credentials MinLen=32.
+    ctx["result"].assert_wire_error("INVALID_REQUEST", recovery="correctable", issues=[{"keyword": "minLength"}])
 
 
 @then("the error should indicate minimum credential length is 32 characters")
 def then_error_min_credential_length(ctx: dict) -> None:
-    """Assert the wire error message names the 32-character minimum.
+    """Assert the wire envelope names the 32-character minimum on the credentials field.
 
-    The 32-char minimum surfaces in the wire error MESSAGE (Pydantic's
-    "String should have at least 32 characters"). Production's RequestValidationError
-    envelope does NOT emit a suggestion for this path, so the message — not a
-    suggestion — carries the boundary value.
+    The boundary VALUE used to live ONLY inside pydantic's authored sentence
+    ("String should have at least 32 characters"), because the old projection kept
+    loc/msg/type and dropped pydantic's ``ctx``. So this step had to read prose for
+    a number.
+
+    It is structural now: ``issues[].keyword_value`` carries the constraint the
+    keyword refers to -- in JSON Schema terms, the keyword's value in the schema.
+    Pinned to the credentials pointer specifically, as before.
     """
-    result = ctx["result"]
-    result.assert_wire_error("VALIDATION_ERROR", recovery="correctable", message_substr="32 characters")
+    # Same code as the rejection step above, for the same reason: the constraint that
+    # failed is MinLen=32, reported on the wire as issues[].keyword = minLength, so it is a
+    # schema-constraint rejection -> INVALID_REQUEST.
+    issues = ctx["result"].wire_error_issues("INVALID_REQUEST", recovery="correctable")
+    credentials_entry = next(
+        (i for i in issues if "credentials" in str(i.get("pointer", ""))),
+        None,
+    )
+    assert credentials_entry is not None, f"no issue names the credentials field; issues were {issues!r}"
+    assert credentials_entry.get("keyword") == "minLength", (
+        f"expected a minLength constraint on credentials, got {credentials_entry!r}"
+    )
+    # The NUMBER, read as a number's own field rather than found inside a sentence.
+    assert credentials_entry.get("keyword_value") == "32", (
+        f"expected the 32-character minimum on the credentials issue, got {credentials_entry!r}"
+    )
 
 
 @then("the configuration should be accepted")
@@ -2124,48 +2630,163 @@ def then_hmac_header(ctx: dict, header: str) -> None:
     assert re.match(r"^[0-9a-f]{1,}$", stripped), f"Header {header!r} is not a hex-encoded HMAC: {value!r}"
 
 
+# Both spellings the feature file has carried for this obligation are bound to the ONE
+# assertion, so the grade cannot depend on which wording a scenario line uses.
+@then(parsers.parse('the request should include header "{header}" with a UNIX timestamp'))
 @then(parsers.parse('the request should include header "{header}" with unix timestamp'))
 def then_timestamp_header(ctx: dict, header: str) -> None:
-    """Assert timestamp header is present and contains a unix-seconds integer.
+    """Assert the replay-binding timestamp is the AdCP-legacy UNIX seconds form.
 
     Per AdCP 3.1.1 (docs/building/by-layer/L3/webhooks.mdx:404-418):
     ``X-ADCP-Timestamp: <unix timestamp in seconds>``, an exact ASCII integer.
+
+    ``adcp.signing.webhook_hmac`` — the verifier a buyer runs against this scheme —
+    signs and checks ``f"{timestamp}.{body}"`` with ``timestamp = str(int(time.time()))``
+    and applies its skew window to that integer. An ISO string (which this scenario
+    asked for before #1291 C1 routed the sender through the SDK) is not accepted by
+    any conformant legacy verifier, so the seconds form is the contract.
     """
     headers = _get_last_webhook_headers(ctx)
     assert header in headers, f"Expected header {header!r} but got: {list(headers.keys())}"
     value = headers[header]
-    assert value.isdigit(), f"Header {header!r} is not a unix-seconds integer: {value!r}"
+    assert value.isdigit(), f"Header {header!r} is not a UNIX-seconds integer: {value!r}"
+    # Sanity: seconds, not milliseconds — a ms value would silently blow every
+    # receiver's skew window.
+    assert 1_000_000_000 < int(value) < 10_000_000_000, f"Header {header!r} is not in seconds: {value!r}"
 
 
 @then('the HMAC should be computed over "timestamp.payload" concatenation')
 def then_hmac_computation(ctx: dict) -> None:
     """Assert the HMAC verifies against the RAW bytes the origin actually received.
 
-    Recomputes over the wire body (``deliveries[-1].body``), not a fresh
-    ``json.dumps`` of the parsed payload — a recompute from the dict can
-    silently agree with a sender that signed one serialization and
-    transmitted another, which is exactly the defect PR #1802 fixed.
+    Delegates to ``tests.helpers.hmac_assertions``, which 13 non-BDD callers
+    already use. This step used to recompute the HMAC inline, and the copy had
+    drifted in three ways that all favour a false pass:
+
+    * it read ``X-ADCP-Signature``/``X-ADCP-Timestamp`` while the helper and the
+      senders use ``X-AdCP-``, which is the exact regression the helper's own
+      docstring names;
+    * it stripped ``sha256=`` and compared bare hex, so a signature sent WITHOUT
+      the prefix verified anyway;
+    * it read the headers with ``.get(..., "")``, so a delivery that went out
+      entirely unsigned failed on 'header present' rather than reporting that
+      nothing can attribute the request to us (#1894).
+
+    The recompute-over-wire-bytes property this step exists for is the helper's
+    property too: it signs ``f"{timestamp}." + request.body``, never a fresh dump
+    of the parsed payload — a recompute from the parsed dict can silently agree with a
+    sender that signed one serialization and transmitted another, which is the defect
+    PR #1802 fixed and the whole point of the obligation (#1441). Being byte-based it is
+    also canonicalization-agnostic. [5/5 routed — salesagent-n78j0.1.4]
     """
-    import hashlib
-    import hmac as hmac_lib
+    delivery = _last_webhook_delivery(ctx)
 
-    deliveries = _webhook_deliveries(ctx)
-    assert deliveries, "No webhook POST was made"
-    request = deliveries[-1]
-
-    headers = request.headers
-    timestamp = headers.get("X-ADCP-Timestamp", "")
-    raw_sig = headers.get("X-ADCP-Signature", "")
-    signature = raw_sig.removeprefix("sha256=")
-    assert signature, "Expected HMAC signature header to be present and non-empty"
     signing_secret: str = ctx.get("webhook_secret", "")
     assert signing_secret, "Test setup must store webhook_secret in ctx['webhook_secret']"
-    message = f"{timestamp}.".encode() + request.body
-    expected = hmac_lib.new(signing_secret.encode(), message, hashlib.sha256).hexdigest()
-    assert signature == expected, (
-        f"the buyer's endpoint could not verify this webhook: X-ADCP-Signature was computed over "
-        f"bytes other than the {len(request.body)} that crossed the socket (got {signature!r}, "
-        f"expected {expected!r})"
+
+    assert_signature_verifies_over_wire_body(delivery, signing_secret)
+
+
+# ── RFC 9421 delivery-signature assertions ────────────────────────
+
+
+@then(parsers.parse('the request should include header "{header}"'))
+def then_header_present(ctx: dict, header: str) -> None:
+    """The named header reached the socket, with a non-empty value.
+
+    Case-insensitively, through :class:`httpx.Headers`: HTTP header names are
+    case-insensitive and the sender is free to change its casing, so a case-sensitive
+    dict lookup would grade the sender's formatting rather than the wire contract.
+    """
+    captured = _captured_delivery(ctx)
+    assert header in captured.headers, (
+        f"expected header {header!r} on the outbound delivery; the wire carried {sorted(captured.headers.keys())}"
+    )
+    assert captured.headers[header].strip(), f"header {header!r} was sent empty, so it carries no contract"
+
+
+@then(parsers.parse('the request should not include header "{header}"'))
+def then_header_absent(ctx: dict, header: str) -> None:
+    """The named header did NOT reach the socket.
+
+    security.mdx @ v3.1.1 :1425 — *"Sellers MUST NOT sign the same webhook both ways."*
+    The mode switch is exclusive, so on the 9421 arm the legacy HMAC headers are not
+    merely unnecessary, they are forbidden; and on an arm with no key material the 9421
+    headers must be absent rather than present-but-unresolvable.
+    """
+    captured = _captured_delivery(ctx)
+    assert header not in captured.headers, (
+        f"header {header!r} was sent with value {captured.headers[header]!r}; this delivery's "
+        "authentication mode forbids it"
+    )
+
+
+@then("the Signature-Input tag should equal the advertised webhook_signing profile")
+def then_signature_tag_matches_advertised_profile(ctx: dict) -> None:
+    """The ``tag=`` on the wire is the profile our capabilities document advertises.
+
+    Two things a receiver does statically: read ``webhook_signing.profile`` off our
+    capabilities and compare it against the ``tag=`` parameter of the delivery it
+    receives (the ``profile`` field's own contract — "MUST match the ``tag=``
+    parameter … so receivers can statically validate the declared profile against the
+    on-wire signature"). Comparing the wire against the ADVERTISEMENT rather than
+    against an SDK constant is what makes this one decision instead of two: a literal
+    here would stay green while the two sides drifted apart.
+    """
+    captured = _captured_delivery(ctx)
+    advertised = ctx["env"].advertised_webhook_signing()
+    assert advertised.profile is not None, (
+        "this tenant advertises no webhook_signing.profile, so a receiver has nothing to validate "
+        "the tag against — the delivery's signature is unverifiable by static comparison"
+    )
+    tag = signature_input_params(captured).get("tag")
+    assert tag == advertised.profile, (
+        f"the delivery is signed under tag {tag!r} while we advertise profile "
+        f"{advertised.profile!r}; a receiver validating one against the other rejects every delivery"
+    )
+
+
+@then(parsers.parse('the covered components should include "{component}"'))
+def then_covered_components_include(ctx: dict, component: str) -> None:
+    """*component* is in the signature's covered-component list, not merely in a header.
+
+    Parsed as a structured field rather than substring-matched: ``Content-Digest`` can
+    be present as a header while the signature does not COVER it, and that is precisely
+    the shape where the body is unprotected — the digest is then an unsigned claim an
+    attacker rewrites alongside the body.
+    """
+    captured = _captured_delivery(ctx)
+    covered = signature_input_label(captured).components
+    assert component in covered, (
+        f"the signature covers {list(covered)}, which does not include {component!r} — the "
+        "signature does not protect what this scenario says it protects"
+    )
+
+
+@then("the signature should verify against the tenant's published JWKS")
+def then_signature_verifies_against_published_jwks(ctx: dict) -> None:
+    """A conformant receiver, given only what we publish, accepts this delivery.
+
+    The one shared verifier (``tests/helpers/signing.py::verify_as_conformant_receiver``,
+    the single legal home per
+    ``tests/unit/test_guards_no_duplicate_conformant_receiver_verifier.py``) run over the
+    JWKS the tenant PUBLISHES — not over the key row we minted. Verifying against the
+    row would still pass if the publication hop were broken, and a signature only
+    verifiable against a key we never published is not verifiable at all.
+
+    The signer identity is compared to the kid the Given provisioned, so a delivery
+    signed under some other key cannot pass by merely being well-formed.
+    """
+    captured = _captured_delivery(ctx)
+    env = ctx["env"]
+    expected_kid = ctx.get("webhook_signing_kid")
+    assert expected_kid, "the signing-key Given must record the kid it provisioned"
+
+    verified = verify_as_conformant_receiver(captured, env.published_jwks())
+
+    assert verified.key_id == expected_kid, (
+        f"the delivery verified under key {verified.key_id!r}, but this tenant publishes and "
+        f"should have signed with {expected_kid!r}"
     )
 
 
@@ -2271,16 +2892,35 @@ def then_no_deliveries_field(ctx: dict) -> None:
 
 @then(parsers.parse("the error should NOT reveal that the media buy exists"))
 def then_error_no_reveal(ctx: dict) -> None:
-    """Assert error does not leak existence information via message content or ID echoing."""
+    """Assert the refusal leaks no existence information — in the message OR by echoing.
+
+    BOTH halves run. The id-echo half used to be gated on
+    ``ctx.get("target_media_buy_id") or ctx.get("media_buy_id")``, and NO step writes
+    either key, so ``mb_id`` was always ``""`` and the half was skipped every time it
+    ran — the scenario named a security obligation and graded half of it
+    (salesagent-b9hi1.1). It now reads the request as sent, and FAILS if that is
+    missing rather than skipping.
+
+    @T-UC-004-ext-d is the non-disclosure scenario: a non-owner asking about someone
+    else's media buy must get media_buy_not_found, worded so it cannot be told apart
+    from a buy that never existed. Echoing the requested id ONCE is normal — "no media
+    buy found for X" repeats what the buyer sent and reveals nothing — so the bound is
+    on repetition, which is the shape that starts to read like confirmation.
+    """
     error = ctx.get("error")
     assert error is not None, "Expected an error"
     msg = _get_error_message(error).lower()
     leaking_phrases = ["exists", "belongs to", "owned by", "not authorized for", "access denied"]
     for phrase in leaking_phrases:
         assert phrase not in msg, f"Error leaks existence info via phrase {phrase!r}: {error}"
-    # The media_buy_id should not be echoed back in a way that confirms existence
-    mb_id = ctx.get("target_media_buy_id") or ctx.get("media_buy_id") or ""
-    if mb_id:
+
+    requested = ctx.get("requested_media_buy_ids")
+    assert requested, (
+        "No requested_media_buy_ids recorded — the When that dispatched must record what it "
+        "sent, or the id-echo half of this non-disclosure check grades nothing"
+    )
+    for label in requested:
+        mb_id = _resolve_media_buy_id(ctx, label)
         assert msg.count(mb_id.lower()) <= 1, (
             f"Error repeatedly echoes media_buy_id {mb_id!r}, which may reveal existence: {error}"
         )
@@ -2289,16 +2929,63 @@ def then_error_no_reveal(ctx: dict) -> None:
 # ── Webhook skip assertions ─────────────────────────────────────────
 
 
+def _declined_delivery_outcome(ctx: dict) -> bool:
+    """Production's OWN verdict on the delivery this scenario asked for.
+
+    The observable for "the system considered this and declined". Receiver absence is
+    NOT that observable: nothing arriving is true for a dozen uninteresting reasons —
+    the request was never made, the address was never handed out, the receiver was
+    never asked — and that is exactly how this scenario stayed vacuous through three
+    review cycles (salesagent-n78j0.1.4). ``WebhookDeliveryService._send_webhook_enhanced``
+    (``src/services/webhook_delivery_service.py`` :348-355) selects this principal's
+    ACTIVE ``PushNotificationConfig`` rows and returns ``False`` WITHOUT a POST when
+    there are none, so the returned flag is production reporting its own skip.
+
+    Read strictly, because every lax reading of it is a way back into the bug:
+
+    * ``ctx["webhook_result"]`` is INDEXED, not ``.get()``-ed — a ``When`` that never
+      assigned it must raise ``KeyError``, not quietly become ``None``;
+    * ``ctx`` must carry no ``"error"`` — the delivery Whens store exceptions there, so
+      an assertion that tolerated a missing result would go GREEN when production BLEW
+      UP, which is worse than vacuous;
+    * the flag is returned to the caller UNCOERCED so the caller can pin ``is False``.
+      ``bool(...)`` here would let ``None`` / ``0`` / ``[]`` pass for a decline.
+    """
+    assert "error" not in ctx, (
+        f"the delivery request raised instead of returning a verdict, so there is no decline to grade: {ctx['error']!r}"
+    )
+    raw = ctx["webhook_result"]
+    return raw[0] if isinstance(raw, tuple) else raw
+
+
 @then(parsers.parse('the system should skip "{mb_id}" (no webhook to deliver to)'))
 def then_skip_no_webhook(ctx: dict, mb_id: str) -> None:
-    """Assert no webhook POST was made for this specific media buy.
+    """Production was asked to deliver for THIS media buy and declined.
 
-    Verifies that no POST call contains this media buy's ID in its payload,
-    confirming the system correctly skipped delivery when no webhook is configured.
+    Two things pinned together, because either alone is satisfiable by an accident: the
+    request the ``When`` actually made names the media buy the scenario names, and
+    production's verdict on it was ``False``. A verdict without the id would be green if
+    the step evaluated some other buy; an id without the verdict would be green if
+    production had happily delivered.
     """
     real_id = _resolve_media_buy_id(ctx, mb_id)
-    # Collect all media_buy_ids that received webhook POSTs
-    posted_mb_ids = [req.json().get("media_buy_id") for req in _webhook_deliveries(ctx)]
+    evaluated = ctx["webhook_evaluated_media_buy"]
+    outcome = _declined_delivery_outcome(ctx)
+    assert (evaluated, outcome) == (real_id, False), (
+        f"expected the system to be asked about {real_id!r} and to DECLINE (False); it was asked "
+        f"about {evaluated!r} and answered {outcome!r}"
+    )
+    # And the endpoint agrees: no delivery that arrived carried this media buy. The
+    # verdict alone would be green if production had reported a skip while a POST went
+    # out anyway, so the receiver-side claim is kept as the second half of the pin.
+    # Read at the ENTRY layer: media_buy_id is a property of a media_buy_deliveries[]
+    # entry, never of the envelope, so an envelope-level read is None for every delivery
+    # and the `not in` below would be green whatever production sent.
+    posted_mb_ids = [
+        entry.get("media_buy_id")
+        for delivery in _webhook_deliveries(ctx)
+        for entry in _delivery_entries(_webhook_result(_sent_payload(delivery)))
+    ]
     assert real_id not in posted_mb_ids, (
         f"Webhook POST was made for '{real_id}' but it should have been skipped "
         f"(no webhook configured). All posted IDs: {posted_mb_ids}"
@@ -2307,7 +2994,27 @@ def then_skip_no_webhook(ctx: dict, mb_id: str) -> None:
 
 @then("no delivery attempt should be made")
 def then_no_delivery_attempt(ctx: dict) -> None:
-    """Assert the endpoint received nothing at all."""
+    """No POST was attempted — production returned its verdict without sending.
+
+    Production's OWN verdict is the PRIMARY claim, and it is the one that cannot be
+    satisfied by an accident: nothing arriving at a receiver is true for a dozen
+    uninteresting reasons (the request was never made, the address was never handed out,
+    the receiver was never asked), which is how this scenario stayed vacuous through
+    three review cycles (salesagent-n78j0.1.4).
+
+    ``is False`` and not ``not outcome``: the falsy set includes ``None``, which is what
+    a crashed ``When`` leaves behind.
+
+    The endpoint's own count is asserted as the SECONDARY claim. It is not redundant —
+    a verdict of False while a POST went out anyway is exactly the divergence neither
+    half catches alone — and it is answerable because the delivery envs run a real
+    origin that records every request that reaches it.
+    """
+    outcome = _declined_delivery_outcome(ctx)
+    assert outcome is False, (
+        f"expected production to report that it made no delivery attempt (False); it returned "
+        f"{outcome!r}, so a POST was attempted or the verdict is not production's"
+    )
     env = ctx["env"]
     assert env.delivery_attempts == 0, f"Expected no delivery attempt, endpoint received {env.delivery_attempts}"
 
@@ -2341,12 +3048,14 @@ def then_packages_include_breakdown(ctx: dict, field: str) -> None:
             assert entry_impressions is not None, f"Breakdown entry in {pkg.package_id!r}.{field} missing 'impressions'"
             # Dimension identifier: proves data is actually segmented
             dim_value = entry.get(dimension_key) if isinstance(entry, dict) else getattr(entry, dimension_key, None)
-            if dim_value is None:
-                pytest.xfail(
-                    f"PRODUCTION GAP: breakdown entry in {pkg.package_id!r}.{field} "
-                    f"missing dimension identifier '{dimension_key}' — "
-                    f"entries are not segmented by dimension"
-                )
+            # A breakdown entry with no dimension identifier is not a breakdown. The xfail
+            # that stood here excused the one condition that makes the whole claim false --
+            # unsegmented rows -- while the assert two lines down already refuses an EMPTY
+            # identifier. Absent and empty are the same defect.
+            assert dim_value is not None, (
+                f"Breakdown entry in {pkg.package_id!r}.{field} is missing dimension "
+                f"identifier {dimension_key!r}: entries are not segmented by dimension"
+            )
             assert dim_value, (
                 f"Breakdown entry in {pkg.package_id!r}.{field} has empty "
                 f"dimension identifier '{dimension_key}': {dim_value!r}"
@@ -2459,6 +3168,56 @@ def then_packages_include_field(ctx: dict, field: str) -> None:
     assert checked >= 1, "Response has no packages to check"
 
 
+def _wire_package(ctx: dict, pkg_id: str) -> dict:
+    """The ``by_package`` entry for *pkg_id*, off the serialized wire body.
+
+    Two hops, because ``by_package`` sits inside a list element and ``wire_lookup``'s
+    dotted path deliberately does not index lists. The delivery is located by the
+    sanctioned ``wire_entry`` primitive with the count pinned, as its docstring requires
+    for an index-located entry; the package is then found by value within it. Sole
+    implementation, so the three commercial-field Thens cannot drift apart.
+    """
+    deliveries = wire_field(ctx, "media_buy_deliveries")
+    assert len(deliveries) == 1, f"expected one delivery to read {pkg_id!r} from, got {len(deliveries)}"
+    delivery = wire_entry(ctx, "media_buy_deliveries", index=0)
+    packages = delivery.get("by_package") or []
+    named = [pkg for pkg in packages if pkg.get("package_id") == pkg_id]
+    assert named, f"no by_package entry for {pkg_id!r}; wire carried {[p.get('package_id') for p in packages]}"
+    return named[0]
+
+
+@then(parsers.parse('the response packages should include pricing_model "{expected}" for "{pkg_id}"'))
+def then_package_pricing_model(ctx: dict, expected: str, pkg_id: str) -> None:
+    """The package's pricing_model on the wire is *expected*.
+
+    Required on every ``by_package`` entry by get-media-buy-delivery-response.json and
+    typed as the ``enums/pricing-model.json`` enum — read off the wire, not the typed
+    payload, because a serialized enum member is what the buyer actually receives.
+    """
+    actual = _wire_package(ctx, pkg_id).get("pricing_model")
+    assert actual == expected, f"package {pkg_id!r} pricing_model is {actual!r}, expected {expected!r}"
+
+
+@then(parsers.parse('the response packages should include rate {expected:g} for "{pkg_id}"'))
+def then_package_rate(ctx: dict, expected: float, pkg_id: str) -> None:
+    """The package's rate on the wire is *expected*.
+
+    get-media-buy-delivery-response.json: "For fixed-rate pricing, this is the agreed rate
+    ... For auction-based pricing, this represents the effective rate based on actual
+    delivery." One step grades both readings — which value is owed is the scenario's
+    business, and it says so by the number it passes.
+    """
+    actual = _wire_package(ctx, pkg_id).get("rate")
+    assert actual == expected, f"package {pkg_id!r} rate is {actual!r}, expected {expected!r}"
+
+
+@then(parsers.parse('the response packages should include currency "{expected}" for "{pkg_id}"'))
+def then_package_currency(ctx: dict, expected: str, pkg_id: str) -> None:
+    """The package's currency on the wire is *expected* (required on every entry)."""
+    actual = _wire_package(ctx, pkg_id).get("currency")
+    assert actual == expected, f"package {pkg_id!r} currency is {actual!r}, expected {expected!r}"
+
+
 @then(parsers.parse('the response packages should include "{f1}" and "{f2}" breakdowns'))
 def then_packages_include_two(ctx: dict, f1: str, f2: str) -> None:
     """Assert every package has both named breakdown fields as non-empty lists."""
@@ -2503,14 +3262,15 @@ def then_geo_system(ctx: dict, system: str) -> None:
     assert resp.media_buy_deliveries, "Expected non-empty media_buy_deliveries"
     assert resp.reporting_period is not None, "Expected reporting_period"
 
-    # Check if by_geo is populated on any package
+    # The subject must be there for the claim to mean anything. The pinned 3.1
+    # get-media-buy-delivery-response.json makes by_geo conditional ("Available when the
+    # buyer requests geo breakdown via reporting_dimensions and the seller supports it"),
+    # so absence is legal in general — but a scenario asking which CLASSIFICATION SYSTEM
+    # the geo rows use has already asserted the rows exist. The xfail that stood here
+    # excused exactly the case the step is for.
     packages = _collect_all_packages(resp)
     has_geo = any(getattr(pkg, "by_geo", None) for pkg in packages)
-    if not has_geo:
-        pytest.xfail(
-            f"PRODUCTION GAP: by_geo breakdown not populated in response — "
-            f"cannot verify classification system '{system}'"
-        )
+    assert has_geo, f"no package carried by_geo, so the classification-system claim ({system!r}) graded nothing"
     # If geo data is present, verify system field
     for pkg in packages:
         by_geo = getattr(pkg, "by_geo", None) or []
@@ -2576,11 +3336,19 @@ def then_attribution_model(ctx: dict, model: str) -> None:
 
 @then("the attribution_window should echo the applied post_click window")
 def then_attribution_echo(ctx: dict) -> None:
-    """Assert attribution window echoes the buyer's requested post_click values.
+    """Assert attribution_window echoes the post_click window THE BUYER SENT.
 
-    The production code echoes the buyer-requested post_click window
-    (preserving unit and interval).  This step verifies the echoed values
-    match the request — not merely that they are non-None.
+    Reads the request as dispatched, with NO default. It used to read
+    ``ctx["request_attribution"]`` — a key no step wrote — and fall back to
+    ``interval=7`` / ``unit="days"``, so it compared the response against two
+    constants. They happened to equal this scenario's Examples, which is why it
+    passed; a seller that ignored the requested window entirely and always answered
+    7 days would have passed identically, and the docstring claimed the opposite of
+    what the code did (salesagent-b9hi1.1).
+
+    The absent-key branch now FAILS instead of defaulting. A Then that cannot find
+    what the buyer asked for cannot grade an echo, and saying so is the whole repair:
+    the defect was not a weak comparison, it was a comparison against a constant.
     """
     assert "error" not in ctx, f"Expected valid response but got error: {ctx.get('error')}"
     resp = require_payload(ctx)
@@ -2594,18 +3362,25 @@ def then_attribution_echo(ctx: dict) -> None:
         "attribution_window.post_click is None — buyer requested a post_click window which should be echoed"
     )
 
-    # Read the buyer-requested values from ctx (set by the When step)
-    requested = ctx.get("request_attribution", {})
-    req_interval = requested.get("post_click_interval", 7)
-    req_unit = requested.get("post_click_unit", "days")
+    # The request as sent, written by the When that sent it. Required, not defaulted.
+    requested = ctx.get("request_attribution")
+    assert requested is not None, (
+        "No request_attribution recorded — the When that sends attribution_window must "
+        "record it, or this step is comparing the response against nothing"
+    )
+    requested_pc = requested.get("post_click")
+    assert requested_pc is not None, (
+        f"The request carried no post_click window, so there is no echo to grade: {requested!r}"
+    )
+    req_interval = requested_pc["interval"]
+    req_unit = requested_pc["unit"]
 
-    # Assert the echoed values match the request
     assert pc.interval == req_interval, (
-        f"attribution_window.post_click.interval should echo request value {req_interval}, got {pc.interval}"
+        f"attribution_window.post_click.interval should echo the requested {req_interval}, got {pc.interval}"
     )
     pc_unit = pc.unit.value if hasattr(pc.unit, "value") else str(pc.unit)
     assert pc_unit == req_unit, (
-        f"attribution_window.post_click.unit should echo request value {req_unit!r}, got {pc_unit!r}"
+        f"attribution_window.post_click.unit should echo the requested {req_unit!r}, got {pc_unit!r}"
     )
 
 
@@ -2648,23 +3423,21 @@ def then_attribution_default(ctx: dict) -> None:
     pc = getattr(aw, "post_click", "MISSING")
     pv = getattr(aw, "post_view", "MISSING")
     if pc != "MISSING" or pv != "MISSING":
-        # Production currently echoes the buyer request instead of stripping it.
-        # Xfail only the specific assertion that checks the unimplemented behavior.
-        try:
-            assert pc is None, (
-                f"attribution_window.post_click should be None for unsupported seller "
-                f"(buyer request should be discarded), got {pc!r}"
-            )
-            assert pv is None, (
-                f"attribution_window.post_view should be None for unsupported seller "
-                f"(buyer request should be discarded), got {pv!r}"
-            )
-        except AssertionError:
-            pytest.xfail(
-                "PRODUCTION GAP: seller 'does NOT support configurable attribution' "
-                "check not implemented — production echoes buyer request instead of "
-                "returning bare platform default (post_click/post_view should be None)"
-            )
+        # This was `try: assert ... except AssertionError: pytest.xfail(...)` — the purest
+        # form of the defect this epic names: catch the failure and excuse it, so the step
+        # cannot fail in either direction. A seller that echoes the buyer's attribution
+        # window when it does not support configurable attribution is reporting a setting
+        # it will not honour, which is the thing worth failing on.
+        assert pc is None, (
+            f"attribution_window.post_click should be None for a seller that does not "
+            f"support configurable attribution (the buyer's request is discarded, not "
+            f"echoed), got {pc!r}"
+        )
+        assert pv is None, (
+            f"attribution_window.post_view should be None for a seller that does not "
+            f"support configurable attribution (the buyer's request is discarded, not "
+            f"echoed), got {pv!r}"
+        )
 
 
 @then('the response attribution_window should include "model" field (required)')
@@ -2845,14 +3618,23 @@ def _delivery_boundary_handler(ctx: dict, field: str, expected: str) -> bool:
         return False
 
     if expected.strip().lower() in ("invalid", "error", "rejected"):
+        # The rejection is graded on the WIRE: a code the buyer actually received,
+        # not the class of a reconstructed exception. The
+        # in-process branch survives only for a request that never reached the wire
+        # -- a pydantic failure while BUILDING it -- which is a genuinely different
+        # outcome, not a lenient fallback for the same one.
         from pydantic import ValidationError as PydanticValidationError
 
-        from src.core.exceptions import AdCPError
-
+        result = ctx.get("result")
+        wire_code = result.wire_error_code() if result is not None else None
+        if wire_code is not None:
+            result.assert_wire_error(wire_code)
+            return True
         error = ctx.get("error")
         assert error is not None, f"Expected '{field}' boundary to be rejected as invalid, but no error in ctx"
-        assert isinstance(error, (AdCPError, PydanticValidationError)), (
-            f"Expected AdCPError or ValidationError for invalid '{field}' boundary, got {type(error).__name__}: {error}"
+        assert isinstance(error, PydanticValidationError), (
+            f"no wire error envelope was captured for the '{field}' boundary, so the only remaining "
+            f"acceptable outcome is a request that failed to build — got {type(error).__name__}: {error}"
         )
     else:
         assert "error" not in ctx, f"Expected valid '{field}' boundary but got error: {ctx.get('error')}"
@@ -2968,18 +3750,51 @@ def _assert_wire_rejection(ctx: dict, field: str) -> None:
     wire: not a server fault (INTERNAL_ERROR / transient) and not an auth failure. The
     precise code/recovery is asserted only once the scenario carries it.
     """
+    # Read through the sanctioned readers rather than digging the envelope by hand.
+    # error_envelope_or_none() is the ctx-side guarded accessor: on a wire transport it
+    # hands back the REAL captured envelope, and on IMPL — which declares has_wire=False
+    # — the dispatcher's own synthesized stand-in, so these assertions grade every
+    # transport instead of pushing the wireless one into the failed-to-build branch
+    # below. locate_envelope_error() is the single locator for the payload-layer error
+    # object (errors[0]); the two-layer invariant guarantees it agrees with adcp_error,
+    # so the payload layer is the position to read.
     envelope = error_envelope_or_none(ctx)
-    if isinstance(envelope, dict) and "adcp_error" in envelope:
-        layer = envelope["adcp_error"]
-        code = layer.get("code")
-        recovery = layer.get("recovery")
-        # SERVICE_UNAVAILABLE must be excluded too: ERROR_CODE_MAPPING remaps
-        # INTERNAL_ERROR to SERVICE_UNAVAILABLE, and the base AdCPError default
-        # recovery is "terminal" — so a {SERVICE_UNAVAILABLE, terminal} server fault
-        # would otherwise pass as a field rejection. (#1420 should-fix)
-        # CONFIGURATION_ERROR now passes through untranslated and is
-        # likewise a seller-side fault, never a field rejection.
-        assert code and code not in {"INTERNAL_ERROR", "SERVICE_UNAVAILABLE", "CONFIGURATION_ERROR", "AUTH_REQUIRED"}, (
+    error_object = locate_envelope_error(envelope)
+    if error_object is not None:
+        code = error_object.get("code")
+        recovery = error_object.get("recovery")
+        # SERVICE_UNAVAILABLE must be excluded too: it is a server fault that would otherwise
+        # pass as a field rejection. (#1420 should-fix) CONFIGURATION_ERROR now
+        # passes through untranslated and is likewise a
+        # seller-side fault, never a field rejection. AUTH_MISSING/AUTH_INVALID
+        # (the v3.1.1 split) replace the deprecated AUTH_REQUIRED
+        # alias for auth failures — excluding only the literal "AUTH_REQUIRED"
+        # string let an auth failure (e.g. resolve_principal_or_raise's
+        # "principal not found" -> AUTH_INVALID) masquerade as a legitimate
+        # client field rejection once the split landed.
+        # The three codes below were added when the code rewriters were deleted. They used to
+        # arrive here as SERVICE_UNAVAILABLE — already excluded — because a collapse rewrote
+        # every non-standard code before the wire. With the collapse gone they arrive as
+        # themselves, and each would otherwise pass as a legitimate "client field rejection":
+        #   PARTIAL_FAILURE       correctable, but a SERVER-side partial failure
+        #   MEDIA_BUY_REJECTED    terminal, a SELLER decision, not a field being invalid
+        #   INVENTORY_UNAVAILABLE correctable, but about availability rather than the field
+        # The recovery check below already catches the transient server faults
+        # (ACTIVATION_WORKFLOW_FAILED, AD_SERVER_CREATE_FAILED, AD_SERVER_UPDATE_FAILED,
+        # WORKFLOW_CREATION_FAILED), and ACTIVATION_ERROR / ACTIVATION_FAILED / ADAPTER_ERROR /
+        # CREATIVE_SYNC_FAILED are absent from CODE_TABLE entirely, so no raise site can emit
+        # them. Without these three the assertion would silently WEAKEN as a result of this step.
+        assert code and code not in {
+            "INTERNAL_ERROR",
+            "SERVICE_UNAVAILABLE",
+            "CONFIGURATION_ERROR",
+            "AUTH_REQUIRED",
+            "AUTH_MISSING",
+            "AUTH_INVALID",
+            "PARTIAL_FAILURE",
+            "MEDIA_BUY_REJECTED",
+            "INVENTORY_UNAVAILABLE",
+        }, (
             f"Invalid {field}: expected a client rejection on the wire, got code={code!r} "
             f"— a server crash or auth failure is not a field rejection. Envelope: {envelope}"
         )
@@ -2989,25 +3804,25 @@ def _assert_wire_rejection(ctx: dict, field: str) -> None:
         )
         return
 
-    # Legacy fallback — no wire envelope captured (bare in-process exception).
-    from pydantic import ValidationError
+    # No wire envelope. Exactly ONE outcome is still acceptable: the request never
+    # reached the wire because it FAILED TO BUILD. That is a real, different outcome,
+    # not a lenient fallback -- _validate_reporting_webhook_credentials (:3113) drives
+    # the reporting-webhook Authentication rules through CreateMediaBuyRequest PARSING
+    # on purpose, so those scenarios have no dispatch by construction.
+    #
+    # What is NOT accepted any more is the old `isinstance(error, (AdCPSalesAgentError,
+    # ValidationError))`: admitting AdCPSalesAgentError there let a scenario that DID dispatch,
+    # and produced no wire bytes, pass on the strength of a reconstructed exception
+    # .
+    from pydantic import ValidationError as PydanticValidationError
 
-    from src.core.exceptions import AdCPError
-
-    assert "error" in ctx, f"Expected invalid {field} result but operation succeeded"
-    error = ctx["error"]
-    assert isinstance(error, (AdCPError, ValidationError)), (
-        f"Expected AdCPError/ValidationError for invalid {field}, got {type(error).__name__}: {error}"
+    error = ctx.get("error")
+    assert error is not None, f"Expected invalid {field} result but operation succeeded"
+    assert isinstance(error, PydanticValidationError), (
+        f"Invalid {field}: no wire error envelope was captured, so the only remaining "
+        f"acceptable outcome is a request that failed to build — got "
+        f"{type(error).__name__}: {error}"
     )
-    if isinstance(error, AdCPError):
-        assert error.error_code and error.error_code != "INTERNAL_ERROR", (
-            f"Invalid {field}: expected a validation rejection, got {error.error_code}: {error}"
-        )
-
-
-# Fields migrated to the clean reference path (scenario names the exact error code,
-# step asserts it on the harness wire envelope). attribution_window is the first.
-_WIRE_ASSERTED_FIELDS = {"attribution_window"}
 
 
 def _assert_partition_or_boundary(ctx: dict, expected: str, field: str = "unknown") -> None:
@@ -3035,21 +3850,14 @@ def _assert_partition_or_boundary(ctx: dict, expected: str, field: str = "unknow
     if m:
         code = m.group("code")
         require_suggestion = bool(m.group("sug"))
-        if field in _WIRE_ASSERTED_FIELDS:
-            _assert_error_outcome(ctx, code, field, require_suggestion=require_suggestion)
-            return
-        # Legacy reconstructed path (other fields, pending migration to the wire path).
-        from src.core.exceptions import AdCPError
-
-        assert "error" in ctx, f"Expected error '{code}' for {field} but operation succeeded"
-        error = ctx["error"]
-        assert isinstance(error, AdCPError), f"Expected AdCPError for {field}, got {type(error).__name__}: {error}"
-        assert error.error_code == code, f"Expected error code '{code}' for {field}, got '{error.error_code}'"
-        if require_suggestion:
-            # STRICT error.json conformance: suggestion is a top-level error
-            # attribute; a copy buried in the free-form details dict does not
-            # count (#1417).
-            assert error.suggestion, f"Expected top-level suggestion in error for {field}, got: {error.suggestion!r}"
+        # EVERY field goes through the wire path. _WIRE_ASSERTED_FIELDS used to name
+        # the one field ("attribution_window") that had been migrated, sending all the
+        # others down a reconstructed-exception branch -- a ratcheting allowlist living
+        # inside a test, where the unmigrated majority graded a rebuilt object instead
+        # of the buyer's envelope. Deleted rather than shrunk: measured first that no
+        # BR-UC-004 scenario names a code absent from CODE_TABLE, so nothing here
+        # depended on the lenient branch.
+        _assert_error_outcome(ctx, code, field, require_suggestion=require_suggestion)
         return
 
     raise AssertionError(f"Unexpected expected value '{expected}' for {field}")
@@ -3161,6 +3969,16 @@ def _ensure_media_buy_in_db(
             principal_id=owner,
         )
 
+    # A seeded status only survives where its flight window agrees with it: the real
+    # status scheduler the app-backed transports run promotes a mid-flight
+    # ``pending_start`` buy to ``active``, so the Given's status is gone by the time the
+    # When polls. _STATUS_FLIGHT_WINDOW is derived HERE, for every Given, rather than at
+    # the call sites -- the multi-buy Given applied it and the single-buy ones did not,
+    # which is how a scheduler tick landing between seed and poll read as
+    # "Expected status 'pending_start', got 'active'" on e2e_rest.
+    if start_date is None and end_date is None:
+        start_date, end_date = _STATUS_FLIGHT_WINDOW.get(status, (None, None))
+
     # Create media buy
     mb_kwargs: dict[str, Any] = {
         "tenant": ctx["db_tenant"],
@@ -3174,6 +3992,63 @@ def _ensure_media_buy_in_db(
         mb_kwargs["end_date"] = _date.fromisoformat(end_date)
 
     MediaBuyFactory(**mb_kwargs)
+
+
+def _seed_package_terms(
+    ctx: dict,
+    pkg_id: str,
+    *,
+    pricing_model: str,
+    rate: float | None,
+    currency: str,
+    is_fixed: bool,
+    bid_price: float | None = None,
+) -> None:
+    """Give the buy seeded by the preceding Given exactly one package on these terms.
+
+    Both halves of a package's identity move together, which is the whole point: the
+    persisted request names *pkg_id* and the option, and the ``MediaPackage`` row carries
+    the matching ``pricing_info``. The delivery path joins them by ``package_id``, so
+    seeding one without the other grades nothing.
+    """
+    env = ctx["env"]
+    if env is None or not hasattr(env, "_session"):
+        return
+
+    from decimal import Decimal
+
+    from sqlalchemy import select
+    from sqlalchemy.orm import attributes
+
+    from src.core.database.models import MediaBuy
+    from src.core.helpers.pricing_helpers import pricing_info_for
+    from tests.factories import MediaPackageFactory, PricingOptionFactory
+    from tests.factories.media_buy import request_package
+
+    option = PricingOptionFactory.build(
+        pricing_model=pricing_model,
+        currency=currency,
+        is_fixed=is_fixed,
+        rate=Decimal(str(rate)) if rate is not None else None,
+    )
+    package = request_package(package_id=pkg_id, pricing_option_id=option.pricing_option_id)
+    if bid_price is not None:
+        package["bid_price"] = bid_price
+
+    mb_id = next(reversed(ctx.get("media_buys", {})), None)
+    assert mb_id, "package terms need a media buy — the scenario must seed one first"
+    session = env._session
+    buy = session.scalars(select(MediaBuy).filter_by(media_buy_id=mb_id)).first()
+    assert buy is not None, f"media buy {mb_id!r} was not seeded into the database"
+
+    buy.raw_request = {**(buy.raw_request or {}), "packages": [package]}
+    attributes.flag_modified(buy, "raw_request")
+    MediaPackageFactory(
+        media_buy=buy,
+        package_id=pkg_id,
+        package_config={**package, "pricing_info": pricing_info_for(option, bid_price=bid_price)},
+    )
+    session.commit()
 
 
 def _parse_request_params(params_str: str) -> dict[str, Any]:
@@ -3241,6 +4116,27 @@ def _validate_reporting_webhook_credentials(ctx: dict, auth_scheme: str, credent
     FIXME(#2109): this grades a Pydantic constructor in the test process, not
     production — nothing is dispatched, so the a2a/mcp/rest axis carries no
     information for the 14 auth-scheme and credential rows that route here.
+
+    WHY THE OBVIOUS FIX DOES NOT WORK, measured under salesagent-prkv.65 so the
+    next person does not spend the attempt again: converting this to
+    ``harness_create_request_kwargs(ctx)`` + a raw ``dispatch_request`` — the
+    template that fixed every other site in that ticket, and which
+    ``when_validate_webhook_config`` above already uses successfully — turns all
+    42 of these tests (14 rows x 3 transports) RED, valid rows included. The two
+    scenario outlines are routed to ``DeliveryPollEnv``, whose verb is
+    ``get_media_buy_delivery``; a create_media_buy-shaped kwargs bag dispatched
+    there comes back INVALID_REQUEST no matter what the credentials say.
+
+    So this is NOT a step-definition migration. It needs the
+    ``T-UC-004-partition-credentials`` / ``T-UC-004-boundary-credentials`` rows
+    routed to a create-capable env (an ENV_ROUTES change plus product/pricing
+    seeding), or the rows re-homed next to the ``T-UC-004-webhook-creds-*``
+    scenarios, which already dispatch a real create. That is a scenario-routing
+    decision, not a harness one.
+
+    Note the graduation note in conftest.py for these two tags says they pass "on
+    all transports" — they do, but only because this constructor check is
+    transport-independent. That is the gap #2109 names, not evidence of coverage.
     """
     from datetime import UTC, datetime
 
@@ -3248,17 +4144,18 @@ def _validate_reporting_webhook_credentials(ctx: dict, auth_scheme: str, credent
 
     from src.core.schemas import CreateMediaBuyRequest
 
-    reporting_webhook = {
-        "url": "https://buyer.example.com/reporting",
-        "authentication": {"schemes": [auth_scheme], "credentials": credentials},
-        "reporting_frequency": "daily",
-    }
+    reporting_webhook = ReportingWebhookRequestFactory.payload(
+        url="https://buyer.example.com/reporting",
+        authentication={"schemes": [auth_scheme], "credentials": credentials},
+        reporting_frequency="daily",
+    )
     ctx.pop("error", None)
     try:
         # NOT ctx["response"]: this is the constructed REQUEST, not a response.
         # It shared the key with dispatch responses, so a Then could read a
         # request believing it had a response — the ambiguity lane gra7.5 removes.
         ctx["constructed_request"] = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "buyer.example.com"},
             start_time=datetime(2025, 1, 1, tzinfo=UTC),
             end_time=datetime(2025, 2, 1, tzinfo=UTC),
@@ -3317,7 +4214,7 @@ def _seed_valid_account_if_named(ctx: dict, value: str) -> None:
     if tenant is None or principal is None:
         return
 
-    from tests.bdd.steps.generic._account_resolution import seed_account_with_access
+    from tests.helpers.account_seeding import seed_account_with_access
 
     # Explicit account_id ONLY (the invalid oneOf row also carries account_id but
     # pairs it with brand/operator — exclude it so it still errors).
@@ -3408,20 +4305,36 @@ def _dispatch_ownership_partition(ctx: dict, label: str) -> None:
     is seeded under the default principal (buyer-001). ``owner_matches`` queries
     as the owner (the buy is returned); ``owner_mismatch`` queries the same buy
     id as a foreign principal (a real ownership mismatch).
+
+    Serves the BOUNDARY outline too, whose Examples spell the same two cases as
+    "principal matches owner" / "principal differs from owner" — hence
+    ``differs`` alongside ``mismatch``. Both outlines assert the same obligation,
+    so they must exercise the same identity swap.
     """
     norm = label.strip().lower().replace(" ", "_")
     media_buys = ctx.get("media_buys", {})
     owned_ids = _resolve_media_buy_ids(ctx, list(media_buys.keys()))
-    if "mismatch" in norm:
-        # Query the owned buy as a different principal — a genuine ownership
-        # mismatch. (The row is selective-xfailed: production does not yet
-        # reject a non-owned id, it just returns nothing.)
-        from tests.factories import PrincipalFactory
+    if "mismatch" in norm or "differs" in norm:
+        # Query the owned buy as a REAL second principal: seed its row, re-point the env at
+        # it, and let the resolver build its identity from the token that row carries.
+        #
+        # What this replaced passed ``identity=`` as a request kwarg -- a fabricated
+        # ResolvedIdentity injected past the resolver. It never tested ownership on any
+        # transport. a2a and mcp rejected ``identity`` as an unrecognized argument, so the
+        # "expected invalid" assertion passed on the argument being unknown rather than on
+        # the buy being someone else's; rest dropped it, dispatched as the OWNER, and
+        # "failed" for succeeding. The comment above this table already named that exact
+        # trap for the boundary outline ("a table of which transport rejects an unknown
+        # argument") and routed both outlines through this helper to fix it -- while the
+        # helper kept the injection, so the trap moved rather than closed.
+        from tests.bdd.steps.generic._auth import authenticate_env_as
+        from tests.factories.principal import PrincipalFactory
 
-        foreign = PrincipalFactory.make_identity(
-            principal_id="buyer-999-foreign", tenant_id=ctx.get("tenant_id", "test_tenant")
-        )
-        dispatch_request(ctx, identity=foreign, media_buy_ids=owned_ids or ["mb-001"])
+        env = ctx["env"]
+        foreign = PrincipalFactory(tenant=ctx["tenant"], principal_id="buyer-999-foreign")
+        env._commit_factory_data()
+        authenticate_env_as(ctx, foreign.principal_id)
+        dispatch_request(ctx, media_buy_ids=owned_ids or ["mb-001"])
     else:
         # owner_matches — query as the owning principal (default identity).
         dispatch_request(ctx, media_buy_ids=owned_ids or None)
@@ -3434,7 +4347,9 @@ def _generate_unique_id(label: str) -> str:
     """Generate a unique media_buy_id from a Gherkin label."""
     import uuid
 
-    return f"{label}-{uuid.uuid4().hex[:8]}"
+    from tests.factories.mint import mint
+
+    return mint(f"{label}-{uuid.uuid4().hex[:8]}")
 
 
 def _register_media_buy_label(ctx: dict, label: str, real_id: str) -> None:
@@ -3511,11 +4426,14 @@ def _wire_webhook_db(ctx: dict) -> None:
 def _call_webhook_service(
     ctx: dict,
     mb_id: str | None = None,
-    is_final: bool = False,
-    is_adjusted: bool = False,
-    next_expected_interval_seconds: float | None = 3600.0,
-) -> bool:
-    """Dispatch webhook delivery through the CircuitBreakerEnv.call_send."""
+    report_type: str | None = None,
+) -> tuple[bool, dict[str, Any]]:
+    """Ask the system under test to make ONE delivery, through the env's own seam.
+
+    ``report_type`` (the Gherkin word) is passed straight through as
+    ``notification_type``: which production flags it maps to is the env's business,
+    not this step layer's — the same reason the transport is.
+    """
     if mb_id is None:
         # Pick the first label from ctx, then resolve to real ID
         label = next(iter(ctx.get("media_buys", {})), None) or next(iter(ctx.get("webhook_config", {})), None)
@@ -3525,14 +4443,7 @@ def _call_webhook_service(
         mb_id = _resolve_media_buy_id(ctx, mb_id)
     _wire_webhook_db(ctx)
     env = ctx["env"]
-    kwargs: dict[str, Any] = {
-        "media_buy_id": mb_id,
-        "is_final": is_final,
-        "is_adjusted": is_adjusted,
-    }
-    if next_expected_interval_seconds is not None:
-        kwargs["next_expected_interval_seconds"] = next_expected_interval_seconds
-    return env.call_send(**kwargs)
+    return env.deliver_webhook(media_buy_id=mb_id, notification_type=report_type)
 
 
 _DEFAULT_PLACEMENT_DATA: list[dict[str, Any]] = [
@@ -3724,7 +4635,6 @@ def _dispatch_webhook_credentials(ctx: dict, value: str) -> None:
 
     try:
         WebhookVerifier(webhook_secret=secret)
-        ctx["webhook_validated"] = True
     except Exception as exc:
         ctx["error"] = exc
 

@@ -57,21 +57,18 @@ class BroadstreetInventoryManager(BaseInventoryManager):
         self,
         client: BroadstreetClient | None,
         network_id: str,
-        dry_run: bool = False,
         log_func: Callable[[str], None] | None = None,
     ):
         """Initialize the inventory manager.
 
         Args:
-            client: Broadstreet API client (None for dry-run mode)
+            client: Broadstreet API client
             network_id: Broadstreet network ID
-            dry_run: Whether to simulate operations
             log_func: Optional logging function
         """
         super().__init__(
             client=client,
             identifier=network_id,
-            dry_run=dry_run,
             log_func=log_func,
         )
         self.network_id = network_id
@@ -92,38 +89,6 @@ class BroadstreetInventoryManager(BaseInventoryManager):
             return list(self._zone_cache.values())
 
         self.log("Fetching zones from Broadstreet")
-
-        if self.dry_run:
-            # Return simulated zones
-            simulated_zones = [
-                ZoneInfo(
-                    zone_id="zone_1",
-                    name="Top Banner",
-                    width=728,
-                    height=90,
-                    display_type="standard",
-                ),
-                ZoneInfo(
-                    zone_id="zone_2",
-                    name="Sidebar",
-                    width=300,
-                    height=250,
-                    display_type="standard",
-                ),
-                ZoneInfo(
-                    zone_id="zone_3",
-                    name="Footer",
-                    width=970,
-                    height=250,
-                    display_type="rotation",
-                    ad_count=3,
-                ),
-            ]
-            for zone in simulated_zones:
-                self._zone_cache[zone.zone_id] = zone
-            self._last_sync = datetime.now(UTC)
-            self.log(f"  Simulated {len(simulated_zones)} zones")
-            return simulated_zones
 
         if self.client:
             try:

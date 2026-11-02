@@ -42,12 +42,13 @@ from __future__ import annotations
 
 import dataclasses
 import json
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from scripts.audit import storyboard_spec
+from scripts.ci import shard_split
+from src.core.config import ToolingSettings
 
 #: The artifact field carrying the scenario's marker set — the join's only
 #: marker source, and why the plugin persists it.
@@ -126,8 +127,8 @@ def registry_wired(marker_names: Any, env_routes: Any) -> bool:
 
 def default_artifact_path() -> Path:
     """The artifact path, from the ONE owner of the env var and default name."""
-    override = os.environ.get(storyboard_spec.ARTIFACT_ENV_VAR)
-    return Path(override) if override else _ARTIFACT_DEFAULT
+    override = ToolingSettings().bdd_liveness_artifact  # storyboard_spec.ARTIFACT_ENV_VAR
+    return override if override else _ARTIFACT_DEFAULT
 
 
 def load_artifact(path: Path) -> dict[str, dict[str, Any]]:
@@ -161,6 +162,16 @@ def _reject_narrowed_run(path: Path, run: dict[str, Any] | None) -> None:
         return
     selection = run.get("selection") or ""
     markers = run.get("markers") or ""
+    # A shard narrows by neither: it is handed a file list. ``target`` is absent in an
+    # artifact written before the writer recorded it, which the legacy rule above covers.
+    target = run.get("target")
+    if target is not None and not shard_split.targets_cover_suite("bdd", target):
+        raise storyboard_spec.StoryboardAuditError(
+            f"{path} was written by a session invoked on {len(target)} path(s), which do not "
+            f"account for every BDD module ({run.get('collected')} collected). It is one shard, "
+            "not a measurement of the suite. Re-run the full suite (`pytest tests/bdd`) before "
+            "regenerating anything that quotes liveness."
+        )
     if not selection and not markers:
         return
     raise storyboard_spec.StoryboardAuditError(

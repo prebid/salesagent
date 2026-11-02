@@ -98,7 +98,7 @@ class TestProductChannelsConversion:
             delivery_measurement={"provider": "publisher"},
             **overrides,
         )
-        pricing = PricingOption(
+        pricing = PricingOption.create(
             tenant_id="channel_test",
             product_id="channel_test_001",
             pricing_model="cpm",

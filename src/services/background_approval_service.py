@@ -107,7 +107,7 @@ def _run_approval_polling_thread(
 
             # Initialize GAM client and orders manager
             client_manager = GAMClientManager(gam_config, adapter_config.gam_network_code)
-            orders_manager = GAMOrdersManager(client_manager, dry_run=False)
+            orders_manager = GAMOrdersManager(client_manager)
 
         except Exception as e:
             logger.error(f"[{workflow_step_id}] Failed to initialize adapter: {e}")

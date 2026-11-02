@@ -34,20 +34,21 @@ repos:
         stages: [pre-push]
 
       - id: repo-invariants
-        name: Repo invariants (no-skip-tests, no-fn-calls)
+        name: Repo invariants (no-skip-tests, no-fn-calls, no-developer-paths)
         entry: uv run python .pre-commit-hooks/check_repo_invariants.py
         language: system
-        types: [python]
+        # types_or, not types: the developer-path check is not Python-specific —
+        # #2228 removed hardcoded homes from docs, formulas, a shell script and two
+        # tracked SYMLINKS. The Python-only checks guard their own scope internally.
+        #
+        # `types: []` is required for the symlink entry to do anything. pre-commit ANDs
+        # `types` (default `[file]`) with `types_or`, and a symlink is not a `file`, so the
+        # entry listed below never matched one — the very case #2228 added it for. Emptying
+        # `types` drops the AND; `text` then also reaches the JSON, TOML and HTML a
+        # hardcoded home can hide in, which the explicit list did not.
+        types: []
+        types_or: [text, symlink]
         pass_filenames: true
-        # Commit stage only. Without this the hook inherits
-        # default_install_hook_types and runs at pre-push too, where the file
-        # list is the whole pushed range rather than what you just wrote. A
-        # push that carries a merge then presents every file the other branch
-        # touched, and the hook asks you to fix citations you did not author:
-        # 272 of them across 110 files at the time this line was added. The
-        # rule is about what an author cites, so it belongs where authoring
-        # happens.
-        stages: [pre-commit]
 
       # Layer 2 — pre-push stage (medium cost; CI is authoritative for heavy checks)
       - id: check-docs-links
@@ -77,8 +78,16 @@ repos:
         pass_filenames: false
         stages: [pre-push]
 
+      - id: fixme-citation-no-regression
+        name: "Check local-beads-id citations (no regression)"
+        entry: uv run python .pre-commit-hooks/check_fixme_citation_count.py
+        language: system
+        files: '^(src/.*\.py|tests/.*\.py|\.pre-commit-config\.yaml|\.pre-commit-hooks/.*|\.fixme-citation-baseline)$'
+        pass_filenames: false
+        stages: [pre-push]
+
       - id: ruff-complexity-no-regression
-        name: "Check ruff complexity counts C901/PLR0912/PLR0915 (no regression)"
+        name: "Check ruff counts C901/PLR0912/PLR0915/F841 (no regression)"
         entry: uv run python .pre-commit-hooks/check_ruff_complexity_count.py
         language: system
         files: '^(src/.*\.py|pyproject\.toml|mypy\.ini|uv\.lock|\.pre-commit-config\.yaml|\.pre-commit-hooks/.*|\.ruff-complexity-baseline)$'
@@ -108,19 +117,15 @@ repos:
         pass_filenames: false
         stages: [pre-push]
 
-      - id: check-tenant-context-order
-        name: Check tenant context auth before get_current_tenant()
-        entry: uv run python .pre-commit-hooks/check_tenant_context_order.py
+      # Scope is the whole tree, because each rule under .ast-grep/rules/ declares its
+      # own `files:` and the narrower `^tests/bdd/steps/` here decided which rules could
+      # ever fire, silently. `make quality-ci` runs the same scan — this repo's workflow
+      # merges locally and never pushes, so the pre-push stage alone would never execute.
+      - id: ast-grep-structural-rules
+        name: ast-grep structural rules (.ast-grep/rules/)
+        entry: ast-grep scan --config sgconfig.yml
         language: system
-        files: '^src/core/tools/.*\.py$'
-        pass_filenames: true
-        stages: [pre-push]
-
-      - id: ast-grep-bdd-guards
-        name: ast-grep BDD step guards (scaffold — no rules yet)
-        entry: ast-grep scan
-        language: system
-        files: '^tests/bdd/steps/.*\.py$'
+        files: '\.py$'
         pass_filenames: false
         stages: [pre-push]
 

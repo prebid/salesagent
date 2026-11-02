@@ -4,16 +4,16 @@ The mock adapter ([`src/adapters/mock_ad_server.py`](../../../src/adapters/mock_
 is a simulated ad server: it implements the full `AdServerAdapter` interface
 without external API credentials or network calls. It backs local development,
 CI, and most of this repository's test suites, and it can compress a campaign's
-delivery timeline so an AI agent's full-lifecycle behavior is testable in
+delivery timeline so you can test an AI agent's full-lifecycle behavior in
 minutes. Its registry key is `mock`, and a tenant selects it like any other
 adapter — see [Creating an ad server adapter](../creating-an-adapter.md) for
 the interface it implements and
-[the adapter pattern](../../development/architecture.md#adapter-pattern) for
-where adapters sit in the system.
+[Adapter pattern](../../development/architecture.md#adapter-pattern) for where
+adapters sit in the system.
 
 ## Contents
 
-- [Implemented interface](#implemented-interface) — the seven adapter methods and what the mock does for each
+- [Implemented interface](#implemented-interface) — the six adapter methods and what the mock does for each
 - [Media buy lifecycle](#media-buy-lifecycle) — creation paths and status progression
 - [Targeting behavior](#targeting-behavior) — what the mock accepts and what it deliberately rejects
 - [Validation rules](#validation-rules) — the GAM-style checks on create
@@ -21,25 +21,28 @@ where adapters sit in the system.
 - [Human-in-the-loop simulation](#human-in-the-loop-simulation) — sync, async, and mixed approval modes
 - [Failure injection from the database](#failure-injection-from-the-database) — the `test_behavior` mechanism for containerized tests
 - [Getting started](#getting-started) — tenant setup, tokens, and a first request
-- [Configuration reference](#configuration-reference) — every configuration surface, verified against the code
+- [Configuration reference](#configuration-reference) — all three configuration locations, verified against the code
 - [State and limitations](#state-and-limitations)
 - [Troubleshooting](#troubleshooting)
 - [Related documentation](#related-documentation)
 
 ## Implemented interface
 
-`MockAdServer` subclasses `AdServerAdapter` and implements all seven of its
+`MockAdServer` subclasses `AdServerAdapter` and implements all six of its
 abstract methods:
 
-| Method | Mock behavior |
-|--------|---------------|
-| `create_media_buy` | Validates the request, then creates an in-memory campaign; honors test keywords and HITL modes |
-| `add_creative_assets` | Auto-approves creatives by default; keywords or approval simulation can reject or hold them |
-| `associate_creatives` | Records every creative–line-item pairing as a success |
-| `check_media_buy_status` | Derives `pending_start`, `delivering`, or `completed` from the flight dates |
-| `get_media_buy_delivery` | Computes paced delivery metrics from campaign progress, with per-package breakdowns |
-| `update_media_buy` | Persists package budget updates through `MediaBuyRepository` |
-| `update_media_buy_performance_index` | Accepts performance signals and reports success |
+- `create_media_buy` — validates the request, then creates an in-memory
+  campaign; honors test keywords and HITL modes.
+- `add_creative_assets` — auto-approves creatives by default; keywords or
+  approval simulation can reject or hold them.
+- `associate_creatives` — records every creative–line-item pairing as a
+  success.
+- `check_media_buy_status` — derives `pending_start`, `delivering`, or
+  `completed` from the flight dates.
+- `get_media_buy_delivery` — computes paced delivery metrics from campaign
+  progress, with per-package breakdowns.
+- `update_media_buy` — persists package budget updates through
+  `MediaBuyRepository`.
 
 Beyond the required interface, the mock overrides `get_packages_snapshot`
 (near-real-time delivery snapshots with pacing indexes),
@@ -50,13 +53,13 @@ Because those methods cover the full adapter seam, every AdCP tool — product
 discovery, media buy creation and update, creative sync, and delivery
 reporting — works end to end against a mock tenant over MCP, A2A, and REST.
 
-Capabilities worth knowing:
+Three capabilities are worth knowing about:
 
 - **All pricing models**: `cpm`, `vcpm`, `cpcv`, `cpp`, `cpc`, `cpv`, and
   `flat_rate`.
 - **Channels**: `display`, `olv`, `streaming_audio`, and `social` by default.
-- **Delivery simulation**: time-accelerated delivery with webhooks — see the
-  [delivery simulation guide](delivery-simulation.md).
+- **Delivery simulation**: time-accelerated delivery with webhooks — see
+  [Delivery simulation](delivery-simulation.md).
 
 ## Media buy lifecycle
 
@@ -94,9 +97,9 @@ stateDiagram-v2
 ## Targeting behavior
 
 The mock deliberately mirrors a real ad server's limits rather than accepting
-everything, so capability-error paths are testable.
+everything, so you can test the capability-error paths.
 
-**Accepted dimensions:**
+The mock accepts these dimensions:
 
 - Geographic targeting: countries, regions, and metros, plus postal-code
   systems (US ZIP and ZIP+4, CA FSA and full, GB outward and full, DE PLZ, FR
@@ -104,8 +107,8 @@ everything, so capability-error paths are testable.
 - Key-value pairs (AXE integration).
 - Media types.
 
-**Rejected dimensions** — a package `targeting_overlay` using any of the
-following raises `AdCPCapabilityNotSupportedError`:
+The mock rejects the following dimensions — a package `targeting_overlay` using
+any of them raises `AdCPCapabilityNotSupportedError`:
 
 - `device_type_any_of`
 - `os_any_of`
@@ -134,24 +137,21 @@ to orchestrate deterministic test outcomes — no configuration change needed.
 
 For `create_media_buy`, put keywords in the request's **brand domain** field:
 
-| Keyword | Effect |
-|---------|--------|
-| `[REJECT:reason]` | Raises `AdCPMediaBuyRejectedError` with the given reason |
-| `[ERROR:message]` | Raises `AdCPError` with the given message |
-| `[DELAY:N]` | Sleeps N seconds before responding |
-| `[ASYNC]` | Returns a pending response; a workflow step tracks completion |
-| `[HITL:Nm:outcome]` | Simulates a human approval taking N minutes |
-| `[QUESTION:text]` | Returns pending, modeling an operation that needs input |
+- `[REJECT:reason]` — raises `AdCPMediaBuyRejectedError` with the given reason.
+- `[ERROR:message]` — raises `AdCPError` with the given message.
+- `[DELAY:N]` — sleeps N seconds before responding.
+- `[ASYNC]` — returns a pending response; a workflow step tracks completion.
+- `[HITL:Nm:outcome]` — simulates a human approval taking N minutes.
+- `[QUESTION:text]` — returns pending, modeling an operation that needs input.
 
 For `sync_creatives`, put keywords in the **creative name**:
 
-| Keyword | Effect |
-|---------|--------|
-| `[APPROVE]` | Approves the creative |
-| `[REJECT:reason]` | Rejects the creative with the given reason |
-| `[ASK:field needed]` | Holds the creative in `pending`, requesting more information |
+- `[APPROVE]` — approves the creative.
+- `[REJECT:reason]` — rejects the creative with the given reason.
+- `[ASK:field needed]` — holds the creative in `pending`, requesting more
+  information.
 
-Creatives without keywords are auto-approved.
+The mock auto-approves creatives that carry no keyword.
 
 ## Human-in-the-loop simulation
 
@@ -219,8 +219,8 @@ it and raises a typed error:
 - `recovery` selects the exception class by its recovery classification:
   `transient` (`SERVICE_UNAVAILABLE`), `terminal` (`CONFIGURATION_ERROR`), or
   `correctable` (`VALIDATION_ERROR`).
-- `error_message` and `error_details` shape the error; a `suggestion` inside
-  `error_details` is lifted to the error's top-level suggestion field.
+- `error_message` and `error_details` shape the error; the adapter lifts a
+  `suggestion` inside `error_details` to the error's top-level suggestion field.
 
 See [Test architecture](../../../tests/CLAUDE.md) for the factories that write
 this configuration.
@@ -237,19 +237,16 @@ docker compose exec adcp-server python scripts/setup/setup_tenant.py "Test Publi
 
 This creates the tenant, its mock adapter configuration, currency limits for
 USD, EUR, and GBP, and a default principal named `<tenant_id>_default`. The
-command prints the principal's access token — copy it. The tenant has no
-products yet; create them in the Admin UI (http://localhost:8000/admin/)
+command prints the principal's access token — copy it. The tenant starts with
+no products; create them in the Admin UI (`http://localhost:8000/admin/`)
 before calling `get_products`.
 
 ### 2. Retrieve a token later
 
-In the Admin UI, open the tenant's advertisers list and copy the API token.
-Or query the database:
-
-```bash
-docker compose exec postgres psql -U adcp_user -d adcp \
-  -c "SELECT principal_id, access_token FROM principals WHERE tenant_id = 'test_publisher';"
-```
+In the Admin UI, open the tenant's advertisers list and copy the API token. The
+database holds only a hash of each token, so you cannot read one back from
+`principals`: use the token the command printed when the advertiser was
+created, or rotate it in the Admin UI.
 
 ### 3. Call the server
 
@@ -259,7 +256,7 @@ Over MCP with the Python client:
 from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
-headers = {"x-adcp-auth": "your_principal_token"}
+headers = {"Authorization": "Bearer your_principal_token"}
 transport = StreamableHttpTransport(url="http://localhost:8000/mcp/", headers=headers)
 client = Client(transport=transport)
 
@@ -274,27 +271,30 @@ uvx adcp http://localhost:8000/mcp/ --auth <principal-token> list_tools
 uvx adcp http://localhost:8000/mcp/ --auth <principal-token> get_products '{"brief":"video"}'
 ```
 
-The A2A server serves the same tools at `http://localhost:8000/a2a` — see
-[A2A and MCP agent flows](../../development/a2a-mcp-agent-flows.md) for how
-the two transports process a request.
+The A2A server serves the same tools at `http://localhost:8000/a2a`, and the
+REST routes serve them at `/api/v1` — see
+[A2A and MCP agent flows](../../development/a2a-mcp-agent-flows.md) for why all
+three transports process a request the same way, and what differs in their
+framing.
 
-For writing tests against a mock tenant — the harness, factories, and
-fixtures this repository expects — read
-[Test architecture](../../../tests/CLAUDE.md) first, and
-[End-to-end testing](../../development/e2e-testing.md) for the containerized
-stack the e2e suites drive.
+To write tests against a mock tenant — the harness, factories, and fixtures
+this repository expects — read [Test architecture](../../../tests/CLAUDE.md)
+first, then [End-to-end testing](../../development/e2e-testing.md) for the
+containerized stack the e2e suites drive.
 
 ## Configuration reference
 
-The mock adapter has three configuration surfaces.
+Mock adapter configuration lives in three places.
 
 ### Adapter configuration (per tenant)
 
 The `adapter_config` table row with `adapter_type = 'mock'` carries:
 
-- `mock_dry_run` — when true, the adapter logs what it would do without
-  storing state.
 - `mock_manual_approval_required` — routes operations through manual approval.
+  It is the whole of the mock adapter's connection configuration; the
+  `dry_run` field it once carried is gone, along with the column behind it,
+  because a preview is a rolled-back unit of work rather than an adapter mode
+  (`src/adapters/mock_ad_server.py:82-89`).
 - `config_json.test_behavior` — the
   [failure-injection block](#failure-injection-from-the-database).
 
@@ -317,7 +317,7 @@ simulation settings on the product's `implementation_config`:
 | `seasonal_factor` | `1.0` | 0.1–10.0 |
 | `verbose_logging` | `false` | boolean |
 | `predictable_ids` | `false` | boolean |
-| `delivery_simulation` | `{"enabled": false, ...}` | see the [delivery simulation guide](delivery-simulation.md) |
+| `delivery_simulation` | `{"enabled": false, ...}` | see [Delivery simulation](delivery-simulation.md) |
 
 ### Principal configuration
 
@@ -328,17 +328,17 @@ and the [HITL configuration](#human-in-the-loop-simulation).
 
 - **Campaign state is in-memory.** Created campaigns live in a class-level
   dict (`MockAdServer._media_buys`) and disappear on restart. Tests that need
-  a clean slate call `MockAdServer._media_buys.clear()`. Package budget
+  an empty store call `MockAdServer._media_buys.clear()`. Package budget
   updates are the exception: `update_media_buy` writes them to the database.
-- **Delivery metrics are synthesized.** Spend paces evenly with random
-  variance and impressions assume a fixed $10 CPM — no ads are served.
+- **The mock synthesizes delivery metrics.** Spend paces evenly with random
+  variance and impressions assume a fixed $10 CPM — the mock serves no ads.
 - **No external network calls** apart from the webhooks the delivery
   simulation and async HITL completion send.
 - **No rate limiting** and no real ad server authentication.
 
 Use a real adapter (GAM, Kevel, Triton, or Broadstreet) for staging
-validation, production, and anything adapter-specific — see the
-[adapter overview](../README.md).
+validation, production, and anything adapter-specific — see
+[Adapter overview](../README.md).
 
 ## Troubleshooting
 
@@ -374,7 +374,7 @@ The block must live at `platform_mappings.mock.hitl_config` with
 
 ### Delivery webhooks are not firing
 
-See [the delivery simulation guide's troubleshooting section](delivery-simulation.md#troubleshooting).
+See [Delivery simulation § Troubleshooting](delivery-simulation.md#troubleshooting).
 
 ## Related documentation
 

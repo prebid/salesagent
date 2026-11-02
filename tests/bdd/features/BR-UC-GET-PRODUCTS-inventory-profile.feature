@@ -20,7 +20,8 @@ Feature: Product discovery with inventory profile publisher_properties
     Given an inventory profile with property_ids "homepage" for domain "example.com"
     And a product linked to that inventory profile with pricing
     When the buyer requests products
-    Then the response contains at least one product
+    Then the response is compliant with the get_products spec
+    And the response contains at least one product
     And the first product publisher_properties selection_type is "by_id"
     And the first product publisher_properties property_ids contains "homepage"
 
@@ -29,7 +30,8 @@ Feature: Product discovery with inventory profile publisher_properties
     Given an inventory profile with property_tags "premium" for domain "example.com"
     And a product linked to that inventory profile with pricing
     When the buyer requests products
-    Then the response contains at least one product
+    Then the response is compliant with the get_products spec
+    And the response contains at least one product
     And the first product publisher_properties selection_type is "by_tag"
     And the first product publisher_properties property_tags contains "premium"
 
@@ -38,7 +40,8 @@ Feature: Product discovery with inventory profile publisher_properties
     Given an inventory profile with only domain "example.com"
     And a product linked to that inventory profile with pricing
     When the buyer requests products
-    Then the response contains at least one product
+    Then the response is compliant with the get_products spec
+    And the response contains at least one product
     And the first product publisher_properties selection_type is "all"
 
   @inventory_profile @selection_type @requires_db
@@ -46,7 +49,8 @@ Feature: Product discovery with inventory profile publisher_properties
     Given an inventory profile with property_tags "premium" for domain "example.com" and selection_type "by_tag"
     And a product linked to that inventory profile with pricing
     When the buyer requests products
-    Then the response contains at least one product
+    Then the response is compliant with the get_products spec
+    And the response contains at least one product
     And the first product publisher_properties selection_type is "by_tag"
     And the first product publisher_properties property_tags contains "premium"
 
@@ -55,7 +59,8 @@ Feature: Product discovery with inventory profile publisher_properties
     Given an inventory profile with property_ids "weather.com" for domain "example.com"
     And a product linked to that inventory profile with pricing
     When the buyer requests products
-    Then the response contains at least one product
+    Then the response is compliant with the get_products spec
+    And the response contains at least one product
     And the first product publisher_properties selection_type is "all"
 
   @inventory_profile @selection_type @requires_db
@@ -68,7 +73,8 @@ Feature: Product discovery with inventory profile publisher_properties
     Given an inventory profile with property_ids "homepage" for domain "example.com" and legacy fields
     And a product linked to that inventory profile with pricing
     When the buyer requests products
-    Then the response contains at least one product
+    Then the response is compliant with the get_products spec
+    And the response contains at least one product
     And the first product publisher_properties selection_type is "by_id"
     And the first product publisher_properties property_ids contains "homepage"
     And the first product publisher_properties does not have field "property_name"

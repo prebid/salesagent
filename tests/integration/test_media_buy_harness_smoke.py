@@ -49,6 +49,6 @@ class TestMediaBuyCreateEnvEntersAndSeeds:
                 start_time=start.isoformat(),
                 end_time=end.isoformat(),
             )
-            created = result.response
+            created = result
             assert isinstance(created, CreateMediaBuySuccess), f"create must succeed, got {type(created).__name__}"
             assert created.media_buy_id is not None

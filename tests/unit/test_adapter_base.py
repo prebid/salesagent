@@ -26,18 +26,19 @@ class TestRequireConfig:
 
     def test_missing_value_raises_configuration_error_with_field(self):
         with pytest.raises(AdCPConfigurationError) as exc_info:
-            AdServerAdapter._require_config(_SELF, None, field="api_key", message="api_key is missing")
+            AdServerAdapter._require_config(_SELF, None, field="api_key")
 
         assert exc_info.value.error_code == "CONFIGURATION_ERROR"
         assert exc_info.value.field == "api_key"
-        assert "api_key is missing" in str(exc_info.value)
+        # The class, the code and ``field`` are the whole diagnosis: nothing was
+        # caught, so nothing rides internal_detail.
+        assert exc_info.value.internal_detail is None
 
     def test_missing_value_uses_default_message_naming_the_field(self):
         with pytest.raises(AdCPConfigurationError) as exc_info:
             AdServerAdapter._require_config(_SELF, None, field="network_id")
 
         assert exc_info.value.field == "network_id"
-        assert "network_id" in str(exc_info.value)
 
     def test_empty_string_is_treated_as_missing(self):
         # Falsy values (including "") raise — this is what lets callers rebind

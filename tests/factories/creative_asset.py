@@ -20,9 +20,11 @@ def make_legacy_asset_dict(asset_id: str, **fields: object) -> dict:
 
     The v1 shape has NO ``asset_type`` discriminator and is NOT a list — it keys
     each role directly to a flat dict of fields (e.g. ``url``/``width``/``height``,
-    ``url_type``, ``content``, ``duration_ms``). This is the shape the legacy
-    adapter converter (``_convert_creative_to_adapter_asset``) consumes, and the
-    shape that SDK 5.7's discriminated union rejects.
+    ``url_type``, ``content``, ``duration_ms``). The pinned SDK's discriminated
+    asset union rejects this shape. The legacy adapter converter that consumed it,
+    ``_convert_creative_to_adapter_asset``, is deleted; the live path is
+    ``media_buy_create._build_adapter_asset_from_creative``, which reads the ORM
+    row rather than a schema object.
 
     Use this ONLY for legacy-input / negative tests that deliberately exercise the
     old shape. New or valid creative assets must use the AssetSpec mechanism
@@ -57,6 +59,26 @@ def make_creative_asset_minimal(**extra: object) -> CreativeAsset:
     }
     defaults.update(extra)
     return CreativeAsset(**defaults)
+
+
+def make_creative_asset_request(**extra: object) -> dict:
+    """The same minimal creative, as the WIRE DICT sync_creatives accepts.
+
+    Reuses make_creative_asset_minimal rather than restating its defaults. Returns a dict
+    because that is what a transport hands the request DTO.
+
+    PREFER ``CreativeAssetRequestFactory.payload()`` (tests/factories/request.py) for new
+    code: it binds ``CreativeAssetRequest`` — the REQUEST model — and carries the OMIT /
+    None override contract a negative path needs. This helper still builds the RESPONSE
+    model and dumps it, which is the confusion below; its 14 existing callers are
+    salesagent-b341x.10's to redirect.
+
+    The per-file ``_make_creative`` helpers build the RESPONSE model (created_date,
+    updated_date, principal_id); feeding one of those to a request worked only while the
+    request field wrongly pointed at the response model, which is what left seven
+    spec-legal fields unsendable and `inputs` unreachable.
+    """
+    return make_creative_asset_minimal(**extra).model_dump(exclude_none=True, mode="json")
 
 
 class CreativeAssetFactory(factory.Factory):

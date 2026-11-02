@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.adapters.gam.managers.targeting import GAMTargetingManager
+from src.core.exceptions import AdCPCapabilityNotSupportedError
 from src.core.schemas import Targeting
 
 
@@ -214,10 +215,8 @@ def test_axe_include_segment_fails_if_key_not_configured(mock_adapter_config_no_
             axe_include_segment="x8dj3k",
         )
 
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(AdCPCapabilityNotSupportedError) as exc_info:
             manager.build_targeting(targeting_overlay)
-
-        assert "axe_include_key not configured" in str(exc_info.value)
 
 
 def test_axe_exclude_segment_fails_if_key_not_configured(mock_adapter_config_no_keys):
@@ -234,7 +233,5 @@ def test_axe_exclude_segment_fails_if_key_not_configured(mock_adapter_config_no_
             axe_exclude_segment="y9kl4m",
         )
 
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(AdCPCapabilityNotSupportedError) as exc_info:
             manager.build_targeting(targeting_overlay)
-
-        assert "axe_exclude_key not configured" in str(exc_info.value)

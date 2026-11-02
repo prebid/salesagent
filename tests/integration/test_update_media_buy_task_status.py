@@ -47,8 +47,10 @@ class TestUpdateMediaBuyWireTransportStatus:
         from src.core.schemas import UpdateMediaBuyRequest
 
         return UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id=media_buy.media_buy_id,
-            budget=9999.0,
+            end_time="2026-12-01T00:00:00Z",
         )
 
     @pytest.mark.parametrize("transport", _WIRE_TRANSPORTS)

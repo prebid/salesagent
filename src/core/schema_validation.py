@@ -32,11 +32,9 @@ def create_schema_registry() -> dict[str, dict[str, Any]]:
         GetMediaBuyDeliveryResponse,
         GetProductsResponse,
         GetSignalsResponse,
-        ListAuthorizedPropertiesResponse,
         ListCreativeFormatsResponse,
         ListCreativesResponse,
         SyncCreativesResponse,
-        UpdatePerformanceIndexResponse,
     )
 
     # Core response models to include in schema registry
@@ -45,12 +43,10 @@ def create_schema_registry() -> dict[str, dict[str, Any]]:
     response_models: list[type[BaseModel]] = [
         GetProductsResponse,
         ListCreativeFormatsResponse,
-        ListAuthorizedPropertiesResponse,
         GetSignalsResponse,
         SyncCreativesResponse,
         ListCreativesResponse,
         GetMediaBuyDeliveryResponse,
-        UpdatePerformanceIndexResponse,
     ]
 
     schema_registry: dict[str, dict[str, Any]] = {}

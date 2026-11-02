@@ -156,11 +156,14 @@ def check_file(filepath: Path) -> list[str]:
     # Find usages without imports
     errors = []
     builtins = {
-        "Exception",
         "AssertionError",
+        "Exception",
         "ValueError",
         "TypeError",
         "KeyError",
+        # LookupError is KeyError and IndexError's own base class, and both were already
+        # here: the set was missing a builtin, not describing a rule.
+        "LookupError",
         "AttributeError",
         "RuntimeError",
         "NameError",

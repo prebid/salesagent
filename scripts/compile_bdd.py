@@ -17,7 +17,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import os
 import re
 import subprocess
 import sys
@@ -35,7 +34,14 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TRACEABILITY_PATH = PROJECT_ROOT / "docs" / "test-obligations" / "bdd-traceability.yaml"
 OUTPUT_DIR = PROJECT_ROOT / "tests" / "bdd" / "features"
 
-DEFAULT_ADCP_REQ_PATH = Path(os.environ.get("ADCP_REQ_PATH", str(Path.home() / "projects" / "adcp-req")))
+
+def _default_adcp_req_path() -> Path:
+    """``ADCP_REQ_PATH``, read through the settings loader, the one reader of the environment."""
+    sys.path.insert(0, str(PROJECT_ROOT))
+    from src.core.config import ToolingSettings
+
+    return ToolingSettings().adcp_req_path
+
 
 # ---------------------------------------------------------------------------
 # Data structures for parsed Gherkin
@@ -647,6 +653,65 @@ def _transform_step_text(keyword: str, text: str) -> str:
     return text
 
 
+#: Step-text shapes that assert on the BUYER-FACING MESSAGE. These are refused at COMPILE
+#: time, not merely deleted from the tree, because the tree is regenerated: upstream
+#: (adcp-req) still authors them, and a plain deletion is undone by the next
+#: ``--merge``. The buyer-facing sentence is a function of the error CODE through
+#: CODE_TABLE (src/core/errors/codes.py), so asserting both the code and the sentence
+#: checks the table against itself; and because the step DEFINITIONS are gone, a
+#: regenerated prose line does not fail loudly — it raises StepDefinitionNotFoundError,
+#: which tests/bdd/conftest.py converts to a NON-STRICT XFAIL, silently un-grading the
+#: whole scenario including its code assertions. Assert the code, the recovery, the
+#: field, or errors[0].details instead.
+#: Prose steps refused during this run, recorded into the merge manifest so a compile-time
+#: deletion is auditable rather than silent.
+_DROPPED_PROSE: list[str] = []
+
+_PROSE_ASSERTION_MARKERS: tuple[str, ...] = (
+    "error message",
+    "the error indicates",
+    "rejection should name",
+)
+
+
+def _is_prose_assertion(keyword: str, text: str) -> bool:
+    """True if this step asserts on the buyer-facing message text.
+
+    THEN-side only: a Given/When may legitimately mention a message (it is setting up
+    or sending one), and the negative wire-safety checks are NOT prose pins — they assert
+    the ABSENCE of a leak, which nothing derives from a code, so no tautology exists.
+    """
+    if keyword not in ("Then", "And", "But"):
+        return False
+    lowered = text.lower()
+    if "should not contain" in lowered or "must not contain" in lowered:
+        return False
+    return any(marker in lowered for marker in _PROSE_ASSERTION_MARKERS)
+
+
+def _apply_step_transforms(scenario: Scenario) -> None:
+    """Transform every step's text and DROP prose assertions, recording what was dropped.
+
+    One helper for all three call sites (compile, and both merge paths) — the same
+    two-line loop copied three times would be a DRY defect, and a deny-list that only
+    some paths honour is worse than none.
+
+    Dropping caller-side rather than raising inside ``_transform_step_text`` is
+    deliberate: while upstream still carries these lines, a raising compiler would fail
+    EVERY run and make an upstream mirror a hard prerequisite for pulling any unrelated
+    change. Dropping keeps compiles working, and the dropped lines are RECORDED in the
+    manifest — the property that matters is not-silent, not never-dropped.
+    """
+    kept: list[Step] = []
+    for step in scenario.steps:
+        step.text = _transform_step_text(step.keyword, step.text)
+        if _is_prose_assertion(step.keyword, step.text):
+            _DROPPED_PROSE.append(f"{step.keyword} {step.text}")
+            continue
+        kept.append(step)
+    scenario.steps = kept
+
+
 def _strip_transport_from_scenario(scenario: Scenario) -> None:
     """Strip <transport> placeholder from Scenario Outline if fully removed from steps.
 
@@ -759,9 +824,8 @@ def _render_feature(
         if scenario.contextgit is not None:
             all_scenario_ids.add(scenario.contextgit.id)
 
-        # Transform step text first (strip transport suffixes)
-        for step in scenario.steps:
-            step.text = _transform_step_text(step.keyword, step.text)
+        # Transform step text first (strip transport suffixes) and refuse prose assertions
+        _apply_step_transforms(scenario)
 
         # Strip <transport> from Scenario Outline if fully removed from steps
         _strip_transport_from_scenario(scenario)
@@ -1104,33 +1168,94 @@ def _without_trailing_blanks(lines: list[str]) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Binding ground truth (which scenarios actually have step-defs in salesagent)
+# Binding ground truth (which feature files pytest-bdd actually collects)
 # ---------------------------------------------------------------------------
 #
-# Empirical truth from pytest-bdd baseline collection (see
-# phase5-snapshot/baseline-2026-06-01/bdd.json):
-#   - Only 8 UCs have a test_<uc>_*.py driver that loads the feature file.
-#     Scenarios in unwired UCs cannot have bindings (pytest-bdd never sees
-#     them), so v3.1 TARGET wins unconditionally.
-#   - Within wired UCs, only scenarios whose baseline outcome was 'passed'
-#     have working bindings. The rest auto-xfailed at runtime
-#     (StepDefinitionNotFoundError) — no binding to preserve.
+# A compiled feature file is collected iff some ``tests/bdd/test_*.py`` names it
+# in a ``scenarios("features/...")`` / ``scenario("features/...", ...)`` call —
+# pytest-bdd has no directory-wide collection here, every driver names its file.
+# A file nobody collects has no step-def binding to protect, so TARGET may be
+# taken wholesale (the TARGET-WINS bucket). A file that IS collected has
+# bindings, and taking TARGET wholesale silently discards every downstream edit
+# to it — including a deliberately deleted step sentence, which comes back
+# bound to a step definition that was deleted with it. ``conftest.py`` then
+# converts the resulting ``StepDefinitionNotFoundError`` into dormancy, so the
+# scenario goes quiet rather than red (salesagent-b341x.8).
 #
-# Together these reduce the "needs semantic merge" set from 661 to ~106
-# scenarios (only wired UC + bound scenario). The rest take TARGET
-# mechanically via the NEW-ADD render path.
-WIRED_UCS = frozenset(
-    {
-        "UC-002",
-        "UC-003",
-        "UC-004",
-        "UC-005",
-        "UC-006",
-        "UC-011",
-        "UC-019",
-        "UC-026",
-    }
-)
+# Collection is the per-FILE fact above; the gate the classifier applies is the
+# per-UC fold of it (``collected_ucs``), which is strictly the safer of the two --
+# see that function for why.
+#
+# THIS IS DERIVED, NOT DECLARED, because the declared form drifted. It used to
+# be ``WIRED_UCS``, a hardcoded 8-UC frozenset taken from a 2026-06-01 pytest
+# baseline, kept current by a manual step in adcp-req's own runbook
+# (``docs/plan/phase5-handoff.md`` step 2: "Verify the WIRED_UCS list still
+# matches actual salesagent wiring ... update it first"). Nobody ran it.
+# ``test_uc010_discover_seller_capabilities.py`` and
+# ``test_uc018_list_creatives.py`` were added afterwards, so UC-010 and UC-018
+# were collected by live drivers while the generator still believed they had no
+# bindings: 141 scenarios routed to TARGET-WINS, overwritten from upstream with
+# no LLM merge and no manifest entry to review.
+
+
+class CollectedFeaturesUnavailable(RuntimeError):
+    """The collected-feature derivation found nothing, so the merge must not run.
+
+    An empty result is indistinguishable, downstream, from "no file is
+    collected" — which routes EVERY scenario to TARGET-WINS and overwrites the
+    whole suite from upstream without review. That is the exact failure the
+    derivation exists to prevent, so it refuses instead of returning an empty
+    set: a moved test directory or a renamed driver has to be fixed, not
+    silently absorbed.
+    """
+
+
+BDD_TESTS_DIR = PROJECT_ROOT / "tests" / "bdd"
+
+#: ``scenarios("features/BR-UC-018-list-creatives.feature")`` and the singular
+#: ``scenario("features/....feature", "name")``. The path is always relative to
+#: the test module's own directory, so only the basename is needed here. The
+#: singular arm is pytest-bdd's API, not current practice -- no driver uses it
+#: today, so a break in that arm alone would go unnoticed by the guard.
+_SCENARIOS_CALL_RE = re.compile(r"""\bscenarios?\s*\(\s*["'][^"']*?(?P<name>[^"'/]+\.feature)["']""")
+
+
+def collected_feature_files(bdd_tests_dir: Path | None = None) -> frozenset[str]:
+    """Basenames of the feature files a salesagent BDD driver actually collects.
+
+    Raises ``CollectedFeaturesUnavailable`` when the derivation yields nothing.
+    """
+    root = BDD_TESTS_DIR if bdd_tests_dir is None else bdd_tests_dir
+    names: set[str] = set()
+    for module in sorted(root.glob("test_*.py")):
+        names.update(m.group("name") for m in _SCENARIOS_CALL_RE.finditer(module.read_text()))
+    if not names:
+        raise CollectedFeaturesUnavailable(
+            f"no scenarios(...) call naming a .feature file found under {root} — refusing to merge. "
+            "Every compiled file would be classified TARGET-WINS and overwritten from upstream "
+            "without review. Fix the path or the driver naming before re-running."
+        )
+    return frozenset(names)
+
+
+def collected_ucs(bdd_tests_dir: Path | None = None) -> frozenset[str]:
+    """UC keys with at least one collected feature file — the gate's actual unit.
+
+    Deliberately coarser than ``collected_feature_files()``. The gate asks "is there
+    a binding to protect", and a UC with one collected file has step definitions
+    loaded for the whole UC; keeping the gate per-UC only ever moves a file OUT of
+    the wholesale-overwrite bucket, never into it, which is the safe direction for
+    a bucket whose whole risk is discarding downstream work. It also leaves the
+    synthetic per-UC fixtures in adcp-req's ``scripts/phase5/`` classifying the way
+    they always did (``BR-UC-002-fixture.feature`` is a real fixture name, collected
+    by nothing).
+    """
+    keys = {_extract_uc_key(name) for name in collected_feature_files(bdd_tests_dir)}
+    # ``_extract_uc_key`` echoes the filename for anything not named BR-UC-<NNN>-*
+    # (``local-*.feature``, ``BR-CODES-*``). Those are downstream-only files with no
+    # upstream counterpart, so they never reach the classifier; dropping them keeps
+    # the set readable in a failure message.
+    return frozenset(k for k in keys if k.startswith("UC-"))
 
 
 def load_bound_scenarios(baseline_bdd_json_path: Path) -> set[str]:
@@ -1175,11 +1300,12 @@ def merge_feature(
     manifest_entries lists NEEDS-SEMANTIC-MERGE scenarios for Layer 2;
     bucket_counts is per-classifier-bucket count for the manifest summary.
 
-    bound_scenarios: when provided, scenarios outside this set (OR in UCs
-    not in WIRED_UCS) are classified TARGET-WINS instead of
+    bound_scenarios: when provided, scenarios outside this set (OR in a feature
+    file no salesagent driver collects) are classified TARGET-WINS instead of
     NEEDS-SEMANTIC-MERGE — applied mechanically via the NEW-ADD render path
     since there's no binding to preserve.
     """
+    collected = collected_ucs()
     target_feature = parse_feature_file(target_source_path.read_text())
     feature_filename = target_source_path.name
     uc_key = _extract_uc_key(feature_filename)
@@ -1264,8 +1390,8 @@ def merge_feature(
                 bg_hit = True
         if bg_hit:
             bucket_counts["RESOLVED-FROM-LOCKFILE"] = bucket_counts.get("RESOLVED-FROM-LOCKFILE", 0) + 1
-        elif uc_key not in WIRED_UCS:
-            # UC has no test driver — no Background-step binding to preserve.
+        elif uc_key not in collected:
+            # No driver collects this UC — no Background-step binding to preserve.
             bucket_counts["TARGET-WINS"] = bucket_counts.get("TARGET-WINS", 0) + 1
             use_target_background = True
         else:
@@ -1305,8 +1431,7 @@ def merge_feature(
             output_tags, new_mapping = _transform_scenario_tags(scen, traceability, uc_key, feature_filename)
             if new_mapping is not None:
                 new_mappings.append(new_mapping)
-            for step in scen.steps:
-                step.text = _transform_step_text(step.keyword, step.text)
+            _apply_step_transforms(scen)
             _strip_transport_from_scenario(scen)
             merged_scenarios.append(
                 Scenario(
@@ -1321,32 +1446,31 @@ def merge_feature(
             )
         elif bucket == "NEEDS-SEMANTIC-MERGE":
             # Demote to TARGET-WINS when pytest-bdd has no working binding to
-            # preserve (UC has no test driver OR scenario auto-xfails on
+            # preserve (no driver collects the file OR scenario auto-xfails on
             # baseline). Render TARGET via the standard compile pipeline —
             # same path NEW-ADD uses — since legacy phrasing has nothing to
             # protect.
-            # UC-level gate is ALWAYS active: if the UC has no
-            # test_<uc>_*.py driver in salesagent (i.e., not in WIRED_UCS),
-            # pytest-bdd never collects its scenarios — there is no step-def
-            # binding to preserve, regardless of what the gherkin says.
+            # The collected-UC gate is ALWAYS active: if no salesagent
+            # ``scenarios("features/BR-<this UC>-*.feature")`` call names any of
+            # the UC's files, pytest-bdd never collects its scenarios — there is
+            # no step-def binding to preserve, whatever the gherkin says.
             # Demote to TARGET-WINS (mechanical render, no LLM).
             #
             # Scenario-level gate is OPTIONAL: when --bound-scenarios-from is
-            # provided, narrow within a wired UC to only the scenarios
+            # provided, narrow within a collected file to only the scenarios
             # pytest-bdd actually bound. WARNING — known false-positive prone:
             # baseline bdd.json's "xfailed" outcomes can be harness-not-wired
             # XFails (e.g. "No harness wired for None") rather than
             # StepDefinitionNotFoundError. Only enable when bdd.json is
             # known clean.
-            no_binding = uc_key not in WIRED_UCS or (bound_scenarios is not None and sid not in bound_scenarios)
+            no_binding = uc_key not in collected or (bound_scenarios is not None and sid not in bound_scenarios)
             if no_binding:
                 bucket_counts[bucket] = bucket_counts.get(bucket, 0) - 1
                 bucket_counts["TARGET-WINS"] = bucket_counts.get("TARGET-WINS", 0) + 1
                 output_tags, new_mapping = _transform_scenario_tags(scen, traceability, uc_key, feature_filename)
                 if new_mapping is not None:
                     new_mappings.append(new_mapping)
-                for step in scen.steps:
-                    step.text = _transform_step_text(step.keyword, step.text)
+                _apply_step_transforms(scen)
                 _strip_transport_from_scenario(scen)
                 merged_scenarios.append(
                     Scenario(
@@ -1428,7 +1552,7 @@ def merge_feature(
         out_lines.append(dl.rstrip())
     background_lines: list[str] | None = None
     if use_target_background and target_feature.background_lines:
-        # Unwired UC + Background diff → TARGET wins (no bindings to keep).
+        # Uncollected file + Background diff → TARGET wins (no bindings to keep).
         background_lines = target_feature.background_lines
     elif legacy_feature is not None and legacy_feature.background_lines:
         background_lines = legacy_feature.background_lines
@@ -1562,6 +1686,7 @@ def merge_features(
     if not dry_run:
         import json
 
+        manifest["dropped_prose_assertions"] = sorted(set(_DROPPED_PROSE))
         manifest_path.write_text(json.dumps(manifest, indent=2))
         total_nsm = sum(len(uc["needs_semantic_merge"]) for uc in manifest["per_uc"].values())
         try:
@@ -1708,11 +1833,12 @@ def main() -> None:
         default=None,
         help="Where to write .merge-manifest.json (default: <salesagent>/.merge-manifest.json).",
     )
+    default_adcp_req_path = _default_adcp_req_path()
     parser.add_argument(
         "--adcp-req-path",
         type=Path,
-        default=DEFAULT_ADCP_REQ_PATH,
-        help=f"Path to adcp-req repository (default: {DEFAULT_ADCP_REQ_PATH}).",
+        default=default_adcp_req_path,
+        help=f"Path to adcp-req repository (default: {default_adcp_req_path}).",
     )
     parser.add_argument(
         "--lockfile-root",
@@ -1743,7 +1869,7 @@ def main() -> None:
         help=(
             "Path to a baseline bdd.json (e.g., "
             "adcp-req/phase5-snapshot/baseline-2026-06-01/bdd.json). When set, "
-            "scenarios outside wired UCs OR not in the baseline-passed set are "
+            "scenarios in an uncollected feature file OR not in the baseline-passed set are "
             "demoted from NEEDS-SEMANTIC-MERGE to TARGET-WINS (taken from v3.1 "
             "mechanically — no LLM merge needed)."
         ),

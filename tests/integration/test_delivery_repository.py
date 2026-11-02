@@ -24,6 +24,7 @@ from src.core.database.models import (
 )
 from src.core.database.repositories.delivery import DeliveryRepository
 from src.core.webhooks.delivery import WebhookDeliveryOutcome, WebhookTaskContext
+from tests.factories.principal import plaintext_token_for
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -50,7 +51,12 @@ def tenant_a(integration_db):
     tenant_id = "del_repo_tenant_a"
     with get_db_session() as session:
         tenant = Tenant(
-            tenant_id=tenant_id, name="Delivery Tenant A", subdomain="del-a", is_active=True, ad_server="mock"
+            tenant_id=tenant_id,
+            name="Delivery Tenant A",
+            subdomain="del-a",
+            virtual_host="del-a.adcp.test",
+            is_active=True,
+            ad_server="mock",
         )
         session.add(tenant)
         session.commit()
@@ -64,7 +70,12 @@ def tenant_b(integration_db):
     tenant_id = "del_repo_tenant_b"
     with get_db_session() as session:
         tenant = Tenant(
-            tenant_id=tenant_id, name="Delivery Tenant B", subdomain="del-b", is_active=True, ad_server="mock"
+            tenant_id=tenant_id,
+            name="Delivery Tenant B",
+            subdomain="del-b",
+            virtual_host="del-b.adcp.test",
+            is_active=True,
+            ad_server="mock",
         )
         session.add(tenant)
         session.commit()
@@ -77,11 +88,11 @@ def principal_a(tenant_a):
     """Create a principal in tenant A."""
     principal_id = "del_principal_a"
     with get_db_session() as session:
-        principal = Principal(
+        principal = Principal.with_token(
+            plaintext_token_for(principal_id),
             tenant_id=tenant_a,
             principal_id=principal_id,
             name="Delivery Advertiser A",
-            access_token="del_token_a",
             platform_mappings={"mock": {"advertiser_id": "del_adv_a"}},
         )
         session.add(principal)
@@ -94,11 +105,11 @@ def principal_b(tenant_b):
     """Create a principal in tenant B."""
     principal_id = "del_principal_b"
     with get_db_session() as session:
-        principal = Principal(
+        principal = Principal.with_token(
+            plaintext_token_for(principal_id),
             tenant_id=tenant_b,
             principal_id=principal_id,
             name="Delivery Advertiser B",
-            access_token="del_token_b",
             platform_mappings={"mock": {"advertiser_id": "del_adv_b"}},
         )
         session.add(principal)

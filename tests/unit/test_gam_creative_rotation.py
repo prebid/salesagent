@@ -100,7 +100,23 @@ class TestPackageInfoExtraction:
 
 
 class TestCreativeRotationLogic:
-    """Test creative rotation type determination and LICA creation."""
+    """Test creative rotation type determination and LICA creation.
+
+    Four tests became the one parametrized test below. Three of them
+    (``test_all_default_weights_keeps_even_rotation``,
+    ``test_non_default_weight_triggers_manual``,
+    ``test_uniform_non_default_weights_trigger_manual``) passed
+    ``line_item_service=None`` and asserted LOG STRINGS — "keeping EVEN rotation",
+    "will use MANUAL rotation". With no service, production logs its decision and then
+    returns at ``if not line_item_service``, a path ``add_creative_assets`` cannot take:
+    it always passes the service it just asked the client manager for. So they graded a
+    sentence on a dead branch, and none of them observed the one thing that matters —
+    whether GAM was actually told to switch.
+
+    What the four differed in was only the SHAPE of the ``any(w != 100)`` condition, so
+    that is what is parametrized, and the assertion is now GAM's ``updateLineItems``
+    call.
+    """
 
     @pytest.fixture
     def mock_client_manager(self, mocker):
@@ -115,163 +131,59 @@ class TestCreativeRotationLogic:
         return GAMCreativesManager(
             client_manager=mock_client_manager,
             advertiser_id="12345",
-            dry_run=True,  # Use dry run for unit tests
         )
 
-    def test_all_default_weights_keeps_even_rotation(self, creatives_manager, caplog):
-        """When all creatives have default weight (100), keep EVEN rotation."""
+    @pytest.mark.parametrize(
+        ("weights", "expect_manual"),
+        [
+            pytest.param([100, 100, 100], False, id="all-default"),
+            pytest.param([70, 30], True, id="varying"),
+            pytest.param([50], True, id="single-non-default"),
+            pytest.param([50, 50], True, id="uniform-non-default"),
+        ],
+    )
+    def test_line_item_rotation_switches_to_manual_for_any_non_default_weight(
+        self, creatives_manager, mocker, weights, expect_manual
+    ):
+        """GAM honours creative weights only under MANUAL rotation (AdCP 2.5, #827).
+
+        So any weight other than the default 100 — one of them, or all of them, or a
+        mix — must switch the line item, and an all-default set must leave it alone.
+        The line item id is numeric because production binds it as ``int(line_item_id)``,
+        the way a GAM id is shaped.
+        """
         assets = [
             {
-                "creative_id": "cr_1",
-                "package_assignments": [
-                    {"package_id": "pkg_prod_abc_123_1", "weight": 100},
-                    {"package_id": "pkg_prod_abc_456_2", "weight": 100},
-                ],
-            },
-            {
-                "creative_id": "cr_2",
-                "package_assignments": [
-                    {"package_id": "pkg_prod_abc_123_1", "weight": 100},
-                ],
-            },
+                "creative_id": f"cr_{index}",
+                "package_assignments": [{"package_id": "pkg_prod_abc_123_1", "weight": weight}],
+            }
+            for index, weight in enumerate(weights)
         ]
+        line_item_map = {"Campaign - prod_abc": "5551234"}
+        line_item = {"id": "5551234", "creativeRotationType": "EVEN"}
+        line_item_service = mocker.MagicMock()
+        line_item_service.getLineItemsByStatement.return_value = mocker.MagicMock(results=[line_item])
 
-        line_item_map = {"Campaign - prod_abc": "li_123"}
+        creatives_manager._update_line_items_for_weighted_creatives(assets, line_item_map, line_item_service)
 
-        creatives_manager._update_line_items_for_weighted_creatives(assets, line_item_map, None)
-
-        assert "keeping EVEN rotation" in caplog.text
-
-    def test_varying_weights_triggers_manual_rotation(self, creatives_manager, caplog):
-        """When creatives have different weights, switch to MANUAL rotation."""
-        assets = [
-            {
-                "creative_id": "cr_1",
-                "package_assignments": [
-                    {"package_id": "pkg_prod_abc_123_1", "weight": 70},
-                ],
-            },
-            {
-                "creative_id": "cr_2",
-                "package_assignments": [
-                    {"package_id": "pkg_prod_abc_123_1", "weight": 30},
-                ],
-            },
-        ]
-
-        line_item_map = {"Campaign - prod_abc": "li_123"}
-
-        creatives_manager._update_line_items_for_weighted_creatives(assets, line_item_map, None)
-
-        assert "will use MANUAL rotation" in caplog.text
-        assert "Would update line item" in caplog.text
-
-    def test_non_default_weight_triggers_manual(self, creatives_manager, caplog):
-        """Even a single non-default weight triggers MANUAL rotation."""
-        assets = [
-            {
-                "creative_id": "cr_1",
-                "package_assignments": [
-                    {"package_id": "pkg_prod_abc_123_1", "weight": 50},  # Non-default
-                ],
-            },
-        ]
-
-        line_item_map = {"Campaign - prod_abc": "li_123"}
-
-        creatives_manager._update_line_items_for_weighted_creatives(assets, line_item_map, None)
-
-        # Even single non-default weight should trigger MANUAL
-        assert "will use MANUAL rotation" in caplog.text
-
-    def test_uniform_non_default_weights_trigger_manual(self, creatives_manager, caplog):
-        """Uniform non-default weights (e.g., all 50) should also trigger MANUAL."""
-        assets = [
-            {
-                "creative_id": "cr_1",
-                "package_assignments": [
-                    {"package_id": "pkg_prod_abc_123_1", "weight": 50},
-                ],
-            },
-            {
-                "creative_id": "cr_2",
-                "package_assignments": [
-                    {"package_id": "pkg_prod_abc_123_1", "weight": 50},
-                ],
-            },
-        ]
-
-        line_item_map = {"Campaign - prod_abc": "li_123"}
-
-        creatives_manager._update_line_items_for_weighted_creatives(assets, line_item_map, None)
-
-        # Uniform but non-default should still trigger MANUAL
-        assert "will use MANUAL rotation" in caplog.text
-
-
-class TestLICACreationWithWeights:
-    """Test that LICA creation includes weights correctly."""
-
-    @pytest.fixture
-    def mock_client_manager(self, mocker):
-        """Create a mock GAM client manager."""
-        client_manager = mocker.MagicMock()
-        client_manager.get_statement_builder.return_value = mocker.MagicMock()
-        return client_manager
-
-    @pytest.fixture
-    def creatives_manager(self, mock_client_manager):
-        """Create a GAMCreativesManager instance for testing."""
-        return GAMCreativesManager(
-            client_manager=mock_client_manager,
-            advertiser_id="12345",
-            dry_run=True,
-        )
-
-    def test_lica_dry_run_logs_weight(self, creatives_manager, caplog):
-        """In dry run, LICA with non-default weight should log the weight."""
-        asset = {
-            "creative_id": "cr_1",
-            "package_assignments": [
-                {"package_id": "pkg_prod_abc_123_1", "weight": 70},
-            ],
-        }
-
-        line_item_map = {"Campaign - prod_abc": "li_123"}
-
-        creatives_manager._associate_creative_with_line_items(
-            gam_creative_id="gam_cr_999",
-            asset=asset,
-            line_item_map=line_item_map,
-            lica_service=None,
-        )
-
-        assert "with weight 70" in caplog.text
-
-    def test_lica_dry_run_default_weight_no_extra_log(self, creatives_manager, caplog):
-        """Default weight (100) should not log extra weight info."""
-        asset = {
-            "creative_id": "cr_1",
-            "package_assignments": [
-                {"package_id": "pkg_prod_abc_123_1", "weight": 100},
-            ],
-        }
-
-        line_item_map = {"Campaign - prod_abc": "li_123"}
-
-        creatives_manager._associate_creative_with_line_items(
-            gam_creative_id="gam_cr_999",
-            asset=asset,
-            line_item_map=line_item_map,
-            lica_service=None,
-        )
-
-        assert "with weight" not in caplog.text
-        assert "Would associate creative" in caplog.text
+        if expect_manual:
+            line_item_service.updateLineItems.assert_called_once_with(
+                [{"id": "5551234", "creativeRotationType": "MANUAL"}]
+            )
+        else:
+            line_item_service.updateLineItems.assert_not_called()
 
 
 class TestLICACreationActualPayload:
-    """Test that LICA creation sends correct payload to GAM API."""
+    """Test that LICA creation sends correct payload to GAM API.
+
+    This class absorbed ``TestLICACreationWithWeights``, whose two tests passed
+    ``lica_service=None`` and asserted the dry-run log lines "with weight 70" and
+    "Would associate creative". There is no dry-run branch, and the obligation those
+    two approximated — the weight is on the association when it is not the default,
+    and absent when it is — is exactly what the two tests below grade on the real
+    call, so they were duplicates rather than coverage.
+    """
 
     @pytest.fixture
     def mock_client_manager(self, mocker):
@@ -291,7 +203,6 @@ class TestLICACreationActualPayload:
         return GAMCreativesManager(
             client_manager=mock_client_manager,
             advertiser_id="12345",
-            dry_run=False,
         )
 
     def test_lica_payload_includes_weight_when_non_default(self, creatives_manager_non_dry_run, mock_lica_service):
@@ -367,11 +278,10 @@ class TestBackwardCompatibility:
         return GAMCreativesManager(
             client_manager=mock_client_manager,
             advertiser_id="12345",
-            dry_run=True,
         )
 
-    def test_string_assignments_work(self, creatives_manager, caplog):
-        """String format should still work (with default weight)."""
+    def test_string_assignments_work(self, creatives_manager, mocker):
+        """String format still associates, at the default weight (so no weight field)."""
         asset = {
             "creative_id": "cr_1",
             # String format: just package IDs
@@ -379,13 +289,15 @@ class TestBackwardCompatibility:
         }
 
         line_item_map = {"Campaign - prod_abc": "li_123"}
+        lica_service = mocker.MagicMock()
 
         creatives_manager._associate_creative_with_line_items(
             gam_creative_id="gam_cr_999",
             asset=asset,
             line_item_map=line_item_map,
-            lica_service=None,
+            lica_service=lica_service,
         )
 
-        # Should work without error
-        assert "Would associate creative" in caplog.text
+        lica_service.createLineItemCreativeAssociations.assert_called_once_with(
+            [{"creativeId": "gam_cr_999", "lineItemId": "li_123"}]
+        )

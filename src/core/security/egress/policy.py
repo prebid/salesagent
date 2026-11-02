@@ -32,7 +32,7 @@ from urllib.parse import ParseResult, urlparse
 
 from adcp.signing import SSRFValidationError, resolve_and_validate_host
 
-from src.core.exceptions import AdCPBlockedUrlError, AdCPError
+from src.core.exceptions import AdCPBlockedUrlError, AdCPSalesAgentError
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +80,61 @@ _BLOCKED_HOSTNAMES = frozenset(
     }
 )
 
+# RFC 2606 / RFC 6761 reserved TLDs. NOT part of either egress verdict: a URL
+# under one is accepted by both (`buyer.example.com` fixtures must register),
+# and nothing here refuses it. What this frozenset answers is a different
+# question -- "can this hostname ever name a real host?" -- which is guaranteed
+# to be No, so a caller can judge it WITHOUT a DNS lookup. That determinism is
+# the point: relying on NXDOMAIN would make the answer depend on whether the
+# local resolver hijacks unknown names, which many do.
+#
+# It lives beside `_BLOCKED_HOSTNAMES` because it is the same kind of value --
+# a DNS-free hostname-class fact -- and because this module is where the
+# egress ruff table (`ruff-egress.toml`) names the owner of host classification.
+# Single source: the notification activation prover
+# (`src/services/notification_proof_service.py`) treats hosts under these as
+# unprovable. Two copies would drift.
+#
+# It classifies what we are willing to DIAL, never what we accept as a NAME. A
+# brand.domain is an identifier and is graded by `core/brand-ref.json`'s hostname
+# pattern alone.
+#
+# SIX entries, not four. ``.local`` (RFC 6762 §3, multicast DNS) and ``.internal`` (RFC 8375
+# / ICANN SAC113, private-use) are special-use names exactly as much as the RFC 2606 four,
+# and a name under either resolves only inside somebody's LAN -- which is the whole class
+# this gate exists to refuse. They were dropped when this policy moved out of the retired
+# ``url_validator``; restoring them is fail-closed and is what
+# ``tests/unit/test_architecture_reserved_tld_single_matcher.py`` grades the set against.
+RESERVED_TLDS: frozenset[str] = frozenset({".test", ".invalid", ".example", ".localhost", ".local", ".internal"})
+
+
+def reserved_tld_for_host(hostname: str) -> str | None:
+    """Which reserved TLD *hostname* sits under, or None.
+
+    THE single matcher for this policy, and the reason it returns the TLD rather than a
+    bool: a caller that has to tell the operator WHICH name class it refused would
+    otherwise re-derive it with its own ``endswith`` loop, and a bare ``endswith`` is the
+    defect this function exists to prevent -- it matches ``notlocal`` for ``.local`` unless
+    the dot is included, and misses the bare label ``test``.
+
+    Normalizes case and a trailing root dot, and matches a bare reserved LABEL (``test``)
+    as well as a suffix (``acme.test``); all three are spellings a caller meets.
+    """
+    lowered = hostname.lower().rstrip(".")
+    for tld in RESERVED_TLDS:
+        if lowered == tld.lstrip(".") or lowered.endswith(tld):
+            return tld
+    return None
+
+
+def is_reserved_tld_host(hostname: str) -> bool:
+    """Whether *hostname* sits under a reserved / special-use TLD.
+
+    The boolean gate, expressed over :func:`reserved_tld_for_host` so the two cannot
+    disagree about what counts.
+    """
+    return reserved_tld_for_host(hostname) is not None
+
 
 class PinnedHost(NamedTuple):
     """The resolved identity a pinned transport is built from.
@@ -104,9 +159,10 @@ class OutboundError(Exception):
     raised directly.
 
     It exists so a call site that only logs can write one ``except``. It is
-    deliberately *not* an ``AdCPError``: raising it directly would degrade to
+    deliberately *not* an ``AdCPSalesAgentError``: raising it directly would degrade to
     a bare INTERNAL_ERROR at a transport boundary and would be invisible to
-    the error-taxonomy guards that walk ``AdCPError.iter_concrete_subclasses()``.
+    the error-taxonomy guards that walk
+    ``AdCPSalesAgentError.iter_concrete_subclasses()``.
     Raise :class:`OutboundRequestBlocked` (defined here) or
     ``OutboundDeliveryFailed`` (``src/core/security/egress/attempts.py`` — a
     delivery outcome tied to the retry schedule, not an address-policy
@@ -119,7 +175,7 @@ class OutboundError(Exception):
     catchers (``except OutboundError`` / ``except OutboundRequestBlocked``)
     notice the move.
 
-    It defines no ``__init__`` on purpose — one would shadow ``AdCPError``'s
+    It defines no ``__init__`` on purpose — one would shadow ``AdCPSalesAgentError``'s
     through the MRO of ``OutboundRequestBlocked``. Class attributes are safe:
     they do not touch ``__init__``, and declaring them here is what makes
     ``exc.http_status`` a typed read on ``OutboundError`` instead of a
@@ -293,7 +349,7 @@ class EgressPolicy:
         """
         try:
             error = _registration_error(url)
-        except AdCPError:
+        except AdCPSalesAgentError:
             raise
         except ValueError as exc:
             # ValueError, not Exception, and a FIXED sentence rather than the

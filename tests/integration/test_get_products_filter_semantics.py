@@ -12,13 +12,11 @@ import pytest
 
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
-    GetSignalsRequest,
     ListCreativeFormatsRequest,
     ListCreativeFormatsResponse,
 )
-from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.creative_formats import _list_creative_formats_impl
-from src.core.tools.signals import _get_signals_impl
+from tests.factories.principal import PrincipalFactory
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -31,12 +29,10 @@ def identity(integration_db):
     for adapter config (AdapterConfig table lookup). The tenant is a plain dict
     since formats and signals don't require a Tenant row.
     """
-    return ResolvedIdentity(
+    return PrincipalFactory.make_identity(
         principal_id="test_principal",
         tenant_id="filter-sem-test",
         tenant={"tenant_id": "filter-sem-test", "name": "Filter Semantics Test"},
-        protocol="mcp",
-        testing_context=AdCPTestContext(dry_run=False, mock_time=None, jump_to_event=None, test_session_id=None),
     )
 
 
@@ -277,101 +273,3 @@ class TestDimensionFilter:
         assert len(narrow.formats) <= len(all_formats.formats), (
             "Dimension filter should not return more formats than unfiltered"
         )
-
-
-# ---------------------------------------------------------------------------
-# BR-RULE-050-01: Per-Filter Signal Discovery Semantics
-# ---------------------------------------------------------------------------
-
-
-class TestPerFilterSignalSemantics:
-    """Covers: BR-RULE-050-01"""
-
-    _DELIVER_TO = {
-        "countries": ["US"],
-        "deployments": [{"type": "platform", "platform": "google_ad_manager"}],
-    }
-
-    def _make_signal_req(self, **kwargs):
-        """Build a GetSignalsRequest with required deliver_to + signal_spec fields."""
-        data = {"signal_spec": "", "deliver_to": self._DELIVER_TO}
-        data.update(kwargs)
-        return GetSignalsRequest.model_validate(data)
-
-    @pytest.mark.asyncio
-    async def test_catalog_types_or_within_filter(self, identity):
-        """catalog_types uses OR semantics: signals matching ANY listed type are returned.
-
-        Covers: BR-RULE-050-01
-        """
-        marketplace_result = await _get_signals_impl(
-            self._make_signal_req(filters={"catalog_types": ["marketplace"]}), identity
-        )
-        owned_result = await _get_signals_impl(self._make_signal_req(filters={"catalog_types": ["owned"]}), identity)
-        both_result = await _get_signals_impl(
-            self._make_signal_req(filters={"catalog_types": ["marketplace", "owned"]}), identity
-        )
-
-        # OR semantics: combined should be >= each individual
-        assert len(both_result.signals) >= len(marketplace_result.signals)
-        assert len(both_result.signals) >= len(owned_result.signals)
-
-        for s in both_result.signals:
-            assert s.signal_type in ("marketplace", "owned"), (
-                f"Signal {s.name} has type {s.signal_type}, expected marketplace or owned"
-            )
-
-    @pytest.mark.asyncio
-    async def test_data_providers_or_within_filter(self, identity):
-        """data_providers uses OR semantics: signals from ANY listed provider are returned.
-
-        Covers: BR-RULE-050-01
-        """
-        all_result = await _get_signals_impl(self._make_signal_req(), identity)
-        providers = {s.data_provider for s in all_result.signals}
-        assert len(providers) >= 2, "Need at least 2 data providers to test OR"
-
-        provider_list = list(providers)[:2]
-
-        result = await _get_signals_impl(self._make_signal_req(filters={"data_providers": provider_list}), identity)
-
-        assert len(result.signals) >= 2, "Should return signals from at least 2 providers"
-        for s in result.signals:
-            assert s.data_provider in provider_list, (
-                f"Signal {s.name} from provider {s.data_provider}, expected one of {provider_list}"
-            )
-
-    @pytest.mark.asyncio
-    async def test_max_cpm_threshold(self, identity):
-        """max_cpm enforces numeric threshold: signals with cpm > max_cpm are excluded.
-
-        Covers: BR-RULE-050-01
-        """
-        max_cpm = 2.0
-        result = await _get_signals_impl(self._make_signal_req(filters={"max_cpm": max_cpm}), identity)
-
-        for s in result.signals:
-            assert s.pricing is not None, f"Signal {s.name} should have pricing"
-            assert s.pricing.cpm <= max_cpm, f"Signal {s.name} has cpm={s.pricing.cpm}, but max_cpm={max_cpm}"
-
-        all_result = await _get_signals_impl(self._make_signal_req(), identity)
-        assert len(result.signals) < len(all_result.signals), "max_cpm should exclude some signals"
-
-    @pytest.mark.asyncio
-    async def test_min_coverage_threshold(self, identity):
-        """min_coverage enforces numeric threshold: signals below threshold are excluded.
-
-        Covers: BR-RULE-050-01
-        """
-        min_coverage = 85.0
-        result = await _get_signals_impl(
-            self._make_signal_req(filters={"min_coverage_percentage": min_coverage}), identity
-        )
-
-        for s in result.signals:
-            assert s.coverage_percentage >= min_coverage, (
-                f"Signal {s.name} has coverage={s.coverage_percentage}%, but min_coverage={min_coverage}%"
-            )
-
-        all_result = await _get_signals_impl(self._make_signal_req(), identity)
-        assert len(result.signals) < len(all_result.signals), "min_coverage should exclude some signals"

@@ -1,81 +1,71 @@
-"""Authentication utilities for MCP server."""
+"""The principal lookups: the resolver's database primitives.
 
-import hmac
+Two readers, one per way a principal is identified. A request identifies its principal
+by the token it presents (``get_principal_from_token``); server-initiated work identifies
+the owner of a stored row by id (``get_principal_by_id``). Both are scoped to a tenant,
+because a principal is a row in exactly one tenant, and both hand back the model built
+inside the session so the resolver keeps what was loaded.
+"""
+
 import logging
 
-from sqlalchemy import select
-
+from src.core.credentials import hash_token
 from src.core.database.database_session import execute_with_retry
-from src.core.database.models import Principal, Tenant
+from src.core.database.repositories.principal import PrincipalRepository
+from src.core.schemas import Principal
 
 logger = logging.getLogger(__name__)
 
 
-def get_principal_from_token(token: str, tenant_id: str | None = None) -> tuple[str | None, dict | None]:
-    """Looks up a principal_id from the database using a token with retry logic.
+def get_principal_from_token(token: str, tenant_id: str) -> Principal | None:
+    """The principal *token* authenticates inside *tenant_id*, or ``None``.
 
-    If tenant_id is provided, only looks in that specific tenant.
-    If not provided, searches globally by token and returns the discovered tenant.
+    A buyer credential is a ``Principal`` row and nothing else, and the lookup is always
+    scoped to the tenant the request addressed, so a token minted for one tenant never
+    acts on another. The row stores ``sha256(token)``, so the presented value is hashed
+    here and compared by equality on the hash; the plaintext is never written anywhere.
+    """
 
-    Args:
-        token: Authentication token
-        tenant_id: Optional tenant ID to restrict search
+    token_hash = hash_token(token)
 
-    Returns:
-        (principal_id, tenant_dict) tuple. tenant_dict is only populated when
-        the tenant was discovered from a global token lookup (no tenant_id provided).
+    def _lookup_principal(session):
+        row = PrincipalRepository(session, tenant_id).find_by_token_hash(token_hash)
+        return Principal.from_row(row) if row else None
+
+    return execute_with_retry(_lookup_principal)
+
+
+def get_principal_by_agent_url(agent_url: str, tenant_id: str) -> Principal | None:
+    """The principal onboarded at *agent_url* inside *tenant_id*, or ``None``.
+
+    The third way a request identifies its principal, and the newest: a valid RFC 9421
+    signature. Verification establishes exactly one fact — "the request was issued by the
+    agent whose ``jwks_uri`` contains the ``keyid``" (security.mdx @ v3.1.1 § Agent
+    identity) — and names that agent by the ``agents[]`` entry whose ``jwks_uri`` resolved
+    the key. So a verified signature IS a credential, and this is how it resolves to a
+    principal when the caller presented no bearer at all.
+
+    Scoped to the tenant like the other two, and unique within it
+    (``uq_principals_tenant_agent_url``), so the answer is one row rather than whichever
+    sorted first.
     """
 
     def _lookup_principal(session):
-        if tenant_id:
-            # If tenant_id specified, ONLY look in that tenant
-            stmt = select(Principal).filter_by(access_token=token, tenant_id=tenant_id)
-            principal = session.scalars(stmt).first()
-            if principal:
-                return principal.principal_id, None
+        row = PrincipalRepository(session, tenant_id).find_by_agent_url(agent_url)
+        return Principal.from_row(row) if row else None
 
-            # Check if it's the admin token for this specific tenant
-            tenant_stmt = select(Tenant).filter_by(tenant_id=tenant_id, is_active=True)
-            tenant_obj = session.scalars(tenant_stmt).first()
-            if tenant_obj and tenant_obj.admin_token and hmac.compare_digest(tenant_obj.admin_token, token):
-                logger.debug("Token matches admin token for tenant '%s'", tenant_id)
-                return f"{tenant_id}_admin", None
+    return execute_with_retry(_lookup_principal)
 
-            return None, None
-        else:
-            # No tenant specified - search globally
-            stmt = select(Principal).filter_by(access_token=token)
-            principal = session.scalars(stmt).first()
-            logger.debug(f"[AUTH] Looking up principal with token: {token[:20]}...")
-            if principal:
-                logger.info(f"[AUTH] Principal found: {principal.principal_id}, tenant_id={principal.tenant_id}")
-                # Found principal - look up tenant to return
-                stmt = select(Tenant).filter_by(tenant_id=principal.tenant_id, is_active=True)
-                tenant = session.scalars(stmt).first()
-                if tenant:
-                    logger.info(f"[AUTH] Tenant found: {tenant.tenant_id}, is_active={tenant.is_active}")
-                    from src.core.utils.tenant_utils import serialize_tenant_to_dict
 
-                    tenant_dict = serialize_tenant_to_dict(tenant)
-                    return principal.principal_id, tenant_dict
-                else:
-                    logger.error(
-                        f"[AUTH] ERROR: Tenant NOT FOUND for tenant_id={principal.tenant_id} with is_active=True"
-                    )
-                    # Try without is_active filter to see if tenant exists but is_active is wrong
-                    stmt_debug = select(Tenant).filter_by(tenant_id=principal.tenant_id)
-                    tenant_debug = session.scalars(stmt_debug).first()
-                    if tenant_debug:
-                        logger.warning(f"[AUTH] DEBUG: Tenant EXISTS but is_active={tenant_debug.is_active}")
-                    else:
-                        logger.warning("[AUTH] DEBUG: Tenant does not exist at all")
-            else:
-                logger.error(f"[AUTH] ERROR: Principal NOT FOUND for token {token[:20]}...")
+def get_principal_by_id(tenant_id: str, principal_id: str) -> Principal | None:
+    """The principal *principal_id* names inside *tenant_id*, or ``None``.
 
-        return None, None
+    For resolution from stored ids (``resolved_identity.identity_of``): the owner of a
+    media buy or creative a server-initiated job acts on.
+    """
 
-    try:
-        return execute_with_retry(_lookup_principal)
-    except Exception as e:
-        logger.error(f"[AUTH] Database error during principal lookup: {e}", exc_info=True)
-        return None, None
+    def _lookup_principal(session):
+        row = PrincipalRepository(session, tenant_id).get(principal_id)
+        return Principal.from_row(row) if row else None
+
+    return execute_with_retry(_lookup_principal)

@@ -20,7 +20,14 @@ def test_get_targeting_values_endpoint(authenticated_admin_session, integration_
     # Use get_db_session() to interact with it
     with get_db_session() as db_session:
         # Create test tenant with GAM configuration
-        tenant = Tenant(tenant_id="test_tenant", name="Test Tenant", subdomain="test", ad_server="google_ad_manager")
+        # Required (NOT NULL) and UNIQUE. Nothing routes to this host; it exists to satisfy the column.
+        tenant = Tenant(
+            tenant_id="test_tenant",
+            name="Test Tenant",
+            subdomain="test",
+            virtual_host="test-tenant.adcp.test",
+            ad_server="google_ad_manager",
+        )
         db_session.add(tenant)
         db_session.flush()
 
@@ -147,6 +154,7 @@ def test_get_targeting_values_empty_result(authenticated_admin_session, integrat
             tenant_id="test_tenant_empty",
             name="Test Tenant Empty",
             subdomain="testempty",
+            virtual_host="test-tenant-empty.adcp.test",
             ad_server="google_ad_manager",
         )
         db_session.add(tenant)
@@ -194,7 +202,12 @@ def test_get_targeting_values_tenant_isolation(authenticated_admin_session, inte
     """Test endpoint requires GAM configuration (validates tenant isolation at config level)."""
     with get_db_session() as db_session:
         # Create tenant without GAM configuration
-        tenant = Tenant(tenant_id="tenant_a", name="Tenant A", subdomain="tenanta")
+        tenant = Tenant(
+            tenant_id="tenant_a",
+            name="Tenant A",
+            subdomain="tenanta",
+            virtual_host="tenant-a.adcp.test",
+        )
         db_session.add(tenant)
 
         # Create key
@@ -224,7 +237,12 @@ def test_get_targeting_values_requires_auth(admin_client, integration_db):
     """Test endpoint requires authentication."""
     with get_db_session() as db_session:
         # Create test tenant and key
-        tenant = Tenant(tenant_id="auth_test", name="Auth Test", subdomain="authtest")
+        tenant = Tenant(
+            tenant_id="auth_test",
+            name="Auth Test",
+            subdomain="authtest",
+            virtual_host="auth-test.adcp.test",
+        )
         db_session.add(tenant)
         db_session.commit()
 

@@ -3,7 +3,7 @@
 Guards PR #1420 review finding #5: when BDD_E2E_ENABLED=true is run under
 pytest-xdist (-n auto / >0), the e2e_rest transport is silently dropped at
 collection (the worker's pytest_generate_tests never appends it) and the bdd
-suite goes green having never exercised the 5th transport. The ctx fixture's
+suite goes green having never exercised the e2e_rest transport. The ctx fixture's
 hard-error can't catch this — collection never happens. pytest_configure must
 turn the silent drop into a hard error.
 
@@ -31,10 +31,10 @@ def _config(numprocesses):
 @pytest.mark.parametrize("numprocesses", [1, 4])
 def test_e2e_enabled_under_xdist_raises(monkeypatch, numprocesses):
     # Shared-server case: no per-worker isolation, so the guard MUST raise.
-    # Isolate E2E_PER_WORKER explicitly — the guard is legitimately relaxed under
-    # per-worker e2e stacks (E2E_PER_WORKER=1), and fast-path runners / the
-    # in-network box export it globally (Phase B); a leak into this unit test
-    # would suppress the guard and wrongly fail the expectation.
+    # Isolate from the runner's env: run_all_tests and the in-network box export
+    # E2E_PER_WORKER=1 globally (Phase B per-worker stacks), which legitimately
+    # exempts the guard — but this test grades the SHARED-stack failure mode,
+    # so clear it.
     monkeypatch.delenv("E2E_PER_WORKER", raising=False)
     monkeypatch.setenv("BDD_E2E_ENABLED", "true")
     with pytest.raises(pytest.UsageError, match="BDD_XDIST_N=0"):

@@ -17,7 +17,7 @@ marker-set-keyed prose branches in ``_harness_env``, invisible to
 as a "tag combination in the table" at all. So the input is the real collected
 ``tests/bdd`` suite: every scenario's tag + MARKER set, taken from a real
 ``pytest --collect-only`` run (the same shape as
-``tests/integration/test_bdd_scenario_liveness_real_run.py``'s narrow slices),
+``tests/collection/test_bdd_scenario_liveness_real_run.py``'s narrow slices),
 grouped per feature module so a failure names the module it is in.
 
 ## The negative obligation (F1c.1)
@@ -75,9 +75,18 @@ _OWNER_MODULE = ".".join(OWNER.with_suffix("").parts)
 _CATCH_ALL_SCENARIOS = (
     ("UC-002", "T-UC-002-alt-asap", "conftest.py:3475"),
     ("UC-003", "T-UC-003-alt-budget", "conftest.py:3586"),
-    ("UC-006", "T-UC-006-boundary-approval", "conftest.py:3617"),
-    ("UC-011", "T-UC-011-v31-error-conflict-version", "conftest.py:3665"),
-    ("UC-018", "T-UC-018-boundary-default-query", "conftest.py:3644-3647"),
+    # UC-006 has no specimen: its catch-all was replaced by rows that each named a
+    # measured blocker, and every one of those rows is empty now -- each scenario they
+    # parked was corrected to the pin and wired, or deleted as ungrounded in the sync
+    # request's schema. The row family still exists in tests/bdd/conftest.py and would
+    # pin a specimen again the day a UC-006 scenario is parked on one of them.
+    # UC-011 and UC-018 have no specimen either, for the same reason UC-006 has none: the
+    # catch-all rows they fell through to no longer park anything. Both rows survive and
+    # build the real env (they are pinned in test_architecture_measurement_floors.py's
+    # EXPECTED_WIRED_ROUTES), so a scenario of those UCs is WIRED by construction and
+    # cannot be a specimen of "falls through to an xfail". What catches an unbound step in
+    # them now is the dormancy tripwire, which fails the scenario and names the step
+    # instead of xfailing it out of sight.
 )
 
 _UC004_TAG_PREFIX = "T-UC-004-"
@@ -94,7 +103,6 @@ _MINIMUM_COLLECTED_ITEMS = 6000
 # regression, not a shrug.
 _MODULES_WITHOUT_SCENARIO_IDENTITY = frozenset(
     {
-        "tests/bdd/test_brand_shorthand_bdd.py",
         "tests/bdd/test_get_products_inventory_profile.py",
     }
 )
@@ -113,12 +121,12 @@ def _collected_items() -> tuple[dict[str, Any], ...]:
     ``DERIVATION_ACCESSOR`` is pinned on, and grading against anything narrower
     would compare two equally-truncated sets and pass while proving nothing.
 
-    e2e_rest rows are dropped: this grader reasons about the in-process marker
+    The in-network rows are dropped: this grader reasons about the in-process marker
     sets, and the record may come from a session that had BDD_E2E_ENABLED on
     (docker-compose sets it in-network). Dropping them here is what the old
     nested collection achieved by popping the variable from its subprocess env.
     """
-    rows = [row for row in load(manifest_dir(), target=BDD_TREE) if "[e2e_rest" not in row["nodeid"]]
+    rows = [row for row in load(manifest_dir(), target=BDD_TREE) if "[e2e_" not in row["nodeid"]]
 
     # The suite collects ~7.2k items today. A floor well under that still catches
     # a truncated collection, which would make every verdict below vacuous. It
@@ -324,28 +332,6 @@ def test_uc004_catch_all_is_unreachable_so_all_of_it_resolves_wired(tmp_path: Pa
         not_wired,
         set(),
         fix_hint=f"(scenario, _harness_env verdict, join verdict) — every UC-004 scenario is wired today.\n{FIX_HINT}",
-    )
-
-
-def test_scenario_never_measured_this_run_resolves_not_wired(tmp_path: Path) -> None:
-    """4c: a marker-keyed resolver has no input for an unmeasured scenario.
-
-    ``build_index`` calls the resolver for ids whose record is ``None``. Unstated,
-    the implementer keeps the tag-only lookup as a fallback and resurrects the
-    divergent path as a branch. Record-is-None resolves NOT-WIRED — consistent,
-    because ``graded_by_live_scenario`` already ANDs ``measured_this_run``.
-    """
-    from scripts.audit.scenario_liveness_join import build_index
-
-    empty = tmp_path / "liveness.json"
-    empty.write_text(json.dumps({"scenarios": []}), encoding="utf-8")
-    index = build_index({"T-UC-005-boundary-agent-asset"}, artifact_path=empty, env_routes=_env_routes())
-    record = index["T-UC-005-boundary-agent-asset"]
-
-    assert record.measured_this_run is False
-    assert record.registry_wired is False, (
-        "an unmeasured scenario has no marker set to route on, so it cannot be reported registry-wired — "
-        f"a tag-only fallback here is the divergent path returning as a branch.\n{FIX_HINT}"
     )
 
 

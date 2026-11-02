@@ -1,0 +1,68 @@
+# SERIALIZATION import bans: a model becomes bytes at a named edge and nowhere else
+# (salesagent-3cs7o.12, CLAUDE.md critical pattern 4).
+#
+# Run as its own line in `make quality-ci`, beside ruff-boundary.toml, ruff-ownership.toml and
+# ruff-egress.toml:
+#
+#     uv run ruff check --config ruff-serialization.toml --no-respect-gitignore src/ scripts/
+#
+# WHAT THIS BANS. The two bare-call spellings of serialization that are importable NAMES:
+# `pydantic_core.to_jsonable_python` and `pydantic_core.to_json`, under either import form
+# (`from pydantic_core import to_json` and `pydantic_core.to_json(...)` are both caught). The
+# method-call spellings, `.model_dump(...)` and `.model_dump_json(...)`, import nothing, so
+# ruff cannot see them; they are matched by `.ast-grep/rules/serialize-only-at-the-edges.yml`
+# with the SAME edge list. The two files are one rule in two syntaxes: a new edge is a new
+# entry in both, in one change.
+#
+# WHY A FOURTH CONFIG. ruff's per-file-ignores exempt a RULE per path, and every ban here is
+# the same rule (TID251), so a file exempted from one ban is exempted from all bans in the
+# same config. The edge list below includes src/admin/** and the repositories, which must stay
+# under the boundary bans (ToolError, the auth refusals, ContextObject, the direct-_impl names,
+# the Principal model) and the ownership bans. Keeping the serialization bans in a config of
+# their own is what lets an edge module be exempt from these and from nothing else, the same
+# separation ruff-ownership.toml and ruff-egress.toml already make.
+#
+# THE EDGES, each with one owner: the wire (to_wire); outbound HTTP to another agent or a
+# webhook target (the agent registries, the webhook services, the registration gate); the
+# idempotency payload hash; the two error helpers that project issues and details to their
+# wire shape; the persistence edge -- the engine's JSON serializer registered in
+# database_session.py (what the JSONType column serializes a model through), the ORM
+# @validates hooks in json_validators.py that normalize a column document, and the documents
+# the repositories and the context manager compose or compare; the admin UI's JSON responses,
+# a wire the boundary's to_wire does not own; and the ONE schema module that re-dumps a nested
+# child inside the one serializer seat (_base.py). pricing.py was a second such module until
+# the validator that dumped an SDK pricing option to revalidate it was deleted: nothing in
+# production produced an SDK-typed option, so the coercion had no caller and the exemption no
+# subject (salesagent-3cs7o.32).
+#
+# Proven live by tests/unit/test_ruff_boundary_bans.py, which reads this table as well as the
+# boundary and ownership ones; there is no allowlist and no other guard.
+
+[lint]
+select = ["TID251"]
+
+[lint.per-file-ignores]
+"src/core/tools/_wire.py" = ["TID251"]
+"src/core/idempotency_canonical.py" = ["TID251"]
+"src/core/creative_agent_registry.py" = ["TID251"]
+"src/core/signals_agent_registry.py" = ["TID251"]
+"src/services/protocol_webhook_service.py" = ["TID251"]
+"src/services/webhook_delivery_service.py" = ["TID251"]
+# Two outbound-body edges the RFC 9421 layer brought: the PUBLISHED trust-root documents
+# (JWKS, brand.json — a third party fetches them) and the activation-challenge body sent
+# to the buyer's webhook target. Mirrored in .ast-grep/rules/serialize-only-at-the-edges.yml.
+"src/core/signing/trust_root.py" = ["TID251"]
+"src/services/notification_proof_service.py" = ["TID251"]
+"src/core/webhooks/registration.py" = ["TID251"]
+"src/core/errors/issues.py" = ["TID251"]
+"src/core/errors/details.py" = ["TID251"]
+"src/core/database/repositories/**" = ["TID251"]
+"src/core/database/database_session.py" = ["TID251"]
+"src/core/context_manager.py" = ["TID251"]
+"src/core/json_validators.py" = ["TID251"]
+"src/admin/**" = ["TID251"]
+"src/core/schemas/_base.py" = ["TID251"]
+
+[lint.flake8-tidy-imports.banned-api]
+"pydantic_core.to_jsonable_python".msg = "A model is serialized only at an edge (the wire, an outbound body, the idempotency hash, the persistence edge, the admin UI's JSON). Hand the model through; a receiving model adopts a sibling generated class with a mode='before' validator or from_attributes=True, never by a dump in the caller (salesagent-3cs7o.12)."
+"pydantic_core.to_json".msg = "A model is serialized only at an edge. The JSONType column serializes a model handed to it through the engine's serializer in database_session.py; nothing else calls to_json (salesagent-3cs7o.12)."

@@ -1,0 +1,298 @@
+<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>BDD decisions</title><style>
+:root{--bg:#fff;--fg:#191919;--mut:#6a6a6a;--line:#e3e3e3;--code:#f7f7f5;--red:#b3261e;--amb:#8a6100;--ok:#0a6b3d}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#151515;--fg:#e8e8e8;--mut:#9a9a9a;--line:#2d2d2d;--code:#1d1d1d;--red:#ff8a80;--amb:#ffcc66;--ok:#7fd1a5}}
+:root[data-theme=dark]{--bg:#151515;--fg:#e8e8e8;--mut:#9a9a9a;--line:#2d2d2d;--code:#1d1d1d;--red:#ff8a80;--amb:#ffcc66;--ok:#7fd1a5}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);margin:0;font:15px/1.62 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.wrap{max-width:1080px;margin:0 auto;padding:34px 22px 100px}
+h1{font-size:25px;margin:0 0 6px}
+.lede{color:var(--mut);margin:0 0 26px;max-width:70ch}
+.sum{width:100%;border-collapse:collapse;margin:0 0 34px;font-size:14px}
+.sum th,.sum td{border:1px solid var(--line);padding:7px 10px;text-align:left}
+.sum th{background:var(--code)}
+.sum td.n{text-align:right;font:13px ui-monospace,Menlo,monospace;width:5.5em}
+.sum a{color:inherit;text-decoration:none;border-bottom:1px solid var(--line)}
+.d{border:1px solid var(--line);border-radius:7px;margin:22px 0;overflow:hidden}
+.d>h2{margin:0;padding:13px 17px;font-size:17px;background:var(--code);border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:12px;align-items:baseline}
+.cnt{font:13px ui-monospace,Menlo,monospace;color:var(--mut);white-space:nowrap}
+.d .in{padding:14px 17px}
+.why{margin:0 0 10px}
+.ask{border-left:3px solid var(--amb);background:var(--code);padding:9px 13px;margin:12px 0 4px;border-radius:0 4px 4px 0}
+.ask strong{color:var(--amb)}
+details.ev{margin-top:12px}
+details.ev>summary{cursor:pointer;color:var(--mut);font-size:13.5px}
+pre{background:var(--code);border:1px solid var(--line);border-radius:4px;padding:10px 12px;overflow-x:auto;font:12.5px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;margin:6px 0 14px}
+.loc{font:12.5px ui-monospace,Menlo,monospace;color:var(--mut);display:block;margin-top:10px}
+code{background:var(--code);padding:1px 5px;border-radius:3px;font:13px ui-monospace,Menlo,monospace}
+.more{color:var(--mut);font-size:13px;margin:4px 0 0}
+</style></head><body><div class='wrap'><h1>BDD harness — what needs deciding</h1><p class='lede'>337 sites across 9 defect classes, measured from the tree at render time rather than copied from a report, so this page cannot drift from the code. Each class states why it is a defect and the one question whose answer unblocks the work. The agent reports behind these live in <code>bdd-cluster-findings.html</code>.</p><table class='sum'><thead><tr><th>Defect class</th><th class='n'>Sites</th></tr></thead><tbody><tr><td><a href="#then-grades-nothing">A Then that grades nothing</a></td><td class="n">65</td></tr><tr><td><a href="#shadowed">One sentence, two competing bodies</a></td><td class="n">11</td></tr><tr><td><a href="#then-dispatches">A Then that performs the action it grades</a></td><td class="n">4</td></tr><tr><td><a href="#given-dispatches">A Given that performs the action</a></td><td class="n">3</td></tr><tr><td><a href="#then-writes-ctx">A Then that mutates state</a></td><td class="n">17</td></tr><tr><td><a href="#step-patches-mock">A step that patches a mock</a></td><td class="n">5</td></tr><tr><td><a href="#step-reaches-env-mock">A step reaching into env.mock[...]</a></td><td class="n">41</td></tr><tr><td><a href="#raw-ctx-heavy">Raw ctx access, 8+ subscripts in one step</a></td><td class="n">17</td></tr><tr><td><a href="#bare-truthiness">assert on bare truthiness</a></td><td class="n">174</td></tr></tbody></table><section class="d" id="then-grades-nothing"><h2><span>A Then that grades nothing</span><span class="cnt">65 sites</span></h2><div class="in"><p class="why">No assert, no raise, and no call to an asserting helper. The scenario says an obligation holds; the step checks nothing. These pass unconditionally and always will.</p><div class="ask"><strong>Decide:</strong> Delete the step and the sentence, or write the assertion it implies? Each needs the scenario read to know which.</div><details class="ev"><summary>Evidence — first 6 of 65, verbatim</summary><span class="loc">uc003_storyboard_generic_client.py:113</span><pre>def then_error_recovery_hint_correctable(ctx: dict) -&gt; None:
+    &quot;&quot;&quot;Delegate to then_error_recovery&#x27;s existing wire-first logic — DRY, no duplication.&quot;&quot;&quot;
+    then_error_recovery(ctx, &quot;correctable&quot;)
+
+
+@then(&quot;the response should echo the context.correlation_id unchanged&quot;)
+def then_response_echoes_correlation_id_unchanged(ctx: dict) -&gt; None:</pre><span class="loc">uc003_update_media_buy.py:126</span><pre>def then_wire_media_buy_status_value(ctx: dict, status: str) -&gt; None:
+    &quot;&quot;&quot;Assert the REAL wire ``media_buy_status`` equals the expected DOMAIN status.
+
+    Used to pin that a persisted status whose name differs from its AdCP
+    value (e.g. &#x27;scheduled&#x27;) is normalized to the correct domain MediaBuyStatus on
+    the update response (#1417).&quot;&quot;&quot;
+    _assert_wire_field_equals(ctx, &quot;media_buy_status&quot;, status)</pre><span class="loc">uc003_update_media_buy.py:136</span><pre>def then_wire_status_value(ctx: dict, status: str) -&gt; None:
+    &quot;&quot;&quot;Assert the REAL wire top-level ``status`` equals the expected PROTOCOL TaskStatus.
+
+    The GA 3.1.0 storyboard pending_creatives_to_start.yaml grades top-level
+    ``status`` = field_value &#x27;completed&#x27; on synchronous create/update success
+    (protocol-envelope.json required: [status]) — a different namespace from
+    the domain ``media_buy_status``.&quot;&quot;&quot;</pre><span class="loc">uc003_update_media_buy.py:1077</span><pre>def then_no_errors_field(ctx: dict) -&gt; None:
+    &quot;&quot;&quot;Assert the response does not contain an &#x27;errors&#x27; field at all.
+
+    Step text says &#x27;NOT contain&#x27; — the key must be ABSENT, not merely null: an empty list
+    or a serialized null both mean the field exists. wire_absent encodes that distinction.
+
+    Asserted on the WIRE rather than on resp.model_dump(): a round-trip through the model</pre><span class="loc">uc004_delivery.py:1635</span><pre>def then_no_error_for_mb_alt(ctx: dict, mb_id: str) -&gt; None:
+    &quot;&quot;&quot;Assert no error for a specific media buy (alt phrasing).&quot;&quot;&quot;
+    then_no_error_for_mb(ctx, mb_id)
+
+
+@then(parsers.parse(&#x27;the response should include only media buys with status &quot;{status}&quot;&#x27;))
+def then_only_status(ctx: dict, status: str) -&gt; None:</pre><span class="loc">uc004_delivery.py:3220</span><pre>def then_partition_or_boundary_outcome(ctx: dict, field: str, expected: str) -&gt; None:
+    &quot;&quot;&quot;Partition/boundary test: assert outcome matches expected for the given field.&quot;&quot;&quot;
+    _assert_partition_or_boundary(ctx, expected, field)
+
+
+@then(parsers.re(r&quot;the filter should result in (?P&lt;expected&gt;.+)&quot;))
+def then_filter_result(ctx: dict, expected: str) -&gt; None:</pre><p class="more">+59 more of this class in the tree.</p></details></div></section><section class="d" id="shadowed"><h2><span>One sentence, two competing bodies</span><span class="cnt">11 sites</span></h2><div class="in"><p class="why">The same sentence is registered in two modules with DIFFERENT normalized bodies. Which one runs depends on plugin registration order, and pytest-bdd does not warn. Same class as the duplicate-scenario-name trap.</p><div class="ask"><strong>Decide:</strong> For each: is one body correct and the other dead, or do they mean different things and need two sentences? Three of seven reviewed had the first opinion objected to.</div><details class="ev"><summary>Evidence — first 6 of 11, verbatim</summary><span class="loc">@then no media buy record should be persisted</span><pre>then_media_buy.py::then_no_media_buy_persisted
+then_success.py::then_no_media_buy_record_persisted
+
+# 2 distinct bodies compete for this sentence</pre><span class="loc">@then no media buy record should be persisted in the database</span><pre>then_media_buy.py::then_no_media_buy_persisted
+then_success.py::then_no_media_buy_record_persisted
+
+# 2 distinct bodies compete for this sentence</pre><span class="loc">@then the budget validation should pass</span><pre>uc002_create_media_buy.py::then_budget_validation_passes
+then_media_buy.py::then_budget_validation_passes
+
+# 2 distinct bodies compete for this sentence</pre><span class="loc">@then the error should be a real validation error, not simulated</span><pre>uc019_query_media_buys.py::then_real_validation_error
+then_error.py::then_real_validation_error
+
+# 2 distinct bodies compete for this sentence</pre><span class="loc">@then the error should include a &quot;suggestion&quot; field</span><pre>uc019_query_media_buys.py::then_error_has_suggestion
+then_error.py::then_error_has_suggestion
+
+# 2 distinct bodies compete for this sentence</pre><span class="loc">@then the error should include a suggestion for how to fix the issue</span><pre>uc019_query_media_buys.py::then_error_suggestion_for_fix
+then_error.py::then_error_has_fix_suggestion
+
+# 2 distinct bodies compete for this sentence</pre><p class="more">+5 more of this class in the tree.</p></details></div></section><section class="d" id="then-dispatches"><h2><span>A Then that performs the action it grades</span><span class="cnt">4 sites</span></h2><div class="in"><p class="why">The assertion step calls the dispatch seam. A Then that acts is a When wearing the wrong keyword, and it makes the scenario&#x27;s own Given/When/Then structure a lie about what happened in which order.</p><div class="ask"><strong>Decide:</strong> Move the dispatch to a When, or is the second call deliberate (a re-read, an idempotency probe)?</div><details class="ev"><summary>Evidence — first 4 of 4, verbatim</summary><span class="loc">uc002_nfr.py:146</span><pre>def then_auth_before_business_logic(ctx: dict) -&gt; None:
+    &quot;&quot;&quot;Assert authentication is the first gate before any business logic.
+
+    Sends a SECOND request with invalid credentials (no principal_id) THROUGH
+    THE WIRE (the parametrized transport) and verifies: (1) the wire envelope
+    carries the AUTH_MISSING error code (absent credential — no principal_id
+    resolved at all), and (2) no adapter calls were made — proving auth blocks</pre><span class="loc">uc002_nfr.py:217</span><pre>def then_rate_limiting_enforced(ctx: dict) -&gt; None:
+    &quot;&quot;&quot;Assert rate limiting is enforced on create_media_buy.
+
+    Sends a rapid follow-up request and asserts it is rejected with
+    AdCPRateLimitError. Production should reject when the threshold is
+    exceeded, but no rate-limiting middleware exists yet.
+</pre><span class="loc">uc002_nfr.py:263</span><pre>def then_payload_size_limits(ctx: dict) -&gt; None:
+    &quot;&quot;&quot;Assert payload size limits are enforced.
+
+    Sends a request with an oversized order_name payload and asserts it is
+    rejected with a payload-too-large error. Production has no ASGI middleware
+    that checks content-length or rejects oversized request bodies.
+</pre><span class="loc">uc002_nfr.py:433</span><pre>def then_budget_validated_against_min_order(ctx: dict) -&gt; None:
+    &quot;&quot;&quot;Assert budget enforcement works by testing the rejection path.
+
+    The happy path (budget &gt;= minimum, original request succeeded) is
+    tautological — it only proves the budget was already adequate.
+    True enforcement verification requires a budget BELOW the minimum
+    triggering a specific rejection.</pre></details></div></section><section class="d" id="given-dispatches"><h2><span>A Given that performs the action</span><span class="cnt">3 sites</span></h2><div class="in"><p class="why">Setup that dispatches through the tool seam. The scenario then has two actions and the When is not the one under test.</p><div class="ask"><strong>Decide:</strong> Is the dispatch setup (seed via the API because no factory exists) or is it the action? If setup, it wants a factory; if the action, it wants to be the When.</div><details class="ev"><summary>Evidence — first 3 of 3, verbatim</summary><span class="loc">uc002_create_media_buy.py:1508</span><pre>def given_media_buy_already_created_same_key(ctx: dict) -&gt; None:
+    &quot;&quot;&quot;Perform a REAL first create through the parametrized transport.
+
+    Dispatches the SAME request_kwargs (copied) so the canonical payload hash
+    matches the When-step replay. Records the original media_buy_id and the
+    adapter create_media_buy call count so the Then steps can assert the replay
+    returns the same id and does NOT re-invoke the adapter.</pre><span class="loc">uc019_query_media_buys.py:2994</span><pre>def given_captured_media_buy_id_from_create(ctx: dict) -&gt; None:
+    &quot;&quot;&quot;Perform a REAL create_media_buy through the scenario&#x27;s transport and capture its id.
+
+    The id comes from ``wire_field`` — the buyer captures what the RESPONSE
+    carried, so reading the reconstructed typed payload would grade the
+    reconstruction instead. wire_field also raises on a wire transport that
+    stashed no wire, which is what keeps this from degrading into a silent</pre><span class="loc">when_request.py:183</span><pre>def when_request_unfiltered(ctx: dict) -&gt; None:
+    &quot;&quot;&quot;Unfiltered list_creative_formats dispatch.
+
+    Serves both the generic &#x27;requests/sends a list_creative_formats request&#x27;
+    When phrasings and the UC-005 baseline Given &#x27;the Buyer Agent calls
+    list_creative_formats without filters&#x27; (single canonical dispatch step).
+    &quot;&quot;&quot;</pre></details></div></section><section class="d" id="then-writes-ctx"><h2><span>A Then that mutates state</span><span class="cnt">17 sites</span></h2><div class="in"><p class="why">An assertion step writing back into ctx. Later steps then depend on assertion order, so removing or reordering an assertion changes behaviour rather than just coverage.</p><div class="ask"><strong>Decide:</strong> What later step consumes the write? If none, delete the write. If one, the value belongs in the When&#x27;s result, not in an assertion.</div><details class="ev"><summary>Evidence — first 6 of 17, verbatim</summary><span class="loc">uc004_delivery.py:1589</span><pre>def then_response_errors_include_for_mb(ctx: dict, code: str, mb_id: str) -&gt; None:
+    &quot;&quot;&quot;A TASK-LEVEL error in a SUCCESSFUL delivery response names *code* for *mb_id*.
+
+    The delivery verb reports a per-buy failure INSIDE a completed response rather than
+    refusing the call: get-media-buy-delivery-response.json declares ``errors[]`` as
+    &quot;Task-specific errors and warnings (e.g., missing delivery data, reporting platform
+    issues)&quot;, and an unavailable ad server is a reporting platform issue. A request for</pre><span class="loc">uc006_sync_creatives.py:2130</span><pre>def then_creative_action_failed(ctx: dict) -&gt; None:
+    &quot;&quot;&quot;Assert the per-creative SyncCreativeResult has action == &quot;failed&quot;.
+
+    Production reports per-creative failures as a successful response containing
+    a SyncCreativeResult with action=&quot;failed&quot; and a string in errors[].
+    Promotes the first error string to ctx[&quot;error&quot;] as a synthetic object
+    so downstream generic Then steps (error code, message, suggestion) can run.</pre><span class="loc">uc006_sync_creatives.py:2255</span><pre>def then_operation_fails_with_assignment_error(ctx: dict) -&gt; None:
+    &quot;&quot;&quot;Assert the operation failed and the failure originated in assignment processing.
+
+    Production raises AdCPValidationError (FORMAT_MISMATCH branch) or
+    AdCPNotFoundError (package-not-found branch) from _assignments.py.
+    Both are AdCPSalesAgentError subclasses surfaced as ctx[&quot;error&quot;] by dispatch.
+</pre><span class="loc">uc011_accounts.py:773</span><pre>def then_n_accounts(ctx: dict, count: int) -&gt; None:
+    &quot;&quot;&quot;Assert the response has exactly N accounts.
+
+    Also tracks account IDs for later disjointness checks in pagination.
+    &quot;&quot;&quot;
+    resp = require_payload(ctx)
+    actual = len(resp.accounts)</pre><span class="loc">uc011_accounts.py:786</span><pre>def then_n_more_accounts(ctx: dict, count: int) -&gt; None:
+    &quot;&quot;&quot;Assert the response has exactly N accounts and they are disjoint from previous page.&quot;&quot;&quot;
+    resp = require_payload(ctx)
+    actual = len(resp.accounts)
+    assert actual == count, f&quot;Expected {count} more accounts, got {actual}&quot;
+    # Verify disjointness with previous page
+    prev_ids = ctx.get(&quot;previous_page_ids&quot;)</pre><span class="loc">uc011_accounts.py:1797</span><pre>def then_account_action_with_brand_id(ctx: dict, domain: str, bid: str, action: str) -&gt; None:
+    &quot;&quot;&quot;Assert a specific account (by domain + brand_id) has the expected action.&quot;&quot;&quot;
+    resp = require_payload(ctx)
+    acct = _find_account_by_brand(resp, domain, brand_id=bid)
+    actual = _action_str(acct.action)
+    assert actual == action, f&quot;Expected action &#x27;{action}&#x27; for {domain}:{bid}, got &#x27;{actual}&#x27;&quot;
+    ctx[&quot;last_account&quot;] = acct</pre><p class="more">+11 more of this class in the tree.</p></details></div></section><section class="d" id="step-patches-mock"><h2><span>A step that patches a mock</span><span class="cnt">5 sites</span></h2><div class="in"><p class="why">Patching inside a step definition. The scenario then grades the patch rather than production, and the patch is invisible in the feature file — a reader cannot tell the system was replaced.</p><div class="ask"><strong>Decide:</strong> Can the state be produced for real (a factory, a seeded row)? If genuinely not, should the scenario say so out loud rather than hide it in a step?</div><details class="ev"><summary>Evidence — first 5 of 5, verbatim</summary><span class="loc">uc002_nfr.py:499</span><pre>def given_observe_high_value_alerts(ctx: dict) -&gt; None:
+    &quot;&quot;&quot;Make the &gt;$10k high-value audit alert observable at the Seller boundary.
+
+    The high-value alert fires inside the REAL AuditLogger (notify_audit_log),
+    which the create harness no-ops by default. This swaps in the real audit
+    logger so the budget gate actually runs, and spies its external Slack
+    boundary (the same Slack-boundary idiom as &#x27;a Slack notification should be</pre><span class="loc">uc006_sync_creatives.py:2075</span><pre>def given_creative_agent_no_preview_urls(ctx: dict) -&gt; None:
+    &quot;&quot;&quot;Configure the creative agent registry to return no previews.
+
+    ``preview_creative`` is awaited inside production&#x27;s _processing.py via
+    ``run_async_in_sync_context``. CreativeSyncEnv exposes the registry mock
+    on ``env.mock[&quot;registry&quot;].return_value``; ``preview_creative`` is an
+    AsyncMock per the harness defaults. Returning an empty dict (no</pre><span class="loc">uc011_accounts.py:571</span><pre>def when_list_accounts_unfiltered(ctx: dict) -&gt; None:
+    &quot;&quot;&quot;Send list_accounts request with no filters (matches multiple phrasings).
+
+    Dispatches over the scenario&#x27;s transport on EVERY env: AccountSyncEnv now
+    carries the list verb too (AccountListDispatchMixin), so a cross-cutting
+    scenario running under the sync env grades the same wire every other
+    scenario does. The request is constructed explicitly so one request-type</pre><span class="loc">uc019_query_media_buys.py:168</span><pre>def given_today_is(ctx: dict, today_str: str) -&gt; None:
+    &quot;&quot;&quot;Override &#x27;today&#x27; for status computation.
+
+    Production code uses ``datetime.now(UTC).date()`` in
+    ``src.core.tools.media_buy_list`` (line 116). We patch ``datetime``
+    in that module so ``now()`` returns a datetime whose ``.date()``
+    yields the desired date.</pre><span class="loc">uc019_query_media_buys.py:846</span><pre>def given_adapter_no_realtime(ctx: dict) -&gt; None:
+    &quot;&quot;&quot;Configure adapter to NOT support realtime reporting (short form).
+
+    Patches get_adapter in the media_buy_list module so the returned adapter
+    has supports_realtime_reporting=False. Unlike the &quot;ad platform adapter does
+    not support realtime reporting&quot; step (which uses env.mock[&quot;adapter&quot;]), this
+    step patches the module-level get_adapter — suitable for MediaBuyListEnv</pre></details></div></section><section class="d" id="step-reaches-env-mock"><h2><span>A step reaching into env.mock[...]</span><span class="cnt">41 sites</span></h2><div class="in"><p class="why">Direct access to the mock registry, bypassing the realization seam. These are the sites that cannot work on e2e, and they are not declared unsupported anywhere — so they are invisible until the transport changes.</p><div class="ask"><strong>Decide:</strong> Route through the seam, or declare unsupported? Silently working on one transport is the outcome to avoid.</div><details class="ev"><summary>Evidence — first 6 of 41, verbatim</summary><span class="loc">codes_open_vocabulary.py:36</span><pre>def given_seller_will_reject(ctx: dict) -&gt; None:
+    &quot;&quot;&quot;Make the seller reject this create, on EVERY transport.
+
+    Two mechanisms, because the transports genuinely differ and one alone grades half
+    the matrix:
+
+    IN-PROCESS (mcp/a2a/rest): MediaBuyCreateEnv patches ``get_adapter`` with a MagicMock,</pre><span class="loc">uc002_create_media_buy.py:1423</span><pre>def given_tenant_auto_approval(ctx: dict) -&gt; None:
+    &quot;&quot;&quot;Configure the tenant for auto-approval and verify the env reflects it.
+
+    Turns OFF ``human_review_required`` on the real tenant row AND in the
+    identity&#x27;s tenant dict, and confirms the adapter mock is not gating on
+    manual approval — so the create returns ``status=&#x27;completed&#x27;`` rather than
+    pending. The production approval gate (media_buy_create.py) is</pre><span class="loc">uc002_create_media_buy.py:1508</span><pre>def given_media_buy_already_created_same_key(ctx: dict) -&gt; None:
+    &quot;&quot;&quot;Perform a REAL first create through the parametrized transport.
+
+    Dispatches the SAME request_kwargs (copied) so the canonical payload hash
+    matches the When-step replay. Records the original media_buy_id and the
+    adapter create_media_buy call count so the Then steps can assert the replay
+    returns the same id and does NOT re-invoke the adapter.</pre><span class="loc">uc002_create_media_buy.py:2104</span><pre>def then_slack_notification_sent(ctx: dict) -&gt; None:
+    &quot;&quot;&quot;Assert Slack notifier was called with seller-facing event details.
+
+    In E2E, mocks live in the test process while the server runs in Docker,
+    so mock.call_count is always 0. Verify the media buy reached a status that
+    triggers seller notification (the notification is a side-effect of status
+    transitions in production code).</pre><span class="loc">uc002_nfr.py:110</span><pre>def then_no_adapter_calls(ctx: dict) -&gt; None:
+    &quot;&quot;&quot;Assert the adapter was never called — proving auth blocked before business logic.&quot;&quot;&quot;
+    env = ctx[&quot;env&quot;]
+    mock_adapter = env.mock[&quot;adapter&quot;].return_value
+    assert not mock_adapter.create_media_buy.called, (
+        &quot;Adapter.create_media_buy was called despite auth failure — business logic ran before authentication&quot;
+    )</pre><span class="loc">uc002_nfr.py:146</span><pre>def then_auth_before_business_logic(ctx: dict) -&gt; None:
+    &quot;&quot;&quot;Assert authentication is the first gate before any business logic.
+
+    Sends a SECOND request with invalid credentials (no principal_id) THROUGH
+    THE WIRE (the parametrized transport) and verifies: (1) the wire envelope
+    carries the AUTH_MISSING error code (absent credential — no principal_id
+    resolved at all), and (2) no adapter calls were made — proving auth blocks</pre><p class="more">+35 more of this class in the tree.</p></details></div></section><section class="d" id="raw-ctx-heavy"><h2><span>Raw ctx access, 8+ subscripts in one step</span><span class="cnt">17 sites</span></h2><div class="in"><p class="why">A step reading and writing many ctx keys directly instead of going through the guarded helpers. Every raw read is a place a key can be absent, misspelled, or written by a different sentence than the one the author had in mind.</p><div class="ask"><strong>Decide:</strong> Which of these keys are a real contract between steps, and which are incidental? The contract ones want a named accessor.</div><details class="ev"><summary>Evidence — first 6 of 17, verbatim</summary><span class="loc">uc002_create_media_buy.py:292 — 12 subscripts</span><pre>def given_request_with_partition(ctx: dict, partition: str) -&gt; None:
+    &quot;&quot;&quot;Set up request based on partition name (for Scenario Outline tables).&quot;&quot;&quot;
+    from adcp.types import AccountReference, AccountReferenceById, AccountReferenceByNaturalKey, BrandReference
+
+    env = ctx[&quot;env&quot;]
+    ensure_tenant_principal(ctx, env)
+    tenant = ctx[&quot;tenant&quot;]</pre><span class="loc">uc002_create_media_buy.py:428 — 12 subscripts</span><pre>def given_request_with_boundary_config(ctx: dict, config: str) -&gt; None:
+    &quot;&quot;&quot;Set up request based on boundary config string.&quot;&quot;&quot;
+    from adcp.types import AccountReference, AccountReferenceById, AccountReferenceByNaturalKey, BrandReference
+
+    env = ctx[&quot;env&quot;]
+    ensure_tenant_principal(ctx, env)
+    tenant = ctx[&quot;tenant&quot;]</pre><span class="loc">uc003_update_media_buy.py:1654 — 8 subscripts</span><pre>def given_creative_update_mode(ctx: dict, mode: str) -&gt; None:
+    &quot;&quot;&quot;Set the creative update mode on the first package update.
+
+    Parses mode formats:
+    - &#x27;creative_ids=[cr_new_1, cr_new_2]&#x27; — set creative_ids array
+    - &#x27;creative_assignments=[{cr_new_1, weight:70}]&#x27; — set creative_assignments
+    &quot;&quot;&quot;</pre><span class="loc">uc003_update_media_buy.py:1800 — 10 subscripts</span><pre>def given_creative_assignments_with_state(ctx: dict, creative_state: str) -&gt; None:
+    &quot;&quot;&quot;Add creative_assignments referencing a creative with a specific state.
+
+    States: &#x27;approved&#x27;, &#x27;error&#x27;, &#x27;wrong_format&#x27;.
+    Creates a Creative record with the appropriate state/format.
+    &quot;&quot;&quot;
+    from tests.factories.creative import CreativeFactory</pre><span class="loc">uc006_sync_creatives.py:151 — 12 subscripts</span><pre>def given_account_is(ctx: dict, account_setup: str) -&gt; None:
+    &quot;&quot;&quot;Set up account state from the scenario table&#x27;s JSON or sentinel value.
+
+    Parses account_setup as JSON to build an AccountReference, or handles
+    sentinel values like &quot;not provided&quot;.
+    &quot;&quot;&quot;
+    from adcp.types import AccountReference, AccountReferenceById, AccountReferenceByNaturalKey, BrandReference</pre><span class="loc">uc006_sync_creatives.py:845 — 8 subscripts</span><pre>def given_assignments_to_package_with_setup(ctx: dict, product_setup: str) -&gt; None:
+    &quot;&quot;&quot;Create a media buy + package whose product matches the Gherkin setup phrase.
+
+    Supported phrases (from the assignment_format partition scenario):
+      - ``product accepting agent/banner-300x250`` — product format_ids matches creative
+      - ``product with empty format_ids`` — no restrictions
+      - ``package with no product_id`` — format check skipped entirely</pre><p class="more">+11 more of this class in the tree.</p></details></div></section><section class="d" id="bare-truthiness"><h2><span>assert on bare truthiness</span><span class="cnt">174 sites</span></h2><div class="in"><p class="why">`assert x` with no comparison. Passes for any non-empty value, so it grades presence rather than correctness — and a wrong value of the right shape sails through.</p><div class="ask"><strong>Decide:</strong> What is the actual expected value? A truthy check on a response field is nearly always a missed equality assertion.</div><details class="ev"><summary>Evidence — first 6 of 174, verbatim</summary><span class="loc">admin_accounts.py:155</span><pre>def when_navigate_detail(ctx: dict, name: str) -&gt; None:
+    &quot;&quot;&quot;GET the account detail page.&quot;&quot;&quot;
+    env = _env(ctx)
+    account_id = ctx.get(f&quot;account_id:{name}&quot;) or env.get_account_id_by_name(name)
+    assert account_id, f&quot;No account found with name &#x27;{name}&#x27;&quot;
+    ctx[&quot;admin_page&quot;] = env.get_detail_page(account_id)
+</pre><span class="loc">admin_accounts.py:164</span><pre>def when_navigate_edit(ctx: dict, name: str) -&gt; None:
+    &quot;&quot;&quot;GET the account edit form.&quot;&quot;&quot;
+    env = _env(ctx)
+    account_id = ctx.get(f&quot;account_id:{name}&quot;) or env.get_account_id_by_name(name)
+    assert account_id, f&quot;No account found with name &#x27;{name}&#x27;&quot;
+    ctx[&quot;admin_page&quot;] = env.get_edit_page(account_id)
+</pre><span class="loc">admin_accounts.py:173</span><pre>def when_submit_edit_form(ctx: dict, datatable: list) -&gt; None:
+    &quot;&quot;&quot;POST the edit form with data table values.&quot;&quot;&quot;
+    env = _env(ctx)
+    form_data = _datatable_to_form(datatable)
+
+    # Get account_id from a previous Given/When step
+    account_id = _find_account_id_in_ctx(ctx)</pre><span class="loc">admin_accounts.py:185</span><pre>def when_status_change(ctx: dict, name: str, new_status: str) -&gt; None:
+    &quot;&quot;&quot;POST a JSON status change request.&quot;&quot;&quot;
+    env = _env(ctx)
+    account_id = ctx.get(f&quot;account_id:{name}&quot;) or env.get_account_id_by_name(name)
+    assert account_id, f&quot;No account found with name &#x27;{name}&#x27;&quot;
+    ctx[&quot;admin_page&quot;] = env.post_status_change(account_id, new_status)
+</pre><span class="loc">admin_accounts.py:435</span><pre>def then_control_is_not_editable(ctx: dict, field: str) -&gt; None:
+    &quot;&quot;&quot;Assert the form control for *field* is rendered disabled or readonly.
+
+    Natural-key components must not be presented as editable: the repository
+    refuses them, so an enabled control would invite an operator to make a change
+    that is then silently dropped (salesagent-8sfr). Accepts either spelling —
+    ``disabled`` for the checkbox, ``readonly`` for the text input — because they</pre><span class="loc">egress_ssrf.py:537</span><pre>def then_creative_rejected_per_item(ctx: dict, field: str) -&gt; None:
+    &quot;&quot;&quot;Assert the PER-ITEM failure carries the seam&#x27;s own classification.
+
+    Per-item rather than request-level because ``format_id.agent_url`` is a
+    per-CREATIVE field: the pinned sync-creatives-response schema calls a
+    synchronous success &quot;best-effort processing with per-item status/failures&quot;
+    and says ``action=&quot;failed&quot;`` items are &quot;per-item validation/processing</pre><p class="more">+168 more of this class in the tree.</p></details></div></section></div></body></html>

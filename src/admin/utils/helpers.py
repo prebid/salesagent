@@ -4,16 +4,15 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from functools import wraps
 from typing import TYPE_CHECKING, NamedTuple, TypeVar
 
-from adcp.types import ContextObject
 from flask import abort, g, jsonify, redirect, session, url_for
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import Select
 
+from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant, TenantManagementConfig, User
 from src.core.logging_config import log_safe
@@ -29,12 +28,13 @@ logger = logging.getLogger(__name__)
 def is_admin_production() -> bool:
     """Return True when admin should behave in production-safe mode.
 
-    Treats both PRODUCTION=true and ENVIRONMENT=production as authoritative
-    so security-sensitive checks do not drift between deployment styles.
+    One answer for every spelling of "production", so security-sensitive checks
+    do not drift between deployment styles.
     """
-    return (
-        os.environ.get("PRODUCTION", "").lower() == "true" or os.environ.get("ENVIRONMENT", "").lower() == "production"
-    )
+    return get_settings().runtime.is_production
+
+
+#: The blueprint name of the test-credential login path (src/admin/blueprints/test_auth.py).
 
 
 def parse_json_config(config_str):
@@ -73,7 +73,6 @@ def get_tenant_config_from_db(tenant_id):
                 "adapters": {},
                 "features": {},
                 "creative_engine": {},
-                "admin_token": tenant.admin_token or "",
                 "slack_webhook_url": tenant.slack_webhook_url or "",
                 "policy_settings": {},
             }
@@ -98,8 +97,6 @@ def get_tenant_config_from_db(tenant_id):
                     adapter_config[adapter_type]["manual_approval_required"] = (
                         adapter_obj.gam_manual_approval_required or False
                     )
-                elif adapter_type == "mock":
-                    adapter_config[adapter_type]["dry_run"] = adapter_obj.mock_dry_run or False
                 elif adapter_type == "kevel":
                     if adapter_obj.kevel_network_id:
                         adapter_config[adapter_type]["network_id"] = adapter_obj.kevel_network_id
@@ -161,23 +158,18 @@ def is_super_admin(email):
         # No session context available (e.g., outside request context)
         pass
 
-    # 1. FIRST: Check environment variables (most reliable)
-    env_emails = os.environ.get("SUPER_ADMIN_EMAILS", "")
-    if env_emails:
-        env_emails_list = [e.strip().lower() for e in env_emails.split(",") if e.strip()]
-        if email_lower in env_emails_list:
-            logger.debug(f"Super admin access granted via environment: {email}")
-            _cache_admin_status(email_lower, True)
-            return True
+    # 1. FIRST: Check the configured lists (most reliable)
+    auth_settings = get_settings().auth
+    if email_lower in auth_settings.super_admin_email_list:
+        logger.debug(f"Super admin access granted via environment: {email}")
+        _cache_admin_status(email_lower, True)
+        return True
 
-    env_domains = os.environ.get("SUPER_ADMIN_DOMAINS", "")
-    if env_domains:
-        env_domains_list = [d.strip().lower() for d in env_domains.split(",") if d.strip()]
-        email_domain = email_lower.split("@")[1] if "@" in email_lower else ""
-        if email_domain in env_domains_list:
-            logger.debug(f"Super admin access granted via environment domain: {email}")
-            _cache_admin_status(email_lower, True)
-            return True
+    email_domain = email_lower.split("@")[1] if "@" in email_lower else ""
+    if email_domain and email_domain in auth_settings.super_admin_domain_list:
+        logger.debug(f"Super admin access granted via environment domain: {email}")
+        _cache_admin_status(email_lower, True)
+        return True
 
     # 2. FALLBACK: Check database configuration
     try:
@@ -266,12 +258,6 @@ def require_auth(admin_only=False):
     def decorator(f):
         @wraps(f)
         def decorated_function(*args, **kwargs):
-            # Check for test mode
-            test_mode = os.environ.get("ADCP_AUTH_TEST_MODE", "").lower() == "true"
-            if test_mode and "test_user" in session:
-                g.user = session["test_user"]
-                return f(*args, **kwargs)
-
             if "user" not in session:
                 logger.info(f"require_auth: No 'user' in session. Session keys: {list(session.keys())}")
                 # Store the original URL to redirect back after login
@@ -300,6 +286,38 @@ def require_auth(admin_only=False):
     return decorator
 
 
+def _session_email(user_info: object) -> str:
+    """The caller's email, whichever shape the session stored.
+
+    A dict from the OIDC/OAuth callbacks, a bare string from older sessions. One place to
+    read it, so the decorators do not each carry the isinstance.
+    """
+    return user_info.get("email", "") if isinstance(user_info, dict) else str(user_info)
+
+
+def _setup_session_reaches(tenant_id: str) -> bool:
+    """Whether the caller's setup-mode session grants access to *tenant_id*.
+
+    Decided from the session alone — NO database read. Reading the tenant's auth_setup_mode
+    here would need one, and ``get_db_session()`` is scoped: opening a session inside an
+    auth decorator nests within whatever session the caller already holds, and the inner
+    exit removes the scoped session and detaches the outer one, discarding rows the caller
+    had flushed but not committed. ``enable_oidc`` carries the same rule.
+
+    The scope check needs no database. The session states which tenant it is for, and this
+    server signed it, so that statement is as trustworthy as the ``user`` the caller's own
+    path reads. A caller who is not a super admin reaches exactly the tenant its session
+    names — which is what the approval-refusal tests grade, since a super admin crosses
+    tenants by design and a refusal test authenticated as one proves nothing.
+
+    Never true in production: no route in a deployment mints such a session, so the branch
+    is unreachable there, and this says so rather than leaving it to be inferred.
+    """
+    if "test_user" not in session or get_settings().runtime.is_production:
+        return False
+    return session.get("test_tenant_id") == tenant_id or session.get("test_user_role") == "super_admin"
+
+
 def require_tenant_access(api_mode=False):
     """Decorator to require tenant access for routes."""
 
@@ -315,28 +333,28 @@ def require_tenant_access(api_mode=False):
                 f"Auth check - tenant: {tenant_id}, method: {request.method}, has_session: {has_session}, has_cookies: {has_cookies}, session_keys: {list(session.keys())}"
             )
 
-            # Check for test mode (global env var OR per-tenant auth_setup_mode)
-            test_mode = os.environ.get("ADCP_AUTH_TEST_MODE", "").lower() == "true"
-
-            # Also check per-tenant auth_setup_mode if test_user is in session
-            if not test_mode and "test_user" in session:
-                try:
-                    with get_db_session() as db_session:
-                        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-                        if tenant and getattr(tenant, "auth_setup_mode", False):
-                            test_mode = True
-                            logger.debug(f"Auth setup mode enabled for tenant {tenant_id}")
-                except Exception as e:
-                    logger.warning(f"Error checking tenant auth_setup_mode: {e}")
-
-            if test_mode and "test_user" in session:
+            # A SETUP-MODE SESSION, decided from the session alone — NO DATABASE READ.
+            #
+            # Reading the tenant's auth_setup_mode to decide whether a ``test_user`` session
+            # counts would be a DB read inside the auth decorator, on every request, and
+            # ``get_db_session()`` is scoped: opening one here nests inside whatever session
+            # the caller already holds, and the inner exit REMOVES the scoped session and
+            # detaches the outer one, discarding rows the caller flushed but had not
+            # committed. ``enable_oidc`` carries the same rule.
+            #
+            # The scope check does not need the database. The session states which tenant it
+            # is for, and a session is signed by this server, so what it states is as
+            # trustworthy as the ``user`` the path below reads. The grant is TENANT-SCOPED:
+            # a caller who is not a super admin reaches exactly the tenant named in its own
+            # session, which is what the approval-refusal tests grade (a super admin crosses
+            # tenants by design, so a refusal test authenticated as one proves nothing).
+            #
+            # Never in production: no route in a deployment mints such a session, so this
+            # branch is unreachable there by construction; the guard states that rather than
+            # leaving it to be inferred.
+            if _setup_session_reaches(tenant_id):
                 g.user = session["test_user"]
-                # Test users can access their assigned tenant
-                if "test_tenant_id" in session and session["test_tenant_id"] == tenant_id:
-                    return f(tenant_id, *args, **kwargs)
-                # Super admins can access all tenants
-                if session.get("test_user_role") == "super_admin":
-                    return f(tenant_id, *args, **kwargs)
+                return f(tenant_id, *args, **kwargs)
 
             if "user" not in session:
                 if api_mode:
@@ -346,11 +364,7 @@ def require_tenant_access(api_mode=False):
 
             user_info = session["user"]
 
-            # Handle both string email and dict user info formats
-            if isinstance(user_info, dict):
-                email = user_info.get("email", "")
-            else:
-                email = str(user_info)
+            email = _session_email(user_info)
 
             # Check super admin status (is_super_admin handles env + db + session caching internally)
             if is_super_admin(email):
@@ -573,28 +587,6 @@ def execute_limited(db_session: Session, stmt: Select, limit: int) -> LimitedRes
     """
     rows = list(db_session.scalars(stmt.limit(limit)).all())
     return LimitedResult(rows=rows, truncated=len(rows) >= limit)
-
-
-# ---------------------------------------------------------------------------
-# Webhook context echo
-# ---------------------------------------------------------------------------
-
-
-def echo_context(request_data: dict) -> ContextObject | None:
-    """Reconstruct the buyer's request context for echoing on an outbound webhook.
-
-    The original tool request is stored on the workflow step's ``request_data``;
-    per spec the webhook's embedded result echoes the buyer's ``context`` back
-    verbatim. ``model_construct`` (not ``model_validate``): ContextObject is an
-    extra=allow passthrough and the dict was already validated at request time.
-    Returns ``None`` when no context was stored (absent/None/non-dict), so
-    ``exclude_none`` keeps the field off the wire. Shared by the media-buy
-    approve and creative approval webhook paths (PR #1567 round-3 DRY).
-    """
-    context_data = request_data.get("context")
-    if context_data and isinstance(context_data, dict):
-        return ContextObject.model_construct(**context_data)
-    return None
 
 
 def approve_media_buy_through_writer(media_buy_id: str, tenant_id: str, *, approved_by: str) -> ApprovalResult:

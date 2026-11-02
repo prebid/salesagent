@@ -79,15 +79,15 @@ class TestOptionalFields:
 
 
 class TestContext:
-    """Context dict included when provided."""
+    """The buyer's context never reaches a creative's stored data document.
 
-    def test_context_included(self):
-        data = _build_creative_data(_make_creative(), None, context={"app": "test"})
-        assert data["context"] == {"app": "test"}
-
-    def test_context_excluded_when_none(self):
-        data = _build_creative_data(_make_creative(), None, context=None)
-        assert "context" not in data
+    Two tests here passed ``context={...}`` and ``context=None`` and graded that the
+    dict was carried into the data document or omitted. That parameter is gone
+    (83efb1a06 deleted the buyer-context plumbing from business logic): context is
+    written by the boundary alone, so there is no kwarg to pass and no per-call
+    branch to grade. What remains gradeable is the absence below -- the helper builds
+    the document from the creative and the url, and nothing puts a context in it.
+    """
 
     def test_context_default_is_none(self):
         data = _build_creative_data(_make_creative(), None)
@@ -108,7 +108,9 @@ class TestCombined:
             snippet_type="js",
             template_variables={"cta": "Learn More"},
         )
-        data = _build_creative_data(creative, "https://example.com/ad.png", context={"campaign": "summer"})
+        # No context= kwarg: the parameter is deleted, and its absence from the data
+        # document is graded by TestContext above.
+        data = _build_creative_data(creative, "https://example.com/ad.png")
         assert data["url"] == "https://example.com/ad.png"
         assert data["click_url"] == "https://example.com/click"
         assert data["width"] == 728
@@ -118,4 +120,3 @@ class TestCombined:
         assert data["snippet"] == "<script>tag</script>"
         assert data["snippet_type"] == "js"
         assert data["template_variables"] == {"cta": "Learn More"}
-        assert data["context"] == {"campaign": "summer"}

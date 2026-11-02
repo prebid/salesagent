@@ -81,10 +81,10 @@ ACCEPTED_GATE_SYMBOLS = frozenset(sym for symbols in ACCEPTED_GATES.values() for
 # correct designs, not debt, so no FIXME. The set may only shrink.
 CORRECT_DESIGN_NO_GATE = frozenset(
     {
-        # Transport wrappers: they FORWARD the raw field to _sync_creatives_impl,
-        # which runs the gate. Validating in the wrapper would be the layer
-        # inversion pattern #5 forbids (and a second verdict per transport).
-        "src/core/tools/creatives/sync_wrappers.py",
+        # The transport-wrapper entry that stood here (sync_wrappers.py) is gone with the
+        # wrappers themselves: the registry generates each transport's entry point, and the
+        # generated boundary names no webhook field at all.
+        #
         # Stores the config into workflow request_data AFTER _sync.py's gate
         # verdict accepted it — a post-validation writer, same standing as the
         # delivery-time readers (scan disposition row 14).
@@ -230,8 +230,8 @@ def test_allowlist_only_shrinks():
         assert module_names_webhook_fields(tree) and not module_routes_through_a_gate(tree), (
             f"stale allowlist entry — {relpath} no longer needs it; remove the entry"
         )
-    assert len(CORRECT_DESIGN_NO_GATE) == 2, (
-        f"CORRECT_DESIGN_NO_GATE is {len(CORRECT_DESIGN_NO_GATE)} entries, expected exactly 2 — "
+    assert len(CORRECT_DESIGN_NO_GATE) == 1, (
+        f"CORRECT_DESIGN_NO_GATE is {len(CORRECT_DESIGN_NO_GATE)} entries, expected exactly 1 — "
         "fix the new module instead of listing it, or update this pin if a listed one genuinely left."
     )
 

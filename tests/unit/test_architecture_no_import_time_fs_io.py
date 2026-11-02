@@ -14,11 +14,27 @@ mode 644, and every other uid then died at pytest COLLECTION with
 taking entire suites down before a single test ran, and looking like flakiness
 because which container won the race varied.
 
-Scope is every directory whose modules get IMPORTED by something that is not a
-test -- ``src/``, ``scripts/``, ``alembic/`` (the container's migration step
+Test modules are in scope for the same reason, and the failure there is if
+anything more insidious: pytest imports every test module during COLLECTION, so
+a module-level write runs before any test does -- even for ``--collect-only``, or
+a run filtered down to one unrelated test. ``tests/integration/test_mock_adapter.py``
+did exactly that, dropping a JSON file into the CWD on every integration run
+while containing no tests at all.
+
+Scope is therefore every directory whose modules get imported by anything --
+``src/``, ``scripts/``, ``tests/``, ``alembic/`` (the container's migration step
 imports all 180), ``.pre-commit-hooks/`` and ``examples/`` -- with NO allowlist:
-all 528 modules have zero instances today and must keep it that way. Deferring
-the work to first use is always available: open on demand, not on import.
+the tree has zero instances today and must keep it that way. Deferring the work
+to first use is always available: open on demand, not on import.
+
+DETECTOR NOTE: the match is by attribute NAME, so a module-level ``str.replace``
+reads the same as ``Path.replace`` (a rename) and is reported. One such site
+existed when ``tests/`` came into scope -- ``test_architecture_bdd_xfail_reason_tokens``
+built a mutated xfail reason at module level -- and it was moved into a function,
+which is the right shape regardless: nothing about that string needs to be
+computed during collection. Narrowing the detector to let the RECEIVER decide is
+still worth doing; dropping ``tests/`` from scope is not, because that hides the
+historical defect this guard was written for.
 
 The detector treats a class body and a function's default arguments as
 import-time, because they are. A class-level ``handler = logging.FileHandler(...)``
@@ -40,7 +56,7 @@ from tests.unit._architecture_helpers import (
     repo_root,
 )
 
-_SCANNED_DIRS = ("src", "scripts", "alembic", ".pre-commit-hooks", "examples")
+_SCANNED_DIRS = ("src", "scripts", "tests", "alembic", ".pre-commit-hooks", "examples")
 
 _KNOWN_BAD_SNIPPETS = {
     "module_level_mkdir": "from pathlib import Path\nLOG_DIR = Path('logs')\nLOG_DIR.mkdir(exist_ok=True)",
@@ -81,7 +97,7 @@ _KNOWN_GOOD_SNIPPETS = {
 
 
 @pytest.mark.arch_guard
-def test_no_import_time_filesystem_io_in_production_code() -> None:
+def test_no_import_time_filesystem_io_anywhere_in_the_tree() -> None:
     repo = repo_root()
     _SCANNED_ROOTS = [repo / d for d in _SCANNED_DIRS]
     violations: list[str] = []

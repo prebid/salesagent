@@ -11,6 +11,8 @@ from sqlalchemy import delete
 from src.admin.services.media_buy_readiness_service import MediaBuyReadinessService
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative, CreativeAssignment, MediaBuy, Principal, Tenant
+from tests.factories.principal import plaintext_token_for
+from tests.utils.database_helpers import vhost_for
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -20,7 +22,15 @@ def test_tenant(integration_db, request):
     """Create a test tenant (requires integration_db fixture)."""
     tenant_id = f"test_readiness_{request.node.name[-20:]}"  # Truncate to avoid long names
     with get_db_session() as session:
-        tenant = Tenant(tenant_id=tenant_id, name="Test Tenant", subdomain="test", is_active=True, ad_server="mock")
+        # Required (NOT NULL) and UNIQUE. Nothing routes to this host; it exists to satisfy the column.
+        tenant = Tenant(
+            tenant_id=tenant_id,
+            name="Test Tenant",
+            subdomain="test",
+            virtual_host=vhost_for(tenant_id),
+            is_active=True,
+            ad_server="mock",
+        )
         session.add(tenant)
         session.commit()
 
@@ -37,11 +47,11 @@ def test_principal(integration_db, test_tenant):
     """Create a test principal (requires integration_db and test_tenant fixtures)."""
     principal_id = "test_principal"
     with get_db_session() as session:
-        principal = Principal(
+        principal = Principal.with_token(
+            plaintext_token_for(principal_id),
             tenant_id=test_tenant,
             principal_id=principal_id,
             name="Test Advertiser",
-            access_token="test_token",
             platform_mappings={"mock": {"advertiser_id": "test_adv_123"}},  # Required field with valid mapping
         )
         session.add(principal)

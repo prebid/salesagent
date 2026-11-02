@@ -38,7 +38,9 @@ class TestConfigUtilities:
         mock_get_db_session.return_value.__enter__.return_value = mock_session
 
         mock_tenant = Mock()
-        mock_tenant.admin_token = "test_token"
+        # No admin_token: the column is gone (84a86e019) and get_tenant_config_from_db no
+        # longer emits the key. A Mock() accepts any attribute, so setting it here and
+        # asserting it below graded the test's own setup, not production.
         mock_tenant.slack_webhook_url = "https://slack.webhook"
         mock_tenant.adapter_config = '{"google_ad_manager": {"enabled": true}}'
         mock_tenant.max_daily_budget = 10000
@@ -52,7 +54,6 @@ class TestConfigUtilities:
         # Test
         config = get_tenant_config_from_db("tenant_123")
 
-        assert config["admin_token"] == "test_token"
         assert config["slack_webhook_url"] == "https://slack.webhook"
         assert config["adapters"]["google_ad_manager"]["enabled"]
         assert config["features"]["max_daily_budget"] == 10000

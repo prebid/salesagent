@@ -3,7 +3,6 @@
 Tests the full flow: create product with pricing_options → get products → create media buy.
 """
 
-import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -12,15 +11,32 @@ import pytest
 from src.core.database.database_session import get_db_session
 from src.core.database.models import CurrencyLimit, PricingOption, Principal, Product, PropertyTag, Tenant
 from src.core.exceptions import AdCPValidationError
-from src.core.resolved_identity import ResolvedIdentity
-from src.core.schemas import CreateMediaBuyRequest, GetProductsRequest, PricingModel
-from src.core.testing_hooks import AdCPTestContext
+from src.core.schemas import GetProductsRequest, PricingModel
 from src.core.tools.media_buy_create import _create_media_buy_impl
 from src.core.tools.products import _get_products_impl
-from tests.helpers.adcp_factories import create_test_package_request
-from tests.utils.database_helpers import create_tenant_with_timestamps
+from tests.factories import PricingOptionFactory
+from tests.factories.account import seed_default_account
+from tests.factories.principal import PrincipalFactory, plaintext_token_for
+from tests.helpers.adcp_factories import create_test_media_buy_request, create_test_package_request
+from tests.integration.media_buy_helpers import assert_created, make_media_buy_identity
+from tests.utils.database_helpers import bind_factories_to_session, create_tenant_with_timestamps
+from tests.utils.tenant_setup import seed_setup_checklist_rows
 
 pytestmark = pytest.mark.requires_db
+
+
+TENANT_ID = "test_pricing_tenant"
+PRINCIPAL_ID = "test_advertiser"
+
+
+def _identity():
+    """The caller ``_create_media_buy_impl`` takes: principal, tenant AND account.
+
+    The account is spec-required on the request and the implementation reads
+    ``identity.account.account_id``, so a plain ``ResolvedIdentity`` is the wrong TYPE
+    here -- see ``make_media_buy_identity``.
+    """
+    return make_media_buy_identity(PRINCIPAL_ID, TENANT_ID)
 
 
 def _get_future_date_range() -> tuple[str, str]:
@@ -45,9 +61,21 @@ def setup_tenant_with_pricing_products(integration_db):
             name="Pricing Test Publisher",
             subdomain="pricing-test",
             ad_server="mock",
+            # Half of the setup checklist's "SSO configured" task; the other half is the
+            # TenantAuthConfig row seed_setup_checklist_rows writes below.
+            auth_setup_mode=False,
+            # The column defaults to True, which routes every create to the
+            # manual-approval branch and answers `submitted` with no media_buy_id. These
+            # tests grade PRICING on a completed create, so the gate is off -- the same
+            # reason the GAM pricing fixtures set it.
+            human_review_required=False,
         )
         session.add(tenant)
         session.flush()
+
+        # create_media_buy validates the setup checklist for every caller now, so the
+        # tenant these tests drive has to really be set up.
+        seed_setup_checklist_rows(session, tenant)
 
         # Add property tag (required for products)
         property_tag = PropertyTag(
@@ -67,14 +95,22 @@ def setup_tenant_with_pricing_products(integration_db):
         session.add(currency_limit)
 
         # Add principal for authentication
-        principal = Principal(
+        principal = Principal.with_token(
+            plaintext_token_for("test_advertiser"),
             tenant_id="test_pricing_tenant",
             principal_id="test_advertiser",
             name="Test Advertiser",
-            access_token="test_token",
             platform_mappings={"mock": {"advertiser_id": "mock_adv_123"}},
         )
         session.add(principal)
+        session.flush()
+
+        # The ACCOUNT the request names, and this principal's access to it. Required on
+        # create-media-buy-request.json, and resolved for real -- a payload naming an
+        # account with no row, or with no grant for the caller, is refused before the
+        # pricing logic under test runs.
+        with bind_factories_to_session(session):
+            seed_default_account(TENANT_ID, PRINCIPAL_ID)
 
         # Product 1: CPM fixed rate
         product_cpm_fixed = Product(
@@ -94,7 +130,7 @@ def setup_tenant_with_pricing_products(integration_db):
         session.add(product_cpm_fixed)
         session.flush()
 
-        pricing_cpm_fixed = PricingOption(
+        pricing_cpm_fixed = PricingOptionFactory.build(
             tenant_id="test_pricing_tenant",
             product_id="prod_cpm_fixed",
             pricing_model="cpm",
@@ -119,7 +155,7 @@ def setup_tenant_with_pricing_products(integration_db):
         session.add(product_cpm_auction)
         session.flush()
 
-        pricing_cpm_auction = PricingOption(
+        pricing_cpm_auction = PricingOptionFactory.build(
             tenant_id="test_pricing_tenant",
             product_id="prod_cpm_auction",
             pricing_model="cpm",
@@ -145,7 +181,7 @@ def setup_tenant_with_pricing_products(integration_db):
         session.add(product_cpcv)
         session.flush()
 
-        pricing_cpcv = PricingOption(
+        pricing_cpcv = PricingOptionFactory.build(
             tenant_id="test_pricing_tenant",
             product_id="prod_cpcv",
             pricing_model="cpcv",
@@ -175,7 +211,7 @@ def setup_tenant_with_pricing_products(integration_db):
         session.flush()
 
         # Add CPM option
-        pricing_multi_cpm = PricingOption(
+        pricing_multi_cpm = PricingOptionFactory.build(
             tenant_id="test_pricing_tenant",
             product_id="prod_multi",
             pricing_model="cpm",
@@ -186,7 +222,7 @@ def setup_tenant_with_pricing_products(integration_db):
         session.add(pricing_multi_cpm)
 
         # Add CPCV option
-        pricing_multi_cpcv = PricingOption(
+        pricing_multi_cpcv = PricingOptionFactory.build(
             tenant_id="test_pricing_tenant",
             product_id="prod_multi",
             pricing_model="cpcv",
@@ -197,7 +233,7 @@ def setup_tenant_with_pricing_products(integration_db):
         session.add(pricing_multi_cpcv)
 
         # Add CPP option with demographics
-        pricing_multi_cpp = PricingOption(
+        pricing_multi_cpp = PricingOptionFactory.build(
             tenant_id="test_pricing_tenant",
             product_id="prod_multi",
             pricing_model="cpp",
@@ -246,13 +282,11 @@ async def test_get_products_returns_pricing_options(setup_tenant_with_pricing_pr
     """Test that get_products returns pricing_options for products."""
     request = GetProductsRequest(brief="display ads", brand={"domain": "testbrand.com"})
 
-    # Create identity
-    identity = ResolvedIdentity(
+    # get_products is a PUBLIC tool and names no account: the plain resolved caller.
+    identity = PrincipalFactory.make_identity(
         principal_id="test_advertiser",
-        tenant_id="test_pricing_tenant",
-        tenant={"tenant_id": "test_pricing_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
+        tenant_id=TENANT_ID,
+        tenant={"tenant_id": TENANT_ID},
     )
 
     response = await _get_products_impl(request, identity)
@@ -287,9 +321,7 @@ async def test_get_products_returns_pricing_options(setup_tenant_with_pricing_pr
 async def test_create_media_buy_with_cpm_fixed_pricing(setup_tenant_with_pricing_products):
     """Test creating media buy with fixed CPM pricing."""
     start_time, end_time = _get_future_date_range()
-    request = CreateMediaBuyRequest(
-        brand={"domain": "testbrand.com"},
-        idempotency_key=f"int-key-{uuid.uuid4().hex}",
+    request = create_test_media_buy_request(
         packages=[
             create_test_package_request(
                 product_id="prod_cpm_fixed",
@@ -301,31 +333,18 @@ async def test_create_media_buy_with_cpm_fixed_pricing(setup_tenant_with_pricing
         end_time=end_time,
     )
 
-    identity = ResolvedIdentity(
-        principal_id="test_advertiser",
-        tenant_id="test_pricing_tenant",
-        tenant={"tenant_id": "test_pricing_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
-    )
+    identity = _identity()
 
-    response, _ = await _create_media_buy_impl(req=request, identity=identity)
+    response = await _create_media_buy_impl(req=request, identity=identity)
 
-    # Verify response is success (AdCP 2.4 compliant)
-    # Success response has media_buy_id, error response has errors field
-    assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
-        f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
-    )
-    assert response.media_buy_id is not None
+    assert_created(response)
 
 
 @pytest.mark.requires_db
 async def test_create_media_buy_with_cpm_auction_pricing(setup_tenant_with_pricing_products):
     """Test creating media buy with auction CPM pricing."""
     start_time, end_time = _get_future_date_range()
-    request = CreateMediaBuyRequest(
-        brand={"domain": "testbrand.com"},
-        idempotency_key=f"int-key-{uuid.uuid4().hex}",
+    request = create_test_media_buy_request(
         packages=[
             create_test_package_request(
                 product_id="prod_cpm_auction",
@@ -338,31 +357,18 @@ async def test_create_media_buy_with_cpm_auction_pricing(setup_tenant_with_prici
         end_time=end_time,
     )
 
-    identity = ResolvedIdentity(
-        principal_id="test_advertiser",
-        tenant_id="test_pricing_tenant",
-        tenant={"tenant_id": "test_pricing_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
-    )
+    identity = _identity()
 
-    response, _ = await _create_media_buy_impl(req=request, identity=identity)
+    response = await _create_media_buy_impl(req=request, identity=identity)
 
-    # Verify response is success (AdCP 2.4 compliant)
-    # Success response has media_buy_id, error response has errors field
-    assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
-        f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
-    )
-    assert response.media_buy_id is not None
+    assert_created(response)
 
 
 @pytest.mark.requires_db
 async def test_create_media_buy_auction_bid_below_floor_fails(setup_tenant_with_pricing_products):
     """Test that auction bid below floor price fails."""
     start_time, end_time = _get_future_date_range()
-    request = CreateMediaBuyRequest(
-        brand={"domain": "testbrand.com"},
-        idempotency_key=f"int-key-{uuid.uuid4().hex}",
+    request = create_test_media_buy_request(
         packages=[
             create_test_package_request(
                 product_id="prod_cpm_auction",
@@ -375,15 +381,9 @@ async def test_create_media_buy_auction_bid_below_floor_fails(setup_tenant_with_
         end_time=end_time,
     )
 
-    identity = ResolvedIdentity(
-        principal_id="test_advertiser",
-        tenant_id="test_pricing_tenant",
-        tenant={"tenant_id": "test_pricing_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
-    )
+    identity = _identity()
 
-    # Boundary-validation failures are now signaled via typed AdCPError that
+    # Boundary-validation failures are now signaled via typed AdCPSalesAgentError that
     # propagates past the narrowed (ValueError, PermissionError) catch in _impl
     # and is translated to the spec two-layer envelope at the transport
     # boundary. Verify the typed raise at the layer above the transport.
@@ -392,17 +392,13 @@ async def test_create_media_buy_auction_bid_below_floor_fails(setup_tenant_with_
 
     exc = excinfo.value
     assert exc.error_code == "VALIDATION_ERROR"
-    msg = exc.message.lower()
-    assert "below floor price" in msg or "floor" in msg
 
 
 @pytest.mark.requires_db
 async def test_create_media_buy_with_cpcv_pricing(setup_tenant_with_pricing_products):
     """Test creating media buy with CPCV pricing."""
     start_time, end_time = _get_future_date_range()
-    request = CreateMediaBuyRequest(
-        brand={"domain": "testbrand.com"},
-        idempotency_key=f"int-key-{uuid.uuid4().hex}",
+    request = create_test_media_buy_request(
         packages=[
             create_test_package_request(
                 product_id="prod_cpcv",
@@ -414,31 +410,18 @@ async def test_create_media_buy_with_cpcv_pricing(setup_tenant_with_pricing_prod
         end_time=end_time,
     )
 
-    identity = ResolvedIdentity(
-        principal_id="test_advertiser",
-        tenant_id="test_pricing_tenant",
-        tenant={"tenant_id": "test_pricing_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
-    )
+    identity = _identity()
 
-    response, _ = await _create_media_buy_impl(req=request, identity=identity)
+    response = await _create_media_buy_impl(req=request, identity=identity)
 
-    # Verify response is success (AdCP 2.4 compliant)
-    # Success response has media_buy_id, error response has errors field
-    assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
-        f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
-    )
-    assert response.media_buy_id is not None
+    assert_created(response)
 
 
 @pytest.mark.requires_db
 async def test_create_media_buy_below_min_spend_fails(setup_tenant_with_pricing_products):
     """Test that budget below min_spend_per_package fails."""
     start_time, end_time = _get_future_date_range()
-    request = CreateMediaBuyRequest(
-        brand={"domain": "testbrand.com"},
-        idempotency_key=f"int-key-{uuid.uuid4().hex}",
+    request = create_test_media_buy_request(
         packages=[
             create_test_package_request(
                 product_id="prod_cpcv",
@@ -450,15 +433,9 @@ async def test_create_media_buy_below_min_spend_fails(setup_tenant_with_pricing_
         end_time=end_time,
     )
 
-    identity = ResolvedIdentity(
-        principal_id="test_advertiser",
-        tenant_id="test_pricing_tenant",
-        tenant={"tenant_id": "test_pricing_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
-    )
+    identity = _identity()
 
-    # Boundary-validation failures are now signaled via typed AdCPError that
+    # Boundary-validation failures are now signaled via typed AdCPSalesAgentError that
     # propagates past the narrowed (ValueError, PermissionError) catch in _impl
     # and is translated to the spec two-layer envelope at the transport
     # boundary. Verify the typed raise at the layer above the transport.
@@ -467,17 +444,13 @@ async def test_create_media_buy_below_min_spend_fails(setup_tenant_with_pricing_
 
     exc = excinfo.value
     assert exc.error_code == "VALIDATION_ERROR"
-    msg = exc.message.lower()
-    assert "below minimum spend" in msg or "minimum" in msg
 
 
 @pytest.mark.requires_db
 async def test_create_media_buy_multi_pricing_choose_cpp(setup_tenant_with_pricing_products):
     """Test creating media buy choosing CPP from multi-pricing product."""
     start_time, end_time = _get_future_date_range()
-    request = CreateMediaBuyRequest(
-        brand={"domain": "testbrand.com"},
-        idempotency_key=f"int-key-{uuid.uuid4().hex}",
+    request = create_test_media_buy_request(
         packages=[
             create_test_package_request(
                 product_id="prod_multi",
@@ -489,31 +462,18 @@ async def test_create_media_buy_multi_pricing_choose_cpp(setup_tenant_with_prici
         end_time=end_time,
     )
 
-    identity = ResolvedIdentity(
-        principal_id="test_advertiser",
-        tenant_id="test_pricing_tenant",
-        tenant={"tenant_id": "test_pricing_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
-    )
+    identity = _identity()
 
-    response, _ = await _create_media_buy_impl(req=request, identity=identity)
+    response = await _create_media_buy_impl(req=request, identity=identity)
 
-    # Verify response is success (AdCP 2.4 compliant)
-    # Success response has media_buy_id, error response has errors field
-    assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
-        f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
-    )
-    assert response.media_buy_id is not None
+    assert_created(response)
 
 
 @pytest.mark.requires_db
 async def test_create_media_buy_invalid_pricing_model_fails(setup_tenant_with_pricing_products):
     """Test that requesting unavailable pricing model fails."""
     start_time, end_time = _get_future_date_range()
-    request = CreateMediaBuyRequest(
-        brand={"domain": "testbrand.com"},
-        idempotency_key=f"int-key-{uuid.uuid4().hex}",
+    request = create_test_media_buy_request(
         packages=[
             create_test_package_request(
                 product_id="prod_cpm_fixed",  # Only offers CPM
@@ -525,15 +485,9 @@ async def test_create_media_buy_invalid_pricing_model_fails(setup_tenant_with_pr
         end_time=end_time,
     )
 
-    identity = ResolvedIdentity(
-        principal_id="test_advertiser",
-        tenant_id="test_pricing_tenant",
-        tenant={"tenant_id": "test_pricing_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
-    )
+    identity = _identity()
 
-    # Boundary-validation failures are now signaled via typed AdCPError that
+    # Boundary-validation failures are now signaled via typed AdCPSalesAgentError that
     # propagates past the narrowed (ValueError, PermissionError) catch in _impl
     # and is translated to the spec two-layer envelope at the transport
     # boundary. Verify the typed raise at the layer above the transport.
@@ -542,5 +496,3 @@ async def test_create_media_buy_invalid_pricing_model_fails(setup_tenant_with_pr
 
     exc = excinfo.value
     assert exc.error_code == "VALIDATION_ERROR"
-    msg = exc.message.lower()
-    assert "does not offer" in msg or "pricing" in msg

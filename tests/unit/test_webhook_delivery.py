@@ -209,9 +209,9 @@ class TestWebhookDelivery:
         Recomputes over ``env.last_delivery.body`` (the raw wire bytes), not a
         fresh serialization of the payload dict -- a recompute from the dict
         can silently agree with a sender that signed one serialization and
-        transmitted another, which is exactly the defect salesagent-47n9.1
+        transmitted another, which is exactly the defect #1441
         fixed. Spec header name (X-AdCP-Signature, from
-        adcp.sign_legacy_webhook) since salesagent-47n9.1 -- the non-spec
+        adcp.sign_legacy_webhook) since #1441 -- the non-spec
         X-Webhook-Signature no longer exists.
         """
         from tests.harness.delivery_webhook_unit import WebhookEnv
@@ -248,14 +248,46 @@ class TestWebhookDelivery:
         cannot be localhost here: the harness must allow loopback for the test
         origin to be reachable at all, so a localhost assertion would grade the
         harness's allowance instead of production's policy.
+
+        The posture obligation the localhost case carried (salesagent-og9k.4/.8
+        — "it was green for the wrong reason") survives, RETARGETED at the seam,
+        because the knob it named no longer decides this path. Delivery runs
+        through ``webhook_egress.deliver_webhook`` →
+        ``EgressPolicy.resolve_for_dial``, which never reads ``ADCP_TESTING``;
+        that variable now feeds only the REGISTRATION verdict's
+        ``allow_loopback``, graded on both arms in
+        ``test_webhook_security.py::TestLocalhostAllowanceUnderTestingMode``,
+        while dial-time localhost refusal is graded in
+        ``test_protocol_webhook_ssrf.py::test_send_notification_rejects_localhost_without_post``.
+        Deleting ``ADCP_TESTING`` here would therefore assert nothing.
+
+        The posture that DOES decide this path is the private-range hatch, which
+        ``LocalOriginMixin`` opens so the loopback origin is dialable. Pinning it
+        OPEN is the anti-vacuity check: the refusal below has to come from the
+        metadata/supplement check that sits outside every hatch, not from a hatch
+        that happened to be shut.
+
+        Read off the SETTINGS rather than off ``os.environ``: that is where the
+        seam reads it (``outbound_http._allow_private()``), and the environment
+        spelling never reached it once anything had built the settings object.
+        Asserting the variable was asserting the harness's intent rather than the
+        gate's state.
         """
+        from src.core.config import get_settings
         from tests.harness.delivery_webhook_unit import WebhookEnv
 
         with WebhookEnv() as env:
+            assert get_settings().limits.adcp_outbound_allow_private is True, (
+                "the private-range hatch must be OPEN, or this refusal grades the hatch, not production policy"
+            )
+
             success, result = env.call_deliver(webhook_url=RESERVED_METADATA_URL, payload={"test": "data"})
 
             assert success is False
             assert "Invalid webhook URL" in result["error"]
+            # refused_destination: nothing was dialled, so attempts=0 is the honest
+            # count the seam reports — not a retry ladder that quietly exhausted.
+            assert result["attempts"] == 0
             assert env.delivery_attempts == 0
 
     @patch("src.core.webhook_delivery._create_delivery_record")

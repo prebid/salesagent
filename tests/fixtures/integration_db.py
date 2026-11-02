@@ -25,6 +25,8 @@ from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 from sqlalchemy import create_engine
 from sqlalchemy.orm import scoped_session, sessionmaker
 
+from tests.helpers.postgres_admin import drop_database
+
 _PG_URL_PATTERN = re.compile(r"postgresql://([^:]+):([^@]+)@([^:]+):(\d+)/(.+)")
 
 
@@ -157,21 +159,7 @@ def make_integration_db(
 
         # Drop the test database
         try:
-            conn = psycopg2.connect(**conn_params)
-            conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
-            cur = conn.cursor()
-            cur.execute(
-                """
-                SELECT pg_terminate_backend(pg_stat_activity.pid)
-                FROM pg_stat_activity
-                WHERE pg_stat_activity.datname = %s
-                AND pid <> pg_backend_pid()
-                """,
-                (unique_db_name,),
-            )
-            cur.execute(f'DROP DATABASE IF EXISTS "{unique_db_name}"')
-            cur.close()
-            conn.close()
+            drop_database(psycopg2.connect(**conn_params), unique_db_name)
         except Exception as exc:
             import warnings
 

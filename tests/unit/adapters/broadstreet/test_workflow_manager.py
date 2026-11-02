@@ -6,6 +6,23 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.adapters.broadstreet.managers.workflow import BroadstreetWorkflowManager
+from src.core.tenant_context import TenantContext
+
+#: The notifier loads its tenant BY ID now (``TenantContext.load`` in
+#: ``src/adapters/base_workflow.py``) and reads ``slack_webhook_url`` off the typed
+#: context; ``get_tenant_config``, which took a config KEY and returned that field, is
+#: gone. These are the two tenants the cases below need.
+#: A tenant always declares the host it is served at, so the projection requires one.
+#: Nothing here reads it — these cases grade Slack notification, not routing.
+_TENANT_HOST = "test-tenant.adcp.test"
+
+_TENANT_WITHOUT_SLACK = TenantContext(tenant_id="test_tenant", name="Test Tenant", virtual_host=_TENANT_HOST)
+_TENANT_WITH_SLACK = TenantContext(
+    tenant_id="test_tenant",
+    name="Test Tenant",
+    virtual_host=_TENANT_HOST,
+    slack_webhook_url="https://hooks.slack.com/test",
+)
 
 
 class TestBroadstreetWorkflowManager:
@@ -49,10 +66,10 @@ class TestBroadstreetWorkflowManager:
         assert manager.platform_url_base == "https://broadstreetads.com"
 
     @patch("src.adapters.base_workflow.get_db_session")
-    @patch("src.adapters.base_workflow.get_tenant_config")
-    def test_create_activation_workflow_step(self, mock_get_config, mock_db_session, manager, sample_packages):
+    @patch("src.adapters.base_workflow.TenantContext.load")
+    def test_create_activation_workflow_step(self, mock_load_tenant, mock_db_session, manager, sample_packages):
         """Test creating activation workflow step."""
-        mock_get_config.return_value = {}
+        mock_load_tenant.return_value = _TENANT_WITHOUT_SLACK
         mock_session = MagicMock()
         mock_db_session.return_value.__enter__.return_value = mock_session
 
@@ -70,17 +87,19 @@ class TestBroadstreetWorkflowManager:
         assert mock_session.commit.called
 
     @patch("src.adapters.base_workflow.get_db_session")
-    @patch("src.adapters.base_workflow.get_tenant_config")
-    def test_create_manual_campaign_workflow_step(self, mock_get_config, mock_db_session, manager, sample_packages):
+    @patch("src.adapters.base_workflow.TenantContext.load")
+    def test_create_manual_campaign_workflow_step(self, mock_load_tenant, mock_db_session, manager, sample_packages):
         """Test creating manual campaign creation workflow step."""
-        mock_get_config.return_value = {}
+        mock_load_tenant.return_value = _TENANT_WITHOUT_SLACK
         mock_session = MagicMock()
         mock_db_session.return_value.__enter__.return_value = mock_session
 
         request = MagicMock()
         request.brand.domain = "testbrand.com"
         request.po_number = "PO-12345"
-        request.get_total_budget.return_value = 5000.0
+        # Production reads ``request.total_budget`` -- the get_total_budget() this stubbed
+        # is gone, and a MagicMock attribute stood in for the number until it was formatted.
+        request.total_budget = 5000.0
 
         step_id = manager.create_manual_campaign_workflow_step(
             request=request,
@@ -99,10 +118,10 @@ class TestBroadstreetWorkflowManager:
         assert mock_session.commit.called
 
     @patch("src.adapters.base_workflow.get_db_session")
-    @patch("src.adapters.base_workflow.get_tenant_config")
-    def test_create_creative_approval_workflow_step(self, mock_get_config, mock_db_session, manager):
+    @patch("src.adapters.base_workflow.TenantContext.load")
+    def test_create_creative_approval_workflow_step(self, mock_load_tenant, mock_db_session, manager):
         """Test creating creative approval workflow step."""
-        mock_get_config.return_value = {}
+        mock_load_tenant.return_value = _TENANT_WITHOUT_SLACK
         mock_session = MagicMock()
         mock_db_session.return_value.__enter__.return_value = mock_session
 
@@ -120,25 +139,23 @@ class TestBroadstreetWorkflowManager:
         assert mock_session.commit.called
 
     @patch("src.adapters.base_workflow.get_db_session")
-    @patch("src.adapters.base_workflow.get_tenant_config")
+    @patch("src.adapters.base_workflow.TenantContext.load")
     @patch("src.core.webhook_delivery.deliver_webhook_with_retry")
-    def test_slack_notification_sent(self, mock_deliver, mock_get_config, mock_db_session, manager, sample_packages):
+    def test_slack_notification_sent(self, mock_deliver, mock_load_tenant, mock_db_session, manager, sample_packages):
         """Test that Slack notification is sent when configured.
 
-        The mock return value used to be {"slack": {"webhook_url": ...}}, which is a
-        shape get_tenant_config never produces — it takes a config KEY and returns
-        that field. Production read it as get_tenant_config(self.tenant_id), got
-        None, and raised AttributeError into a broad handler, so this notification
-        had never fired for any tenant. The mock made the dead path look alive.
-        Both sides are fixed here: production reads the key, and the mock returns
-        what that key actually holds.
+        The mock return value used to be {"slack": {"webhook_url": ...}}, which no
+        tenant read ever produced, so production got None, raised AttributeError into a
+        broad handler, and this notification had never fired for any tenant — the mock
+        made the dead path look alive. What production reads is the typed tenant it
+        LOADS BY ID, so the mock returns one of those with the webhook set on it.
 
         The patch target moved from the raw egress seam to
         ``deliver_webhook_with_retry`` because production no longer dials the seam:
         it goes through SlackNotifier, which owns retry and the delivery record.
         Patching the seam would now assert on a call production does not make.
         """
-        mock_get_config.return_value = "https://hooks.slack.com/test"
+        mock_load_tenant.return_value = _TENANT_WITH_SLACK
         mock_session = MagicMock()
         mock_db_session.return_value.__enter__.return_value = mock_session
 
@@ -161,12 +178,12 @@ class TestBroadstreetWorkflowManager:
         assert delivery.max_retries == 1
 
     @patch("src.adapters.base_workflow.get_db_session")
-    @patch("src.adapters.base_workflow.get_tenant_config")
+    @patch("src.adapters.base_workflow.TenantContext.load")
     def test_slack_notification_skipped_when_not_configured(
-        self, mock_get_config, mock_db_session, manager, sample_packages
+        self, mock_load_tenant, mock_db_session, manager, sample_packages
     ):
         """Test that Slack notification is skipped when not configured."""
-        mock_get_config.return_value = {}  # No Slack config
+        mock_load_tenant.return_value = _TENANT_WITHOUT_SLACK  # No Slack webhook
         mock_session = MagicMock()
         mock_db_session.return_value.__enter__.return_value = mock_session
 

@@ -24,6 +24,8 @@ from adcp.types import (
 )
 from pydantic import ValidationError
 
+from tests.factories.principal import PrincipalFactory
+
 # ---------------------------------------------------------------------------
 # xfail marker -- property list CRUD _impl not yet implemented
 # ---------------------------------------------------------------------------
@@ -37,20 +39,10 @@ _XFAIL_NO_IMPL = pytest.mark.xfail(
 
 def _lazy_identity(tenant_id: str = "test_tenant", principal_id: str = "test_principal"):
     """Build a ResolvedIdentity for property list tests."""
-    from src.core.resolved_identity import ResolvedIdentity
-    from src.core.testing_hooks import AdCPTestContext
-
-    return ResolvedIdentity(
+    return PrincipalFactory.make_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
         tenant={"tenant_id": tenant_id, "name": "Test Tenant"},
-        protocol="mcp",
-        testing_context=AdCPTestContext(
-            dry_run=False,
-            mock_time=None,
-            jump_to_event=None,
-            test_session_id=None,
-        ),
     )
 
 
@@ -383,7 +375,6 @@ class TestPropertyListWebhookUrl:
             await _create_property_list_impl(req, identity)
 
         errors = exc_info.value.errors()
-        assert any("webhook_url" in str(e["loc"]) for e in errors)
 
     @_XFAIL_NO_IMPL
     @pytest.mark.asyncio

@@ -4,7 +4,7 @@
 outbound request: BR-RULE-029's 1s/2s/4s, each plus a ``uniform(0, 1)`` draw.
 A call site that computes its own geometric delay is deciding that policy a
 second time, and the two drift — which is exactly what happened before
-salesagent-4fya.6: one site slept 1/2/4, another skipped the 1s step entirely
+#1802: one site slept 1/2/4, another skipped the 1s step entirely
 and slept 2/4, and the seam itself slept 0.1/0.2/0.4 with no jitter at all. The
 BDD step that was supposed to catch it only compared successive delays as a
 ratio, so every one of those schedules passed.

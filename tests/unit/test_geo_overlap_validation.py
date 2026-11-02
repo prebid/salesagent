@@ -8,7 +8,20 @@ Updated for : validation now accepts Targeting model directly.
 """
 
 from src.core.schemas import Targeting
-from src.services.targeting_capabilities import validate_geo_overlap
+from src.services.targeting_capabilities import geo_overlap_conflicts
+
+
+def _flat(record: dict) -> str:
+    """Every value in one conflict record, joined -- so a test can name a field or a value.
+
+    The validator returns {include, exclude, values} (plus `system` for the structured
+    pairs) rather than a sentence: these reach the buyer through errors[0].details, and a
+    rendered sentence there is the message smuggled back in (salesagent-3dawm.9). Tests
+    that used to substring-match the sentence now match against the record's own values.
+    """
+    parts = [str(record.get("include", "")), str(record.get("exclude", "")), str(record.get("system", ""))]
+    parts.extend(str(v) for v in record.get("values", []))
+    return " ".join(parts)
 
 
 class TestCountryOverlap:
@@ -19,37 +32,37 @@ class TestCountryOverlap:
             geo_countries=["US", "CA"],
             geo_countries_exclude=["US"],
         )
-        violations = validate_geo_overlap(targeting)
+        violations = geo_overlap_conflicts(targeting)
         assert len(violations) == 1
-        assert "US" in violations[0]
-        assert "geo_countries" in violations[0]
+        assert "US" in _flat(violations[0])
+        assert "geo_countries" in _flat(violations[0])
 
     def test_multiple_overlapping_countries(self):
         targeting = Targeting(
             geo_countries=["US", "CA", "GB"],
             geo_countries_exclude=["US", "GB"],
         )
-        violations = validate_geo_overlap(targeting)
+        violations = geo_overlap_conflicts(targeting)
         assert len(violations) == 1  # One violation message for the field pair
-        assert "US" in violations[0]
-        assert "GB" in violations[0]
+        assert "US" in _flat(violations[0])
+        assert "GB" in _flat(violations[0])
 
     def test_no_overlap_passes(self):
         targeting = Targeting(
             geo_countries=["US", "CA"],
             geo_countries_exclude=["GB", "DE"],
         )
-        violations = validate_geo_overlap(targeting)
+        violations = geo_overlap_conflicts(targeting)
         assert violations == []
 
     def test_include_only_passes(self):
         targeting = Targeting(geo_countries=["US", "CA"])
-        violations = validate_geo_overlap(targeting)
+        violations = geo_overlap_conflicts(targeting)
         assert violations == []
 
     def test_exclude_only_passes(self):
         targeting = Targeting(geo_countries_exclude=["US"])
-        violations = validate_geo_overlap(targeting)
+        violations = geo_overlap_conflicts(targeting)
         assert violations == []
 
 
@@ -61,17 +74,17 @@ class TestRegionOverlap:
             geo_regions=["US-CA", "US-NY"],
             geo_regions_exclude=["US-CA"],
         )
-        violations = validate_geo_overlap(targeting)
+        violations = geo_overlap_conflicts(targeting)
         assert len(violations) == 1
-        assert "US-CA" in violations[0]
-        assert "geo_regions" in violations[0]
+        assert "US-CA" in _flat(violations[0])
+        assert "geo_regions" in _flat(violations[0])
 
     def test_no_overlap_passes(self):
         targeting = Targeting(
             geo_regions=["US-CA", "US-NY"],
             geo_regions_exclude=["US-TX"],
         )
-        violations = validate_geo_overlap(targeting)
+        violations = geo_overlap_conflicts(targeting)
         assert violations == []
 
 
@@ -83,10 +96,10 @@ class TestMetroOverlap:
             geo_metros=[{"system": "nielsen_dma", "values": ["501", "502"]}],
             geo_metros_exclude=[{"system": "nielsen_dma", "values": ["501"]}],
         )
-        violations = validate_geo_overlap(targeting)
+        violations = geo_overlap_conflicts(targeting)
         assert len(violations) == 1
-        assert "501" in violations[0]
-        assert "geo_metros" in violations[0]
+        assert "501" in _flat(violations[0])
+        assert "geo_metros" in _flat(violations[0])
 
     def test_different_systems_no_conflict(self):
         """Different metro systems can have the same code without conflict."""
@@ -94,7 +107,7 @@ class TestMetroOverlap:
             geo_metros=[{"system": "nielsen_dma", "values": ["501"]}],
             geo_metros_exclude=[{"system": "uk_itl1", "values": ["501"]}],
         )
-        violations = validate_geo_overlap(targeting)
+        violations = geo_overlap_conflicts(targeting)
         assert violations == []
 
     def test_same_system_no_overlap(self):
@@ -102,7 +115,7 @@ class TestMetroOverlap:
             geo_metros=[{"system": "nielsen_dma", "values": ["501", "502"]}],
             geo_metros_exclude=[{"system": "nielsen_dma", "values": ["503"]}],
         )
-        violations = validate_geo_overlap(targeting)
+        violations = geo_overlap_conflicts(targeting)
         assert violations == []
 
     def test_multiple_systems_overlap_in_one(self):
@@ -117,10 +130,10 @@ class TestMetroOverlap:
                 {"system": "uk_itl1", "values": ["200"]},
             ],
         )
-        violations = validate_geo_overlap(targeting)
+        violations = geo_overlap_conflicts(targeting)
         assert len(violations) == 1
-        assert "501" in violations[0]
-        assert "nielsen_dma" in violations[0]
+        assert "501" in _flat(violations[0])
+        assert "nielsen_dma" in _flat(violations[0])
 
 
 class TestPostalAreaOverlap:
@@ -131,17 +144,17 @@ class TestPostalAreaOverlap:
             geo_postal_areas=[{"system": "us_zip", "values": ["10001", "10002"]}],
             geo_postal_areas_exclude=[{"system": "us_zip", "values": ["10001"]}],
         )
-        violations = validate_geo_overlap(targeting)
+        violations = geo_overlap_conflicts(targeting)
         assert len(violations) == 1
-        assert "10001" in violations[0]
-        assert "geo_postal_areas" in violations[0]
+        assert "10001" in _flat(violations[0])
+        assert "geo_postal_areas" in _flat(violations[0])
 
     def test_different_systems_no_conflict(self):
         targeting = Targeting(
             geo_postal_areas=[{"system": "us_zip", "values": ["10001"]}],
             geo_postal_areas_exclude=[{"system": "gb_outward", "values": ["10001"]}],
         )
-        violations = validate_geo_overlap(targeting)
+        violations = geo_overlap_conflicts(targeting)
         assert violations == []
 
     def test_no_overlap_passes(self):
@@ -149,7 +162,7 @@ class TestPostalAreaOverlap:
             geo_postal_areas=[{"system": "us_zip", "values": ["10001"]}],
             geo_postal_areas_exclude=[{"system": "us_zip", "values": ["90210"]}],
         )
-        violations = validate_geo_overlap(targeting)
+        violations = geo_overlap_conflicts(targeting)
         assert violations == []
 
 
@@ -163,7 +176,7 @@ class TestMultipleLevelOverlap:
             geo_regions=["US-CA"],
             geo_regions_exclude=["US-CA"],
         )
-        violations = validate_geo_overlap(targeting)
+        violations = geo_overlap_conflicts(targeting)
         assert len(violations) == 2
 
 
@@ -171,7 +184,7 @@ class TestEdgeCases:
     """Edge cases for geo overlap validation."""
 
     def test_empty_targeting(self):
-        violations = validate_geo_overlap(Targeting())
+        violations = geo_overlap_conflicts(Targeting())
         assert violations == []
 
     def test_empty_lists_no_overlap(self):
@@ -181,7 +194,7 @@ class TestEdgeCases:
             geo_countries=None,
             geo_countries_exclude=None,
         )
-        violations = validate_geo_overlap(targeting)
+        violations = geo_overlap_conflicts(targeting)
         assert violations == []
 
     def test_non_geo_fields_ignored(self):
@@ -189,5 +202,5 @@ class TestEdgeCases:
             device_type_any_of=["mobile"],
             content_cat_any_of=["IAB1"],
         )
-        violations = validate_geo_overlap(targeting)
+        violations = geo_overlap_conflicts(targeting)
         assert violations == []

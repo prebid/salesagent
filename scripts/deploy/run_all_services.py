@@ -17,33 +17,37 @@ import sys
 import threading
 import time
 
+from src.core.config import get_settings, load_settings
+
 # Store process references for cleanup
 processes = []
 
 
 def validate_required_env():
-    """Validate required environment variables."""
+    """Read the environment once for this entrypoint and check what a deployment must set."""
     print("🔍 Validating required environment variables...")
 
+    # The composition root of the container: a malformed value fails here, before any
+    # service starts. Every later read in this script is off the same object.
+    settings = load_settings()
     missing = []
 
     # Note: SUPER_ADMIN_EMAILS is optional - per-tenant OIDC with Setup Mode is the default auth flow.
     # New tenants start with auth_setup_mode=true, allowing test credentials to configure SSO.
 
     # Database URL is required
-    if not os.environ.get("DATABASE_URL"):
+    if not settings.database.database_url:
         missing.append("DATABASE_URL")
 
     # Encryption key is required for storing OIDC client secrets
-    if not os.environ.get("ENCRYPTION_KEY"):
+    if not settings.auth.encryption_key:
         missing.append(
             "ENCRYPTION_KEY (generate with: python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')"
         )
 
     # Multi-tenant mode requires SALES_AGENT_DOMAIN
-    if os.environ.get("ADCP_MULTI_TENANT", "false").lower() == "true":
-        if not os.environ.get("SALES_AGENT_DOMAIN"):
-            missing.append("SALES_AGENT_DOMAIN (required for multi-tenant mode)")
+    if settings.runtime.adcp_multi_tenant and not settings.runtime.sales_agent_domain:
+        missing.append("SALES_AGENT_DOMAIN (required for multi-tenant mode)")
 
     if missing:
         print("❌ Missing required environment variables:")
@@ -68,7 +72,7 @@ def check_database_health():
         sys.exit(1)
 
     # Show parsed connection info (without password)
-    db_url = os.environ.get("DATABASE_URL", "")
+    db_url = get_settings().database.database_url
     print(f"DATABASE_URL set: {bool(db_url)}")
 
     if db_url:
@@ -227,11 +231,10 @@ def run_migrations():
 def run_mcp_server():
     """Run the MCP server."""
     print("Starting MCP server on port 8080...")
-    env = os.environ.copy()
-    env["ADCP_SALES_PORT"] = "8080"
+    # nginx proxies to 8080 whatever ADCP_SALES_PORT says, so the port is passed as an
+    # argument rather than by rewriting the child's environment.
     proc = subprocess.Popen(
-        [sys.executable, "scripts/run_server.py"],
-        env=env,
+        [sys.executable, "scripts/run_server.py", "--port", "8080"],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
@@ -255,14 +258,14 @@ def run_nginx():
     # Select nginx config based on ADCP_MULTI_TENANT env var
     # Default: simple (single-tenant, path-based routing only)
     # ADCP_MULTI_TENANT=true: full config with subdomain routing for multi-tenant
-    multi_tenant = os.environ.get("ADCP_MULTI_TENANT", "false").lower() == "true"
-    if multi_tenant:
+    runtime = get_settings().runtime
+    if runtime.adcp_multi_tenant:
         config_path = "/etc/nginx/nginx-multi-tenant.conf"
         print("[Nginx] Using multi-tenant config (subdomain routing enabled)")
 
         # Multi-tenant config uses environment variable templates
         # Use envsubst to substitute ${SALES_AGENT_DOMAIN} with actual value
-        sales_agent_domain = os.environ.get("SALES_AGENT_DOMAIN", "")
+        sales_agent_domain = runtime.sales_agent_domain or ""
         if not sales_agent_domain:
             print("❌ SALES_AGENT_DOMAIN is required for multi-tenant mode")
             sys.exit(1)
@@ -366,16 +369,14 @@ def main():
     # A2A and Admin UI are now integrated into the MCP server process (src/app.py)
 
     # Cron thread for scheduled tasks (syncing GAM tenants, etc.)
-    skip_cron = os.environ.get("SKIP_CRON", "false").lower() == "true"
-    if not skip_cron:
+    runtime = get_settings().runtime
+    if not runtime.skip_cron:
         cron_thread = threading.Thread(target=run_cron, daemon=True)
         cron_thread.start()
         threads.append(cron_thread)
 
-    # Check if we should skip nginx (useful for docker-compose with separate services)
-    skip_nginx = os.environ.get("SKIP_NGINX", "false").lower() == "true"
-
-    if not skip_nginx:
+    # Skipping nginx is useful for docker-compose with separate services
+    if not runtime.skip_nginx:
         # Give services more time to start before nginx
         print("⏳ Waiting for backend services to be ready before starting nginx...")
         time.sleep(10)

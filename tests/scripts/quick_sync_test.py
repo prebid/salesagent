@@ -14,8 +14,8 @@ import requests
 # Add project root to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.admin.auth_helpers import get_api_key_from_config
-from src.admin.sync_api import initialize_tenant_management_api_key
+from src.admin.sync_api import mint_tenant_management_api_key
+from src.core.config import get_settings
 
 
 def main():
@@ -25,13 +25,15 @@ def main():
     print("Quick Sync API Test")
     print("=" * 40)
 
-    # 1. Get API key
+    # 1. Get API key. The stored key is a hash, so a key already in place cannot be
+    # recovered: either SYNC_API_KEY carries the plaintext, or we mint (and rotate to)
+    # a fresh one that this process is then the only holder of.
     print("\n1. Getting API key...")
-    api_key = get_api_key_from_config("SYNC_API_KEY", "api_key")
+    api_key = get_settings().auth.sync_api_key
     if not api_key:
-        print("   Creating new API key...")
-        api_key = initialize_tenant_management_api_key()
-    print(f"   API Key: {api_key[:20]}...")
+        print("   Minting a new API key (rotates any existing one)...")
+        api_key = mint_tenant_management_api_key()
+    print(f"   API Key: {api_key[:12]}...")
 
     # Set up headers
     headers = {"X-API-Key": api_key, "Content-Type": "application/json"}

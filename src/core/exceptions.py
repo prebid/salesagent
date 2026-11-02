@@ -10,389 +10,108 @@ to help buyer agents decide whether to retry, fix, or abandon a request.
 
 from __future__ import annotations
 
-import logging
 import math
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, get_args
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
 
-from adcp.server.helpers import STANDARD_ERROR_CODES, adcp_error
-from adcp.types import Error as LibraryError
-from pydantic import BaseModel, ValidationError
+from adcp.signing.errors import SignatureVerificationError
+from adcp.types import ErrorCode
+from pydantic import ValidationError
+
+from src.core.errors.codes import CODE_TABLE, AppErrorCode, ErrorCodeT, Recovery
+from src.core.errors.details import (
+    AccountSetupDetails,
+    AdapterFailureDetails,
+    BudgetDetails,
+    CapabilityRefusalDetails,
+    ConfigurationDetails,
+    ConflictDetails,
+    CreativeRefDetails,
+    CreativeRejectionDetails,
+    EntityRefDetails,
+    ErrorDetails,
+    InvalidStateDetails,
+    ProductRefDetails,
+    RejectionReasonDetails,
+    ValidationDetails,
+    VersionUnsupportedDetails,
+)
+from src.core.errors.issues import ErrorIssue, issues_from_validation_error, pointer_to_field
+from src.core.errors.signature_codes import SignatureErrorCode
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Mapping, Sequence
+    from collections.abc import Iterator
 
-    from adcp.types import ContextObject
+    from src.core.schemas._base import AdcpErrorResponse
 
-logger = logging.getLogger(__name__)
-
-RecoveryHint = Literal["transient", "correctable", "terminal"]
+# The recovery vocabulary is the ``Recovery`` StrEnum in src/core/errors/codes.py
+# -- one transcription of the wire schema's three values, not two. The parallel
+# ``RecoveryHint`` Literal this module used to declare was a second copy of the
+# same closed set, bridged to the enum by unchecked casts; it is deleted so the
+# two cannot disagree.
 
 # ---------------------------------------------------------------------------
-# Error-code compliance: mapping non-standard codes to SDK equivalents
+# Error codes on the wire
 # ---------------------------------------------------------------------------
-# Every code that reaches the wire (buyer agent) MUST be in
-# WIRE_STANDARD_CODES.  Codes in ERROR_CODE_MAPPING are translated at the
-# transport boundary; codes in INTERNAL_CODES never leave the server.
+# There is ONE classifier: ``CODE_TABLE`` in src/core/errors/codes.py, loaded from
+# the pinned enums/error-code.json (92 published codes) plus this platform's own
+# ``AppErrorCode`` members. Message, recovery, suggestion and status all come
+# from that file. The SDK's ``STANDARD_ERROR_CODES`` is consulted for NONE of
+# them: it was the message fallback until it was measured to shadow published
+# text for 37 of the 92 codes while adding nothing for the other 55, so it is
+# now only a cross-check a reader may consult, never an input.
 #
-# Two tables, one job each, so neither answers a question the other owns:
-#   * WIRE_STANDARD_CODES  — which code NAMES may reach a buyer. Membership only;
-#     its values are empty by construction (see below).
-#   * RECOVERY_BY_WIRE_CODE — what each of those codes means for retry. Loaded
-#     from the pinned spec at import; the only recovery classification either
-#     TABLE in this module carries.
-# Recovery is DERIVED, not stated. ``AdCPError.recovery`` is a read-only property
-# that looks its wire code up in RECOVERY_BY_WIRE_CODE, so the only way to say
-# "this is terminal" is to raise a class whose code the pinned enumMetadata
-# classifies terminal. There is no ``recovery=`` kwarg on ``__init__`` or on
-# ``synthesize`` to disagree with the pin through, and no raise site in ``src/``
-# carries a hand-typed recovery literal.
+# Every code a raise site declares reaches the buyer VERBATIM: the AdCP error
+# vocabulary is OPEN, so there is no translation at the transport boundary and no
+# server-only set. Message, recovery and suggestion are all functions of the code
+# (see docs/decisions/adr-010-graded-wire-fields-are-functions-of-the-code.md), so a
+# raise site cannot make one of them disagree with the pin.
 #
-# One hand-typed surface remains, and it is graded: the per-class
-# ``_default_recovery`` literals below. They are the fallback for a code the pin
-# does not define, and
-# tests/unit/test_architecture_error_recovery_enum_conformance.py checks every
-# class whose code the pin DOES define against this same table — so a literal
-# that contradicts the pin fails a test rather than reaching a buyer.
-
-
-def _load_pinned_recovery() -> dict[str, RecoveryHint]:
-    """Read the normative ``recovery`` classification for every pinned wire code.
-
-    Source: the installed SDK's own plain schema tree, ``adcp/_schemas/<major.minor>/
-    enums/error-code.json`` → ``enumMetadata``. That block is normative — its
-    ``$comment`` states "SDKs MUST consume this block instead of parsing
-    'Recovery: X' from enumDescriptions prose" — so it is machine-read here rather
-    than transcribed. A pin bump moves this table with zero edits to this file.
-
-    Deliberately NOT sourced from ``adcp.server.helpers.STANDARD_ERROR_CODES``:
-    probed at the 6.6.0 pin, the helper's own ``recovery`` values contradict the
-    schema on 7 of its 38 codes (UNSUPPORTED_FEATURE, AUTHORIZATION_REQUIRED,
-    IDEMPOTENCY_CONFLICT and IDEMPOTENCY_EXPIRED terminal-vs-correctable;
-    ACCOUNT_PAYMENT_REQUIRED and BUDGET_EXHAUSTED correctable-vs-terminal;
-    CONFLICT correctable-vs-transient). The SDK is a cross-check, not the
-    authority (CLAUDE.md spec-grounding gate).
-
-    Mirrors ``_pinned_recovery_by_code`` in
-    tests/unit/test_architecture_error_recovery_enum_conformance.py, which keeps
-    its OWN independent load — src cannot import from tests, and the duplicated
-    path derivation is what lets that oracle grade this loader instead of
-    agreeing with it.
-    """
-    import json
-    from pathlib import Path
-
-    import adcp
-
-    major, minor = adcp.get_adcp_spec_version().split(".")[:2]
-    schema_path = Path(adcp.__file__).parent / "_schemas" / f"{major}.{minor}" / "enums" / "error-code.json"
-    metadata = json.loads(schema_path.read_text())["enumMetadata"]
-    table = {
-        code: entry["recovery"] for code, entry in metadata.items() if isinstance(entry, dict) and "recovery" in entry
-    }
-
-    # The file-shape invariants live HERE, in the seam that reads the file, so a
-    # partial table can never be RETURNED. Checked at module scope they would be
-    # checked on a partial table that already exists and has already been handed
-    # to every caller. `raise`, not `assert`: -O deletes an assert, and a pin
-    # whose enforcement vanishes under an interpreter flag is not enforcement.
-    if len(table) < 90:
-        raise RuntimeError(
-            f"RECOVERY_BY_WIRE_CODE loaded only {len(table)} codes from the pinned enumMetadata; "
-            f"the 3.1 pin defines 92. The loader is reading the wrong file or shape."
-        )
-    bad_values = {v for v in table.values() if v not in get_args(RecoveryHint)}
-    if bad_values:
-        raise RuntimeError(f"Pinned enumMetadata carries recovery value(s) outside RecoveryHint: {bad_values}")
-
-    return table
-
-
-# The recovery classification for every code the pinned spec defines (92 at the
-# 3.1 pin). Read-only vocabulary: consumers look a code up, never assign one.
-RECOVERY_BY_WIRE_CODE: dict[str, RecoveryHint] = _load_pinned_recovery()
-
-# Spec codes the SDK helper table has not caught up to. The pinned 3.1 enum
-# (enums/error-code.json, shipped inside the installed adcp SDK) defines these
-# as real wire codes; the SDK's ``STANDARD_ERROR_CODES`` predates them, and the
-# SDK is a cross-check, not the authority. CREATIVE_NOT_FOUND per the enum:
-# "Sellers MUST return this code uniformly for any creative_id not owned by the
-# calling account" (#1430 review). CONFIGURATION_ERROR per the enum: "the buyer
-# cannot resolve a seller-side deployment misconfiguration and MUST NOT
-# auto-retry" (#1430 review). Their recovery classifications are NOT repeated
-# here — this is a set of code NAMES; RECOVERY_BY_WIRE_CODE answers what they
-# mean. The remaining demoted spec code (BILLING_NOT_SUPPORTED) is tracked for
-# the same treatment in #1602.
-_SPEC_SUPPLEMENT_CODES: frozenset[str] = frozenset({"CREATIVE_NOT_FOUND", "CONFIGURATION_ERROR"})
-
-# Codes the SDK helper ships that the PINNED spec does not define. The pin is the
-# authority and the helper is a cross-check (CLAUDE.md spec-grounding gate), so a
-# helper-only code is not a wire code -- it has no normative recovery
-# classification, and admitting it would leave the recovery table partial and
-# every lookup falling back to an authored default, which is exactly what
-# invariant I6 ("recovery is derived, never authored") forbids.
+# That openness is the PIN's own words, not this module's preference. AdCP 3.1.1
+# ``core/error.json`` types ``error.code`` as a bare ``string`` (minLength 1,
+# maxLength 64) and states: "the standard codes published in
+# ``enums/error-code.json`` are documentary, and senders MAY emit codes outside
+# that set ... Receivers MUST decode unknown codes — treat the response as
+# well-formed, read ``error.recovery`` for the recovery classification".
 #
-# NOT_SUPPORTED is the single code by which adcp.server.helpers.STANDARD_ERROR_CODES
-# (38 entries) exceeds the pinned 3.1 enum (92 entries): absent from `enum` and
-# from `enumMetadata`, and absent from the whole of dist/ at v3.1.1. The SDK even
-# assigns it recovery="terminal", which _load_pinned_recovery's docstring above
-# already explains is not a value to trust. UNSUPPORTED_FEATURE, which IS pinned,
-# is the code this seller emits instead; nothing in src/ produces the bare one.
-_SPEC_DEMOTED_CODES: frozenset[str] = frozenset({"NOT_SUPPORTED"})
-
-# The authoritative wire-code table: SDK code-name baseline + pinned-spec
-# supplement. Values are empty on purpose and every consumer is a membership
-# check — carrying the SDK's own recovery values here would leave 7 codes
-# answering a recovery question with a value the pin contradicts, one line below
-# the table that reads the pin. An accidental value read is a loud KeyError for
-# every code instead of a silently wrong classification for some. Look a
-# classification up in RECOVERY_BY_WIRE_CODE, never here.
-WIRE_STANDARD_CODES: dict[str, dict[str, str]] = {
-    code: {} for code in (*STANDARD_ERROR_CODES, *sorted(_SPEC_SUPPLEMENT_CODES)) if code not in _SPEC_DEMOTED_CODES
-}
-
-# The wire set is TOTAL over the recovery table, by construction rather than by
-# inspection. Deleting one helper-only code would only remove today's instance:
-# the set is DERIVED from the SDK helper, so the next helper code the SDK ships
-# ahead of the pin would re-create the partial table verbatim and silently. This
-# raise turns that drift into an import failure that NAMES the offending code and
-# states the two ways to resolve it, so nobody has to rediscover which is right.
-_UNPINNED_WIRE_CODES = set(WIRE_STANDARD_CODES) - set(RECOVERY_BY_WIRE_CODE)
-if _UNPINNED_WIRE_CODES:
-    raise RuntimeError(
-        f"Wire code(s) with no pinned recovery classification: {sorted(_UNPINNED_WIRE_CODES)}. "
-        f"The SDK helper ships a code the pinned enumMetadata does not classify. Either the pin "
-        f"moved and _SPEC_SUPPLEMENT_CODES should carry it, or the helper is ahead of the spec and "
-        f"_SPEC_DEMOTED_CODES should -- with a reason. It may not simply enter the wire set: an "
-        f"unclassified code makes RECOVERY_BY_WIRE_CODE partial and sends every lookup to an "
-        f"authored default."
-    )
-
-ERROR_CODE_MAPPING: dict[str, str] = {
-    # Internal-only codes that occasionally leak to the wire when a raise site
-    # uses a base class (AdCPError / AdCPNotFoundError / AdCPConfigurationError)
-    # instead of a specific subclass. Mapped to the closest WIRE_STANDARD_CODES
-    # entry so the wire stays spec-compliant. Raise sites can later migrate to
-    # specific subclasses; the mappings stay as a safety net.
-    "NOT_FOUND": "INVALID_REQUEST",
-    # Entity-specific not-found codes the pinned spec enum does NOT define
-    # (unlike CREATIVE_NOT_FOUND, which the enum defines and therefore passes
-    # through untranslated). The typed subclasses exist for
-    # recovery=correctable + guard-enforceability; the buyer-visible wire code
-    # is INVALID_REQUEST.
-    "FORMAT_NOT_FOUND": "INVALID_REQUEST",
-    "TASK_NOT_FOUND": "INVALID_REQUEST",
-    "INTERNAL_ERROR": "SERVICE_UNAVAILABLE",
-    # Authentication / authorisation
-    "AUTHORIZATION_ERROR": "AUTH_REQUIRED",
-    "PRINCIPAL_ID_MISSING": "AUTH_REQUIRED",
-    "PRINCIPAL_NOT_FOUND": "AUTH_REQUIRED",
-    "INSUFFICIENT_PRIVILEGES": "AUTH_REQUIRED",
-    # Validation (field-level)
-    "INVALID_DATE_RANGE": "VALIDATION_ERROR",
-    "INVALID_DATETIME": "VALIDATION_ERROR",
-    "INVALID_CONFIGURATION": "VALIDATION_ERROR",
-    "INVALID_BUDGET": "VALIDATION_ERROR",
-    "INVALID_PLACEMENT_IDS": "VALIDATION_ERROR",
-    "INVALID_DOMAIN": "VALIDATION_ERROR",
-    "MISSING_PACKAGE_ID": "VALIDATION_ERROR",
-    "MISSING_BUDGET": "VALIDATION_ERROR",
-    "MISSING_IMPRESSIONS": "VALIDATION_ERROR",
-    "MISSING_PLATFORM_ID": "VALIDATION_ERROR",
-    "NO_ZONES_CONFIGURED": "VALIDATION_ERROR",
-    "APPROVAL_REQUIRED": "VALIDATION_ERROR",
-    # Budget
-    "BUDGET_CEILING_EXCEEDED": "BUDGET_EXCEEDED",
-    "BUDGET_BELOW_DELIVERY": "BUDGET_EXCEEDED",
-    # Feature support
-    "CURRENCY_NOT_SUPPORTED": "UNSUPPORTED_FEATURE",
-    "UNSUPPORTED_PRICING_MODEL": "UNSUPPORTED_FEATURE",
-    "UNSUPPORTED_TARGETING": "UNSUPPORTED_FEATURE",
-    "PLACEMENT_TARGETING_NOT_SUPPORTED": "UNSUPPORTED_FEATURE",
-    "UNSUPPORTED_ACTION": "UNSUPPORTED_FEATURE",
-    "BILLING_NOT_SUPPORTED": "UNSUPPORTED_FEATURE",
-    # Resource lookup
-    "NO_PACKAGES_FOUND": "PACKAGE_NOT_FOUND",
-    # Resource state
-    "GONE": "INVALID_STATE",
-    # Availability / adapter
-    "RATE_LIMIT_EXCEEDED": "RATE_LIMITED",
-    "ADAPTER_ERROR": "SERVICE_UNAVAILABLE",
-    "ACTIVATION_ERROR": "SERVICE_UNAVAILABLE",
-    "ACTIVATION_FAILED": "SERVICE_UNAVAILABLE",
-    "WORKFLOW_CREATION_FAILED": "SERVICE_UNAVAILABLE",
-    "ACTIVATION_WORKFLOW_FAILED": "SERVICE_UNAVAILABLE",
-    "LINE_ITEM_CREATION_FAILED": "SERVICE_UNAVAILABLE",
-    "GAM_UPDATE_FAILED": "SERVICE_UNAVAILABLE",
-    "CREATIVE_SYNC_FAILED": "SERVICE_UNAVAILABLE",
-    "PARTIAL_FAILURE": "SERVICE_UNAVAILABLE",
-    "PRODUCT_NOT_CONFIGURED": "PRODUCT_UNAVAILABLE",
-    "INVENTORY_UNAVAILABLE": "PRODUCT_UNAVAILABLE",
-    "CREATIVES_NOT_FOUND": "CREATIVE_REJECTED",
-    "MEDIA_BUY_REJECTED": "POLICY_VIOLATION",
-}
-
-# Internal-only codes: never reach the buyer agent.  Each entry has a
-# justification for why it is internal.
-INTERNAL_CODES: frozenset[str] = frozenset(
-    {
-        "INTERNAL_ERROR",  # Base-class default; never instantiated for wire
-        "NOT_FOUND",  # Base-class for entity-specific NotFound subclasses
-        "FORMAT_NOT_FOUND",  # AdCPFormatNotFoundError; wire → INVALID_REQUEST
-        "TASK_NOT_FOUND",  # AdCPTaskNotFoundError; wire → INVALID_REQUEST
-        "API_ERROR",  # Raw adapter API failure detail
-        "WORKFLOW_CREATION_FAILED",  # GAM workflow orchestration detail
-        "LINE_ITEM_CREATION_FAILED",  # GAM line-item creation detail
-        "FLIGHT_NOT_FOUND",  # Kevel/Triton internal flight lookup
-        "ACTIVATION_WORKFLOW_FAILED",  # GAM activation workflow detail
-        "API_UPDATE_FAILED",  # Broadstreet API update detail
-        "GAM_UPDATE_FAILED",  # GAM update API detail
-        "PARTIAL_FAILURE",  # Bulk partial-failure taxonomy (AdCPBulkUpdateError)
-        "MEDIA_BUY_REJECTED",  # Seller declined the buy; wire emits POLICY_VIOLATION
-        "INVENTORY_UNAVAILABLE",  # Requested inventory absent; wire emits PRODUCT_UNAVAILABLE
-    }
-)
-
-# Every mapping target must be a standard code. A `raise`, not an `assert`:
-# `python -O` deletes an assert, and an invariant with an off switch is not one.
-# It stays at module scope rather than moving into the loader because it reads
-# ERROR_CODE_MAPPING, which is defined below the loader's own return.
-_NON_STANDARD_TARGETS = set(ERROR_CODE_MAPPING.values()) - set(WIRE_STANDARD_CODES)
-if _NON_STANDARD_TARGETS:
-    raise RuntimeError(f"ERROR_CODE_MAPPING contains non-standard targets: {_NON_STANDARD_TARGETS}")
-
-# `ERROR_CODE_MAPPING` targets must also be CLASSIFIED, not merely standard. This
-# used to be a separate check against RECOVERY_BY_WIRE_CODE; it is now implied by
-# the drift raise above (wire <= recovery, by construction) plus
-# _NON_STANDARD_TARGETS (targets <= wire), so keeping it would be a detector for a
-# state two other invariants already make unreachable.
-
-# Nothing may enter the spec supplement that the PIN does not classify. Distinct
-# from the drift raise: that one asks whether the wire set is total, this one asks
-# whether the supplement was populated from the pin rather than from wishful
-# thinking. Stays at module scope — it reads _SPEC_SUPPLEMENT_CODES, defined below
-# the loader.
-_UNCLASSIFIED_SUPPLEMENT = _SPEC_SUPPLEMENT_CODES - set(RECOVERY_BY_WIRE_CODE)
-if _UNCLASSIFIED_SUPPLEMENT:
-    raise RuntimeError(
-        f"Spec-supplement code(s) absent from the pinned enumMetadata: {_UNCLASSIFIED_SUPPLEMENT}. "
-        f"The supplement exists because the SDK helper lags the pin — a code the PIN lacks does not "
-        f"belong in it."
-    )
+# Reconciliation note (merge of origin/main's #1858 storyboard-conformance work).
+# origin/main answered the same problem with a different apparatus, all of which
+# ``CODE_TABLE`` SUBSUMES, so none of it is carried here:
+#
+#   * ``RECOVERY_BY_WIRE_CODE`` / ``_load_pinned_recovery()`` — read ``recovery``
+#     out of the pinned ``enums/error-code.json`` ``enumMetadata``. ``CODE_TABLE``
+#     reads the same normative block of the same file and carries recovery
+#     ALONGSIDE suggestion, message and status, so re-adding it would be a second
+#     load of one file answering a question this one already answers.
+#   * ``_SPEC_SUPPLEMENT_CODES`` (CREATIVE_NOT_FOUND, CONFIGURATION_ERROR) and
+#     ``_SPEC_DEMOTED_CODES`` (NOT_SUPPORTED) — both existed to reconcile the SDK
+#     helper's 38-code list against the pin. Loading the pin directly makes the
+#     reconciliation unnecessary: the table classifies the two supplements and does
+#     not contain the demoted one.
+#   * ``WIRE_STANDARD_CODES`` / ``INTERNAL_CODES`` / ``ERROR_CODE_MAPPING`` /
+#     ``translate_error_code`` / ``to_wire_error_code`` — a closed wire set plus a
+#     boundary translator. The pin quoted above forbids the premise: a code outside
+#     the published 92 is legal, and a receiver is REQUIRED to decode it from
+#     ``recovery``. Collapsing MEDIA_BUY_REJECTED to POLICY_VIOLATION destroyed
+#     information the spec says the buyer may consume.
+#   * ``wire_advisory()`` — the one constructor for an ``errors[]`` advisory, which
+#     derived recovery from the pin. ``AdcpErrorResponse.of`` derives recovery AND
+#     message AND suggestion from the same pin, and takes the typed exception rather
+#     than a loose (code, message) pair, so a code and its details cannot be paired
+#     wrongly at the call site.
+#
+# What DID come across from origin/main, because nothing here subsumed it:
+# ``RETRY_AFTER_MAX`` / :func:`clamp_retry_after` below, and the two-families
+# reading of :class:`AdCPConfigurationError`.
 
 
-def translate_error_code(code: str) -> str:
-    """Translate a server-side error code to its wire-compliant equivalent.
-
-    Codes listed in ERROR_CODE_MAPPING are translated to their standard SDK
-    counterpart. All other codes pass through unchanged — codes are only
-    rewritten when there is an explicit mapping entry. Compliance is
-    enforced separately by the architecture guard.
-    """
-    return ERROR_CODE_MAPPING.get(code, code)
-
-
-def to_wire_error_code(code: str) -> str:
-    """Normalize a hand-built advisory code to a guaranteed-standard wire code.
-
-    Like ``translate_error_code`` but, unlike it, GUARANTEES the result is in
-    ``WIRE_STANDARD_CODES`` (the SDK's ``STANDARD_ERROR_CODES`` plus the
-    pinned-spec supplement): an internal-only code that has no mapping
-    entry (e.g. ``API_ERROR``, ``FLIGHT_NOT_FOUND``) would otherwise pass through
-    ``translate_error_code`` verbatim and leak. Use this for ``errors[]``
-    advisories, which serialize verbatim and never pass through the boundary
-    translator that handles raised ``AdCPError``s. Anything still non-standard
-    after translation collapses to ``SERVICE_UNAVAILABLE`` (the generic
-    server-side advisory), so no internal code can reach the buyer.
-    """
-    translated = translate_error_code(code)
-    return translated if translated in WIRE_STANDARD_CODES else "SERVICE_UNAVAILABLE"
-
-
-def wire_advisory(
-    code: str,
-    message: str,
-    *,
-    field: str | None = None,
-    suggestion: str | None = None,
-) -> LibraryError:
-    """Build an ``errors[]`` advisory entry with the recovery the PIN assigns its code.
-
-    The ONE constructor for a per-item advisory. ``recovery`` is DERIVED, never
-    chosen: pass the code that describes what happened and the buyer-facing retry
-    semantics follow from ``RECOVERY_BY_WIRE_CODE``. That is the whole point —
-    ``adcp.types.Error`` types ``code`` as a bare ``str`` and leaves ``recovery``
-    free, so a hand-built advisory could pair a code with a recovery the pinned
-    enumMetadata contradicts, and nothing downstream would catch it: advisories
-    ride inside a SUCCESS response and never pass the boundary translator, so the
-    pair here IS the wire contract.
-
-    The code is normalized through ``to_wire_error_code`` first, so an
-    internal-only code (``ADAPTER_ERROR``, ``API_ERROR``) can neither leak to the
-    buyer nor carry a foreign classification.
-
-    Populating ``recovery`` on every advisory is what the pin asks for:
-    ``Error.recovery``'s own description says senders SHOULD populate it on every
-    error from 3.1 onward, because a receiver that does not recognize the code
-    MUST still be able to classify from ``recovery``.
-
-    ``suggestion`` has no caller yet: the advisory sites migrated so far carry a
-    message and a field, not a suggestion. It is here so the sites that DO carry
-    one arrive through this constructor rather than around it.
-    """
-    wire_code = to_wire_error_code(code)
-    return LibraryError(
-        code=wire_code,
-        message=message,
-        # A subscript, not ``.get``: ``to_wire_error_code`` guarantees membership in
-        # WIRE_STANDARD_CODES, and the drift raise above guarantees
-        # WIRE_STANDARD_CODES <= RECOVERY_BY_WIRE_CODE. There is no unclassified
-        # wire code left for a fallback to answer, so an authored default here
-        # would be unreachable code asserting the opposite.
-        recovery=RECOVERY_BY_WIRE_CODE[wire_code],
-        field=field,
-        suggestion=suggestion,
-    )
-
-
-def _serialize_context(
-    context: ContextObject | dict[str, Any] | None,
-) -> dict[str, Any] | None:
-    """Serialize an AdCP ContextObject (or dict) into a JSON-safe dict.
-
-    Single source of truth for context serialization — used by ``to_dict``,
-    ``to_adcp_error``, and ``build_two_layer_error_envelope`` so all three
-    paths emit byte-identical context payloads.
-
-    Behavior:
-        - ``None`` → ``None`` (caller decides whether to omit the key).
-        - ``dict`` → shallow copy. Prevents aliasing footguns when one
-          serialization layer mutates its copy and accidentally mutates
-          the source context still held on the exception.
-        - ``ContextObject`` → ``model_dump(mode="json", exclude_none=True)``.
-          ``mode="json"`` coerces datetimes/UUIDs/etc. to JSON-serializable
-          primitives; ``exclude_none=True`` matches the spec's emit-only-
-          populated-fields norm.
-        - anything else → log a warning and return ``None``. This is reached
-          from ``to_dict``/``to_adcp_error``/``build_two_layer_error_envelope``,
-          all of which run inside exception handlers — raising here would shadow
-          the original exception and the boundary translator would fail open
-          with no envelope. A malformed context drops to ``None`` instead.
-    """
-    if context is None:
-        return None
-    if isinstance(context, dict):
-        return dict(context)
-    if not isinstance(context, BaseModel):
-        logger.warning(
-            "_serialize_context expected dict or BaseModel, got %s; dropping context", type(context).__name__
-        )
-        return None
-    return context.model_dump(mode="json", exclude_none=True)
-
-
-# The spec Error model bounds retry_after to [1, 3600] seconds (clients clamp
-# anyway); never emit more even when the underlying wait is longer. A spec
-# constant, not an operational knob — deliberately not env-tunable.
+# The pinned spec bounds retry_after: AdCP 3.1.1 ``core/error.json`` →
+# ``retry_after`` is ``{"type": "number", "minimum": 1, "maximum": 3600}`` and its
+# description reads "Sellers MUST return values between 1 and 3600. Clients MUST
+# clamp values outside this range." Never emit more even when the underlying wait
+# is longer. A spec constant, not an operational knob — deliberately not
+# env-tunable.
 RETRY_AFTER_MAX = 3600
 
 
@@ -404,174 +123,306 @@ def clamp_retry_after(seconds: float) -> int:
     Callers layer any context-specific cap (e.g. an insert-rate window) on top.
 
     It lives here rather than beside either caller because this module already
-    owns ``AdCPError.retry_after`` and the spec Error shape, so neither emitter
-    ends up importing the other.
+    owns ``AdCPSalesAgentError.retry_after`` and the spec Error shape, so neither
+    emitter ends up importing the other.
     """
     return min(max(1, math.ceil(seconds)), RETRY_AFTER_MAX)
 
 
-class AdCPError(Exception):
+def _rebuild_error(cls: type[AdCPSalesAgentError], code: ErrorCodeT) -> AdCPSalesAgentError:
+    """Reconstruct a pickled or copied error.
+
+    ``code`` is accepted and unused, and deliberately kept in the signature: it is part of
+    the reduce tuple already written into pickles, so dropping the parameter would refuse to
+    load one. It is not READ because there is nothing to choose between -- every
+    constructible class IS its code, so ``cls()`` restores it. ``__dict__`` restoration then
+    repopulates ``_error_code`` and the rest.
+
+    This used to branch on ``hasattr(cls, "_code")`` and pass ``error_code=code`` otherwise,
+    for the one class that declared none. There is no such class any more.
+    """
+    return cls()
+
+
+def _details_to_wire(details: ErrorDetails | None) -> dict[str, Any] | None:
+    """Render a details block for the wire.
+
+    The construction API is a class; the wire slot is an object. This is the one
+    place that conversion happens, so no caller reaches for ``model_dump()`` on
+    its own and no raise site has to think about it.
+
+    The ``Mapping`` branch that used to be here was migration scaffolding, for
+    the window where some ``self.details`` were still plain dicts. All 177 sites
+    now pass a declared class, so the branch is gone and a dict no longer has a
+    path to the wire: ``AdCPSalesAgentError`` is generic in its detail type, so mypy
+    refuses one at the raise site.
+    """
+    if details is None:
+        return None
+    return details.to_wire()
+
+
+class AdCPSalesAgentError[DetailsT: ErrorDetails](Exception):
     """Base exception for all AdCP errors.
 
-    Class-level identity (``_default_error_code``, ``_default_status_code``,
-    ``_default_recovery``) is declared with ``ClassVar`` per PEP 526 — each
-    typed subclass overrides the ``_default_*`` slot, not the public name.
-    The public ``error_code``/``status_code``/``recovery`` are instance
-    attributes set in ``__init__`` from the class-level default unless the
-    caller overrides via kwargs (only ``synthesize()`` is sanctioned).
+    Parameterized on the detail shape it carries. Parameterizing rather than
+    overriding ``__init__`` on each of the 32 error classes that carry details
+    is what keeps the narrowing free of boilerplate: one ``__init__`` signature
+    here, typed ``DetailsT | None``, gives every subclass its own exact detail
+    type. mypy then rejects both a dict and a foreign detail class at every
+    raise site, and reading ``exc.details`` back is typed without a cast.
 
-    Code that needs class-level identity (e.g. ``_build_error_code_to_status``
-    walking ``__subclasses__()`` to build the wire-code → HTTP-status table)
-    reads ``cls._default_error_code`` / ``cls._default_status_code`` directly.
-    Instance code reads ``self.error_code`` etc. as before.
+    Class-level identity is ``_code`` and nothing else, declared with
+    ``ClassVar`` per PEP 526. The public ``error_code``, ``message``,
+    ``recovery``, ``suggestion`` and ``status_code`` are read-only properties
+    over ``_error_code`` — functions of the code, resolved from
+    ``CODE_TABLE`` at every read, so no instance can carry a value that
+    disagrees with the table by any route, assignment included.
+
+    ``status_code`` joined that list in salesagent-pssfi. It used to be a
+    per-class ``_default_status_code`` slot, which let a class redeclare its
+    ``_code`` and keep a status inherited from a parent that meant something
+    else — ``SimulationError`` emitted INVALID_REQUEST with
+    ``AdCPNotFoundError``'s 404 — and forced the plain-``ToolError`` boundary to
+    reconstruct a code → status table by walking ``__subclasses__()``, whose
+    answer for INVALID_REQUEST was 400 or 404 depending on the import set. There
+    is now no per-class slot to disagree with, and nothing to walk.
+
+    Code that needs class-level identity reads ``cls._code`` directly. Instance
+    code reads ``self.error_code`` etc. as before.
 
     Attributes:
-        message: Human-readable error description.
-        status_code: HTTP status code for REST/FastAPI responses (instance).
-        error_code: Machine-readable error code string (instance).
-        recovery: Recovery classification for buyer agents (instance).
+        message: Human-readable error description (read-only, from CODE_TABLE).
+        status_code: HTTP status for REST/FastAPI responses (read-only, from
+            CODE_TABLE).
+        error_code: Machine-readable error code string (read-only).
+        recovery: Recovery classification for buyer agents (read-only, from
+            CODE_TABLE).
         details: Optional structured error details.
         field: Optional field name that caused the error.
-        suggestion: Optional correction hint for buyer agents.
-        context: Optional AdCP ContextObject (or dict) echoed in the
-            envelope so buyer agents can correlate failures to the
-            request that produced them (spec 3.0.0 normative).
+        suggestion: Correction hint for buyer agents (read-only, from
+            CODE_TABLE).
+        internal_detail: Optional NON-WIRE cause — the caught exception that
+            produced this error (ADR-010 point 5). NEVER serialized:
+            ``AdcpErrorResponse.of`` ignores it; the boundary logs it with its
+            traceback. An authored sentence here says nothing the code, the class
+            and the typed details do not already say; every raise site passes the
+            exception it caught, or nothing.
+            See the class note below.
+
+    Message provenance (AdCP 3.1.1 ``transport-errors.mdx`` § Security
+    Considerations / Seller Requirements, lines 659-670): "Error responses
+    flow through LLM context. Every field is client-facing. Implementations
+    MUST NOT include: internal service names, hostnames, or IP addresses;
+    database error text …; stack traces or file paths; upstream API responses
+    from internal services; credentials, tokens, or session identifiers."
+
+    ``adcp_error_for()`` returns an already-typed ``AdCPSalesAgentError``
+    unchanged, so for a typed error THE RAISE SITE IS THE WIRE — there is no
+    downstream sanitization point. That is why ``message`` is no longer
+    authored at all: it is a read-only property returning
+    ``CODE_TABLE[code].message``, and ``__init__`` takes no ``message``
+    parameter, so the prohibited categories above cannot be interpolated into
+    buyer-facing text even by accident. The trust decision is made once, in the
+    table, instead of per raise site.
+
+    Where the spec POSITIVELY requires request-specific content — version
+    negotiation must name the buyer's requested version and the seller's
+    supported set — that content goes in ``details``, which is exactly where
+    the spec reads it from: see ``AdCPVersionUnsupportedError`` below, whose
+    recovery is "re-pin to a release in the returned
+    ``error.details.supported_versions``". Structured values in ``details``,
+    the caught exception in ``internal_detail`` and on the ``from`` chain (written
+    once to the server log by the boundary's ``record_boundary_error``, never
+    emitted), and nothing at all in ``message``.
     """
 
-    # Class-level identity defaults. Subclasses override these.
-    # Recovery follows the WIRE code, not the internal taxonomy: the base
-    # INTERNAL_ERROR maps to SERVICE_UNAVAILABLE on the wire, whose pinned
-    # enumMetadata classification is transient (#1430 review). Subclasses
-    # whose wire code is pinned terminal declare terminal explicitly.
-    _default_status_code: ClassVar[int] = 500
-    _default_error_code: ClassVar[str] = "INTERNAL_ERROR"
-    _default_recovery: ClassVar[RecoveryHint] = "transient"
-    # Optional class-level suggestion default (#1417 round-8 review item 4): a subclass
-    # whose every rejection shares one buyer fix hint (e.g. AUTH_REQUIRED →
-    # "provide valid credentials") sets this so no raise site can forget the
-    # graded top-level ``suggestion``. Per-raise ``suggestion=`` overrides.
-    _default_suggestion: ClassVar[str | None] = None
+    #: The code this class IS. Annotation only on the base: a class that declares
+    #: none cannot be constructed (see ``__new__``), so a code is identity rather
+    #: than a default anyone can fall through to.
+    #:
+    #: There is NO class-level recovery or suggestion knob. Both existed as
+    #: ``_default_recovery``/``_default_suggestion`` overrides until it was
+    #: measured that zero subclasses used either — the table owned every value
+    #: in practice, so the knobs were only a route by which a class could come
+    #: to disagree with the pin. They were deleted rather than guarded.
+    _code: ClassVar[ErrorCodeT]
 
-    # Instance attributes — set in __init__ from _default_* unless overridden.
-    # ``recovery`` is NOT among them: it is a read-only property, derived below.
-    error_code: str
-    status_code: int
+    # Instance attributes — set in __init__.
+    # ``error_code``, ``message``, ``recovery`` and ``suggestion`` are NOT
+    # here: they are read-only properties over ``_error_code``, so none of
+    # those slots can be written after construction.
+    _error_code: ErrorCodeT
+    internal_detail: BaseException | None
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """Refuse, at class creation, a subclass whose code the table does not classify.
+
+        ``CODE_TABLE`` is the single classifier: every code carries its
+        recovery, suggestion and message there, so a class naming a code
+        outside it could never resolve those three. Failing here moves that
+        contradiction from the first raise (a ``KeyError`` deep in an error
+        path) to import time, where the class definition itself is the error.
+        """
+        super().__init_subclass__(**kwargs)
+        if hasattr(cls, "_code") and cls._code not in CODE_TABLE:
+            raise TypeError(
+                f"{cls.__name__} declares _code {cls._code!r}, which CODE_TABLE does not "
+                "classify. Declare a code the table knows, or add the entry."
+            )
+
+    def __new__(cls, *args: Any, **kwargs: Any) -> AdCPSalesAgentError:
+        """Refuse to build an error that declares no code.
+
+        The invariant is: AN ERROR NAMES A CODE BY ITS CLASS. There is no "or explicitly"
+        any more, and that is the point of this refusal being one branch instead of two.
+
+        It used to read "by its class OR explicitly", with a second branch refusing an error
+        that did both. That second branch is gone with the thing it guarded:
+        ``AdCPRequestSignatureError`` was the only class in the tree declaring no ``_code``,
+        the only raise site passing ``error_code=``, and therefore the only reason the
+        constructor accepted a code at all. It is now the abstract parent of 28 generated
+        classes that each declare one, ``error_code`` is off the
+        constructor entirely, and a raise site picks a CLASS and nothing else.
+
+        What remains is the abstract-base check, which is what this branch was always for
+        underneath: ``_code`` is annotation-only on the base, so ``hasattr`` is False for
+        :class:`AdCPSalesAgentError` and :class:`AdCPRequestSignatureError` and True for
+        every constructible class.
+
+        TWO refusals, and nothing about ``details``. A details block needs no runtime check
+        because the class is generic in its detail type and every concrete subclass binds
+        one, so mypy rejects a dict and a foreign detail class at every raise site --
+        docs/design/error-architecture.md § "An error names its code by its class". A third
+        branch was added here for a dict that reached ``details.to_wire()``; the raise site
+        had dropped the type parameter (``type[AdCPSalesAgentError]``, which erases
+        ``DetailsT`` to ``Any``), so the type system was not consulted rather than
+        insufficient. Parameterizing the annotation was the fix, and the branch came back out.
+
+        ``_code`` is annotation-only on the base, so ``hasattr`` is False here and
+        True on every subclass that declares one. This is the check
+        ``object.__new__`` performs for an abstract class and that
+        ``BaseException.__new__`` does not: ABC is a runtime no-op for exception
+        classes, so without this a bare ``AdCPSalesAgentError()`` would construct and put a
+        null code on the buyer's wire.
+
+        There is still no ``synthesize()``, and the reason is now simpler than it was: a
+        boundary that needs a code the class hierarchy does not model DECLARES a class for
+        it. That is what the signature taxonomy did -- 28 of them, written out below. Nothing
+        scans for a violation; there is nothing left to violate.
+        """
+        if not hasattr(cls, "_code"):
+            raise TypeError(f"{cls.__name__} is abstract: it declares no _code")
+        return cast("AdCPSalesAgentError", super().__new__(cls, *args, **kwargs))
 
     def __init__(
         self,
-        message: str = "",
         *,
-        error_code: str | None = None,
-        status_code: int | None = None,
-        details: dict[str, Any] | None = None,
+        details: DetailsT | None = None,
+        issues: list[ErrorIssue] | None = None,
         field: str | None = None,
-        suggestion: str | None = None,
         retry_after: int | None = None,
-        context: ContextObject | dict[str, Any] | None = None,
+        internal_detail: BaseException | None = None,
     ) -> None:
-        # ``error_code`` and ``status_code`` kwargs are only used by the
-        # sanctioned ``synthesize()`` classmethod for boundary fallback paths
-        # that need a wire code the typed class hierarchy doesn't model.
-        # Direct raises use a typed subclass and inherit its ``_default_*``.
-        super().__init__(message)
-        self.message = message
+        # There is no ``message`` parameter. Buyer-facing text comes from CODE_TABLE
+        # via the read-only ``message`` property, so no raise site can author it and
+        # no caught exception's text can reach the wire. The raw CAUSE goes to
+        # ``internal_detail`` (an exception, server log only); values go to
+        # ``field``/``details``.
+        #
+        # Assigned FIRST: every derived property keys on it. The class IS the code -- there
+        # is no parameter to prefer over it, and no branch here to pick between them.
+        #
+        # No CODE_TABLE membership check either: it was the other half of the same
+        # parameter. A class's code is settled at class creation by ``__init_subclass__``,
+        # which refuses an unclassified one at IMPORT, so by the time any instance exists
+        # the question is already answered. It was checked again here only because a NAMED
+        # code arrived too late for that, and nothing names one now.
+        #
+        # ``message``/``recovery``/``suggestion`` need no assignment at all: they are
+        # read-only properties resolving from CODE_TABLE per read.
+        self._error_code = type(self)._code
         self.details = details
+        self.issues = issues
+        # The pin's MUST: when issues[] is present, `field` is populated from
+        # issues[0].pointer, translated to the JSONPath-lite spelling. Derived
+        # HERE rather than at the emit site, so every reader of the error sees one
+        # value. An explicitly passed field wins, so a caller can still point at something
+        # other than issues[0].
+        if field is None and issues:
+            field = pointer_to_field(issues[0].pointer)
         self.field = field
-        self.suggestion = suggestion if suggestion is not None else type(self)._default_suggestion
         self.retry_after = retry_after
-        self.context = context
-        self.error_code = error_code if error_code is not None else type(self)._default_error_code
-        self.status_code = status_code if status_code is not None else type(self)._default_status_code
+        # No ``context``. The buyer's context object is echoed by the boundary
+        # (``_boundary._served``) onto every outcome, a failure included; an error carries
+        # nothing about the request it answers, so nothing outside the boundary can write it.
+        # NON-WIRE. Deliberately absent from ``AdcpErrorResponse.of``; emitted only
+        # to the server-side log by adcp_error_for(). Never add it to a serializer.
+        self.internal_detail = internal_detail
+        # args stays EMPTY: BaseException.__reduce__ replays ``cls(*args)``, and this
+        # constructor takes none. ``__reduce__`` below replays the keyword form instead,
+        # and ``__str__`` reads the property, so str(e) and .message cannot diverge.
+        super().__init__()
 
     @property
-    def recovery(self) -> RecoveryHint:
-        """The buyer-facing retry classification for this error's WIRE code.
-
-        Read-only and DERIVED — there is no way to say "I want terminal" except by
-        raising a class whose wire code the pinned enumMetadata classifies terminal.
-        Possession of the class is the proof. Before this, ``recovery=`` was a free
-        constructor kwarg, so a raise site could pair any code with any
-        classification and nothing in the system disagreed: the wire carried
-        SERVICE_UNAVAILABLE + terminal (retry forever / do not retry) and a green
-        test graded it.
-
-        Derivation follows ``wire_error_code``, NOT ``error_code``: the buyer reads
-        the translated code, so the classification must be the one the pin assigns
-        to what they actually receive.
-
-        This one keeps its ``.get``, unlike :func:`wire_advisory`'s subscript, and
-        the difference is the DOMAIN. ``wire_advisory`` reads
-        ``to_wire_error_code``'s output, which is guaranteed to be in
-        WIRE_STANDARD_CODES. This reads ``ERROR_CODE_MAPPING.get(code, code)`` --
-        a pass-through -- so its domain is whatever any raise site put in
-        ``error_code``, which is literally unbounded: ``synthesize`` accepts an
-        arbitrary string, and ``tool_error_logging`` passes
-        ``type(error).__name__``, so ``"ValueError"`` can arrive here. Making this
-        a subscript would turn the boundary error handler into a ``KeyError``
-        raised while already handling a failure.
+    def error_code(self) -> ErrorCodeT:
+        """The code this error carries. Read-only: a code cannot be swapped after the
+        fact, so ``str(e)``, ``.message``, ``recovery`` and ``status_code`` cannot drift
+        apart from it, and an out-of-table value cannot be introduced post-construction.
         """
-        return RECOVERY_BY_WIRE_CODE.get(self.wire_error_code, type(self)._default_recovery)
+        return self._error_code
 
     @property
-    def wire_error_code(self) -> str:
-        """Wire-safe error code (translated through ERROR_CODE_MAPPING).
-
-        Used by transport-layer code that serializes errors to the wire.
-        Model methods (``to_dict``, ``to_adcp_error``) preserve the original
-        ``error_code`` so internal callers see the raw source code; transport
-        boundaries are responsible for calling this property when emitting
-        a response.
+    def message(self) -> str:
+        """Buyer-facing text, derived from the code. There is no setter and no
+        parameter: the text is a function of the code, not of the raise site.
         """
-        return translate_error_code(self.error_code)
+        return CODE_TABLE[self._error_code].message
+
+    @property
+    def recovery(self) -> Recovery:
+        """The pinned recovery classification for this code. Read-only for the
+        same reason as ``message``: recovery is the one field a receiver MUST
+        read to decode an unknown code, so no instance may carry one that
+        disagrees with the table. A :class:`Recovery` StrEnum member -- it
+        compares and serializes as its wire string.
+        """
+        return CODE_TABLE[self._error_code].recovery
+
+    @property
+    def suggestion(self) -> str:
+        """The pinned correction hint for this code, derived like ``message``."""
+        return CODE_TABLE[self._error_code].suggestion
+
+    @property
+    def status_code(self) -> int:
+        """The HTTP status this error is signalled with, derived like ``message``.
+
+        No setter and no constructor parameter: two errors carrying one wire code
+        cannot be answered with two different statuses, because there is nowhere
+        left to say so. That is the whole fix for salesagent-pssfi — the old
+        per-class slot was writable by inheritance, so a subclass could re-code
+        itself and silently keep its parent's status.
+        """
+        return CODE_TABLE[self._error_code].status
+
+    def __str__(self) -> str:
+        return self.message
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        # ``BaseException.__reduce__`` would replay ``cls(*args)``; args is empty and
+        # this constructor is keyword-only, so the default breaks pickle and copy.
+        return (_rebuild_error, (type(self), self._error_code), self.__dict__)
 
     @classmethod
-    def synthesize(
-        cls,
-        message: str,
-        *,
-        error_code: str,
-        status_code: int | None = None,
-        details: dict[str, Any] | None = None,
-        field: str | None = None,
-        suggestion: str | None = None,
-        context: ContextObject | dict[str, Any] | None = None,
-    ) -> AdCPError:
-        """Sanctioned entry point for synthesizing an AdCPError with overridden code/status.
-
-        Typed subclasses (``AdCPValidationError``, etc.) carry
-        ``error_code``/``status_code`` as class attributes. Two boundary
-        callers — ``handle_tool_error``'s plain-``ToolError`` fallback and
-        ``ContextManager.audit_workflow_step_failure``'s wire-code
-        sanitization — need to construct an ``AdCPError`` with a code/status
-        the typed class hierarchy doesn't model.
-
-        Prefer this classmethod over passing ``error_code=``/``status_code=``
-        kwargs to ``__init__`` directly. Constructor kwargs that mutate class
-        attributes are a footgun the public API should not invite; this method
-        documents the synthesis intent explicitly so reviewers can audit
-        every site that bypasses the typed class hierarchy.
-
-        ``recovery`` is deliberately NOT a parameter here either. A synthesized
-        error derives its classification from the code it was given, exactly like
-        a typed raise: the code is the choice, the retry semantics follow.
-        """
-        return cls(
-            message,
-            error_code=error_code,
-            status_code=status_code,
-            details=details,
-            field=field,
-            suggestion=suggestion,
-            context=context,
-        )
-
-    @classmethod
-    def iter_concrete_subclasses(cls) -> Iterator[type[AdCPError]]:
+    def iter_concrete_subclasses(cls) -> Iterator[type[AdCPSalesAgentError]]:
         """Yield every transitive *concrete* subclass of ``cls`` exactly once.
 
-        Single source of truth for the subclass walk that builds the
-        wire-code -> HTTP-status table (``_build_error_code_to_status``) and
-        backs the error-code compliance tests. Yields descendants only — not
+        Single source of truth for the subclass walk that backs the
+        error-code compliance tests. (It also built the wire-code → HTTP-status
+        table, until that table stopped existing: a status is now read from
+        ``CODE_TABLE`` by code, so nothing has to be aggregated over whichever
+        subclasses an import happened to define.) Yields descendants only — not
         ``cls`` itself — deduplicates so a class reachable by more than one
         path is visited once, and skips abstract bases (their descendants are
         still walked) so the name's "concrete" promise holds.
@@ -589,95 +440,24 @@ class AdCPError(Exception):
             if not inspect.isabstract(sub):
                 yield sub
 
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize to flat response body dict (legacy format).
 
-        Returns a flat dict with the raw ``error_code``. Transport boundary
-        handlers (FastAPI exception handler, MCP wrapper, A2A wrapper) are
-        responsible for translating to wire-compliant codes via
-        ``translate_error_code()`` or ``wire_error_code``.
-
-        Includes ``context`` when present so callers building advisory
-        payloads (audit logging, retry-loop diagnostics) have the same
-        request-correlation envelope key the two-layer wire shape exposes.
-        """
-        result: dict[str, Any] = {
-            "error_code": self.error_code,
-            "message": self.message,
-            "recovery": self.recovery,
-            "details": self.details,
-        }
-        if self.field is not None:
-            result["field"] = self.field
-        if self.suggestion is not None:
-            result["suggestion"] = self.suggestion
-        if self.retry_after is not None:
-            result["retry_after"] = self.retry_after
-        serialized_context = _serialize_context(self.context)
-        if serialized_context is not None:
-            result["context"] = serialized_context
-        return result
-
-    def to_adcp_error(self) -> dict[str, Any]:
-        """Serialize to AdCP spec-compliant ``{"errors": [...]}`` format.
-
-        Uses ``adcp_error()`` from the SDK to produce the canonical error
-        envelope. Translation to ``WIRE_STANDARD_CODES`` happens at transport
-        boundaries via ``translate_error_code()`` — this method preserves the
-        raw ``error_code`` so internal callers retain the source classification.
-
-        ``context`` flows into ``details["context"]`` so the SDK helper
-        doesn't drop request-correlation data on the floor.
-
-        .. deprecated::
-            Effectively legacy now that ``build_two_layer_error_envelope()``
-            is the single source of truth for the wire envelope. Prefer the
-            envelope builder for any new code path. This method intentionally
-            differs in shape — ``context`` is nested under ``details`` here
-            but appears at the top level in the two-layer envelope — and is
-            retained only for non-envelope callers (audit logging, SDK
-            interop) that still want the flat ``{"errors": [...]}`` payload.
-        """
-        merged_details = dict(self.details) if self.details else {}
-        serialized_context = _serialize_context(self.context)
-        if serialized_context is not None:
-            merged_details.setdefault("context", serialized_context)
-        return adcp_error(
-            self.error_code,
-            self.message,
-            recovery=self.recovery,
-            field=self.field,
-            suggestion=self.suggestion,
-            retry_after=self.retry_after,
-            details=merged_details or None,
-        )
-
-
-class AdCPValidationError(AdCPError):
+class AdCPValidationError(AdCPSalesAgentError[ValidationDetails]):
     """Invalid parameters or request data (400)."""
 
-    _default_status_code: ClassVar[int] = 400
-    _default_error_code: ClassVar[str] = "VALIDATION_ERROR"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.VALIDATION_ERROR
 
 
-class AdCPBlockedUrlError(AdCPValidationError):
-    """Raised when a URL is refused by SSRF egress policy."""
+class AdCPVersionUnsupportedError(AdCPSalesAgentError[VersionUnsupportedDetails]):
+    """Buyer pinned an adcp_version/adcp_major_version this seller doesn't support (400).
 
-    _default_message: ClassVar[str] = "URL resolves to a restricted range."
+    Recovery is correctable per v3.1.1 error-code.json enumMetadata: re-pin to
+    a release in the returned error.details.supported_versions and retry.
 
-    def __init__(
-        self,
-        *,
-        field: str | None = None,
-        suggestion: str | None = None,
-        context: ContextObject | dict[str, Any] | None = None,
-    ) -> None:
-        super().__init__(
-            type(self)._default_message,
-            field=field,
-            suggestion=suggestion,
-            context=context,
-        )
+    The class is the authority on the code; ``VersionUnsupportedDetails`` is a
+    shape and names none, so it stays reusable.
+    """
+
+    _code: ClassVar[ErrorCodeT] = ErrorCode.VERSION_UNSUPPORTED
 
 
 class AdCPInvalidRequestError(AdCPValidationError):
@@ -689,55 +469,469 @@ class AdCPInvalidRequestError(AdCPValidationError):
     Inherits 400 + correctable from AdCPValidationError.
     """
 
-    _default_error_code: ClassVar[str] = "INVALID_REQUEST"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.INVALID_REQUEST
 
 
-AUTH_REQUIRED_SUGGESTION = "Provide valid credentials (x-adcp-auth token)."
+# v3.1.1 error-code.json deprecates the single AUTH_REQUIRED code in favor of
+# a split: AUTH_MISSING (no credentials presented; correctable — provide
+# credentials and retry) vs AUTH_INVALID (credentials presented but rejected;
+# terminal — do not auto-retry, rotate/escalate). AUTH_REQUIRED itself is
+# retained by the spec only as a deprecated backward-compat alias. See
+# #2092 for the migration; distinct suggestion strings per code
+# since "provide valid credentials" reads as invalid-framing for the
+# genuinely-absent-credential sites.
 
 
-class AdCPAuthenticationError(AdCPError):
-    """Missing or invalid authentication credentials (401).
+class AdCPAuthenticationError(AdCPSalesAgentError[EntityRefDetails]):
+    """Presented-but-invalid authentication credentials (401, AUTH_INVALID).
 
-    Emits the standard ``AUTH_REQUIRED`` wire code — the sole authentication
-    error code in the AdCP 3.1 error-code enum and adcp 5.7
-    ``STANDARD_ERROR_CODES``. Its enum description explicitly covers both
-    "credentials missing" and "credentials presented but rejected", so it is
-    the canonical code for every authentication failure.
+    Emits ``AUTH_INVALID`` per the v3.1.1 error-code enum: "Credentials were
+    presented but rejected — revoked, malformed signature, or a key no longer
+    in the seller's keystore ... Recovery: terminal." This is the base class
+    for the presented-but-rejected case; ``AdCPAuthRequiredError`` below
+    overrides to ``AUTH_MISSING`` for the genuinely-absent-credential case.
 
-    Recovery is ``correctable`` per the pinned AdCP error-code enum
-    (``AUTH_REQUIRED.recovery == "correctable"``; released 3.1.0 agrees) —
-    not the ``terminal`` base default. The enum carries operationally distinct
-    sub-cases (missing credentials → retry; presented-but-rejected → escalate),
-    but its single canonical ``recovery`` classification is ``correctable``,
-    and the wire contract is graded against that enum (#1417,
-    superseding the earlier "storyboards grade only the code" judgment).
+    Recovery is ``terminal`` — the buyer MUST NOT blindly auto-retry
+    (rejected credentials, retried unmodified, will be rejected again);
+    rotate/refresh once if applicable, otherwise escalate to a human.
     """
 
-    _default_status_code: ClassVar[int] = 401
-    _default_error_code: ClassVar[str] = "AUTH_REQUIRED"
-    # Every authentication rejection shares one buyer fix hint, so the graded
-    # top-level suggestion (error.json) can never be forgotten at a raise site
-    # (#1417 round-8 review item 4: 11 of 12 raise sites emitted an empty suggestion).
-    _default_suggestion: ClassVar[str | None] = AUTH_REQUIRED_SUGGESTION
+    _code: ClassVar[ErrorCodeT] = ErrorCode.AUTH_INVALID
 
 
 class AdCPAuthRequiredError(AdCPAuthenticationError):
-    """No authentication context present (401, AUTH_REQUIRED).
+    """No authentication context present (401, AUTH_MISSING).
 
-    Raised when the request contains no auth token at all. Inherits the
-    standard ``AUTH_REQUIRED`` wire code from its parent.
+    Raised when the request contains no auth token / identity at all. Per
+    the v3.1.1 error-code enum: "No credentials were presented ... Recovery:
+    correctable (provide credentials via the auth header and retry)."
+    """
+
+    _code: ClassVar[ErrorCodeT] = ErrorCode.AUTH_MISSING
+
+
+class AdCPRequestSignatureError(AdCPSalesAgentError[ErrorDetails]):
+    """An inbound RFC 9421 signature was required, malformed, or refused (401).
+
+    ABSTRACT, exactly like :class:`AdCPSalesAgentError` itself: it declares no ``_code``, so
+    it cannot be constructed. What a raise site picks is one of the concrete subclasses in
+    below, one per member of the request-family taxonomy, each declaring
+    its own code the way every other error class in this tree does.
+
+    This class used to NAME its code instead — the only one that did, and the only reason
+    ``__new__`` had a branch permitting it. The argument for that was a class per code being
+    "27 declarations that can drift from the one table", and it was simply wrong: the table
+    exists either way. The verifier's translation did ``CODE_BY_VALUE[exc.code]`` to get a
+    code and now does one lookup to get a class — same mapping, same size, same drift
+    surface, a different value type. Nothing was saved, and what it cost was the invariant's
+    universality: "an error names a code by its class" stopped being a property nothing can
+    violate and became a convention with one exception in it.
+
+    A DIRECT subclass, not one of :class:`AdCPAuthenticationError`, although what it says is
+    the same kind of thing: a credential was presented and did not verify. Inheriting
+    AUTH_INVALID would give every one of these classes that code through the MRO, and the
+    whole point of the taxonomy is that the code differs per refusal. The relation that
+    mattered about that parent is kept where it is actually enforced: ``ruff-boundary.toml``
+    bans this class outside the resolver beside the other two, so the three refusals of a
+    buyer's credential have one author between them.
+
+    Recovery, suggestion, message and the 401 all come from ``CODE_TABLE`` like every other
+    code — this changed WHO NAMES THE CODE and nothing about where the buyer-facing text
+    comes from. What the buyer gets that is specific to the refusal is the CODE, twice: in
+    ``error.code``, and in the ``WWW-Authenticate`` challenge ``AuthChallengeResponder``
+    derives from it. The verifier's own exception — which carries the checklist step and a
+    diagnostic sentence — rides ``internal_detail``, server log only.
     """
 
 
-class AdCPAuthorizationError(AdCPError):
+# ---------------------------------------------------------------------------
+# The RFC 9421 request-signature taxonomy: one class per code
+# ---------------------------------------------------------------------------
+# Twenty-eight class statements, in enum order, so a reader can check them off against
+# ``SignatureErrorCode`` by eye. Written out for the same reason the other ~48 concrete
+# subclasses in this module are: a class is this seller's PUBLIC API, and an API must not be
+# a function of an upstream string.
+#
+# They were briefly GENERATED from the enum -- ``type(name, (base,), {"_code": code})`` over
+# a comprehension -- and that is rejected. ``SignatureErrorCode`` is itself derived from the
+# SDK's taxonomy, so generating classes from it means an SDK UPGRADE CAN RENAME OUR CLASSES:
+# upstream respells a code, ``AdCPRequestSignatureKeyRevokedError`` quietly becomes something
+# else, every ``except`` naming it stops matching, and nothing fails at build time because
+# there is no source line to change and no diff to review. Typed out, the same upstream
+# change is an ``AttributeError`` at import on the line that names the member -- a conflict a
+# human reads. That trade is the whole point: a drift that is cheap to see beats a drift that
+# is impossible to see.
+
+
+class AdCPRequestSignatureAgentNotInBrandJsonError(AdCPRequestSignatureError):
+    """The signer's brand.json lists no agent entry for the URL it was resolved from (401).
+
+    Discovery, step 7. The brand.json fetched at the signer's trust root carries no ``agents[]`` entry whose ``url`` matches the counterparty this request claims, so no ``jwks_uri`` can be read from it and no key can be resolved.
+
+    Wire code ``request_signature_agent_not_in_brand_json``.
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_AGENT_NOT_IN_BRAND_JSON
+
+
+class AdCPRequestSignatureAlgNotAllowedError(AdCPRequestSignatureError):
+    """The signature names an algorithm outside the AdCP profile (401).
+
+    Checklist step 4. ``alg`` is not one of the profile's permitted values -- ``rsa-pss-sha512`` is the corpus's example -- so the signature is refused before any key is resolved for it.
+
+    Wire code ``request_signature_alg_not_allowed``.
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_ALG_NOT_ALLOWED
+
+
+class AdCPRequestSignatureBrandJsonAmbiguousError(AdCPRequestSignatureError):
+    """The signer's brand.json matches more than one agent entry (401).
+
+    Discovery, step 7. Two or more ``agents[]`` entries answer to the counterparty's URL, so which ``jwks_uri`` governs is undecidable and the walk refuses rather than choosing.
+
+    Wire code ``request_signature_brand_json_ambiguous``.
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_BRAND_JSON_AMBIGUOUS
+
+
+class AdCPRequestSignatureBrandJsonMalformedError(AdCPRequestSignatureError):
+    """The signer's brand.json is not a document this verifier can read (401).
+
+    Discovery, step 7. The trust root answered, but with something that is not a well-formed brand.json, so the ``agents[]`` entry the walk needs cannot be located.
+
+    Wire code ``request_signature_brand_json_malformed``.
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_BRAND_JSON_MALFORMED
+
+
+class AdCPRequestSignatureBrandJsonUnreachableError(AdCPRequestSignatureError):
+    """The signer's brand.json could not be fetched (401).
+
+    Discovery, step 7, and TRANSIENT: the document may be reachable later, so the same request may succeed on a retry once the signer's trust root is serving.
+
+    Wire code ``request_signature_brand_json_unreachable``.
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_BRAND_JSON_UNREACHABLE
+
+
+class AdCPRequestSignatureBrandJsonUrlMissingError(AdCPRequestSignatureError):
+    """The signer's capabilities name no brand.json to walk to (401).
+
+    Discovery, step 7. ``identity.brand_json_url`` is absent or is not an ``https://`` URL, so the chain from the counterparty's agent URL to its keys has no second hop.
+
+    Wire code ``request_signature_brand_json_url_missing``.
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_BRAND_JSON_URL_MISSING
+
+
+class AdCPRequestSignatureBrandOriginMismatchError(AdCPRequestSignatureError):
+    """The signer's brand.json is served from a different origin than its agent (401).
+
+    Discovery, step 7. brand.json and the agent it describes must share an origin -- the Brand Agent variant has no ``authorized_operators[]`` escape hatch -- so a cross-origin pair cannot anchor a key.
+
+    Wire code ``request_signature_brand_origin_mismatch``.
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_BRAND_ORIGIN_MISMATCH
+
+
+class AdCPRequestSignatureCapabilitiesUnreachableError(AdCPRequestSignatureError):
+    """The signer's capabilities document could not be fetched (401).
+
+    Discovery, step 7, and TRANSIENT: the first hop of the walk failed, so nothing downstream of it was even attempted. The same request may succeed once the counterparty is serving.
+
+    Wire code ``request_signature_capabilities_unreachable``.
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_CAPABILITIES_UNREACHABLE
+
+
+class AdCPRequestSignatureComponentsIncompleteError(AdCPRequestSignatureError):
+    """The signature does not cover a component this verifier requires (401).
+
+    Checklist step 6. A mandatory covered component is missing from ``Signature-Input`` -- ``@authority``, or ``content-digest`` where this agent's ``covers_content_digest`` is ``required``.
+
+    Wire code ``request_signature_components_incomplete``.
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_COMPONENTS_INCOMPLETE
+
+
+class AdCPRequestSignatureComponentsUnexpectedError(AdCPRequestSignatureError):
+    """The signature covers a component this verifier forbids (401).
+
+    Checklist step 6, the mirror of ``components_incomplete``: the signature covers ``content-digest`` while this agent's ``covers_content_digest`` is ``forbidden``.
+
+    Wire code ``request_signature_components_unexpected``.
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_COMPONENTS_UNEXPECTED
+
+
+class AdCPRequestSignatureDigestMismatchError(AdCPRequestSignatureError):
+    """The Content-Digest header does not describe the body that arrived (401).
+
+    Checklist step 11, which runs AFTER the signature verifies: the header was covered and its bytes are authentic, but the digest it asserts is not the hash of the received body.
+
+    Wire code ``request_signature_digest_mismatch``.
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_DIGEST_MISMATCH
+
+
+class AdCPRequestSignatureHeaderMalformedError(AdCPRequestSignatureError):
+    """The signature headers are not well-formed structured fields (401).
+
+    Checklist step 1, the earliest refusal there is. It fires for a ``Signature-Input`` that is not parseable RFC 8941, a ``Signature`` with no matching ``Signature-Input``, a duplicated label, an unquoted string parameter, and a multi-valued field where the profile permits one.
+
+    Wire code ``request_signature_header_malformed``.
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_HEADER_MALFORMED
+
+
+class AdCPRequestSignatureInvalidError(AdCPRequestSignatureError):
+    """The signature bytes do not verify against the resolved key (401).
+
+    Checklist step 10, the cryptographic check itself. Everything before it passed: the headers parsed, the window held, the algorithm was permitted, and a key was resolved and found usable.
+
+    Wire code ``request_signature_invalid``.
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_INVALID
+
+
+class AdCPRequestSignatureJwksUnavailableError(AdCPRequestSignatureError):
+    """The signer's JWKS could not be fetched (401).
+
+    Discovery, step 7, and TRANSIENT: the third hop failed. brand.json named a ``jwks_uri`` and that document did not answer.
+
+    Wire code ``request_signature_jwks_unavailable``.
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_JWKS_UNAVAILABLE
+
+
+class AdCPRequestSignatureJwksUntrustedError(AdCPRequestSignatureError):
+    """The signer's JWKS is served from a location this verifier will not read (401).
+
+    Discovery, step 7. The ``jwks_uri`` resolves somewhere a key may not be read from -- keys come from ``<agent origin>/.well-known/jwks.json`` (docs/design/signature-architecture.md § "Resolve a counterparty's public key") -- so its contents are not admissible however well-formed the document is. It is also the code for a ``jwks_uri`` the trust boundary refuses outright: an authority that will not canonicalize, or an SSRF-banned host.
+
+    Wire code ``request_signature_jwks_untrusted``.
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_JWKS_UNTRUSTED
+
+
+class AdCPRequestSignatureKeyOriginMismatchError(AdCPRequestSignatureError):
+    """The key resolved at an origin the signer did not declare (401).
+
+    Checklist step 7's consistency check: the origin a key was actually fetched from is byte-matched against the counterparty's declared ``identity.key_origins``, and they disagree.
+
+    Wire code ``request_signature_key_origin_mismatch``.
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_KEY_ORIGIN_MISMATCH
+
+
+class AdCPRequestSignatureKeyOriginMissingError(AdCPRequestSignatureError):
+    """The signer declares no key origin to check the resolved key against (401).
+
+    Checklist step 7. Without ``identity.key_origins`` there is nothing for the consistency check to anchor to, and an unanchored key is refused rather than admitted.
+
+    Wire code ``request_signature_key_origin_missing``.
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_KEY_ORIGIN_MISSING
+
+
+class AdCPRequestSignatureKeyPurposeInvalidError(AdCPRequestSignatureError):
+    """The presented key is not usable for request signing (401).
+
+    Checklist step 8. The JWK resolved but is scoped elsewhere -- ``adcp_use`` naming a different purpose, ``key_ops`` without ``verify``, or an ``alg``/``kty``/``crv`` combination that is not internally consistent.
+
+    Wire code ``request_signature_key_purpose_invalid``.
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_KEY_PURPOSE_INVALID
+
+
+class AdCPRequestSignatureKeyRevokedError(AdCPRequestSignatureError):
+    """The signing key is on a revocation list (401).
+
+    Checklist step 9, which runs BEFORE the cryptographic verify on purpose: a revoked key must be refused as revoked, not as invalid, however well its signature would have verified.
+
+    Wire code ``request_signature_key_revoked``.
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_KEY_REVOKED
+
+
+class AdCPRequestSignatureKeyUnknownError(AdCPRequestSignatureError):
+    """No key with this keyid could be resolved for the signer (401).
+
+    Checklist step 7. The counterparty resolved, but its JWKS holds no entry for the ``keyid`` the signature names.
+
+    Wire code ``request_signature_key_unknown``.
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_KEY_UNKNOWN
+
+
+class AdCPRequestSignatureParamsIncompleteError(AdCPRequestSignatureError):
+    """The signature omits a parameter the profile requires (401).
+
+    Checklist step 2. ``Signature-Input`` parsed, but ``created``, ``expires``, ``nonce`` or ``keyid`` is missing, so the window and replay checks have nothing to read.
+
+    Wire code ``request_signature_params_incomplete``.
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_PARAMS_INCOMPLETE
+
+
+class AdCPRequestSignatureRateAbuseError(AdCPRequestSignatureError):
+    """The signer's live replay entries are at their per-keyid cap (401).
+
+    Checklist step 9a. One keyid holds its configured number of unexpired nonces, which is either abuse or a misconfigured signer; either way the next request is refused before it is verified.
+
+    Wire code ``request_signature_rate_abuse``.
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_RATE_ABUSE
+
+
+class AdCPRequestSignatureReplayedError(AdCPRequestSignatureError):
+    """This (keyid, nonce) pair has already been accepted (401).
+
+    Checklist step 12, the last one. The signature was valid and the digest matched -- and the nonce was already claimed inside its window, so accepting it again would accept a replay.
+
+    Wire code ``request_signature_replayed``.
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_REPLAYED
+
+
+class AdCPRequestSignatureRequiredError(AdCPRequestSignatureError):
+    """The operation requires a signature and the request carried none (401).
+
+    Checklist step 0, the pre-check, and the one code in the family a buyer earns by doing nothing wrong except not signing. It is also what a request registering webhook credentials earns regardless of ``required_for``, per security.mdx's escalation rule.
+
+    Wire code ``request_signature_required``.
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_REQUIRED
+
+
+class AdCPRequestSignatureRevocationStaleError(AdCPRequestSignatureError):
+    """The revocation list is too old to be relied on (401).
+
+    Checklist step 9, and TRANSIENT: the list could not be refreshed inside its grace window, so whether this key is revoked is unknown and the fail-closed answer is to refuse.
+
+    Wire code ``request_signature_revocation_stale``.
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_REVOCATION_STALE
+
+
+class AdCPRequestSignatureTagInvalidError(AdCPRequestSignatureError):
+    """The signature names a tag other than the AdCP request-signing profile (401).
+
+    Checklist step 3. ``tag`` must be ``adcp/request-signing/v1``; a signature scoped to another profile is not one this verifier may accept, however valid it is under that profile.
+
+    Wire code ``request_signature_tag_invalid``.
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_TAG_INVALID
+
+
+class AdCPRequestSignatureWindowInvalidError(AdCPRequestSignatureError):
+    """The signature's validity window is expired, inverted or too long (401).
+
+    Checklist step 5. It covers all three window faults: ``expires`` already past, ``expires`` at or before ``created``, and a window wider than the profile's 300-second maximum.
+
+    Wire code ``request_signature_window_invalid``.
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_WINDOW_INVALID
+
+
+class AdCPRequestTargetUriMalformedError(AdCPRequestSignatureError):
+    """The request's target URI cannot be canonicalized (401).
+
+    Parse-time, before the checklist: the authority or path cannot be reduced to the canonical ``@target-uri`` the signature base is built over, so there is no well-defined string to verify against.
+
+    Wire code ``request_target_uri_malformed``.
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_TARGET_URI_MALFORMED
+
+
+#: The ONE seam where a code arrives as a string instead of as a class.
+#:
+#: Checks 1-13 run inside ``adcp.signing.verifier``, not here, and a failure there reaches us
+#: as a ``SignatureVerificationError`` carrying ``code`` -- a string. Something has to turn
+#: that string into a class, and this is it. Removing the seam entirely would mean
+#: reimplementing the SDK's checklist to learn which check failed, which trades a mapping for
+#: a second verifier; the mapping is the smaller thing.
+#:
+#: WRITTEN OUT, one class per line, never derived from the enum. That is the same rule the 28
+#: classes above follow and for the same reason: a comprehension here would make the SDK's
+#: spelling decide which class we raise, invisibly. A reader greps a class name and finds
+#: this line; a missing row is a ``KeyError`` at the seam rather than a wrong class.
+#:
+#: Consulted only by :func:`adcp_error_for`, which docs/design/error-architecture.md names as
+#: the one normalizer from an untyped exception to a typed one.
+_SIGNATURE_ERROR_BY_CODE: Final[Mapping[SignatureErrorCode, type[AdCPRequestSignatureError]]] = MappingProxyType(
+    {
+        SignatureErrorCode.REQUEST_SIGNATURE_AGENT_NOT_IN_BRAND_JSON: AdCPRequestSignatureAgentNotInBrandJsonError,
+        SignatureErrorCode.REQUEST_SIGNATURE_ALG_NOT_ALLOWED: AdCPRequestSignatureAlgNotAllowedError,
+        SignatureErrorCode.REQUEST_SIGNATURE_BRAND_JSON_AMBIGUOUS: AdCPRequestSignatureBrandJsonAmbiguousError,
+        SignatureErrorCode.REQUEST_SIGNATURE_BRAND_JSON_MALFORMED: AdCPRequestSignatureBrandJsonMalformedError,
+        SignatureErrorCode.REQUEST_SIGNATURE_BRAND_JSON_UNREACHABLE: AdCPRequestSignatureBrandJsonUnreachableError,
+        SignatureErrorCode.REQUEST_SIGNATURE_BRAND_JSON_URL_MISSING: AdCPRequestSignatureBrandJsonUrlMissingError,
+        SignatureErrorCode.REQUEST_SIGNATURE_BRAND_ORIGIN_MISMATCH: AdCPRequestSignatureBrandOriginMismatchError,
+        SignatureErrorCode.REQUEST_SIGNATURE_CAPABILITIES_UNREACHABLE: AdCPRequestSignatureCapabilitiesUnreachableError,
+        SignatureErrorCode.REQUEST_SIGNATURE_COMPONENTS_INCOMPLETE: AdCPRequestSignatureComponentsIncompleteError,
+        SignatureErrorCode.REQUEST_SIGNATURE_COMPONENTS_UNEXPECTED: AdCPRequestSignatureComponentsUnexpectedError,
+        SignatureErrorCode.REQUEST_SIGNATURE_DIGEST_MISMATCH: AdCPRequestSignatureDigestMismatchError,
+        SignatureErrorCode.REQUEST_SIGNATURE_HEADER_MALFORMED: AdCPRequestSignatureHeaderMalformedError,
+        SignatureErrorCode.REQUEST_SIGNATURE_INVALID: AdCPRequestSignatureInvalidError,
+        SignatureErrorCode.REQUEST_SIGNATURE_JWKS_UNAVAILABLE: AdCPRequestSignatureJwksUnavailableError,
+        SignatureErrorCode.REQUEST_SIGNATURE_JWKS_UNTRUSTED: AdCPRequestSignatureJwksUntrustedError,
+        SignatureErrorCode.REQUEST_SIGNATURE_KEY_ORIGIN_MISMATCH: AdCPRequestSignatureKeyOriginMismatchError,
+        SignatureErrorCode.REQUEST_SIGNATURE_KEY_ORIGIN_MISSING: AdCPRequestSignatureKeyOriginMissingError,
+        SignatureErrorCode.REQUEST_SIGNATURE_KEY_PURPOSE_INVALID: AdCPRequestSignatureKeyPurposeInvalidError,
+        SignatureErrorCode.REQUEST_SIGNATURE_KEY_REVOKED: AdCPRequestSignatureKeyRevokedError,
+        SignatureErrorCode.REQUEST_SIGNATURE_KEY_UNKNOWN: AdCPRequestSignatureKeyUnknownError,
+        SignatureErrorCode.REQUEST_SIGNATURE_PARAMS_INCOMPLETE: AdCPRequestSignatureParamsIncompleteError,
+        SignatureErrorCode.REQUEST_SIGNATURE_RATE_ABUSE: AdCPRequestSignatureRateAbuseError,
+        SignatureErrorCode.REQUEST_SIGNATURE_REPLAYED: AdCPRequestSignatureReplayedError,
+        SignatureErrorCode.REQUEST_SIGNATURE_REQUIRED: AdCPRequestSignatureRequiredError,
+        SignatureErrorCode.REQUEST_SIGNATURE_REVOCATION_STALE: AdCPRequestSignatureRevocationStaleError,
+        SignatureErrorCode.REQUEST_SIGNATURE_TAG_INVALID: AdCPRequestSignatureTagInvalidError,
+        SignatureErrorCode.REQUEST_SIGNATURE_WINDOW_INVALID: AdCPRequestSignatureWindowInvalidError,
+        SignatureErrorCode.REQUEST_TARGET_URI_MALFORMED: AdCPRequestTargetUriMalformedError,
+    }
+)
+
+
+class AdCPAuthorizationError(AdCPSalesAgentError[EntityRefDetails]):
     """Authenticated but not authorized for this resource (403).
 
-    Emits ``AUTH_REQUIRED`` with ``correctable`` recovery, matching the pinned
-    AdCP error-code enum and ``AdCPAuthenticationError`` (#1417).
+    Emits ``PERMISSION_DENIED`` with ``correctable`` recovery per the v3.1.1
+    error-code enum: "The authenticated caller is not authorized for the
+    requested action under the seller's own policies." Distinct from
+    ``AUTHORIZATION_REQUIRED`` (a downstream-platform-connection gap, not this
+    class's shape) — migrated off the deprecated AUTH_REQUIRED alias
+    (salesagent-otc5, completing #2092 for this axis).
     """
 
-    _default_status_code: ClassVar[int] = 403
-    _default_error_code: ClassVar[str] = "AUTH_REQUIRED"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.PERMISSION_DENIED
 
 
 class AdCPPolicyViolationError(AdCPAuthorizationError):
@@ -750,22 +944,49 @@ class AdCPPolicyViolationError(AdCPAuthorizationError):
     recovery is ``correctable`` rather than the parent's ``terminal``.
     """
 
-    _default_error_code: ClassVar[str] = "POLICY_VIOLATION"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.POLICY_VIOLATION
 
 
-class AdCPNotFoundError(AdCPError):
-    """Requested resource does not exist (404).
+class AdCPNotFoundError[D: ErrorDetails](AdCPSalesAgentError[D]):
+    """Requested resource does not exist (404, REFERENCE_NOT_FOUND).
 
-    Recovery=correctable: the wire code is INVALID_REQUEST (via
-    ERROR_CODE_MAPPING), whose pinned enumMetadata classification is
-    correctable — recovery follows the wire code (#1430 review).
+    Emits the PUBLISHED ``REFERENCE_NOT_FOUND`` rather than a minted generic
+    ``NOT_FOUND``. error-handling.mdx: "Fall back to ``REFERENCE_NOT_FOUND`` for
+    resource types without a dedicated code" and "Typed parameters that lack a
+    dedicated standard code MUST use ``REFERENCE_NOT_FOUND`` rather than minting a
+    custom ``*_NOT_FOUND`` code." A bare ``NOT_FOUND`` is exactly such a mint.
+
+    Recovery=correctable, unchanged: ``REFERENCE_NOT_FOUND``'s pinned enumMetadata
+    classifies it correctable, the same class the retired code carried.
+
+    Subclasses that DO have a dedicated standard code (account, media buy,
+    package, ...) override ``_code`` and are unaffected — the spec's not-found
+    precedence prefers the resource-specific code when the resolved type is known
+    from the request, and this base is only the fallback.
     """
 
-    _default_status_code: ClassVar[int] = 404
-    _default_error_code: ClassVar[str] = "NOT_FOUND"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.REFERENCE_NOT_FOUND
 
 
-class AdCPAccountNotFoundError(AdCPNotFoundError):
+class AdCPAdapterResourceNotFoundError(AdCPNotFoundError[AdapterFailureDetails]):
+    """An ad server says a resource it owns does not exist (404, REFERENCE_NOT_FOUND).
+
+    A GAM ad unit, order or line item; a Broadstreet advertiser or campaign. The
+    resource belongs to the SELLER's ad server, so none of the entity-specific
+    not-found codes (account, media buy, package, product, creative, format, task)
+    describes it and the pin forbids minting a new one: error-handling.mdx says a
+    type "without a dedicated code" MUST fall back to ``REFERENCE_NOT_FOUND``.
+
+    Distinct from the base ``AdCPNotFoundError`` only in carrying a typed identity,
+    which is what the no-base-raise guard exists to require, and in taking
+    ``AdapterFailureDetails`` so the failing upstream call is nameable.
+
+    Inherits ``REFERENCE_NOT_FOUND`` and recovery=correctable from the base: the
+    buyer CAN act, by correcting the reference they supplied.
+    """
+
+
+class AdCPAccountNotFoundError(AdCPNotFoundError[EntityRefDetails]):
     """Account not found by ID or natural key (404, ACCOUNT_NOT_FOUND).
 
     Recovery=terminal per the pinned enumMetadata for ACCOUNT_NOT_FOUND —
@@ -773,28 +994,26 @@ class AdCPAccountNotFoundError(AdCPNotFoundError):
     match its INVALID_REQUEST wire code).
     """
 
-    _default_error_code: ClassVar[str] = "ACCOUNT_NOT_FOUND"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.ACCOUNT_NOT_FOUND
 
 
-class AdCPAccountSetupRequiredError(AdCPError):
+class AdCPAccountSetupRequiredError(AdCPSalesAgentError[AccountSetupDetails]):
     """Account exists but requires setup before use (422, ACCOUNT_SETUP_REQUIRED)."""
 
-    _default_status_code: ClassVar[int] = 422
-    _default_error_code: ClassVar[str] = "ACCOUNT_SETUP_REQUIRED"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.ACCOUNT_SETUP_REQUIRED
 
 
-class AdCPAccountSuspendedError(AdCPError):
+class AdCPAccountSuspendedError(AdCPSalesAgentError[EntityRefDetails]):
     """Account is suspended and cannot be used (403, ACCOUNT_SUSPENDED).
 
     Recovery=terminal per the pinned enumMetadata — declared explicitly
     (the base default is transient to match its SERVICE_UNAVAILABLE wire code).
     """
 
-    _default_status_code: ClassVar[int] = 403
-    _default_error_code: ClassVar[str] = "ACCOUNT_SUSPENDED"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.ACCOUNT_SUSPENDED
 
 
-class AdCPAccountPaymentRequiredError(AdCPError):
+class AdCPAccountPaymentRequiredError(AdCPSalesAgentError[EntityRefDetails]):
     """Account has outstanding payment requirements (402, ACCOUNT_PAYMENT_REQUIRED).
 
     Recovery=terminal: from the sales agent's perspective there is
@@ -804,11 +1023,10 @@ class AdCPAccountPaymentRequiredError(AdCPError):
     (the base default is transient to match its SERVICE_UNAVAILABLE wire code).
     """
 
-    _default_status_code: ClassVar[int] = 402
-    _default_error_code: ClassVar[str] = "ACCOUNT_PAYMENT_REQUIRED"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.ACCOUNT_PAYMENT_REQUIRED
 
 
-class AdCPConflictError(AdCPError):
+class AdCPConflictError(AdCPSalesAgentError[ConflictDetails]):
     """Resource conflict, e.g. duplicate idempotency key (409).
 
     Recovery=transient per the pinned error-code.json enumMetadata (CONFLICT):
@@ -818,19 +1036,18 @@ class AdCPConflictError(AdCPError):
     override this (#1417).
     """
 
-    _default_status_code: ClassVar[int] = 409
-    _default_error_code: ClassVar[str] = "CONFLICT"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.CONFLICT
 
 
 class AdCPAccountAmbiguousError(AdCPConflictError):
     """Natural key matches multiple accounts (409, ACCOUNT_AMBIGUOUS)."""
 
-    _default_error_code: ClassVar[str] = "ACCOUNT_AMBIGUOUS"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.ACCOUNT_AMBIGUOUS
     # ACCOUNT_AMBIGUOUS is correctable per the enum (the buyer disambiguates with
     # an explicit account_id) — override the transient CONFLICT parent (#1417).
 
 
-class AdCPGoneError(AdCPError):
+class AdCPGoneError(AdCPSalesAgentError[InvalidStateDetails]):
     """Resource previously existed but is no longer available (410).
 
     Recovery=correctable: the resource itself is gone, but the buyer can
@@ -838,11 +1055,10 @@ class AdCPGoneError(AdCPError):
     media buy) and re-issuing the request.
     """
 
-    _default_status_code: ClassVar[int] = 410
-    _default_error_code: ClassVar[str] = "INVALID_STATE"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.INVALID_STATE
 
 
-class AdCPBudgetExhaustedError(AdCPError):
+class AdCPBudgetExhaustedError(AdCPSalesAgentError[BudgetDetails]):
     """Budget or spend limit has been reached (422).
 
     Recovery=terminal per the pinned error-code.json enumMetadata (BUDGET_EXHAUSTED):
@@ -850,25 +1066,68 @@ class AdCPBudgetExhaustedError(AdCPError):
     budget — so the buyer agent must not retry (#1417).
     """
 
-    _default_status_code: ClassVar[int] = 422
-    _default_error_code: ClassVar[str] = "BUDGET_EXHAUSTED"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.BUDGET_EXHAUSTED
 
 
-class AdCPRateLimitError(AdCPError):
+class AdCPRateLimitError(AdCPSalesAgentError[AdapterFailureDetails]):
     """Too many requests (429)."""
 
-    _default_status_code: ClassVar[int] = 429
-    _default_error_code: ClassVar[str] = "RATE_LIMITED"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.RATE_LIMITED
 
 
-class AdCPAdapterError(AdCPError):
-    """External adapter (GAM, etc.) failure (502)."""
+class AdCPAdapterError(AdCPSalesAgentError[AdapterFailureDetails]):
+    """External adapter (GAM, etc.) failure.
 
-    _default_status_code: ClassVar[int] = 502
-    _default_error_code: ClassVar[str] = "SERVICE_UNAVAILABLE"
+    Answered 503, like everything else emitting SERVICE_UNAVAILABLE: the status
+    follows the code the buyer reads, and this class declared 502 against that
+    code until salesagent-pssfi. An ad-server call that actually failed has its
+    own 502 codes -- AD_SERVER_CREATE_FAILED / AD_SERVER_UPDATE_FAILED.
+    """
+
+    _code: ClassVar[ErrorCodeT] = ErrorCode.SERVICE_UNAVAILABLE
 
 
-class AdCPConfigurationError(AdCPError):
+class AdCPTenantUndefinedError(AdCPSalesAgentError[ErrorDetails]):
+    """The request named no seller this deployment serves (421, terminal).
+
+    A PLATFORM code, because AdCP defines none for this and the spec's vocabulary is open
+    (``core/error.json``; ``error-handling.mdx:845`` "sellers MAY return platform-specific
+    codes"). AdCP 3.1.1 is silent on tenant addressing -- a request is addressed to an
+    agent's URL and the mapping from that to a seller is this seller's own concern -- so
+    there is no published code to collapse this onto, and collapsing it would throw away the
+    one distinction a buyer can act on.
+
+    NOT ``CONFIGURATION_ERROR``, which this used to be. That code's pinned condition is a
+    seller-side deployment defect whose remediation is "report this to the seller's
+    operator", and after ``virtual_host`` became NOT NULL the seller-side sub-case cannot
+    occur: what reaches here is a caller naming an address this deployment answers for
+    nobody. The shipped edge is ``default_server`` / ``server_name _``, so a buyer holding a
+    stale URL and ordinary scanner traffic arrive exactly as an edge misroute would. Telling
+    those callers the SELLER is misconfigured points at the wrong party, and
+    ``error-handling.mdx:849`` then has their dashboards page the aggregate as a seller
+    outage.
+
+    TERMINAL, not correctable. ``correctable`` means "fix the request and resend"
+    (``core/error.json``), and no version of this request to THIS deployment succeeds:
+    naming a different host addresses a different agent, which is another request to another
+    seller rather than a correction of this one. The caller's move is to find the right
+    seller, not to resend.
+
+    421 Misdirected Request (RFC 9110 S15.5.20) says precisely this -- "directed at a server
+    that is unable or unwilling to produce an authoritative response for the target URI's
+    origin". Not 500, which would claim a fault on this side; not 404, which answers for a
+    resource inside a seller this request never identified.
+
+    CARRIES NO DETAILS. The address the caller supplied is what the operator needs and the
+    one thing the buyer must not be handed back, so it travels in the raise's ``__cause__``
+    to the server's record. The resolver is the only author
+    (``ruff-boundary.toml`` bans this class elsewhere, beside the two auth refusals).
+    """
+
+    _code: ClassVar[ErrorCodeT] = AppErrorCode.TENANT_UNDEFINED
+
+
+class AdCPConfigurationError(AdCPSalesAgentError[ConfigurationDetails]):
     """Server-side configuration is broken (500).
 
     Two families of raise site, one meaning — this deployment is pointed at
@@ -881,21 +1140,20 @@ class AdCPConfigurationError(AdCPError):
       answering with something unparseable. The address came from this
       deployment, not from the buyer, so the buyer has no lever either way.
 
-    Callers should NOT silently fall back. Recovery is ``terminal``: per the
-    pinned enum the buyer "cannot resolve a seller-side deployment
-    misconfiguration and MUST NOT auto-retry". Choosing this class IS how a
-    raise site says terminal — do not hand-type ``recovery="terminal"`` onto a
-    code the pin classifies otherwise. CONFIGURATION_ERROR is a
-    _SPEC_SUPPLEMENT_CODES pass-through — it reaches the wire untranslated
-    (#1430 review).
+    Callers should NOT silently fall back — the configuration needs admin
+    intervention, so recovery is ``terminal``: the buyer has no lever to fix
+    server config and per the pinned enum "MUST NOT auto-retry". Choosing this
+    class IS how a raise site says terminal; there is no ``recovery=`` knob to
+    say it with, because recovery is a function of the code (ADR-010).
+    CONFIGURATION_ERROR is a code the pinned table classifies — it reaches the
+    wire untranslated (#1430 review).
 
-    NOT for a buyer-supplied URL: that is ``AdCPBlockedUrlError``. Telling a
-    buyer the SELLER is misconfigured about an address they chose inverts the
-    provenance.
+    NOT for a buyer-supplied URL: that is :class:`AdCPUrlNotAllowedError`.
+    Telling a buyer the SELLER is misconfigured about an address they chose
+    inverts the provenance.
     """
 
-    _default_status_code: ClassVar[int] = 500
-    _default_error_code: ClassVar[str] = "CONFIGURATION_ERROR"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.CONFIGURATION_ERROR
 
 
 class AdCPPersistedStateError(AdCPConfigurationError):
@@ -929,7 +1187,7 @@ class AdCPPersistedStateError(AdCPConfigurationError):
     """
 
 
-class AdCPServiceUnavailableError(AdCPError):
+class AdCPServiceUnavailableError(AdCPSalesAgentError[AdapterFailureDetails]):
     """Service or product temporarily unavailable (503).
 
     503 indicates a temporary outage in a downstream service the sales
@@ -937,21 +1195,86 @@ class AdCPServiceUnavailableError(AdCPError):
     than mutate the request.
     """
 
-    _default_status_code: ClassVar[int] = 503
-    _default_error_code: ClassVar[str] = "SERVICE_UNAVAILABLE"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.SERVICE_UNAVAILABLE
+
+
+class AdCPInternalError(AdCPSalesAgentError[EntityRefDetails]):
+    """The seller's own state is inconsistent, so the request cannot be completed (500).
+
+    Distinct from AdCPServiceUnavailableError, which names a downstream outage, and from
+    AdCPValidationError, which says the buyer's request is at fault. This says neither: the
+    request was well formed and no dependency is down, but an invariant this seller relies
+    on did not hold. The buyer cannot fix it by changing anything, and recovery is transient
+    because the inconsistency may be a race that a retry resolves.
+
+    INTERNAL_ERROR is a platform code (AppErrorCode), legal on the wire because AdCP 3.1.1's
+    code vocabulary is open, and classified in CODE_TABLE like every other code this seller
+    emits.
+    """
+
+    _code: ClassVar[ErrorCodeT] = AppErrorCode.INTERNAL_ERROR
+
+
+class AdCPUrlNotAllowedError(AdCPValidationError):
+    """A buyer-supplied URL names a host this seller will not contact (400).
+
+    Emits the PUBLISHED ``VALIDATION_ERROR``, not a platform code. This class briefly
+    carried a minted ``URL_NOT_ALLOWED`` on the reasoning that VALIDATION_ERROR "tells a
+    buyer nothing they can act on differently". That reasoning does not survive the pin:
+    malformed-vs-value-refused is already the published INVALID_REQUEST / VALIDATION_ERROR
+    split (INVALID_REQUEST is "malformed, missing required fields, or violates schema
+    constraints"; VALIDATION_ERROR is "invalid field values or violates business rules
+    beyond schema validation"), and a schema-valid https URI refused by a deny-list is the
+    second. The pinned spec then applies it to this exact vector:
+    ``dist/docs/3.1.0/learning/specialist/security.mdx:84`` has the practitioner register
+    ``https://169.254.169.254/latest/meta-data/`` and "observe that the agent refuses it
+    synchronously with a ``VALIDATION_ERROR`` on ``notification_configs[].url``".
+
+    The open vocabulary permits minting a code the spec has NOT defined; it does not make
+    a private synonym of a published member a good idea, because a buyer switching on
+    ``error.code`` across sellers loses the ability to handle this uniformly.
+
+    The class survives the code change on purpose: the A2A boundary catches it BY TYPE to
+    select ``InvalidParamsError``, which a bare ``AdCPValidationError`` could not express
+    without also catching every other validation failure. Being a SUBCLASS costs nothing
+    there — ``isinstance`` still discriminates the URL refusal exactly.
+
+    It is a subclass rather than a sibling because two fail-closed handlers depend on the
+    subsumption, and both are load-bearing rather than incidental:
+    ``src/services/delivery_webhook_scheduler.py`` and ``src/core/context_manager.py`` each
+    wrap the registration gate (``webhooks/registration.py`` →
+    ``reject_unsafe_webhook_registration_url``) in ``except AdCPValidationError`` precisely
+    so a refused registration becomes a logged non-delivery instead of an exception that
+    kills the scheduler loop or fails a status transition. As a direct
+    ``AdCPSalesAgentError`` subclass — which is how this branch declared it — an SSRF
+    refusal escapes both. The parent's ``ValidationDetails`` replaces the
+    ``ValueRejectionDetails`` this class was parameterized on; no raise site in the tree
+    passes ``details=`` to it, so that parameter was carrying nothing.
+
+    The buyer's actionable signal is the CODE plus ``field`` (which URL was refused). The
+    rejection REASON never reaches the buyer -- the spec's Security Considerations forbid
+    disclosing internal service names, hostnames or IP addresses, so the cause rides
+    ``internal_detail`` (server log only). Deliberate loss in the switch: the retired
+    entry's suggestion enumerated the refused host classes, where VALIDATION_ERROR's is
+    the generic "review error details and fix field values". A per-class override is NOT
+    the fix -- it would make the suggestion a function of the class rather than the code,
+    which ADR-010 forbids (the override knob that once allowed it is deleted).
+    """
+
+    _code: ClassVar[ErrorCodeT] = ErrorCode.VALIDATION_ERROR
 
 
 # ---------------------------------------------------------------------------
 # Typed subclasses for spec-compliant error codes.
 # ---------------------------------------------------------------------------
-# Each subclass pins its wire error_code to a WIRE_STANDARD_CODES entry (SDK
-# STANDARD_ERROR_CODES plus the pinned-spec supplement), so
+# Each subclass pins its wire error_code to a CODE_TABLE entry (the pinned
+# enums/error-code.json plus this platform's own AppErrorCode members), so
 # raise sites can use semantic names (AdCPMediaBuyNotFoundError) instead of
-# constructing Error(code="MEDIA_BUY_NOT_FOUND") inline. The boundary
-# translator runs build_two_layer_error_envelope() on the raised exception.
+# constructing Error(code="MEDIA_BUY_NOT_FOUND") inline. The boundary builds an
+# ``AdcpErrorResponse`` from the raised exception.
 
 
-class AdCPMediaBuyNotFoundError(AdCPNotFoundError):
+class AdCPMediaBuyNotFoundError(AdCPNotFoundError[EntityRefDetails]):
     """Media buy lookup failed (404, MEDIA_BUY_NOT_FOUND).
 
     Recovery=correctable: the buyer can correct by supplying the right
@@ -960,10 +1283,10 @@ class AdCPMediaBuyNotFoundError(AdCPNotFoundError):
     case the buyer's own request is the lever for recovery.
     """
 
-    _default_error_code: ClassVar[str] = "MEDIA_BUY_NOT_FOUND"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.MEDIA_BUY_NOT_FOUND
 
 
-class AdCPPackageNotFoundError(AdCPNotFoundError):
+class AdCPPackageNotFoundError(AdCPNotFoundError[EntityRefDetails]):
     """Package lookup failed within a media buy (404, PACKAGE_NOT_FOUND).
 
     Recovery=correctable: the buyer can correct by supplying the right
@@ -971,10 +1294,10 @@ class AdCPPackageNotFoundError(AdCPNotFoundError):
     the same reason as ``AdCPMediaBuyNotFoundError``.
     """
 
-    _default_error_code: ClassVar[str] = "PACKAGE_NOT_FOUND"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.PACKAGE_NOT_FOUND
 
 
-class AdCPProductNotFoundError(AdCPNotFoundError):
+class AdCPProductNotFoundError(AdCPNotFoundError[ProductRefDetails]):
     """Requested product does not exist (404, PRODUCT_NOT_FOUND).
 
     Recovery=correctable: the buyer can correct by supplying a valid
@@ -982,13 +1305,13 @@ class AdCPProductNotFoundError(AdCPNotFoundError):
     ``AdCPNotFoundError`` ``terminal`` default for the same reason as
     ``AdCPMediaBuyNotFoundError`` — the buyer's own request is the lever
     for recovery. PRODUCT_NOT_FOUND is a standard SDK code (passthrough,
-    not in ERROR_CODE_MAPPING).
+    emitted as itself).
     """
 
-    _default_error_code: ClassVar[str] = "PRODUCT_NOT_FOUND"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.PRODUCT_NOT_FOUND
 
 
-class AdCPContextNotFoundError(AdCPNotFoundError):
+class AdCPContextNotFoundError(AdCPNotFoundError[EntityRefDetails]):
     """Buyer-supplied context_id does not resolve (404, SESSION_NOT_FOUND).
 
     A ``context_id`` that does not map to a persistent context is a not-found
@@ -996,68 +1319,83 @@ class AdCPContextNotFoundError(AdCPNotFoundError):
     delete path anywhere in ``src/``, so a non-resolving id never existed. That
     rules out ``AdCPGoneError`` (``INVALID_STATE``) — the correct wire code is
     ``SESSION_NOT_FOUND``, the standard SDK code for an unresolvable
-    session/context (passthrough, not in ERROR_CODE_MAPPING).
+    session/context (emitted as itself).
 
     Recovery=correctable: the buyer can correct by supplying a valid context_id
     or omitting it to start a fresh context. Overrides the ``AdCPNotFoundError``
     ``terminal`` default for the same reason as ``AdCPMediaBuyNotFoundError``.
     """
 
-    _default_error_code: ClassVar[str] = "SESSION_NOT_FOUND"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.SESSION_NOT_FOUND
 
 
-class AdCPCreativeNotFoundError(AdCPNotFoundError):
+class AdCPCreativeNotFoundError(AdCPNotFoundError[CreativeRefDetails]):
     """Requested creative does not exist (404, wire CREATIVE_NOT_FOUND).
 
     ``CREATIVE_NOT_FOUND`` is a pinned-spec wire code (enums/error-code.json @
     04f59d2d5): correctable, and MANDATED uniformly for any creative_id not
     owned by the calling account — never distinguish "exists under another
     principal/tenant" from "does not exist" (anti-enumeration). It reaches the
-    wire untranslated via the WIRE_STANDARD_CODES spec supplement.
+    wire untranslated: CODE_TABLE classifies it.
 
     Recovery=correctable: the buyer can correct by supplying a valid creative_id
     (discoverable via list_creatives / sync_creatives).
     """
 
-    _default_error_code: ClassVar[str] = "CREATIVE_NOT_FOUND"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.CREATIVE_NOT_FOUND
 
 
-class AdCPFormatNotFoundError(AdCPNotFoundError):
-    """Requested creative format does not exist on the agent (404, wire → INVALID_REQUEST).
+class AdCPFormatNotFoundError(AdCPNotFoundError[EntityRefDetails]):
+    """Requested creative format does not exist on the agent (404, REFERENCE_NOT_FOUND).
 
-    No standard ``FORMAT_NOT_FOUND`` SDK code exists, so the raw code is internal
-    and translated to ``INVALID_REQUEST`` at the wire boundary. The gain over the
-    bare ``AdCPNotFoundError`` is recovery=correctable + a typed identity.
+    Emits the PUBLISHED ``REFERENCE_NOT_FOUND``, not a minted ``FORMAT_NOT_FOUND``.
+    The pinned spec forbids the latter by name: release-notes.mdx (#2704) lists
+    ``FORMAT_NOT_FOUND`` among eleven custom codes that "collapse to
+    ``REFERENCE_NOT_FOUND`` with ``error.field`` naming the failed parameter" and
+    closes "Sellers returning any of the 11 collapsed codes today MUST switch to
+    ``REFERENCE_NOT_FOUND``". error-handling.mdx restates it generally: "Typed
+    parameters that lack a dedicated standard code MUST use ``REFERENCE_NOT_FOUND``
+    rather than minting a custom ``*_NOT_FOUND`` code".
 
-    Recovery=correctable: the buyer can correct by supplying a valid format_id
-    (discoverable via list_creative_formats).
+    This is NOT the open-vocabulary allowance. An open vocabulary permits a code
+    the spec has not defined; it does not permit one the spec explicitly REMOVED
+    and replaced under a MUST.
+
+    ``field="format_id"`` is retained deliberately. The uniform-response rule
+    requires a type-NEUTRAL field when naming it would leak a polymorphic
+    parameter's resolved type, but creative/specification.mdx names this exact
+    case the other way: "``REFERENCE_NOT_FOUND``: Requested format does not exist
+    or is not accessible (``error.field`` identifies the ``format_id``)".
     """
 
-    _default_error_code: ClassVar[str] = "FORMAT_NOT_FOUND"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.REFERENCE_NOT_FOUND
 
 
-class AdCPTaskNotFoundError(AdCPNotFoundError):
-    """Requested workflow task/step does not exist (404, wire → INVALID_REQUEST).
+class AdCPTaskNotFoundError(AdCPNotFoundError[EntityRefDetails]):
+    """Requested workflow task/step does not exist (404, REFERENCE_NOT_FOUND).
 
-    No standard ``TASK_NOT_FOUND`` SDK code exists, so the raw code is internal
-    and translated to ``INVALID_REQUEST`` at the wire boundary. The gain over the
-    bare ``AdCPNotFoundError`` is recovery=correctable + a typed identity.
+    ``TASK_NOT_FOUND`` is not among the eight resource-specific not-found codes
+    the pinned spec enumerates (PRODUCT/PACKAGE/MEDIA_BUY/CREATIVE/SIGNAL/SESSION/
+    ACCOUNT/PLAN), so error-handling.mdx's general MUST applies: "Typed parameters
+    that lack a dedicated standard code MUST use ``REFERENCE_NOT_FOUND`` rather
+    than minting a custom ``*_NOT_FOUND`` code -- the vocabulary grows by upstream
+    spec change, not by per-seller inflation."
 
-    Recovery=correctable: the buyer can correct by supplying a valid task_id
-    (discoverable via list_tasks).
+    Positively graded upstream: the get_products_async storyboard step
+    ``get_products_task_status_wrong_account`` expects ``REFERENCE_NOT_FOUND``, and
+    ``get_task_status`` is a registered MCP tool, so this envelope is buyer-facing.
     """
 
-    _default_error_code: ClassVar[str] = "TASK_NOT_FOUND"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.REFERENCE_NOT_FOUND
 
 
-class AdCPBudgetTooLowError(AdCPError):
+class AdCPBudgetTooLowError(AdCPSalesAgentError[BudgetDetails]):
     """Requested budget falls below product minimum (422, BUDGET_TOO_LOW)."""
 
-    _default_status_code: ClassVar[int] = 422
-    _default_error_code: ClassVar[str] = "BUDGET_TOO_LOW"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.BUDGET_TOO_LOW
 
 
-class AdCPCapabilityNotSupportedError(AdCPError):
+class AdCPCapabilityNotSupportedError(AdCPSalesAgentError[CapabilityRefusalDetails]):
     """Requested capability is not supported by this seller (422, UNSUPPORTED_FEATURE).
 
     .. note::
@@ -1071,13 +1409,11 @@ class AdCPCapabilityNotSupportedError(AdCPError):
 
         Only the adcp SDK's ``STANDARD_ERROR_CODES`` table classifies it
         ``terminal``; the SDK is not authoritative (the pinned spec enum is),
-        so its table diverges from the spec here. If the SDK runtime ever
-        starts enforcing ``terminal`` at the wire (rejecting our spec-correct
-        ``correctable`` hint), reconcile with the SDK then.
+        so its table diverges from the spec here. Nothing here reads that
+        table, so the divergence cannot reach the wire.
     """
 
-    _default_status_code: ClassVar[int] = 422
-    _default_error_code: ClassVar[str] = "UNSUPPORTED_FEATURE"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.UNSUPPORTED_FEATURE
 
 
 class AdCPIdempotencyConflictError(AdCPConflictError):
@@ -1087,13 +1423,12 @@ class AdCPIdempotencyConflictError(AdCPConflictError):
     ORIGINAL bytes under the same key, or mint a fresh idempotency_key for the
     new payload. This matches the AdCP 3.0.1 prose example envelope and the
     conformance storyboard's stated expectation. The SDK's
-    ``STANDARD_ERROR_CODES`` table classifies the code ``terminal``, but that
-    table is only a default applied when no recovery is supplied — an explicit
-    recovery always wins, and nothing in the SDK or the storyboard's machine
-    validations grades the value.
+    ``STANDARD_ERROR_CODES`` table classifies the code ``terminal`` and is
+    simply wrong about it: nothing here reads that table, and ``recovery`` is
+    loaded from the pinned ``enumMetadata``, which says ``correctable``.
     """
 
-    _default_error_code: ClassVar[str] = "IDEMPOTENCY_CONFLICT"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.IDEMPOTENCY_CONFLICT
 
 
 class AdCPIdempotencyExpiredError(AdCPConflictError):
@@ -1113,191 +1448,220 @@ class AdCPIdempotencyExpiredError(AdCPConflictError):
     description classifies the code ``correctable`` (that buyer-recovery path),
     and the recovery taxonomy reserves ``terminal`` for conditions requiring
     HUMAN action (account suspended, payment required) — not an agent-resolvable
-    retry. The SDK's ``STANDARD_ERROR_CODES`` default table lists it ``terminal``,
-    but that default applies only when no recovery is supplied; an explicit
-    recovery wins, exactly as for ``IDEMPOTENCY_CONFLICT``.
+    retry. The SDK's ``STANDARD_ERROR_CODES`` table lists it ``terminal`` and is
+    wrong about it, exactly as for ``IDEMPOTENCY_CONFLICT``: nothing here reads
+    that table, and the value emitted is the pinned one.
     """
 
-    _default_error_code: ClassVar[str] = "IDEMPOTENCY_EXPIRED"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.IDEMPOTENCY_EXPIRED
 
 
-class AdCPCreativeRejectedError(AdCPError):
+class AdCPCreativeRejectedError(AdCPSalesAgentError[CreativeRejectionDetails]):
     """Creative failed policy or technical validation (422, CREATIVE_REJECTED)."""
 
-    _default_status_code: ClassVar[int] = 422
-    _default_error_code: ClassVar[str] = "CREATIVE_REJECTED"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.CREATIVE_REJECTED
 
 
-class AdCPBudgetExceededError(AdCPError):
+# The structural provenance rejections of core/creative-policy.json: "Sellers that publish a
+# requirement here MUST enforce it on creative submission: a sync_creatives request that
+# omits a required field is rejected with the corresponding PROVENANCE_* error code". All
+# four are correctable per the pinned enumMetadata, and each names in ``field`` the
+# provenance path it inspected.
+
+
+class AdCPProvenanceRequiredError(AdCPSalesAgentError[EntityRefDetails]):
+    """No provenance object on the creative or any asset under a policy requiring one (422)."""
+
+    _code: ClassVar[ErrorCodeT] = ErrorCode.PROVENANCE_REQUIRED
+
+
+class AdCPProvenanceDigitalSourceTypeMissingError(AdCPSalesAgentError[EntityRefDetails]):
+    """Provenance present but ``digital_source_type`` absent under require_digital_source_type (422)."""
+
+    _code: ClassVar[ErrorCodeT] = ErrorCode.PROVENANCE_DIGITAL_SOURCE_TYPE_MISSING
+
+
+class AdCPProvenanceDisclosureMissingError(AdCPSalesAgentError[EntityRefDetails]):
+    """Provenance present but no usable ``disclosure`` block under require_disclosure_metadata (422)."""
+
+    _code: ClassVar[ErrorCodeT] = ErrorCode.PROVENANCE_DISCLOSURE_MISSING
+
+
+class AdCPProvenanceEmbeddedMissingError(AdCPSalesAgentError[EntityRefDetails]):
+    """Provenance present but no ``embedded_provenance`` entry under require_embedded_provenance (422)."""
+
+    _code: ClassVar[ErrorCodeT] = ErrorCode.PROVENANCE_EMBEDDED_MISSING
+
+
+class AdCPBudgetExceededError(AdCPSalesAgentError[BudgetDetails]):
     """Requested budget exceeds tenant or product ceiling (422, BUDGET_EXCEEDED)."""
 
-    _default_status_code: ClassVar[int] = 422
-    _default_error_code: ClassVar[str] = "BUDGET_EXCEEDED"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.BUDGET_EXCEEDED
 
 
-class AdCPProductUnavailableError(AdCPError):
-    """Product is offline, deactivated, or otherwise unavailable (422, PRODUCT_UNAVAILABLE)."""
+class AdCPProductUnavailableError(AdCPSalesAgentError[EntityRefDetails]):
+    """Product is offline, sold out, deactivated, or otherwise unavailable (422).
 
-    _default_status_code: ClassVar[int] = 422
-    _default_error_code: ClassVar[str] = "PRODUCT_UNAVAILABLE"
+    Emits the PUBLISHED ``PRODUCT_UNAVAILABLE``, whose pinned description covers
+    the whole condition: "The requested product is sold out or no longer
+    available."
+
+    This absorbed ``AdCPInventoryUnavailableError``, which was the same error
+    under a second name: same 422, same ``PRODUCT_UNAVAILABLE``, same
+    correctable recovery, and nothing anywhere caught or ``isinstance``-checked
+    the two apart. Two classes emitting one code with identical handling give a
+    buyer no distinction to switch on and give a raise site a coin to flip. The
+    distinction that DOES matter -- which product, and why -- belongs in
+    ``details``.
+    """
+
+    _code: ClassVar[ErrorCodeT] = ErrorCode.PRODUCT_UNAVAILABLE
 
 
 # ---------------------------------------------------------------------------
-# Adapter-taxonomy subclasses (502 → SERVICE_UNAVAILABLE).
+# Adapter-taxonomy subclasses.
 # ---------------------------------------------------------------------------
-# These extend AdCPAdapterError to carry an internal failure taxonomy as the
-# class identity instead of smuggling it through ``details["internal_code"]``
-# (which is buyer-visible). The raw ``error_code`` stays in INTERNAL_CODES for
-# server-side logs/audit; ``wire_error_code`` translates it to
-# SERVICE_UNAVAILABLE via ERROR_CODE_MAPPING so the buyer sees a standard code.
+# These extend AdCPAdapterError to carry a failure taxonomy as the class identity
+# instead of smuggling it through ``details["internal_code"]`` (which is
+# buyer-visible). Each class's ``error_code`` now reaches the buyer AS ITSELF: the
+# AdCP vocabulary is open, so a specific platform code plus its recovery tells the
+# buyer more than a collapse onto SERVICE_UNAVAILABLE did.
 
 
 class AdCPWorkflowError(AdCPAdapterError):
-    """Workflow-step orchestration failed inside an adapter (502 → SERVICE_UNAVAILABLE).
+    """Workflow-step orchestration failed inside an adapter (WORKFLOW_CREATION_FAILED, 502).
 
-    Carries the WORKFLOW_CREATION_FAILED taxonomy as the class identity so
-    logs/audit retain the specific failure mode while the wire shows the
-    standard SERVICE_UNAVAILABLE. Recovery=transient (inherited): the
-    workflow subsystem may succeed on retry.
+    Carries the WORKFLOW_CREATION_FAILED taxonomy as the class identity, and
+    that code is what reaches the buyer -- so 502 is its status, read from the
+    code like every other. Recovery=transient: the workflow subsystem may
+    succeed on retry.
     """
 
-    _default_error_code: ClassVar[str] = "WORKFLOW_CREATION_FAILED"
+    _code: ClassVar[ErrorCodeT] = AppErrorCode.WORKFLOW_CREATION_FAILED
 
 
 class AdCPLineItemError(AdCPAdapterError):
-    """Adapter line-item creation failed (502 → SERVICE_UNAVAILABLE).
+    """Adapter line-item creation failed (SERVICE_UNAVAILABLE, 503).
 
-    Carries the LINE_ITEM_CREATION_FAILED taxonomy as the class identity;
-    same rationale as ``AdCPWorkflowError``.
+    The one adapter-taxonomy subclass that declares no code of its own: it
+    inherits ``AdCPAdapterError``'s SERVICE_UNAVAILABLE, and therefore that
+    code's 503. It read 502 until salesagent-pssfi gave the code the status.
     """
 
-    _default_error_code: ClassVar[str] = "LINE_ITEM_CREATION_FAILED"
+    _code: ClassVar[ErrorCodeT] = AppErrorCode.AD_SERVER_CREATE_FAILED
 
 
 class AdCPBulkUpdateError(AdCPAdapterError):
-    """A bulk update partially failed — N operations attempted, M failed (502 → SERVICE_UNAVAILABLE).
+    """A bulk update partially failed — N operations attempted, M failed (PARTIAL_FAILURE, 502).
 
     Unifies the cross-adapter partial-failure event under one class and one
-    status (502) so REST clients filtering on HTTP status don't fork by
-    adapter (previously broadstreet raised 502, GAM raised 503 for the same
-    semantic event). Carries the PARTIAL_FAILURE taxonomy as the class
+    status so REST clients filtering on HTTP status don't fork by adapter
+    (previously broadstreet raised 502, GAM raised 503 for the same semantic
+    event). Carries the PARTIAL_FAILURE taxonomy as the class
     identity; per-operation detail (failed IDs, counts) belongs in ``details``
-    as data. Recovery=transient (inherited): failed operations may succeed
-    on retry.
+    as data.
+
+    Recovery is CORRECTABLE, from ``CODE_TABLE[PARTIAL_FAILURE]``. This said
+    "transient (inherited)" — byte-identical to main, where it was true — and both
+    halves expired here: the value is correctable, and there is no class-level
+    recovery knob left to inherit one from. ``recovery`` is a read-only property
+    resolved from the table at every read, so no class states it and this sentence
+    reports it rather than declaring it.
     """
 
-    _default_error_code: ClassVar[str] = "PARTIAL_FAILURE"
+    _code: ClassVar[ErrorCodeT] = AppErrorCode.PARTIAL_FAILURE
 
 
 class AdCPActivationWorkflowError(AdCPAdapterError):
-    """Adapter order/line-item activation workflow failed (502 → SERVICE_UNAVAILABLE).
+    """Adapter order/line-item activation workflow failed (ACTIVATION_WORKFLOW_FAILED, 502).
 
     Distinct from ``AdCPWorkflowError`` (creation): this is the activation step
     of an existing order. Carries the ACTIVATION_WORKFLOW_FAILED taxonomy as the
     class identity; same wire mapping as the other adapter-workflow failures.
     """
 
-    _default_error_code: ClassVar[str] = "ACTIVATION_WORKFLOW_FAILED"
+    _code: ClassVar[ErrorCodeT] = AppErrorCode.ACTIVATION_WORKFLOW_FAILED
 
 
 class AdCPGamUpdateError(AdCPAdapterError):
-    """A GAM line-item update API call failed (502 → SERVICE_UNAVAILABLE).
+    """A GAM line-item update API call failed (AD_SERVER_UPDATE_FAILED, 502).
 
     Carries the GAM_UPDATE_FAILED taxonomy as the class identity; per-operation
     detail (package_id, line_item_id) belongs in ``details`` as data.
     """
 
-    _default_error_code: ClassVar[str] = "GAM_UPDATE_FAILED"
+    _code: ClassVar[ErrorCodeT] = AppErrorCode.AD_SERVER_UPDATE_FAILED
 
 
-class AdCPMediaBuyRejectedError(AdCPError):
-    """The seller declined the media buy (422 → POLICY_VIOLATION).
+class AdCPMediaBuyRejectedError(AdCPSalesAgentError[RejectionReasonDetails]):
+    """The seller declined the media buy (MEDIA_BUY_REJECTED, 422, terminal).
 
-    A business rejection, not a server failure: recovery=correctable so the
-    buyer can adjust the request and resubmit. Carries the MEDIA_BUY_REJECTED
-    taxonomy as the class identity; the wire code is the standard POLICY_VIOLATION.
+    A business rejection rather than a server failure, and the buyer cannot make this
+    request succeed by correcting it — the seller declined, so recovery is TERMINAL.
+
+    All three of those were wrong here, in one sentence each: the docstring said
+    "422 → POLICY_VIOLATION", "recovery=correctable", and "the wire code is the standard
+    POLICY_VIOLATION". Every one was true on main, where ``ERROR_CODE_MAPPING`` collapsed
+    MEDIA_BUY_REJECTED to POLICY_VIOLATION. This change deletes that collapse: the class's
+    own ``_code`` IS the wire code, and ``recovery`` is a read-only property over
+    ``CODE_TABLE``, which answers terminal. Nothing reads a docstring, so none of this
+    misrouted a response — but with the class-level recovery knob gone, these sentences are
+    the only per-class statement of a raise site's recovery contract in ``src/``, and a
+    reader picking a class for a new raise site reads them.
     """
 
-    _default_status_code: ClassVar[int] = 422
-    _default_error_code: ClassVar[str] = "MEDIA_BUY_REJECTED"
+    _code: ClassVar[ErrorCodeT] = AppErrorCode.MEDIA_BUY_REJECTED
 
 
-class AdCPInventoryUnavailableError(AdCPError):
-    """Requested inventory is not available (422 → PRODUCT_UNAVAILABLE).
+class AdCPNotCancellableError(AdCPSalesAgentError[InvalidStateDetails]):
+    """A cancel refused by the buy's own state (NOT_CANCELLABLE, 410, correctable).
 
-    recovery=correctable: the buyer can select different inventory. Carries the
-    INVENTORY_UNAVAILABLE taxonomy as the class identity; the wire code is the
-    standard PRODUCT_UNAVAILABLE.
+    The SPECIALIZATION of INVALID_STATE that the pin reserves for one input: a cancel. 3.1's
+    enum carries both codes and separates them by what was asked, not by what went wrong --
+    "The media buy or package cannot be canceled in its current state" against INVALID_STATE's
+    "Operation is not permitted for the resource's current status". So a terminal buy answers
+    NOT_CANCELLABLE to a cancel and INVALID_STATE to anything else, which is the split
+    ``BR-UC-003-update-media-buy.feature`` already states.
+
+    Carries ``InvalidStateDetails`` for the same reason its generic sibling does: the fact the
+    buyer needs is ``current_status`` -- a re-cancel is refused because the buy is already
+    canceled, and the status is what says so.
     """
 
-    _default_status_code: ClassVar[int] = 422
-    _default_error_code: ClassVar[str] = "INVENTORY_UNAVAILABLE"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.NOT_CANCELLABLE
 
 
-# ---------------------------------------------------------------------------
-# Two-layer envelope serializer — single source of truth for wire shape.
-# ---------------------------------------------------------------------------
-# All three boundary translators (MCP, A2A, REST) and
-# ContextManager.audit_workflow_step_failure call this so wire
-# responses and persisted workflow_step.response_data share the same
-# two-layer shape. _impl functions never build wire shape; they raise
-# AdCPError subclasses and the boundary translator runs this.
-#
-# Spec: two-layer model is normative since AdCP 3.0.0 (``error-handling.mdx``).
-# Storyboard runners (@adcp/sdk 6.11.0+) check errors[0].code (when
-# success===false) AND adcp_error.code; missing either layer causes the
-# runner to synthesize "MCP_ERROR" and erase the real code.
+class AdcpFailure(Exception):
+    """A failed tool call, carrying the response that says so. THE edge exception.
 
+    One type, and its payload is an ``AdcpErrorResponse``. The boundary raises it; the three
+    transports catch it, serialize ``self.response`` and set their own wire failure marker --
+    an HTTP status, a ``ToolError``, a failed A2A Task state. That marker is the only part of
+    a refusal that is genuinely per-transport.
 
-def build_two_layer_error_envelope(exc: AdCPError) -> dict[str, Any]:
-    """Build the AdCP spec-compliant two-layer error envelope from an exception.
+    WHY AN EXCEPTION AND NOT A RETURN VALUE. A return can be ignored; a raise cannot. Business
+    logic across fourteen tools calls services that call services, and a caller that forgets to
+    check a returned failure proceeds on it silently. So the signal stays unignorable.
 
-    Wraps the stable ``adcp_error()`` SDK helper for the payload half
-    (``errors[]``), then mirrors the single error object at envelope level
-    as ``adcp_error`` so the storyboard runner can read either path. Echoes
-    ``exc.context`` when present.
+    WHY IT CARRIES A RESPONSE. The thing a transport must write is a response --
+    ``core/protocol-envelope.json`` declares ``adcp_error``, ``context`` and a required
+    ``status`` on every response envelope -- so a transport handed a bare exception has to
+    build one, and three of them did, from a hand-assembled dict that could carry no ``status``.
+    Carrying the response means the conversion happens once, where the request's ``context`` is
+    still in hand.
 
-    Returns:
-        Plain dict with shape::
-
-            {
-                "adcp_error": {"code": "...", "message": "...", "recovery": "...", ...},
-                "errors": [{"code": "...", "message": "...", "recovery": "...", ...}],
-                "context": {...},     # only when exc.context is set
-            }
-
-    Both codes pass through ``ERROR_CODE_MAPPING`` via ``exc.wire_error_code``
-    so they always land in ``WIRE_STANDARD_CODES`` (the SDK's
-    ``STANDARD_ERROR_CODES`` plus the pinned-spec supplement, e.g.
-    ``CREATIVE_NOT_FOUND``).
+    Business logic keeps raising ``AdCPSalesAgentError`` subclasses and never sees this class:
+    the boundary is what turns one into the other.
     """
-    payload = adcp_error(
-        exc.wire_error_code,
-        exc.message,
-        recovery=exc.recovery,
-        field=exc.field,
-        suggestion=exc.suggestion,
-        retry_after=exc.retry_after,
-        details=exc.details,
-    )
-    # Copy errors[0] for the envelope-level mirror so callers that mutate one
-    # layer don't accidentally mutate the other (aliasing footgun once both
-    # layers may be mutated independently).
-    envelope: dict[str, Any] = {
-        "adcp_error": dict(payload["errors"][0]),
-        "errors": payload["errors"],
-    }
-    serialized_context = _serialize_context(exc.context)
-    if serialized_context is not None:
-        envelope["context"] = serialized_context
-    return envelope
+
+    def __init__(self, response: AdcpErrorResponse) -> None:
+        super().__init__(response.adcp_error.message if response.adcp_error else "tool call failed")
+        self.response = response
 
 
 # Canonical buyer-facing suggestions from error-code.json enumMetadata (AdCP 3.1.1):
 # each code carries its own default hint, so a VALIDATION_ERROR must not borrow
 # INVALID_REQUEST's text.
-INVALID_REQUEST_SUGGESTION = "check request parameters and fix"
-VALIDATION_ERROR_SUGGESTION = "review error details and fix field values"
 
 
 def first_validation_error_field(validation_error: ValidationError) -> str | None:
@@ -1323,42 +1687,86 @@ def first_validation_error_field(validation_error: ValidationError) -> str | Non
     return "".join(parts)
 
 
-def build_validation_error_details(errors: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    """Project Pydantic errors into the buyer-safe structured detail shape."""
-    return {
-        "validation_errors": [
-            {
-                "loc": list(error.get("loc", ())),
-                "msg": error.get("msg"),
-                "type": error.get("type"),
-            }
-            for error in errors
-        ]
-    }
-
-
-def normalize_to_adcp_error(exc: Exception) -> AdCPError:
-    """Normalize untyped exceptions to typed AdCPError subclasses.
+def adcp_error_for(exc: Exception, field: str | None = None) -> AdCPSalesAgentError:
+    """Normalize untyped exceptions to typed AdCPSalesAgentError subclasses.
 
     Single source of truth for the wrapping applied at all three transport
-    boundaries (MCP, A2A, REST). Already-typed ``AdCPError`` passes through
+    boundaries (MCP, A2A, REST). Already-typed ``AdCPSalesAgentError`` passes through
     unchanged. Pydantic ``ValidationError`` maps to a structured, sanitized
     ``AdCPValidationError``; other ``ValueError`` instances map to the plain
     validation error, ``PermissionError`` to ``AdCPAuthorizationError``, and
-    anything else wraps in base ``AdCPError`` (INTERNAL_ERROR).
+    anything else names INTERNAL_ERROR on the base.
+
+    Every branch keeps its type mapping and carries NO text: an untyped exception's
+    string has no provenance guarantee (it may be a DB DSN, a stack fragment, or an
+    upstream response body -- AdCP 3.1.1 transport-errors.mdx Security Considerations
+    MUST-NOT list), and the code's own table sentence is what the buyer sees. The
+    original exception is still logged in full server-side by the transport
+    boundary's record_boundary_error() / audit logger. This function logs nothing:
+    a typed error's cause is on its ``__cause__`` chain (every raise site that wraps
+    an exception raises ``from`` it), and the boundary writes that chain once.
     """
-    if isinstance(exc, AdCPError):
+    if isinstance(exc, AdCPSalesAgentError):
         return exc
+    # The SDK's checklist refusal, which is the one untyped exception in this function that
+    # already KNOWS its code -- as a string, because checks 1-13 run inside
+    # ``adcp.signing.verifier`` and it reports which one failed the only way it can.
+    # ``_SIGNATURE_ERROR_BY_CODE`` is the written-out string-to-class table for exactly that
+    # seam; a code this seller does not classify is a ``KeyError`` HERE rather than a 500
+    # three frames later.
+    #
+    # ``internal_detail`` carries the SDK exception itself, never its text: it holds the
+    # checklist step and a diagnostic sentence, which AdCP 3.1.1 transport-errors.mdx
+    # § Security Considerations keeps out of a buyer-facing field. Same rule as every other
+    # branch here -- a type mapping and no text.
+    if isinstance(exc, SignatureVerificationError):
+        return _SIGNATURE_ERROR_BY_CODE[SignatureErrorCode(exc.code)](internal_detail=exc)
+    # A pydantic ValidationError is BY CONSTRUCTION a schema-constraint violation, and
+    # 3.1/enums/error-code.json is explicit about which code that earns:
+    #   INVALID_REQUEST  "malformed, missing required fields, or violates SCHEMA CONSTRAINTS"
+    #   VALIDATION_ERROR "invalid field values or violates business rules BEYOND schema validation"
+    # So this branch maps to INVALID_REQUEST; the plain-ValueError branch below stays
+    # VALIDATION_ERROR, because a ValueError our own business logic raises is exactly the
+    # "beyond schema validation" case. REST already answered INVALID_REQUEST here, so this
+    # also closes the MCP/A2A-vs-REST divergence rather than merely documenting it.
     if isinstance(exc, ValidationError):
+        # ValidationError is checked BEFORE ValueError deliberately: a pydantic
+        # ValidationError IS a ValueError subclass, so the order decides whether a
+        # buyer gets the field and issues or a bare VALIDATION_ERROR.
         errors = exc.errors()
-        return AdCPValidationError(
-            errors[0].get("msg") if errors else "Request failed schema validation",
-            field=first_validation_error_field(exc),
-            suggestion=VALIDATION_ERROR_SUGGESTION,
-            details=build_validation_error_details(errors),
+        return AdCPInvalidRequestError(
+            field=field if field is not None else first_validation_error_field(exc),
+            issues=issues_from_validation_error(errors),
         )
     if isinstance(exc, ValueError):
-        return AdCPValidationError(str(exc))
+        return AdCPValidationError()
     if isinstance(exc, PermissionError):
-        return AdCPAuthorizationError(str(exc))
-    return AdCPError(str(exc) or type(exc).__name__)
+        return AdCPAuthorizationError()
+    return AdCPInternalError()
+
+
+# ---------------------------------------------------------------------------
+# Names origin/main spells differently
+# ---------------------------------------------------------------------------
+# An alias, not a class: the pair below is ONE concept that the two branches
+# named differently, so binding a second name costs nothing, while defining a
+# second class would put two answers on the wire for one failure.
+#
+# ``AdCPBlockedUrlError`` is origin/main's name for the SSRF refusal, and the two
+# were ONE condition, not two: the pinned 3.1.1 ``enums/error-code.json`` defines
+# no URL/SSRF code at all (the nearest, AGENT_BLOCKED, is about a blocked AGENT),
+# and both branches already resolved a refused URL to the same published
+# VALIDATION_ERROR — "invalid field values or violates business rules beyond
+# schema validation", as against INVALID_REQUEST's "malformed ... or violates
+# schema constraints". A schema-valid https URI refused by a deny-list is the
+# former. So the spec distinguishes nothing here for a second class to carry, and
+# there is one class with one alias.
+#
+# The surviving class takes origin/main's HIERARCHY (subclass of
+# AdCPValidationError) and this branch's NAME and body — see the class docstring
+# for why the hierarchy half is a behavior fix rather than a preference.
+# origin/main's other difference, an authored ``_default_message`` ("URL resolves
+# to a restricted range."), is subsumed: the message here is the code's own table
+# sentence, which is the ADR-010 rule the whole taxonomy follows and which keeps
+# the refused host out of buyer-facing text by construction.
+AdCPBlockedUrlError = AdCPUrlNotAllowedError

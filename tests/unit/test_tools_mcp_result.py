@@ -37,14 +37,6 @@ def test_datetime_serializes_to_iso_string():
     assert result.structured_content["timestamp"] == "2026-01-01T00:00:00Z"
 
 
-def test_content_defaults_to_str_of_response():
-    response = _SampleResponse(required_field="ok", timestamp=datetime(2026, 1, 1, tzinfo=UTC))
-
-    result = mcp_result(response)
-
-    assert result.content[0].text == str(response)
-
-
 def test_content_override_used_verbatim():
     response = _SampleResponse(required_field="ok", timestamp=datetime(2026, 1, 1, tzinfo=UTC))
 

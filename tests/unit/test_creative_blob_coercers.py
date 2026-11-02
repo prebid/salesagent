@@ -7,7 +7,18 @@ the whole listing:
 
 * ``_coerce_blob_scalar``   — string fields (``concept_id`` / ``concept_name``)
 * ``_coerce_blob_str_list`` — ``list[str]`` (``tags``)
-* ``_coerce_blob_dict``     — ``dict``      (``assets``)
+* ``_coerce_blob_assets``   — the typed asset map (``assets``)
+
+``_coerce_blob_assets`` is where ``_coerce_blob_dict`` went. Commit ecfdd7771 ("wire
+models conform by inheritance") made ``Creative.assets`` inherit the library's typed
+asset map instead of a local ``dict[str, Any]``, so guaranteeing dict-*ness* was no
+longer enough: the coercer now validates the stored value against the pinned asset
+union (``ASSET_MAP``, ``core/creative-asset.json``) at the row-to-model read, which is
+the inner validation the old docstring deferred to #1779. The obligation is unchanged —
+a corrupt value drops to ``None`` with a warning rather than crashing the listing — and
+what counts as corrupt is now strictly larger: a well-formed dict that is not a valid
+asset map used to pass through to the wire and is now dropped, which the class below
+grades directly.
 
 The integration guards in ``tests/integration/test_list_creatives_concept_filter.py``
 pin the wiring (DB → reader → every wire transport, that omission/stringify survives
@@ -23,7 +34,7 @@ import pytest
 
 from src.core.tools.creatives.listing import (
     _blob_log_context,
-    _coerce_blob_dict,
+    _coerce_blob_assets,
     _coerce_blob_scalar,
     _coerce_blob_str_list,
 )
@@ -135,19 +146,48 @@ class TestCoerceBlobStrList:
         assert mock_logger.debug.call_count == 1
 
 
-class TestCoerceBlobDict:
-    """Dicts (and None) pass through; a non-dict drops to None + warn."""
+class TestCoerceBlobAssets:
+    """A valid asset map (and None) passes; anything the pinned union refuses drops + warns."""
 
-    @pytest.mark.parametrize("value", [None, {}, {"banner": {"url": "x"}}])
-    def test_dicts_and_none_pass_without_warning(self, value, mock_logger):
-        assert _coerce_blob_dict(value, "assets") == value
+    #: One asset the pinned union accepts: a ``text`` asset under a ``^[a-z0-9_]+$`` key.
+    _VALID = {"headline": {"asset_type": "text", "content": "Hi"}}
+
+    def test_none_passes_without_warning(self, mock_logger):
+        assert _coerce_blob_assets(None, "assets") is None
         assert mock_logger.warning.call_count == 0
 
-    @pytest.mark.parametrize("value", [["a"], "str", 123, True])
-    def test_non_dict_is_dropped_and_logged(self, value, mock_logger):
-        assert _coerce_blob_dict(value, "assets") is None
+    def test_empty_map_is_preserved_not_collapsed(self, mock_logger):
+        # The sibling list coercer collapses [] to None; an empty object is instead the
+        # presence-preserving projection of a required field, so {} survives.
+        assert _coerce_blob_assets({}, "assets") == {}
+        assert mock_logger.warning.call_count == 0
+
+    def test_valid_map_is_validated_into_typed_assets(self, mock_logger):
+        coerced = _coerce_blob_assets(self._VALID, "assets")
+
+        # The value comes back as the pinned model, not the stored dict: this read is the
+        # one place a row becomes a model, so a passthrough of the raw blob would be the
+        # regression (the model is what Creative then carries).
+        assert set(coerced) == {"headline"}
+        assert coerced["headline"].root.content == "Hi"
+        assert mock_logger.warning.call_count == 0
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            ["a"],
+            "str",
+            123,
+            True,
+            {"banner": {"url": "x"}},  # a dict, but not a member of the asset union
+            {"Bad-Key": {"asset_type": "text", "content": "Hi"}},  # key fails the pinned pattern
+            {"headline": None},  # a null asset value
+        ],
+    )
+    def test_a_value_the_union_refuses_is_dropped_and_logged(self, value, mock_logger):
+        assert _coerce_blob_assets(value, "assets") is None
         assert _warnings(mock_logger) == [
-            f"Dropping non-dict assets value of type {type(value).__name__} from creative listing"
+            f"Dropping invalid-assets assets value of type {type(value).__name__} from creative listing"
         ]
 
 
@@ -162,7 +202,7 @@ class TestFieldLabelIsRequired:
         [
             (_coerce_blob_scalar, ["x"]),
             (_coerce_blob_str_list, [1]),
-            (_coerce_blob_dict, ["x"]),
+            (_coerce_blob_assets, ["x"]),
         ],
     )
     def test_field_label_has_no_default(self, coercer, arg):
@@ -188,10 +228,10 @@ class TestLogContextAttribution:
             f"Dropping non-scalar concept_id value of type list from creative listing{self._CTX}"
         ]
 
-    def test_dict_non_dict_drop_carries_context(self, mock_logger):
-        _coerce_blob_dict(["x"], "assets", log_context=self._CTX)
+    def test_assets_drop_carries_context(self, mock_logger):
+        _coerce_blob_assets(["x"], "assets", log_context=self._CTX)
         assert _warnings(mock_logger) == [
-            f"Dropping non-dict assets value of type list from creative listing{self._CTX}"
+            f"Dropping invalid-assets assets value of type list from creative listing{self._CTX}"
         ]
 
     def test_list_non_list_drop_carries_context(self, mock_logger):

@@ -76,7 +76,6 @@ from tests.harness.transport import Transport, TransportResult
 
 # Webhook registration -> delivery envs
 from tests.harness.webhook_registration import (
-    A2APushRegistrationEnv,
     MediaBuyPushRegistrationEnv,
 )
 
@@ -105,7 +104,6 @@ __all__ = [
     # Protocol webhook env
     "ProtocolWebhookEnv",
     # Webhook registration -> delivery envs
-    "A2APushRegistrationEnv",
     "MediaBuyPushRegistrationEnv",
     # Transport
     "Transport",

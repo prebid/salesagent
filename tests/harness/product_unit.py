@@ -1,8 +1,8 @@
 """ProductEnv — unit test environment for _get_products_impl.
 
-Patches: ProductUoW, get_principal_object, convert_product_model_to_schema,
-         PolicyCheckService, generate_variants_for_brief, DynamicPricingService,
-         get_factory (ranking), resolve_property_list, get_adapter.
+Patches: ProductUoW, convert_product_model_to_schema, PolicyCheckService,
+         generate_variants_for_brief, DynamicPricingService, get_factory (ranking),
+         resolve_property_list, get_adapter.
 
 Usage::
 
@@ -14,7 +14,6 @@ Usage::
 
 Available mocks via env.mock:
     "uow"                  -- ProductUoW class mock
-    "principal"            -- get_principal_object mock
     "convert"              -- convert_product_model_to_schema mock (identity)
     "policy_service"       -- PolicyCheckService class mock
     "dynamic_variants"     -- generate_variants_for_brief AsyncMock
@@ -29,16 +28,18 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import MagicMock
 
+from src.core.product_conversion import default_reporting_capabilities
 from src.core.schemas import Product
+from tests.factories.product import PricingOptionRequestFactory
 from tests.harness._base import BaseTestEnv
 from tests.harness._mixins import ProductMixin
 
-_DEFAULT_PRICING_OPTION = {
-    "pricing_model": "cpm",
-    "rate": "5.00",
-    "currency": "USD",
-    "pricing_option_id": "po_default",
-}
+#: The factory's baseline, not a hand-written twin of it. The one delta against the
+#: literal this replaced is ``max_bid: False``, which is ``CpmPricingOption``'s OWN
+#: default surfaced by the dump (it defaults to ``False``, not ``None``, so
+#: ``exclude_none`` keeps it) — measured: the ``Product`` built from either dict
+#: round-trips identically.
+_DEFAULT_PRICING_OPTION = PricingOptionRequestFactory.payload()
 
 _DEFAULT_PUBLISHER_PROPERTY = {
     "selection_type": "all",
@@ -59,10 +60,18 @@ def _make_product(
     delivery_measurement: dict[str, str] | None = None,
     publisher_properties: list[dict[str, Any]] | None = None,
     estimated_exposures: int | None = None,
+    reporting_capabilities: Any | None = None,
     **extra: Any,
 ) -> Product:
-    """Build a Product schema instance for unit testing."""
+    """Build a Product schema instance for unit testing.
+
+    ``reporting_capabilities`` is required by core/product.json and carries no default on
+    the wire model, so the harness supplies the same value production's row-to-model read
+    supplies for a row that stores NULL — asked of ``default_reporting_capabilities``
+    rather than restated here, so a harness product cannot drift from a converted one.
+    """
     return Product(
+        reporting_capabilities=reporting_capabilities or default_reporting_capabilities(),
         product_id=product_id,
         name=name,
         description=description,
@@ -99,7 +108,6 @@ class ProductEnv(ProductMixin, BaseTestEnv):
     MODULE = "src.core.tools.products"
     EXTERNAL_PATCHES = {
         "uow": "src.core.database.repositories.uow.ProductUoW",
-        "principal": f"{MODULE}.get_principal_object",
         "convert": f"{MODULE}.convert_product_model_to_schema",
         "policy_service": f"{MODULE}.PolicyCheckService",
         "dynamic_variants": "src.services.dynamic_products.generate_variants_for_brief",
@@ -117,13 +125,6 @@ class ProductEnv(ProductMixin, BaseTestEnv):
         self._uow_instance: MagicMock | None = None
 
     def _configure_mocks(self) -> None:
-        # Principal: return a valid mock principal
-        self.mock["principal"].return_value = MagicMock(
-            principal_id=self._principal_id,
-            name="Test Principal",
-            platform_mappings={"mock": {"advertiser_id": "test_adv"}},
-        )
-
         # UoW: context manager with product repository
         self._uow_instance = MagicMock()
         self._uow_instance.products = MagicMock()

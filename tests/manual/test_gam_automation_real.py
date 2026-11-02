@@ -21,7 +21,6 @@ Environment Variables:
 """
 
 import argparse
-import json
 import os
 import sys
 from datetime import datetime, timedelta
@@ -51,11 +50,11 @@ class GAMAutomationTester:
         self.created_orders: list[str] = []
         self.test_tenant_id = "gam_test_tenant"
 
+        # The schema Principal declares principal_id, name and platform_mappings, and
+        # nothing else: no credential, and no tenant (the identity carries the tenant).
         self.principal = Principal(
-            tenant_id=self.test_tenant_id,
             principal_id="test_advertiser",
             name="GAM Test Advertiser",
-            access_token="test_token",
             platform_mappings={"gam_advertiser_id": advertiser_id},
         )
 
@@ -74,7 +73,7 @@ class GAMAutomationTester:
                 tenant_id=self.test_tenant_id,
                 product_id="gam_test_auto",
                 name="GAM Auto Activation Test",
-                implementation_config=json.dumps(
+                implementation_config=(
                     {
                         "order_name_template": "TEST-AUTO-{po_number}-{timestamp}",
                         "line_item_type": "NETWORK",
@@ -95,7 +94,7 @@ class GAMAutomationTester:
                 tenant_id=self.test_tenant_id,
                 product_id="gam_test_confirm",
                 name="GAM Confirmation Test",
-                implementation_config=json.dumps(
+                implementation_config=(
                     {
                         "order_name_template": "TEST-CONF-{po_number}-{timestamp}",
                         "line_item_type": "HOUSE",
@@ -116,7 +115,7 @@ class GAMAutomationTester:
                 tenant_id=self.test_tenant_id,
                 product_id="gam_test_manual",
                 name="GAM Manual Test",
-                implementation_config=json.dumps(
+                implementation_config=(
                     {
                         "order_name_template": "TEST-MANUAL-{po_number}-{timestamp}",
                         "line_item_type": "NETWORK",
@@ -137,7 +136,7 @@ class GAMAutomationTester:
                 tenant_id=self.test_tenant_id,
                 product_id="gam_test_guaranteed",
                 name="GAM Guaranteed Test",
-                implementation_config=json.dumps(
+                implementation_config=(
                     {
                         "order_name_template": "TEST-GUARANTEED-{po_number}-{timestamp}",
                         "line_item_type": "STANDARD",
@@ -158,7 +157,7 @@ class GAMAutomationTester:
                 tenant_id=self.test_tenant_id,
                 product_id="gam_test_lifecycle_network",
                 name="GAM Lifecycle Network Test",
-                implementation_config=json.dumps(
+                implementation_config=(
                     {
                         "order_name_template": "TEST-LIFECYCLE-NET-{po_number}-{timestamp}",
                         "line_item_type": "NETWORK",
@@ -178,7 +177,7 @@ class GAMAutomationTester:
                 tenant_id=self.test_tenant_id,
                 product_id="gam_test_lifecycle_standard",
                 name="GAM Lifecycle Standard Test",
-                implementation_config=json.dumps(
+                implementation_config=(
                     {
                         "order_name_template": "TEST-LIFECYCLE-STD-{po_number}-{timestamp}",
                         "line_item_type": "STANDARD",
@@ -198,7 +197,7 @@ class GAMAutomationTester:
                 tenant_id=self.test_tenant_id,
                 product_id="gam_test_lifecycle_standard_block",
                 name="GAM Lifecycle Block Test",
-                implementation_config=json.dumps(
+                implementation_config=(
                     {
                         "order_name_template": "TEST-LIFECYCLE-BLOCK-{po_number}-{timestamp}",
                         "line_item_type": "STANDARD",
@@ -218,7 +217,7 @@ class GAMAutomationTester:
                 tenant_id=self.test_tenant_id,
                 product_id="gam_test_lifecycle_archive",
                 name="GAM Lifecycle Archive Test",
-                implementation_config=json.dumps(
+                implementation_config=(
                     {
                         "order_name_template": "TEST-LIFECYCLE-ARCH-{po_number}-{timestamp}",
                         "line_item_type": "HOUSE",
@@ -268,7 +267,6 @@ class GAMAutomationTester:
             network_code=self.network_code,
             advertiser_id=self.advertiser_id,
             trafficker_id=self.trafficker_id,
-            dry_run=False,  # REAL GAM CALLS
             tenant_id=self.test_tenant_id,
         )
 
@@ -281,6 +279,7 @@ class GAMAutomationTester:
         )
 
         request = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             po_number="AUTO001",
             total_budget=10.00,
@@ -330,7 +329,6 @@ class GAMAutomationTester:
             network_code=self.network_code,
             advertiser_id=self.advertiser_id,
             trafficker_id=self.trafficker_id,
-            dry_run=False,
             tenant_id=self.test_tenant_id,
         )
 
@@ -339,6 +337,7 @@ class GAMAutomationTester:
         )
 
         request = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             po_number="CONF001",
             total_budget=5.00,
@@ -389,7 +388,6 @@ class GAMAutomationTester:
             network_code=self.network_code,
             advertiser_id=self.advertiser_id,
             trafficker_id=self.trafficker_id,
-            dry_run=False,
             tenant_id=self.test_tenant_id,
         )
 
@@ -398,6 +396,7 @@ class GAMAutomationTester:
         )
 
         request = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             po_number="MAN001",
             total_budget=7.50,
@@ -447,7 +446,6 @@ class GAMAutomationTester:
             network_code=self.network_code,
             advertiser_id=self.advertiser_id,
             trafficker_id=self.trafficker_id,
-            dry_run=False,
             tenant_id=self.test_tenant_id,
         )
 
@@ -460,6 +458,7 @@ class GAMAutomationTester:
         )
 
         request = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             po_number="GUAR001",
             total_budget=500.00,
@@ -509,7 +508,6 @@ class GAMAutomationTester:
             network_code=self.network_code,
             advertiser_id=self.advertiser_id,
             trafficker_id=self.trafficker_id,
-            dry_run=False,  # REAL GAM CALLS
             tenant_id=self.test_tenant_id,
         )
 
@@ -523,6 +521,7 @@ class GAMAutomationTester:
         )
 
         request = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             po_number="LIFECYCLE001",
             total_budget=7.50,
@@ -578,7 +577,6 @@ class GAMAutomationTester:
             network_code=self.network_code,
             advertiser_id=self.advertiser_id,
             trafficker_id=self.trafficker_id,
-            dry_run=False,  # REAL GAM CALLS
             tenant_id=self.test_tenant_id,
         )
 
@@ -592,6 +590,7 @@ class GAMAutomationTester:
         )
 
         request = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             po_number="LIFECYCLE002",
             total_budget=20.00,
@@ -645,7 +644,6 @@ class GAMAutomationTester:
             network_code=self.network_code,
             advertiser_id=self.advertiser_id,
             trafficker_id=self.trafficker_id,
-            dry_run=False,  # REAL GAM CALLS
             tenant_id=self.test_tenant_id,
         )
 
@@ -659,6 +657,7 @@ class GAMAutomationTester:
         )
 
         request = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             po_number="LIFECYCLE003",
             total_budget=15.00,
@@ -716,7 +715,6 @@ class GAMAutomationTester:
             network_code=self.network_code,
             advertiser_id=self.advertiser_id,
             trafficker_id=self.trafficker_id,
-            dry_run=False,  # REAL GAM CALLS
             tenant_id=self.test_tenant_id,
         )
 
@@ -730,6 +728,7 @@ class GAMAutomationTester:
         )
 
         request = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             po_number="LIFECYCLE004",
             total_budget=1.00,
@@ -806,7 +805,6 @@ class GAMAutomationTester:
             network_code=self.network_code,
             advertiser_id=self.advertiser_id,
             trafficker_id=self.trafficker_id,
-            dry_run=False,
             tenant_id=self.test_tenant_id,
         )
 

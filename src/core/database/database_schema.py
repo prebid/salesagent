@@ -68,7 +68,8 @@ CREATE TABLE IF NOT EXISTS principals (
     principal_id VARCHAR(100) NOT NULL,
     name VARCHAR(255) NOT NULL,
     platform_mappings JSONB NOT NULL,
-    access_token VARCHAR(255) UNIQUE NOT NULL,
+    token_hash VARCHAR(64) UNIQUE NOT NULL,
+    token_prefix VARCHAR(16) NOT NULL,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     PRIMARY KEY (tenant_id, principal_id),
     FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE
@@ -143,7 +144,7 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 CREATE INDEX IF NOT EXISTS idx_subdomain ON tenants(subdomain);
 CREATE INDEX IF NOT EXISTS idx_products_tenant ON products(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_principals_tenant ON principals(tenant_id);
-CREATE INDEX IF NOT EXISTS idx_principals_token ON principals(access_token);
+CREATE INDEX IF NOT EXISTS idx_principals_token_hash ON principals(token_hash);
 CREATE INDEX IF NOT EXISTS idx_users_tenant ON users(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE INDEX IF NOT EXISTS idx_users_google_id ON users(google_id);

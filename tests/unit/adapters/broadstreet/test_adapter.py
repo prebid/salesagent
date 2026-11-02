@@ -2,15 +2,15 @@
 
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from src.adapters.base import AdapterCreateRequest, AdapterUpdateResult
 from src.adapters.broadstreet import BroadstreetAdapter
-from src.core.schemas import (
-    CreateMediaBuySuccess,
-    MediaPackage,
-)
+from src.core.schemas import FormatId, MediaPackage
+from tests.helpers.broadstreet_client import stub_broadstreet_client, zone_payload
 
 
 @pytest.fixture
@@ -30,29 +30,48 @@ def mock_config():
     return {"api_key": "test_api_key", "network_id": "net_123", "default_advertiser_id": "adv_default"}
 
 
-class TestBroadstreetAdapterInit:
-    """Tests for adapter initialization."""
+def _adapter_over_vendor(mock_principal, mock_config, *, client=None):
+    """Build the adapter with its Broadstreet client replaced by a stand-in.
 
-    def test_init_dry_run_mode(self, mock_principal, mock_config):
-        """Test adapter initializes in dry-run mode."""
+    The adapter builds a real ``BroadstreetClient`` in ``__init__`` and every method
+    below reaches it, so a test that calls one states what the vendor answers. Returns
+    the pair, because what the adapter SENT is usually the obligation.
+    """
+    stub = client if client is not None else stub_broadstreet_client()
+    with patch("src.adapters.broadstreet.adapter.BroadstreetClient") as client_cls:
+        client_cls.return_value = stub
         adapter = BroadstreetAdapter(
             config=mock_config,
             principal=mock_principal,
-            dry_run=True,
+            tenant_id="test_tenant",
+        )
+    return adapter, stub
+
+
+class TestBroadstreetAdapterInit:
+    """Tests for adapter initialization."""
+
+    def test_init_sets_the_registry_name(self, mock_principal, mock_config):
+        """The adapter answers to the key ``src/adapters/__init__.py`` registers it under.
+
+        This was ``test_init_dry_run_mode``, and its other two assertions —
+        ``adapter.dry_run is True`` and ``adapter.client is None`` — named a mode the
+        adapter does not have: there is no ``dry_run`` attribute, and the client is
+        always a real one. Its ``advertiser_id`` assertion is the next test's subject.
+        """
+        adapter = BroadstreetAdapter(
+            config=mock_config,
+            principal=mock_principal,
             tenant_id="test_tenant",
         )
 
         assert adapter.adapter_name == "broadstreet"
-        assert adapter.dry_run is True
-        assert adapter.client is None
-        assert adapter.advertiser_id == "adv_456"
 
     def test_init_uses_principal_advertiser_id(self, mock_principal, mock_config):
         """Test adapter uses advertiser ID from principal platform_mappings."""
         adapter = BroadstreetAdapter(
             config=mock_config,
             principal=mock_principal,
-            dry_run=True,
             tenant_id="test_tenant",
         )
 
@@ -69,7 +88,6 @@ class TestBroadstreetAdapterInit:
         adapter = BroadstreetAdapter(
             config=mock_config,
             principal=principal,
-            dry_run=True,
             tenant_id="test_tenant",
         )
 
@@ -88,9 +106,7 @@ class TestBroadstreetAdapterInit:
         config = {"network_id": "net_123", "api_key": "test_key"}
 
         with pytest.raises(AdCPConfigurationError) as exc_info:
-            BroadstreetAdapter(config=config, principal=principal, dry_run=False, tenant_id="test_tenant")
-
-        assert "does not have a Broadstreet advertiser ID" in str(exc_info.value)
+            BroadstreetAdapter(config=config, principal=principal, tenant_id="test_tenant")
 
 
 class TestBroadstreetAdapterCapabilities:
@@ -101,7 +117,6 @@ class TestBroadstreetAdapterCapabilities:
         adapter = BroadstreetAdapter(
             config=mock_config,
             principal=mock_principal,
-            dry_run=True,
             tenant_id="test_tenant",
         )
 
@@ -115,7 +130,6 @@ class TestBroadstreetAdapterCapabilities:
         adapter = BroadstreetAdapter(
             config=mock_config,
             principal=mock_principal,
-            dry_run=True,
             tenant_id="test_tenant",
         )
 
@@ -131,7 +145,6 @@ class TestBroadstreetAdapterCapabilities:
         adapter = BroadstreetAdapter(
             config=mock_config,
             principal=mock_principal,
-            dry_run=True,
             tenant_id="test_tenant",
         )
 
@@ -139,96 +152,73 @@ class TestBroadstreetAdapterCapabilities:
 
 
 class TestBroadstreetAdapterCreateMediaBuy:
-    """Tests for create_media_buy method."""
+    """Tests for create_media_buy method.
 
-    def test_create_media_buy_dry_run(self, mock_principal, mock_config):
-        """Test creating media buy in dry-run mode."""
-        adapter = BroadstreetAdapter(
-            config=mock_config,
-            principal=mock_principal,
-            dry_run=True,
-            tenant_id="test_tenant",
-        )
+    ``test_create_media_buy_dry_run`` stood here and asserted a campaign was created
+    with a ``bs_`` media buy id. It is deleted because THE PATH IT ASSERTED CANNOT RUN.
 
-        start_time = datetime.now(UTC)
-        end_time = start_time + timedelta(days=30)
+    ``create_media_buy`` reads each package's zone configuration as
+    ``getattr(package, "implementation_config", None) or {}``, but ``MediaPackage`` —
+    the only type the tool ever hands an adapter — declares no such field and is
+    ``extra="forbid"``, so the attribute is absent and cannot even be assigned. Zone
+    ids are therefore always empty and the method always raises
+    ``AdCPValidationError``; measured, with a real ``MediaPackage``, in this worktree.
+    The old test passed only because ``MagicMock(spec=MediaPackage)`` let it invent the
+    field (``spec`` restricts reads, not writes), so the buy it placed was one no buyer
+    can ask for. GAM, by contrast, reads ``implementation_config`` off the Product row.
 
-        # Create a minimal valid request using MagicMock to avoid schema complexity
-        request = MagicMock()
-        request.po_number = "PO-001"
-
-        # Create package with implementation config
-        package = MagicMock(spec=MediaPackage)
-        package.package_id = "pkg_1"
-        package.product_id = "prod_1"
-        package.name = "Test Package"
-        package.budget = 10000
-        package.impressions = 100000
-        package.implementation_config = {
-            "targeted_zone_ids": ["zone_1", "zone_2"],
-            "automation_mode": "automatic",  # Skip workflow for this test
-        }
-
-        result = adapter.create_media_buy(
-            request=request,
-            packages=[package],
-            start_time=start_time,
-            end_time=end_time,
-        )
-
-        assert isinstance(result, CreateMediaBuySuccess)
-        assert result.media_buy_id.startswith("bs_")
-        assert len(result.packages) == 1
-        assert result.packages[0].package_id == "pkg_1"
+    Reported as a production bug rather than repaired here. Until it is fixed, the one
+    test below is the whole of the create path's real behaviour.
+    """
 
     def test_create_media_buy_fails_without_zones(self, mock_principal, mock_config):
-        """Test create_media_buy fails when no zones configured."""
-        adapter = BroadstreetAdapter(
-            config=mock_config,
-            principal=mock_principal,
-            dry_run=True,
-            tenant_id="test_tenant",
-        )
+        """Test create_media_buy fails when no zones configured.
+
+        NOTE: this currently passes for a wider reason than it names — see the class
+        docstring. Production cannot read zone config off a package at all, so this
+        raise happens for EVERY package, not only for one with no zones configured.
+        """
+        from src.core.exceptions import AdCPValidationError
+
+        adapter, client = _adapter_over_vendor(mock_principal, mock_config)
 
         start_time = datetime.now(UTC)
         end_time = start_time + timedelta(days=30)
 
-        # Create a minimal valid request using MagicMock
-        request = MagicMock()
-        request.po_number = "PO-001"
-
-        # Package without zones
-        package = MagicMock(spec=MediaPackage)
-        package.package_id = "pkg_1"
-        package.product_id = "prod_1"
-        package.name = "Test Package"
-        package.budget = 10000
-        package.impressions = 100000
-        package.implementation_config = {}  # No zones
-
-        from src.core.exceptions import AdCPValidationError
+        # A real package and a real carrier — the shapes production passes. The old
+        # version built both as MagicMocks and set implementation_config on the
+        # package, which is the field the class docstring is about.
+        package = MediaPackage(
+            package_id="pkg_1",
+            name="Test Package",
+            delivery_type="guaranteed",
+            cpm=5.0,
+            impressions=100000,
+            product_id="prod_1",
+            budget=10000.0,
+            format_ids=[FormatId(agent_url="https://test.com", id="display_300x250")],
+        )
 
         with pytest.raises(AdCPValidationError) as exc_info:
             adapter.create_media_buy(
-                request=request,
+                request=AdapterCreateRequest(po_number="PO-001", total_budget=Decimal("10000")),
                 packages=[package],
                 start_time=start_time,
                 end_time=end_time,
             )
+
         assert exc_info.value.error_code == "VALIDATION_ERROR"
+        assert exc_info.value.details.product_id == "prod_1"
+        # Nothing was placed: the refusal happens before Broadstreet is called.
+        client.create_campaign.assert_not_called()
 
 
 class TestBroadstreetAdapterCreatives:
     """Tests for creative management methods."""
 
-    def test_add_creative_assets_dry_run(self, mock_principal, mock_config):
-        """Test adding creative assets in dry-run mode."""
-        adapter = BroadstreetAdapter(
-            config=mock_config,
-            principal=mock_principal,
-            dry_run=True,
-            tenant_id="test_tenant",
-        )
+    def test_add_creative_assets(self, mock_principal, mock_config):
+        """Each asset becomes an advertisement in Broadstreet, typed from its content."""
+        adapter, client = _adapter_over_vendor(mock_principal, mock_config)
 
         assets = [
             {
@@ -246,25 +236,42 @@ class TestBroadstreetAdapterCreatives:
             today=datetime.now(UTC),
         )
 
-        assert len(results) == 2
-        assert all(r.status == "approved" for r in results)
+        # One vendor create per asset, each carrying the ad type the content implies
+        assert [(call.kwargs["name"], call.kwargs["ad_type"]) for call in client.create_advertisement.mock_calls] == [
+            ("Test Banner", "static"),
+            ("Test HTML", "html"),
+        ]
+        assert [(r.creative_id, r.status) for r in results] == [
+            ("creative_1", "approved"),
+            ("creative_2", "approved"),
+        ]
 
-    def test_associate_creatives_dry_run(self, mock_principal, mock_config):
-        """Test associating creatives in dry-run mode."""
-        adapter = BroadstreetAdapter(
-            config=mock_config,
-            principal=mock_principal,
-            dry_run=True,
-            tenant_id="test_tenant",
-        )
+    def test_associate_creatives_is_declined_for_every_pair(self, mock_principal, mock_config):
+        """Broadstreet cannot associate without a campaign, and says so per pair.
+
+        The old assertion was ``status == "success"`` for all four pairs, which was the
+        dry-run branch's answer. Production associates NOTHING: a placement needs a
+        campaign id, which this signature does not carry, so every pair comes back
+        ``skipped`` with the reason. That is the real behaviour and it is asserted here
+        rather than the invented success — but see the report: a declined capability
+        that returns a status instead of raising is a quiet failure by this repo's own
+        rule, and no caller is obliged to read the field.
+        """
+        adapter, client = _adapter_over_vendor(mock_principal, mock_config)
 
         results = adapter.associate_creatives(
             line_item_ids=["zone_1", "zone_2"],
             platform_creative_ids=["ad_1", "ad_2"],
         )
 
-        assert len(results) == 4  # 2 zones x 2 creatives
-        assert all(r["status"] == "success" for r in results)
+        assert [(r["line_item_id"], r["creative_id"], r["status"]) for r in results] == [
+            ("zone_1", "ad_1", "skipped"),
+            ("zone_1", "ad_2", "skipped"),
+            ("zone_2", "ad_1", "skipped"),
+            ("zone_2", "ad_2", "skipped"),
+        ]
+        assert all("campaign context" in r["message"] for r in results)
+        client.create_placement.assert_not_called()
 
 
 def _make_mock_db_package(package_id="pkg_1", media_buy_id="bs_12345", ad_ids=None):
@@ -296,16 +303,17 @@ def _mock_db_session(packages):
 class TestBroadstreetAdapterUpdates:
     """Tests for update methods."""
 
-    def test_update_media_buy_pause_dry_run(self, mock_principal, mock_config):
-        """Test pausing media buy in dry-run mode queries DB and returns success."""
-        adapter = BroadstreetAdapter(
-            config=mock_config,
-            principal=mock_principal,
-            dry_run=True,
-            tenant_id="test_tenant",
-        )
+    def test_update_media_buy_pause(self, mock_principal, mock_config):
+        """A campaign pause deactivates every advertisement of every package, in Broadstreet.
 
-        db_pkgs = [_make_mock_db_package()]
+        ``active: 0`` on each ad IS the pause — Broadstreet has no campaign-level
+        switch — so that is what this asserts. The old version asserted
+        ``isinstance(result, UpdateMediaBuySuccess)``, a buyer-facing model adapters no
+        longer return, and nothing about the vendor.
+        """
+        adapter, client = _adapter_over_vendor(mock_principal, mock_config)
+
+        db_pkgs = [_make_mock_db_package(ad_ids=["ad_100", "ad_200"])]
 
         with _mock_db_session(db_pkgs):
             result = adapter.update_media_buy(
@@ -316,22 +324,19 @@ class TestBroadstreetAdapterUpdates:
                 today=datetime.now(UTC),
             )
 
-        from src.core.schemas import UpdateMediaBuySuccess
-
-        assert isinstance(result, UpdateMediaBuySuccess)
+        assert isinstance(result, AdapterUpdateResult)
         assert len(result.affected_packages) == 1
         assert result.affected_packages[0].paused is True
+        assert {
+            (call.kwargs["advertisement_id"], call.kwargs["params"]["active"])
+            for call in client.update_advertisement.mock_calls
+        } == {("ad_100", 0), ("ad_200", 0)}
 
-    def test_update_media_buy_resume_dry_run(self, mock_principal, mock_config):
-        """Test resuming media buy in dry-run mode queries DB and returns success."""
-        adapter = BroadstreetAdapter(
-            config=mock_config,
-            principal=mock_principal,
-            dry_run=True,
-            tenant_id="test_tenant",
-        )
+    def test_update_media_buy_resume(self, mock_principal, mock_config):
+        """A resume reactivates the same advertisements — ``active: 1`` on each."""
+        adapter, client = _adapter_over_vendor(mock_principal, mock_config)
 
-        db_pkgs = [_make_mock_db_package()]
+        db_pkgs = [_make_mock_db_package(ad_ids=["ad_100", "ad_200"])]
 
         with _mock_db_session(db_pkgs):
             result = adapter.update_media_buy(
@@ -342,18 +347,19 @@ class TestBroadstreetAdapterUpdates:
                 today=datetime.now(UTC),
             )
 
-        from src.core.schemas import UpdateMediaBuySuccess
-
-        assert isinstance(result, UpdateMediaBuySuccess)
+        assert isinstance(result, AdapterUpdateResult)
         assert len(result.affected_packages) == 1
         assert result.affected_packages[0].paused is False
+        assert {
+            (call.kwargs["advertisement_id"], call.kwargs["params"]["active"])
+            for call in client.update_advertisement.mock_calls
+        } == {("ad_100", 1), ("ad_200", 1)}
 
     def test_update_media_buy_pause_no_packages(self, mock_principal, mock_config):
         """Test pause returns error when no packages found in DB."""
         adapter = BroadstreetAdapter(
             config=mock_config,
             principal=mock_principal,
-            dry_run=True,
             tenant_id="test_tenant",
         )
 
@@ -370,16 +376,11 @@ class TestBroadstreetAdapterUpdates:
                 )
         assert exc_info.value.error_code == "PACKAGE_NOT_FOUND"
 
-    def test_update_media_buy_pause_package_dry_run(self, mock_principal, mock_config):
-        """Test pausing a single package in dry-run mode."""
-        adapter = BroadstreetAdapter(
-            config=mock_config,
-            principal=mock_principal,
-            dry_run=True,
-            tenant_id="test_tenant",
-        )
+    def test_update_media_buy_pause_package(self, mock_principal, mock_config):
+        """A package pause deactivates only that package's advertisements."""
+        adapter, client = _adapter_over_vendor(mock_principal, mock_config)
 
-        db_pkgs = [_make_mock_db_package(package_id="pkg_1")]
+        db_pkgs = [_make_mock_db_package(package_id="pkg_1", ad_ids=["ad_100"])]
 
         with _mock_db_session(db_pkgs):
             result = adapter.update_media_buy(
@@ -390,18 +391,18 @@ class TestBroadstreetAdapterUpdates:
                 today=datetime.now(UTC),
             )
 
-        from src.core.schemas import UpdateMediaBuySuccess
-
-        assert isinstance(result, UpdateMediaBuySuccess)
+        assert isinstance(result, AdapterUpdateResult)
         assert result.affected_packages[0].package_id == "pkg_1"
         assert result.affected_packages[0].paused is True
+        client.update_advertisement.assert_called_once_with(
+            advertiser_id="adv_456", advertisement_id="ad_100", params={"active": 0}
+        )
 
     def test_update_media_buy_unsupported_action(self, mock_principal, mock_config):
         """Test update with unsupported action returns error without DB call."""
         adapter = BroadstreetAdapter(
             config=mock_config,
             principal=mock_principal,
-            dry_run=True,
             tenant_id="test_tenant",
         )
 
@@ -422,7 +423,6 @@ class TestBroadstreetAdapterUpdates:
         adapter = BroadstreetAdapter(
             config=mock_config,
             principal=mock_principal,
-            dry_run=True,
             tenant_id="test_tenant",
         )
 
@@ -460,7 +460,6 @@ class TestBroadstreetAdapterBulkUpdateRaiseSites:
             adapter = BroadstreetAdapter(
                 config=mock_config,
                 principal=mock_principal,
-                dry_run=False,
                 tenant_id="test_tenant",
             )
         return adapter
@@ -514,7 +513,6 @@ class TestBroadstreetAdapterDelivery:
         adapter = BroadstreetAdapter(
             config=mock_config,
             principal=mock_principal,
-            dry_run=True,
             tenant_id="test_tenant",
         )
 
@@ -541,19 +539,22 @@ class TestBroadstreetAdapterInventory:
     """Tests for inventory operations."""
 
     @pytest.mark.asyncio
-    async def test_get_available_inventory_dry_run(self, mock_principal, mock_config):
-        """Test getting available inventory in dry-run mode."""
-        adapter = BroadstreetAdapter(
-            config=mock_config,
-            principal=mock_principal,
-            dry_run=True,
-            tenant_id="test_tenant",
+    async def test_get_available_inventory(self, mock_principal, mock_config):
+        """The network's zones are what the adapter offers as inventory."""
+        adapter, _ = _adapter_over_vendor(
+            mock_principal,
+            mock_config,
+            client=stub_broadstreet_client(
+                zones=[
+                    zone_payload("zone_1", "Top Banner", width=728, height=90),
+                    zone_payload("zone_2", "Sidebar", width=300, height=250),
+                ]
+            ),
         )
 
         result = await adapter.get_available_inventory()
 
-        assert "zones" in result
-        assert len(result["zones"]) > 0
+        assert [zone["zone_id"] for zone in result["zones"]] == ["zone_1", "zone_2"]
         assert "creative_specs" in result
 
 
@@ -565,7 +566,6 @@ class TestBroadstreetAdapterCreativeFormats:
         adapter = BroadstreetAdapter(
             config=mock_config,
             principal=mock_principal,
-            dry_run=True,
             tenant_id="test_tenant",
         )
 
@@ -590,7 +590,6 @@ class TestBroadstreetAdapterCreativeFormats:
         adapter = BroadstreetAdapter(
             config=mock_config,
             principal=mock_principal,
-            dry_run=True,
             tenant_id="test_tenant",
         )
 
@@ -609,7 +608,6 @@ class TestBroadstreetAdapterCreativeFormats:
         adapter = BroadstreetAdapter(
             config=mock_config,
             principal=mock_principal,
-            dry_run=True,
             tenant_id="test_tenant",
         )
 

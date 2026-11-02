@@ -1,11 +1,13 @@
-"""Integration tests: REST error envelope fields survive harness reconstruction.
+"""Integration tests: the REST error envelope carries what the buyer needs.
 
-Verifies that suggestion (and other fields present in the wire envelope) are
-faithfully restored on the reconstructed AdCPError after a REST round-trip.
+Verifies that suggestion (and the other error-object fields) are present on the
+WIRE after a REST round-trip -- what the buyer actually receives.
 
-Before #1417, _envelope_to_adcp_error extracted code/message/recovery/
-details but NOT suggestion.  The wire body included suggestion (production code
-correct), but result.error.suggestion was always None after REST dispatch.
+Historically this file guarded a harness reconstruction: before #1417
+_envelope_to_adcp_error rebuilt an AdCPSalesAgentError from the wire body and dropped
+suggestion while doing so. That reconstruction was deleted by
+salesagent-3dawm.15, so the file now asserts the wire directly and the
+reconstruction-specific test is gone with the mechanism it guarded.
 
 """
 
@@ -39,6 +41,7 @@ class TestRestErrorSuggestionPreservation:
 
         now = datetime.now(UTC)
         return CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             start_time=(now + timedelta(days=1)).isoformat(),
             end_time=(now + timedelta(days=8)).isoformat(),
@@ -60,24 +63,14 @@ class TestRestErrorSuggestionPreservation:
         suggestion = errors[0].get("suggestion")
         assert suggestion, f"Wire errors[0] missing suggestion: {errors[0]}"
 
-    def test_rest_reconstructed_error_has_suggestion(self, env_with_data):
-        """After REST round-trip, result.error.suggestion matches the wire suggestion.
-
-        This test FAILS before the #1417 fix because _envelope_to_adcp_error
-        does not extract suggestion from the wire envelope during reconstruction.
-        """
-        result = env_with_data.call_via(Transport.REST, req=self._zero_budget_req())
-        assert result.is_error, f"Expected error, got payload: {result.payload}"
-        wire = result.wire_error_envelope
-        assert wire is not None, "No wire error envelope captured"
-        wire_suggestion = (wire.get("errors", [{}]) or [{}])[0].get("suggestion")
-        assert wire_suggestion, "Wire envelope missing suggestion — precondition for this test"
-
-        assert result.error.suggestion is not None, (
-            f"result.error.suggestion is None after REST round-trip. "
-            f"Wire had suggestion='{wire_suggestion}'. "
-            "_envelope_to_adcp_error dropped it during reconstruction."
-        )
-        assert result.error.suggestion == wire_suggestion, (
-            f"result.error.suggestion '{result.error.suggestion}' != wire suggestion '{wire_suggestion}'"
-        )
+    # test_rest_reconstructed_error_has_suggestion is DELETED, not migrated. Its whole
+    # subject was "the harness reconstruction preserves suggestion" -- it compared
+    # result.error.suggestion against the wire's, to catch _envelope_to_adcp_error
+    # dropping the field. There is no reconstruction any more (salesagent-3dawm.15):
+    # nothing rebuilds a production error from wire bytes, so nothing can drop a field
+    # while doing so. Keeping the test would require re-adding the mechanism it
+    # guards.
+    #
+    # The claim that SURVIVES -- the buyer actually receives a suggestion -- is
+    # asserted by the sibling above, directly on the wire envelope, which is where it
+    # always belonged.

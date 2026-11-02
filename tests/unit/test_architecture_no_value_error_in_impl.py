@@ -4,7 +4,7 @@
 recovery hint, or context. At the transport boundary it is mapped to a synthetic
 ``AdCPValidationError`` (VALIDATION_ERROR), which loses the semantic specificity
 the caller intended. Per the error-emission architecture, business logic should
-raise typed AdCPError subclasses (AdCPValidationError, AdCPBudgetTooLowError,
+raise typed AdCPSalesAgentError subclasses (AdCPValidationError, AdCPBudgetTooLowError,
 AdCPMediaBuyNotFoundError, etc.) with explicit codes.
 
 This guard counts ``raise ValueError(...)`` sites in ``src/core/tools/`` and
@@ -22,9 +22,12 @@ import pytest
 # Per-file caps for ``raise ValueError(...)`` sites. Two categories of entries:
 #
 #   1. **Migration targets** — boundary-facing raises that should become typed
-#      ``AdCPError`` subclasses. Each site carries a
-#      ``migrate to typed AdCPError raise`` comment so reviewers
-#      can grep to the cleanup work. PR 2 sub-batches drain these.
+#      ``AdCPSalesAgentError`` subclasses. Each site carries a
+#      ``# FIXME(#<gh-issue>): migrate to typed AdCPSalesAgentError raise``
+#      comment so reviewers can grep to the cleanup work. PR 2 sub-batches
+#      drain these. The citation is a GitHub issue, never a local beads id —
+#      beads ids do not resolve for outside contributors (CLAUDE.md "Rules for
+#      guards"), and check_fixme_citation_count.py ratchets the spelling.
 #
 #   2. **Internal contracts** — ``ValueError`` raised inside helper functions
 #      to enforce programmer-error invariants (Pydantic validators, factory
@@ -37,17 +40,23 @@ import pytest
 # would make the distinction visible at the guard level. For now, both
 # categories share the cap dict and shrink together as PR 2 lands.
 VALUE_ERROR_PER_FILE_CAP: dict[str, int] = {
-    "src/adapters/__init__.py": 2,
-    "src/adapters/base.py": 1,
+    "src/adapters/__init__.py": 0,
+    "src/adapters/base.py": 0,
     "src/adapters/broadstreet/config_schema.py": 4,
-    "src/adapters/gam/auth.py": 5,
-    "src/adapters/gam/client.py": 1,
-    "src/adapters/gam/managers/creatives.py": 3,
-    "src/adapters/gam/managers/orders.py": 11,
-    "src/adapters/gam/managers/targeting.py": 22,
-    "src/adapters/gam/pricing_compatibility.py": 2,
+    "src/adapters/gam/auth.py": 0,
+    "src/adapters/gam/client.py": 0,
+    # 3→0: the creative-input rejection sites now raise
+    # AdCPCreativeRejectedError (CREATIVE_REJECTED/correctable).
+    "src/adapters/gam/managers/orders.py": 0,
+    # 22→7: the 15 buyer-correctable capability-gap sites now raise
+    # AdCPCapabilityNotSupportedError (UNSUPPORTED_FEATURE/correctable); the 7
+    # remaining ValueErrors are seller-side operational faults by design.
+    "src/adapters/gam/managers/targeting.py": 0,
+    # 2→1: the pricing-model capability gap is typed; the remaining ValueError
+    # is the seller-config incompatible-override raise (deliberately untyped).
+    "src/adapters/gam/pricing_compatibility.py": 0,
     "src/adapters/gam_implementation_config_schema.py": 4,
-    "src/adapters/xandr.py": 5,
+    "src/adapters/xandr.py": 0,
     "src/core/tools/media_buy_create.py": 2,  # null-session guard + agent_url HTTP(S) validation (internal contracts)
 }
 
@@ -83,7 +92,7 @@ class TestNoValueErrorInImpl:
             count_sites=_count_value_error_raises,
             scan_dirs=SCAN_DIRS,
             site_label="raise ValueError",
-            typed_raise_hint="convert to typed AdCPError raise (e.g., AdCPValidationError)",
+            typed_raise_hint="convert to typed AdCPSalesAgentError raise (e.g., AdCPValidationError)",
             rel=_rel,
         )
 

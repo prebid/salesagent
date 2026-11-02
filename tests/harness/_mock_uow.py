@@ -16,6 +16,22 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 
+def wire_effect_boundary(repo: MagicMock, *, preview: bool = False) -> None:
+    """Make a mocked repo behave like SessionEffectsMixin (#1970).
+
+    ``outbound(call)`` INVOKES ``call`` on the live path and returns its result;
+    a bare MagicMock would swallow it, so the outbound request under test never
+    happens and the assertion passes against a Mock. Same failure shape as the
+    idempotency-cache default below: the mock silently answers the opposite of
+    production. ``after_commit`` is deliberately left as a plain recorder —
+    with no real transaction there is no drain, so a deferred effect not running
+    is the CORRECT behavior for a unit test, and ``.assert_called_once_with()``
+    is how a test grades that it was registered.
+    """
+    repo.is_preview = preview
+    repo.outbound.side_effect = lambda call, preview_result=None: preview_result if preview else call()
+
+
 def make_mock_uow(
     repos: dict[str, MagicMock] | None = None,
 ) -> tuple[MagicMock, MagicMock]:
@@ -49,11 +65,13 @@ def make_mock_uow(
     if repos is not None:
         for name, repo in repos.items():
             setattr(mock_uow, name, repo)
+            wire_effect_boundary(repo)
     else:
         # Default: MediaBuyUoW-style with media_buys repo
         mock_repo = MagicMock()
         mock_repo.get_by_principal.return_value = []
         mock_repo.get_packages.return_value = []
+        wire_effect_boundary(mock_repo)
         mock_uow.media_buys = mock_repo
 
     # Idempotency cache defaults to a MISS — idempotency_key is required on

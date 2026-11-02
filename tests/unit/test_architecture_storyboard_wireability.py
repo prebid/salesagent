@@ -268,7 +268,7 @@ def _min_record(**overrides) -> dict:
         "required_tools": [],
         "requires_controller": False,
         "measured_failing_protocols": [],
-        "measured": "no ledger entry",
+        "measured": storyboard_check_index.MEASURED_NOT_MEASURED,
         "scenarios": [],
         "scenario_grain": "storyboard",
         "scenario_binding_buckets": {},
@@ -304,6 +304,8 @@ def _min_totals(records: list[dict]) -> dict:
         "with_issue": sum(1 for r in records if r["issues"]),
         "neither": sum(1 for r in records if not r["scenarios"] and not r["issues"]),
         "failing": sum(1 for r in records if r["measured_failing_protocols"]),
+        "not_failing": sum(1 for r in records if r["measured"] == storyboard_check_index.MEASURED_NOT_FAILING),
+        "not_measured": sum(1 for r in records if r["measured"] == storyboard_check_index.MEASURED_NOT_MEASURED),
         "ungradable": sum(1 for r in records if r["requires_controller"]),
         "wireable": sum(1 for r in records if r["e2e_wireable"] == "wireable"),
         "conditional": sum(1 for r in records if r["e2e_wireable"] == "conditional"),
@@ -319,7 +321,12 @@ def _wireability_section(rendered: str) -> str:
 def test_render_shows_an_unassessed_step_as_a_visible_gap() -> None:
     """The deliverable: an untriaged step is a row in the table, not an absence."""
     records = [_min_record(step_id="untriaged_step", e2e_wireable="unassessed")]
-    result = {"pinned_version": "v3.1.1", "totals": _min_totals(records), "records": records}
+    result = {
+        "pinned_version": "v3.1.1",
+        "liveness_measured": True,
+        "totals": _min_totals(records),
+        "records": records,
+    }
 
     section = _wireability_section(storyboard_check_index.render(result))
 
@@ -330,7 +337,12 @@ def test_render_shows_an_unassessed_step_as_a_visible_gap() -> None:
 def test_render_still_omits_plainly_wireable_steps() -> None:
     """Negative: a fully-wireable check is not a gap and stays out of this table."""
     records = [_min_record(step_id="clean_step", e2e_wireable="wireable")]
-    result = {"pinned_version": "v3.1.1", "totals": _min_totals(records), "records": records}
+    result = {
+        "pinned_version": "v3.1.1",
+        "liveness_measured": True,
+        "totals": _min_totals(records),
+        "records": records,
+    }
 
     section = _wireability_section(storyboard_check_index.render(result))
 
@@ -343,7 +355,12 @@ def test_render_still_shows_conditional_and_not_wireable_steps() -> None:
         _min_record(step_id="cond_step", e2e_wireable="conditional", e2e_requires=["webhook_receiver"]),
         _min_record(step_id="blocked_step", e2e_wireable="not_wireable", e2e_blocker="upstream only"),
     ]
-    result = {"pinned_version": "v3.1.1", "totals": _min_totals(records), "records": records}
+    result = {
+        "pinned_version": "v3.1.1",
+        "liveness_measured": True,
+        "totals": _min_totals(records),
+        "records": records,
+    }
 
     section = _wireability_section(storyboard_check_index.render(result))
 

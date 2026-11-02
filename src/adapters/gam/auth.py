@@ -11,6 +11,8 @@ from typing import Any
 import google.oauth2.service_account
 from googleads import oauth2
 
+from src.core.exceptions import AdCPConfigurationError, AdCPSalesAgentError
+
 logger = logging.getLogger(__name__)
 
 
@@ -33,9 +35,7 @@ class GAMAuthManager:
 
         # Validate that we have at least one authentication method
         if not self.refresh_token and not self.service_account_json and not self.key_file:
-            raise ValueError(
-                "GAM config requires either 'refresh_token', 'service_account_json', or 'service_account_key_file'"
-            )
+            raise AdCPConfigurationError()
 
     def get_credentials(self):
         """Get authenticated credentials for GAM API.
@@ -53,7 +53,7 @@ class GAMAuthManager:
             elif self.service_account_json or self.key_file:
                 return self._get_service_account_credentials()
             else:
-                raise ValueError("No valid authentication method configured")
+                raise AdCPConfigurationError()
         except Exception as e:
             logger.error(f"Error creating GAM credentials: {e}")
             raise
@@ -61,15 +61,18 @@ class GAMAuthManager:
     def _get_oauth_credentials(self):
         """Get OAuth credentials using refresh token and Pydantic configuration."""
         try:
-            from src.core.config import get_gam_oauth_config
+            from src.core.config import get_settings
 
-            # Get validated configuration
-            gam_config = get_gam_oauth_config()
-            client_id = gam_config.client_id
-            client_secret = gam_config.client_secret
+            auth = get_settings().auth
+            client_id = auth.gam_oauth_client_id
+            client_secret = auth.gam_oauth_client_secret
 
+        except AdCPSalesAgentError:
+            # A typed error already names its own fault; flattening it here would
+            # cost the buyer the code it earned.
+            raise
         except Exception as e:
-            raise ValueError(f"GAM OAuth configuration error: {str(e)}") from e
+            raise AdCPConfigurationError(internal_detail=e) from e
 
         # Create GoogleAds OAuth2 client
         oauth2_client = oauth2.GoogleRefreshTokenClient(
@@ -101,7 +104,7 @@ class GAMAuthManager:
                 logger.info("Using service account credentials from JSON string")
                 return oauth2_client
             except json.JSONDecodeError as e:
-                raise ValueError(f"Invalid service account JSON: {e}") from e
+                raise AdCPConfigurationError(internal_detail=e) from e
         elif self.key_file:
             # Legacy: Load from file
             credentials = google.oauth2.service_account.Credentials.from_service_account_file(
@@ -112,7 +115,7 @@ class GAMAuthManager:
             logger.info(f"Using service account credentials from file: {self.key_file}")
             return oauth2_client
         else:
-            raise ValueError("No service account credentials configured")
+            raise AdCPConfigurationError()
 
     def is_oauth_configured(self) -> bool:
         """Check if OAuth authentication is configured."""

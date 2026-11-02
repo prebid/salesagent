@@ -1,5 +1,4 @@
 # Generated from adcp-req @ a14db6e5894e781a8b2c577e86e1b136876e4915 on 2026-06-03T11:30:04Z (merge mode)
-# DO NOT EDIT -- re-run: python scripts/compile_bdd.py --merge
 
 Feature: BR-UC-032 Compliance Test Controller (Sandbox-Only)
   As a conformance Runner driving compliance tests against a seller's sandbox
@@ -121,14 +120,14 @@ Feature: BR-UC-032 Compliance Test Controller (Sandbox-Only)
     And the response has current_state "suspended"
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/compliance/comply-test-controller-request.json
 
-  @T-UC-032-force-create-media-buy-arm-submitted @main-flow @force-create-media-buy-arm @directive @post-s4 @single-shot
-  Scenario: force_create_media_buy_arm with submitted arm registers single-shot directive
+  @T-UC-032-force-create-media-buy-branch-submitted @main-flow @force-create-media-buy-branch @directive @post-s4 @single-shot
+  Scenario: force_create_media_buy_arm with submitted branch registers single-shot directive
     Given the Runner targets a sandbox-flagged account
-    When the Runner invokes comply_test_controller with scenario "force_create_media_buy_arm" params arm "submitted" task_id "task_async_signed_io_q2" message "Awaiting IO signature"
+    When the Runner invokes comply_test_controller with scenario "force_create_media_buy_arm" params branch "submitted" task_id "task_async_signed_io_q2" message "Awaiting IO signature"
     Then the response has success true
-    And the response has forced.arm "submitted"
+    And the response has forced.branch "submitted"
     And the response has forced.task_id "task_async_signed_io_q2"
-    And the next create_media_buy call from the same sandbox account returns the submitted arm with task_id "task_async_signed_io_q2"
+    And the next create_media_buy call from the same sandbox account returns the submitted branch with task_id "task_async_signed_io_q2"
     And the directive is consumed after the next create_media_buy call (single-shot)
     # POST-S4: Single-shot directive registered
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/compliance/comply-test-controller-request.json
@@ -284,9 +283,9 @@ Feature: BR-UC-032 Compliance Test Controller (Sandbox-Only)
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/compliance/comply-test-controller-request.json
 
   @T-UC-032-ext-b-invalid-params-missing-task-id @extension-b @invalid-params @post-f1 @post-f2
-  Scenario: INVALID_PARAMS — force_create_media_buy_arm with arm "submitted" missing task_id is rejected
+  Scenario: INVALID_PARAMS — force_create_media_buy_arm with branch "submitted" missing task_id is rejected
     Given the Runner targets a sandbox-flagged account
-    When the Runner invokes comply_test_controller with scenario "force_create_media_buy_arm" params arm "submitted" but omits task_id
+    When the Runner invokes comply_test_controller with scenario "force_create_media_buy_arm" params branch "submitted" but omits task_id
     Then the response has success false
     And the response has error "INVALID_PARAMS" (or the request is schema-rejected by the if/then branch before reaching the seller)
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/compliance/comply-test-controller-request.json
@@ -461,7 +460,7 @@ Feature: BR-UC-032 Compliance Test Controller (Sandbox-Only)
       | result payload size == 262145 bytes (just over 256 KB), seller enforces MAY |
       | task_id refers to unknown task in caller's sandbox account |
 
-  @T-UC-032-bva-force-create-media-buy-arm @bva @boundary @force-create-media-buy-arm @single-shot @sandbox-only
+  @T-UC-032-bva-force-create-media-buy-branch @bva @boundary @force-create-media-buy-branch @single-shot @sandbox-only
   Scenario Outline: BVA — force_create_media_buy_arm_directive (<boundary>)
     Given the Runner targets a sandbox-flagged account
     When the Runner invokes comply_test_controller with scenario "force_create_media_buy_arm"
@@ -470,16 +469,16 @@ Feature: BR-UC-032 Compliance Test Controller (Sandbox-Only)
 
     Examples:
       | boundary |
-      | params.arm = 'submitted' with params.task_id present (<=128 chars) |
-      | params.arm = 'submitted' with params.task_id absent |
-      | params.arm = 'input-required' |
-      | params.arm = 'completed' (excluded arm; not in enum) |
-      | params.arm = 'working' (excluded arm; not in enum) |
+      | params.branch = 'submitted' with params.task_id present (<=128 chars) |
+      | params.branch = 'submitted' with params.task_id absent |
+      | params.branch = 'input-required' |
+      | params.branch = 'completed' (excluded branch; not in enum) |
+      | params.branch = 'working' (excluded branch; not in enum) |
       | params.task_id length = 128 |
       | params.task_id length = 129 |
       | params.message length = 2000 |
       | params.message length = 2001 |
-      | second create_media_buy from same principal (no re-arm) after directive consumption |
+      | second create_media_buy from same principal (no re-branch) after directive consumption |
       | create_media_buy from a different principal after Principal A's registration |
       | two force_create_media_buy_arm calls from same principal before any create_media_buy |
 

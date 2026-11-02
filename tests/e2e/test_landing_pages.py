@@ -17,167 +17,121 @@ import os
 import pytest
 import requests
 
-from tests.e2e.conftest import e2e_host
 from tests.e2e.utils import make_mcp_client
 
 
 class TestLandingPages:
-    """Test landing page routing for different domain types."""
+    """Test landing page routing for different domain types.
 
-    def _get_base_url(self) -> str:
-        """Get base URL for tests (supports dynamic ports via ADCP_SALES_PORT env var).
-
-        Host path: localhost:<published-port>. In-network the server is reached by
-        service name (ADCP_TEST_HOST=proxy) — localhost inside the runner container
-        is the runner itself, not the server, which made these tests skip with
-        "Server not running" instead of executing.
-        """
-        host = e2e_host()
-        port = os.getenv("ADCP_SALES_PORT", "8080")
-        return os.getenv("TEST_BASE_URL", f"http://{host}:{port}")
+    The base URL is the ``live_server`` fixture VALUE (built from the ports
+    ``docker_services_e2e`` actually allocated), not ``os.getenv("ADCP_SALES_PORT")``.
+    A process-global has no sender — the fixture, docker-compose.e2e.yml and
+    scripts/test-stack.sh all write that variable — no lifetime, and no
+    multiplicity under xdist; its ``"8080"`` default aimed these tests at whatever
+    happened to be listening. Because ``live_server`` guarantees the stack is up, a
+    connection error is a genuine failure here rather than a skip.
+    """
 
     @pytest.mark.integration
-    def test_admin_domain_redirects_to_login(self):
+    def test_admin_domain_redirects_to_login(self, live_server):
         """Admin domain should return 302 redirect to login page."""
-        base_url = self._get_base_url()
+        # Test admin domain routing with admin Host header
+        response = requests.get(
+            f"{live_server['admin']}/",
+            headers={
+                "Host": "admin.sales-agent.example.com",
+            },
+            timeout=5,
+            allow_redirects=False,
+        )
 
-        try:
-            # Test admin domain routing with admin Host header
-            response = requests.get(
-                f"{base_url}/",
-                headers={
-                    "Host": "admin.sales-agent.example.com",
-                },
-                timeout=5,
-                allow_redirects=False,
-            )
-
-            # Admin domain should redirect to login
-            assert response.status_code == 302, f"Admin domain should return 302 redirect, got {response.status_code}"
-            location = response.headers.get("Location", "")
-            assert "/admin/login" in location, f"Admin domain should redirect to /admin/login, got {location}"
-
-        except (requests.ConnectionError, requests.Timeout):
-            pytest.skip(f"Server not running at {base_url}")
+        # Admin domain should redirect to login
+        assert response.status_code == 302, f"Admin domain should return 302 redirect, got {response.status_code}"
+        location = response.headers.get("Location", "")
+        assert "/admin/login" in location, f"Admin domain should redirect to /admin/login, got {location}"
 
     @pytest.mark.integration
-    def test_admin_login_page_shows_login_form(self):
-        """Admin login page should contain login form when following redirect."""
-        base_url = self._get_base_url()
+    def test_admin_login_page_shows_login_form(self, live_server):
+        """/admin/login lands the caller at authentication.
 
-        try:
-            # Follow redirects to get to login page
-            response = requests.get(
-                f"{base_url}/",
-                headers={
-                    "Host": "admin.sales-agent.example.com",
-                },
-                timeout=5,
-                allow_redirects=True,
-            )
+        Two outcomes are both correct, and which one a deployment serves is a
+        property of that deployment, not of the admin: with no identity provider
+        configured the login page renders, and with one configured the admin hands
+        off to it (``login()`` has always redirected straight to the sole provider).
 
-            # Should arrive at login page with 200 OK (skip if server error - environment may not be fully configured)
-            if response.status_code >= 500:
-                pytest.skip(f"Server error {response.status_code} - environment may not be fully configured")
+        This asserts OUR response and does not follow the chain off-site. Following it
+        grades whatever the provider answered — CI sets Google credentials, so the chain
+        runs on to accounts.google.com and its 404 for the dummy client_id arrives as
+        though the admin had served it.
+        """
+        response = requests.get(
+            f"{live_server['admin']}/admin/login",
+            headers={"Host": "admin.sales-agent.example.com"},
+            timeout=5,
+            allow_redirects=False,
+        )
 
-            assert response.status_code == 200, f"Login page should return 200 OK, got {response.status_code}"
-            content = response.content.decode("utf-8").lower()
-            assert "login" in content, "Admin login page should contain login form"
+        if response.status_code == 200:
+            assert "login" in response.text.lower(), "Rendered login page should contain a login form"
+            return
 
-        except (requests.ConnectionError, requests.Timeout):
-            pytest.skip(f"Server not running at {base_url}")
+        assert response.status_code in (301, 302, 307, 308), (
+            f"Login should render or hand off to a provider, got {response.status_code}. "
+            f"Body starts: {response.text[:200]!r}"
+        )
+        location = response.headers.get("Location", "")
+        assert "/auth/" in location, f"Login should hand off to an identity provider, got Location={location!r}"
 
     @pytest.mark.integration
-    def test_landing_page_contains_mcp_endpoint(self):
+    def test_landing_page_contains_mcp_endpoint(self, live_server):
         """Landing page for configured tenant should contain MCP endpoint or pending config message."""
-        base_url = self._get_base_url()
+        # For local testing, we need to specify a custom domain
+        # that would route to tenant landing page
+        response = requests.get(
+            f"{live_server['admin']}/",
+            headers={
+                "Host": "test-custom-domain.example.com",
+            },
+            timeout=5,
+            allow_redirects=True,
+        )
 
-        try:
-            # For local testing, we need to specify a custom domain
-            # that would route to tenant landing page
-            response = requests.get(
-                f"{base_url}/",
-                headers={
-                    "Host": "test-custom-domain.example.com",
-                },
-                timeout=5,
-                allow_redirects=True,
+        # If we get a 200 OK, check for MCP endpoint
+        if response.status_code == 200:
+            content = response.content.decode("utf-8").lower()
+
+            # Landing page should mention MCP or show it's pending configuration
+            has_mcp = 'href="/mcp' in content or "mcp endpoint" in content
+            is_pending = "pending configuration" in content or "not configured" in content
+
+            assert has_mcp or is_pending, (
+                "Landing page should either show MCP endpoint or pending configuration message"
             )
 
-            # If we get a 200 OK, check for MCP endpoint
-            if response.status_code == 200:
-                content = response.content.decode("utf-8").lower()
-
-                # Landing page should mention MCP or show it's pending configuration
-                has_mcp = 'href="/mcp' in content or "mcp endpoint" in content
-                is_pending = "pending configuration" in content or "not configured" in content
-
-                assert has_mcp or is_pending, (
-                    "Landing page should either show MCP endpoint or pending configuration message"
-                )
-
-        except (requests.ConnectionError, requests.Timeout):
-            pytest.skip(f"Server not running at {base_url}")
-
     @pytest.mark.integration
-    def test_landing_page_contains_a2a_endpoint(self):
+    def test_landing_page_contains_a2a_endpoint(self, live_server):
         """Landing page for configured tenant should contain A2A endpoint or pending config message."""
-        base_url = self._get_base_url()
+        # For local testing, we need to specify a custom domain
+        response = requests.get(
+            f"{live_server['admin']}/",
+            headers={
+                "Host": "test-custom-domain.example.com",
+            },
+            timeout=5,
+            allow_redirects=True,
+        )
 
-        try:
-            # For local testing, we need to specify a custom domain
-            response = requests.get(
-                f"{base_url}/",
-                headers={
-                    "Host": "test-custom-domain.example.com",
-                },
-                timeout=5,
-                allow_redirects=True,
+        # If we get a 200 OK, check for A2A endpoint
+        if response.status_code == 200:
+            content = response.content.decode("utf-8").lower()
+
+            # Landing page should mention A2A or show it's pending configuration
+            has_a2a = 'href="/a2a' in content or "a2a endpoint" in content
+            is_pending = "pending configuration" in content or "not configured" in content
+
+            assert has_a2a or is_pending, (
+                "Landing page should either show A2A endpoint or pending configuration message"
             )
-
-            # If we get a 200 OK, check for A2A endpoint
-            if response.status_code == 200:
-                content = response.content.decode("utf-8").lower()
-
-                # Landing page should mention A2A or show it's pending configuration
-                has_a2a = 'href="/a2a' in content or "a2a endpoint" in content
-                is_pending = "pending configuration" in content or "not configured" in content
-
-                assert has_a2a or is_pending, (
-                    "Landing page should either show A2A endpoint or pending configuration message"
-                )
-
-        except (requests.ConnectionError, requests.Timeout):
-            pytest.skip(f"Server not running at {base_url}")
-
-    @pytest.mark.integration
-    def test_approximated_header_precedence_for_admin(self):
-        """Apx-Incoming-Host header should take precedence over Host header for admin routing."""
-        base_url = self._get_base_url()
-
-        try:
-            # Send both headers - Apx-Incoming-Host should win
-            # Use admin domain as Apx-Incoming-Host since we know it exists
-            response = requests.get(
-                f"{base_url}/",
-                headers={
-                    "Host": f"localhost:{os.getenv('ADCP_SALES_PORT', '8080')}",  # Backend host
-                    "Apx-Incoming-Host": "admin.sales-agent.example.com",  # Proxied admin host
-                },
-                timeout=5,
-                allow_redirects=False,
-            )
-
-            # Should route based on Apx-Incoming-Host (admin domain -> login redirect)
-            assert response.status_code == 302, (
-                f"Proxied admin domain should redirect to login (302), got {response.status_code}"
-            )
-
-            location = response.headers.get("Location", "")
-            assert "/admin/login" in location, f"Proxied admin domain should redirect to /admin/login, got {location}"
-
-        except (requests.ConnectionError, requests.Timeout):
-            pytest.skip(f"Server not running at {base_url}")
 
 
 class TestAuthOptionalEndpoints:
@@ -213,27 +167,6 @@ class TestAuthOptionalEndpoints:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
-    async def test_list_authorized_properties_without_auth(self, live_server):
-        """list_authorized_properties should be reachable without authentication via domain routing."""
-        # Unauthenticated: tenant resolved via Host header only (no x-adcp-tenant).
-        mcp_client = make_mcp_client(live_server, tenant=None, host="test-custom-domain.example.com")
-        try:
-            async with mcp_client as client:
-                result = await client.call_tool("list_authorized_properties", {})
-                assert result is not None
-        except Exception:
-            pass
-
-    @pytest.mark.asyncio
-    @pytest.mark.integration
-    async def test_list_authorized_properties_with_auth(self, live_server, test_auth_token):
-        """list_authorized_properties should work with authentication."""
-        async with make_mcp_client(live_server, token=test_auth_token) as client:
-            result = await client.call_tool("list_authorized_properties", {})
-            assert result is not None, "list_authorized_properties should return a result"
-
-    @pytest.mark.asyncio
-    @pytest.mark.integration
     async def test_get_products_without_auth_public_policy(self, live_server):
         """get_products should be reachable without authentication (public policy tenants)."""
         # Unauthenticated: tenant resolved via Host header only (no x-adcp-tenant).
@@ -244,14 +177,6 @@ class TestAuthOptionalEndpoints:
                 assert result is not None
         except Exception:
             pass
-
-    @pytest.mark.asyncio
-    @pytest.mark.integration
-    async def test_get_products_with_auth(self, live_server, test_auth_token):
-        """get_products should work with authentication regardless of policy."""
-        async with make_mcp_client(live_server, token=test_auth_token) as client:
-            result = await client.call_tool("get_products", {"brief": "test campaign"})
-            assert result is not None, "get_products should return a result"
 
     @pytest.mark.asyncio
     @pytest.mark.integration

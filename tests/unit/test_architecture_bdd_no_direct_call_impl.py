@@ -1,16 +1,21 @@
-"""Guard: BDD When/Given steps must not call call_impl() or _impl() directly.
+"""Guard: BDD step modules must not call call_impl() or _impl() directly.
 
 Transport dispatch should go through dispatch_request() → env.call_via() so that
-parametrized scenarios actually execute across all 4 transports (IMPL/A2A/MCP/REST).
+parametrized scenarios actually execute across all wire transports (A2A/MCP/REST
++ e2e).
 
 Direct call_impl() bypasses transport dispatch and runs IMPL regardless of the
 ctx["transport"] value. This is only allowed when marked with a TRANSPORT-BYPASS
 comment explaining why (e.g., cross-cutting list under sync env).
 
-Scanning approach: AST — find functions decorated with @when(...) or @given(...)
-in tests/bdd/steps/ and check for .call_impl( or _impl( calls without
-TRANSPORT-BYPASS comment.
-
+Scanning approach: AST — find EVERY function in tests/bdd/steps/ (not only the
+@when/@given-decorated ones) and check for .call_impl( or _impl( calls without a
+TRANSPORT-BYPASS comment. Scanning only the decorated entry points was a blind
+spot: a Then-side module-local helper that calls ``_list_accounts_impl`` grades
+IMPL on every transport just as thoroughly as a @when would, and was invisible to
+this guard — which is how uc011's ``_persisted_subscribers`` bypass appeared
+after the allowlist had been frozen. The decorator is recorded in the violation
+label (step vs helper), not used to decide whether to look.
 """
 
 from __future__ import annotations
@@ -26,13 +31,9 @@ _BDD_STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
 
 # Functions that legitimately bypass transport dispatch.
 # Each entry: (filename_stem, function_name).
-# This allowlist can only shrink — never add new entries.
-_ALLOWLIST: set[tuple[str, str]] = {
-    # FIXME(#1880): cross-cutting list under sync env —
-    # AccountSyncEnv can't dispatch list_accounts requests
-    ("uc011_accounts", "when_list_accounts_unfiltered"),
-    ("uc011_accounts", "when_list_sandbox_filter"),
-}
+# This allowlist can only shrink — never add new entries. It is EMPTY: the
+# list_accounts verb on AccountSyncEnv removed the last reason to hold one.
+_ALLOWLIST: set[tuple[str, str]] = set()
 
 
 def _is_when_or_given_decorated(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
@@ -69,7 +70,7 @@ def _has_transport_bypass_comment(source_lines: list[str], func: ast.FunctionDef
 
 
 def _scan_bdd_steps() -> list[str]:
-    """Find When/Given steps with direct call_impl/_impl calls."""
+    """Find any step-module function with direct call_impl/_impl calls."""
     violations = []
     for py_file in sorted(_BDD_STEPS_DIR.rglob("*.py")):
         if py_file.name.startswith("__"):
@@ -83,8 +84,6 @@ def _scan_bdd_steps() -> list[str]:
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
-            if not _is_when_or_given_decorated(node):
-                continue
             if not _has_direct_impl_call(node):
                 continue
             # Check for TRANSPORT-BYPASS comment
@@ -93,26 +92,30 @@ def _scan_bdd_steps() -> list[str]:
             # Check allowlist
             if (file_stem, node.name) in _ALLOWLIST:
                 continue
-            violations.append(f"{relative}:{node.lineno} {node.name}")
+            kind = "step" if _is_when_or_given_decorated(node) else "helper"
+            violations.append(f"{relative}:{node.lineno} {node.name} ({kind})")
 
     return violations
 
 
 class TestBddNoDirectCallImpl:
-    """Structural guard: When/Given steps must use dispatch_request(), not call_impl()."""
+    """Structural guard: step modules must use dispatch_request(), not call_impl()."""
 
     @pytest.mark.arch_guard
     def test_no_direct_call_impl_in_steps(self):
-        """Every @when/@given step must dispatch through dispatch_request().
+        """Every function in a step module must reach production through a transport.
 
         Direct .call_impl() or _impl() calls bypass transport parametrization,
-        causing scenarios tagged [mcp] or [a2a] to silently run IMPL.
-        Use TRANSPORT-BYPASS comment for legitimate exceptions.
+        causing scenarios tagged [mcp] or [a2a] to silently run IMPL. Module-local
+        helpers count: a Then-side read-back helper that calls an _impl grades the
+        in-process function on every transport, so the row proves nothing about the
+        wire the buyer sees. Use a TRANSPORT-BYPASS comment for legitimate exceptions.
         """
         violations = _scan_bdd_steps()
         assert not violations, (
-            f"Found {len(violations)} step(s) with direct call_impl/_impl calls "
-            f"(use dispatch_request or add TRANSPORT-BYPASS comment):\n" + "\n".join(f"  {v}" for v in violations)
+            f"Found {len(violations)} function(s) with direct call_impl/_impl calls "
+            f"(use dispatch_request, or env.call_via(...) reading the returned "
+            f"TransportResult from a Then-side helper):\n" + "\n".join(f"  {v}" for v in violations)
         )
 
     @pytest.mark.arch_guard

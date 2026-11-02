@@ -44,11 +44,10 @@ class MockAdServer(AdServerAdapter):
 Mock adapter simulates real API security:
 
 ```python
-if self.dry_run:
-    self.log(f"Would call: MockAdServer.createCampaign()")
-    self.log(f"  API Request: {{")
-    self.log(f"    'advertiser_id': '{self.adapter_principal_id}',")
-    # Shows security context in logs
+self.log(f"Would call: MockAdServer.createCampaign()")
+self.log(f"  API Request: {{")
+self.log(f"    'advertiser_id': '{self.adapter_principal_id}',")
+# Shows security context in logs
 ```
 
 ### 3. Test Data Isolation
@@ -92,8 +91,7 @@ Mock adapter validates:
 
 ```json
 {
-    "adapter": "mock_ad_server",
-    "dry_run": false
+    "adapter": "mock_ad_server"
 }
 ```
 

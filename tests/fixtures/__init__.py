@@ -14,7 +14,6 @@ __all__ = [
     "PrincipalFactory",
     "ProductFactory",
     "MediaBuyFactory",
-    "CreativeFactory",
     # Mocks
     "MockDatabase",
     "MockCursor",
@@ -25,7 +24,6 @@ __all__ = [
     "MockHTTPRequest",
     "MockHTTPResponse",
     # Builders
-    "RequestBuilder",
     "ResponseBuilder",
     "TargetingBuilder",
     "TestDataBuilder",

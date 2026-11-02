@@ -1,6 +1,6 @@
 #!/bin/bash
 # Mutation check: does the e2e_rest circuit-breaker scenario actually grade the
-# server's breaker? (salesagent-pldmk.41)
+# server's breaker? (#2060)
 #
 # WHY THIS EXISTS. @T-UC-004-webhook-circuit-open claims to prove that the
 # DEPLOYED server opens its circuit breaker after repeated webhook delivery

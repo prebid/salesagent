@@ -55,7 +55,7 @@ _SIGNING_SEAM_FUNCTIONS = frozenset({"prepare_signed_request"})
 # positional index 1, and is a REQUIRED parameter, so "omitted entirely" is not an
 # expressible call shape (it is a TypeError, not a silent unsigned delivery). The two
 # keyword-only twins that made omission expressible -- and that this detector had a
-# dedicated arm for -- were deleted in salesagent-pldmk.3; that arm went with them.
+# dedicated branch for -- were deleted in salesagent-pldmk.3; that branch went with them.
 # Every seam function must have an entry here: see
 # test_every_seam_function_has_a_known_secret_slot below.
 _POSITIONAL_SECRET_INDEX = {"prepare_signed_request": 1}
@@ -223,7 +223,7 @@ def test_every_seam_function_has_a_known_secret_slot() -> None:
 
     It can do that only while every seam function takes its secret at a known
     positional slot. A future seam function whose secret is keyword-only would need
-    the omitted-secret arm this file deleted in salesagent-pldmk.3 brought back —
+    the omitted-secret branch this file deleted in salesagent-pldmk.3 brought back —
     this assertion is what forces that to be a deliberate decision rather than a
     KeyError at scan time.
     """

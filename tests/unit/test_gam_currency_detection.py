@@ -14,23 +14,44 @@ class TestGAMOrderCurrency:
     @pytest.fixture
     def mock_client_manager(self):
         """Create mock GAM client manager."""
-        mock_client = MagicMock()
-        mock_client.get_service = MagicMock()
-        return mock_client
+        return MagicMock()
+
+    @pytest.fixture
+    def mock_orders_service(self, mock_client_manager):
+        """The OrderService GAM would hand back, wired into the client manager.
+
+        ``create_order`` acquires it through ``client_manager.get_service`` at call time,
+        so one fixture serves every test here and each one reads its own
+        ``createOrders.call_args``.
+        """
+        service = MagicMock()
+        service.createOrders = MagicMock(return_value=[{"id": "12345"}])
+        mock_client_manager.get_service.return_value = service
+        return service
 
     @pytest.fixture
     def orders_manager(self, mock_client_manager):
-        """Create GAM Orders Manager with mocked dependencies."""
-        manager = GAMOrdersManager(
+        """The GAM orders manager under test.
+
+        ``GAMOrdersManager.__init__`` takes client_manager, advertiser_id and
+        trafficker_id — there is no ``dry_run``, here or on any other adapter. This was the
+        "dry-run manager" the three tests below each re-built inline once they needed a real
+        one; it is the single construction again.
+        """
+        return GAMOrdersManager(
             client_manager=mock_client_manager,
             advertiser_id="test_advertiser",
             trafficker_id="test_trafficker",
-            dry_run=True,  # Use dry-run to avoid actual API calls
         )
-        return manager
 
-    def test_create_order_uses_default_usd_currency(self, orders_manager):
-        """Test that create_order defaults to USD currency."""
+    def test_create_order_uses_default_usd_currency(self, orders_manager, mock_orders_service):
+        """create_order with no ``currency`` argument sends USD to GAM.
+
+        Used to assert the order id started with ``dry_run_order_``. Adapters have no
+        dry-run mode, so that oracle does not exist — and it never graded the default
+        currency this test is named for. It does now: the claim is what
+        ``totalBudget.currencyCode`` carries when the caller omits ``currency``.
+        """
         from datetime import datetime
 
         order_id = orders_manager.create_order(
@@ -40,27 +61,15 @@ class TestGAMOrderCurrency:
             end_time=datetime(2025, 1, 31),
         )
 
-        # In dry-run mode, returns a mock order ID
-        assert order_id.startswith("dry_run_order_")
+        assert order_id == "12345"
+        order_data = mock_orders_service.createOrders.call_args[0][0][0]
+        assert order_data["totalBudget"]["currencyCode"] == "USD"
 
-    def test_create_order_accepts_custom_currency(self, orders_manager, mock_client_manager):
+    def test_create_order_accepts_custom_currency(self, orders_manager, mock_orders_service):
         """Test that create_order uses specified currency."""
         from datetime import datetime
 
-        # Set up mock to capture the order data
-        mock_service = MagicMock()
-        mock_service.createOrders = MagicMock(return_value=[{"id": "12345"}])
-        mock_client_manager.get_service.return_value = mock_service
-
-        # Create non-dry-run manager
-        manager = GAMOrdersManager(
-            client_manager=mock_client_manager,
-            advertiser_id="test_advertiser",
-            trafficker_id="test_trafficker",
-            dry_run=False,
-        )
-
-        order_id = manager.create_order(
+        order_id = orders_manager.create_order(
             order_name="Test Order",
             total_budget=1000.0,
             start_time=datetime(2025, 1, 1),
@@ -72,33 +81,22 @@ class TestGAMOrderCurrency:
         assert order_id == "12345"
 
         # Verify the currency was set correctly in the API call
-        call_args = mock_service.createOrders.call_args[0][0]
+        call_args = mock_orders_service.createOrders.call_args[0][0]
         assert len(call_args) == 1
         order_data = call_args[0]
         assert order_data["totalBudget"]["currencyCode"] == "EUR"
         assert order_data["totalBudget"]["microAmount"] == 1000_000_000  # 1000 * 1_000_000
 
-    def test_create_order_with_different_currencies(self, mock_client_manager):
+    def test_create_order_with_different_currencies(self, orders_manager, mock_orders_service):
         """Test create_order with various currency codes."""
         from datetime import datetime
-
-        mock_service = MagicMock()
-        mock_service.createOrders = MagicMock(return_value=[{"id": "12345"}])
-        mock_client_manager.get_service.return_value = mock_service
-
-        manager = GAMOrdersManager(
-            client_manager=mock_client_manager,
-            advertiser_id="test_advertiser",
-            trafficker_id="test_trafficker",
-            dry_run=False,
-        )
 
         currencies_to_test = ["USD", "EUR", "GBP", "JPY", "CAD"]
 
         for currency in currencies_to_test:
-            mock_service.createOrders.reset_mock()
+            mock_orders_service.createOrders.reset_mock()
 
-            manager.create_order(
+            orders_manager.create_order(
                 order_name=f"Test Order {currency}",
                 total_budget=500.0,
                 start_time=datetime(2025, 1, 1),
@@ -106,7 +104,7 @@ class TestGAMOrderCurrency:
                 currency=currency,
             )
 
-            call_args = mock_service.createOrders.call_args[0][0]
+            call_args = mock_orders_service.createOrders.call_args[0][0]
             order_data = call_args[0]
             assert order_data["totalBudget"]["currencyCode"] == currency
 
@@ -114,17 +112,13 @@ class TestGAMOrderCurrency:
 class TestHealthCheckCurrency:
     """Test health check returns currency code."""
 
-    def test_check_authentication_returns_currency_code_in_details(self):
-        """Test that check_authentication includes currencyCode in details."""
-        # Create checker in dry-run mode
-        config = {"service_account_key_file": "/fake/path.json"}
-        checker = GAMHealthChecker(config, dry_run=True)
-
-        result = checker.check_authentication()
-
-        # Dry-run returns healthy with dry_run flag
-        assert result.status == HealthStatus.HEALTHY
-        assert result.details.get("dry_run") is True
+    # DELETED: test_check_authentication_returns_currency_code_in_details. Its body graded
+    # the dry-run short circuit in ``check_authentication`` (HEALTHY with
+    # ``details["dry_run"] is True``), and dry-run is deleted from the adapters —
+    # ``GAMHealthChecker.__init__`` takes only ``config``. The claim its NAME made,
+    # currencyCode reaching ``details``, is graded by
+    # ``test_check_authentication_extracts_currency_from_network`` below, so nothing the
+    # production code still does went ungraded.
 
     @patch("src.adapters.gam.utils.health_check.GAMHealthChecker._init_client")
     def test_check_authentication_extracts_currency_from_network(self, mock_init):
@@ -132,7 +126,7 @@ class TestHealthCheckCurrency:
         mock_init.return_value = True
 
         config = {"service_account_key_file": "/fake/path.json", "network_code": "12345"}
-        checker = GAMHealthChecker(config, dry_run=False)
+        checker = GAMHealthChecker(config)
 
         # Create mock client and network service
         mock_client = MagicMock()
@@ -160,7 +154,7 @@ class TestHealthCheckCurrency:
         mock_init.return_value = True
 
         config = {"service_account_key_file": "/fake/path.json", "network_code": "12345"}
-        checker = GAMHealthChecker(config, dry_run=False)
+        checker = GAMHealthChecker(config)
 
         # Create mock client with no secondary currencies
         mock_client = MagicMock()

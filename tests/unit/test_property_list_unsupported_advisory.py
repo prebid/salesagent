@@ -14,6 +14,7 @@ Covers: UC-003-MAIN-13 (property_list update with advisory on success)
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 from src.core.schemas import (
@@ -27,6 +28,12 @@ from src.services.targeting_capabilities import (
     build_property_list_unsupported_advisories,
     supports_property_list_filtering,
 )
+
+#: ``confirmed_at`` and ``revision`` carry no model default -- they are columns the
+#: repository owns -- so the envelopes built below pass literals. These cases assert on
+#: the ``errors`` key, not on either value, and a test does not speak for the repository.
+_CONFIRMED_AT = datetime(2026, 1, 1, tzinfo=UTC)
+_REVISION = 1
 
 # ---------------------------------------------------------------------------
 # Helper-level coverage
@@ -137,15 +144,21 @@ class TestBuildPropertyListUnsupportedAdvisories:
             "packages[2].targeting_overlay.property_list",
         ]
 
-    def test_advisory_carries_message_and_suggestion(self):
-        """Buyers need to know WHY (silent-drop window) and WHAT TO DO
-        (keep sending). Message + suggestion satisfy both."""
+    def test_advisory_names_the_feature_and_the_field(self):
+        """Buyers need to know WHICH feature is off and WHERE the request tripped it.
+
+        Both are site-specific choices, so they travel structurally in ``details``
+        and ``field``. WHY and WHAT TO DO are not asserted at all any more:
+        message and suggestion are derived from the code by the Error model
+        (read-only, from CODE_TABLE), so with the code pinned by
+        ``test_one_advisory_per_offending_package`` an assert on either would
+        only grade the table against itself.
+        """
         pkgs = [_make_pkg_with_property_list()]
         advisory = build_property_list_unsupported_advisories(pkgs, False)[0]
-        assert "property_list_filtering" in advisory.message
-        assert "persisted" in advisory.message
-        assert advisory.suggestion is not None
-        assert "Continue to send property_list" in advisory.suggestion
+        # `feature` became `capability`, the one name every capability refusal uses.
+        assert advisory.details == {"capability": "property_list_filtering"}
+        assert advisory.field == "packages[0].targeting_overlay.property_list"
 
 
 # ---------------------------------------------------------------------------
@@ -159,10 +172,12 @@ class TestSuccessEnvelopeErrorsField:
 
     def test_create_success_round_trips_errors(self):
         """``errors`` is set, model_dump preserves it."""
-        resp = CreateMediaBuySuccess.carrier(
+        resp = CreateMediaBuySuccess.sync_success(
             media_buy_id="mb_1",
             status="completed",
             packages=[],
+            confirmed_at=_CONFIRMED_AT,
+            revision=_REVISION,
             errors=[Error(code="UNSUPPORTED_FEATURE", message="m", field="f")],
         )
         dumped = resp.model_dump(exclude_none=True)
@@ -172,15 +187,22 @@ class TestSuccessEnvelopeErrorsField:
     def test_create_success_errors_absent_when_none(self):
         """No advisory → no ``errors`` key under ``exclude_none=True``
         (keeps spec-default response shape clean)."""
-        resp = CreateMediaBuySuccess.carrier(media_buy_id="mb_1", status="completed", packages=[])
+        resp = CreateMediaBuySuccess.sync_success(
+            media_buy_id="mb_1",
+            status="completed",
+            packages=[],
+            confirmed_at=_CONFIRMED_AT,
+            revision=_REVISION,
+        )
         dumped = resp.model_dump(exclude_none=True)
         assert "errors" not in dumped
 
     def test_update_success_round_trips_errors(self):
-        resp = UpdateMediaBuySuccess.carrier(
+        resp = UpdateMediaBuySuccess.sync_success(
             media_buy_id="mb_1",
             status="completed",
             affected_packages=[],
+            revision=_REVISION,
             errors=[Error(code="UNSUPPORTED_FEATURE", message="m", field="f")],
         )
         dumped = resp.model_dump(exclude_none=True)
@@ -188,7 +210,9 @@ class TestSuccessEnvelopeErrorsField:
         assert dumped["errors"][0]["code"] == "UNSUPPORTED_FEATURE"
 
     def test_update_success_errors_absent_when_none(self):
-        resp = UpdateMediaBuySuccess.carrier(media_buy_id="mb_1", status="completed", affected_packages=[])
+        resp = UpdateMediaBuySuccess.sync_success(
+            media_buy_id="mb_1", status="completed", affected_packages=[], revision=_REVISION
+        )
         dumped = resp.model_dump(exclude_none=True)
         assert "errors" not in dumped
 
@@ -208,6 +232,7 @@ class TestCreateRequestPackagesFlow:
         from tests.helpers.adcp_factories import create_test_package_request
 
         return CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(
@@ -242,6 +267,8 @@ class TestUpdateRequestPackagesFlow:
 
     def test_advisory_fires_through_real_update_request(self):
         req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id="mb_1",
             packages=[
                 {
@@ -262,7 +289,9 @@ class TestUpdateRequestPackagesFlow:
     def test_update_without_packages_returns_empty(self):
         """An update with no ``packages`` (e.g. ``paused: true``) has nothing
         to advise about."""
-        req = UpdateMediaBuyRequest(media_buy_id="mb_1", paused=True)
+        req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"}, idempotency_key="test-idem-key-0001", media_buy_id="mb_1", paused=True
+        )
         advisories = build_property_list_unsupported_advisories(req.packages, False)
         assert advisories == []
 
@@ -286,6 +315,7 @@ class TestAdvisoryComputedOnFreshCreate:
         from tests.helpers.adcp_factories import create_test_package_request
 
         req = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(
@@ -323,6 +353,7 @@ class TestAdvisoryComputedOnFreshCreate:
             supports_property_list_filtering = True
 
         req = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(

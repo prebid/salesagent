@@ -1,0 +1,179 @@
+"""What the test data GENERATED, recorded at the site that generates it.
+
+THE PROBLEM THIS SOLVES. ``scripts/audit/compare_payloads.py`` diffs the request
+payload a scenario dispatched, run against run. Most of that payload is stable and
+must be diffed verbatim. Some of it is GENERATED and differs on every run for
+reasons that mean nothing -- a factory ``Sequence`` counter, a ``uuid4`` suffix, a
+``now(UTC)``-anchored campaign window -- and diffing those verbatim reports every
+nodeid as CHANGED forever.
+
+WHY THIS IS NOT A NORMALIZATION RULE. The obvious fix is a per-field or per-value
+rule: normalize ``idempotency_key``, or normalize anything matching
+``<prefix>-<hex>``. Both were tried against the real population (2905 dispatched
+payloads, salesagent-ryzil.2) and both are wrong in BOTH directions, with
+symmetric counterexamples measured on this tree:
+
+* ``idempotency_key`` carries the PINNED LITERAL ``"test-idem-key-0001"`` on 210
+  of 587 events. It looks exactly like a generated Sequence value. A field rule
+  or a regex normalizes it, and the gate goes blind to a migration changing it.
+* ``media_buy_ids[]`` carries ``"mb-001-7a693ba8"`` -- a pinned prefix with a
+  ``uuid4().hex[:8]`` suffix. It looks exactly like a hand-written literal. The
+  same rule leaves it alone, and every run reports CHANGED.
+
+No rule over the VALUE or its FIELD NAME separates those, because the difference
+is not in the value: it is in WHERE THE VALUE CAME FROM. So ask there. A value
+nobody minted is, by definition, not run-variant.
+
+SCOPE, AND WHY THERE ARE TWO FUNCTIONS.
+
+:func:`mint` is PER TEST. ``tests/bdd/payload_capture.py`` clears the record at
+each test's setup, so a value generated while test A ran can never intern a
+literal that test B happens to dispatch. That containment is the whole reason
+this is not one process-wide set.
+
+:func:`mint_shared` is PER PROCESS, for the one shape per-test scoping cannot
+express: a generator that CACHES, so the value is minted once and reused by every
+later test in the process. ``tests/factories/request._campaign_window`` is
+``@cache``d exactly so that one baseline's ``start_time``/``end_time`` cannot
+drift mid-scenario; clearing its record between tests would leave 200-odd
+``start_time`` events un-interned and permanently CHANGED. The mint site knows
+which of the two it is -- it is the site that wrote the ``@cache`` -- so the
+choice is made there rather than guessed by a scoping heuristic here.
+
+WHAT COUNTS AS A MINT. Two sources, and neither is a hand-maintained list:
+
+1. Every factory_boy DECLARATION that resolves to a value -- ``Sequence``,
+   ``LazyFunction``, ``LazyAttribute`` and friends. Recorded by wrapping
+   ``BaseDeclaration.evaluate_pre``, the ONE method every attribute-resolution
+   declaration funnels through (factory_boy 3.3.3). Wrapping it means a factory
+   written tomorrow is recorded without anyone remembering to register it, and
+   an argument the CALLER passed explicitly -- ``MediaBuyFactory(media_buy_id=
+   "mb-001")``, a pinned literal -- is not a declaration and is correctly NOT
+   recorded.
+2. Hand-rolled generators outside factory_boy (``f"idem-{uuid4().hex}"`` in a
+   step or an env), which call :func:`mint` directly.
+
+ONLY TEXTUAL LEAVES ARE RECORDED -- ``str``, and the ``datetime``/``date``/``UUID``
+values that reach a wire as text. Numbers are deliberately excluded: a
+``Sequence`` yielding ``0`` would otherwise intern every zero in every payload.
+"""
+
+from __future__ import annotations
+
+from datetime import date, datetime
+from typing import Any
+from uuid import UUID
+
+#: Values minted during the CURRENT test. Cleared by the capture plugin at each
+#: test's setup -- see the scope discussion above.
+_TEST_MINTS: set[str] = set()
+
+#: Values minted once for the whole process by a CACHING generator. Never cleared,
+#: because the generator will never mint them again.
+_SHARED_MINTS: set[str] = set()
+
+
+def _forms(value: Any) -> tuple[str, ...]:
+    """The textual leaf forms *value* can appear as in a captured payload.
+
+    A ``datetime`` reaches the capture as ``json_safe``'s ``isoformat()``, but the
+    same object stringifies differently (``"... 12:00:00+00:00"`` vs
+    ``"...T12:00:00+00:00"``), and a step that formats one into an id uses ``str``.
+    Recording both spellings costs one set entry and removes a whole class of
+    "interned on REST, missed on MCP" asymmetry.
+
+    Returns ``()`` for anything that is not a textual leaf, which is how numbers,
+    ``None``, models and containers stay out of the record.
+    """
+    if isinstance(value, bool):
+        return ()
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, datetime | date):
+        return (value.isoformat(), str(value))
+    if isinstance(value, UUID):
+        return (str(value),)
+    return ()
+
+
+def mint[T](value: T) -> T:
+    """Record *value* as GENERATED BY THIS TEST, and return it unchanged.
+
+    Wrap a generator's result at the site that generates it::
+
+        return mint(f"idem-{uuid.uuid4().hex}")
+
+    Non-textual values pass through unrecorded, so this is safe to wrap around
+    anything without the caller having to know what it produced.
+    """
+    for form in _forms(value):
+        _TEST_MINTS.add(form)
+    return value
+
+
+def mint_shared[T](value: T) -> T:
+    """Record *value* as GENERATED ONCE FOR THE PROCESS, and return it unchanged.
+
+    For CACHING generators only (see the module docstring). Using this where
+    :func:`mint` belongs re-opens the cross-test leak per-test scoping exists to
+    close, so the caller must be able to point at the cache.
+    """
+    for form in _forms(value):
+        _SHARED_MINTS.add(form)
+    return value
+
+
+def minted_forms() -> frozenset[str]:
+    """Every textual form minted and still in scope, for the capture to intern."""
+    return frozenset(_TEST_MINTS | _SHARED_MINTS)
+
+
+def begin_test() -> None:
+    """Drop the per-test record. Called once per test, before its setup runs."""
+    _TEST_MINTS.clear()
+
+
+# ---------------------------------------------------------------------------
+# factory_boy declaration recording
+# ---------------------------------------------------------------------------
+
+_ORIGINAL_EVALUATE_PRE: Any = None
+
+
+def install_declaration_recording() -> None:
+    """Record every factory_boy declaration's resolved value through :func:`mint`.
+
+    Wraps ``factory.declarations.BaseDeclaration.evaluate_pre`` -- the single
+    method ``Sequence``, ``LazyFunction`` and ``LazyAttribute`` all reach their
+    own ``evaluate`` through. A CLASS attribute is looked up at call time, so
+    installing this from a plugin's ``pytest_configure`` reaches factories that
+    were imported long before (the by-value import trap that made an earlier
+    probe of this seam under-count by 3x -- salesagent-ryzil.2 -- does not apply
+    to a method on a class).
+
+    Idempotent: installing twice would double-wrap and the second uninstall would
+    restore the wrapper, so the second call is a no-op.
+    """
+    global _ORIGINAL_EVALUATE_PRE
+    if _ORIGINAL_EVALUATE_PRE is not None:
+        return
+    from factory.declarations import BaseDeclaration
+
+    original = BaseDeclaration.evaluate_pre
+
+    def evaluate_pre(self: Any, instance: Any, step: Any, overrides: Any) -> Any:
+        return mint(original(self, instance, step, overrides))
+
+    _ORIGINAL_EVALUATE_PRE = original
+    BaseDeclaration.evaluate_pre = evaluate_pre  # type: ignore[method-assign]
+
+
+def uninstall_declaration_recording() -> None:
+    """Undo :func:`install_declaration_recording`. For the recorder's own tests."""
+    global _ORIGINAL_EVALUATE_PRE
+    if _ORIGINAL_EVALUATE_PRE is None:
+        return
+    from factory.declarations import BaseDeclaration
+
+    BaseDeclaration.evaluate_pre = _ORIGINAL_EVALUATE_PRE  # type: ignore[method-assign]
+    _ORIGINAL_EVALUATE_PRE = None

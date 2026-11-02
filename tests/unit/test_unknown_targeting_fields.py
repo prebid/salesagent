@@ -23,17 +23,25 @@ class TestForbidRejectsUnknownFields:
         assert t.geo_countries is not None
         assert t.model_extra is None
 
-    def test_managed_field_accepted(self):
-        """Managed-only fields are real model fields, accepted normally."""
-        t = Targeting(axe_include_segment="foo", key_value_pairs={"k": "v"})
-        assert t.axe_include_segment == "foo"
-        assert t.model_extra is None
+    # REMOVED: test_managed_field_accepted. It constructed
+    # ``Targeting(axe_include_segment="foo", key_value_pairs={"k": "v"})``; there is no
+    # seller-managed key/value field any more (src/core/schemas/_base.py names the reason:
+    # pinned core/targeting.json declares none, and Field(exclude=True) kept the one that
+    # lived there off the wire, off persistence and out of the idempotency hash alike, so
+    # it could never round-trip). With that argument gone the test asserted only that a
+    # declared field is accepted, which test_known_field_accepted above already grades.
 
-    def test_v2_normalized_field_accepted(self):
-        """v2 field names consumed by normalizer should not cause rejection."""
-        t = Targeting(geo_country_any_of=["CA"])
-        assert t.geo_countries is not None
-        assert t.model_extra is None
+    def test_v2_flat_field_rejected(self):
+        """A v2 FLAT geo field is rejected — there is no normalizer to consume it.
+
+        adcp 3.1.1 core/targeting.json declares ``geo_countries`` (ISO 3166-1 alpha-2
+        array) and no flat ``geo_country_any_of``, and ``Targeting`` reshapes nothing on
+        the way in. This test asserted the opposite while the normalizer existed; it is
+        inverted rather than deleted because the rejection is the contract, and a
+        re-added normalizer would silently reopen a spelling the pin does not define.
+        """
+        with pytest.raises(Exception, match="Extra inputs are not permitted"):
+            Targeting(geo_country_any_of=["CA"])
 
     def test_multiple_unknown_fields_rejected(self):
         with pytest.raises(Exception, match="Extra inputs are not permitted"):
@@ -41,40 +49,10 @@ class TestForbidRejectsUnknownFields:
 
 
 class TestValidateUnknownTargetingFields:
-    """validate_unknown_targeting_fields should report model_extra keys.
+    """Unknown targeting fields are rejected by PYDANTIC, not by business logic.
 
-    With extra='forbid', unknown fields are rejected at parse time, so
-    model_extra is always empty/None. These tests verify the validator
-    handles both modes correctly.
+    ``Targeting`` resolves ``extra`` through ``get_pydantic_extra_mode()``: ``forbid`` in
+    dev/CI (rejected at construction, as the tests above assert) and ``ignore`` in
+    production (silently dropped). A business-logic ``model_extra`` scan therefore could
+    never fire, and was deleted in salesagent-3dawm.9.
     """
-
-    def test_accepts_all_known_fields(self):
-        from src.services.targeting_capabilities import validate_unknown_targeting_fields
-
-        t = Targeting(geo_countries=["US"], device_type_any_of=["mobile"])
-        violations = validate_unknown_targeting_fields(t)
-        assert violations == []
-
-    def test_accepts_managed_fields(self):
-        """Managed fields are known model fields — they should NOT be flagged here.
-        (They are caught separately by validate_overlay_targeting's access checks.)"""
-        from src.services.targeting_capabilities import validate_unknown_targeting_fields
-
-        t = Targeting(key_value_pairs={"k": "v"}, axe_include_segment="seg")
-        violations = validate_unknown_targeting_fields(t)
-        assert violations == []
-
-    def test_accepts_v2_normalized_fields(self):
-        """v2 fields converted by normalizer should not be flagged."""
-        from src.services.targeting_capabilities import validate_unknown_targeting_fields
-
-        t = Targeting(geo_country_any_of=["US"])
-        violations = validate_unknown_targeting_fields(t)
-        assert violations == []
-
-    def test_empty_targeting_no_violations(self):
-        from src.services.targeting_capabilities import validate_unknown_targeting_fields
-
-        t = Targeting()
-        violations = validate_unknown_targeting_fields(t)
-        assert violations == []

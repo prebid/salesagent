@@ -12,14 +12,9 @@ Obligation IDs:
 
 from __future__ import annotations
 
-import asyncio
-from unittest.mock import AsyncMock, MagicMock
-
 import pytest
 from adcp.types import AssetContentType, ImageFormatAsset, VideoFormatAsset
 from adcp.types.generated_poc.core.format import Dimensions, Renders  # TODO: no stable alias in adcp.types
-from fastmcp.server.context import Context
-from fastmcp.tools.tool import ToolResult
 
 from src.core.schemas import (
     Format,
@@ -187,101 +182,9 @@ class TestCombinedFilters:
         assert response.formats == []
 
 
-# ---------------------------------------------------------------------------
-# UC-005-MAIN-MCP-17: MCP ToolResult wrapping
-# ---------------------------------------------------------------------------
-
-
-class TestMcpToolResultWrapping:
-    """Covers: UC-005-MAIN-MCP-17 -- MCP response wraps response as ToolResult."""
-
-    def test_mcp_returns_tool_result_with_structured_content(self, integration_db):
-        """UC-005-MAIN-MCP-17: MCP wrapper returns ToolResult with structured content.
-
-        The MCP wrapper must return a ToolResult object whose
-        structured_content is the ListCreativeFormatsResponse data,
-        parseable as JSON.
-        """
-        from src.core.tools.creative_formats import list_creative_formats
-
-        formats = [
-            _make_format("display_300", "Medium Rectangle"),
-            _make_format("video_15s", "Pre-roll 15s"),
-        ]
-
-        with CreativeFormatsEnv() as env:
-            TenantFactory(tenant_id="test_tenant")
-            env.set_registry_formats(formats)
-            env._commit_factory_data()
-
-            from tests.harness.transport import Transport
-
-            mock_ctx = MagicMock(spec=Context)
-            mock_ctx.get_state = AsyncMock(return_value=env.identity_for(Transport.MCP))
-
-            tool_result = asyncio.run(list_creative_formats(ctx=mock_ctx))
-
-        # Verify it is a ToolResult
-        assert isinstance(tool_result, ToolResult)
-
-        # Verify structured_content is present and is a dict-like object
-        sc = tool_result.structured_content
-        assert sc is not None
-
-        # Verify it can be parsed as ListCreativeFormatsResponse
-        parsed = ListCreativeFormatsResponse(**sc)
-        assert len(parsed.formats) == 2
-
-    def test_mcp_tool_result_content_is_text(self, integration_db):
-        """UC-005-MAIN-MCP-17: ToolResult.content contains displayable text."""
-        from src.core.tools.creative_formats import list_creative_formats
-
-        formats = [_make_format("test_fmt", "Test Format")]
-
-        with CreativeFormatsEnv() as env:
-            TenantFactory(tenant_id="test_tenant")
-            env.set_registry_formats(formats)
-            env._commit_factory_data()
-
-            from tests.harness.transport import Transport
-
-            mock_ctx = MagicMock(spec=Context)
-            mock_ctx.get_state = AsyncMock(return_value=env.identity_for(Transport.MCP))
-
-            tool_result = asyncio.run(list_creative_formats(ctx=mock_ctx))
-
-        # content is a list of TextContent objects with displayable text
-        assert tool_result.content is not None
-        assert len(tool_result.content) > 0
-        # First content item has text
-        assert hasattr(tool_result.content[0], "text")
-        assert len(tool_result.content[0].text) > 0
-
-    def test_mcp_structured_content_includes_formats_array(self, integration_db):
-        """UC-005-MAIN-MCP-17: structured_content contains 'formats' key."""
-        from src.core.tools.creative_formats import list_creative_formats
-
-        formats = [
-            _make_format("fmt_a", "Format A"),
-            _make_format("fmt_b", "Format B"),
-        ]
-
-        with CreativeFormatsEnv() as env:
-            TenantFactory(tenant_id="test_tenant")
-            env.set_registry_formats(formats)
-            env._commit_factory_data()
-
-            from tests.harness.transport import Transport
-
-            mock_ctx = MagicMock(spec=Context)
-            mock_ctx.get_state = AsyncMock(return_value=env.identity_for(Transport.MCP))
-
-            tool_result = asyncio.run(list_creative_formats(ctx=mock_ctx))
-
-        sc = tool_result.structured_content
-        assert "formats" in sc
-        assert isinstance(sc["formats"], list)
-        assert len(sc["formats"]) == 2
+# UC-005-MAIN-MCP-17 (MCP ToolResult wrapping) is graded on the wire: every BR-UC-005
+# scenario parametrized over mcp reads the tool's structured_content through the
+# harness's MCP leg, so no direct-call test of the wrapper is kept here.
 
 
 # ---------------------------------------------------------------------------
@@ -392,7 +295,6 @@ class TestTenantContextFromA2AHeaders:
             identity = PrincipalFactory.make_identity(
                 principal_id="buyer_1",
                 tenant_id="my_tenant",
-                protocol="a2a",
             )
             response = env.call_a2a(identity=identity)
 
@@ -421,7 +323,6 @@ class TestTenantContextFromA2AHeaders:
             identity_a = PrincipalFactory.make_identity(
                 principal_id="buyer_a",
                 tenant_id="tenant_a",
-                protocol="a2a",
             )
             response_a = env_a.call_a2a(identity=identity_a)
 
@@ -433,7 +334,6 @@ class TestTenantContextFromA2AHeaders:
             identity_b = PrincipalFactory.make_identity(
                 principal_id="buyer_b",
                 tenant_id="tenant_b",
-                protocol="a2a",
             )
             response_b = env_b.call_a2a(identity=identity_b)
 
@@ -443,22 +343,11 @@ class TestTenantContextFromA2AHeaders:
         b_ids = {f.format_id.id for f in response_b.formats}
         assert b_ids == {"fmtB1", "fmtB2"}
 
-    def test_a2a_no_tenant_raises_auth_error(self, integration_db):
-        """UC-005-MAIN-REST-03: missing tenant context raises AdCPAuthenticationError.
-
-        When the identity has no tenant (tenant=None), the A2A wrapper
-        must raise an auth error, not silently return empty data.
-        """
-        from src.core.exceptions import AdCPAuthenticationError
-
-        identity_no_tenant = PrincipalFactory.make_identity(
-            principal_id="buyer_no_tenant",
-            tenant_id="no_tenant",
-            tenant=None,
-            protocol="a2a",
-        )
-
-        with CreativeFormatsEnv() as env:
-            # A2A transport translates AdCPError to a2a-sdk errors; catch either
-            with pytest.raises((AdCPAuthenticationError, Exception), match="tenant"):
-                env.call_a2a(identity=identity_no_tenant)
+    # (Deleted) test_a2a_no_tenant_raises_auth_error: it built an identity with a resolved
+    # principal and ``tenant=None`` and asserted the A2A wrapper refuses it. The resolver
+    # never produces that pairing -- it looks a credential up only inside the tenant the
+    # request reached -- and ``ResolvedIdentity`` declares ``tenant`` required, so the
+    # construction itself now fails. The reachable case, an anonymous tenant-less
+    # discovery request, is answered with an empty catalog by design (76c2a96fb), which
+    # is the opposite of what this asserted. Its `pytest.raises((AdCPAuthenticationError,
+    # Exception))` could not have told the two apart anyway: every exception matches.

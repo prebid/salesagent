@@ -5,8 +5,6 @@ This module provides standard advertising products that are automatically
 created for new tenants to make onboarding easier.
 """
 
-import json
-from datetime import UTC, datetime
 from typing import Any
 
 
@@ -157,78 +155,6 @@ def get_default_products() -> list[dict[str, Any]]:
             "implementation_config": {"privacy_compliant": True, "no_cookies": True, "priority": "medium"},
         },
     ]
-
-
-def create_default_products_for_tenant(conn, tenant_id: str, industry: str = None) -> list[str]:
-    """Create default products for a new tenant.
-
-    Args:
-        conn: Database connection
-        tenant_id: The tenant to create products for
-
-    Returns:
-        List of created product IDs
-    """
-    created_products = []
-
-    # Get products based on industry if specified
-    products_to_create = get_industry_specific_products(industry) if industry else get_default_products()
-
-    for product_template in products_to_create:
-        try:
-            # Check if product already exists
-            cursor = conn.execute(
-                "SELECT product_id FROM products WHERE tenant_id = ? AND product_id = ?",
-                (tenant_id, product_template["product_id"]),
-            )
-            if cursor.fetchone():
-                continue  # Skip if already exists
-
-            # Insert the product
-            conn.execute(
-                """
-                INSERT INTO products (
-                    product_id, tenant_id, name, description,
-                    creative_formats, delivery_type, cpm,
-                    price_guidance_min, price_guidance_max,
-                    countries, targeting_template, implementation_config,
-                    created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-                (
-                    product_template["product_id"],
-                    tenant_id,
-                    product_template["name"],
-                    product_template["description"],
-                    json.dumps(product_template["formats"]),
-                    product_template["delivery_type"],
-                    product_template["cpm"],
-                    (
-                        product_template.get("price_guidance", {}).get("min")
-                        if product_template.get("price_guidance")
-                        else None
-                    ),
-                    (
-                        product_template.get("price_guidance", {}).get("max")
-                        if product_template.get("price_guidance")
-                        else None
-                    ),
-                    json.dumps(product_template["countries"]) if product_template["countries"] else None,
-                    json.dumps(product_template["targeting_template"]),
-                    json.dumps(product_template["implementation_config"]),
-                    datetime.now(UTC).isoformat(),
-                    datetime.now(UTC).isoformat(),
-                ),
-            )
-
-            created_products.append(product_template["product_id"])
-
-        except Exception as e:
-            print(f"Warning: Failed to create default product {product_template['product_id']}: {e}")
-            continue
-
-    conn.commit()
-    return created_products
 
 
 def get_industry_specific_products(industry: str) -> list[dict[str, Any]]:

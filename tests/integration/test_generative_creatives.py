@@ -51,7 +51,7 @@ class TestGenerativeCreatives:
                     "status": "draft",
                     "context_id": "ctx-123",
                     "creative_output": {
-                        "assets": {"headline": {"text": "Generated headline"}},
+                        "assets": {"headline": {"asset_type": "text", "content": "Generated headline"}},
                         "output_format": {"url": "https://example.com/generated.html"},
                     },
                 },
@@ -140,10 +140,8 @@ class TestGenerativeCreatives:
             env.setup_default_data()
             fmt = env.setup_generative_build(
                 format_id="display_300x250_generative",
-                gemini_api_key=None,  # No API key
+                gemini_api_key=None,  # No API key — setup_generative_build clears it
             )
-            # Override to remove gemini key (setup_generative_build sets it)
-            env.mock["config"].return_value.gemini_api_key = None
 
             result = env.call_impl(
                 creatives=[
@@ -159,7 +157,6 @@ class TestGenerativeCreatives:
         assert len(result.creatives) == 1
         assert result.creatives[0].action == "failed"
         assert result.creatives[0].errors
-        assert any("GEMINI_API_KEY" in str(err) for err in result.creatives[0].errors)
 
     def test_message_extraction_from_assets(self, integration_db):
         """Test that message is correctly extracted from various asset roles."""

@@ -1,59 +1,69 @@
-# Prebid Sales Agent Documentation
+# Prebid Sales Agent documentation
 
-The Prebid Sales Agent is the Prebid.org reference implementation of an AdCP-compliant sales agent.
+The Prebid Sales Agent is the Prebid.org reference implementation of a sales agent that complies with the Ad Context Protocol (AdCP).
 
-## Quick Start
+## Quick start
 
-- **[Quickstart Guide](quickstart.md)** - Get running locally in 5 minutes
+The [Quickstart guide](quickstart.md) gets the agent running locally in 5 minutes.
 
 ## Deployment
 
-- **[Single-Tenant](deployment/single-tenant.md)** - Standard deployment (recommended)
-- **[Multi-Tenant](deployment/multi-tenant.md)** - Multiple publishers on one deployment
+- **[Single-tenant deployment](deployment/single-tenant.md)** — the standard deployment, and the recommended one
+- **[Multi-tenant deployment](deployment/multi-tenant.md)** — multiple publishers on one deployment
 
-### Cloud Walkthroughs
+### Cloud walkthroughs
 
+- **[AWS (ECS Fargate, RDS, ALB)](deployment/aws.md)**
 - **[Google Cloud Run](deployment/walkthroughs/gcp.md)**
 - **[Fly.io](deployment/walkthroughs/fly.md)**
+- **[Single VM with Docker Compose and Caddy](deployment/vm.md)**
 
-## User Guide
+## User guide
 
-- **[Overview](user-guide/)** - Using the sales agent after deployment
-- **[SSO Setup](user-guide/sso-setup.md)** - Configure Single Sign-On with Google, Microsoft, Okta, Auth0, or Keycloak
-- **[Products](user-guide/products.md)** - Setting up your product catalog
-- **[Advertisers](user-guide/advertisers.md)** - Managing principals and API access
-- **[Creatives](user-guide/creatives.md)** - Creative approval workflow
+- **[User guide overview](user-guide/)** — use the sales agent after deployment
+- **[Single sign-on (SSO) setup](user-guide/sso-setup.md)** — configure single sign-on with Google, Microsoft, Okta, Auth0, or Keycloak
+- **[Products](user-guide/products.md)** — set up your product catalog
+- **[Advertisers](user-guide/advertisers.md)** — manage principals and API access
+- **[Creatives](user-guide/creatives.md)** — the creative approval workflow
 
 ## Adapters
 
-- **[Overview](adapters/)** - Choosing and configuring adapters
-- **[Google Ad Manager](adapters/gam/)** - GAM integration
-- **[Mock Adapter](adapters/mock/)** - Testing and development
+- **[Adapter overview](adapters/)** — choose and configure an adapter
+- **[Google Ad Manager](adapters/gam/)** — the GAM integration
+- **[Mock adapter](adapters/mock/)** — testing and development
 
-## Security & Configuration
+## Security and configuration
 
-- **[Security](security.md)** - Authentication and security best practices
-- **[Encryption](encryption.md)** - API key encryption with Fernet
+- **[Security](security.md)** — authentication and security best practices
+- **[Encryption](encryption.md)** — API key encryption with Fernet
+
+## Message signing (RFC 9421)
+
+- **[Signing posture and key discovery](signing/posture-and-discovery.md)** — for counterparties: what we advertise, the enforcement ladder, and the brand.json walk to our JWKS
+- **[Verifying our outbound webhooks](signing/verifying-our-webhooks.md)** — for counterparties: the profile tag, where to fetch the key, and the legacy HMAC removal
+- **[Signing key runbook](operations/signing-key-runbook.md)** — for operators: provisioning, rotation, revocation, rollout and rollback
 
 ## Development
 
-- **[Overview](development/)** - Contributing to the codebase
-- **[Architecture](development/architecture.md)** - System design
-- **[Engineering standards](development/engineering-standards.md)** - Standards every change is held to
-- **[Troubleshooting](development/troubleshooting.md)** - Common issues
+- **[Development overview](development/)** — contributing to the codebase, and the map of every development document
+- **[Architecture](development/architecture.md)** — system design
+- **[Request lifecycle](development/request-lifecycle.md)** — how a request reaches business logic
+- **[Building a tool](development/building-tools.md)** — add or change an AdCP tool
+- **[Engineering standards](development/engineering-standards.md)** — the standards every change is held to
+- **[Troubleshooting](development/troubleshooting.md)** — common issues
 
-## Architecture Decision Records (ADRs)
+## Architecture decision records (ADRs)
 
-ADRs explain *why* significant technical decisions were made — not just what was
-decided. Each record captures the context, the chosen approach, trade-offs, and
-when to revisit the decision.
+An ADR explains *why* a significant technical decision was made, not only what
+was decided. Each record captures the context, the chosen approach, the
+trade-offs, and when to revisit the decision.
 
-- **[decisions/](decisions/)** - Index of all ADRs
-- **[ADR-001](decisions/adr-001-single-source-pre-commit-deps.md)** - uv.lock as single source of truth for pre-commit deps
-- **[ADR-002](decisions/adr-002-solo-maintainer-bypass.md)** - Solo-maintainer branch protection with bypass
-- **[ADR-003](decisions/adr-003-pull-request-target-trust.md)** - pull_request_target trust boundary for CLA and PR-title workflows
+- **[ADR index](decisions/)** — every ADR in one list
+- **[ADR-001](decisions/adr-001-single-source-pre-commit-deps.md)** — uv.lock as the single source of truth for pre-commit deps
+- **[ADR-002](decisions/adr-002-solo-maintainer-bypass.md)** — solo-maintainer branch protection with bypass
+- **[ADR-003](decisions/adr-003-pull-request-target-trust.md)** — the pull_request_target trust boundary for CLA and PR-title workflows
 
-## Documentation Structure
+## Documentation structure
 
 ```
 docs/
@@ -64,6 +74,8 @@ docs/
 ├── deployment/
 │   ├── single-tenant.md        # Standard deployment
 │   ├── multi-tenant.md         # Multi-tenant configuration
+│   ├── aws.md                  # AWS: ECS Fargate, RDS, ALB (Terraform)
+│   ├── vm.md                   # Single VM: Docker Compose + Caddy
 │   └── walkthroughs/
 │       ├── gcp.md              # Google Cloud Run
 │       └── fly.md              # Fly.io
@@ -83,26 +95,26 @@ docs/
     └── troubleshooting.md      # Common issues
 ```
 
-## Finding Information
+## Find information
 
-### By Role
+### By role
 
-**New Users**
-1. [Quickstart](quickstart.md) - Get running locally
-2. [Deployment](deployment/) - Deploy to production
-3. [User Guide](user-guide/) - Configure and use
+**New users**
+1. [Quickstart guide](quickstart.md) — get running locally
+2. [Deployment](deployment/) — deploy to production
+3. [User guide](user-guide/) — configure and use the agent
 
-**Publishers/Operators**
-1. [User Guide](user-guide/) - Day-to-day usage
-2. [Adapters](adapters/) - Configure ad server
-3. [Security](security.md) - Security configuration
+**Publishers and operators**
+1. [User guide](user-guide/) — day-to-day usage
+2. [Adapters](adapters/) — configure the ad server
+3. [Security](security.md) — security configuration
 
 **Developers**
-1. [Development](development/) - Contributing guide
-2. [Architecture](development/architecture.md) - System design
-3. [CLAUDE.md](../CLAUDE.md) - AI assistant patterns
+1. [Development guide](development/) — how to contribute
+2. [Architecture](development/architecture.md) — system design
+3. [Root CLAUDE.md](../CLAUDE.md) — development patterns, condensed for AI agents
 
-## System Overview
+## System overview
 
 ```
 ┌─────────────────┐     ┌──────────────────┐
@@ -117,15 +129,15 @@ docs/
         └──────────────┘ └────────┘ └──────────────┘
 ```
 
-## Key Components
+## Key components
 
-- **MCP Server** (port 8080) - FastMCP-based tools for AI agents
-- **Admin UI** (port 8001) - OAuth secured web interface
-- **A2A Server** (port 8091) - Agent-to-agent communication
-- **Database** - PostgreSQL
+- **MCP server** (port `8080`) — FastMCP-based tools for AI agents
+- **Admin UI** (port `8001`) — OAuth secured web interface
+- **A2A server** (port `8091`) — agent-to-agent communication
+- **Database** — PostgreSQL
 
-## External Links
+## External links
 
-- [AdCP Protocol Specification](https://adcontextprotocol.org/docs/)
-- [MCP Protocol Documentation](https://modelcontextprotocol.io)
-- [GitHub Repository](https://github.com/prebid/salesagent)
+- [AdCP protocol specification](https://adcontextprotocol.org/docs/)
+- [MCP protocol documentation](https://modelcontextprotocol.io)
+- [GitHub repository](https://github.com/prebid/salesagent)

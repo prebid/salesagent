@@ -19,6 +19,7 @@ from src.adapters.gam_inventory_discovery import (
     GAMInventoryDiscovery,
 )
 from src.core.database.db_config import DatabaseConfig
+from src.core.database.integrity import resolve_or_write
 from src.core.database.models import GAMInventory, Product, ProductInventoryMapping
 
 # Create database session factory
@@ -720,7 +721,8 @@ class GAMInventoryService:
         """
         from sqlalchemy.exc import DBAPIError, OperationalError
 
-        from src.adapters.gam.utils.timeout_handler import TimeoutError, timeout
+        from src.adapters.gam.utils.timeout_handler import timeout
+        from src.core.exceptions import AdCPServiceUnavailableError
 
         @timeout(seconds=120)  # 2 minute timeout for database operations
         def _commit_with_timeout():
@@ -741,14 +743,14 @@ class GAMInventoryService:
             logger.info("💾 Committing batch transaction (120s timeout)...")
             _commit_with_timeout()
             logger.info("✅ Batch committed successfully")
-        except TimeoutError as e:
+        except AdCPServiceUnavailableError as e:
             logger.error(f"⏰ Database commit timed out after 120s: {e}")
             logger.error(f"   Insert count: {len(to_insert)}, Update count: {len(to_update)}")
             logger.error("   This usually indicates: lost connection, lock contention, or large transaction")
             self.db.rollback()
-            raise TimeoutError(
-                "Database commit timed out after 120s - possible lost connection, lock contention, or large transaction"
-            )
+            # A DB commit timeout is SERVICE_UNAVAILABLE, per AdCP 3.1.1
+            # transport-errors.mdx Rule 1, which names this exact translation.
+            raise AdCPServiceUnavailableError(internal_detail=e) from e
         except (OperationalError, DBAPIError) as e:
             # Connection errors - log and re-raise with context
             logger.error(f"❌ Database connection error during batch write: {e}")
@@ -827,29 +829,31 @@ class GAMInventoryService:
                 GAMInventory.inventory_id == inventory_id,
             )
         )
-        existing = self.db.scalars(stmt).first()
+        item = GAMInventory(
+            tenant_id=tenant_id,
+            inventory_type=inventory_type,
+            inventory_id=inventory_id,
+            name=name,
+            path=path,
+            status=status,
+            inventory_metadata=inventory_metadata,
+            last_synced=last_synced,
+        )
+        existing = resolve_or_write(
+            self.db,
+            conflict=lambda: self.db.scalars(stmt).first(),
+            write=lambda: self.db.add(item),
+            constraint="uq_gam_inventory",
+        )
 
-        if existing:
-            # Update existing
+        if existing is not None:
+            # Update existing — also where a sync that lost the insert race lands.
             existing.name = name
             existing.path = path
             existing.status = status
             existing.inventory_metadata = inventory_metadata
             # Properly assign datetime to DateTime column
             existing.last_synced = last_synced
-        else:
-            # Insert new
-            item = GAMInventory(
-                tenant_id=tenant_id,
-                inventory_type=inventory_type,
-                inventory_id=inventory_id,
-                name=name,
-                path=path,
-                status=status,
-                inventory_metadata=inventory_metadata,
-                last_synced=last_synced,
-            )
-            self.db.add(item)
 
         self.db.commit()
 
@@ -1539,7 +1543,6 @@ def create_inventory_endpoints(app):
                 advertiser_id=None,  # Not needed for inventory sync
                 trafficker_id=None,  # Not needed for inventory sync
                 tenant_id=tenant_id,
-                dry_run=False,
             )
 
             # Perform sync
@@ -1743,7 +1746,6 @@ def create_inventory_endpoints(app):
                 advertiser_id=None,
                 trafficker_id=None,
                 tenant_id=tenant_id,
-                dry_run=False,
             )
 
             # Fetch values using GAM API

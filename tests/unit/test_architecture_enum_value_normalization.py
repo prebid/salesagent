@@ -24,6 +24,7 @@ import re
 from pathlib import Path
 
 from src.core.enum_helpers import enum_value
+from src.core.schemas import ListCreativeFormatsRequest
 
 _SRC_CORE = Path(__file__).resolve().parents[2] / "src" / "core"
 
@@ -65,18 +66,15 @@ class TestEnumValueNormalizationBehavior:
         # independence is the observable invariant the refactor must preserve.)
         from adcp.types import AssetContentType
 
-        from src.core.tools.creative_formats import build_list_creative_formats_request
-
         members = list(AssetContentType)[:2]
-        from_enums = build_list_creative_formats_request(asset_types=members)
-        from_strs = build_list_creative_formats_request(asset_types=[m.value for m in members])
+        from_enums = ListCreativeFormatsRequest(asset_types=members)
+        from_strs = ListCreativeFormatsRequest(asset_types=[m.value for m in members])
 
         assert from_enums.asset_types == from_strs.asset_types
 
     def test_build_request_asset_types_none_stays_none(self):
-        from src.core.tools.creative_formats import build_list_creative_formats_request
 
-        req = build_list_creative_formats_request(asset_types=None)
+        req = ListCreativeFormatsRequest(asset_types=None)
         assert req.asset_types is None
 
     def test_enum_value_matches_handrolled_status_normalization(self):

@@ -5,20 +5,70 @@ Both are invisible to the adapter suites by construction. The per-client
 so a test that asserts ``timeout=30.0`` passes whether the field is wired up or
 deleted outright. The overlap rule fires on a key clash, and no production call
 site has one — which is the reason to test it here, not a reason to skip it.
+
+The overlap rule's refusal is graded by CHANNEL, not by sentence. Under ADR-010
+the buyer-facing text is a function of the code, so an assertion on ``str(exc)``
+grades ``CODE_TABLE`` rather than this module: the clashing keys are the
+structured fact and live in ``details.rejected_value``, and the buyer-facing
+message must name NEITHER the keys nor the vendor's dial coordinates — AdCP 3.1.1
+``transport-errors.mdx`` § Security Considerations forbids credentials, tokens
+and internal service names in any client-facing field.
 """
 
+import json
 from types import MappingProxyType
 from unittest.mock import patch
 
 import pytest
+from adcp.types import ErrorCode
 
 from src.adapters.vendor_http import VendorHttpClient
+from src.core.errors.codes import CODE_TABLE, Recovery
+from src.core.errors.details import ConfigurationDetails
 from src.core.exceptions import AdCPConfigurationError
+
+#: A query-string credential distinctive enough that its absence from every
+#: buyer-facing channel is a fact rather than a coincidence.
+_CREDENTIAL = "s3cr3t-query-credential"
+
+#: The host the test client dials. An internal service name, so it is subject to
+#: the same buyer-facing prohibition as the credential.
+_VENDOR_HOST = "vendor.example"
 
 
 def _client(**overrides):
-    kwargs = {"base_url": "https://vendor.example", "headers": {}}
+    kwargs = {"base_url": f"https://{_VENDOR_HOST}", "headers": {}}
     return VendorHttpClient(**{**kwargs, **overrides})
+
+
+def _assert_clash_refusal(exc: AdCPConfigurationError, *, clashing_keys: list[str]) -> None:
+    """Grade one clash refusal on every channel it is allowed to speak through.
+
+    Written once because both clash tests grade the same envelope; only the key
+    set differs.
+    """
+    # Classification. Terminal and 500 are the point of choosing this class: the
+    # deployment's own wiring is wrong, so the buyer has no lever and MUST NOT retry.
+    assert exc.error_code == ErrorCode.CONFIGURATION_ERROR
+    assert exc.recovery == Recovery.TERMINAL
+    assert exc.status_code == 500
+
+    # The structured fact: exactly the offending keys, in sorted order. Equality,
+    # not membership, is what proves a non-clashing key is never blamed.
+    assert isinstance(exc.details, ConfigurationDetails)
+    assert exc.details.rejected_value == clashing_keys
+
+    # Buyer-facing text is a function of the code (ADR-010) — not authored here.
+    assert exc.message == CODE_TABLE[exc.error_code].message
+    assert str(exc) == exc.message
+
+    # AdCP 3.1.1 transport-errors.mdx § Security Considerations: no credential, no
+    # internal service name, in any client-facing field.
+    wire = json.dumps({"message": exc.message, "details": exc.details.to_wire()})
+    assert _CREDENTIAL not in wire, "a query-string credential must never reach the buyer"
+    assert _VENDOR_HOST not in wire, "the vendor host must never reach the buyer"
+    for key in clashing_keys:
+        assert key not in exc.message, "the buyer-facing sentence must not name our wiring"
 
 
 class TestPerClientTimeout:
@@ -67,26 +117,27 @@ class TestParamsMerge:
         caller supplying the same key is forging it or shadowing a dial
         coordinate. Picking a winner silently would let either bug ship.
         """
-        client = _client(params=MappingProxyType({"access_token": "T"}))
+        client = _client(params=MappingProxyType({"access_token": _CREDENTIAL}))
 
         with patch("src.adapters.vendor_http.send") as mock_send:
-            with pytest.raises(AdCPConfigurationError, match="access_token"):
+            with pytest.raises(AdCPConfigurationError) as exc_info:
                 client.call("GET", "/records", params={"access_token": "forged"})
 
         assert not mock_send.called, "the clash must be caught before any request is sent"
+        _assert_clash_refusal(exc_info.value, clashing_keys=["access_token"])
 
     def test_the_clash_error_names_every_offending_key(self):
-        client = _client(params=MappingProxyType({"access_token": "T", "network": "1"}))
+        client = _client(params=MappingProxyType({"access_token": _CREDENTIAL, "network": "1"}))
 
         with patch("src.adapters.vendor_http.send"):
             with pytest.raises(AdCPConfigurationError) as exc_info:
                 client.call("GET", "/r", params={"access_token": "x", "network": "2", "ok": "y"})
 
-        # Quoted forms: a bare "ok" would match inside "access_token".
-        message = str(exc_info.value)
-        assert "'access_token'" in message
-        assert "'network'" in message
-        assert "'ok'" not in message, "a key that does not clash must not be blamed"
+        # Equality on the structured channel is what excludes the non-clashing "ok":
+        # the old substring read of the sentence needed quoted forms to keep "ok" from
+        # matching inside "access_token", and graded prose to do it.
+        _assert_clash_refusal(exc_info.value, clashing_keys=["access_token", "network"])
+        assert "ok" not in exc_info.value.details.rejected_value, "a key that does not clash must not be blamed"
 
 
 class TestImmutability:

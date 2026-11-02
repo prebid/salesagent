@@ -1,13 +1,13 @@
 """A server-side property-list failure must not reach the buyer as their mistake.
 
-``_get_products_impl`` wrapped every non-``AdCPError`` out of
-``resolve_property_list`` in ``AdCPValidationError(..., recovery="transient")``.
+``_get_products_impl`` wrapped every non-``AdCPSalesAgentError`` out of
+``resolve_property_list`` in ``AdCPValidationError``, whose recovery the code table supplies.
 Two things are wrong with that on the wire, and only the wire can show them:
 
 1. The buyer is told ``VALIDATION_ERROR`` — "your request is malformed" — for a
    fault entirely on our side (an ``AttributeError``, a ``TypeError``, a DNS
    failure inside the resolver).
-2. The arm forced ``recovery="transient"`` while the pinned AdCP enum classifies
+2. The branch forced ``recovery="transient"`` while the pinned AdCP enum classifies
    ``VALIDATION_ERROR`` as ``correctable``. The buyer is simultaneously told the
    request is invalid AND that retrying the identical request may work.
 
@@ -41,7 +41,6 @@ _WIRE_TRANSPORTS = [Transport.MCP, Transport.A2A]
 def test_resolver_crash_is_not_reported_as_the_buyers_validation_error(integration_db, transport):
     """A crash inside property-list resolution reaches the buyer as a server fault."""
     from tests.harness.product import ProductEnv
-    from tests.helpers import assert_envelope_shape
 
     with ProductEnv() as env:
         tenant = TenantFactory(tenant_id="test_tenant")
@@ -61,8 +60,19 @@ def test_resolver_crash_is_not_reported_as_the_buyers_validation_error(integrati
             "a crash inside property-list resolution must fail the request, got "
             f"{getattr(result, 'wire_response', None) or result.payload!r}"
         )
-        assert_envelope_shape(
-            result.wire_error_envelope,
-            "SERVICE_UNAVAILABLE",
+        # EXPECTATION REVERSED by salesagent-3dawm.6. This asserted SERVICE_UNAVAILABLE,
+        # which was never what the raise site declared: adcp_error_for turns an
+        # untyped crash into INTERNAL_ERROR, and a now-deleted table rewrote that to
+        # SERVICE_UNAVAILABLE at the boundary. With the rewriters gone the buyer sees the
+        # code the server actually produced.
+        #
+        # This test's own point still holds, and holds better: a resolver crash must not be
+        # reported as the BUYER's validation error. INTERNAL_ERROR says "the seller broke",
+        # and recovery=transient — unchanged by the reversal — tells the buyer what to do
+        # about it, which is what AdCP 3.1.1 core/error.json makes the decode path for a code
+        # outside the published enum. No internal detail reaches the wire: the message is
+        # CODE_TABLE's generic sentence, which BR-SECURITY-001 grades separately.
+        result.assert_wire_error(
+            "INTERNAL_ERROR",
             recovery="transient",
         )

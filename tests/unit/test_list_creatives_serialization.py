@@ -61,7 +61,7 @@ def test_list_creatives_response_with_multiple_creatives():
 
 
 def test_list_creatives_response_with_optional_fields():
-    """Test that internal fields are accessible via model_dump_internal()."""
+    """A public optional field is on the wire; an internal field is on the model only."""
     creative = make_test_creative(
         creative_id="test_with_optional",
         name="Test Creative",
@@ -88,10 +88,9 @@ def test_list_creatives_response_with_optional_fields():
     assert "creative_id" in creative_data
     assert "format_id" in creative_data
 
-    # Internal fields accessible via model_dump_internal()
-    internal_data = creative.model_dump_internal()
-    assert "principal_id" in internal_data
-    assert internal_data["principal_id"] == "principal_123"
+    # A Field(exclude=True) field EXISTS on the model — the attribute is what existing
+    # means, and there is no second dump shape to read it out of (CLAUDE.md pattern 4).
+    assert creative.principal_id == "principal_123"
 
 
 def test_query_summary_sort_applied_serializes_enum_values():

@@ -4,29 +4,14 @@ import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
+
 # All MCP tools - unified mode is now enabled by default
 # Note: signals tools (get_signals, activate_signal) removed - should come from dedicated signals agents
-ALL_TOOLS = [
-    # Core AdCP discovery tools
-    "get_adcp_capabilities",
-    # Core AdCP tools
-    "get_products",
-    "create_media_buy",
-    "update_media_buy",
-    "get_media_buy_delivery",
-    "get_media_buys",
-    "sync_creatives",
-    "list_creatives",
-    "list_creative_formats",
-    "list_authorized_properties",
-    "list_accounts",
-    "sync_accounts",
-    "update_performance_index",
-    # Task management tools (HITL - Human-in-the-loop)
-    "list_tasks",
-    "get_task",
-    "complete_task",
-]
+def _registry_tools() -> set[str]:
+    """The tools the registry declares -- the one place a tool is declared at all."""
+    from src.core.tools.registry import TOOLS
+
+    return set(TOOLS)
 
 
 def test_all_tools_registered():
@@ -38,12 +23,16 @@ def test_all_tools_registered():
     tools = asyncio.new_event_loop().run_until_complete(mcp.list_tools())
     registered_tools = [t.name for t in tools]
 
-    for tool in ALL_TOOLS:
-        assert tool in registered_tools, f"Tool '{tool}' is not registered with MCP server"
-
-    # Verify no unexpected tools
-    unexpected = set(registered_tools) - set(ALL_TOOLS)
-    assert len(unexpected) == 0, f"Unexpected tools registered: {unexpected}"
+    # EQUALITY against the registry, not membership in a hand-written list. The list this
+    # replaces had gone stale in both directions -- it named list_authorized_properties and
+    # update_performance_index, which are not AdCP tasks at the pinned version and are no
+    # longer declared, and it could not have known about a tool added tomorrow. Registration
+    # is generated from TOOLS, so the honest statement is that the two agree exactly.
+    assert set(registered_tools) == _registry_tools(), (
+        f"MCP registration disagrees with the registry. "
+        f"missing={sorted(_registry_tools() - set(registered_tools))} "
+        f"unexpected={sorted(set(registered_tools) - _registry_tools())}"
+    )
 
 
 def test_tool_registration_completeness():

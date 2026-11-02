@@ -13,35 +13,24 @@ import asyncio
 import concurrent.futures
 import logging
 import time
-from collections.abc import Sequence
-from typing import Annotated
+from typing import TYPE_CHECKING
 
 # FIXME(#1388): FormatId has a local subclass; import from src.core.schemas (Pattern #7/#4).
-from adcp import FormatId
 from adcp.types import (
-    AssetContentType,
     AudioFormatAsset,
-    ContextObject,
     CreativeAgentCapability,
     HtmlFormatAsset,
     ImageFormatAsset,
     TextFormatAsset,
     UrlFormatAsset,
     VideoFormatAsset,
-    WcagLevel,
 )
 from adcp.types import Format as AdcpFormat
-from adcp.types.generated_poc.enums.disclosure_persistence import DisclosurePersistence
-from adcp.types.generated_poc.enums.disclosure_position import DisclosurePosition
 from adcp.utils.format_assets import get_format_assets
 
 # Format subclass preserved through backward-compatibility helper (PEP 695 type param below).
-from fastmcp.server.context import Context
-from pydantic import Field
-
-from src.core.exceptions import AdCPError, AdCPServiceUnavailableError
+from src.core.exceptions import AdCPSalesAgentError, AdCPServiceUnavailableError
 from src.core.helpers import enum_value
-from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
 
@@ -72,28 +61,29 @@ ADVERTISED_CREATIVE_AGENT_CAPABILITIES: tuple[CreativeAgentCapability, ...] = (
 
 
 def _ensure_backward_compatible_format[FormatT: AdcpFormat](f: FormatT) -> FormatT:
-    """Pass-through function for backward compatibility.
+    """Return *f* unchanged, as the same Format subclass it was given.
 
-    Note: adcp 3.2.0 removed the deprecated `assets_required` field from Format.
-    The new `assets` field includes both required and optional assets with a `required` boolean.
-    This function is kept for API compatibility but now just returns the format unchanged.
+    Nothing is reshaped: the pinned Format declares one ``assets`` list whose entries
+    carry their own ``required`` flag, so there is no second field to populate from it.
 
     Args:
         f: Format object from creative agent
 
     Returns:
-        Format unchanged (backward compatibility code removed in adcp 3.2.0 upgrade)
+        The same object, unchanged.
     """
     return f
 
 
+from adcp import ErrorCode
+
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import require_tenant
-from src.core.resolved_identity import ResolvedIdentity
+from src.core.resolved_identity import PublicIdentity
+from src.core.schemas import Error as AdCPResponseError
+
+if TYPE_CHECKING:
+    from src.core.creative_agent_registry import FormatFetchResult
 from src.core.schemas import ListCreativeFormatsRequest, ListCreativeFormatsResponse, format_id_identity
-from src.core.tools._mcp import mcp_result
-from src.core.transport_helpers import resolve_identity_from_context
-from src.core.validation_helpers import adcp_validation_boundary
 
 
 def _infer_asset_type(asset_id: str) -> str:
@@ -143,45 +133,8 @@ def _make_asset(
     )
 
 
-def build_list_creative_formats_request(
-    *,
-    format_ids: list[FormatId] | None = None,
-    output_format_ids: list[FormatId] | None = None,
-    input_format_ids: list[FormatId] | None = None,
-    is_responsive: bool | None = None,
-    name_search: str | None = None,
-    asset_types: Sequence[AssetContentType | str] | None = None,
-    min_width: int | None = None,
-    max_width: int | None = None,
-    min_height: int | None = None,
-    max_height: int | None = None,
-    wcag_level: WcagLevel | str | None = None,
-    disclosure_positions: list[DisclosurePosition] | None = None,
-    disclosure_persistence: list[DisclosurePersistence] | None = None,
-    context: ContextObject | None = None,
-) -> ListCreativeFormatsRequest:
-    """Build the shared list_creative_formats request for transport wrappers."""
-    asset_types_strs = [enum_value(at) for at in asset_types] if asset_types else None
-    return ListCreativeFormatsRequest(
-        format_ids=format_ids,
-        output_format_ids=output_format_ids,
-        input_format_ids=input_format_ids,
-        is_responsive=is_responsive,
-        name_search=name_search,
-        asset_types=asset_types_strs,
-        min_width=min_width,
-        max_width=max_width,
-        min_height=min_height,
-        max_height=max_height,
-        wcag_level=wcag_level,
-        disclosure_positions=disclosure_positions,
-        disclosure_persistence=disclosure_persistence,
-        context=context,
-    )
-
-
 def _list_creative_formats_impl(
-    req: ListCreativeFormatsRequest | None, identity: ResolvedIdentity | None
+    req: ListCreativeFormatsRequest | None, identity: PublicIdentity
 ) -> ListCreativeFormatsResponse:
     """List all available creative formats (AdCP spec endpoint).
 
@@ -196,49 +149,47 @@ def _list_creative_formats_impl(
     if req is None:
         req = ListCreativeFormatsRequest()
 
-    # Extract principal and tenant from resolved identity
-    principal_id = identity.principal_id if identity else None
-    tenant = require_tenant(identity, context=req.context)
+    principal_id = identity.principal_id
+    # Always a tenant: a request naming no seller is refused CONFIGURATION_ERROR by the
+    # resolver, so there is no empty-format answer for one.
+    tenant = identity.tenant
 
     # Get formats from all registered creative agents via registry
     from src.core.creative_agent_registry import FormatFetchResult, get_creative_agent_registry
 
     try:
         registry = get_creative_agent_registry()
-    except AdCPError:
+    except AdCPSalesAgentError:
         raise
     except Exception as e:
         logger.error(f"Failed to create creative agent registry: {e}", exc_info=True)
-        raise AdCPServiceUnavailableError(
-            f"Creative agent registry initialization failed: {e}",
-            context=req.context,
-        ) from e
+        raise AdCPServiceUnavailableError(internal_detail=e) from e
 
     # Use list_all_formats_with_errors() to get per-agent error reporting (FD-ERR-01, FD-ERR-02)
     try:
         loop = asyncio.get_running_loop()
         with concurrent.futures.ThreadPoolExecutor() as executor:
             future = executor.submit(
-                lambda: asyncio.run(registry.list_all_formats_with_errors(tenant_id=tenant["tenant_id"]))
+                lambda: asyncio.run(registry.list_all_formats_with_errors(tenant_id=tenant.tenant_id))
             )
             fetch_result: FormatFetchResult = future.result()
     except RuntimeError:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            fetch_result = loop.run_until_complete(registry.list_all_formats_with_errors(tenant_id=tenant["tenant_id"]))
+            fetch_result = loop.run_until_complete(registry.list_all_formats_with_errors(tenant_id=tenant.tenant_id))
         finally:
             loop.close()
 
     formats = fetch_result.formats
-    agent_errors = fetch_result.errors
+    agent_errors = _route_agent_failures(fetch_result, req)
 
     # Get formats from adapter if it provides them (e.g., Broadstreet acting as both sales and creative agent)
     # Check adapter type from tenant config and load formats without instantiating the full adapter
     try:
         from src.core.database.repositories.uow import TenantConfigUoW
 
-        with TenantConfigUoW(tenant["tenant_id"]) as uow:
+        with TenantConfigUoW(tenant.tenant_id) as uow:
             assert uow.tenant_config is not None
             config_row = uow.tenant_config.get_adapter_config()
             adapter_type = config_row.adapter_type if config_row else None
@@ -248,7 +199,7 @@ def _list_creative_formats_impl(
                 from src.adapters.broadstreet.config_schema import BROADSTREET_TEMPLATES
                 from src.core.schemas import Format, FormatId, url
 
-                agent_url = f"broadstreet://{tenant['tenant_id']}"
+                agent_url = f"broadstreet://{tenant.tenant_id}"
 
                 for template_id, template in BROADSTREET_TEMPLATES.items():
                     try:
@@ -295,7 +246,10 @@ def _list_creative_formats_impl(
 
                 logger.info(f"Added {len(BROADSTREET_TEMPLATES)} Broadstreet formats")
     except Exception as e:
-        # Don't fail if adapter formats can't be retrieved
+        # FIXME(#1566): silent degradation — the adapter's formats are dropped from
+        # the response with no errors[] entry, so a failed lookup is indistinguishable
+        # from "this adapter provides none".
+        # Allowlisted in test_architecture_no_silent_loop_failures.py.
         logger.debug(f"Could not get adapter formats: {e}")
 
     # Apply filters from request
@@ -339,6 +293,37 @@ def _list_creative_formats_impl(
                 if w is not None or h is not None:
                     dimensions.append((w, h))
         return dimensions
+
+    def get_format_disclosure_positions(f) -> set[str]:
+        """The disclosure positions a format declares, by the pin's two-source order.
+
+        ``media-buy/list-creative-formats-request.json`` states the order on the
+        ``disclosure_positions`` filter itself: "Filter to formats that support all of
+        these disclosure positions. When a format has disclosure_capabilities, match
+        against those positions. Otherwise fall back to
+        supported_disclosure_positions." So ``disclosure_capabilities`` is not merged
+        with the flat list — it SUPERSEDES it, which ``core/format.json`` says in the
+        other direction ("When present, supersedes supported_disclosure_positions...
+        The flat supported_disclosure_positions field is retained for backward
+        compatibility").
+
+        A format declaring NEITHER yields the empty set, and that is the pinned answer
+        rather than a missing-data escape: ``core/format.json`` on
+        ``supported_disclosure_positions`` — "When omitted, the format makes no
+        disclosure rendering guarantees — creative agents SHOULD treat this as
+        incompatible with briefs that require specific disclosure positions." An empty
+        set is a subset of nothing the filter can request (the request's ``minItems: 1``
+        means a present filter always asks for at least one position), so such a format
+        drops out, which is what that SHOULD requires.
+
+        Normalized through ``enum_value`` on both sides for the same reason
+        ``get_format_asset_types`` is: the request carries ``DisclosurePosition``
+        members while a registry format may carry the plain strings it was built from,
+        and comparing a member to its own value silently matches nothing.
+        """
+        if f.disclosure_capabilities:
+            return {enum_value(c.position) for c in f.disclosure_capabilities if c.position is not None}
+        return {enum_value(p) for p in (f.supported_disclosure_positions or [])}
 
     def get_format_asset_types(f) -> set[str]:
         """Get all asset types from format's assets.
@@ -404,6 +389,18 @@ def _list_creative_formats_impl(
             if f.accessibility is not None and _WCAG_ORDER.get(f.accessibility.wcag_level, 0) >= min_level
         ]
 
+    # Filter by disclosure_positions — AND semantics, unlike every filter around it.
+    # media-buy/list-creative-formats-request.json: "Filter to formats that support all
+    # of these disclosure positions" -- "all", not "any", so the
+    # requested set must be a SUBSET of what the format declares. asset_types and the
+    # two format-id filters intersect (OR); this one contains (AND), and getting that
+    # backwards would hand a buyer a format missing a position they asked for.
+    # get_format_disclosure_positions owns the disclosure_capabilities ->
+    # supported_disclosure_positions fallback the same schema prescribes.
+    if req.disclosure_positions:
+        requested_positions = {enum_value(p) for p in req.disclosure_positions}
+        formats = [f for f in formats if requested_positions <= get_format_disclosure_positions(f)]
+
     # Filter by output_format_ids / input_format_ids (OR semantics each).
     # These $ref the same core/format-id.json schema as format_ids, so they carry
     # the same (agent_url, id) federation identity — match on the pair via
@@ -427,8 +424,8 @@ def _list_creative_formats_impl(
     # (type field removed in adcp 3.12)
     formats.sort(key=lambda f: f.name or "")
 
-    # Ensure backward compatibility: populate both assets and assets_required
-    # This allows old clients (using assets_required) and new clients (using assets) to work
+    # A no-op today: the helper returns each format unchanged, because the pinned Format
+    # carries required/optional on the asset itself. Nothing is populated here.
     formats = [_ensure_backward_compatible_format(f) for f in formats]
 
     # Apply cursor-based pagination (AdCP PaginationRequest spec)
@@ -473,7 +470,7 @@ def _list_creative_formats_impl(
 
     creative_agents_list: list[AdcpCreativeAgent] | None = None
     try:
-        agents = registry._get_tenant_agents(tenant["tenant_id"])
+        agents = registry._get_tenant_agents(tenant.tenant_id)
         if agents:
             creative_agents_list = []
             for agent in agents:
@@ -485,10 +482,14 @@ def _list_creative_formats_impl(
                     )
                 )
     except Exception:
-        logger.warning("Failed to build agent referrals for tenant %s", tenant["tenant_id"], exc_info=True)
+        # FIXME(#1566): silent degradation — creative_agents referrals are dropped
+        # from the response with no errors[] entry, so the buyer reads a referral
+        # lookup failure as "this seller federates to no creative agents".
+        # Allowlisted in test_architecture_no_silent_loop_failures.py.
+        logger.warning("Failed to build agent referrals for tenant %s", tenant.tenant_id, exc_info=True)
 
     # Log the operation
-    audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])
+    audit_logger = get_audit_logger("AdCP", tenant.tenant_id)
     audit_logger.log_operation(
         operation="list_creative_formats",
         principal_name=principal_id or "anonymous",
@@ -507,15 +508,15 @@ def _list_creative_formats_impl(
     # Create response (no message/specification_version - not in adapter schema)
     # Determine sandbox flag from identity (BR-RULE-209 INV-4)
     sandbox_flag: bool | None = None
-    if identity and identity.testing_context and identity.testing_context.dry_run:
-        sandbox_flag = True
 
     # Format list from registry is compatible with library Format type
     response = ListCreativeFormatsResponse(
+        message=f"Found {len(page_formats)} creative format{'s' if len(page_formats) != 1 else ''}."
+        if page_formats
+        else "No creative formats are currently supported.",
         formats=page_formats,
         creative_agents=creative_agents_list,
         errors=agent_errors if agent_errors else None,
-        context=req.context,
         pagination=pagination_response,
         sandbox=sandbox_flag,
     )
@@ -525,92 +526,46 @@ def _list_creative_formats_impl(
     return response
 
 
-async def list_creative_formats(
-    format_ids: list[FormatId] | None = None,
-    output_format_ids: list[FormatId] | None = None,
-    input_format_ids: list[FormatId] | None = None,
-    is_responsive: Annotated[bool | None, Field(description="Filter for responsive formats only")] = None,
-    name_search: Annotated[str | None, Field(description="Search formats by name substring")] = None,
-    asset_types: list[AssetContentType] | None = None,
-    wcag_level: Annotated[WcagLevel | None, Field(description="Minimum WCAG conformance level")] = None,
-    min_width: Annotated[int | None, Field(description="Minimum format width in pixels")] = None,
-    max_width: Annotated[int | None, Field(description="Maximum format width in pixels")] = None,
-    min_height: Annotated[int | None, Field(description="Minimum format height in pixels")] = None,
-    max_height: Annotated[int | None, Field(description="Maximum format height in pixels")] = None,
-    disclosure_positions: Annotated[
-        list[DisclosurePosition] | None, Field(description="Filter by supported disclosure positions")
-    ] = None,
-    disclosure_persistence: Annotated[
-        list[DisclosurePersistence] | None, Field(description="Filter by supported disclosure persistence modes")
-    ] = None,
-    context: ContextObject | None = None,  # Application level context per adcp spec
-    ctx: Context | ToolContext | None = None,
-):
-    """List all available creative formats (AdCP spec endpoint).
+def _route_agent_failures(
+    fetch_result: "FormatFetchResult",
+    req: ListCreativeFormatsRequest,
+) -> list[AdCPResponseError]:
+    """Split creative-agent fetch failures by whether the REQUEST referenced them.
 
-    MCP tool wrapper that delegates to the shared implementation.
-    FastMCP automatically validates and coerces JSON inputs to Pydantic models.
+    Two different buyer-facing conditions share one internal cause, and only the
+    boundary can tell them apart -- the registry never sees ``req``:
 
-    Args:
-        format_ids: Filter by FormatId objects
-        output_format_ids: Filter by formats that can generate any of these output format IDs
-        input_format_ids: Filter by formats that can consume any of these input format IDs
-        is_responsive: Filter for responsive formats (True/False)
-        name_search: Search formats by name (case-insensitive partial match)
-        asset_types: Filter by asset content types (e.g., ["image", "video"])
-        wcag_level: Minimum WCAG conformance level
-        min_width: Minimum format width in pixels
-        max_width: Maximum format width in pixels
-        min_height: Minimum format height in pixels
-        max_height: Maximum format height in pixels
-        disclosure_positions: Filter by supported disclosure positions
-        disclosure_persistence: Filter by supported disclosure persistence modes
-        context: Application-level context per AdCP spec
-        ctx: FastMCP context (automatically provided)
+    * The buyer asked for a format from that agent (``req.format_ids`` carries a
+      matching ``agent_url``). Then the reference did not resolve, and
+      list_creative_formats.mdx:654 is explicit -- "REFERENCE_NOT_FOUND |
+      Requested format_id doesn't exist, or referenced creative agent is
+      unavailable / not accessible. error.field MUST identify which typed
+      parameter failed to resolve." Hence ``field="format_ids"``: the MUST is on
+      naming the parameter, and "format_ids" is the typed parameter that failed
+      to resolve.
+    * Nobody asked for it; the agent merely failed during seller-side
+      aggregation. That is the unreferenced branch, and it keeps the
+      AGENT_UNREACHABLE advisory with ``field="formats"`` naming the response
+      section it degrades.
 
-    Returns:
-        ToolResult with ListCreativeFormatsResponse data
+    RECOVERY DIFFERS, and that is the buyer-visible point of the split:
+    AGENT_UNREACHABLE is transient (retry may help), REFERENCE_NOT_FOUND is
+    correctable (retrying the same format_ids never will -- fix the reference).
+    Both derive from the code via CODE_TABLE, so neither is authored here.
+
+    Correlation comes from ``failed_agent_urls``, which is parallel to
+    ``errors`` and never reaches the wire; the advisory itself deliberately
+    omits the agent_url because every wire field is client-facing.
     """
-    with adcp_validation_boundary(context="list_creative_formats request"):
-        req = build_list_creative_formats_request(
-            format_ids=format_ids,
-            output_format_ids=output_format_ids,
-            input_format_ids=input_format_ids,
-            is_responsive=is_responsive,
-            name_search=name_search,
-            asset_types=asset_types,
-            wcag_level=wcag_level,
-            min_width=min_width,
-            max_width=max_width,
-            min_height=min_height,
-            max_height=max_height,
-            disclosure_positions=disclosure_positions,
-            disclosure_persistence=disclosure_persistence,
-            context=context,
-        )
+    requested_agent_urls = {str(fid.agent_url) for fid in (req.format_ids or [])}
+    if not requested_agent_urls or not fetch_result.failed_agent_urls:
+        return fetch_result.errors
 
-    identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
-    response = _list_creative_formats_impl(req, identity)
-    return mcp_result(response)
-
-
-def list_creative_formats_raw(
-    req: ListCreativeFormatsRequest | None = None,
-    ctx: Context | ToolContext | None = None,
-    identity: ResolvedIdentity | None = None,
-) -> ListCreativeFormatsResponse:
-    """List all available creative formats (raw function for A2A server use).
-
-    Delegates to shared implementation.
-
-    Args:
-        req: Optional request with filter parameters
-        ctx: FastMCP context
-        identity: Pre-resolved identity (if available)
-
-    Returns:
-        ListCreativeFormatsResponse with all available formats
-    """
-    if identity is None:
-        identity = resolve_identity_from_context(ctx, require_valid_token=False)
-    return _list_creative_formats_impl(req, identity)
+    routed: list[AdCPResponseError] = []
+    for index, advisory in enumerate(fetch_result.errors):
+        failed_url = fetch_result.failed_agent_urls[index] if index < len(fetch_result.failed_agent_urls) else None
+        if failed_url is not None and str(failed_url) in requested_agent_urls:
+            routed.append(AdCPResponseError.of(ErrorCode.REFERENCE_NOT_FOUND, field="format_ids"))
+        else:
+            routed.append(advisory)
+    return routed

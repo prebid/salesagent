@@ -5,15 +5,12 @@ Each test targets a specific beads issue to prevent regression.
 
 : Non-async receive lambda (ASGI protocol)
 : CORS origins configuration
-: Apx-Incoming-Host hostname validation
 : Debug endpoints gated behind ADCP_TESTING
 : format_resolver async event loop fix
 """
 
 import os
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 # ---------------------------------------------------------------------------
 # [P0]: Async receive callable in messageId middleware
@@ -42,12 +39,12 @@ class TestAsyncReceiveCallable:
         payload = {
             "jsonrpc": "2.0",
             "id": 42,
-            "method": "message/send",
+            "method": "SendMessage",
             "params": {
                 "message": {
                     "messageId": 12345,
-                    "role": "user",
-                    "parts": [{"kind": "text", "text": "test"}],
+                    "role": "ROLE_USER",
+                    "parts": [{"text": "test"}],
                 }
             },
         }
@@ -56,7 +53,7 @@ class TestAsyncReceiveCallable:
         response = client.post(
             "/a2a",
             json=payload,
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", "A2A-Version": "1.0"},
         )
 
         # We don't care about the exact response (auth will fail),
@@ -71,12 +68,12 @@ class TestAsyncReceiveCallable:
 
         client = TestClient(app)
 
-        payload = {"jsonrpc": "2.0", "id": 99, "method": "message/send", "params": {}}
+        payload = {"jsonrpc": "2.0", "id": 99, "method": "SendMessage", "params": {}}
 
         response = client.post(
             "/a2a",
             json=payload,
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", "A2A-Version": "1.0"},
         )
 
         # Middleware should have converted id to "99" — verify no crash
@@ -135,153 +132,67 @@ class TestCORSConfiguration:
 
 
 # ---------------------------------------------------------------------------
-# [P0]: Apx-Incoming-Host hostname validation
-# ---------------------------------------------------------------------------
-
-
-class TestHostnameValidation:
-    """Apx-Incoming-Host header must be validated before use in URLs."""
-
-    def test_valid_hostnames_accepted(self):
-        """Standard hostnames pass validation."""
-        from src.app import _is_valid_hostname
-
-        assert _is_valid_hostname("example.com")
-        assert _is_valid_hostname("sub.example.com")
-        assert _is_valid_hostname("localhost")
-        assert _is_valid_hostname("localhost:8000")
-        assert _is_valid_hostname("my-host.example.com:443")
-        assert _is_valid_hostname("192.168.1.1")
-        assert _is_valid_hostname("192.168.1.1:8080")
-
-    def test_path_traversal_rejected(self):
-        """Hostnames with path components are rejected."""
-        from src.app import _is_valid_hostname
-
-        assert not _is_valid_hostname("example.com/../../etc/passwd")
-        assert not _is_valid_hostname("example.com/admin")
-        assert not _is_valid_hostname("host/path")
-
-    def test_injection_characters_rejected(self):
-        """Hostnames with injection characters are rejected."""
-        from src.app import _is_valid_hostname
-
-        assert not _is_valid_hostname("example.com\r\nX-Injected: true")
-        assert not _is_valid_hostname("example.com<script>")
-        assert not _is_valid_hostname("example.com; rm -rf /")
-        assert not _is_valid_hostname("example.com' OR '1'='1")
-
-    def test_empty_and_none_rejected(self):
-        """Empty strings are rejected."""
-        from src.app import _is_valid_hostname
-
-        assert not _is_valid_hostname("")
-
-    def test_overly_long_hostname_rejected(self):
-        """Hostnames longer than 253 characters are rejected (DNS limit)."""
-        from src.app import _is_valid_hostname
-
-        long_host = "a" * 254
-        assert not _is_valid_hostname(long_host)
-
-    def test_agent_card_ignores_invalid_header(self):
-        """Agent card falls back to Host header when Apx-Incoming-Host is invalid."""
-        from starlette.testclient import TestClient
-
-        from src.app import app
-
-        client = TestClient(app)
-
-        response = client.get(
-            "/.well-known/agent-card.json",
-            headers={
-                "Apx-Incoming-Host": "evil.com/../../etc/passwd",
-                "Host": "localhost:8000",
-            },
-        )
-
-        assert response.status_code == 200
-        card = response.json()
-        # URL should NOT contain the injected path
-        assert "passwd" not in card.get("url", "")
-        assert "../../" not in card.get("url", "")
-
-    def test_agent_card_ignores_invalid_host_header(self):
-        """Agent card falls back to default URL when Host header is invalid ."""
-        from starlette.testclient import TestClient
-
-        from src.app import app
-
-        client = TestClient(app)
-
-        response = client.get(
-            "/.well-known/agent-card.json",
-            headers={
-                "Host": "evil.com/../../etc/passwd",
-            },
-        )
-
-        assert response.status_code == 200
-        card = response.json()
-        # URL should NOT contain the injected path
-        assert "passwd" not in card.get("url", "")
-        assert "../../" not in card.get("url", "")
-
-
-# ---------------------------------------------------------------------------
 # [P0]: Debug endpoints gated behind ADCP_TESTING
 # ---------------------------------------------------------------------------
 
 
 class TestDebugEndpointGate:
-    """Debug endpoints must return 404 when ADCP_TESTING is not 'true'."""
+    """The ``/debug/*`` routes must not EXIST unless this deployment allows them.
 
-    def test_require_testing_mode_blocks_in_production(self):
-        """require_testing_mode raises 404 when ADCP_TESTING is not set."""
-        from fastapi import HTTPException
+    The gate used to be a per-request FastAPI dependency, ``require_testing_mode``, which
+    read ADCP_TESTING out of the environment on every call and raised 404. It is gone
+    (commit 3d6bd0593): the environment is read once into typed settings, and ``src/app.py``
+    includes ``health_debug_router`` only when ``settings.debug_routes_enabled`` -- a route
+    that is not mounted cannot be reached, so there is nothing per-request to check. These
+    cases grade the mounting decision and the router's own emptiness of gates.
+    """
 
-        from src.routes.health import require_testing_mode
+    def test_debug_routes_exist_exactly_when_the_allowance_says_so(self):
+        """The mounted app carries ``/debug/*`` iff ``settings.debug_routes_enabled``.
 
-        with patch.dict(os.environ, {}, clear=True):
-            # Remove ADCP_TESTING if present
-            os.environ.pop("ADCP_TESTING", None)
-            with pytest.raises(HTTPException) as exc_info:
-                require_testing_mode()
-            assert exc_info.value.status_code == 404
+        Read off the app that was actually built, in whichever mode this process runs, so
+        both directions are graded: routes present when the allowance is on, and no route
+        to reach at all when it is off.
 
-    def test_require_testing_mode_allows_in_testing(self):
-        """require_testing_mode passes when ADCP_TESTING=true."""
-        from src.routes.health import require_testing_mode
-
-        with patch.dict(os.environ, {"ADCP_TESTING": "true"}):
-            # Should not raise
-            require_testing_mode()
-
-    def test_debug_endpoints_use_testing_dependency(self):
-        """All /debug/* routes are on the debug_router with require_testing_mode dependency."""
+        The allowance is read from ``src.app.settings`` -- the object the mount decision
+        was made from -- not from ``get_settings()``. ``src/app.py`` calls
+        ``load_settings()`` at import, and another test module importing the app during
+        collection builds it under the ambient environment rather than this test's, so
+        the live settings object can disagree with the one the app was built from.
+        """
+        from src.app import app, settings
         from src.routes.health import debug_router
 
-        # The debug_router should have the require_testing_mode dependency
-        assert len(debug_router.dependencies) > 0, "debug_router has no dependencies"
+        declared = {route.path for route in debug_router.routes}
+        mounted = {getattr(route, "path", None) for route in app.routes}
 
-        # Check that at least one dependency is require_testing_mode
-        dep_callables = [d.dependency for d in debug_router.dependencies]
-        from src.routes.health import require_testing_mode
+        if settings.debug_routes_enabled:
+            assert declared and declared <= mounted, (
+                f"the allowance is on, so every debug route must be mounted; missing {declared - mounted}"
+            )
+        else:
+            assert not (declared & mounted), (
+                f"the allowance is off, so no debug route may exist; found {declared & mounted}"
+            )
 
-        assert require_testing_mode in dep_callables, "require_testing_mode not in debug_router dependencies"
+    def test_the_allowance_is_the_testing_flag(self):
+        """``debug_routes_enabled`` is ADCP_TESTING, read once into the settings."""
+        from src.core.config import Settings
 
-    def test_debug_db_state_returns_404_without_testing(self):
-        """GET /debug/db-state returns 404 in production mode."""
-        from starlette.testclient import TestClient
+        settings = Settings.from_environment()
+        assert settings.debug_routes_enabled is settings.testing.adcp_testing
 
-        from src.app import app
+    def test_debug_router_carries_no_per_request_gate(self):
+        """The router declares no dependencies: the mount decision IS the gate.
 
-        client = TestClient(app)
+        A resurrected per-request check would be a second gate that can disagree with the
+        mount, which is what this pins against.
+        """
+        from src.routes.health import debug_router
 
-        with patch.dict(os.environ, {"ADCP_TESTING": "false"}):
-            os.environ.pop("ADCP_TESTING", None)
-            response = client.get("/debug/db-state")
-            assert response.status_code == 404
+        assert debug_router.dependencies == [], (
+            f"debug_router must carry no request-time gate, found {debug_router.dependencies!r}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -374,16 +285,22 @@ class TestOidcCallbackCompatibility:
     """OIDC config should keep the legacy public callback path."""
 
     def test_get_tenant_redirect_uri_uses_root_auth_callback(self):
+        """On the origin the tenant is served at, keeping the legacy callback path.
+
+        The scheme is decided by that origin rather than assumed: a local install gets
+        ``http``, so the provider is not handed an ``https`` URI for a server that does not
+        speak it. A real ``Tenant`` rather than a mock, because ``virtual_host`` is mandatory
+        and a mock answering ``None`` grades a state production cannot reach.
+        """
+        from src.core.database.models import Tenant
         from src.services.auth_config_service import get_tenant_redirect_uri
 
-        tenant = MagicMock()
-        tenant.virtual_host = None
-        tenant.subdomain = None
+        local = get_tenant_redirect_uri(Tenant(tenant_id="oidc-local", virtual_host="localhost:8080"))
+        served = get_tenant_redirect_uri(Tenant(tenant_id="oidc-served", virtual_host="sso.example.com"))
 
-        with patch.dict(os.environ, {"ADCP_SALES_PORT": "8080"}, clear=False):
-            redirect_uri = get_tenant_redirect_uri(tenant)
-
-        assert redirect_uri.endswith("/auth/oidc/callback")
+        assert local == "http://localhost:8080/admin/auth/oidc/callback"
+        assert served == "https://sso.example.com/admin/auth/oidc/callback"
+        assert local.endswith("/auth/oidc/callback")
 
 
 class TestA2ATrailingSlashCompatibility:

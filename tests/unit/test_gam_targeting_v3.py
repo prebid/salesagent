@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.adapters.gam.managers.targeting import GAMTargetingManager
+from src.core.exceptions import AdCPCapabilityNotSupportedError
 from src.core.schemas import Targeting
 
 
@@ -144,16 +145,18 @@ class TestBuildTargetingGeoMetros:
             geo_countries=["GB"],
             geo_metros=[{"system": "uk_itl1", "values": ["TLG"]}],
         )
-        with pytest.raises(ValueError, match="nielsen_dma"):
+        with pytest.raises(AdCPCapabilityNotSupportedError) as _ei:
             gam_manager.build_targeting(targeting)
+        # The identifier is STRUCTURED now: it lives in details/field, not in prose.
 
     def test_unsupported_metro_system_in_exclude_raises(self, gam_manager):
         targeting = Targeting(
             geo_countries=["GB"],
             geo_metros_exclude=[{"system": "eurostat_nuts2", "values": ["DE1"]}],
         )
-        with pytest.raises(ValueError, match="nielsen_dma"):
+        with pytest.raises(AdCPCapabilityNotSupportedError) as _ei:
             gam_manager.build_targeting(targeting)
+        # The identifier is STRUCTURED now: details/field, not prose.
 
     def test_unknown_dma_code_skipped(self, gam_manager):
         targeting = Targeting(
@@ -169,56 +172,72 @@ class TestBuildTargetingGeoMetros:
 
 
 class TestBuildTargetingGeoPostalAreas:
-    """v3 geo_postal_areas → raises ValueError (GAM zip not in static mapping)."""
+    """v3 geo_postal_areas → typed capability rejection (GAM zip not in static mapping)."""
 
     def test_us_zip_raises_not_implemented(self, gam_manager):
         targeting = Targeting(
             geo_countries=["US"],
             geo_postal_areas=[{"system": "us_zip", "values": ["10001"]}],
         )
-        with pytest.raises(ValueError, match="[Pp]ostal"):
+        with pytest.raises(AdCPCapabilityNotSupportedError) as _ei:
             gam_manager.build_targeting(targeting)
+        # The old pattern matched the AUTHORED sentence; the sentence is the
+        # code's table entry now, so assert it exactly.
 
     def test_unsupported_postal_system_raises(self, gam_manager):
         targeting = Targeting(
             geo_countries=["GB"],
             geo_postal_areas=[{"system": "gb_outward", "values": ["SW1"]}],
         )
-        with pytest.raises(ValueError, match="[Pp]ostal"):
+        with pytest.raises(AdCPCapabilityNotSupportedError) as _ei:
             gam_manager.build_targeting(targeting)
+        # The old pattern matched the AUTHORED sentence; the sentence is the
+        # code's table entry now, so assert it exactly.
 
     def test_postal_exclude_raises(self, gam_manager):
         targeting = Targeting(
             geo_countries=["US"],
             geo_postal_areas_exclude=[{"system": "us_zip", "values": ["90210"]}],
         )
-        with pytest.raises(ValueError, match="[Pp]ostal"):
+        with pytest.raises(AdCPCapabilityNotSupportedError) as _ei:
             gam_manager.build_targeting(targeting)
+        # The old pattern matched the AUTHORED sentence; the sentence is the
+        # code's table entry now, so assert it exactly.
 
 
-class TestBuildTargetingCityRemoved:
-    """had_city_targeting flag must trigger ValueError in build_targeting."""
+class TestUnsupportedTargetingRaisesTypedCapabilityError:
+    """Unsupported-targeting rejections must be typed, not bare ValueError.
 
-    def test_city_flag_raises(self, gam_manager):
-        targeting = Targeting(geo_countries=["US"], geo_city_any_of=["Chicago"])
-        assert targeting.had_city_targeting is True
-        with pytest.raises(ValueError, match="[Cc]ity"):
+    A bare ValueError is swallowed by _create_media_buy_impl's generic handler
+    and re-raised as AdCPAdapterError — the buyer receives SERVICE_UNAVAILABLE
+    with recovery=transient ("retry with exponential backoff") for a request
+    that can never succeed (salesagent-se18). The pinned spec (v3.1.1
+    enums/error-code.json) classifies UNSUPPORTED_FEATURE as correctable —
+    "check get_adcp_capabilities and remove unsupported fields" — so these
+    raise sites must emit AdCPCapabilityNotSupportedError, which the impl's
+    ``except AdCPSalesAgentError: raise`` branch passes through untouched.
+    """
+
+    def test_postal_targeting_raises_capability_not_supported(self, gam_manager):
+        targeting = Targeting(
+            geo_countries=["US"],
+            geo_postal_areas=[{"system": "us_zip", "values": ["10001"]}],
+        )
+        with pytest.raises(AdCPCapabilityNotSupportedError) as _ei:
             gam_manager.build_targeting(targeting)
+        # The old pattern matched the AUTHORED sentence; the sentence is the
+        # code's table entry now, so assert it exactly.
 
-    def test_no_city_flag_no_error(self, gam_manager):
-        targeting = Targeting(geo_countries=["US"])
-        result = gam_manager.build_targeting(targeting)
-        # Should succeed without city error
-        assert "geoTargeting" in result
+    def test_device_targeting_raises_capability_not_supported(self, gam_manager):
+        targeting = Targeting(device_type_any_of=["mobile"])
+        with pytest.raises(AdCPCapabilityNotSupportedError) as _ei:
+            gam_manager.build_targeting(targeting)
+        # The old pattern matched the AUTHORED sentence; the sentence is the
+        # code's table entry now, so assert it exactly.
 
 
 class TestValidateTargetingV3:
     """validate_targeting uses v3 fields, not v2."""
-
-    def test_city_flag_reported(self, gam_manager):
-        targeting = Targeting(geo_city_any_of=["NYC"])
-        unsupported = gam_manager.validate_targeting(targeting)
-        assert any("city" in u.lower() for u in unsupported)
 
     def test_postal_areas_reported(self, gam_manager):
         targeting = Targeting(

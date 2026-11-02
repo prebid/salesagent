@@ -9,16 +9,43 @@ Environment variables:
 
 import json
 import logging
-import os
-from contextvars import ContextVar
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import select
-
+from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant
 
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
+
+    from src.core.database.repositories.tenant_lookup import TenantLookupRepository
+
 logger = logging.getLogger(__name__)
+
+
+def _lookup(session: "Session") -> "TenantLookupRepository":
+    """The one repository every function here queries through.
+
+    The import is local, and so are the two in ``_as_dict`` and below: the repository
+    package reaches ``resolved_identity`` -> ``tenant_context`` -> this module, so a
+    module-level import is a genuine cycle rather than a style choice.
+    """
+    from src.core.database.repositories.tenant_lookup import TenantLookupRepository
+
+    return TenantLookupRepository(session)
+
+
+def _as_dict(tenant: Tenant | None) -> dict[str, Any] | None:
+    """A looked-up tenant as the dict the callers here hand back, or ``None``.
+
+    The import is local because ``tenant_utils`` imports ``safe_json_loads`` from this
+    module; module-level would be a cycle.
+    """
+    if tenant is None:
+        return None
+    from src.core.utils.tenant_utils import serialize_tenant_to_dict
+
+    return serialize_tenant_to_dict(tenant)
 
 
 def validate_multi_tenant_config() -> list[str]:
@@ -31,7 +58,7 @@ def validate_multi_tenant_config() -> list[str]:
 
     if not is_single_tenant_mode():
         # Multi-tenant mode requires SALES_AGENT_DOMAIN
-        if not os.environ.get("SALES_AGENT_DOMAIN"):
+        if not get_settings().runtime.sales_agent_domain:
             errors.append("SALES_AGENT_DOMAIN is required for multi-tenant mode")
 
     return errors
@@ -53,236 +80,40 @@ def safe_json_loads(value, default=None):
     return default
 
 
-# Thread-safe tenant context
-current_tenant: ContextVar[dict[str, Any] | None] = ContextVar("current_tenant", default=None)
-
-
-def get_current_tenant() -> dict[str, Any]:
-    """Get current tenant from context.
-
-    CRITICAL: This function must only be called AFTER tenant context has been established
-    via resolve_identity() at the transport boundary + set_current_tenant().
-
-    Common mistake: Calling get_current_tenant() before authenticating the request.
-    Correct order:
-        1. identity = resolve_identity(headers, protocol=...)  # At transport boundary
-        2. set_current_tenant(identity.tenant)  # Sets tenant context
-        3. tenant = get_current_tenant()  # Now safe to call
-
-    Raises:
-        RuntimeError: If tenant context is not set (indicates authentication/ordering bug)
-    """
-    import inspect
-
-    tenant = current_tenant.get()
-    if not tenant:
-        # SECURITY: Do NOT fall back to default tenant in production.
-        # This would cause tenant isolation breach.
-        # Only CLI/testing scripts should call this without context.
-
-        # Get caller information for debugging
-        frame = inspect.currentframe()
-        caller_frame = frame.f_back if frame else None
-        caller_info = ""
-        if caller_frame:
-            caller_file = caller_frame.f_code.co_filename
-            caller_line = caller_frame.f_lineno
-            caller_func = caller_frame.f_code.co_name
-            caller_info = f"\n  Called from: {caller_file}:{caller_line} in {caller_func}()"
-
-        raise RuntimeError(
-            "No tenant context set. Tenant must be set via set_current_tenant() "
-            "before calling this function. This is a critical security error - "
-            "falling back to default tenant would breach tenant isolation.\n"
-            "\n"
-            "COMMON CAUSE: Calling get_current_tenant() before authenticating the request.\n"
-            "FIX: Ensure resolve_identity() is called at the transport boundary BEFORE get_current_tenant()."
-            f"{caller_info}"
-        )
-    return tenant
-
-
-def get_default_tenant() -> dict[str, Any] | None:
-    """Get the default tenant for CLI/testing."""
-    try:
-        with get_db_session() as db_session:
-            # Get first active tenant or specific default
-            # Try to get 'default' tenant first, fall back to first active tenant
-            stmt = select(Tenant).filter_by(tenant_id="default", is_active=True)
-            tenant = db_session.scalars(stmt).first()
-
-            if not tenant:
-                # Fall back to first active tenant by creation date
-                stmt = select(Tenant).filter_by(is_active=True).order_by(Tenant.created_at)
-                tenant = db_session.scalars(stmt).first()
-
-            if tenant:
-                from src.core.utils.tenant_utils import serialize_tenant_to_dict
-
-                return serialize_tenant_to_dict(tenant)
-            return None
-    except Exception as e:
-        # If table doesn't exist or other DB errors, return None
-        if "no such table" in str(e) or "does not exist" in str(e):
-            return None
-        raise
-
-
-def load_config() -> dict[str, Any]:
-    """
-    Load configuration from current tenant.
-
-    For backward compatibility, this returns config in the old format.
-    In multi-tenant mode, config comes from database.
-    """
-    tenant = get_current_tenant()
-
-    # Build config from tenant fields
-    config = {
-        "ad_server": {"adapter": tenant.get("ad_server", "mock"), "enabled": True},
-        "creative_engine": {
-            "auto_approve_format_ids": tenant.get("auto_approve_format_ids", []),
-            "human_review_required": tenant.get("human_review_required", True),
-        },
-        "features": {
-            "max_daily_budget": tenant.get("max_daily_budget", 10000),
-            "enable_axe_signals": tenant.get("enable_axe_signals", True),
-            "slack_webhook_url": tenant.get("slack_webhook_url"),
-            "slack_audit_webhook_url": tenant.get("slack_audit_webhook_url"),
-            "hitl_webhook_url": tenant.get("hitl_webhook_url"),
-        },
-        "admin_token": tenant.get("admin_token"),
-        "dry_run": False,
-    }
-
-    # Add policy settings if present
-    if tenant.get("policy_settings"):
-        config["policy_settings"] = tenant["policy_settings"]
-
-    # Apply environment variable overrides (for development/testing)
-    if gemini_key := os.environ.get("GEMINI_API_KEY"):
-        config["gemini_api_key"] = gemini_key
-
-    # System-level overrides
-    if dry_run := os.environ.get("ADCP_DRY_RUN"):
-        config["dry_run"] = dry_run.lower() == "true"
-
-    return config
-
-
-def get_tenant_config(key: str, default=None):
-    """Get config value for current tenant."""
-    tenant = get_current_tenant()
-
-    # Check if it's a top-level tenant field
-    if key in tenant:
-        return tenant[key]
-
-    # Otherwise return default
-    return default
-
-
-def set_current_tenant(tenant_data: Any) -> None:
-    """Set the current tenant context.
-
-    Normalizes TenantContext / LazyTenantContext to a plain dict before
-    storing in the ContextVar.  This is the SINGLE conversion point —
-    callers pass whatever they have and this function ensures the ContextVar
-    always holds dict[str, Any].
-    """
-    from src.core.tenant_context import LazyTenantContext, TenantContext
-
-    if isinstance(tenant_data, (TenantContext, LazyTenantContext)):
-        tenant_data = dict(tenant_data)
-    current_tenant.set(tenant_data)
-
-
-def get_tenant_by_subdomain(subdomain: str) -> dict[str, Any] | None:
-    """Get tenant by subdomain.
-
-    Args:
-        subdomain: The subdomain to look up (e.g., 'wonderstruck' from wonderstruck.sales-agent.example.com)
-
-    Returns:
-        Tenant dict if found, None otherwise
-    """
-    try:
-        with get_db_session() as db_session:
-            stmt = select(Tenant).filter_by(subdomain=subdomain, is_active=True)
-            tenant = db_session.scalars(stmt).first()
-
-            if tenant:
-                from src.core.utils.tenant_utils import serialize_tenant_to_dict
-
-                return serialize_tenant_to_dict(tenant)
-            return None
-    except Exception as e:
-        # If table doesn't exist or other DB errors, return None
-        if "no such table" in str(e) or "does not exist" in str(e):
-            return None
-        raise
-
-
 def get_tenant_by_id(tenant_id: str) -> dict[str, Any] | None:
-    """Get tenant by tenant_id.
-
-    Args:
-        tenant_id: The tenant_id to look up (e.g., 'tenant_wonderstruck')
-
-    Returns:
-        Tenant dict if found, None otherwise
-    """
-    try:
-        with get_db_session() as db_session:
-            stmt = select(Tenant).filter_by(tenant_id=tenant_id, is_active=True)
-            tenant = db_session.scalars(stmt).first()
-
-            if tenant:
-                from src.core.utils.tenant_utils import serialize_tenant_to_dict
-
-                return serialize_tenant_to_dict(tenant)
-            return None
-    except Exception as e:
-        # If table doesn't exist or other DB errors, return None
-        if "no such table" in str(e) or "does not exist" in str(e):
-            return None
-        raise
+    """The active tenant with this id, as a dict, or ``None``."""
+    with get_db_session() as db_session:
+        return _as_dict(_lookup(db_session).find_active_by_id(tenant_id))
 
 
 def get_tenant_by_virtual_host(virtual_host: str) -> dict[str, Any] | None:
-    """Get tenant by virtual host."""
-    try:
-        with get_db_session() as db_session:
-            stmt = select(Tenant).filter_by(virtual_host=virtual_host, is_active=True)
-            tenant = db_session.scalars(stmt).first()
-
-            if tenant:
-                from src.core.utils.tenant_utils import serialize_tenant_to_dict
-
-                return serialize_tenant_to_dict(tenant)
-            return None
-    except Exception as e:
-        # If table doesn't exist or other DB errors, return None
-        if "no such table" in str(e) or "does not exist" in str(e):
-            return None
-        raise
+    """Get tenant by virtual host. A port on the incoming host is ignored."""
+    with get_db_session() as db_session:
+        return _as_dict(_lookup(db_session).find_active_by_virtual_host(virtual_host))
 
 
-def get_secret(key: str, default: str | None = None) -> str | None:
-    """Get a secret from environment or config."""
-    return os.environ.get(key, default)
+def tenant_id_for(*, virtual_host: str) -> str | None:
+    """The tenant_id served at *virtual_host*, WITHOUT loading the tenant row.
+
+    Identification, not hydration. The token check is scoped by tenant_id
+    (``get_principal_from_token(auth_token, tenant_id)``), so knowing WHICH tenant cannot be
+    deferred; the row itself is loaded once by ``TenantContext.load`` after the tenant is
+    known.
+
+    Its sibling ``get_tenant_by_virtual_host`` ends in ``serialize_tenant_to_dict`` and hands
+    back the whole row, so identification paid for hydration on every request and the identity
+    then DISCARDED that row and re-queried it on first field access. This selects one indexed
+    column instead.
+    """
+    if not virtual_host:
+        return None
+    with get_db_session() as db_session:
+        return _lookup(db_session).active_tenant_id_for_virtual_host(virtual_host)
 
 
 def is_single_tenant_mode() -> bool:
-    """Check if the system is running in single-tenant mode.
-
-    Single-tenant mode is the default. Multi-tenant mode must be explicitly enabled
-    via ADCP_MULTI_TENANT=true environment variable.
-
-    Returns:
-        True if single-tenant mode (default), False if multi-tenant mode
-    """
-    return os.environ.get("ADCP_MULTI_TENANT", "false").lower() != "true"
+    """Single-tenant mode is the default; multi-tenant is ``ADCP_MULTI_TENANT=true``."""
+    return get_settings().runtime.is_single_tenant
 
 
 def ensure_default_tenant_exists() -> dict[str, Any] | None:
@@ -301,25 +132,34 @@ def ensure_default_tenant_exists() -> dict[str, Any] | None:
     try:
         with get_db_session() as db_session:
             # Check if any tenant exists
-            stmt = select(Tenant).filter_by(is_active=True)
-            existing = db_session.scalars(stmt).first()
+            existing = _lookup(db_session).find_default_active()
 
             if existing:
                 logger.debug(f"Tenant already exists: {existing.name}")
-                from src.core.utils.tenant_utils import serialize_tenant_to_dict
-
-                return serialize_tenant_to_dict(existing)
+                return _as_dict(existing)
 
             # Create default tenant for single-tenant deployments
             logger.info("Single-tenant mode: Creating default tenant...")
 
-            # Get super admin email for initial authorization
-            super_admin_emails = os.environ.get("SUPER_ADMIN_EMAILS", "")
-            authorized_emails = [e.strip() for e in super_admin_emails.split(",") if e.strip()]
+            # Nobody is present at bootstrap to state where this deployment answers, so it
+            # is asked to declare itself — and the answer is STORED, where an operator can
+            # see and correct it, rather than re-derived on every publish (#1845). None
+            # means a production install declaring neither ADCP_AGENT_URL nor
+            # SALES_AGENT_DOMAIN: it serves nothing by Host today, and a row holding
+            # "localhost" would look configured while serving nothing.
+            from src.core.agent_identity import deployment_virtual_host
 
-            # Get super admin domains for initial authorization
-            super_admin_domains = os.environ.get("SUPER_ADMIN_DOMAINS", "")
-            authorized_domains = [d.strip() for d in super_admin_domains.split(",") if d.strip()]
+            virtual_host = deployment_virtual_host()
+            if virtual_host is None:
+                logger.warning(
+                    "Not creating a default tenant: this deployment declares no host "
+                    "(set ADCP_AGENT_URL or SALES_AGENT_DOMAIN, then restart)."
+                )
+                return None
+
+            # The super admins are the initial authorization
+            authorized_emails = get_settings().auth.super_admin_email_list
+            authorized_domains = get_settings().auth.super_admin_domain_list
 
             from datetime import UTC, datetime
 
@@ -327,7 +167,8 @@ def ensure_default_tenant_exists() -> dict[str, Any] | None:
             default_tenant = Tenant(
                 tenant_id="default",
                 name="Default Publisher",
-                subdomain="default",  # Required field for routing
+                subdomain="default",  # An internal identifier; virtual_host is what routes
+                virtual_host=virtual_host,
                 ad_server="mock",  # Start with mock adapter, user can configure later
                 authorized_emails=authorized_emails,
                 authorized_domains=authorized_domains,
@@ -342,26 +183,9 @@ def ensure_default_tenant_exists() -> dict[str, Any] | None:
 
             logger.info(f"Created default tenant: {default_tenant.name} (id: {default_tenant.tenant_id})")
 
-            from src.core.utils.tenant_utils import serialize_tenant_to_dict
-
-            return serialize_tenant_to_dict(default_tenant)
+            return _as_dict(default_tenant)
 
     except Exception as e:
         # Don't fail startup if tenant creation fails - log and continue
         logger.warning(f"Could not ensure default tenant exists: {e}")
         return None
-
-
-def get_single_tenant() -> dict[str, Any] | None:
-    """Get the single tenant for single-tenant deployments.
-
-    In single-tenant mode, returns the only active tenant.
-    In multi-tenant mode, returns None.
-
-    Returns:
-        The single tenant dict, or None if multi-tenant mode or no tenant exists
-    """
-    if not is_single_tenant_mode():
-        return None
-
-    return get_default_tenant()

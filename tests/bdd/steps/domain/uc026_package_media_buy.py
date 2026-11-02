@@ -12,7 +12,8 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import _require_error, payload_or_none, require_payload
+from tests.bdd.steps._outcome_helpers import assert_wire_rejection, payload_or_none, require_payload
+from tests.bdd.steps.generic._table import as_bool
 from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -43,6 +44,30 @@ def _resolve_pricing_id(ctx: dict, label: str) -> str:
     """
     mapping = ctx.get("pricing_option_map", {})
     return mapping.get(label, label)
+
+
+def _resolve_product_id(ctx: dict, label: str) -> str:
+    """Map a feature-file product label to the seeded product's real ``product_id``.
+
+    The exact counterpart of :func:`_resolve_pricing_id`, and missing for the same
+    reason that one exists: the feature writes a readable label (``prod-1``) while the
+    seeded row carries the harness's own id (``prod_1``). ``pricing_option_id`` was
+    resolved through a map and ``product_id`` was passed through verbatim, so a package
+    built from a data table named a product that does not exist and production answered
+    PRODUCT_NOT_FOUND -- a rejection the scenario never intended to grade.
+
+    ONLY the label the scenario actually declared is resolved -- the one its Background
+    named, recorded by :func:`_scenario_product`. Any other string passes through
+    verbatim, so a scenario that deliberately names a product the seller does not have
+    still reaches production with that name and still gets its refusal. Rewriting every
+    product_id to the seeded row would have silently disarmed exactly those scenarios.
+    """
+    product = ctx.get("default_product")
+    declared = ctx.get("uc026_product_label")
+    if product is None or declared is None or label != declared:
+        return label
+    seeded = getattr(product, "product_id", None)
+    return str(seeded) if seeded else label
 
 
 def _pkg_field(pkg: Any, field: str) -> Any:
@@ -310,6 +335,34 @@ def _ensure_update_kwargs(ctx: dict) -> dict[str, Any]:
 # ═══════════════════════════════════════════════════════════════════════
 
 
+def _scenario_product(ctx: dict, product_id: str) -> Any:
+    """The seeded product a scenario refers to by *product_id*, whatever the row is called.
+
+    The name in the feature is a LABEL for "the product this scenario is about", not the
+    persisted primary key. Requests are built from the seeded row's own id
+    (``_ensure_request_defaults`` reads ``default_product.product_id``), so the feature's
+    spelling never reaches the wire and the two were never required to agree.
+
+    Both Givens used to assert they DID agree, which bound the scenario to whatever the
+    shared ``setup_media_buy_data`` happened to name its product. That is a naming
+    coincidence, not a precondition: the harness seeds ``prod_1`` and the Background says
+    ``prod-1``, so every one of the 75 scenarios failed in its Background the moment the
+    use case was finally routed.
+
+    What IS worth refusing is a scenario that names two DIFFERENT products while only one
+    is seeded — there the label stops identifying anything and the later Given would
+    silently reconfigure the earlier one's product.
+    """
+    product = ctx.get("default_product")
+    assert product is not None, "No default_product in ctx — conftest must seed one"
+    claimed = ctx.setdefault("uc026_product_label", product_id)
+    assert claimed == product_id, (
+        f"scenario names two products ({claimed!r} then {product_id!r}) but only one is seeded; "
+        "seed the second one before referring to it, or the later Given silently reconfigures the first"
+    )
+    return product
+
+
 @given(parsers.parse('the seller has a product "{product_id}" in inventory with pricing_options {options}'))
 def given_product_with_pricing(ctx: dict, product_id: str, options: str) -> None:
     """Establish a product with specified pricing_options in the database.
@@ -321,9 +374,7 @@ def given_product_with_pricing(ctx: dict, product_id: str, options: str) -> None
     from tests.factories import PricingOptionFactory
 
     env = ctx["env"]
-    product = ctx.get("default_product")
-    assert product is not None, "No default_product in ctx — conftest must seed one"
-    assert product.product_id == product_id, f"Expected product '{product_id}', got '{product.product_id}'"
+    product = _scenario_product(ctx, product_id)
 
     # Parse the option labels from the feature file (e.g. ["cpm-standard", "cpm-auction"])
     try:
@@ -375,8 +426,6 @@ def given_product_with_pricing(ctx: dict, product_id: str, options: str) -> None
 
         ctx["pricing_option_map"] = pricing_map
 
-    ctx["product_pricing_options"] = options
-
 
 @given(parsers.parse('the product "{product_id}" supports format_ids {format_ids}'))
 def given_product_format_ids(ctx: dict, product_id: str, format_ids: str) -> None:
@@ -386,9 +435,7 @@ def given_product_format_ids(ctx: dict, product_id: str, format_ids: str) -> Non
     rather than merely asserting they already match.
     """
     env = ctx["env"]
-    product = ctx.get("default_product")
-    assert product is not None, "No default_product in ctx — conftest must seed one"
-    assert product.product_id == product_id, f"Expected product '{product_id}', got '{product.product_id}'"
+    product = _scenario_product(ctx, product_id)
 
     try:
         expected = json.loads(format_ids)
@@ -399,35 +446,26 @@ def given_product_format_ids(ctx: dict, product_id: str, format_ids: str) -> Non
         product.format_ids = _to_format_id_dicts(expected)
         env._commit_factory_data()
 
-    ctx["product_format_ids"] = format_ids
-
 
 # --- Package table request construction ---
 
 
-def _build_package_request(ctx: dict, datatable: list[list[str]], transport: str) -> None:
-    """Shared: build request kwargs with a package from data table."""
-    kwargs = _ensure_request_defaults(ctx)
-    _apply_package_table(kwargs, datatable, ctx)
-    ctx.setdefault("package_transport_hint", transport)
-
-
-@given(parsers.parse("a valid create_media_buy MCP tool request with packages array containing:"))
-def given_mcp_request_with_packages(ctx: dict, datatable: list[list[str]]) -> None:
-    """Build create request with a single package from data table (MCP)."""
-    _build_package_request(ctx, datatable, "mcp")
-
-
-@given(parsers.parse("a valid create_media_buy A2A task request with packages array containing:"))
-def given_a2a_request_with_packages(ctx: dict, datatable: list[list[str]]) -> None:
-    """Build create request with a single package from data table (A2A)."""
-    _build_package_request(ctx, datatable, "a2a")
+# The MCP- and A2A-named variants of the Given below are deleted with the two
+# scenarios that bound them. Package creation is transport-independent, so a Given
+# that names a transport asserts nothing about the seller, and the tags those
+# scenarios carried opted them out of parametrization entirely — see the note in
+# BR-UC-026-package-media-buy.feature where the pair stood.
+#
+# The shared ``_build_package_request`` helper went with them: it took a
+# ``transport`` argument that no branch ever read — the three Givens differed only
+# in the string they passed — which is the same claim the scenarios made and could
+# not keep. One caller and two statements do not need a helper.
 
 
 @given(parsers.parse("a valid create_media_buy request with a package containing:"))
 def given_request_with_package(ctx: dict, datatable: list[list[str]]) -> None:
-    """Build create request with a single package from data table (generic)."""
-    _build_package_request(ctx, datatable, "impl")
+    """Build create request with a single package from the data table."""
+    _apply_package_table(_ensure_request_defaults(ctx), datatable, ctx)
 
 
 def _apply_package_table(kwargs: dict, datatable: list[list[str]], ctx: dict | None = None) -> None:
@@ -439,7 +477,7 @@ def _apply_package_table(kwargs: dict, datatable: list[list[str]], ctx: dict | N
     for row in datatable:
         field, value = row[0].strip(), row[1].strip()
         if field == "product_id":
-            pkg["product_id"] = value
+            pkg["product_id"] = _resolve_product_id(ctx or {}, value)
         elif field == "budget":
             pkg["budget"] = float(value)
         elif field == "pricing_option_id":
@@ -455,7 +493,7 @@ def _apply_package_table(kwargs: dict, datatable: list[list[str]], ctx: dict | N
             # Convert bare strings to FormatId dicts
             pkg["format_ids"] = _to_format_id_dicts(raw)
         elif field == "paused":
-            pkg["paused"] = value.lower() == "true"
+            pkg["paused"] = as_bool(value)
         elif field == "bid_price":
             pkg["bid_price"] = float(value)
         elif field == "pacing":
@@ -571,13 +609,7 @@ def given_product_not_exists(ctx: dict, product_id: str) -> None:
 @given(parsers.parse('the pricing_option_id "{option}" is not in product "{product_id}" pricing_options'))
 def given_pricing_not_in_product(ctx: dict, option: str, product_id: str) -> None:
     """Assert that a pricing option is not offered by the product."""
-    product = ctx.get("default_product")
-    assert product is not None, (
-        f"No default_product in ctx — cannot verify pricing option '{option}' is absent from product '{product_id}'"
-    )
-    assert product.product_id == product_id, (
-        f"default_product has product_id '{product.product_id}', but step references '{product_id}'"
-    )
+    product = _scenario_product(ctx, product_id)
     actual_options = getattr(product, "pricing_options", None) or []
     actual_ids = set()
     for opt in actual_options:
@@ -588,7 +620,6 @@ def given_pricing_not_in_product(ctx: dict, option: str, product_id: str) -> Non
         f"Pricing option '{option}' (resolved: '{resolved}') should NOT be in "
         f"product '{product_id}' but found in {actual_ids}"
     )
-    ctx.setdefault("expected_missing_pricing_options", []).append(option)
 
 
 @given(parsers.parse('the product "{product_id}" has a minimum spend requirement of {amount:d}'))
@@ -630,9 +661,7 @@ def given_format_not_supported(ctx: dict, format_id: str, product_id: str) -> No
 @given(parsers.parse('the product "{product_id}" has pricing_option "{option}" in its pricing_options array'))
 def given_product_has_pricing_option(ctx: dict, product_id: str, option: str) -> None:
     """Verify product has the specified pricing option."""
-    product = ctx.get("default_product")
-    assert product is not None, "No default_product in ctx"
-    assert product.product_id == product_id
+    product = _scenario_product(ctx, product_id)
     actual_options = getattr(product, "pricing_options", None)
     assert actual_options and len(actual_options) > 0, "Product has no pricing_options"
     resolved = _resolve_pricing_id(ctx, option)
@@ -648,13 +677,7 @@ def given_product_has_pricing_option(ctx: dict, product_id: str, option: str) ->
 @given(parsers.parse('the product "{product_id}" does not have pricing_option "{option}"'))
 def given_product_lacks_pricing_option(ctx: dict, product_id: str, option: str) -> None:
     """Verify the product does not have the specified pricing option."""
-    product = ctx.get("default_product")
-    assert product is not None, (
-        f"No default_product in ctx — cannot verify pricing option '{option}' is absent from product '{product_id}'"
-    )
-    assert product.product_id == product_id, (
-        f"default_product has product_id '{product.product_id}', but step references '{product_id}'"
-    )
+    product = _scenario_product(ctx, product_id)
     actual_options = getattr(product, "pricing_options", None) or []
     actual_ids = set()
     for opt in actual_options:
@@ -664,19 +687,15 @@ def given_product_lacks_pricing_option(ctx: dict, product_id: str, option: str) 
     assert resolved not in actual_ids and option not in actual_ids, (
         f"Pricing option '{option}' should NOT be in product '{product_id}' but found in {actual_ids}"
     )
-    ctx.setdefault("expected_missing_pricing_options", []).append(option)
 
 
 @given(parsers.parse('the product "{product_id}" has pricing_option "{option}" with max_bid={max_bid}'))
 def given_pricing_option_max_bid(ctx: dict, product_id: str, option: str, max_bid: str) -> None:
     """Verify product has the pricing option and record max_bid semantics."""
-    product = ctx.get("default_product")
-    assert product is not None, "No default_product in ctx"
-    assert product.product_id == product_id, f"Expected product '{product_id}', got '{product.product_id}'"
+    product = _scenario_product(ctx, product_id)
     actual_options = getattr(product, "pricing_options", None)
     assert actual_options and len(actual_options) > 0, f"Product '{product_id}' has no pricing_options"
     # Record max_bid semantics for downstream assertions
-    ctx.setdefault("pricing_option_max_bid", {})[option] = max_bid.lower() == "true"
 
 
 # --- Dedup / cross-buy Given steps ---
@@ -695,13 +714,11 @@ def given_no_existing_packages(ctx: dict) -> None:
     assert "existing_package_id" not in ctx, (
         "Expected no existing packages but existing_package_id is already in context"
     )
-    ctx["no_existing_packages"] = True
 
 
 @given(parsers.parse('the Buyer is creating a new media buy "{mb_id}"'))
 def given_creating_new_mb(ctx: dict, mb_id: str) -> None:
     """Set up state for creating a new (different) media buy."""
-    ctx["new_media_buy_name"] = mb_id
     ctx.pop("request_kwargs", None)
 
 
@@ -726,8 +743,17 @@ def given_buyer_owns_pkg_with_budget(ctx: dict, pkg_id: str, amount: int) -> Non
 
 
 @given(parsers.parse('the Buyer owns a media buy with an active package "{pkg_id}" (paused=false)'))
+@given(parsers.parse('the Buyer owns a media buy with an active package "{pkg_id}"'))
 def given_buyer_owns_active_pkg(ctx: dict, pkg_id: str) -> None:
-    """Create a media buy with an active (not paused) package."""
+    """Create a media buy with an active (not paused) package.
+
+    TWO sentences, ONE body, stacked on one function rather than copied into a second.
+    The feature spells this precondition both with and without the explicit
+    ``(paused=false)``, and the bare spelling had no binding at all, so every scenario
+    opening with it graded NOTHING -- the whole cancel flow among them. A second
+    function with an identical body would say the two sentences mean different things
+    while making them mean the same, which is what the duplicate-step guard refuses.
+    """
     _create_media_buy_for_update(ctx, paused=False)
 
 
@@ -737,16 +763,103 @@ def given_buyer_owns_paused_pkg(ctx: dict, pkg_id: str) -> None:
     _create_media_buy_for_update(ctx, paused=True)
 
 
+@given(parsers.parse('the Buyer owns a media buy with a canceled package "{pkg_id}"'))
+def given_buyer_owns_canceled_pkg(ctx: dict, pkg_id: str) -> None:
+    """Create a package and then CANCEL it through the real update path.
+
+    Realized rather than asserted: cancellation is a buyer-facing operation, so the
+    precondition "owns a canceled package" is reachable by performing it. The package
+    is created, then updated with ``canceled=true`` over the same transport the
+    scenario runs on, which is what leaves a genuinely canceled package behind for the
+    When step to attempt un-cancelling.
+
+    Stashing a flag and handing the scenario an ACTIVE package would have been the
+    other option, and it is the one ``_own_pkg_with_metadata``'s docstring warns
+    against: the Then would then grade an un-cancellation of something never canceled
+    and report coverage for a transition nothing exercised.
+    """
+    from tests.bdd.steps.generic._dispatch import dispatch_request
+
+    _create_media_buy_for_update(ctx, paused=False)
+    existing = ctx.get("existing_media_buy")
+    media_buy_id = _pkg_field(existing, "media_buy_id") if existing is not None else None
+    package_id = _pkg_field(ctx.get("existing_package"), "package_id")
+    dispatch_request(
+        ctx,
+        media_buy_id=media_buy_id,
+        account={"account_id": "acct_test"},
+        idempotency_key="uc026-cancel-precondition",
+        packages=[{"package_id": package_id, "canceled": True}],
+    )
+
+
+@when(
+    parsers.parse('the Buyer Agent attempts to send an update_media_buy request setting canceled=false on "{pkg_id}"')
+)
+def when_attempt_uncancel(ctx: dict, pkg_id: str) -> None:
+    """Dispatch a RAW update body carrying ``canceled: false``.
+
+    Raw on purpose. ``canceled`` is ``const: true`` in the pinned PackageUpdate, so
+    building ``UpdateMediaBuyRequest`` here would raise inside the step and the
+    rejection would never cross a wire — the scenario would grade the harness's own
+    exception instead of the envelope production emits. This is the same reasoning the
+    generic update dispatch above records.
+    """
+    from tests.bdd.steps.generic._dispatch import dispatch_request
+
+    existing = ctx.get("existing_media_buy")
+    media_buy_id = _pkg_field(existing, "media_buy_id") if existing is not None else None
+    package_id = _pkg_field(ctx.get("existing_package"), "package_id") or pkg_id
+    dispatch_request(
+        ctx,
+        media_buy_id=media_buy_id,
+        account={"account_id": "acct_test"},
+        idempotency_key="uc026-uncancel-attempt",
+        packages=[{"package_id": package_id, "canceled": False}],
+    )
+
+
+@given(parsers.parse('the Buyer owns a media buy with a package "{pkg_id}" that has already settled'))
+def given_buyer_owns_settled_pkg(ctx: dict, pkg_id: str) -> None:
+    """Create a package. SETTLEMENT IS NOT REALIZED -- no surface reaches that state.
+
+    Settlement is a billing-side lifecycle the buyer-facing tools do not expose: there
+    is no request that settles a package, and no seeding path here writes one. So this
+    step establishes everything it honestly can and stops.
+
+    The scenario that opens with it (@T-UC-026-ext-j) therefore grades a package that
+    is NOT settled, and production cancels it rather than refusing with
+    NOT_CANCELLABLE. That failure is a HARNESS gap, and it is recorded as one at its
+    xfail in conftest rather than as a production defect -- production is not being
+    asked the question the scenario means to ask.
+
+    Defined rather than left missing on purpose. An unbound sentence makes the whole
+    scenario dormant, which reads as ordinary xfail volume; a bound one that cannot
+    reach the state fails visibly and carries a reason naming what is missing.
+
+    Routed through ``_own_pkg_with_metadata`` because that helper exists for exactly
+    this: a sentence whose claim cannot be applied keeps the claim VISIBLE at its call
+    site, where whoever wires settlement will find it.
+    """
+    _own_pkg_with_metadata(ctx, pkg_id, settled=True)
+
+
 def _own_pkg_with_metadata(ctx: dict, pkg_id: str, **metadata: Any) -> None:
     """Create a media buy with a package, recording metadata about its intended state.
 
     All 'the Buyer owns a media buy with a package ...' steps use this shared
-    helper. The metadata dict captures the step's semantic claim (e.g., keyword
-    targets, catalogs) so downstream steps can reference it.
+    helper. The ``metadata`` kwargs keep each sentence's semantic claim at its own
+    call site (keyword targets, catalogs, expected product) -- they are NOT
+    applied: ``_create_media_buy_for_update`` builds the default package, and
+    production takes no such per-package configuration from this path.
+
+    They used to be stashed in ``ctx["package_metadata"]`` "so downstream steps
+    can reference it". No downstream step ever did, so a sentence could claim a
+    package "having catalogs" and nothing anywhere would notice the package had
+    none. The stash is gone; the claims stay visible at the call sites, where the
+    scenarios that need them wired can be found.
     """
     _create_media_buy_for_update(ctx)
-    if metadata:
-        ctx.setdefault("package_metadata", {}).update(metadata)
 
 
 @given(parsers.parse('the Buyer owns a media buy with a package "{pkg_id}" having no keyword targets'))
@@ -806,12 +919,19 @@ def given_buyer_owns_pkg_no_neg_keyword(ctx: dict, pkg_id: str, keyword: str, ma
 def given_buyer_owns_pkg_with_product(ctx: dict, pkg_id: str, prod_id: str) -> None:
     """Create a media buy with a package linked to specific product."""
     _own_pkg_with_metadata(ctx, pkg_id, expected_product_id=prod_id)
-    # Verify the created package references the correct product
+    # Verify the created package references the product this scenario named. The
+    # comparison resolves the feature's LABEL to the seeded row's id first, the same
+    # way the package builder does -- comparing the raw label against a persisted
+    # product_id asserts a naming coincidence, and this Given is a precondition, so a
+    # failure here reads as a spec-production gap that nobody has.
     existing_pkg = ctx.get("existing_package")
     if existing_pkg is not None:
         actual_prod = _pkg_field(existing_pkg, "product_id")
+        expected_prod = _resolve_product_id(ctx, prod_id)
         if actual_prod is not None:
-            assert actual_prod == prod_id, f"Package created with product_id '{actual_prod}', expected '{prod_id}'"
+            assert actual_prod == expected_prod, (
+                f"Package created with product_id '{actual_prod}', expected '{expected_prod}'"
+            )
 
 
 @given(parsers.parse('the Buyer owns a media buy with a package "{pkg_id}" with format_ids {fmt_ids}'))
@@ -882,7 +1002,7 @@ def given_update_with_package_table(ctx: dict, datatable: list[list[str]]) -> No
         elif field == "budget":
             pkg_update["budget"] = float(value)
         elif field == "paused":
-            pkg_update["paused"] = value.lower() == "true"
+            pkg_update["paused"] = as_bool(value)
         elif field == "pacing":
             pkg_update["pacing"] = value
         elif field == "product_id":
@@ -1530,23 +1650,16 @@ def given_boundary_replacement(ctx: dict, boundary_point: str) -> None:
 
 
 @when("the Buyer Agent invokes the create_media_buy MCP tool")
-def when_invoke_create_mcp(ctx: dict) -> None:
-    """Dispatch create_media_buy through MCP transport."""
-    ctx["package_transport_hint"] = "mcp"
-    _dispatch_create(ctx)
-
-
 @when("the Buyer Agent sends the create_media_buy A2A task")
-def when_send_create_a2a(ctx: dict) -> None:
-    """Dispatch create_media_buy through A2A transport."""
-    ctx["package_transport_hint"] = "a2a"
-    _dispatch_create(ctx)
+def when_dispatch_create_named_transport(ctx: dict) -> None:
+    """Dispatch create_media_buy; the transport named in the sentence is narrative.
 
-
-@when(parsers.parse('the Buyer Agent sends the create_media_buy request for "{mb_id}"'))
-def when_send_create_for_mb(ctx: dict, mb_id: str) -> None:
-    """Dispatch create_media_buy for a specific (cross-buy) media buy."""
-    ctx["dispatched_for_mb_id"] = mb_id
+    Every BDD scenario is parametrized over all four transports, so a sentence
+    saying "MCP tool" or "A2A task" does not choose one -- the run does. These
+    were two functions with the same body, each stashing a ``package_transport_hint``
+    ("mcp" / "a2a") that no step read, which made the two sentences look like they
+    dispatched differently. They never did.
+    """
     _dispatch_create(ctx)
 
 
@@ -1555,16 +1668,26 @@ def when_send_generic_request(ctx: dict) -> None:
     """Send either a create or update request based on context."""
     if ctx.get("paused_request_type") == "update" or "update_kwargs" in ctx:
         # Update flow
-        from src.core.schemas import UpdateMediaBuyRequest
         from tests.bdd.steps.generic._dispatch import dispatch_request
 
         update_kwargs = ctx.get("update_kwargs", {})
-        try:
-            req = UpdateMediaBuyRequest(**update_kwargs)
-        except Exception as exc:
-            ctx["error"] = exc
-            return
-        dispatch_request(ctx, req=req)
+        # Dispatch the RAW flat bag and let the TRANSPORT validate. Constructing
+        # UpdateMediaBuyRequest here meant a payload the schema rejects never crossed a
+        # transport: the ValidationError was raised in the TEST process and stashed as
+        # ctx["error"], so every "malformed input is rejected with X" scenario graded the
+        # harness's own exception -- keys ['code','message'], no suggestion -- instead of
+        # the wire envelope production emits, which carries a full one (code, field,
+        # issues, message, recovery, suggestion).
+        #
+        # Such a test cannot fail when the server stops rejecting the payload, because the
+        # server was never asked. The sibling site in uc003_update_media_buy.py was fixed
+        # the same way; this was the second one named in the ticket.
+        raw: dict = {
+            "account": {"account_id": "acct_test"},
+            "idempotency_key": "test-idem-key-0001",
+            **update_kwargs,  # scenario-supplied values win over the defaults
+        }
+        dispatch_request(ctx, **raw)
     else:
         # Create flow
         _dispatch_create(ctx)
@@ -1572,40 +1695,14 @@ def when_send_generic_request(ctx: dict) -> None:
 
 def _dispatch_create(ctx: dict) -> None:
     """Build CreateMediaBuyRequest and dispatch through harness."""
-    from pydantic import ValidationError
-
-    from src.core.schemas import CreateMediaBuyRequest
     from tests.bdd.steps.generic._dispatch import dispatch_request
 
+    # Dispatch the RAW flat bag; the TRANSPORT validates. Constructing the request here and
+    # catching its ValidationError meant a schema-invalid payload never crossed a transport,
+    # so the scenario graded the harness's own exception rather than the wire envelope --
+    # and would keep passing if the server stopped rejecting the payload entirely.
     request_kwargs = _ensure_request_defaults(ctx)
-    try:
-        req = CreateMediaBuyRequest(**request_kwargs)
-    except ValidationError as exc:
-        ctx["error"] = exc
-        return
-
-    dispatch_request(ctx, req=req)
-
-    # Post-process: promote error results
-    _promote_create_errors(ctx)
-
-
-def _promote_create_errors(ctx: dict) -> None:
-    """Promote CreateMediaBuyError responses to ctx['error']."""
-    resp = payload_or_none(ctx)
-    if resp is None:
-        return
-    from src.core.schemas._base import CreateMediaBuyError as CMBError
-
-    if hasattr(resp, "response") and isinstance(resp.response, CMBError) and resp.response.errors:
-        ctx["error"] = resp.response.errors[0]
-        # This promotion makes the error payload INVISIBLE to success-path Thens —
-        # that was the point of the old `del ctx["response"]`, and retiring the key
-        # did not retire the requirement. Clear every source the payload accessors
-        # read, or require_payload/payload_or_none hand the error payload straight
-        # back and a success-path Then grades it as a success.
-        ctx.pop("result", None)
-        ctx.pop("self_dispatched_response", None)
+    dispatch_request(ctx, **request_kwargs)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1650,7 +1747,6 @@ def then_package_pricing(ctx: dict, pricing_option_id: str) -> None:
 @then("the package should contain format_ids defaulting to all product formats")
 def then_package_default_formats(ctx: dict) -> None:
     """Assert package format_ids default to all product formats."""
-    import pytest
 
     packages = _get_packages(ctx)
     pkg = packages[0]
@@ -1658,7 +1754,9 @@ def then_package_default_formats(ctx: dict) -> None:
     assert pkg_id, "Package has no package_id — cannot verify format_ids"
     format_ids = _pkg_field(pkg, "format_ids")
     if format_ids is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: format_ids not defaulted to product formats when omitted from request")
+        raise AssertionError(
+            "format_ids not defaulted to the product formats when omitted; the pinned 3.1 core/package.json declares format_ids"
+        )
     assert isinstance(format_ids, list), f"Expected format_ids to be a list, got {type(format_ids)}"
     assert format_ids, "Expected format_ids to default to all product formats, got empty list"
     product = ctx["default_product"]
@@ -1904,59 +2002,45 @@ def then_operation_succeeds(ctx: dict) -> None:
 
 @then(parsers.parse("the outcome should be {outcome}"))
 def then_outcome(ctx: dict, outcome: str) -> None:
-    """Dispatch assertion based on outcome text from partition/boundary tables."""
+    """Dispatch assertion based on outcome text from partition/boundary tables.
+
+    Wire-first (converging on uc004_delivery._assert_error_outcome, the
+    reference form): when the scenario names a canonical/pinned code and a wire
+    envelope was captured, assert the AdCP two-layer error the buyer receives
+    via ``result.assert_wire_error`` (recovery pin-sourced). assert_wire_error
+    HARD-FAILS on a non-pinned code (e.g. the scenario-only
+    DOMAIN_INVALID_FORMAT that production never emits), so those — and the
+    no-wire case — fall through to the reconstructed-exception branch.
+    """
     import re
 
-    from adcp.types import Error as AdCPError
-
     outcome = outcome.strip()
-    if outcome.startswith("error"):
-        error = _require_error(ctx)
-        is_adcp_error = isinstance(error, AdCPError) or (isinstance(error, dict) and "code" in error)
-
-        # Extract expected error code from outcome string, e.g. 'error "CODE" ...'
-        code_match = re.search(r'"([^"]+)"', outcome)
-        expected_code = code_match.group(1) if code_match else None
-        actual_code: str | None = None
-
-        if expected_code and is_adcp_error:
-            actual_code = getattr(error, "code", None)
-            if actual_code is None and isinstance(error, dict):
-                actual_code = error.get("code")
-            assert actual_code, f"Expected error with code but got empty code. Error: {error}"
-            assert actual_code == expected_code, (
-                f"Expected error code '{expected_code}', got '{actual_code}'. Error: {error}"
-            )
-
-        # Verify suggestion only when the error code matches the scenario
-        # expectation.
-        codes_match = actual_code is not None and actual_code == expected_code
-        if "with suggestion" in outcome and is_adcp_error and codes_match:
-            suggestion = getattr(error, "suggestion", None)
-            if suggestion is None and isinstance(error, dict):
-                suggestion = error.get("suggestion")
-            if suggestion is None:
-                suggestion = getattr(error, "recovery", None)
-                if suggestion is None and isinstance(error, dict):
-                    suggestion = error.get("recovery")
-            assert suggestion is not None, f"Expected error with suggestion but none found. Error: {error}"
-    elif outcome.startswith("success"):
+    if outcome.startswith("success"):
         assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
-    else:
+        return
+    if not outcome.startswith("error"):
         raise ValueError(f"Unknown outcome format: {outcome}")
+
+    # Extract expected error code from outcome string, e.g. 'error "CODE" ...'
+    code_match = re.search(r'"([^"]+)"', outcome)
+    expected_code = code_match.group(1) if code_match else None
+    require_suggestion = "with suggestion" in outcome
+
+    # ONE path: the wire. The reconstructed fallback that used to sit below is gone
+    # (salesagent-3dawm.18). It existed for outcomes naming a code CODE_TABLE does not
+    # carry -- i.e. a code no raise site can emit -- and it let exactly those scenarios
+    # pass by inspecting a rebuilt exception instead of the buyer's envelope. Measured
+    # before removing it: BR-UC-026 names no such code, so nothing here relied on it.
+    #
+    # A scenario that does name one now fails loudly inside assert_wire_error with
+    # "not an emittable error code ... Reconcile the feature", which is the correct
+    # outcome and the subject of #1753.
+    result = ctx["result"]
+    assert expected_code, f"Outcome names no error code: {outcome!r}"
+    result.assert_wire_error(expected_code, require_suggestion=require_suggestion)
 
 
 # --- Update-specific Then steps ---
-
-
-@then(parsers.parse("the response should contain the updated package with budget {budget:d}"))
-def then_updated_budget(ctx: dict, budget: int) -> None:
-    """Assert updated package has the expected budget."""
-    packages = _get_packages(ctx)
-    pkg = packages[0]
-    actual = _pkg_field(pkg, "budget")
-    assert actual is not None, "Package budget is None in update response"
-    assert float(actual) == float(budget), f"Expected budget {budget}, got {actual}"
 
 
 @then(parsers.parse('the response should contain the updated package with budget {budget:d} and pacing "{pacing}"'))
@@ -1974,7 +2058,6 @@ def then_updated_budget_and_pacing(ctx: dict, budget: int, pacing: str) -> None:
 @then("the package paused state should be unchanged")
 def then_paused_unchanged(ctx: dict) -> None:
     """Assert paused state was not changed by the update."""
-    import pytest
 
     _assert_no_error(ctx)
     packages = _get_packages(ctx)
@@ -1987,9 +2070,13 @@ def then_paused_unchanged(ctx: dict) -> None:
     )
     original_paused = _pkg_field(existing_pkg, "paused")
     if actual_paused is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: paused not echoed in update response — cannot verify unchanged. FIXME")
+        raise AssertionError(
+            "paused absent from the update response; the pinned 3.1 core/package.json declares paused as boolean with default false, so a parsed package resolves absence to False and never to None"
+        )
     if original_paused is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: paused not present on existing package — cannot verify unchanged. FIXME")
+        raise AssertionError(
+            "paused absent from the pre-update package; the pinned 3.1 core/package.json declares paused as boolean with default false, so a parsed package resolves absence to False and never to None"
+        )
     assert actual_paused == original_paused, f"Paused state changed: was {original_paused!r}, now {actual_paused!r}"
 
 
@@ -1999,14 +2086,42 @@ def then_pkg_paused_value(ctx: dict, paused: str) -> None:
     packages = _get_packages(ctx)
     pkg = packages[0]
     actual = _pkg_field(pkg, "paused")
-    expected = paused.lower() == "true"
+    expected = as_bool(paused)
     assert actual == expected, f"Expected paused={expected}, got {actual}"
+
+
+@then(parsers.parse("the response should contain the package with canceled={canceled}"))
+def then_pkg_canceled_value(ctx: dict, canceled: str) -> None:
+    """Assert the returned package carries the expected ``canceled`` value.
+
+    The twin of the ``paused`` step above, and it had no binding at all, so the
+    cancel scenario reached its outcome and graded nothing.
+    """
+    packages = _get_packages(ctx)
+    assert packages, "No packages in response"
+    actual = _pkg_field(packages[0], "canceled")
+    expected = as_bool(canceled)
+    assert actual == expected, f"Expected canceled={expected}, got {actual}"
+
+
+@then("the request should be rejected as schema-invalid because canceled accepts only the constant true")
+def then_uncancel_rejected(ctx: dict) -> None:
+    """The wire refuses ``canceled: false``.
+
+    ``canceled`` is ``const: true`` in the pinned PackageUpdate, so un-cancellation
+    cannot be expressed on the wire at all -- the refusal is schema-level, which the
+    pin codes INVALID_REQUEST ("malformed, missing required fields, or violates schema
+    constraints") with a correctable recovery, naming the offending field.
+
+    Asserted through the shared helper on the REAL envelope, so a seller that quietly
+    accepted the un-cancellation, or refused it with some other code, fails here.
+    """
+    assert_wire_rejection(ctx, "INVALID_REQUEST", recovery="correctable", field="canceled")
 
 
 @then("the package should not deliver impressions")
 def then_no_delivery(ctx: dict) -> None:
     """Assert package should not deliver (paused=true implies no delivery)."""
-    import pytest
 
     _assert_no_error(ctx)
     packages = _get_packages(ctx)
@@ -2015,7 +2130,9 @@ def then_no_delivery(ctx: dict) -> None:
     assert pkg_id is not None, "Package missing package_id — cannot verify delivery state"
     paused = _pkg_field(pkg, "paused")
     if paused is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: paused field absent — cannot verify no-delivery. FIXME")
+        raise AssertionError(
+            "paused absent, so the no-delivery claim grades nothing; the pinned 3.1 core/package.json declares paused as boolean with default false, so a parsed package resolves absence to False and never to None"
+        )
     assert paused is True, f"Expected paused=true (no delivery), got paused={paused!r}"
 
 
@@ -2031,13 +2148,14 @@ def then_should_deliver(ctx: dict) -> None:
 @then("the package should resume delivering impressions")
 def then_resume_delivery(ctx: dict) -> None:
     """Assert package resumed delivery (paused=false)."""
-    import pytest
 
     packages = _get_packages(ctx)
     pkg = packages[0]
     paused = _pkg_field(pkg, "paused")
     if paused is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: paused field absent — cannot verify resumed delivery. FIXME")
+        raise AssertionError(
+            "paused absent, so the resumed-delivery claim grades nothing; the pinned 3.1 core/package.json declares paused as boolean with default false, so a parsed package resolves absence to False and never to None"
+        )
     assert paused is False, f"Expected paused=false (resumed), got paused={paused}"
 
 
@@ -2047,16 +2165,20 @@ def then_resume_delivery(ctx: dict) -> None:
 @then(parsers.parse('the response should contain the package with keyword "{keyword}" in targeting_overlay'))
 def then_pkg_has_keyword(ctx: dict, keyword: str) -> None:
     """Assert package targeting_overlay contains specified keyword."""
-    import pytest
 
     packages = _get_packages(ctx)
     pkg = packages[0]
     overlay = _pkg_field(pkg, "targeting_overlay")
-    if overlay is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: targeting_overlay not present in response. FIXME")
+    assert overlay is not None, (
+        "targeting_overlay absent from the package; the pinned 3.1 core/package.json "
+        "declares it ($ref targeting.json), and a step asserting what is INSIDE the "
+        "overlay grades nothing without it"
+    )
     kw_targets = _get_overlay_keywords(pkg, "keyword_targets")
     if kw_targets is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: keyword_targets not present in targeting_overlay. FIXME")
+        raise AssertionError(
+            "keyword_targets absent from targeting_overlay; the pinned 3.1 core/targeting.json declares keyword_targets"
+        )
     found = _find_keyword(kw_targets, keyword)
     assert found is not None, (
         f"Keyword '{keyword}' not found in targeting_overlay.keyword_targets. "
@@ -2073,14 +2195,16 @@ def then_keyword_with_match_type(ctx: dict, keyword: str, match_type: str) -> No
     and the later body was stronger (asserted no error before inspecting
     packages), so that body survives here.
     """
-    import pytest
 
     _assert_no_error(ctx)
     pkgs = _assert_has_packages(ctx)
     pkg = pkgs[0]
     kw_targets = _get_overlay_keywords(pkg, "keyword_targets")
     if kw_targets is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: keyword_targets not in targeting_overlay. FIXME")
+        raise AssertionError(
+            "keyword_targets absent from targeting_overlay; the pinned 3.1 core/targeting.json "
+            "declares it, and this step's claim is about its contents"
+        )
     found = _find_keyword(kw_targets, keyword, match_type)
     assert found is not None, (
         f"Keyword '{keyword}' with match_type '{match_type}' not found in targeting_overlay. "
@@ -2095,18 +2219,22 @@ def then_keyword_with_match_type(ctx: dict, keyword: str, match_type: str) -> No
 )
 def then_keyword_updated_bid(ctx: dict, keyword: str, match_type: str, price: str) -> None:
     """Assert keyword has updated bid_price."""
-    import pytest
 
     pkgs = _assert_has_packages(ctx)
     pkg = pkgs[0]
     kw_targets = _get_overlay_keywords(pkg, "keyword_targets")
     if kw_targets is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: keyword_targets not in targeting_overlay. FIXME")
+        raise AssertionError(
+            "keyword_targets absent from targeting_overlay; the pinned 3.1 core/targeting.json "
+            "declares it, and this step's claim is about its contents"
+        )
     found = _find_keyword(kw_targets, keyword, match_type)
     assert found is not None, f"Keyword '{keyword}' with match_type '{match_type}' not found in targeting_overlay"
     actual_bid = _keyword_field(found, "bid_price")
     if actual_bid is None:
-        pytest.xfail(f"SPEC-PRODUCTION GAP: keyword '{keyword}' found but bid_price not echoed. FIXME")
+        raise AssertionError(
+            f"keyword {keyword!r} present but bid_price not echoed; the pinned 3.1 core/package.json declares bid_price"
+        )
     assert float(actual_bid) == float(price), f"Expected bid_price {price} for keyword '{keyword}', got {actual_bid}"
 
 
@@ -2154,13 +2282,14 @@ def then_targeting_unchanged(ctx: dict) -> None:
 @then(parsers.parse('the response should contain negative keyword "{keyword}" in targeting_overlay'))
 def then_negative_keyword(ctx: dict, keyword: str) -> None:
     """Assert targeting_overlay contains specified negative keyword."""
-    import pytest
 
     pkgs = _assert_has_packages(ctx)
     pkg = pkgs[0]
     neg_keywords = _get_overlay_keywords(pkg, "negative_keywords")
     if neg_keywords is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: negative_keywords not in targeting_overlay. FIXME")
+        raise AssertionError(
+            "negative_keywords absent from targeting_overlay; the pinned 3.1 core/targeting.json declares negative_keywords"
+        )
     found = _find_keyword(neg_keywords, keyword)
     assert found is not None, (
         f"Negative keyword '{keyword}' not found in targeting_overlay.negative_keywords. "
@@ -2193,20 +2322,23 @@ def then_negative_keywords_unchanged(ctx: dict) -> None:
 @then("the response should contain updated keyword targets and negative keywords")
 def then_updated_keyword_and_negative(ctx: dict) -> None:
     """Assert response contains both keyword targets and negative keywords in targeting."""
-    import pytest
 
     _assert_no_error(ctx)
     pkgs = _assert_has_packages(ctx)
     pkg = pkgs[0]
     overlay = _pkg_field(pkg, "targeting_overlay")
-    if overlay is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: targeting_overlay not present in response. FIXME")
+    assert overlay is not None, (
+        "targeting_overlay absent from the package; the pinned 3.1 core/package.json "
+        "declares it ($ref targeting.json), and a step asserting what is INSIDE the "
+        "overlay grades nothing without it"
+    )
     kw_targets = _get_overlay_keywords(pkg, "keyword_targets")
     neg_keywords = _get_overlay_keywords(pkg, "negative_keywords")
-    if kw_targets is None and neg_keywords is None:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: neither keyword_targets nor negative_keywords present in targeting_overlay. FIXME"
-        )
+    assert not (kw_targets is None and neg_keywords is None), (
+        "neither keyword_targets nor negative_keywords is present in targeting_overlay; "
+        "the pinned 3.1 core/targeting.json declares both, and this step asserts an update "
+        "touched one of them"
+    )
     # Both dimensions must be non-empty — cross-dimension mixing means both were updated
     assert kw_targets is not None and len(kw_targets) > 0, (
         f"Expected keyword_targets to be non-empty after cross-dimension update, got {kw_targets}"
@@ -2231,7 +2363,6 @@ def then_keyword_bid_ceiling(ctx: dict, price: str) -> None:
     3. The bid_price value matches the expected price (production persisted it).
     4. The pricing option has max_bid=true (ceiling semantics, not exact).
     """
-    import pytest
 
     _assert_no_error(ctx)
     pkgs = _assert_has_packages(ctx)
@@ -2244,7 +2375,10 @@ def then_keyword_bid_ceiling(ctx: dict, price: str) -> None:
     # Check keyword_targets in the response targeting_overlay
     kw_targets = _get_overlay_keywords(pkg, "keyword_targets")
     if kw_targets is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: keyword_targets not in targeting_overlay. FIXME")
+        raise AssertionError(
+            "keyword_targets absent from targeting_overlay; the pinned 3.1 core/targeting.json "
+            "declares it, and this step's claim is about its contents"
+        )
     # Find keyword with the expected bid_price from the production response
     expected_price = float(price)
     found_with_bid = None
@@ -2272,11 +2406,8 @@ def then_existing_package(ctx: dict, pkg_id: str) -> None:
     """Assert response contains the existing package (dedup)."""
     pkgs = _assert_has_packages(ctx)
     # Use the actual existing_package_id from the Given step (pkg_id is a label)
-    actual_existing = ctx.get("expected_existing_package_id") or ctx.get("existing_package_id")
-    assert actual_existing, (
-        "expected_existing_package_id/existing_package_id missing from context — "
-        "Given step must record the existing package ID"
-    )
+    actual_existing = ctx.get("existing_package_id")
+    assert actual_existing, "existing_package_id missing from context — Given step must record the existing package ID"
     found = False
     for pkg in pkgs:
         if _pkg_field(pkg, "package_id") == actual_existing:
@@ -2313,8 +2444,7 @@ def then_new_pkg_in_mb(ctx: dict, mb_id: str) -> None:
         f"Expected a NEW package_id for '{mb_id}' but got the same as existing: '{pkg_id}'"
     )
     # Verify the response media_buy_id matches the target (different from original)
-    named_mb_ids = ctx.get("named_media_buy_ids", {})
-    original_mb_id = named_mb_ids.get("mb-A") or ctx.get("existing_media_buy_id")
+    original_mb_id = ctx.get("existing_media_buy_id")
     resp = payload_or_none(ctx)
     if resp is not None:
         inner = getattr(resp, "response", resp)
@@ -2405,7 +2535,6 @@ def then_pricing_defaults(ctx: dict) -> None:
        bid_price for auction options).
     4. The option carries a non-None default rate (the effective price).
     """
-    import pytest
 
     _assert_no_error(ctx)
     pkgs = _assert_has_packages(ctx)
@@ -2469,16 +2598,18 @@ def then_pricing_defaults(ctx: dict) -> None:
             if isinstance(price_breakdown, dict)
             else getattr(price_breakdown, "list_price", None)
         )
-        if list_price is not None:
-            assert float(list_price) == float(rate), (
-                f"price_breakdown.list_price ({list_price}) != option rate ({rate}); defaults not applied correctly"
-            )
+        assert list_price is not None, (
+            f"price_breakdown present but carries no list_price, so the default-rate claim ({rate}) grades nothing"
+        )
+        assert float(list_price) == float(rate), (
+            f"price_breakdown.list_price ({list_price}) != option rate ({rate}); defaults not applied correctly"
+        )
     else:
-        pytest.xfail(
-            f"price_breakdown not populated in create response — "
-            f"cannot verify default list_price == option rate ({rate}). "
-            f"Option defaults verified via catalog: pricing_model={pricing_model}, "
-            f"currency={currency}, rate={rate}, is_fixed={is_fixed}"
+        raise AssertionError(
+            f"price_breakdown absent from the create response, so the default "
+            f"list_price == option rate ({rate}) claim grades nothing. The pinned 3.1 "
+            f"core/package.json declares price_breakdown. Catalog-side option values: "
+            f"pricing_model={pricing_model}, currency={currency}, rate={rate}, is_fixed={is_fixed}"
         )
 
 
@@ -2502,7 +2633,7 @@ def then_created_with_formats(ctx: dict, fmt_ids: str) -> None:
 def then_created_with_paused(ctx: dict, paused: str) -> None:
     """Assert package was created with specific paused value."""
     pkgs = _assert_has_packages(ctx)
-    expected = paused.lower() == "true"
+    expected = as_bool(paused)
     actual = _pkg_field(pkgs[0], "paused")
     assert actual is not None, f"paused not echoed in response; expected {expected}"
     assert actual == expected, f"Expected paused={expected}, got {actual!r}"
@@ -2607,13 +2738,14 @@ def _assert_goal_in_list(expected: dict, actual_list: list[dict]) -> None:
 @then("the package catalogs should be unchanged")
 def then_catalogs_unchanged(ctx: dict) -> None:
     """Assert package catalogs were not changed (patch semantics — omitted fields preserved)."""
-    import pytest
 
     _assert_no_error(ctx)
     pkgs = _assert_has_packages(ctx)
     actual_catalogs = _pkg_field(pkgs[0], "catalogs")
     if actual_catalogs is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: catalogs not echoed in update response — cannot verify unchanged. FIXME")
+        raise AssertionError(
+            "catalogs absent from the update response; the pinned 3.1 core/package.json declares catalogs"
+        )
     assert isinstance(actual_catalogs, list), f"Expected catalogs to be a list, got {type(actual_catalogs)}"
     # Compare with original package's catalogs — content equality, not just length
     existing_pkg = ctx.get("existing_package")
@@ -2636,15 +2768,14 @@ def then_catalogs_unchanged(ctx: dict) -> None:
 @then("the package optimization_goals should be unchanged")
 def then_goals_unchanged(ctx: dict) -> None:
     """Assert package optimization_goals were not changed (patch semantics)."""
-    import pytest
 
     _assert_no_error(ctx)
     pkgs = _assert_has_packages(ctx)
     actual_goals = _pkg_field(pkgs[0], "optimization_goals")
-    if actual_goals is None:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: optimization_goals not echoed in update response — cannot verify unchanged. FIXME"
-        )
+    assert actual_goals is not None, (
+        "optimization_goals absent from the update response, so the unchanged claim grades "
+        "nothing; the pinned 3.1 core/package.json declares optimization_goals"
+    )
     assert isinstance(actual_goals, list), f"Expected optimization_goals to be a list, got {type(actual_goals)}"
     # Compare with original package's goals — content equality, not just length
     existing_pkg = ctx.get("existing_package")
@@ -2665,7 +2796,6 @@ def then_goals_unchanged(ctx: dict) -> None:
 @then(parsers.parse("the package optimization_goals should be {expected}"))
 def then_pkg_goals(ctx: dict, expected: str) -> None:
     """Assert package optimization_goals match expected (replacement semantics)."""
-    import pytest
 
     # Handle "unchanged" case
     if expected.strip().lower() == "unchanged":
@@ -2675,7 +2805,9 @@ def then_pkg_goals(ctx: dict, expected: str) -> None:
     pkgs = _assert_has_packages(ctx)
     actual_goals = _pkg_field(pkgs[0], "optimization_goals")
     if actual_goals is None:
-        pytest.xfail(f"SPEC-PRODUCTION GAP: optimization_goals not echoed in response. Expected {expected}. FIXME")
+        raise AssertionError(
+            f"optimization_goals absent from the response (expected {expected}); the pinned 3.1 core/package.json declares optimization_goals"
+        )
     expected_parsed = json.loads(expected)
     if isinstance(actual_goals, list) and isinstance(expected_parsed, list):
         actual_normalized = [_normalize_item(ag) for ag in actual_goals]
@@ -2747,16 +2879,20 @@ def then_pkg_creatives(ctx: dict, expected: str) -> None:
 @then(parsers.parse('the package targeting_overlay should contain only audience "{audience_id}"'))
 def then_targeting_audience(ctx: dict, audience_id: str) -> None:
     """Assert targeting_overlay contains only specified audience."""
-    import pytest
 
     pkgs = _assert_has_packages(ctx)
     pkg = pkgs[0]
     overlay = _pkg_field(pkg, "targeting_overlay")
-    if overlay is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: targeting_overlay not present in response. FIXME")
+    assert overlay is not None, (
+        "targeting_overlay absent from the package; the pinned 3.1 core/package.json "
+        "declares it ($ref targeting.json), and a step asserting what is INSIDE the "
+        "overlay grades nothing without it"
+    )
     audiences = _get_overlay_field(pkg, "audiences")
     if audiences is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: audiences not in targeting_overlay. FIXME")
+        raise AssertionError(
+            "audience targeting absent from targeting_overlay; the pinned 3.1 core/targeting.json declares audience_include / audience_exclude"
+        )
     assert isinstance(audiences, list), f"Expected audiences to be a list, got {type(audiences)}"
     assert len(audiences) == 1, f"Expected exactly 1 audience, got {len(audiences)}"
     aud = audiences[0]
@@ -2767,13 +2903,14 @@ def then_targeting_audience(ctx: dict, audience_id: str) -> None:
 @then(parsers.parse('the old catalog "{catalog_id}" should not be present'))
 def then_old_catalog_absent(ctx: dict, catalog_id: str) -> None:
     """Assert old catalog is not present after replacement."""
-    import pytest
 
     _assert_no_error(ctx)
     pkgs = _assert_has_packages(ctx)
     catalogs = _pkg_field(pkgs[0], "catalogs")
     if catalogs is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: catalogs not echoed in response — cannot verify old catalog absent. FIXME")
+        raise AssertionError(
+            "catalogs absent from the response, so the old-catalog-absent claim grades nothing; the pinned 3.1 core/package.json declares catalogs"
+        )
     for cat in catalogs:
         cat_id = cat.get("catalog_id") if isinstance(cat, dict) else getattr(cat, "catalog_id", None)
         assert cat_id != catalog_id, f"Old catalog '{catalog_id}' should NOT be present after replacement but was found"
@@ -2782,16 +2919,16 @@ def then_old_catalog_absent(ctx: dict, catalog_id: str) -> None:
 @then(parsers.parse('the old audience "{audience_id}" should not be present'))
 def then_old_audience_absent(ctx: dict, audience_id: str) -> None:
     """Assert old audience is not present after replacement."""
-    import pytest
 
     _assert_no_error(ctx)
     pkgs = _assert_has_packages(ctx)
     pkg = pkgs[0]
     audiences = _get_overlay_field(pkg, "audiences")
-    if audiences is None:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: audiences not in targeting_overlay — cannot verify old audience absent. FIXME"
-        )
+    assert audiences is not None, (
+        "audience targeting absent from targeting_overlay, so the old-audience-absent claim "
+        "grades nothing; the pinned 3.1 core/targeting.json declares audience_include / "
+        "audience_exclude"
+    )
     for aud in audiences:
         aud_id = aud.get("audience_id") if isinstance(aud, dict) else getattr(aud, "audience_id", None)
         assert aud_id != audience_id, (

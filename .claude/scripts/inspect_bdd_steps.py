@@ -281,7 +281,7 @@ def _collect_context_for_step(step: BddStepInfo) -> str:
 
     # Check for common schemas referenced
     project_root = Path(__file__).resolve().parents[2]
-    schema_keywords = ["AdCPError", "ListCreativeFormatsResponse", "ValidationError"]
+    schema_keywords = ["AdCPSalesAgentError", "ListCreativeFormatsResponse", "ValidationError"]
     for kw in schema_keywords:
         if kw in step.source_text:
             # Try to find the schema definition
@@ -304,7 +304,7 @@ def _collect_context_for_step(step: BddStepInfo) -> str:
         context_parts.append(
             "## Context keys used\n"
             "ctx['response'] = ListCreativeFormatsResponse (real production object)\n"
-            "ctx['error'] = Exception (real AdCPError or pydantic.ValidationError)"
+            "ctx['error'] = Exception (real AdCPSalesAgentError or pydantic.ValidationError)"
         )
 
     return "\n\n".join(context_parts) if context_parts else "No additional context available."

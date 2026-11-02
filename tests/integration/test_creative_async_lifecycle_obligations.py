@@ -129,7 +129,7 @@ class TestAsyncWorkingLifecycle:
 
         with CreativeSyncEnv() as env:
             env.setup_default_data()
-            env.identity.tenant["approval_mode"] = "ai-powered"
+            env.configure_tenant_field("approval_mode", "ai-powered")
 
             with (
                 patch("src.admin.blueprints.creatives._ai_review_executor", mock_executor),

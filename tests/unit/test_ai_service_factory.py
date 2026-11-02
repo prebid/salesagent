@@ -230,10 +230,16 @@ class TestAIServiceFactory:
             factory = AIServiceFactory()
             from src.core.exceptions import AdCPConfigurationError
 
-            with pytest.raises(AdCPConfigurationError, match="No API key available"):
+            # The sentence comes from CONFIGURATION_ERROR's table entry now; the provider
+            # that lacked a key is asserted below, where it is machine-readable.
+            with pytest.raises(AdCPConfigurationError) as exc_info:
                 factory.create_model(
                     tenant_ai_config={"provider": "google", "model": "gemini-2.0-flash"},
                 )
+            # The provider is the actionable fact, and it is now structured rather than
+            # embedded in prose.
+            assert exc_info.value.details is not None
+        assert exc_info.value.details.provider == "google"
 
     def test_create_model_with_tenant_config(self):
         """Factory uses tenant config over platform defaults."""

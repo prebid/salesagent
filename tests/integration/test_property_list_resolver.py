@@ -94,7 +94,6 @@ from src.core.property_list_resolver import clear_cache, resolve_property_list
 from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
 from tests.harness.product import RealResolverProductEnv
 from tests.harness.transport import Transport
-from tests.helpers import assert_envelope_shape
 from tests.integration.property_list_helpers import (
     allow_local_origin,
     domain_identifiers,
@@ -334,8 +333,7 @@ class TestRefusedBuyerUrlOnTheWire:
             "A refused buyer-supplied agent_url must fail get_products, not be silently "
             f"ignored. Got: {getattr(result, 'wire_response', None) or result.payload!r}"
         )
-        assert_envelope_shape(
-            result.wire_error_envelope,
+        result.assert_wire_error(
             "VALIDATION_ERROR",
             recovery="correctable",
             field=_REFUSED_FIELD_PATH,

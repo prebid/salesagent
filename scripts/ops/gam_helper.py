@@ -61,11 +61,10 @@ def get_ad_manager_client_for_tenant(tenant_id: str) -> ad_manager.AdManagerClie
 
         # Get OAuth client credentials from validated configuration
         try:
-            from src.core.config import get_gam_oauth_config
+            from src.core.config import get_settings
             from src.core.logging_config import oauth_structured_logger
 
-            gam_config = get_gam_oauth_config()
-            client_id = gam_config.client_id
+            client_id = get_settings().auth.gam_oauth_client_id
 
             # Log configuration load
             oauth_structured_logger.log_gam_oauth_config_load(

@@ -7,28 +7,60 @@ UC-002 (create_media_buy) — same resolve_account(), same exceptions.
 Steps dispatch through CreativeSyncEnv which exercises sync_creatives wrappers
 (MCP/A2A/REST) that call enrich_identity_with_account() → resolve_account().
 
+HOW A CREATIVE IS BUILT HERE, because the next step written in this file will copy
+whatever it finds. Every creative item goes through
+``CreativeAssetRequestFactory.payload()`` — the REQUEST model's factory, never a
+hand-typed dict and never ``CreativeAssetFactory``, which builds the RESPONSE model.
+Three rules follow from its override contract (tests/factories/request.py):
+
+* ``format_id`` is ALWAYS stated. The factory's default normalises ``AGENT_URL`` to
+  a trailing slash and names ``creative.adcontextprotocol.org``, while these
+  scenarios talk to ``env.DEFAULT_AGENT_URL`` — inheriting it would silently change
+  WHICH creative agent the payload names.
+* ``assets`` is stated only when it differs from the conformant baseline. A step
+  that says nothing about assets means "any valid asset will do", which is exactly
+  what the baseline supplies.
+* A deliberate wrongness is an OVERRIDE plus a declaration: ``assets=OMIT`` /
+  ``format_id=None`` for the bytes, ``malformed(kind, why, ..., pin_rejects=...)``
+  around them for the claim. Dropping the override lets a factory default repair the
+  scenario, and ``assert_declared_malformations`` reports that at dispatch.
+
 """
 
 from __future__ import annotations
 
 import json
-from unittest.mock import ANY
+import re
+from contextlib import contextmanager
+from typing import TYPE_CHECKING, Any
 
-import pytest
 from pytest_bdd import given, parsers, then, when
 
+from src.core.errors.codes import ErrorCode
 from tests.bdd.steps._harness_db import db_session
-from tests.bdd.steps._outcome_helpers import is_e2e, payload_or_none, require_payload
-from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal, seed_account_with_access
+from tests.bdd.steps._outcome_helpers import is_e2e, payload_or_none, require_payload, wire_field
+from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal
 from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.factories import CreativeFactory
 from tests.factories.creative_asset import (
     assert_assets,
+    asset_spec,
     build_assets,
     image_spec,
     text_spec,
     url_spec,
 )
+from tests.factories.malformed import malformed
 from tests.factories.principal import PrincipalFactory
+from tests.factories.request import OMIT, CreativeAssetRequestFactory
+from tests.harness.creative_sync import creative_fingerprint
+from tests.harness.media_buy_create import OMIT_ACCOUNT, OMIT_IDEMPOTENCY_KEY
+from tests.helpers.account_seeding import seed_account_with_access, seed_natural_key_matches
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+    from sqlalchemy.orm import Session
 
 # ═══════════════════════════════════════════════════════════════════════
 # E2E format helpers — real creative agent data for Docker transport
@@ -43,6 +75,11 @@ from tests.factories.principal import PrincipalFactory
 _E2E_AGENT_URL = "https://creative-agent.adcp.test:8443/api/creative-agent"
 # Real format that exists in Docker's creative agent catalog
 _E2E_FORMAT_ID = "display_300x250_image"
+# A creative agent that does not answer, on the wire: the TLS front's own name (so the
+# egress gate resolves it and lets the dial through) at a port nothing listens on. A
+# made-up host fails DNS inside the gate instead, which is a VALIDATION_ERROR on the
+# buyer's agent_url -- a different outcome from an agent that is down.
+_E2E_UNREACHABLE_AGENT_URL = "https://creative-agent.adcp.test:8444/api/creative-agent"
 
 
 def _format_payload(ctx: dict, env: object) -> tuple[str, str, dict]:
@@ -70,6 +107,26 @@ def _format_payload(ctx: dict, env: object) -> tuple[str, str, dict]:
     )
 
 
+def latest_creative_id(ctx: dict) -> str:
+    """The id of the creative the scenario most recently declared.
+
+    ONE spelling of one fact. ``ctx["creatives"]`` holds the payloads that go on
+    the wire, so the id inside the last one is the id production is about to see;
+    51 sites already read it that way.
+
+    ``ctx["creative_id"]`` was a scalar mirror, written by five Given steps
+    immediately after they appended that very payload, and five readers spelled
+    the choice ``ctx.get("creative_id") or ctx["creatives"][-1]["creative_id"]``.
+    The mirror won that ``or``, so a scenario that declared a SECOND creative
+    afterwards built its assignment against the FIRST one's id -- silently, and
+    only in the five places that consulted the mirror. Two representations of one
+    fact do not stay equal; the wire payload is the one that decides.
+    """
+    creatives = ctx["creatives"]
+    assert creatives, "No creative declared yet — a Given must append a creative payload first"
+    return creatives[-1]["creative_id"]
+
+
 def _product_format_entry(ctx: dict, env: object) -> dict[str, str]:
     """Return a single ``{"agent_url": ..., "id": ...}`` for ProductFactory.format_ids.
 
@@ -81,6 +138,59 @@ def _product_format_entry(ctx: dict, env: object) -> dict[str, str]:
     return {"agent_url": env.DEFAULT_AGENT_URL, "id": "display_300x250"}
 
 
+def _scenario_format_entry(ctx: dict, env: object) -> dict[str, str]:
+    """The ``{id, agent_url}`` a PERSISTED creative row must carry for this scenario.
+
+    Both halves together, and that is the point. A format's identity is the PAIR
+    ``(agent_url, id)`` -- ``format_id_identity`` in src/core/schemas/_base.py treats it that
+    way -- so switching the id while leaving the agent_url pinned to the in-process default
+    produces a row claiming the real catalog format at an agent that does not serve it, which
+    resolves to nothing. That is the same defect with the halves swapped,
+    and it is easy to introduce while fixing the original: the id is the visible half.
+
+    The id honours ``ctx["creative_format_id"]`` when a Given set one, because a scenario
+    testing a specific format must persist that format. The agent_url always comes from the
+    transport switch: formats live at the transport's own agent whichever id is named.
+    """
+    _default_id, agent_url, _assets = _format_payload(ctx, env)
+    return {"id": _scenario_format_id(ctx, env), "agent_url": agent_url}
+
+
+def _creative_format_id_entry(ctx: dict, env: object) -> dict[str, str]:
+    """The ``format_id`` object a creative payload carries, for the current transport.
+
+     The creative-side twin of :func:`_product_format_entry`. Both read the same switch, which
+     is the whole point: a creative and the product it is checked against must name the same
+     format on every transport, and they only did in-process by coincidence
+    .
+
+     Returns only the identity. Callers that also need the matching ASSETS -- the two formats
+     have different asset ids, so a switched format with unswitched assets fails just as
+     surely -- take them from :func:`_format_payload` directly.
+    """
+    format_id, agent_url, _assets = _format_payload(ctx, env)
+    return {"id": format_id, "agent_url": agent_url}
+
+
+def _scenario_format_id(ctx: dict, env: object) -> str:
+    """The format id this scenario is using: what a Given recorded, else the transport default.
+
+    ``ctx["creative_format_id"]`` is this module's carrier for "the format under test" -- 30
+    steps write it and several read it back. The reads used to default to the literal
+    ``"display_300x250"``, which is the quiet half of the same defect: a scenario that never
+    wrote the key got the IN-PROCESS format on every transport, including e2e_rest where the
+    creative it is compared against had switched to ``display_300x250_image``.
+
+    Defaulting through :func:`_format_payload` keeps the fallback on the same switch as the
+    value it stands in for. A literal default is the same bug one level down.
+    """
+    recorded = ctx.get("creative_format_id")
+    if recorded:
+        return recorded
+    format_id, _agent_url, _assets = _format_payload(ctx, env)
+    return format_id
+
+
 def _e2e_unique_id(prefix: str) -> str:
     """Generate a UUID-based unique ID for e2e tests.
 
@@ -90,7 +200,9 @@ def _e2e_unique_id(prefix: str) -> str:
     """
     import uuid
 
-    return f"{prefix}_{uuid.uuid4().hex[:8]}"
+    from tests.factories.mint import mint
+
+    return mint(f"{prefix}_{uuid.uuid4().hex[:8]}")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -98,12 +210,35 @@ def _e2e_unique_id(prefix: str) -> str:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-@given(parsers.parse('the request includes a push_notification_config with url "{url}"'))
-def given_push_notification_config_url(ctx: dict, url: str) -> None:
-    """Attach push_notification_config to the upcoming sync_creatives dispatch."""
-    push_config = {"url": url}
-    ctx["push_notification_config"] = push_config
-    ctx["push_notification_url"] = url
+def _assignments_for_the_wire(
+    assignments: dict[str, list[str]], terms: dict[tuple[str, str], dict[str, Any]] | None = None
+) -> list[dict[str, Any]]:
+    """The ctx map, as the AdCP 3.1 assignments ARRAY the transports accept.
+
+    The scenarios build (and two steps READ) assignments as the 2.5 map
+    {creative_id: [package_ids]}. 3.1 declares an array of {creative_id, package_id}, so the
+    map is rejected at the MCP and REST boundaries and the sync never runs -- which made two
+    transactional-ordering scenarios look like data-integrity failures when they were really
+    setup rejections. (a2a kept passing, since it forwards the raw bag to _impl; that is the
+    evidence the ordering behaviour itself is intact.)
+
+    Translated ONCE here rather than rewriting ~40 setup sites: the ctx shape stays map-like
+    for the two steps that index into it, and only the wire form changes.
+
+    ``terms`` carries the pin's optional per-entry fields (``weight``, ``placement_ids``)
+    keyed by (creative_id, package_id) -- ``ctx["assignment_terms"]``, written by the Givens
+    that ask for them through :func:`_ask_assignment_terms`.
+    """
+    return [
+        {"creative_id": creative_id, "package_id": package_id, **(terms or {}).get((creative_id, package_id), {})}
+        for creative_id, package_ids in assignments.items()
+        for package_id in package_ids
+    ]
+
+
+def _ask_assignment_terms(ctx: dict, creative_id: str, package_id: str, **terms: Any) -> None:
+    """Record the optional per-entry fields one (creative, package) assignment should carry."""
+    ctx.setdefault("assignment_terms", {}).setdefault((creative_id, package_id), {}).update(terms)
 
 
 @given("a creative with a known format_id")
@@ -115,16 +250,16 @@ def given_creative_with_format(ctx: dict) -> None:
     Stores the payload in ctx["creatives"] for the When step to consume.
     """
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
 
     format_id, agent_url, assets = _format_payload(ctx, env)
     creative_id = "creative-known-fmt-001"
-    creative_payload = {
-        "creative_id": creative_id,
-        "name": "Test Creative with Known Format",
-        "format_id": {"id": format_id, "agent_url": agent_url},
-        "assets": assets,
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id=creative_id,
+        name="Test Creative with Known Format",
+        format_id={"id": format_id, "agent_url": agent_url},
+        assets=assets,
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
     ctx["creative_agent_url"] = agent_url
@@ -140,21 +275,23 @@ def given_account_is(ctx: dict, account_setup: str) -> None:
     from adcp.types import AccountReference, AccountReferenceById, AccountReferenceByNaturalKey, BrandReference
 
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     tenant, principal = ctx["tenant"], ctx["principal"]
 
     if account_setup == "not provided":
-        ctx["account_ref"] = None
-        ctx["account_absent"] = True
+        # ABSENT on the wire, not defaulted: sync-creatives-request.json lists account in
+        # /required, so the request must genuinely omit it for the schema to refuse it.
+        # A None here used to be replaced by the harness's default account.
+        ctx["account_ref"] = OMIT_ACCOUNT
         return
 
     # Parse JSON account setup
     config = json.loads(account_setup)
 
-    # Check for invalid oneOf: both account_id and brand present
+    # Both branches of core/account-ref.json's oneOf at once: sent verbatim, so the
+    # request model's union refuses it (each branch forbids the other's fields).
     if "account_id" in config and "brand" in config:
-        ctx["account_ref"] = None
-        ctx["account_invalid_both"] = True
+        ctx["account_ref"] = config
         return
 
     if "account_id" in config:
@@ -218,18 +355,17 @@ def _setup_account_by_natural_key(brand_domain: str, operator: str, tenant: obje
     access_denied_domains = {"other-agent.com"}
 
     if brand_domain == "multi.com":
-        # Ambiguous: create 3 accounts with same natural key, all accessible to the
-        # requesting agent so ambiguity is genuine FOR THIS AGENT — natural-key
-        # resolution is access-scoped (#1417).
-        for i in range(3):
-            seed_account_with_access(
-                tenant,
-                principal,
-                account_id=f"acc-multi-{i}",
-                status="active",
-                brand_domain=brand_domain,
-                operator=operator,
-            )
+        # Ambiguous: 3 accounts one brand+operator reference all resolve to, each
+        # accessible to the requesting agent so the ambiguity is genuine FOR THIS
+        # AGENT — natural-key resolution is access-scoped (#1417).
+        seed_natural_key_matches(
+            tenant,
+            count=3,
+            brand_domain=brand_domain,
+            operator=operator,
+            owner_for_index=lambda _i: principal,
+            account_id_prefix="acc-multi",
+        )
     elif brand_domain in ("unknown.com",):
         # Not found — don't create anything
         pass
@@ -278,30 +414,38 @@ def when_sync_creative(ctx: dict) -> None:
     the step text says "syncs the creative". Error handling is the production
     code's responsibility, not the step's.
 
-    Honors ``ctx["has_auth"] is False`` by passing ``identity=ctx["identity"]``
-    (typically None or a principal-less identity) so the auth boundary check
-    in _sync_creatives_impl fires.
+    A no-auth Given's ``ctx["credential"]`` (a token-less credential, or one addressing
+    a tenant that does not exist) is presented by ``dispatch_request`` itself, so the
+    resolver's refusal fires on the wire without this step reading the key.
+
+    ``ctx["signed"]`` asks for a REAL RFC 9421 signature on this dispatch. It is
+    forwarded verbatim rather than branched on or collapsed with ``bool(...)``: it is a
+    realization, not a flag (False / True / "malformed" / "tampered"), and what a
+    signature IS on each transport belongs to the dispatcher. Defaulting to False keeps
+    every existing scenario byte-identical.
     """
     account_ref = ctx.get("account_ref")
     creatives = ctx.get("creatives", [])
-    kwargs: dict = {"account": account_ref, "creatives": creatives}
+    kwargs: dict = {"account": account_ref, "creatives": creatives, "signed": ctx.get("signed", False)}
     if "assignments" in ctx:
-        kwargs["assignments"] = ctx["assignments"]
+        kwargs["assignments"] = _assignments_for_the_wire(ctx["assignments"], ctx.get("assignment_terms"))
+    if "assignment_entries" in ctx:
+        # Raw entries, verbatim: the shape a scenario about the ARRAY itself (an entry
+        # missing one of its required fields) needs, which the ctx map cannot express.
+        kwargs["assignments"] = ctx["assignment_entries"]
     if "validation_mode" in ctx:
         kwargs["validation_mode"] = ctx["validation_mode"]
     if "idempotency_key" in ctx:
         kwargs["idempotency_key"] = ctx["idempotency_key"]
     if "push_notification_config" in ctx:
         kwargs["push_notification_config"] = ctx["push_notification_config"]
-    if ctx.get("has_auth") is False:
-        dispatch_request(ctx, identity=ctx.get("identity"), **kwargs)
-    else:
-        dispatch_request(ctx, **kwargs)
-
-
-def _ensure_tenant_principal(ctx: dict, env: object) -> None:
-    """Create tenant + principal if not already created by a Given step."""
-    ensure_tenant_principal(ctx, env)
+    if "dry_run" in ctx:
+        kwargs["dry_run"] = ctx["dry_run"]
+    if "delete_missing" in ctx:
+        kwargs["delete_missing"] = ctx["delete_missing"]
+    if "creative_ids" in ctx:
+        kwargs["creative_ids"] = ctx["creative_ids"]
+    dispatch_request(ctx, **kwargs)
 
 
 def _action_str(action: object) -> str:
@@ -344,7 +488,7 @@ def _ensure_tenant_principal_from_db(ctx: dict, env: object) -> None:
                 ctx["principal"] = principal
                 return
 
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -396,23 +540,21 @@ def then_proceed_with_resolved_account(ctx: dict) -> None:
     #    On a resolution failure _sync_creatives_impl never runs and nothing is
     #    written, so this is what proves processing proceeded past resolution.
     env = ctx["env"]
-    if not getattr(env, "use_real_db", False):
-        pytest.xfail("harness does not provide a DB session — cannot verify persistence")
+    # A missing DB session is a HARNESS defect, not a production gap: production's behaviour cannot influence whether the env opened one. Excusing it as an expected failure meant the persistence claim silently graded nothing.
+    assert getattr(env, "use_real_db", False), (
+        "this env has no real DB, so 'the creative was persisted' cannot be verified. "
+        "Run this scenario under an IntegrationEnv, or the claim does not belong here."
+    )
 
     # Authenticated principal the creative must be scoped to (isolation guard).
     # Given steps expose it as ctx["principal_id"] (string) or ctx["principal"]
-    # (Principal object set by _ensure_tenant_principal); identity is the fallback.
+    # (Principal object set by _ensure_tenant_principal).
     expected_principal = ctx.get("principal_id")
     if not expected_principal and ctx.get("principal") is not None:
         expected_principal = getattr(ctx["principal"], "principal_id", None)
-    if not expected_principal and ctx.get("identity") is not None:
-        identity = ctx["identity"]
-        expected_principal = (
-            identity.get("principal_id") if isinstance(identity, dict) else getattr(identity, "principal_id", None)
-        )
     assert expected_principal, "Test setup error: no expected principal in ctx to verify account resolution"
 
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     from src.core.database.models import Creative as CreativeModel
 
     creative = env.get_one(
@@ -430,17 +572,27 @@ def then_proceed_with_resolved_account(ctx: dict) -> None:
     )
 
 
-def _extract_error_code_and_suggestion(error: object) -> tuple[str | None, str | None]:
-    """Return (error_code, suggestion) for either AdCPError or adcp.types.Error.
+def _extract_error_code_and_suggestion(ctx: dict, error: object) -> tuple[str | None, str | None]:
+    """(error_code, suggestion) — from the WIRE first, then the payload's own Error.
 
-    STRICT error.json conformance: ``suggestion`` is a top-level attribute on
-    both shapes — a copy buried in the free-form ``details`` dict is a
-    conformance bug and deliberately does not count (#1417).
+    STRICT error.json conformance: ``suggestion`` is a top-level attribute, never a
+    copy buried in the free-form ``details`` dict (#1417).
+
+    Two populations reach this, and only one of them is a wire rejection:
+
+    * a request-level rejection -> read ``errors[0]`` off the captured envelope.
+      This used to read ``error.error_code`` off an exception the harness rebuilt
+      from those same bytes; with the reconstruction gone that
+      object is a ``WireError`` carrying the envelope, and reading it by attribute
+      returns None.
+    * a per-creative outcome from a PARTIAL SUCCESS -> an ``adcp.types.Error`` in
+      ``response.errors``. That is not a reconstruction and stays supported: the spec
+      puts per-record failures on the payload layer.
     """
-    from src.core.exceptions import AdCPError
-
-    if isinstance(error, AdCPError):
-        return error.error_code, error.suggestion
+    result = ctx.get("result")
+    wire = result.wire_error_object() if result is not None else None
+    if wire:
+        return wire.get("code"), wire.get("suggestion")
     code = getattr(error, "error_code", None) or getattr(error, "code", None)
     return code, getattr(error, "suggestion", None)
 
@@ -449,36 +601,13 @@ def _extract_error_code_and_suggestion(error: object) -> tuple[str | None, str |
 def then_error_code_with_suggestion(ctx: dict, error_code: str) -> None:
     """Assert error has the expected error_code and includes a suggestion.
 
-    Accepts both src.core.exceptions.AdCPError and adcp.types.Error shapes —
+    Accepts both src.core.exceptions.AdCPSalesAgentError and adcp.types.Error shapes —
     different UCs dispatch through different error hierarchies.
     """
-    _SPEC_PRODUCTION_GAP_CODES = {
-        "ASSIGNMENTS_EMPTY",
-        "ASSIGNMENT_CREATIVE_ID_REQUIRED",
-        "ASSIGNMENT_PACKAGE_ID_REQUIRED",
-        "ASSIGNMENT_WEIGHT_BELOW_MINIMUM",
-        "ASSIGNMENT_WEIGHT_ABOVE_MAXIMUM",
-        # Idempotency-key length codes — merged from the shadowed duplicate step
-        # def this literal used to have (#1417): production does not
-        # validate idempotency_key length yet.
-        "IDEMPOTENCY_KEY_TOO_SHORT",
-        "IDEMPOTENCY_KEY_TOO_LONG",
-    }
-
     error = ctx.get("error")
-    if error is None and error_code in _SPEC_PRODUCTION_GAP_CODES:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: production does not raise {error_code} — "
-            "spec defines this code but production silently accepts the input"
-        )
     assert error is not None, f"Expected error {error_code} but none was recorded"
 
-    actual_code, suggestion = _extract_error_code_and_suggestion(error)
-    if actual_code != error_code and error_code in _SPEC_PRODUCTION_GAP_CODES:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected {error_code}, production raised "
-            f"'{actual_code}' ({type(error).__name__}: {error})"
-        )
+    actual_code, suggestion = _extract_error_code_and_suggestion(ctx, error)
     assert actual_code == error_code, (
         f"Expected error code '{error_code}', got '{actual_code}' ({type(error).__name__}: {error})"
     )
@@ -494,24 +623,34 @@ def then_error_code_with_suggestion(ctx: dict, error_code: str) -> None:
 def given_creative_with_name_and_format(ctx: dict, name: str) -> None:
     """Set up a creative payload with a specific name and a known format_id."""
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
 
     format_id, agent_url, assets = _format_payload(ctx, env)
     creative_id = f"creative-{name.lower().replace(' ', '-')}-001"
-    creative_payload = {
-        "creative_id": creative_id,
-        "name": name,
-        "format_id": {"id": format_id, "agent_url": agent_url},
-        "assets": assets,
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id=creative_id,
+        name=name,
+        format_id={"id": format_id, "agent_url": agent_url},
+        assets=assets,
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
 
 
-@given(parsers.parse('the tenant has approval_mode set to "{mode}"'))
-def given_tenant_has_approval_mode_set_to(ctx: dict, mode: str) -> None:
-    """Set approval_mode on the tenant (REST main-flow scenario)."""
-    _set_tenant_approval_mode(ctx, mode)
+#: The three creative approval modes BR-RULE-037 defines. Named once so the two
+#: Given spellings and the writer's own validation cannot disagree about the set.
+_CREATIVE_APPROVAL_MODES = ("auto-approve", "require-human", "ai-powered")
+
+#: What production falls back to when the tenant configures no approval_mode
+#: (BR-RULE-037 INV-1). Stated by the Gherkin's "not configured" / "" rows.
+_DEFAULT_APPROVAL_MODE = "require-human"
+
+#: The Slack endpoint a require-human tenant is configured with. Deliberately a
+#: name that does not resolve: the seller's obligation is to DIAL the configured
+#: webhook, and every observable of that (the in-process sender mock, the
+#: ``webhook_deliveries`` row the live server writes before it dials) is recorded
+#: ahead of the network, so reachability is not part of what is graded.
+_SLACK_WEBHOOK_URL = "https://hooks.slack.test/approval"
 
 
 @given(parsers.parse('the tenant has approval_mode "{mode}"'))
@@ -521,12 +660,17 @@ def given_tenant_has_approval_mode(ctx: dict, mode: str) -> None:
 
 
 @given('the tenant has approval_mode ""')
-def given_tenant_has_empty_approval_mode(ctx: dict) -> None:
-    """Handle the partition 'not_set' row where mode is empty string."""
-    env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
-    ctx["tenant"].approval_mode = "require-human"
-    env._commit_factory_data()
+@given("the tenant has no approval_mode configured")
+def given_tenant_no_approval_mode(ctx: dict) -> None:
+    """The tenant configures no approval mode, so production's default applies.
+
+    Two Gherkin spellings of ONE state — the partition outline's empty ``mode``
+    cell and the INV-1 scenario's sentence — so they share one step function
+    rather than two identical bodies (``test_architecture_bdd_no_duplicate_steps``
+    is the guard, and it is making the right point: two bodies could drift into
+    configuring two different things while both sentences claim "not configured").
+    """
+    _set_tenant_approval_mode(ctx, _DEFAULT_APPROVAL_MODE)
 
 
 @given(parsers.re(r"the tenant approval mode is (?P<approval_mode>.+)"))
@@ -536,42 +680,64 @@ def given_tenant_approval_mode_creative(ctx: dict, approval_mode: str) -> None:
     Handles creative approval modes: not configured, "auto-approve",
     "require-human", "ai-powered". Also delegates to the UC-003 step function
     for media buy modes (auto-approval, manual).
+
+    Goes through ``_set_tenant_approval_mode`` — the SAME writer the partition
+    outline's ``the tenant has approval_mode "<mode>"`` uses — rather than
+    assigning ``tenant.approval_mode`` itself. Two spellings of one precondition
+    had drifted into two behaviours: this one set the mode and nothing else, so
+    the boundary outline's require-human row ran with NO slack_webhook_url and its
+    "a review workflow should be created with Slack notification" was unsatisfiable.
+    It passed anyway, because the assertion behind that sentence used to read the
+    notification STEP's call count instead of the sender.
     """
     stripped = approval_mode.strip().strip('"')
-    env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
-    tenant = ctx["tenant"]
-
     if stripped in ("not configured", "not set"):
-        tenant.approval_mode = "require-human"
-        env._commit_factory_data()
-    elif stripped in ("auto-approve", "require-human", "ai-powered"):
-        tenant.approval_mode = stripped
-        env._commit_factory_data()
+        _set_tenant_approval_mode(ctx, _DEFAULT_APPROVAL_MODE)
+    elif stripped in _CREATIVE_APPROVAL_MODES:
+        _set_tenant_approval_mode(ctx, stripped)
     else:
         from tests.bdd.steps.domain.uc003_update_media_buy import given_tenant_approval_mode
 
         given_tenant_approval_mode(ctx, approval_mode)
-        return
 
-    ctx["approval_mode_expected"] = stripped if stripped not in ("not configured", "not set") else "require-human"
+
+def _configure_tenant_field(ctx: dict, field: str, value: object) -> None:
+    """Write one tenant field for BOTH auth paths, through the env's own writer.
+
+    Writing the ORM row is not enough: ``_sync_creatives_impl`` reads the tenant's
+    fields off the RESOLVED IDENTITY's tenant dict (_sync.py logs "Tenant
+    approval_mode field: NOT FOUND" when one is absent) and falls back to its
+    default, so an ORM-only Given silently grades the default instead of what the
+    scenario names. ``configure_tenant_field`` is the env-owned writer that
+    updates the tenant overrides AND the DB column and clears the identity cache.
+
+    One helper because four Given steps in this module needed the same statement
+    and three of them had drifted onto the ORM row.
+    """
+    env = ctx["env"]
+    ensure_tenant_principal(ctx, env)
+    env.configure_tenant_field(field, value)
+    env._commit_factory_data()
 
 
 def _set_tenant_approval_mode(ctx: dict, mode: str) -> None:
-    """Shared helper to set approval_mode on the tenant ORM instance."""
-    env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
-    tenant = ctx["tenant"]
+    """Configure the tenant's approval mode, plus what that mode implies.
 
-    if mode in ("auto-approve", "require-human", "ai-powered"):
-        tenant.approval_mode = mode
-    else:
+    require-human is the one mode whose scenarios also need a Slack endpoint —
+    BR-RULE-037 sends only on that branch, and only with a webhook configured —
+    so the writer that sets the mode sets the endpoint with it. A Given that set
+    the mode alone left the require-human boundary row unable to satisfy its own
+    "with Slack notification" sentence.
+    """
+    env = ctx["env"]
+    ensure_tenant_principal(ctx, env)
+
+    if mode not in _CREATIVE_APPROVAL_MODES:
         raise ValueError(f"Unknown approval mode: {mode}")
 
+    _configure_tenant_field(ctx, "approval_mode", mode)
     if mode == "require-human":
-        tenant.slack_webhook_url = "https://hooks.slack.test/approval"
-
-    env._commit_factory_data()
+        _configure_tenant_field(ctx, "slack_webhook_url", _SLACK_WEBHOOK_URL)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -579,24 +745,54 @@ def _set_tenant_approval_mode(ctx: dict, mode: str) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-def _xfail_if_e2e(ctx: dict) -> None:
-    """xfail when running under e2e_rest: factory data is not in Docker's DB."""
-    if is_e2e(ctx):
-        import pytest
+@contextmanager
+def _readback(ctx: dict) -> Iterator[Session]:
+    """A session that re-reads rows PRODUCTION wrote, on every transport.
 
-        pytest.xfail("e2e_rest fixture injection gap — factory-created creatives are not in Docker DB. FIXME")
+    ``db_session`` already hands back a session bound to the database the request
+    under test actually writes: the per-test base in process, and the live
+    server's own base over e2e_rest (the env's factories write there, and
+    ``_db_scope_for`` points production's cached engine at the same URL for the
+    scenario duration — ``_production_db_pointed_at``, tests/bdd/conftest.py).
+    A read-back therefore needs no transport branch, which is why the skip this
+    replaced was never the right primitive.
+
+    What it does need is ``expire_all``. Production committed through its OWN
+    session, so any row this one already loaded — every Given-created tenant,
+    media buy or creative — is still served out of its identity map at the value
+    the factory gave it. Over e2e_rest that is the whole difference between
+    reading the media buy's new status and re-reading the fixture's. Same reason
+    ``tests/harness/webhook_registration.py`` expires before its read-backs.
+    """
+    with db_session(ctx) as session:
+        session.expire_all()
+        yield session
 
 
 def _get_creative_from_db(ctx: dict) -> object:
-    """Retrieve the synced creative from the DB for status assertion."""
+    """Retrieve the synced creative from the DB for status assertion.
+
+    FIXME(#2236): this reads the creative as a raw ORM row and every caller then
+    walks ``creative.data`` as an untyped ``JSONType`` blob — a chain of ``.get``
+    calls with ``or {}`` at each hop, because the blob's shape is whatever the
+    writer happened to store. A test asking "what provenance does this asset
+    carry?" should ask a typed model, not a dict; a raw ``select()`` in a test
+    body is the same defect one layer down (it is the reason this helper exists
+    instead of a repository method).
+
+    The class of defect — creative identity and creative payloads modelled as
+    name-keyed dicts rather than typed values — is what #2236 (RFC:
+    Re-engineer the creative format model on canonical format kinds) proposes to
+    remove. Fix it there, as part of the creative redesign; do not paper over the
+    next ``NoneType has no attribute 'get'`` with another ``or {}``.
+    """
     from sqlalchemy import select
 
     from src.core.database.models import Creative
 
-    _xfail_if_e2e(ctx)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
-    with db_session(ctx) as session:
+    with _readback(ctx) as session:
         creative = session.scalars(
             select(Creative).filter_by(
                 tenant_id=tenant.tenant_id,
@@ -638,12 +834,44 @@ def _assert_success_response(ctx: dict) -> None:
     assert payload_or_none(ctx) is not None, "Expected a response but got None"
 
 
+def _creative_status_values() -> frozenset[str]:
+    """The pinned CreativeStatus enum, read from the SDK rather than retyped.
+
+    sync-creatives-response.json: "Values come from CreativeStatus only
+    (processing, pending_review, approved, suspended, rejected, archived) — never
+    from CreativeAction."
+    """
+    from adcp.types.generated_poc.enums.creative_status import CreativeStatus
+
+    return frozenset(member.value for member in CreativeStatus)
+
+
+def _assert_creative_status(ctx: dict, status: str, *, why: str) -> None:
+    """The creative sits at *status* after this sync, read off the WIRE.
+
+    The wire is the authoritative observable here, not the ``creatives`` row.
+    sync-creatives-response.json (adcp 3.1.1, creative/sync-creatives-response.json)
+    defines the per-creative ``status`` as the "advisory review-lifecycle state of
+    the creative after this sync", drawn from CreativeStatus — which is exactly
+    what BR-RULE-037's approval modes decide. The row carries the same value as an
+    implementation detail of storing it.
+
+    Reading the row instead would also be unstable on the live stack for one of
+    the four modes: ai-powered hands the creative to a real background reviewer
+    that opens its own unit of work and COMMITS a new ``status`` onto the row
+    (src/admin/blueprints/creatives.py ``_ai_review_creative``), so a row read
+    after the response races that thread. The response cannot be rewritten after
+    it is sent, so the wire grades the sync's own decision and nothing else.
+    """
+    _assert_success_response(ctx)
+    entry = _wire_creatives_entry(ctx, latest_creative_id(ctx))
+    assert entry.get("status") == status, f"{why}: expected status {status!r} on the wire, got {entry.get('status')!r}"
+
+
 @then(parsers.parse('the creative status should be "{status}"'))
 def then_creative_status_should_be(ctx: dict, status: str) -> None:
-    """Assert the creative's DB status matches the expected value."""
-    _assert_success_response(ctx)
-    creative = _get_creative_from_db(ctx)
-    assert creative.status == status, f"Expected creative status '{status}', got '{creative.status}'"
+    """Assert the creative's advisory status matches the expected value."""
+    _assert_creative_status(ctx, status, why="BR-RULE-037")
 
 
 @then(parsers.parse('workflow steps created should be "{workflow}"'))
@@ -661,50 +889,60 @@ def then_workflow_steps_created(ctx: dict, workflow: str) -> None:
 @then("the creative should use require-human as default")
 def then_creative_use_require_human_default(ctx: dict) -> None:
     """Assert that when approval_mode is not configured, require-human is the default (INV-1)."""
-    _assert_success_response(ctx)
-    creative = _get_creative_from_db(ctx)
-    assert creative.status == "pending_review", (
-        f"INV-1: Default approval mode should produce 'pending_review' status, got '{creative.status}'"
-    )
+    _assert_creative_status(ctx, "pending_review", why="INV-1: default approval mode")
     _assert_workflow_steps(ctx["env"], expect_present=True)
+
+
+def _assert_slack_notified(ctx: dict, creative_ids: list[str], *, why: str) -> None:
+    """Slack was dialled for exactly *creative_ids* during this sync.
+
+    Read through ``env.slack_notified_creatives``, which is the SENDER on every
+    transport — the in-process mock of ``get_slack_notifier``, and over e2e_rest
+    the ``webhook_deliveries`` row the server's own sender leaves behind. The
+    notification STEP is not the observable: production enters
+    ``_send_creative_notifications`` for every creative needing approval and
+    decides inside it whether Slack is reached.
+
+    Naming the creatives rather than counting calls is what makes the mode
+    attributable. Production dials Slack only on the require-human branch
+    (src/core/tools/creatives/_workflow.py), so "Slack named THIS creative" is
+    already the statement that the branch under test ran, and the empty-list
+    assertions in INV-2/INV-4/INV-6 grade the same accessor.
+    """
+    _assert_success_response(ctx)
+    notified = ctx["env"].slack_notified_creatives
+    assert notified == creative_ids, f"{why}: expected Slack sends for {creative_ids}, got {notified}"
+
+
+@then(parsers.parse('the per-creative result should carry advisory status "{status}"'))
+def then_per_creative_result_carries_status(ctx: dict, status: str) -> None:
+    """The scenario's creative entry carries *status* on the wire.
+
+    sync-creatives-response.json: the per-creative ``status`` is the "advisory
+    review-lifecycle state of the creative after this sync", drawn from CreativeStatus;
+    "sellers with async review return processing or pending_review; sellers with
+    synchronous review MAY return a terminal value (approved, rejected)".
+
+    The same claim BR-RULE-037's own sentences make, so the same assertion —
+    ``_assert_creative_status`` carries the reasoning about why the wire and not
+    the row.
+    """
+    _assert_creative_status(ctx, status, why="the per-creative advisory status")
 
 
 @then("the creative status should be set to approved immediately")
 def then_creative_approved_immediately(ctx: dict) -> None:
     """Assert auto-approve sets status to approved with no workflow (INV-2)."""
-    _assert_success_response(ctx)
-    creative = _get_creative_from_db(ctx)
-    assert creative.status == "approved", (
-        f"INV-2: auto-approve should set status to 'approved', got '{creative.status}'"
-    )
+    _assert_creative_status(ctx, "approved", why="INV-2: auto-approve")
     _assert_workflow_steps(ctx["env"], expect_present=False)
 
 
 @then("a review workflow should be created with Slack notification")
 def then_review_workflow_with_slack(ctx: dict) -> None:
     """Assert require-human creates workflow + sends Slack notification (INV-3)."""
-    _assert_success_response(ctx)
-    creative = _get_creative_from_db(ctx)
-    assert creative.status == "pending_review", (
-        f"INV-3: require-human should set status to 'pending_review', got '{creative.status}'"
-    )
+    _assert_creative_status(ctx, "pending_review", why="INV-3: require-human")
     _assert_workflow_steps(ctx["env"], expect_present=True)
-    mock_notify = ctx["env"].mock.get("send_notifications")
-    assert mock_notify is not None, (
-        "send_notifications mock must be wired in CreativeSyncEnv to verify Slack notification (INV-3)"
-    )
-    mock_notify.assert_called_once_with(
-        creatives_needing_approval=ANY,
-        tenant=ANY,
-        approval_mode="require-human",
-        principal_id=ANY,
-    )
-    creative_id = ctx["creatives"][-1]["creative_id"]
-    notified_ids = {c.get("creative_id") for c in mock_notify.call_args.kwargs["creatives_needing_approval"]}
-    assert creative_id in notified_ids, (
-        f"INV-3: Slack notification should reference creative '{creative_id}', "
-        f"but notified creatives were: {notified_ids}"
-    )
+    _assert_slack_notified(ctx, [latest_creative_id(ctx)], why="INV-3: require-human + webhook configured")
 
 
 @then("a review workflow should be created with AI review")
@@ -718,29 +956,23 @@ def then_review_workflow_with_ai(ctx: dict) -> None:
       configured in the Given step produced this workflow, confirming AI review
       was triggered, not just a human publisher-approval flow)
     """
-    _assert_success_response(ctx)
-    creative = _get_creative_from_db(ctx)
-    assert creative.status == "pending_review", (
-        f"INV-4: ai-powered should set status to 'pending_review', got '{creative.status}'"
-    )
+    _assert_creative_status(ctx, "pending_review", why="INV-4: ai-powered")
     steps = _assert_workflow_steps(ctx["env"], expect_present=True)
     # Verify the workflow step references the synced creative
-    creative_id = ctx["creatives"][-1]["creative_id"]
-    env = ctx["env"]
+    creative_id = latest_creative_id(ctx)
 
     from sqlalchemy import select
 
     from src.core.database.models import ObjectWorkflowMapping
 
-    session = env.get_session()
-    assert session is not None, "No DB session to verify workflow-creative link"
-    mappings = list(
-        session.scalars(
-            select(ObjectWorkflowMapping).filter_by(
-                workflow_step_id=steps[0].step_id,
-            )
-        ).all()
-    )
+    with _readback(ctx) as session:
+        mappings = list(
+            session.scalars(
+                select(ObjectWorkflowMapping).filter_by(
+                    step_id=steps[0].step_id,
+                )
+            ).all()
+        )
     assert mappings, (
         f"INV-4: workflow step {steps[0].step_id} has no object mappings — "
         f"cannot confirm AI review targets creative {creative_id}"
@@ -748,23 +980,15 @@ def then_review_workflow_with_ai(ctx: dict) -> None:
     mapped_ids = [m.object_id for m in mappings]
     assert creative_id in mapped_ids, f"INV-4: workflow step maps to {mapped_ids}, expected creative {creative_id}"
 
-    # Verify AI-specific evidence: the step or its config should carry
-    # an AI review indicator that would NOT be present in a human-only flow
-    step = steps[0]
-    step_config = getattr(step, "config", None) or {}
-    step_metadata = getattr(step, "metadata", None) or {}
-    has_ai_indicator = (
-        step_config.get("approval_mode") == "ai-powered"
-        or step_metadata.get("approval_mode") == "ai-powered"
-        or getattr(step, "approval_mode", None) == "ai-powered"
+    # The step records the approval mode that produced it in its request_data
+    # (src/core/tools/creatives/_workflow.py), which is what distinguishes an AI-review
+    # step from a human-only one. This used to poke ``step.metadata``, which on an ORM
+    # row is SQLAlchemy's MetaData, not a column.
+    recorded_mode = (steps[0].request_data or {}).get("approval_mode")
+    assert recorded_mode == "ai-powered", (
+        f"INV-4: the workflow step records approval_mode={recorded_mode!r}; expected 'ai-powered' "
+        f"(request_data={steps[0].request_data!r})"
     )
-    if not has_ai_indicator:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: workflow step exists and maps to creative, but "
-            "does not carry an AI-specific indicator (approval_mode='ai-powered') "
-            "to distinguish from human-review. "
-            f"Step config={step_config}, metadata={step_metadata}"
-        )
 
 
 @then("a workflow step should be created for the Seller")
@@ -789,53 +1013,39 @@ def then_workflow_step_for_seller(ctx: dict) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-@given(parsers.parse('a creative with format_id "{creative_format}"'))
-def given_creative_with_specific_format(ctx: dict, creative_format: str) -> None:
-    """Build a creative payload with the specific format_id string from the scenario row.
-
-    The ``creative_format`` is the spec-compliant fully-qualified format id
-    (e.g. ``agent/banner-300x250``). It is wrapped in a FormatId dict using
-    the default agent_url so that production validation/lookup succeeds.
-    """
-    env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
-    creative_id = "creative-fmt-partition-001"
-    creative_payload = {
-        "creative_id": creative_id,
-        "name": "Test Creative (format partition)",
-        "format_id": {"id": creative_format, "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": build_assets(image_spec("image")),
-    }
-    ctx.setdefault("creatives", []).append(creative_payload)
-    ctx["creative_format_id"] = creative_format
-    ctx["creative_id"] = creative_id
-
-
 @given(parsers.parse("assignments to a package with {product_setup}"))
 def given_assignments_to_package_with_setup(ctx: dict, product_setup: str) -> None:
     """Create a media buy + package whose product matches the Gherkin setup phrase.
 
     Supported phrases (from the assignment_format partition scenario):
-      - ``product accepting agent/banner-300x250`` — product format_ids matches creative
+      - ``product accepting the creative's format`` — product format_ids matches creative
       - ``product with empty format_ids`` — no restrictions
       - ``package with no product_id`` — format check skipped entirely
-      - ``product accepting only agent/video-30s`` — format mismatch (different format)
+      - ``product accepting only a different format`` — format mismatch
+
+    The creative always carries the format its transport's agent serves (the rows used
+    to name a literal one, which the real e2e agent does not serve, so the "matches" rows
+    failed the creative before any assignment ran); only the product's set varies.
     """
     from tests.factories import MediaBuyFactory, MediaPackageFactory, ProductFactory
 
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
-    agent_url = env.DEFAULT_AGENT_URL
+    # The product declares its formats on the SAME agent the creative names, on every
+    # transport: e2e_rest's creative is served by the Docker agent, not the in-process
+    # default, and a product pinned to the default url would mismatch there on the rows
+    # that say the formats match.
+    agent_url = _scenario_format_entry(ctx, env)["agent_url"]
 
     # Create media buy for the package to belong to.
     media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
     product = None
     package_config: dict = {"budget": 1000.0}
 
-    if product_setup == "product accepting agent/banner-300x250":
-        product = ProductFactory(tenant=tenant, format_ids=[{"agent_url": agent_url, "id": "agent/banner-300x250"}])
+    if product_setup == "product accepting the creative's format":
+        product = ProductFactory(tenant=tenant, format_ids=[_scenario_format_entry(ctx, env)])
         package_config["product_id"] = product.product_id
     elif product_setup == "product with empty format_ids":
         product = ProductFactory(tenant=tenant, format_ids=[])
@@ -843,8 +1053,10 @@ def given_assignments_to_package_with_setup(ctx: dict, product_setup: str) -> No
     elif product_setup == "package with no product_id":
         # Package has no product_id — format compatibility check is skipped.
         pass
-    elif product_setup == "product accepting only agent/video-30s":
-        product = ProductFactory(tenant=tenant, format_ids=[{"agent_url": agent_url, "id": "agent/video-30s"}])
+    elif product_setup == "product accepting only a different format":
+        # Same agent, different id: identity is the (canonical agent_url, id) PAIR, so
+        # this is not a match (formerly graded on its own as BR-RULE-039 INV-2).
+        product = ProductFactory(tenant=tenant, format_ids=[{"agent_url": agent_url, "id": "video_30s"}])
         package_config["product_id"] = product.product_id
     else:
         raise ValueError(f"Unknown product_setup phrase: {product_setup!r}")
@@ -858,7 +1070,7 @@ def given_assignments_to_package_with_setup(ctx: dict, product_setup: str) -> No
     ctx["package"] = package
     ctx["product"] = product
     # assignments payload for _sync_creatives_impl: dict[creative_id -> list[package_id]]
-    creative_id = ctx.get("creative_id") or ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: [package.package_id]}
 
 
@@ -866,12 +1078,6 @@ def given_assignments_to_package_with_setup(ctx: dict, product_setup: str) -> No
 def given_validation_mode(ctx: dict, mode: str) -> None:
     """Set validation_mode on the sync_creatives request (strict or lenient)."""
     ctx["validation_mode"] = mode
-
-
-@given("no validation_mode is specified")
-def given_no_validation_mode(ctx: dict) -> None:
-    """Omit validation_mode from the request (default should be strict per spec)."""
-    ctx.pop("validation_mode", None)
 
 
 # --- 0xwq: assignment package boundary (existing pkg / existing assignment / missing pkg) ---
@@ -883,7 +1089,7 @@ def given_assignment_to_existing_package(ctx: dict) -> None:
     from tests.factories import MediaBuyFactory, MediaPackageFactory, ProductFactory
 
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
 
@@ -907,8 +1113,234 @@ def given_assignment_to_existing_package(ctx: dict) -> None:
     env._commit_factory_data()
     ctx["media_buy"] = media_buy
     ctx["package"] = package
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: [package.package_id]}
+
+
+def _seed_library_creative(ctx: dict, creative_id: str) -> None:
+    """Seed *creative_id* in the caller's own library, on the request creative's format.
+
+    An assignment-only reference: the request must still carry a creative
+    (sync-creatives-request.json: ``creatives`` minItems 1), so the scenario's anchor
+    creative stays in ``ctx["creatives"]`` and this row is the one the assignment names.
+    """
+    from tests.factories import CreativeFactory
+
+    env = ctx["env"]
+    ensure_tenant_principal(ctx, env)
+    fmt = ctx["creatives"][-1]["format_id"]
+    CreativeFactory(
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        creative_id=creative_id,
+        name="Library Creative",
+        agent_url=fmt["agent_url"],
+        format=fmt["id"],
+    )
+    env._commit_factory_data()
+
+
+@given(
+    parsers.parse(
+        'an assignment referencing the unknown creative "{creative_id}" to a package that exists in the tenant'
+    )
+)
+def given_assignment_unknown_creative_existing_package(ctx: dict, creative_id: str) -> None:
+    """The package is real; the creative_id the assignment names has no row anywhere."""
+    given_assignment_to_existing_package(ctx)
+    ctx["assignments"] = {creative_id: [ctx["package"].package_id]}
+
+
+@given(
+    parsers.parse(
+        'an assignment referencing the library creative "{creative_id}" to a package that exists in the tenant'
+    )
+)
+def given_assignment_library_creative_existing_package(ctx: dict, creative_id: str) -> None:
+    """Both ends exist: a creative already in the library, a package in the tenant."""
+    _seed_library_creative(ctx, creative_id)
+    given_assignment_to_existing_package(ctx)
+    ctx["assignments"] = {creative_id: [ctx["package"].package_id]}
+
+
+@given(parsers.parse('an assignment referencing the library creative "{creative_id}" to the package "{package_id}"'))
+def given_assignment_library_creative_named_package(ctx: dict, creative_id: str, package_id: str) -> None:
+    """The creative exists in the library; the package id is whatever the sentence says (here: none)."""
+    _seed_library_creative(ctx, creative_id)
+    ctx["assignments"] = {creative_id: [package_id]}
+
+
+@given("the creative has an empty name")
+def given_creative_has_empty_name(ctx: dict) -> None:
+    """Blank the request creative's name.
+
+    core/creative-asset.json requires ``name`` but sets no minLength, so an empty string
+    is a request the schema admits and the seller's own per-item validation refuses --
+    the same mechanism BR-RULE-033 INV-1's "one with an empty name" pair relies on.
+    """
+    ctx["creatives"][-1]["name"] = ""
+
+
+def _wire_creatives_entry(ctx: dict, creative_id: str) -> dict:
+    """The ONE ``creatives[]`` entry on the wire whose creative_id is *creative_id*."""
+    entries = wire_field(ctx, "creatives")
+    matches = [entry for entry in entries if entry.get("creative_id") == creative_id]
+    assert len(matches) == 1, (
+        f"expected exactly one creatives entry for {creative_id!r} on the wire, found {len(matches)} "
+        f"among {[entry.get('creative_id') for entry in entries]}"
+    )
+    return matches[0]
+
+
+@then(parsers.parse('the creatives entry for "{creative_id}" is assigned to the package'))
+def then_creatives_entry_assigned_to_package(ctx: dict, creative_id: str) -> None:
+    """The wire entry selected by creative_id names the scenario's package in ``assigned_to``."""
+    entry = _wire_creatives_entry(ctx, creative_id)
+    expected = [ctx["package"].package_id]
+    assert entry.get("assigned_to") == expected, (
+        f"expected the entry for {creative_id!r} to carry assigned_to={expected}, got {entry.get('assigned_to')!r}"
+    )
+
+
+@then(parsers.parse('the creatives entry for "{creative_id}" reports the package as an assignment error'))
+def then_creatives_entry_reports_package_assignment_error(ctx: dict, creative_id: str) -> None:
+    """The entry names the scenario's package in ``assignment_errors`` and assigns nothing.
+
+    Both halves matter: ``assignment_errors`` keyed by the package is the report the
+    response schema defines for a skipped assignment, and an empty ``assigned_to`` is
+    what proves it was skipped rather than attempted (GH #1418: the attempt was an FK
+    violation surfacing as a 500).
+    """
+    entry = _wire_creatives_entry(ctx, creative_id)
+    package_id = ctx["package"].package_id
+    assignment_errors = entry.get("assignment_errors") or {}
+    assert package_id in assignment_errors, (
+        f"expected assignment_errors on the entry for {creative_id!r} to name {package_id!r}, got {assignment_errors!r}"
+    )
+    assert not entry.get("assigned_to"), (
+        f"a creative that failed validation must not be assigned, but the entry carries assigned_to={entry.get('assigned_to')!r}"
+    )
+
+
+def _seed_absent_library_creative(ctx: dict) -> str:
+    """A creative already in the library that the request will NOT mention.
+
+    It is the observable subject of delete_missing: a full-library replace archives
+    it and reports ``deleted``; every other scope leaves it out of the response.
+    """
+    env = ctx["env"]
+    ensure_tenant_principal(ctx, env)
+    fmt = ctx["creatives"][-1]["format_id"]
+    absent_id = "creative-absent-from-request-001"
+    CreativeFactory(
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        creative_id=absent_id,
+        name="Absent From Request",
+        agent_url=fmt["agent_url"],
+        format=fmt["id"],
+    )
+    env._commit_factory_data()
+    ctx["absent_creative_id"] = absent_id
+    return absent_id
+
+
+def _scope_request(ctx: dict, *, delete_missing: bool | None, filtered: bool) -> None:
+    """One request creative plus an absent library creative, then the scope flags.
+
+    creative/sync-creatives-request.json: ``delete_missing`` archives creatives not in
+    this sync ("Invalid when creative_ids is provided"); ``creative_ids`` limits the
+    sync to those ids, minItems 1. The filtered scope names the request's own creative
+    and a second one that is deliberately NOT in the filter, so "scoped to the subset"
+    has something to leave out.
+    """
+    given_creative_with_format(ctx)
+    _seed_absent_library_creative(ctx)
+    if filtered:
+        env = ctx["env"]
+        format_id, agent_url, assets = _format_payload(ctx, env)
+        ctx["creatives"].append(
+            CreativeAssetRequestFactory.payload(
+                creative_id="creative-outside-filter-001",
+                name="Outside The Filter",
+                format_id={"id": format_id, "agent_url": agent_url},
+                assets=assets,
+            )
+        )
+        ctx["creative_ids"] = [ctx["creatives"][0]["creative_id"]]
+    if delete_missing is not None:
+        ctx["delete_missing"] = delete_missing
+
+
+_SCOPE_SETUPS: dict[str, dict[str, Any]] = {
+    "delete_missing true and no creative_ids filter": {"delete_missing": True, "filtered": False},
+    "delete_missing false and no creative_ids filter": {"delete_missing": False, "filtered": False},
+    "neither delete_missing nor creative_ids provided": {"delete_missing": None, "filtered": False},
+    "a creative_ids filter and no delete_missing flag": {"delete_missing": None, "filtered": True},
+    "delete_missing true together with a creative_ids filter": {"delete_missing": True, "filtered": True},
+}
+
+
+@given(parsers.parse("a sync request whose scope is {scope_setup}"))
+def given_sync_request_scope(ctx: dict, scope_setup: str) -> None:
+    _scope_request(ctx, **_SCOPE_SETUPS[scope_setup])
+
+
+@given("a sync request with both creative_ids filter and delete_missing set to true")
+def given_sync_request_delete_missing_with_filter(ctx: dict) -> None:
+    _scope_request(ctx, delete_missing=True, filtered=True)
+
+
+@then("the request should proceed as a full-library replace")
+def then_full_library_replace(ctx: dict) -> None:
+    """The creative the request did not mention comes back ``deleted``."""
+    entry = _wire_creatives_entry(ctx, ctx["absent_creative_id"])
+    assert entry.get("action") == "deleted", (
+        f"delete_missing without a filter archives the whole library's absentees; the absent "
+        f"creative's entry says {entry.get('action')!r}"
+    )
+
+
+@then("the request should proceed and leave absent creatives unchanged")
+def then_absent_creatives_untouched(ctx: dict) -> None:
+    """No entry for the creative the request did not mention, and nothing ``deleted``."""
+    entries = wire_field(ctx, "creatives")
+    ids = [entry.get("creative_id") for entry in entries]
+    assert ctx["absent_creative_id"] not in ids, (
+        f"without delete_missing the sync must not touch a creative it did not mention, but the "
+        f"response carries an entry for it: {ids}"
+    )
+    assert all(entry.get("action") != "deleted" for entry in entries), (
+        f"nothing may be archived without delete_missing, got actions {[e.get('action') for e in entries]}"
+    )
+
+
+@then("the request should proceed scoped to the filtered subset")
+def then_scoped_to_filter(ctx: dict) -> None:
+    """Only the filtered ids are processed: the unfiltered request creative is absent."""
+    ids = sorted(entry.get("creative_id") for entry in wire_field(ctx, "creatives"))
+    assert ids == sorted(ctx["creative_ids"]), (
+        f"creative_ids limits the sync to {ctx['creative_ids']}, but the response processed {ids}"
+    )
+
+
+@then("the incompatible package should be reported in assignment_errors")
+def then_incompatible_package_in_assignment_errors(ctx: dict) -> None:
+    entry = _wire_creatives_entry(ctx, latest_creative_id(ctx))
+    incompatible = ctx["incompatible_package"].package_id
+    assert incompatible in (entry.get("assignment_errors") or {}), (
+        f"lenient mode records the format mismatch on the entry's assignment_errors keyed by "
+        f"{incompatible!r}, got {entry.get('assignment_errors')!r}"
+    )
+
+
+@then("processing should continue without aborting")
+def then_processing_continues(ctx: dict) -> None:
+    """Lenient mode: the request succeeds and the creative itself is synced."""
+    entry = _wire_creatives_entry(ctx, latest_creative_id(ctx))
+    assert entry.get("action") in ("created", "updated"), (
+        f"lenient mode must not abort on one failed assignment; the creative's entry says {entry.get('action')!r}"
+    )
 
 
 @given("an assignment that already exists for this creative")
@@ -923,7 +1355,7 @@ def given_assignment_already_exists(ctx: dict) -> None:
     )
 
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
     fmt_entry = _product_format_entry(ctx, env)
@@ -974,9 +1406,9 @@ def given_assignment_already_exists(ctx: dict) -> None:
 def given_assignment_to_missing_package(ctx: dict) -> None:
     """Reference a package_id that does NOT exist anywhere in the tenant."""
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     env._commit_factory_data()
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: ["pkg-does-not-exist-404"]}
     # Strict mode triggers AdCPNotFoundError with recovery='correctable'.
     ctx.setdefault("validation_mode", "strict")
@@ -1003,7 +1435,7 @@ def given_creative_already_assigned_to_package(ctx: dict) -> None:
     )
 
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
     agent_url = env.DEFAULT_AGENT_URL
@@ -1013,7 +1445,7 @@ def given_creative_already_assigned_to_package(ctx: dict) -> None:
         given_creative_with_format(ctx)
 
     media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
-    product = ProductFactory(tenant=tenant, format_ids=[{"agent_url": agent_url, "id": "display_300x250"}])
+    product = ProductFactory(tenant=tenant, format_ids=[_product_format_entry(ctx, env)])
     package = MediaPackageFactory(
         media_buy=media_buy,
         package_config={"product_id": product.product_id, "budget": 1000.0},
@@ -1026,8 +1458,8 @@ def given_creative_already_assigned_to_package(ctx: dict) -> None:
         principal=principal,
         creative_id=creative_id,
         name=creative_payload["name"],
-        agent_url=agent_url,
-        format="display_300x250",
+        agent_url=_scenario_format_entry(ctx, env)["agent_url"],
+        format=_scenario_format_entry(ctx, env)["id"],
     )
     existing_assignment = CreativeAssignmentFactory(
         creative=creative,
@@ -1053,7 +1485,7 @@ def given_assignments_referencing_same_package(ctx: dict) -> None:
     dict to reference the same package_id for idempotent upsert.
     """
     package_id = ctx["idempotent_package_id"]
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: [package_id]}
 
 
@@ -1069,17 +1501,16 @@ def given_package_in_different_tenant(ctx: dict) -> None:
     from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory, ProductFactory, TenantFactory
 
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
 
     # Ensure a creative payload exists
     if not ctx.get("creatives"):
         given_creative_with_format(ctx)
 
-    agent_url = env.DEFAULT_AGENT_URL
     other_tenant = TenantFactory(tenant_id="other_tenant_xtz", subdomain="other_xtz")
     other_principal = PrincipalFactory(tenant=other_tenant, principal_id="other_principal_xtz")
     other_buy = MediaBuyFactory(tenant=other_tenant, principal=other_principal, status="active")
-    other_product = ProductFactory(tenant=other_tenant, format_ids=[{"agent_url": agent_url, "id": "display_300x250"}])
+    other_product = ProductFactory(tenant=other_tenant, format_ids=[_product_format_entry(ctx, env)])
     other_package = MediaPackageFactory(
         media_buy=other_buy,
         package_config={"product_id": other_product.product_id, "budget": 1000.0},
@@ -1095,7 +1526,7 @@ def given_assignments_referencing_that_package(ctx: dict) -> None:
     Uses the package_id stored by 'a package exists in a different tenant'.
     """
     package_id = ctx["cross_tenant_package_id"]
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: [package_id]}
 
 
@@ -1106,7 +1537,6 @@ def given_assignments_referencing_that_package(ctx: dict) -> None:
 def given_no_assignments_field(ctx: dict) -> None:
     """Explicitly omit the assignments field from the request (absent path)."""
     ctx.pop("assignments", None)
-    ctx["assignments_absent"] = True
 
 
 @given("an empty assignments array")
@@ -1118,7 +1548,6 @@ def given_empty_assignments_array(ctx: dict) -> None:
     xfails with SPEC-PRODUCTION GAP reason when production does not raise.
     """
     ctx["assignments"] = {}
-    ctx["assignments_empty"] = True
 
 
 @given(parsers.parse('an assignment with creative_id "{creative_id}" and package_id "{package_id}"'))
@@ -1133,13 +1562,12 @@ def given_assignment_with_ids(ctx: dict, creative_id: str, package_id: str) -> N
     from tests.factories import MediaBuyFactory, MediaPackageFactory, ProductFactory
 
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
-    agent_url = env.DEFAULT_AGENT_URL
 
     media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
-    product = ProductFactory(tenant=tenant, format_ids=[{"agent_url": agent_url, "id": "display_300x250"}])
+    product = ProductFactory(tenant=tenant, format_ids=[_product_format_entry(ctx, env)])
     package = MediaPackageFactory(
         media_buy=media_buy,
         package_id=package_id,
@@ -1149,66 +1577,47 @@ def given_assignment_with_ids(ctx: dict, creative_id: str, package_id: str) -> N
     ctx["media_buy"] = media_buy
     ctx["package"] = package
     # Use the real creative_id from the payload (the "c1" label is symbolic).
-    real_creative_id = ctx["creatives"][-1]["creative_id"]
+    real_creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {real_creative_id: [package.package_id]}
 
 
 @given("an assignment entry with only package_id")
 def given_assignment_entry_missing_creative_id(ctx: dict) -> None:
-    """Attempt to submit an assignment missing creative_id.
+    """An assignments[] entry that omits creative_id.
 
-    Production takes ``assignments`` as ``dict[creative_id -> list[package_id]]``
-    and has no way to express an entry without a creative_id. The spec requires
-    error ``ASSIGNMENT_CREATIVE_ID_REQUIRED``. We mark this as a SPEC-PRODUCTION
-    GAP in the Then step.
+    sync-creatives-request.json requires creative_id and package_id on every entry, so
+    the request is refused as a schema violation. Sent as a raw entry: the ctx map is
+    keyed by creative_id and cannot leave it out.
     """
-    # Best-effort: encode the spec shape by using empty-string creative_id as
-    # the "missing" marker. Production will see an unknown creative and/or a
-    # package lookup but not raise the spec-required error code.
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     from tests.factories import MediaBuyFactory, MediaPackageFactory
 
     tenant = ctx["tenant"]
     principal = ctx["principal"]
     media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
-    package = MediaPackageFactory(media_buy=media_buy)
+    package = MediaPackageFactory(media_buy=media_buy, package_id=_e2e_unique_id("pkg"))
     env._commit_factory_data()
-    ctx["assignments"] = {"": [package.package_id]}
-    ctx["assignment_missing_creative_id"] = True
+    ctx["assignment_entries"] = [{"package_id": package.package_id}]
 
 
 @given("an assignment entry with only creative_id")
 def given_assignment_entry_missing_package_id(ctx: dict) -> None:
-    """Attempt to submit an assignment missing package_id.
-
-    Production's ``dict[creative_id -> list[package_id]]`` shape has no way to
-    encode "creative_id without package_id" — an empty list means "no packages".
-    Spec requires error ``ASSIGNMENT_PACKAGE_ID_REQUIRED``. Marked as SPEC-
-    PRODUCTION GAP in the Then step.
-    """
-    creative_id = ctx["creatives"][-1]["creative_id"]
-    ctx["assignments"] = {creative_id: []}
-    ctx["assignment_missing_package_id"] = True
+    """An assignments[] entry that omits package_id (see the sibling above)."""
+    ctx["assignment_entries"] = [{"creative_id": latest_creative_id(ctx)}]
 
 
 @given("an assignment with weight 0")
 def given_assignment_with_weight_zero(ctx: dict) -> None:
-    """Spec: weight=0 → paused assignment. Production currently hard-codes weight=100.
-
-    There is no way to express per-assignment weight in the current
-    ``dict[creative_id -> list[package_id]]`` shape, so this is a SPEC-PRODUCTION
-    GAP in the Then step.
-    """
+    """assignments[].weight 0: "assigned but paused (receives no delivery)" (the pin)."""
     from tests.factories import MediaBuyFactory, MediaPackageFactory, ProductFactory
 
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
-    agent_url = env.DEFAULT_AGENT_URL
     media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
-    product = ProductFactory(tenant=tenant, format_ids=[{"agent_url": agent_url, "id": "display_300x250"}])
+    product = ProductFactory(tenant=tenant, format_ids=[_product_format_entry(ctx, env)])
     package = MediaPackageFactory(
         media_buy=media_buy,
         package_config={"product_id": product.product_id, "budget": 1000.0},
@@ -1216,27 +1625,22 @@ def given_assignment_with_weight_zero(ctx: dict) -> None:
     env._commit_factory_data()
     ctx["media_buy"] = media_buy
     ctx["package"] = package
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: [package.package_id]}
-    ctx["assignment_weight_zero"] = True
+    _ask_assignment_terms(ctx, creative_id, package.package_id, weight=0)
 
 
 @given('an assignment with placement_ids ["slot_a"]')
 def given_assignment_with_placement_ids(ctx: dict) -> None:
-    """Spec: assignments carry placement_ids for sub-package targeting.
-
-    Production's ``dict[creative_id -> list[package_id]]`` shape does not
-    include placement_ids. SPEC-PRODUCTION GAP in the Then step.
-    """
+    """assignments[].placement_ids: "Restrict this creative to specific placements" (the pin)."""
     from tests.factories import MediaBuyFactory, MediaPackageFactory, ProductFactory
 
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
-    agent_url = env.DEFAULT_AGENT_URL
     media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
-    product = ProductFactory(tenant=tenant, format_ids=[{"agent_url": agent_url, "id": "display_300x250"}])
+    product = ProductFactory(tenant=tenant, format_ids=[_product_format_entry(ctx, env)])
     package = MediaPackageFactory(
         media_buy=media_buy,
         package_config={"product_id": product.product_id, "budget": 1000.0},
@@ -1244,9 +1648,9 @@ def given_assignment_with_placement_ids(ctx: dict) -> None:
     env._commit_factory_data()
     ctx["media_buy"] = media_buy
     ctx["package"] = package
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: [package.package_id]}
-    ctx["assignment_placement_ids"] = ["slot_a"]
+    _ask_assignment_terms(ctx, creative_id, package.package_id, placement_ids=["slot_a"])
 
 
 # --- 5o9e: assignment-basic Given steps (package_id+weight, multi-package, duplicate, missing fields) ---
@@ -1266,7 +1670,7 @@ def _setup_assignment_package(
     from tests.factories import MediaBuyFactory, MediaPackageFactory, ProductFactory
 
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
 
@@ -1298,31 +1702,15 @@ def _setup_assignment_package(
 def given_assignment_with_package_and_weight(ctx: dict, package_id: str, weight: str) -> None:
     """Set up an assignment with a specific package_id and optional weight.
 
-    Handles both ``weight 50`` (explicit int) and ``weight `` (empty = absent).
-    Production's ``dict[creative_id -> list[package_id]]`` shape has no way to
-    express per-assignment weight, so we store the requested weight in
-    ``ctx["assignment_requested_weight"]`` for the Then step to xfail on.
+    Handles both ``weight 50`` (explicit int) and ``weight `` (empty = the field omitted,
+    which the pin defines as equal rotation).
     """
     _media_buy, package = _setup_assignment_package(ctx, package_id=package_id)
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: [package.package_id]}
     weight_stripped = weight.strip()
     if weight_stripped:
-        ctx["assignment_requested_weight"] = int(weight_stripped)
-    else:
-        ctx["assignment_requested_weight"] = None  # absent → equal rotation
-
-
-@given(parsers.parse('an assignment with package_id "{package_id}" and no weight specified'))
-def given_assignment_with_package_no_weight(ctx: dict, package_id: str) -> None:
-    """Set up an assignment with no weight (spec: equal rotation default).
-
-    Production hard-codes weight=100 so this is a SPEC-PRODUCTION GAP in Then.
-    """
-    _media_buy, package = _setup_assignment_package(ctx, package_id=package_id)
-    creative_id = ctx["creatives"][-1]["creative_id"]
-    ctx["assignments"] = {creative_id: [package.package_id]}
-    ctx["assignment_requested_weight"] = None  # absent → equal rotation
+        _ask_assignment_terms(ctx, creative_id, package.package_id, weight=int(weight_stripped))
 
 
 @given("assignments mapping the creative to valid package_ids")
@@ -1331,15 +1719,14 @@ def given_assignments_mapping_creative_to_valid_packages(ctx: dict) -> None:
     from tests.factories import MediaBuyFactory, MediaPackageFactory, ProductFactory
 
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
-    agent_url = env.DEFAULT_AGENT_URL
 
     media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
     product = ProductFactory(
         tenant=tenant,
-        format_ids=[{"agent_url": agent_url, "id": "display_300x250"}],
+        format_ids=[_product_format_entry(ctx, env)],
     )
     pkg1 = MediaPackageFactory(
         media_buy=media_buy,
@@ -1353,7 +1740,7 @@ def given_assignments_mapping_creative_to_valid_packages(ctx: dict) -> None:
     )
     env._commit_factory_data()
     ctx["media_buy"] = media_buy
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: [pkg1.package_id, pkg2.package_id]}
 
 
@@ -1367,15 +1754,14 @@ def given_assignments_mapping_creative_to_two_packages(ctx: dict, creative_id: s
     from tests.factories import MediaBuyFactory, MediaPackageFactory, ProductFactory
 
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
-    agent_url = env.DEFAULT_AGENT_URL
 
     media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
     product = ProductFactory(
         tenant=tenant,
-        format_ids=[{"agent_url": agent_url, "id": "display_300x250"}],
+        format_ids=[_product_format_entry(ctx, env)],
     )
     package1 = MediaPackageFactory(
         media_buy=media_buy,
@@ -1389,7 +1775,7 @@ def given_assignments_mapping_creative_to_two_packages(ctx: dict, creative_id: s
     )
     env._commit_factory_data()
     ctx["media_buy"] = media_buy
-    real_creative_id = ctx["creatives"][-1]["creative_id"]
+    real_creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {real_creative_id: [package1.package_id, package2.package_id]}
 
 
@@ -1397,11 +1783,10 @@ def given_assignments_mapping_creative_to_two_packages(ctx: dict, creative_id: s
 def given_two_assignment_entries_same_ids(ctx: dict) -> None:
     """Submit duplicate (creative_id, package_id) pair — spec expects idempotent upsert."""
     _media_buy, package = _setup_assignment_package(ctx)
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     # The assignments dict shape (creative_id → [pkg_ids]) naturally deduplicates,
     # so we store a flag for the When step to send the duplicate explicitly.
     ctx["assignments"] = {creative_id: [package.package_id, package.package_id]}
-    ctx["assignment_duplicate_pair"] = True
 
 
 @given(
@@ -1411,12 +1796,11 @@ def given_assignment_with_ids_and_weight(ctx: dict, creative_id: str, package_id
     """Set up an assignment with explicit creative_id, package_id, and weight.
 
     The ``creative_id`` label is symbolic (scenario outline placeholder).
-    Production cannot express per-assignment weight — SPEC-PRODUCTION GAP.
     """
     _media_buy, package = _setup_assignment_package(ctx, package_id=package_id)
-    real_creative_id = ctx["creatives"][-1]["creative_id"]
+    real_creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {real_creative_id: [package.package_id]}
-    ctx["assignment_requested_weight"] = weight
+    _ask_assignment_terms(ctx, real_creative_id, package.package_id, weight=weight)
 
 
 @given(
@@ -1425,14 +1809,11 @@ def given_assignment_with_ids_and_weight(ctx: dict, creative_id: str, package_id
     )
 )
 def given_assignment_with_ids_and_placement(ctx: dict, creative_id: str, package_id: str, placement_ids: str) -> None:
-    """Set up an assignment with explicit creative_id, package_id, and placement_ids.
-
-    Production's dict shape has no way to express placement_ids — SPEC-PRODUCTION GAP.
-    """
+    """Set up an assignment with explicit creative_id, package_id, and placement_ids."""
     _media_buy, package = _setup_assignment_package(ctx, package_id=package_id)
-    real_creative_id = ctx["creatives"][-1]["creative_id"]
+    real_creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {real_creative_id: [package.package_id]}
-    ctx["assignment_placement_ids"] = json.loads(placement_ids)
+    _ask_assignment_terms(ctx, real_creative_id, package.package_id, placement_ids=json.loads(placement_ids))
 
 
 @given("an assignment entry missing creative_id")
@@ -1466,8 +1847,13 @@ def _get_assignment_from_db(ctx: dict) -> object:
 
     Performs the lookup and existence assertions shared by assignment
     outcome steps: success (no error), the package present in assigned_to,
-    e2e xfail guard, then a tenant/creative/package-scoped DB lookup that is
-    asserted to exist. Callers add their own divergent attribute checks.
+    then a tenant/creative/package-scoped DB lookup that is asserted to exist.
+    Callers add their own divergent attribute checks.
+
+    The row is the only observable for the assignment's own attributes:
+    sync-creatives-response.json puts the package ids in ``assigned_to`` and the
+    per-package failures in ``assignment_errors``, and carries neither ``weight``
+    nor ``placement_ids`` on the wire at all.
     """
     from sqlalchemy import select
 
@@ -1478,10 +1864,9 @@ def _get_assignment_from_db(ctx: dict) -> object:
     expected_pkg = ctx["package"].package_id
     assert expected_pkg in assigned, f"Expected {expected_pkg!r} in assigned_to, got {assigned}"
 
-    _xfail_if_e2e(ctx)
     tenant_id = ctx["tenant"].tenant_id
-    creative_id = ctx["creatives"][-1]["creative_id"]
-    with db_session(ctx) as session:
+    creative_id = latest_creative_id(ctx)
+    with _readback(ctx) as session:
         assignment = session.scalars(
             select(CreativeAssignment).filter_by(
                 tenant_id=tenant_id,
@@ -1491,120 +1876,6 @@ def _get_assignment_from_db(ctx: dict) -> object:
         ).first()
         assert assignment is not None, f"No CreativeAssignment found for creative={creative_id}, package={expected_pkg}"
         return assignment
-
-
-def _assert_per_creative_failure(ctx: dict, expected_code: str) -> None:
-    """Assert a per-creative failure with the expected error code.
-
-    Checks SyncCreativeResult.action=="failed" first, then falls back to ctx["error"].
-    """
-    from src.core.exceptions import AdCPError
-
-    resp = payload_or_none(ctx)
-    error = ctx.get("error")
-    if resp is not None:
-        results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
-        for r in results:
-            action_str = str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None)))
-            if action_str == "failed":
-                errs = getattr(r, "errors", None) or []
-                if errs:
-                    inferred = _infer_error_code_from_message(str(errs[0]))
-                    if inferred == expected_code:
-                        return
-                    pytest.xfail(
-                        f"SPEC-PRODUCTION GAP: expected {expected_code}, inferred '{inferred}' "
-                        f"from error message: {errs[0]}"
-                    )
-    if error is not None:
-        if isinstance(error, AdCPError) and error.error_code == expected_code:
-            return
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected {expected_code}, got "
-            f"{type(error).__name__}(code={getattr(error, 'error_code', '?')}): {error}"
-        )
-    pytest.xfail(f"SPEC-PRODUCTION GAP: expected {expected_code} but no error occurred. Response: {resp}")
-
-
-@then(parsers.parse('the result should be "{outcome}"'))
-def then_uc006_result_should_be(ctx: dict, outcome: str) -> None:
-    """Assert outcome for UC-006 assignment-format partition scenarios.
-
-    Known outcomes: ``assignment created`` (success + assigned_to populated)
-    and ``FORMAT_MISMATCH`` (AdCPValidationError).
-
-    SPEC-PRODUCTION GAP (all rows): The spec format ids ``agent/banner-300x250``
-    and ``agent/video-30s`` use ``/`` to separate agent namespace from format
-    name. Production's FormatId.id field enforces pattern ``^[a-zA-Z0-9_-]+$``
-    (no ``/`` allowed), so Creative validation fails before any assignment
-    processing. The failed creative has no DB row, yet assignment processing
-    still fires and raises sqlalchemy ForeignKeyViolation. This is a pydantic-
-    schema / production limitation, not a behavioral defect in assignment logic.
-    """
-    import pytest
-    from sqlalchemy.exc import IntegrityError
-
-    from src.core.exceptions import AdCPError
-
-    # Common pre-check: spec format ids with '/' cannot round-trip through
-    # production's FormatId pattern. Surface as SPEC-PRODUCTION GAP.
-    err = ctx.get("error")
-    if isinstance(err, IntegrityError) and "creative_assignments" in str(err) and "is not present in table" in str(err):
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: spec format id 'agent/<name>' contains '/', which violates "
-            "production's FormatId.id pattern ^[a-zA-Z0-9_-]+$. Creative validation fails, "
-            "no creative row is persisted, and assignment processing then raises FK violation."
-        )
-    # MCP's TypeAdapter rejects the format_id at the transport boundary (before
-    # reaching _impl) with a pattern-mismatch ToolError — same underlying gap.
-    if err is not None and "format_id.id" in str(err) and "string_pattern_mismatch" in str(err):
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: spec format id 'agent/<name>' rejected by MCP/transport "
-            "boundary validation — FormatId.id pattern is ^[a-zA-Z0-9_-]+$ in adcp library schema."
-        )
-
-    if outcome == "assignment created":
-        assert err is None, f"Expected 'assignment created' but got {type(err).__name__}: {err}"
-        assigned = _get_creative_assigned_to(ctx)
-        expected_pkg_id = ctx["package"].package_id
-        assert expected_pkg_id in assigned, f"Expected package {expected_pkg_id!r} in assigned_to but got {assigned}"
-    elif outcome == "FORMAT_MISMATCH":
-        assert err is not None, (
-            f"Expected FORMAT_MISMATCH error but production succeeded. Response: {payload_or_none(ctx)}"
-        )
-        assert isinstance(err, AdCPError), f"Expected AdCPError for FORMAT_MISMATCH, got {type(err).__name__}: {err}"
-        msg = str(err).lower()
-        assert "format" in msg and ("not supported" in msg or "mismatch" in msg), (
-            f"Expected format-mismatch indication in error, got: {err}"
-        )
-    elif outcome in ("success", "success (no agent validation)"):
-        assert err is None, f"Expected '{outcome}' but production raised {type(err).__name__}: {err}"
-        assert payload_or_none(ctx) is not None, f"Expected a response for '{outcome}'"
-    elif outcome in (
-        "CREATIVE_FORMAT_REQUIRED",
-        "CREATIVE_FORMAT_UNKNOWN",
-        "CREATIVE_AGENT_UNREACHABLE",
-        "CREATIVE_NAME_EMPTY",
-        "CREATIVE_GEMINI_KEY_MISSING",
-    ):
-        _assert_per_creative_failure(ctx, outcome)
-    elif outcome == "assignment updated":
-        assert err is None, (
-            f"Expected 'assignment updated' (idempotent upsert) but production raised {type(err).__name__}: {err}"
-        )
-        assigned = _get_creative_assigned_to(ctx)
-        expected_pkg_id = ctx["package"].package_id
-        assert expected_pkg_id in assigned, (
-            f"Expected package {expected_pkg_id!r} in assigned_to after update, got {assigned}"
-        )
-    elif outcome == "standard processing":
-        _assert_standard_processing(ctx)
-    elif outcome == "generative build with prompt":
-        _assert_generative_build(ctx, prompt_source="assets")
-    elif outcome == "generative build with name":
-        _assert_generative_build(ctx, prompt_source="name_fallback")
-    else:
-        raise ValueError(f"Unknown UC-006 outcome: {outcome!r}")
 
 
 @then("the assignment should be created successfully")
@@ -1632,37 +1903,9 @@ def then_both_assignments_created(ctx: dict) -> None:
 
 @then(parsers.parse("the assignment should be created with weight {weight:d}"))
 def then_assignment_created_with_weight(ctx: dict, weight: int) -> None:
-    """Assert the assignment was created with the specified weight.
-
-    Production hard-codes weight=100 on all new assignments and has no API
-    surface for per-entry weight. SPEC-PRODUCTION GAP when weight != 100.
-    """
-    assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
-    assigned = _get_creative_assigned_to(ctx)
-    expected_pkg = ctx["package"].package_id
-    assert expected_pkg in assigned, f"Expected {expected_pkg!r} in assigned_to, got {assigned}"
-    # Production hard-codes weight=100 — verify the weight in the DB
-    from sqlalchemy import select
-
-    from src.core.database.models import CreativeAssignment
-
-    tenant_id = ctx["tenant"].tenant_id
-    creative_id = ctx["creatives"][-1]["creative_id"]
-    with db_session(ctx) as session:
-        assignment = session.scalars(
-            select(CreativeAssignment).filter_by(
-                tenant_id=tenant_id,
-                creative_id=creative_id,
-                package_id=expected_pkg,
-            )
-        ).first()
-        assert assignment is not None, f"No CreativeAssignment found for creative={creative_id}, package={expected_pkg}"
-        if assignment.weight != weight:
-            pytest.xfail(
-                f"SPEC-PRODUCTION GAP: Per-assignment weight not supported. "
-                f"Expected weight={weight}, got weight={assignment.weight}. "
-                f"Production hard-codes weight=100 on create."
-            )
+    """The persisted assignment carries the weight the entry asked for (assignments[].weight)."""
+    assignment = _get_assignment_from_db(ctx)
+    assert assignment.weight == weight, f"Expected assignment weight {weight}, got {assignment.weight}"
 
 
 @then("the existing assignment should be updated")
@@ -1699,16 +1942,14 @@ def then_existing_assignment_updated_not_duplicated(ctx: dict) -> None:
     from src.core.database.models import CreativeAssignment
 
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: idempotent upsert should succeed, "
-            f"but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: idempotent upsert should succeed, but production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
 
     assignment_id = ctx["existing_assignment_id"]
     tenant_id = ctx["tenant"].tenant_id
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     package_id = ctx["idempotent_package_id"]
     with db_session(ctx) as session:
         # Check no duplicate rows
@@ -1779,26 +2020,18 @@ def then_no_assignment_processing(ctx: dict) -> None:
     for r in resp.creatives:
         assigned = r.assigned_to or []
         assert not assigned, (
-            f"Expected no assignments processed (ctx.assignments_absent=True), "
+            f"Expected no assignments processed (the request omitted the assignments field), "
             f"but SyncCreativeResult({r.creative_id}).assigned_to={assigned}"
         )
 
 
 @then("the assignment should be created as paused")
 def then_assignment_created_as_paused(ctx: dict) -> None:
-    """Spec: weight=0 assignment is paused (weight persisted as 0).
-
-    Production hard-codes weight=100 on all new assignments and has no API
-    surface for per-entry weight. SPEC-PRODUCTION GAP on weight only.
-    """
+    """assignments[].weight 0 is "assigned but paused (receives no delivery)": persisted as 0."""
     assignment = _get_assignment_from_db(ctx)
-    # Xfail ONLY the specific unimplemented claim
-    if assignment.weight != 0:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: Per-assignment weight (weight=0 → paused) is not supported. "
-            f"Expected weight=0, got weight={assignment.weight}. "
-            "Production hard-codes weight=100 on create."
-        )
+    assert assignment.weight == 0, (
+        f"weight=0 means assigned but PAUSED (pinned 3.1 assignments[].weight); got {assignment.weight}"
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1819,16 +2052,23 @@ def given_creative_with_unknown_format(ctx: dict) -> None:
     from unittest.mock import AsyncMock
 
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
 
     format_id = "nonexistent_format_999"
     creative_id = "creative-unknown-fmt-001"
-    creative_payload = {
-        "creative_id": creative_id,
-        "name": "Unknown Format Creative",
-        "format_id": {"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": build_assets(image_spec("image")),
-    }
+    # The transport's REAL agent, asked for an id it does not serve: on e2e_rest the
+    # Docker agent answers its catalog and the id is simply absent. A made-up agent host
+    # fails the egress gate's DNS lookup first, which is a VALIDATION_ERROR on agent_url
+    # -- a different defect from an unknown format.
+    _default_id, agent_url, _assets = _format_payload(ctx, env)
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id=creative_id,
+        name="Unknown Format Creative",
+        # Well-formed but unknown: the pin ACCEPTS this id (it satisfies
+        # FormatId.id's pattern), so the wrongness is a registry miss downstream
+        # and there is nothing here to declare malformed.
+        format_id={"id": format_id, "agent_url": agent_url},
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
 
@@ -1848,95 +2088,56 @@ def given_creative_with_unreachable_agent(ctx: dict) -> None:
     from unittest.mock import AsyncMock
 
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
 
-    format_id = "display_300x250"
+    format_id, _, _ = _format_payload(ctx, env)
     creative_id = "creative-unreachable-001"
-    creative_payload = {
-        "creative_id": creative_id,
-        "name": "Unreachable Agent Creative",
-        "format_id": {"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": build_assets(image_spec("image")),
-    }
+    # In-process the mock below is what does not answer; on e2e_rest the wire itself
+    # must, so the creative names a resolvable agent at a closed port.
+    agent_url = _E2E_UNREACHABLE_AGENT_URL if is_e2e(ctx) else env.DEFAULT_AGENT_URL
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id=creative_id,
+        name="Unreachable Agent Creative",
+        format_id={"id": format_id, "agent_url": agent_url},
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
 
+    # What the registry actually raises when the agent does not answer: the egress
+    # seam types every undelivered request as OutboundDeliveryFailed, which IS an
+    # AdCPServiceUnavailableError, and _processing.py re-raises it as the request's
+    # answer (SERVICE_UNAVAILABLE, transient). A raw ConnectionError modelled a leak
+    # production's registry never has, and landed in the generic per-item branch.
+    from src.core.security.egress.attempts import OutboundDeliveryFailed
+
     registry = env.mock["registry"].return_value
-    registry.get_format = AsyncMock(
-        side_effect=ConnectionError(f"Connection refused to {env.DEFAULT_AGENT_URL}"),
-    )
+    registry.get_format = AsyncMock(side_effect=OutboundDeliveryFailed(attempts=1, http_status=None))
 
 
-@given("the request has an empty principal_id")
-def given_request_empty_principal_id(ctx: dict) -> None:
-    """Buyer presents an identity whose principal_id is the empty string.
-
-    Distinct from 'no authentication credentials' (identity=None entirely):
-    here the identity resolves but principal_id is empty, which
-    _sync_creatives_impl rejects via ``if not principal_id`` before any DB
-    or adapter work.
-    """
-    env = ctx["env"]
-    ctx["has_auth"] = False
-    ctx["identity"] = PrincipalFactory.make_identity(
-        principal_id="",
-        tenant_id=env._tenant_id,
-    )
-
-
-@given("the Buyer has an empty principal_id in the authentication context")
-def given_buyer_empty_principal_id_in_auth(ctx: dict) -> None:
-    """Buyer presents an identity whose principal_id is the empty string.
-
-    Sets up the same state as 'the request has an empty principal_id'.
-    Production emits the standard AUTH_REQUIRED for the missing-auth path,
-    matching the spec; the downstream generic Then step
-    ``the error code should be "AUTH_REQUIRED"`` asserts it.
-    """
-    env = ctx["env"]
-    ctx["has_auth"] = False
-    ctx["identity"] = PrincipalFactory.make_identity(
-        principal_id="",
-        tenant_id=env._tenant_id,
-    )
-
-
-@given("the principal has no associated tenant")
-def given_principal_no_associated_tenant(ctx: dict) -> None:
-    """Buyer's principal resolves but has no associated tenant.
-
-    Creates an identity with a valid principal_id but a tenant_id that
-    does not exist in the database, so resolve_identity succeeds but
-    tenant lookup fails with TENANT_NOT_FOUND.
-
-    The harness always creates a valid tenant for its session, so the
-    no-tenant error path cannot be exercised. xfail with reason.
-    """
-    env = ctx["env"]
-    ctx["has_auth"] = False
-    ctx["identity"] = PrincipalFactory.make_identity(
-        principal_id=env._principal_id,
-        tenant_id="nonexistent_tenant_404",
-    )
-    pytest.xfail(
-        "SPEC-PRODUCTION GAP: no-tenant error path not exercisable in harness — "
-        "the IntegrationEnv always creates a valid tenant. See UC-005 ext-a xfails "
-        "for the same limitation."
-    )
+# "the request has an empty principal_id" is a sentence of the generic
+# ``given_buyer_no_auth`` (tests/bdd/steps/generic/given_auth.py): on the wire a principal
+# is present or absent, never empty, and absent is the state that step establishes.
 
 
 def _assert_auth_rejection(ctx: dict, expected_code: str) -> None:
     """Assert the sync was rejected with the spec-named auth error code.
 
-    Production emits the standard AUTH_REQUIRED for authentication failures,
-    matching the spec.
+    Wire-first, reconstructed fallback (tests/CLAUDE.md Error Verification
+    Policy) — consolidated onto the same strategy as the canonical
+    ``then_error.py:340`` step. Production splits authentication failures
+    into AUTH_MISSING (absent credential, correctable) / AUTH_INVALID
+    (presented-but-rejected credential, terminal) per v3.1.1
+    error-code.json (#2092).
     """
+    from tests.bdd.steps.generic.then_error import _wire_code
+
     error = ctx.get("error")
-    assert error is not None, f"Expected {expected_code} error but got response: {payload_or_none(ctx)}"
-    actual_code, _ = _extract_error_code_and_suggestion(error)
-    assert actual_code == expected_code, (
-        f"Expected error code '{expected_code}', got '{actual_code}' ({type(error).__name__}: {error})"
-    )
+    actual_code = _wire_code(ctx)
+    if actual_code is None:
+        assert error is not None, f"Expected {expected_code} error but got response: {payload_or_none(ctx)}"
+        actual_code, _ = _extract_error_code_and_suggestion(ctx, error)
+    detail = f" ({type(error).__name__}: {error})" if error is not None else ""
+    assert actual_code == expected_code, f"Expected error code '{expected_code}', got '{actual_code}'{detail}"
 
 
 @then("the creative should be processed successfully")
@@ -1956,113 +2157,37 @@ def then_creative_processed_successfully(ctx: dict) -> None:
     )
 
 
-@then("the request should be rejected with AUTH_REQUIRED")
-def then_rejected_with_auth_required(ctx: dict) -> None:
-    """Assert the sync was rejected with error_code AUTH_REQUIRED."""
-    _assert_auth_rejection(ctx, "AUTH_REQUIRED")
+@then(parsers.parse("the request should be rejected with {expected_code}"))
+def then_rejected_with_auth_code(ctx: dict, expected_code: str) -> None:
+    """Assert the sync was rejected with the given auth error code.
+
+    Parametrized (was a fixed-text ``AUTH_REQUIRED`` step) to cover the
+    v3.1.1 AUTH_MISSING/AUTH_INVALID split (#2092).
+    """
+    _assert_auth_rejection(ctx, expected_code)
 
 
 @then("the assignment should include placement targeting")
 def then_assignment_includes_placement(ctx: dict) -> None:
-    """Spec: assignments carry placement_ids for sub-package targeting.
-
-    Production's assignments shape has no placement_ids field and the
-    CreativeAssignment ORM model does not persist per-assignment placement ids.
-    SPEC-PRODUCTION GAP on placement_ids only.
-    """
+    """assignments[].placement_ids restricts the creative to those placements: persisted as sent."""
     assignment = _get_assignment_from_db(ctx)
-    # Check if placement_ids is supported on the assignment
-    placement_ids = getattr(assignment, "placement_ids", None)
-    if placement_ids is not None:
-        creative_id = ctx["creatives"][-1]["creative_id"]
-        expected_pkg = ctx["package"].package_id
-        assert placement_ids, (
-            f"Assignment has placement_ids field but it is empty for creative={creative_id}, package={expected_pkg}"
-        )
-    else:
-        # Xfail ONLY the specific unimplemented claim
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: Per-assignment placement_ids targeting "
-            "is not supported. CreativeAssignment model does not have a "
-            "placement_ids field."
-        )
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# GIVEN / THEN steps — preview failure (jr6p, ext-h)
-# ═══════════════════════════════════════════════════════════════════════
-
-
-@given("a creative with a known format_id but no media_url")
-def given_creative_with_known_format_no_media_url(ctx: dict) -> None:
-    """Build a creative payload with a known format_id but no media_url / asset url.
-
-    Production's preview-failure branch in _processing.py only fires when both
-    ``creative.url`` and ``data["url"]`` are absent (see _processing.py:712-737).
-    To trigger that branch reliably we omit any url/asset entirely — assets are
-    optional on the request schema.
-    """
-    env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
-
-    format_id = "display_300x250"
-    creative_id = "creative-no-media-url-001"
-    creative_payload = {
-        "creative_id": creative_id,
-        "name": "Creative Without media_url",
-        "format_id": {"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
-        # Intentionally no "assets" and no "url" / "media_url" — triggers the
-        # has_media_url=False path in _processing.py preview branch.
-    }
-    ctx.setdefault("creatives", []).append(creative_payload)
-    ctx["creative_format_id"] = format_id
-    ctx["creative_id"] = creative_id
-
-
-@given("the creative agent returns no preview URLs")
-def given_creative_agent_no_preview_urls(ctx: dict) -> None:
-    """Configure the creative agent registry to return no previews.
-
-    ``preview_creative`` is awaited inside production's _processing.py via
-    ``run_async_in_sync_context``. CreativeSyncEnv exposes the registry mock
-    on ``env.mock["registry"].return_value``; ``preview_creative`` is an
-    AsyncMock per the harness defaults. Returning an empty dict (no
-    "previews" key) drives production into the no-previews + no-media_url
-    branch which produces SyncCreativeResult(action="failed", errors=[...]).
-
-    Production's _processing.py only enters the preview branch when
-    ``format_obj`` is found in ``all_formats`` (the list_all_formats result)
-    AND ``format_obj.agent_url`` is set. The harness-default empty
-    ``all_formats`` makes the format lookup miss and the preview branch
-    never fires. We seed ``all_formats`` via ``set_run_async_result()`` with
-    a static (non-generative) mock format whose ``format_id`` equals the
-    creative payload's FormatId.
-    """
-    from unittest.mock import AsyncMock, MagicMock
-
-    from adcp.types import FormatId as LibraryFormatId
-
-    env = ctx["env"]
-    creative_format_id = ctx.get("creative_format_id", "display_300x250")
-
-    mock_format = MagicMock()
-    mock_format.format_id = LibraryFormatId(agent_url=env.DEFAULT_AGENT_URL, id=creative_format_id)
-    mock_format.agent_url = env.DEFAULT_AGENT_URL
-    mock_format.output_format_ids = []  # static creative — exercises preview_creative branch
-    env.set_run_async_result([mock_format])
-
-    registry = env.mock["registry"].return_value
-    registry.preview_creative = AsyncMock(return_value={})
+    creative_id = latest_creative_id(ctx)
+    expected_pkg = ctx["package"].package_id
+    placement_ids = assignment.placement_ids
+    assert placement_ids, (
+        "assignments[].placement_ids restricts a creative to specific placements within the "
+        f"package; the stored assignment carries {placement_ids!r} "
+        f"(creative={creative_id}, package={expected_pkg})"
+    )
 
 
 @then('the creative should have action "created"')
 def then_creative_action_created(ctx: dict) -> None:
     """Assert the per-creative SyncCreativeResult has action == "created"."""
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected action='created', but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected action='created', but production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     assert results, f"Expected at least one SyncCreativeResult in response, got: {resp}"
@@ -2085,11 +2210,9 @@ def then_creative_action_failed(ctx: dict) -> None:
     """
     resp = payload_or_none(ctx)
     err = ctx.get("error")
-    if resp is None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: scenario expects action='failed' on a "
-            f"SyncCreativeResult but the dispatch raised {type(err).__name__}: {err}"
-        )
+    assert resp is not None, (
+        f"SPEC-PRODUCTION GAP: scenario expects action='failed' on a SyncCreativeResult but the dispatch raised {type(err).__name__}: {err}"
+    )
 
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     assert results, f"Expected at least one SyncCreativeResult in response, got: {resp}"
@@ -2100,140 +2223,34 @@ def then_creative_action_failed(ctx: dict) -> None:
         f"Expected creative action 'failed', got '{action_str}' (errors={getattr(first, 'errors', None)})"
     )
 
+    # Only the promotion, which the docstring above describes and which
+    # ctx["error"]'s 226 readers consume. The two writes that stood here —
+    # ctx["failed_creative_result"] and ctx["failed_creative_errors"] — had ZERO
+    # readers anywhere in tests/, by both a reader scan and a literal grep: each
+    # name occurred exactly once in the tree, at its own assignment. A Then that
+    # writes state nothing reads makes later steps depend on assertion order for
+    # nothing in return.
     errs = getattr(first, "errors", None) or []
-    ctx["failed_creative_result"] = first
-    ctx["failed_creative_errors"] = errs
     _promote_creative_errors_to_ctx(ctx, errs)
 
 
 def _promote_creative_errors_to_ctx(ctx: dict, errs: list) -> None:
     """Promote SyncCreativeResult.errors[] to ctx["error"] for downstream Then steps.
 
-    Production stores per-creative failures as plain strings in errors[]. Some
-    error strings contain structured info (e.g. "GEMINI_API_KEY not configured")
-    that downstream steps can parse. We wrap the first error as a synthetic object
-    with error_code/message/suggestion derived from the string content.
+    Production emits per-creative failures as TYPED errors — src/core/tools/creatives/
+    _processing.py builds each entry with build_error_object(), so every element is an
+    adcp Error carrying code/recovery/suggestion/field/details. This helper therefore
+    just forwards the first one.
+
+    It used to SYNTHESIZE an error object, inferring the code from the message text with
+    a keyword ladder. That existed because production once emitted unstructured strings
+    here; it no longer does, and inferring a code from prose is the exact defect this
+    epic removes — it laundered a guess into something downstream steps read as if it
+    were the real typed error.
     """
     if not errs:
         return
-
-    first_err = str(errs[0])
-    error_code = _infer_error_code_from_message(first_err)
-    suggestion = _infer_suggestion_from_message(first_err)
-
-    class _SyntheticError:
-        def __init__(self, code: str, message: str, suggestion: str | None):
-            self.error_code = code
-            self.code = code
-            self.message = message
-            # STRICT error.json conformance: suggestion is top-level ONLY —
-            # synthesizing a details copy would feed the exact non-conformant
-            # position the harness must reject (#1417).
-            self.suggestion = suggestion
-            self.details: dict = {}
-
-        def __str__(self) -> str:
-            return self.message
-
-    ctx["error"] = _SyntheticError(error_code, first_err, suggestion)
-
-
-def _infer_error_code_from_message(msg: str) -> str:
-    """Map production error strings to spec error codes."""
-    lower = msg.lower()
-    if "gemini_api_key" in lower and "not configured" in lower:
-        return "CREATIVE_GEMINI_KEY_MISSING"
-    if "preview" in lower and ("failed" in lower or "no preview" in lower):
-        return "CREATIVE_PREVIEW_FAILED"
-    if "format" in lower and "required" in lower:
-        return "CREATIVE_FORMAT_REQUIRED"
-    if "name" in lower and ("required" in lower or "empty" in lower or "blank" in lower):
-        return "CREATIVE_NAME_EMPTY"
-    return "CREATIVE_VALIDATION_FAILED"
-
-
-def _infer_suggestion_from_message(msg: str) -> str | None:
-    """Extract or generate a suggestion from a production error message."""
-    lower = msg.lower()
-    if "gemini_api_key" in lower:
-        return "Ask the seller to configure GEMINI_API_KEY in their agent settings"
-    if "preview" in lower:
-        return "Provide a media_url for the creative"
-    return None
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# GIVEN steps — assignment-format / package boundary (bxhz + ryv4)
-# ═══════════════════════════════════════════════════════════════════════
-
-
-@given(parsers.parse('assignments to a package whose product only accepts "{accepted_format}"'))
-def given_assignments_to_package_only_accepts(ctx: dict, accepted_format: str) -> None:
-    """Create a package whose product format_ids contains exactly one format.
-
-    The Gherkin claim is "only accepts <format>", so the product's
-    ``format_ids`` is restricted to that single FormatId. Combined with a
-    creative payload whose format differs (set by the prior Given), this
-    drives the assignment-time format-compatibility check in
-    _assignments.py:120-141 to raise AdCPValidationError when
-    validation_mode is strict.
-    """
-    from tests.factories import MediaBuyFactory, MediaPackageFactory, ProductFactory
-
-    env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
-    tenant = ctx["tenant"]
-    principal = ctx["principal"]
-    agent_url = ctx.get("creative_agent_url", env.DEFAULT_AGENT_URL)
-
-    # Use UUID-based IDs for e2e_rest to avoid collisions in shared Docker DB
-    extra_mb: dict = {}
-    extra_pkg: dict = {}
-    extra_prod: dict = {}
-    if is_e2e(ctx):
-        extra_mb["media_buy_id"] = _e2e_unique_id("mb")
-        extra_pkg["package_id"] = _e2e_unique_id("pkg")
-        extra_prod["product_id"] = _e2e_unique_id("prod")
-
-    media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active", **extra_mb)
-    product = ProductFactory(
-        tenant=tenant,
-        format_ids=[{"agent_url": agent_url, "id": accepted_format}],
-        **extra_prod,
-    )
-    package = MediaPackageFactory(
-        media_buy=media_buy,
-        package_config={"product_id": product.product_id, "budget": 1000.0},
-        **extra_pkg,
-    )
-    env._commit_factory_data()
-    ctx["media_buy"] = media_buy
-    ctx["package"] = package
-    ctx["product"] = product
-    creative_id = ctx.get("creative_id") or ctx["creatives"][-1]["creative_id"]
-    ctx["assignments"] = {creative_id: [package.package_id]}
-    ctx["product_only_accepts"] = accepted_format
-
-
-@given("assignments referencing a non-existent package_id")
-def given_assignments_referencing_nonexistent_package(ctx: dict) -> None:
-    """Build an assignments payload whose package_id does not exist in the tenant.
-
-    Production's _assignments.py:62-69 raises AdCPNotFoundError(recovery=
-    "correctable") when ``find_package_with_media_buy`` returns nothing
-    AND validation_mode == "strict".
-
-    Distinct from the existing "an assignment to a package that does not
-    exist" step (line 747): that step also defaults ``validation_mode`` to
-    strict, while this Gherkin pairs the assignment Given with a separate
-    ``validation_mode is "strict"`` Given. We do NOT default validation_mode
-    here to keep the steps composable.
-    """
-    env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
-    env._commit_factory_data()
-    creative_id = ctx.get("creative_id") or ctx["creatives"][-1]["creative_id"]
-    ctx["assignments"] = {creative_id: ["pkg-nonexistent-ryv4-404"]}
+    ctx["error"] = errs[0]
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2247,7 +2264,7 @@ def then_operation_fails_with_assignment_error(ctx: dict) -> None:
 
     Production raises AdCPValidationError (FORMAT_MISMATCH branch) or
     AdCPNotFoundError (package-not-found branch) from _assignments.py.
-    Both are AdCPError subclasses surfaced as ctx["error"] by dispatch.
+    Both are AdCPSalesAgentError subclasses surfaced as ctx["error"] by dispatch.
 
     SPEC-PRODUCTION GAP handling:
       * MCP transport may reject the format string at the FastMCP TypeAdapter
@@ -2260,14 +2277,13 @@ def then_operation_fails_with_assignment_error(ctx: dict) -> None:
         and assignment processing then raises an SQLAlchemy ForeignKeyViolation
         (creative_assignments FK on creatives). Same root-cause gap as
         the MCP case — surface as the same SPEC-PRODUCTION GAP xfail.
-      * AdCPNotFoundError.error_code == "NOT_FOUND" but the spec demands
+      * AdCPNotFoundError.error_code == "REFERENCE_NOT_FOUND" but the spec demands
         "PACKAGE_NOT_FOUND" — the next Gherkin step asserts the spec code
         and would fail strict equality. We pre-empt by mapping the error
         for downstream Then steps via details["error_code"].
     """
-    from sqlalchemy.exc import IntegrityError
 
-    from src.core.exceptions import AdCPError, AdCPNotFoundError, AdCPValidationError
+    from src.core.exceptions import AdCPSalesAgentError
 
     error = ctx.get("error")
     if error is None:
@@ -2277,76 +2293,74 @@ def then_operation_fails_with_assignment_error(ctx: dict) -> None:
             error = resp.errors[0]
             ctx["error"] = error
 
-    if error is None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected an assignment error but production succeeded. "
-            f"Response: {payload_or_none(ctx)!r}"
-        )
+    assert error is not None, (
+        f"SPEC-PRODUCTION GAP: expected an assignment error but production succeeded. Response: {payload_or_none(ctx)!r}"
+    )
 
     # MCP/TypeAdapter pre-impl rejection of FormatId pattern — surface as gap
     err_str = str(error)
-    if "format_id.id" in err_str and "string_pattern_mismatch" in err_str:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: spec format id 'agent1/banner-300x250' rejected by "
-            "MCP/transport TypeAdapter — adcp library FormatId.id pattern is ^[a-zA-Z0-9_-]+$."
-        )
 
     # SQLAlchemy FK violation cascade from format-id-with-slash gap (REST/impl path)
-    if isinstance(error, IntegrityError) and "creative_assignments" in err_str and "is not present in table" in err_str:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: spec format id 'agent1/<name>' contains '/', which violates "
-            "production's FormatId.id pattern ^[a-zA-Z0-9_-]+$. Creative validation fails, no "
-            "creative row is persisted, and assignment processing then raises FK violation."
-        )
 
     # E2E server crash from format-id-with-slash gap — same root cause as above
     # but manifested as HTTP 500 with empty body on the real Docker stack.
-    if isinstance(error, AdCPError) and error.error_code == "INTERNAL_ERROR" and "HTTP 500" in err_str:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: spec format id 'agent1/<name>' contains '/', which violates "
-            "production's FormatId.id pattern ^[a-zA-Z0-9_-]+$. Server returns 500 with empty "
-            "body on e2e_rest transport."
-        )
+    # A 500 here is a real defect worth failing on. The scenario's format id
+    # "agent1/<name>" is SCHEMA-INVALID: the pinned 3.1 core/format-id.json defines id as a
+    # "slug matching [a-zA-Z0-9_-]+", so the slash is forbidden BY THE SPEC, not merely by
+    # production's pattern. A spec-invalid input must be refused with a validation error,
+    # never answered with an empty-bodied 500 — excusing that hid a crash behind a
+    # scenario bug.
+    assert not (
+        isinstance(error, AdCPSalesAgentError) and error.error_code == "INTERNAL_ERROR" and "HTTP 500" in err_str
+    ), (
+        "server returned INTERNAL_ERROR/HTTP 500 for a format_id whose id contains '/'. "
+        "The pin forbids the slash, so this input must be REFUSED with a validation error, "
+        "not crash the server"
+    )
 
     # Catch-all for fictional format IDs with slashes (e.g. "agent1/banner-300x250").
     # Production's FormatId.id pattern is ^[a-zA-Z0-9_-]+$ — slashes are invalid.
     # Different transports reject at different layers with different error types.
     creative_fmt = str(ctx.get("creative_format_id", ""))
-    if "/" in creative_fmt and isinstance(error, (AdCPError, IntegrityError)):
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: spec format id '{creative_fmt}' contains '/', which violates "
-            "production's FormatId.id pattern ^[a-zA-Z0-9_-]+$. "
-            f"Error: {type(error).__name__}: {error.message if hasattr(error, 'message') else error}"
-        )
 
-    assert isinstance(error, AdCPError), (
-        f"Expected an AdCPError from assignment processing, got {type(error).__name__}: {error}"
+    # The two SPEC-PRODUCTION GAP xfails that used to live here are DELETED, because
+    # both the gap and the mechanism that detected it are gone:
+    #
+    #   THE GAP CLOSED. They said production emitted generic codes -- "production:
+    #   'NOT_FOUND'" and "production: 'VALIDATION_ERROR'" -- where the spec demanded
+    #   specific ones. Production now raises AdCPPackageNotFoundError
+    #   (PACKAGE_NOT_FOUND, _assignments.py:163) and AdCPCreativeRejectedError
+    #   (CREATIVE_REJECTED, :236). Both are published members and both are what the
+    #   scenarios ask for.
+    #
+    #   THE DETECTOR WAS DEAD ANYWAY. They routed on PROSE --
+    #   "package not found" in error.message.lower() -- and message is now derived
+    #   from the code via CODE_TABLE, so neither substring
+    #   can appear and neither branch could ever fire. An xfail route that silently
+    #   stopped working is worse than none: it reads as tracked work while grading
+    #   nothing.
+    #
+    # What remains is the real assertion, on the wire the buyer received rather than
+    # on the class of a rebuilt exception.
+    result = ctx.get("result")
+    wire_code = result.wire_error_code() if result is not None else None
+    assert wire_code is not None, (
+        f"Expected an assignment rejection on the WIRE, but no wire error envelope was captured. "
+        f"dispatch_error={type(error).__name__}: {error}"
+    )
+    assert wire_code in _ASSIGNMENT_REJECTION_CODES, (
+        f"Expected an assignment-processing rejection, got wire code {wire_code!r}. "
+        f"Expected one of {sorted(_ASSIGNMENT_REJECTION_CODES)}"
     )
 
-    # SPEC-PRODUCTION GAP: production exception classes have generic codes
-    # ("NOT_FOUND", "VALIDATION_ERROR") while the spec defines specific codes
-    # ("PACKAGE_NOT_FOUND", "FORMAT_MISMATCH"). Production also does not
-    # populate a "suggestion" detail. Both the next ``the error code should
-    # be "<SPEC_CODE>"`` and ``the suggestion should contain ...`` Gherkin
-    # steps therefore cannot be satisfied without weakening assertions or
-    # mutating production state. Surface the gap here, post-validating that
-    # the failure indeed came from the right assignment-processing branch.
-    is_pkg_not_found = isinstance(error, AdCPNotFoundError) and "package not found" in error.message.lower()
-    is_format_mismatch = isinstance(error, AdCPValidationError) and "not supported by product" in error.message.lower()
-    if is_pkg_not_found:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: assignment failed correctly with AdCPNotFoundError(message='Package "
-            "not found: ...') but the spec demands error_code='PACKAGE_NOT_FOUND' (production: 'NOT_FOUND') "
-            "and a structured 'suggestion' field that production does not populate. "
-            "See _assignments.py:62-69."
-        )
-    if is_format_mismatch:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: assignment failed correctly with AdCPValidationError(message='... "
-            "is not supported by product ...') but the spec demands error_code='FORMAT_MISMATCH' "
-            "(production: 'VALIDATION_ERROR') and a structured 'suggestion' field referencing "
-            "list_creative_formats. See _assignments.py:120-141."
-        )
+
+#: The codes strict-mode assignment processing can reject with, all published.
+#: PACKAGE_NOT_FOUND when the named package does not resolve, CREATIVE_NOT_FOUND when
+#: the creative does not, VALIDATION_ERROR when the creative's format is one the
+#: package's product does not declare -- the pinned enum's "violates business rules
+#: beyond schema validation", and NOT CREATIVE_REJECTED, which the enum reserves for
+#: "failed content policy review" (the update path emits the same, see #1417).
+_ASSIGNMENT_REJECTION_CODES = frozenset({"PACKAGE_NOT_FOUND", "CREATIVE_NOT_FOUND", "VALIDATION_ERROR"})
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2363,52 +2377,10 @@ def given_assignments_to_nonexistent_package(ctx: dict) -> None:
     ``validation_mode is "<mode>"`` Given step to control it.
     """
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     env._commit_factory_data()
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: ["pkg-nonexistent-lzhr-404"]}
-
-
-@then(parsers.parse('the assignment result should be "{outcome}"'))
-def then_assignment_result_should_be(ctx: dict, outcome: str) -> None:
-    """Assert validation-mode-dependent outcome for assignment processing.
-
-    Outcomes from the partition scenario:
-    - "operation aborts with error" -- strict mode: error raised for missing package
-    - "warning logged, processing continues" -- lenient mode: success despite missing package
-    - "rejected with VALIDATION_ERROR" -- invalid mode value: rejected at input validation
-
-    Hard assertions for all outcomes. No xfail escape hatches.
-    """
-    from src.core.exceptions import AdCPError
-
-    error = ctx.get("error")
-    resp = payload_or_none(ctx)
-
-    if outcome == "operation aborts with error":
-        assert error is not None, (
-            f"Strict mode with non-existent package should abort with error, but production succeeded. Response: {resp}"
-        )
-        assert isinstance(error, (AdCPError, Exception)), (
-            f"Expected an AdCPError for strict mode abort, got {type(error).__name__}: {error}"
-        )
-    elif outcome == "warning logged, processing continues":
-        assert error is None, (
-            f"Lenient mode should log warning and continue, but production raised {type(error).__name__}: {error}"
-        )
-        assert resp is not None, "Expected a response in lenient mode"
-    elif outcome == "rejected with VALIDATION_ERROR":
-        assert error is not None, (
-            "Invalid validation_mode 'partial' should be rejected with VALIDATION_ERROR, "
-            f"but production accepted it. Response: {resp}"
-        )
-        actual_code, _ = _extract_error_code_and_suggestion(error)
-        assert actual_code == "VALIDATION_ERROR", (
-            f"Expected error_code 'VALIDATION_ERROR' for invalid validation_mode, "
-            f"got '{actual_code}' ({type(error).__name__}: {error})"
-        )
-    else:
-        raise ValueError(f"Unknown validation outcome: {outcome!r}")
 
 
 @then("the assignment processing should abort with an error")
@@ -2417,29 +2389,30 @@ def then_assignment_processing_should_abort(ctx: dict) -> None:
 
     The scenario sets up a non-existent package assignment under strict
     validation_mode. Production must raise AdCPNotFoundError whose message
-    references the missing package — not just any AdCPError subclass.
+    references the missing package — not just any AdCPSalesAgentError subclass.
+
+    Error code is wire-first (real wire envelope preferred over the lossy
+    reconstructed exception), same strategy as then_error_code.
     """
-    from src.core.exceptions import AdCPError, AdCPNotFoundError
 
     error = ctx.get("error")
     assert error is not None, (
         "Strict mode with non-existent package should abort with an error, "
         f"but production succeeded. Response: {payload_or_none(ctx)}"
     )
-    assert isinstance(error, AdCPError), (
-        f"Expected AdCPError for strict mode abort, got {type(error).__name__}: {error}"
-    )
-    # Verify the error is specifically a not-found error, not an incidental failure
-    assert (
-        isinstance(error, AdCPNotFoundError)
-        or "not_found" in getattr(error, "error_code", "").lower()
-        or "not found" in str(error).lower()
-    ), f"Expected not-found error for missing package, got error_code={getattr(error, 'error_code', None)}: {error}"
-    # Verify the error references the bad package from the Given step
-    bad_package = ctx.get("bad_package_id") or ctx.get("nonexistent_package_id", "")
+    # Graded on the WIRE: the code says WHICH failure, details say which package.
+    # The old form accepted three different things -- an AdCPNotFoundError instance,
+    # "not_found" appearing in the code string, or "not found" appearing anywhere in
+    # str(error) -- so a stringified incidental failure could satisfy it. And the
+    # "references the bad package" check searched str(error), which is now
+    # the table sentence and can never contain an id.
+    result = ctx["result"]
+    result.assert_wire_error("PACKAGE_NOT_FOUND")
+    bad_package = ctx.get("nonexistent_package_id", "")
     if bad_package:
-        assert bad_package in str(error), (
-            f"Error should reference the missing package '{bad_package}', but message is: {error}"
+        details = result.wire_error_details("PACKAGE_NOT_FOUND")
+        assert bad_package in str(details.values()), (
+            f"Expected the rejection to name the missing package {bad_package!r} in its details, got {dict(details)!r}"
         )
 
 
@@ -2451,22 +2424,18 @@ def then_behavior_matches_strict_mode(ctx: dict) -> None:
     means the same abort-on-error behavior as explicit strict mode. We verify
     an error was raised (same assertion as the abort step).
     """
-    from src.core.exceptions import AdCPError
 
     error = ctx.get("error")
     assert error is not None, (
         "Default validation_mode should be 'strict' (abort on error), "
         f"but production succeeded without raising. Response: {payload_or_none(ctx)}"
     )
-    assert isinstance(error, AdCPError), (
-        f"Strict mode abort should raise AdCPError, got {type(error).__name__}: {error}"
-    )
-    # Assert the error code is a known strict-mode abort code
-    actual_code = error.error_code
-    assert actual_code is not None, f"Strict mode AdCPError should have a non-None error_code, got: {error}"
-    strict_codes = {"NOT_FOUND", "VALIDATION_ERROR", "PACKAGE_NOT_FOUND"}
-    assert actual_code in strict_codes, (
-        f"Strict mode abort should produce error_code in {strict_codes}, got '{actual_code}' ({error.message})"
+    # Graded on the wire, and on the codes strict-mode abort actually emits.
+    result = ctx["result"]
+    actual_code = result.wire_error_code()
+    assert actual_code is not None, f"Strict-mode abort should reach the wire, but no envelope was captured: {error}"
+    assert actual_code in _ASSIGNMENT_REJECTION_CODES, (
+        f"Strict mode abort should produce one of {sorted(_ASSIGNMENT_REJECTION_CODES)}, got {actual_code!r}"
     )
 
 
@@ -2483,7 +2452,7 @@ def then_no_assignments_created(ctx: dict) -> None:
     from src.core.database.models import CreativeAssignment
 
     tenant_id = ctx["tenant"].tenant_id
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     with db_session(ctx) as session:
         assignments = session.scalars(
             select(CreativeAssignment).filter_by(
@@ -2515,7 +2484,7 @@ def given_creative_already_exists(ctx: dict) -> None:
     from tests.factories import CreativeFactory
 
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
     creative_payload = ctx["creatives"][-1]
@@ -2534,31 +2503,16 @@ def given_creative_already_exists(ctx: dict) -> None:
 
 @given("the creative already exists with identical data")
 def given_creative_already_exists_identical(ctx: dict) -> None:
-    """Pre-seed the creative in the DB with data identical to the payload.
+    """The creative is already in the library EXACTLY as a sync of this payload leaves it.
 
-    Sync should detect no change and produce action="unchanged".
-    Same as ``given_creative_already_exists`` — the production code compares
-    payload vs DB row; identical data means action="unchanged".
+    "Identical data" is only identical if the row was written by the same path the
+    resync goes through: a factory row carrying the raw request dict differs from what
+    production stores (url/click_url/width/height/duration are derived from the
+    assets), so the resync reported those as changed and "unchanged" was unreachable
+    from this Given. Seeding by a first sync through the transport is what makes the
+    second one a true resync, on every transport.
     """
-    from tests.factories import CreativeFactory
-
-    env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
-    tenant = ctx["tenant"]
-    principal = ctx["principal"]
-    creative_payload = ctx["creatives"][-1]
-    creative_id = creative_payload["creative_id"]
-    format_id = creative_payload["format_id"]["id"]
-    CreativeFactory(
-        tenant=tenant,
-        principal=principal,
-        creative_id=creative_id,
-        name=creative_payload["name"],
-        agent_url=env.DEFAULT_AGENT_URL,
-        format=format_id,
-        data=creative_payload,
-    )
-    env._commit_factory_data()
+    when_sync_creative(ctx)
 
 
 @given("a creative that does not exist in the library")
@@ -2576,12 +2530,12 @@ def given_creative_not_in_library(ctx: dict) -> None:
     env = ctx["env"]
     _ensure_tenant_principal_from_db(ctx, env)
     format_id, agent_url, assets = _format_payload(ctx, env)
-    creative_payload = {
-        "creative_id": "creative-new-no-db-001",
-        "name": "Brand New Creative",
-        "format_id": {"id": format_id, "agent_url": agent_url},
-        "assets": assets,
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id="creative-new-no-db-001",
+        name="Brand New Creative",
+        format_id={"id": format_id, "agent_url": agent_url},
+        assets=assets,
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
 
 
@@ -2593,14 +2547,17 @@ def given_creative_with_empty_name(ctx: dict) -> None:
     literal step handles the ``name=""`` case explicitly.
     """
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     format_id, agent_url, assets = _format_payload(ctx, env)
-    creative_payload = {
-        "creative_id": "creative-empty-name-001",
-        "name": "",
-        "format_id": {"id": format_id, "agent_url": agent_url},
-        "assets": assets,
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id="creative-empty-name-001",
+        # An empty name is CONFORMANT to the pin — its wrongness is production's
+        # CREATIVE_NAME_EMPTY, downstream of validation — so it takes no
+        # malformation declaration. See tests/factories/malformed.py's asymmetry.
+        name="",
+        format_id={"id": format_id, "agent_url": agent_url},
+        assets=assets,
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
 
@@ -2609,13 +2566,23 @@ def given_creative_with_empty_name(ctx: dict) -> None:
 def given_creative_with_name_no_format(ctx: dict, name: str) -> None:
     """Set up a creative payload with a name but no format_id — triggers CREATIVE_FORMAT_REQUIRED."""
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
-    creative_payload = {
-        "creative_id": f"creative-no-fmt-{name.lower().replace(' ', '-')}-001",
-        "name": name,
-        "format_id": None,
-        "assets": build_assets(image_spec("image")),
-    }
+    ensure_tenant_principal(ctx, env)
+    creative_payload = malformed(
+        "explicit_none",
+        "format_id is present and explicitly None — not omitted. The scenario exercises "
+        "CREATIVE_FORMAT_REQUIRED, so the key has to be on the wire carrying null; "
+        "CreativeAssetRequest rejects it with [type=oneOf] provide exactly one of format_id or "
+        "format_kind. The pin reports an omitted key identically, which is exactly why the kind "
+        "is declared here rather than derived from the value.",
+        CreativeAssetRequestFactory.payload(
+            creative_id=f"creative-no-fmt-{name.lower().replace(' ', '-')}-001",
+            name=name,
+            # None, not OMIT: the key must be ON THE WIRE carrying null. The two are
+            # indistinguishable in the pin's error and distinguishable only here.
+            format_id=None,
+        ),
+        obligation=ErrorCode.INVALID_REQUEST,
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
 
 
@@ -2623,15 +2590,14 @@ def given_creative_with_name_no_format(ctx: dict, name: str) -> None:
 def given_creative_format_id_empty_name(ctx: dict) -> None:
     """Set up a creative with a valid format_id but empty name — boundary case."""
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
-    creative_payload = {
-        "creative_id": "creative-fmt-empty-name-001",
-        "name": "",
-        "format_id": {"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": build_assets(image_spec("image")),
-    }
+    ensure_tenant_principal(ctx, env)
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id="creative-fmt-empty-name-001",
+        name="",
+        format_id=_creative_format_id_entry(ctx, env),
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
-    ctx["creative_format_id"] = "display_300x250"
+    ctx["creative_format_id"] = _scenario_format_id(ctx, env)
 
 
 @given("a creative with invalid schema structure")
@@ -2642,13 +2608,22 @@ def given_creative_invalid_schema(ctx: dict) -> None:
     in the wrong structure (string instead of dict) to trigger schema validation.
     """
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
-    creative_payload = {
-        "creative_id": "creative-invalid-schema-001",
-        "name": "Invalid Schema Creative",
-        "format_id": {"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": "not-a-valid-assets-structure",
-    }
+    ensure_tenant_principal(ctx, env)
+    creative_payload = malformed(
+        "wrong_type",
+        "assets is a str where the pin requires an object — CreativeAssetRequest rejects it "
+        "with assets Input should be a valid dictionary [type=dict_type]. format_id is valid on "
+        "purpose so the scenario grades CREATIVE_VALIDATION_FAILED and not "
+        "CREATIVE_FORMAT_REQUIRED; sending the wrong type is the scenario's whole subject, so "
+        "these exact bytes must reach the wire unrepaired.",
+        CreativeAssetRequestFactory.payload(
+            creative_id="creative-invalid-schema-001",
+            name="Invalid Schema Creative",
+            format_id=_creative_format_id_entry(ctx, env),
+            assets="not-a-valid-assets-structure",
+        ),
+        obligation=ErrorCode.INVALID_REQUEST,
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
 
 
@@ -2675,17 +2650,18 @@ def then_response_includes_creative_with_action(ctx: dict, action: str) -> None:
 
 @then("the creative should have a status reflecting the approval workflow")
 def then_creative_has_approval_workflow_status(ctx: dict) -> None:
-    """Assert the creative's status is one of the approval-workflow statuses."""
-    _APPROVAL_STATUSES = {"pending_review", "approved", "rejected", "processing", "adaptation_required"}
-    result = _get_sync_creative_result(ctx)
-    status = getattr(result, "internal_status", None)
-    if status is None:
-        _xfail_if_e2e(ctx)
-        creative = _get_creative_from_db(ctx)
-        status = creative.status
-    assert status in _APPROVAL_STATUSES, (
-        f"Expected approval-workflow status (one of {_APPROVAL_STATUSES}), got '{status}'"
-    )
+    """The per-creative advisory status is drawn from the review lifecycle.
+
+    The values are the pinned CreativeStatus enum
+    (adcp 3.1.1, enums/creative-status.json), which sync-creatives-response.json
+    names as the source for this field. Read off the wire for the reason
+    ``_assert_creative_status`` gives.
+    """
+    _assert_success_response(ctx)
+    entry = _wire_creatives_entry(ctx, latest_creative_id(ctx))
+    status = entry.get("status")
+    allowed = _creative_status_values()
+    assert status in allowed, f"expected a CreativeStatus value (one of {sorted(allowed)}) on the wire, got {status!r}"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2696,15 +2672,15 @@ def then_creative_has_approval_workflow_status(ctx: dict) -> None:
 def _build_creative_payload(ctx: dict, *, provenance: dict | None = None) -> dict:
     """Build a creative payload with optional provenance metadata."""
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     format_id, agent_url, assets = _format_payload(ctx, env)
     creative_id = f"creative-provenance-{'with' if provenance else 'without'}-001"
-    payload: dict = {
-        "creative_id": creative_id,
-        "name": "Provenance Test Creative",
-        "format_id": {"id": format_id, "agent_url": agent_url},
-        "assets": assets,
-    }
+    payload: dict = CreativeAssetRequestFactory.payload(
+        creative_id=creative_id,
+        name="Provenance Test Creative",
+        format_id={"id": format_id, "agent_url": agent_url},
+        assets=assets,
+    )
     if provenance is not None:
         payload["provenance"] = provenance
     ctx.setdefault("creatives", []).append(payload)
@@ -2714,13 +2690,20 @@ def _build_creative_payload(ctx: dict, *, provenance: dict | None = None) -> dic
 
 @given("a creative with provenance metadata")
 def given_creative_with_provenance(ctx: dict) -> None:
-    """Set up a creative that includes AI provenance/disclosure metadata."""
+    """Set up a creative that includes AI provenance/disclosure metadata.
+
+    Shaped by core/provenance.json: ``digital_source_type`` is an IPTC enum member,
+    ``ai_tool`` an object naming the tool, ``disclosure`` an object with the declared
+    ``required`` claim. The scalar ``source`` / ``model`` / ``disclosure`` string this
+    used to send are not pin fields, so the request was refused before provenance
+    handling ran and the scenario graded the refusal instead of the policy.
+    """
     _build_creative_payload(
         ctx,
         provenance={
-            "source": "ai-generated",
-            "model": "stable-diffusion-xl",
-            "disclosure": "This creative was generated using AI.",
+            "digital_source_type": "trained_algorithmic_media",
+            "ai_tool": {"name": "Stable Diffusion XL"},
+            "disclosure": {"required": True},
         },
     )
 
@@ -2756,71 +2739,26 @@ def given_product_with_null_creative_policy(ctx: dict) -> None:
 def given_no_product_with_provenance_required(ctx: dict) -> None:
     """No product exists in the tenant with provenance_required — check is skipped."""
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
-    env._commit_factory_data()
-
-
-@given("the tenant has a product with creative_policy.provenance_required = true")
-def given_tenant_has_product_provenance_required(ctx: dict) -> None:
-    """Create a product whose creative_policy requires provenance (tenant-scoped variant)."""
-    _setup_product_with_creative_policy(ctx, provenance_required=True)
-
-
-@given("the tenant has a product with creative_policy = null")
-def given_tenant_has_product_null_policy(ctx: dict) -> None:
-    """Create a product whose creative_policy is null (tenant-scoped variant)."""
-    _setup_product_with_creative_policy(ctx, creative_policy=None)
-
-
-@given("no product in the tenant has provenance_required set")
-def given_tenant_no_product_provenance(ctx: dict) -> None:
-    """No product in the tenant requires provenance — check is skipped entirely (INV-3)."""
-    env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
-    env._commit_factory_data()
-
-
-@given("a creative with a known format_id and valid provenance metadata")
-def given_creative_known_format_with_provenance(ctx: dict) -> None:
-    """Set up a creative with a known format_id and valid provenance metadata (INV-2)."""
-    _build_creative_payload(
-        ctx,
-        provenance={
-            "source": "ai-generated",
-            "model": "stable-diffusion-xl",
-            "disclosure": "This creative was generated using AI.",
-        },
-    )
-
-
-@given("the tenant has no approval_mode configured")
-def given_tenant_no_approval_mode(ctx: dict) -> None:
-    """Ensure the tenant has no approval_mode configured (default = require-human)."""
-    env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
-    tenant = ctx["tenant"]
-    tenant.approval_mode = "require-human"
+    ensure_tenant_principal(ctx, env)
     env._commit_factory_data()
 
 
 @given("the tenant has a slack_webhook_url configured")
 def given_tenant_has_slack_webhook(ctx: dict) -> None:
-    """Set a slack_webhook_url on the tenant."""
-    env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
-    tenant = ctx["tenant"]
-    tenant.slack_webhook_url = "https://hooks.slack.test/approval"
-    env._commit_factory_data()
+    """Set a slack_webhook_url for both auth paths (see _set_tenant_approval_mode)."""
+    _configure_tenant_field(ctx, "slack_webhook_url", _SLACK_WEBHOOK_URL)
 
 
 @given("the tenant has no slack_webhook_url configured")
 def given_tenant_no_slack_webhook(ctx: dict) -> None:
-    """Ensure the tenant has no slack_webhook_url."""
-    env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
-    tenant = ctx["tenant"]
-    tenant.slack_webhook_url = None
-    env._commit_factory_data()
+    """Ensure the tenant has no slack_webhook_url.
+
+    Through ``configure_tenant_field`` like every sibling: clearing only the ORM
+    column leaves the resolved identity's tenant dict carrying the old value, so
+    INV-6 ("no Slack without a webhook") would be graded against a tenant
+    production still sees a webhook on.
+    """
+    _configure_tenant_field(ctx, "slack_webhook_url", None)
 
 
 def _setup_product_with_creative_policy(
@@ -2833,7 +2771,7 @@ def _setup_product_with_creative_policy(
     from tests.factories import ProductFactory
 
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
     format_id, agent_url, _assets = _format_payload(ctx, env)
 
@@ -2867,36 +2805,6 @@ def then_creative_processed_without_warning(ctx: dict) -> None:
     assert not provenance_warnings, f"Expected no provenance warnings, got: {provenance_warnings}"
 
 
-@then("a provenance warning should be generated")
-def then_provenance_warning_generated(ctx: dict) -> None:
-    """Assert the creative result contains a provenance-related warning (INV-1).
-
-    Uses direct attribute access on SyncCreativeResult (no getattr fallbacks).
-    Hard-asserts the warning exists — provenance enforcement is a spec requirement.
-    """
-    assert "error" not in ctx, (
-        f"Expected successful processing with provenance warning, but got error: {ctx.get('error')}"
-    )
-    resp = require_payload(ctx)
-    results = resp.creatives
-    assert results, "Expected creative results for provenance check, but response.creatives is empty"
-    first = results[0]
-    warnings = first.warnings or []
-    # Find the first provenance-related warning and assert on its content
-    provenance_warning = next(
-        (str(w) for w in warnings if "provenance" in str(w).lower()),
-        None,
-    )
-    assert provenance_warning is not None, (
-        "provenance_required=true with absent provenance should generate a warning "
-        f"containing 'provenance', but none found. All warnings: {warnings}"
-    )
-    # Verify the warning text is a meaningful message (not just the bare word)
-    assert len(provenance_warning) > len("provenance"), (
-        f"Provenance warning text too short to be meaningful: {provenance_warning!r}"
-    )
-
-
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN / WHEN / THEN steps — media buy status transitions (avw0 + amto)
 #   + ai-powered workflow (mah2) + workflow step attributes (nbfu)
@@ -2917,7 +2825,7 @@ def _create_media_buy_with_status(
     from tests.factories import MediaBuyFactory
 
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
     mb_kwargs: dict = {"tenant": tenant, "principal": principal, "status": status}
@@ -2944,7 +2852,16 @@ def given_media_buy_with_approved_at_null(ctx: dict, status: str) -> None:
 
 @given(parsers.parse('a media buy with status "{status}" (non-draft)'))
 def given_media_buy_non_draft(ctx: dict, status: str) -> None:
-    """Create a non-draft media buy (BR-RULE-038 INV-5)."""
+    """Create a non-draft media buy (BR-RULE-038 INV-5).
+
+    The sentence's claim is the STATUS, and the Given refuses a row that contradicts
+    it: INV-4's twin (``... and approved_at set``) seeds the same buy, and the only
+    thing that made this one its own claim was the parenthetical nobody checked.
+    """
+    assert status != "draft", (
+        f"the sentence claims a non-draft media buy, but the scenario asked for status {status!r}; "
+        "INV-5 grades the non-draft path and cannot be established with a draft"
+    )
     _create_media_buy_with_status(ctx, status=status, approved_at_set=True)
 
 
@@ -2959,22 +2876,21 @@ def given_assignments_to_package_in_that_media_buy(ctx: dict) -> None:
     from tests.factories import MediaPackageFactory, ProductFactory
 
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
-    agent_url = env.DEFAULT_AGENT_URL
     media_buy = ctx["media_buy"]
 
     if not ctx.get("creatives"):
         given_creative_with_format(ctx)
 
-    product = ProductFactory(tenant=tenant, format_ids=[{"agent_url": agent_url, "id": "display_300x250"}])
+    product = ProductFactory(tenant=tenant, format_ids=[_product_format_entry(ctx, env)])
     package = MediaPackageFactory(
         media_buy=media_buy,
         package_config={"product_id": product.product_id, "budget": 1000.0},
     )
     env._commit_factory_data()
     ctx["package"] = package
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: [package.package_id]}
 
 
@@ -2990,10 +2906,9 @@ def given_assignment_to_package_in_media_buy_with(ctx: dict, buy_state: str) -> 
     from tests.factories import MediaPackageFactory, ProductFactory
 
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
-    agent_url = env.DEFAULT_AGENT_URL
 
     if "draft" in buy_state and "approved_at set" in buy_state:
         _create_media_buy_with_status(ctx, status="draft", approved_at_set=True)
@@ -3005,14 +2920,14 @@ def given_assignment_to_package_in_media_buy_with(ctx: dict, buy_state: str) -> 
         raise ValueError(f"Unknown buy_state phrase: {buy_state!r}")
 
     media_buy = ctx["media_buy"]
-    product = ProductFactory(tenant=tenant, format_ids=[{"agent_url": agent_url, "id": "display_300x250"}])
+    product = ProductFactory(tenant=tenant, format_ids=[_product_format_entry(ctx, env)])
     package = MediaPackageFactory(
         media_buy=media_buy,
         package_config={"product_id": product.product_id, "budget": 1000.0},
     )
     env._commit_factory_data()
     ctx["package"] = package
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: [package.package_id]}
 
 
@@ -3032,7 +2947,7 @@ def given_existing_assignment_in_media_buy(ctx: dict) -> None:
     )
 
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
     agent_url = env.DEFAULT_AGENT_URL
@@ -3041,7 +2956,7 @@ def given_existing_assignment_in_media_buy(ctx: dict) -> None:
     if not ctx.get("creatives"):
         given_creative_with_format(ctx)
 
-    product = ProductFactory(tenant=tenant, format_ids=[{"agent_url": agent_url, "id": "display_300x250"}])
+    product = ProductFactory(tenant=tenant, format_ids=[_product_format_entry(ctx, env)])
     package_1 = MediaPackageFactory(
         media_buy=media_buy,
         package_config={"product_id": product.product_id, "budget": 500.0},
@@ -3054,8 +2969,8 @@ def given_existing_assignment_in_media_buy(ctx: dict) -> None:
         principal=principal,
         creative_id=creative_id,
         name=creative_payload["name"],
-        agent_url=agent_url,
-        format="display_300x250",
+        agent_url=_scenario_format_entry(ctx, env)["agent_url"],
+        format=_scenario_format_entry(ctx, env)["id"],
     )
     CreativeAssignmentFactory(
         creative=creative,
@@ -3064,8 +2979,6 @@ def given_existing_assignment_in_media_buy(ctx: dict) -> None:
         weight=100,
     )
     env._commit_factory_data()
-    ctx["package_existing"] = package_1
-    ctx["creative_orm"] = creative
     # Start building the assignments dict with the existing package
     ctx["assignments"] = {creative_id: [package_1.package_id]}
 
@@ -3083,17 +2996,15 @@ def given_new_assignment_to_another_package(ctx: dict) -> None:
     env = ctx["env"]
     tenant = ctx["tenant"]
     media_buy = ctx["media_buy"]
-    agent_url = env.DEFAULT_AGENT_URL
 
-    product = ProductFactory(tenant=tenant, format_ids=[{"agent_url": agent_url, "id": "display_300x250"}])
+    product = ProductFactory(tenant=tenant, format_ids=[_product_format_entry(ctx, env)])
     package_2 = MediaPackageFactory(
         media_buy=media_buy,
         package_config={"product_id": product.product_id, "budget": 500.0},
     )
     env._commit_factory_data()
-    ctx["package_new"] = package_2
     # Add the new package to the existing assignments dict
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"][creative_id].append(package_2.package_id)
 
 
@@ -3103,21 +3014,31 @@ def when_sync_creative_with_assignments(ctx: dict) -> None:
     creatives = ctx.get("creatives", [])
     kwargs: dict = {"creatives": creatives}
     if "assignments" in ctx:
-        kwargs["assignments"] = ctx["assignments"]
+        kwargs["assignments"] = _assignments_for_the_wire(ctx["assignments"], ctx.get("assignment_terms"))
+    if "assignment_entries" in ctx:
+        # Raw entries, verbatim: the shape a scenario about the ARRAY itself (an entry
+        # missing one of its required fields) needs, which the ctx map cannot express.
+        kwargs["assignments"] = ctx["assignment_entries"]
     if "validation_mode" in ctx:
         kwargs["validation_mode"] = ctx["validation_mode"]
     dispatch_request(ctx, **kwargs)
 
 
 def _get_media_buy_status_from_db(ctx: dict) -> str:
-    """Re-read the media buy status from the DB after sync."""
+    """Re-read the media buy status from the DB after sync.
+
+    The row is the only observable: sync-creatives-response.json describes the
+    creatives it processed and the packages they were assigned to, and says
+    nothing about the media buy's own lifecycle status. BR-RULE-038/040's
+    transition is therefore a persistence obligation, and ``_readback`` expires
+    the fixture's copy of the row first.
+    """
     from sqlalchemy import select
 
     from src.core.database.models import MediaBuy
 
-    _xfail_if_e2e(ctx)
     media_buy = ctx["media_buy"]
-    with db_session(ctx) as session:
+    with _readback(ctx) as session:
         mb = session.scalars(
             select(MediaBuy).filter_by(
                 media_buy_id=media_buy.media_buy_id,
@@ -3146,11 +3067,9 @@ def then_media_buy_status_should_transition_to(ctx: dict, target_status: str) ->
 def then_media_buy_status_should_remain(ctx: dict, expected_status: str) -> None:
     """Assert the media buy status did NOT change from the expected value."""
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected media buy to remain '{expected_status}' "
-            f"but sync raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected media buy to remain '{expected_status}' but sync raised {type(error).__name__}: {error}"
+    )
     actual = _get_media_buy_status_from_db(ctx)
     assert actual == expected_status, f"Expected media buy status to remain '{expected_status}', but got '{actual}'"
 
@@ -3213,34 +3132,322 @@ def then_workflow_step_should_be_created(ctx: dict) -> None:
 def then_background_ai_review_submitted(ctx: dict) -> None:
     """Assert ai-powered mode submitted a background AI review task (INV-4).
 
-    Production's ai-powered path in _processing.py submits a background task
-    via the task queue. The harness may not expose this directly — xfail if
-    no evidence of AI review submission is available.
+    Production's ai-powered path in _processing.py hands the creative to the
+    background AI-review executor. ``_assert_ai_reviews_taken_up`` names the
+    observable per transport — the submit in process, the committed verdict over
+    e2e_rest.
+    """
+    _assert_ai_reviews_taken_up(
+        ctx,
+        _requested_creative_ids(ctx),
+        why="INV-4: ai-powered submits one AI review per synced creative",
+    )
+
+
+# --- local-uc006-dry-run-out-of-transaction-effects: the AI-review submit seam ---
+#
+# The ai-powered branch of _processing.py hands a job to `_ai_review_executor`; that
+# job opens its OWN AdminCreativeUoW, COMMITS `status` + `data["ai_review"]`, and
+# then sends Slack and the push webhook. None of it is inside the sync
+# transaction, so a preview cannot undo it by rolling back — the submit itself is
+# the thing that must not happen. CreativeSyncEnv mocks the executor
+# (EXTERNAL_PATCHES "ai_review_executor"), which turns "no AI review happened"
+# into a value comparison instead of a race against a background thread.
+
+
+def _requested_creative_ids(ctx: dict) -> list[str]:
+    """The creative_ids this scenario's request named, sorted and deduplicated."""
+    return sorted({c["creative_id"] for c in ctx["creatives"]})
+
+
+def _assert_ai_reviews_taken_up(ctx: dict, expected: list[str], *, why: str) -> None:
+    """The background AI reviewer took up exactly *expected*, and nothing else.
+
+    ``env.ai_reviews_taken_up`` owns the per-transport answer: the mocked
+    executor's submit calls in process, and over e2e_rest a bounded wait on the
+    verdict the real reviewer commits (tests/harness/creative_sync.py). What the
+    step EXPECTS is also the wait target, so the negative sentence ("no AI review
+    is submitted") reads the current state without waiting for one, and the
+    positive sentences wait for the creatives they name.
     """
     _assert_success_response(ctx)
-    mock_submit = ctx["env"].mock.get("submit_ai_review") or ctx["env"].mock.get("ai_review")
-    assert mock_submit is not None, (
-        "Harness must expose a mock for AI review task submission "
-        "(submit_ai_review or ai_review) to verify INV-4 ai-powered behavior"
+    taken_up = ctx["env"].ai_reviews_taken_up(awaiting=expected)
+    assert taken_up == expected, f"{why}: expected AI reviews for {expected}, got {taken_up}"
+
+
+@when("the Buyer Agent previews the creative with dry_run true")
+def when_preview_creative_dry_run(ctx: dict) -> None:
+    """Dispatch the SAME sync_creatives request under dry_run=true.
+
+    Spec: creative/sync-creatives-request.json#/properties/dry_run — "preview
+    changes without applying them."
+    """
+    ctx["dry_run"] = True
+    when_sync_creative(ctx)
+
+
+@then("the AI review submissions name exactly the synced creative")
+def then_ai_review_submitted_for_synced_creative(ctx: dict) -> None:
+    """Control: the live ai-powered branch submits one review, for THIS creative.
+
+    Naming the creative_id (rather than counting calls) is what makes the sibling
+    preview scenario's empty-list assertion non-vacuous: a wrong patch target or a
+    dead ai-powered branch fails here first.
+    """
+    _assert_ai_reviews_taken_up(
+        ctx,
+        _requested_creative_ids(ctx),
+        why="the ai-powered live sync must submit an AI review for the creative it synced",
     )
-    mock_submit.assert_called_once()
+
+
+@then("no AI review is submitted")
+def then_no_ai_review_submitted(ctx: dict) -> None:
+    """A preview must not submit a review whose job commits outside its transaction."""
+    _assert_ai_reviews_taken_up(
+        ctx,
+        [],
+        why=(
+            "dry_run must submit no AI review — that job opens its own AdminCreativeUoW "
+            "and commits a verdict, which the preview's rollback cannot undo"
+        ),
+    )
+
+
+@then("each AI review submission observes the creative exactly as the sync committed it")
+def then_ai_review_observes_committed_creative(ctx: dict) -> None:
+    """The live-branch half of the seam: the effect runs AFTER its transaction commits.
+
+    The submitted job opens its own session, so committed state is the only
+    state it can read. CreativeSyncEnv records, at each submit, what an
+    INDEPENDENT connection sees; this compares that against what the finished
+    request actually left on the row. They are the same read of the same row, so
+    equality is the whole invariant, and each branch fails it differently while the
+    submit stays inside the transaction: the create branch's row is not there at all
+    (``None``), the update branch's is there carrying its PRE-update state.
+    """
+    _assert_success_response(ctx)
+    observed = ctx["env"].ai_review_commit_observations
+    expected_ids = [c["creative_id"] for c in ctx["creatives"]]
+    committed = _persisted_creative_fingerprints(ctx)
+
+    assert sorted(observed) == sorted(expected_ids), (
+        f"expected an AI-review observation for each of {expected_ids}, got {sorted(observed)}"
+    )
+    assert observed == {creative_id: committed.get(creative_id) for creative_id in expected_ids}, (
+        f"the AI review was handed creatives the sync had not committed: observed {observed}, "
+        f"committed {committed} — the job opens its own session, so it would have read exactly "
+        "what is observed here (None = no row yet; a differing fingerprint = pre-update state)"
+    )
+
+
+def _creative_agent_calls(ctx: dict) -> list[str]:
+    """Outbound creative-agent calls the sync made, as method names.
+
+    ``registry`` is the patched external service
+    (CreativeSyncEnv.EXTERNAL_PATCHES), so build_creative / preview_creative
+    land on it as recorded calls. This is the ONLY way to grade the four
+    outbound gates: they exist to make a preview DIFFER from a live run in side
+    effects, and the dry_run parity oracle compares preview against live, so by
+    construction it can never see them (a parity oracle scores un-gating as MORE
+    parity, not less).
+    """
+    registry = ctx["env"].mock.get("registry")
+    assert registry is not None, (
+        "CreativeSyncEnv must patch src.core.creative_agent_registry.get_creative_agent_registry "
+        "for the outbound creative-agent calls to be observable"
+    )
+    # Read the two methods directly rather than parent.method_calls: the env
+    # ASSIGNS build_creative as its own AsyncMock, which replaces the auto-created
+    # child and so never lands in the parent's method_calls -- an accessor reading
+    # only method_calls would report "no calls" for a live run and grade nothing.
+    agent_registry = registry.return_value
+    return [
+        name
+        for name in ("build_creative", "preview_creative")
+        if getattr(getattr(agent_registry, name, None), "call_count", 0)
+    ]
+
+
+@given("a generative creative whose format is served by a creative agent")
+def given_generative_creative_served_by_agent(ctx: dict) -> None:
+    """A creative whose format actually REACHES the creative agent.
+
+    The plain "known format_id" creative is static, and a static creative never
+    calls build_creative/preview_creative at all -- so a preview asserting "no
+    agent request" against it would pass without the gates existing. Generative
+    is the shape that exercises them.
+    """
+    env = ctx["env"]
+    ensure_tenant_principal(ctx, env)
+
+    fmt = env.setup_generative_build(format_id="gen_banner")
+    creative_id = "creative-generative-001"
+    ctx.setdefault("creatives", []).append(
+        CreativeAssetRequestFactory.payload(
+            creative_id=creative_id,
+            name="Generative Creative",
+            format_id=fmt,
+            # Built through the canonical AssetSpec mechanism, never hand-rolled:
+            # 3.1 assets are a discriminated union keyed by role, and a hand-built
+            # dict misses the asset_type discriminator (GH #1391).
+            assets=build_assets(text_spec("prompt", content="a headline about running shoes")),
+        )
+    )
+    ctx["creative_format_id"] = fmt["id"]
+    ctx["creative_agent_url"] = fmt["agent_url"]
+    ctx["expected_creative_ids"] = [creative_id]
+
+
+def _persisted_creative_fingerprints(ctx: dict) -> dict[str, tuple]:
+    """A per-row FINGERPRINT of the tenant's library: {creative_id: (status, data)}.
+
+    Not the id SET. An id set can only see a row being ADDED, so a preview that
+    commits an in-place UPDATE to a row that already existed is invisible to it
+    -- and the update branch is exactly where that happens. Measured: with the
+    transaction disposal inverted, the seeded rows came back carrying
+    generative_build_result / preview_response and an id-set oracle still passed.
+    """
+    from src.core.database.repositories.uow import CreativeUoW
+
+    with CreativeUoW(ctx["tenant"].tenant_id) as uow:
+        assert uow.creatives is not None
+        return {
+            c.creative_id: creative_fingerprint(c)
+            for c in uow.creatives.list_by_principal(ctx["principal"].principal_id)
+        }
+
+
+@given(parsers.parse("a {creative_state} creative on a {format_kind} format served by a creative agent"))
+def given_creative_reaching_the_agent(ctx: dict, creative_state: str, format_kind: str) -> None:
+    """A creative payload that reaches EXACTLY ONE of production's four outbound sites.
+
+    The four ``registry.build_creative`` / ``registry.preview_creative`` calls in
+    _processing.py partition on two independent dimensions, and a payload only
+    ever reaches one cell:
+
+        new      x generative  -> build_creative   (create branch)
+        new      x static      -> preview_creative (create branch)
+        existing x generative  -> build_creative   (update branch)
+        existing x static      -> preview_creative (update branch)
+
+    Which is why one scenario cannot grade all four: an outline over both
+    dimensions is the only shape that reaches every site. ``static`` here means
+    agent-served but non-generative -- ``output_format_ids`` empty is precisely
+    what sends production down the preview branch instead of the build branch.
+    """
+    env = ctx["env"]
+    ensure_tenant_principal(ctx, env)
+
+    generative = format_kind == "generative"
+    fmt = env.configure_agent_served_creative(
+        generative=generative, format_id="gen_banner" if generative else "static_300x250"
+    )
+
+    creative_id = f"creative-{creative_state}-{format_kind}-001"
+    ctx.setdefault("creatives", []).append(
+        CreativeAssetRequestFactory.payload(
+            creative_id=creative_id,
+            name="Agent-served Creative",
+            format_id=fmt,
+            assets=build_assets(text_spec("prompt", content="a headline about running shoes")),
+        )
+    )
+    ctx["creative_format_id"] = fmt["id"]
+    ctx["creative_agent_url"] = fmt["agent_url"]
+    ctx["expected_creative_ids"] = [creative_id]
+
+    if creative_state == "existing":
+        # The update branch is unreachable for a creative that is not already on
+        # file, so two of the four sites can only be graded from a seeded row.
+        given_creative_already_exists(ctx)
+
+    # The persisted set BEFORE the request. A preview must leave it exactly as
+    # it found it -- which for a new creative means "still empty" and for an
+    # existing one means "still just that row", not "empty".
+    ctx["pre_request_library"] = _persisted_creative_fingerprints(ctx)
+
+
+@then("no creative agent request is made")
+def then_no_creative_agent_request(ctx: dict) -> None:
+    """A preview must not fire a request at a creative agent's endpoint.
+
+    Same rule the accounts branch states for activation proofs
+    (src/core/tools/accounts.py: "a preview must not fire a request at a buyer's
+    endpoint") and that plan section 6 keeps _resolve_activation_proofs' own
+    dry_run branch for. An outbound HTTP call is not undone by the transaction's
+    rollback, so a preview that makes one has already had a real effect on a
+    third party.
+    """
+    _assert_success_response(ctx)
+    calls = _creative_agent_calls(ctx)
+    assert calls == [], (
+        f"dry_run called the creative agent: {calls} — an outbound request is not "
+        "reachable by the preview's rollback, so the preview has already acted"
+    )
+
+
+@then("the creative agent is called to build or preview the creative")
+def then_creative_agent_called(ctx: dict) -> None:
+    """Non-vacuity control for the preview assertion above.
+
+    Without this, "no creative agent request is made" would also pass against a
+    renamed method, a wrong patch target, or a format that never reaches the
+    agent at all -- i.e. it would grade nothing.
+    """
+    _assert_success_response(ctx)
+    calls = _creative_agent_calls(ctx)
+    assert calls != [], (
+        "the live branch made no creative-agent call, so the preview scenario's 'no request' assertion proves nothing"
+    )
+
+
+@then("no creative is persisted for the tenant")
+def then_no_creative_persisted_for_tenant(ctx: dict) -> None:
+    """The other half of the same claim: the preview left the library untouched.
+
+    Compared against the set captured BEFORE the request, not against empty: on
+    the update cells the Given legitimately seeds a row, and asserting emptiness
+    there would fail an honest preview. What must hold either way is that the
+    request added nothing.
+    """
+    _assert_success_response(ctx)
+    before = ctx.get("pre_request_library", {})
+    after = _persisted_creative_fingerprints(ctx)
+    added = sorted(set(after) - set(before))
+    removed = sorted(set(before) - set(after))
+    modified = sorted(cid for cid in set(after) & set(before) if after[cid] != before[cid])
+    # MODIFIED is what covers this lane's riskiest deletion: delete_missing lost
+    # its `if not dry_run:` guard, so a preview now performs the deactivation
+    # write and relies entirely on the rollback. That write ARCHIVES (sets
+    # status), and list_by_principal does not filter on status, so an
+    # un-rolled-back deactivation shows up as a MODIFIED row, never a missing
+    # one -- measured, by injecting exactly that write out-of-transaction.
+    # REMOVED is defence-in-depth: nothing in the sync path can make a row
+    # disappear today, so it guards against a future hard delete rather than
+    # against delete_missing.
+    assert added == [] and removed == [] and modified == [], (
+        f"dry_run wrote to the library — added {added}, removed {removed}, modified {modified}; "
+        "a preview must leave it exactly as it found it"
+    )
 
 
 @then("Slack notification should be deferred until AI review completes")
 def then_slack_notification_deferred(ctx: dict) -> None:
     """Assert Slack notification was NOT sent immediately for ai-powered mode (INV-4).
 
-    In ai-powered mode, Slack notification is deferred until AI review completes.
-    This means send_notifications should NOT have been called during the sync.
-    The mock must exist (harness wires it) and must not have been called.
+    In ai-powered mode, Slack notification is deferred until AI review completes, so the
+    Slack sender must not have been used during the sync. Production enters the
+    notification step for every creative needing approval and decides inside it, so the
+    step being entered is not the observable; the sender is.
     """
-    _assert_success_response(ctx)
-    mock_notify = ctx["env"].mock.get("send_notifications")
-    assert mock_notify is not None, "send_notifications mock must be wired in CreativeSyncEnv to verify Slack deferral"
-    assert mock_notify.call_count == 0, (
-        f"ai-powered mode must defer Slack notification until AI review completes (INV-4), "
-        f"but send_notifications was called {mock_notify.call_count} time(s) during sync"
-    )
+    _assert_slack_notified(ctx, [], why="INV-4: ai-powered defers Slack until AI review completes")
+    # DEFERRED is not NEVER. Asserting only "nothing was sent" is the body
+    # ``then_no_slack_notification`` already has, and it passes just as happily when the
+    # notification is never sent at all -- which is a different invariant (INV-2/INV-6) and
+    # a bug on this path. What makes this sentence its own claim is that something exists to
+    # defer TO, so the review task is asserted here as well.
+    then_background_ai_review_submitted(ctx)
 
 
 # --- nbfu: workflow step attributes (BR-RULE-037 INV-5) ---
@@ -3279,7 +3486,20 @@ def then_workflow_step_has_status(ctx: dict, expected: str) -> None:
 
 @given("a creative with any format_id")
 def given_creative_with_any_format(ctx: dict) -> None:
-    """Set up a creative with an arbitrary format_id (format check is irrelevant)."""
+    """A creative whose own format is deliberately UNCONSTRAINED.
+
+    The two scenarios on this sentence — BR-RULE-039 INV-3 (empty product
+    format_ids allows all formats) and INV-6 (no product_id skips the check) —
+    grade the PRODUCT side of format compatibility. The creative's format is the
+    part that must not matter, so the arrangement here is the plain known-format
+    creative and nothing else.
+
+    Deliberately NOT registering the format with the creative agent, which is what
+    separates this from its two neighbours: arranging an agent-served format would
+    establish a property these scenarios are asserting the absence of a dependence
+    on, and a later reader would not be able to tell which of the two the pass
+    depended on.
+    """
     given_creative_with_format(ctx)
 
 
@@ -3289,7 +3509,7 @@ def given_assignments_to_package_no_product_id(ctx: dict) -> None:
     from tests.factories import MediaBuyFactory, MediaPackageFactory
 
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
     media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
@@ -3300,7 +3520,7 @@ def given_assignments_to_package_no_product_id(ctx: dict) -> None:
     env._commit_factory_data()
     ctx["media_buy"] = media_buy
     ctx["package"] = package
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: [package.package_id]}
 
 
@@ -3374,7 +3594,7 @@ def _setup_assignment_package_for_format(
     from tests.factories import MediaBuyFactory, MediaPackageFactory, ProductFactory
 
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
 
@@ -3399,7 +3619,7 @@ def _setup_assignment_package_for_format(
     env._commit_factory_data()
     ctx["media_buy"] = media_buy
     ctx["package"] = package
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: [package.package_id]}
 
 
@@ -3416,30 +3636,6 @@ def given_assignment_product_accepts_format(ctx: dict) -> None:
         ctx,
         product_format_ids=[{"agent_url": agent_url, "id": format_id}],
     )
-
-
-@given("an assignment to a package whose product format has trailing slash")
-def given_assignment_product_trailing_slash(ctx: dict) -> None:
-    """Create a package whose product format agent_url has a trailing slash.
-
-    Production's normalize_url() strips trailing '/' before comparison,
-    so this should still match the creative's agent_url.
-    """
-    format_id = ctx["creative_format_id"]
-    agent_url_with_slash = ctx["creative_agent_url"] + "/"
-    _setup_assignment_package_for_format(
-        ctx,
-        product_format_ids=[{"agent_url": agent_url_with_slash, "id": format_id}],
-    )
-
-
-@given("an assignment to a package whose product has empty format_ids")
-def given_assignment_product_empty_format_ids(ctx: dict) -> None:
-    """Create a package whose product has an empty format_ids list.
-
-    Per BR-RULE-039 INV-3: empty format_ids means all formats are allowed.
-    """
-    _setup_assignment_package_for_format(ctx, product_format_ids=[])
 
 
 @given("an assignment to a package with no product_id")
@@ -3466,19 +3662,6 @@ def given_assignment_product_rejects_format(ctx: dict) -> None:
     ctx["validation_mode"] = "strict"
 
 
-@then("the assignment should match after URL normalization")
-def then_assignment_matches_after_normalization(ctx: dict) -> None:
-    """Assert the assignment succeeded despite the product URL having a trailing slash.
-
-    Production's normalize_url() strips trailing '/' from both URLs before
-    comparison, so the assignment should be created.
-    """
-    assert "error" not in ctx, f"Expected success (URL normalization) but got error: {ctx.get('error')}"
-    assigned = _get_creative_assigned_to(ctx)
-    expected = ctx["package"].package_id
-    assert expected in assigned, f"Expected {expected!r} in assigned_to after URL normalization, got {assigned}"
-
-
 @then("the assignment should be created (all formats allowed)")
 def then_assignment_created_all_formats(ctx: dict) -> None:
     """Assert the assignment succeeded because the product has no format restrictions.
@@ -3491,110 +3674,73 @@ def then_assignment_created_all_formats(ctx: dict) -> None:
     assert expected in assigned, f"Expected {expected!r} in assigned_to (empty format_ids), got {assigned}"
 
 
-@then("the format check should be skipped entirely")
-def then_format_check_skipped_entirely(ctx: dict) -> None:
-    """Assert the format check was skipped because the package has no product_id.
-
-    Per BR-RULE-039 INV-6: no product_id on package means format check is skipped.
-    """
-    assert "error" not in ctx, f"Expected success (no product_id) but got error: {ctx.get('error')}"
-    assigned = _get_creative_assigned_to(ctx)
-    expected = ctx["package"].package_id
-    assert expected in assigned, f"Expected {expected!r} in assigned_to (no product_id), got {assigned}"
-
-
 # --- yqpf: format compatibility — format_id key variants + URL normalization (BR-RULE-039) ---
 
 
-@given(parsers.parse('a creative with format agent_url "{agent_url}"'))
-def given_creative_with_format_agent_url(ctx: dict, agent_url: str) -> None:
-    """Set up a creative payload with a specific agent_url and default format_id.
+def _product_format_at_respelled_agent(ctx: dict, respell) -> None:
+    """Seed the product's format at the SAME agent the creative uses, spelled differently.
 
-    For URL normalization testing: the agent_url may have trailing slash or /mcp
-    that production should normalize before comparison.
+    Both INV-1 scenarios are this, with one function swapped: re-spell the agent_url on an
+    axis the pinned canonicalization algorithm COLLAPSES (host case) or one it PRESERVES
+    (the path), and let the wire say whether the seller agrees.
+
+    The WHOLE entry comes from the shared helper before ``respell`` touches only its
+    agent_url. A format's identity is the (agent_url, id) PAIR, so a re-spelled agent
+    carrying a hand-picked id would name a format that agent does not serve, and the
+    scenario would grade the wrong thing.
+
+    The agent is whatever the CURRENT transport actually serves. The original version used
+    a fictional "https://agent.example.com", which no live registry can resolve: the
+    scenario could not succeed on e2e_rest in principle, and in-process it only appeared to
+    because the registry is mocked.
     """
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
-    format_id = ctx.get("creative_format_id", "display_300x250")
-    creative_id = "creative-url-norm-001"
-    creative_payload = {
-        "creative_id": creative_id,
-        "name": "URL Normalization Creative",
-        "format_id": {"id": format_id, "agent_url": agent_url},
-        "assets": build_assets(image_spec("image")),
-    }
-    ctx.setdefault("creatives", []).append(creative_payload)
-    ctx["creative_format_id"] = format_id
-    ctx["creative_agent_url"] = agent_url
-    ctx["creative_id"] = creative_id
-
-
-@given(parsers.parse('a product with format agent_url "{agent_url}"'))
-def given_product_with_format_agent_url(ctx: dict, agent_url: str) -> None:
-    """Set up a product with a specific agent_url and the same format_id as the creative.
-
-    For URL normalization testing: this product's agent_url may differ from the
-    creative's (e.g., no trailing slash) but should still match after normalization.
-    """
-    env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
-    format_id = ctx.get("creative_format_id", "display_300x250")
-    ctx["product_agent_url"] = agent_url
-    # Don't create package yet — 'matching format_id strings' step may do it
-
-
-@given('a product with format_ids using "format_id" key')
-def given_product_format_ids_using_format_id_key(ctx: dict) -> None:
-    """Create a product whose format_ids use {"format_id": ...} instead of {"id": ...}.
-
-    Per BR-RULE-039 INV-4: products may store format_ids with either "id" or
-    "format_id" as the key name. The format compatibility check must accept both.
-
-    SPEC-PRODUCTION GAP: The DB trigger ``validate_format_ids`` enforces that
-    each entry has ``agent_url`` and ``id`` keys. The ``format_id`` key variant
-    is rejected at the database level, so this scenario cannot be exercised.
-    """
-    pytest.xfail(
-        "SPEC-PRODUCTION GAP: DB trigger validate_format_ids requires 'id' key, "
-        "rejects 'format_id' key variant. Product cannot be created with "
-        'format_ids=[{"format_id": ..., "agent_url": ...}]. '
-        "Spec BR-RULE-039 INV-4 says both should be accepted."
+    ensure_tenant_principal(ctx, env)
+    entry = dict(_scenario_format_entry(ctx, env))
+    original = entry["agent_url"]
+    entry["agent_url"] = respell(original)
+    assert entry["agent_url"] != original, (
+        f"this step exists to make the two spellings DIFFER, but re-spelling {original!r} "
+        f"produced the same string, so the scenario would grade nothing"
     )
+    _setup_assignment_package_for_format(ctx, product_format_ids=[entry])
 
 
-@given("a creative with a matching format")
-def given_creative_with_matching_format(ctx: dict) -> None:
-    """Ensure a creative payload exists with a format that matches the product.
+@given("a product whose format agent_url is the same agent with the host upper-cased")
+def given_product_agent_url_host_upper_cased(ctx: dict) -> None:
+    """BR-RULE-039 INV-1: host case is collapsed at step 2, for ANY URL.
 
-    If no creative exists yet, creates a default one with 'display_300x250'.
-    The preceding 'a product with format_ids ...' step uses the same format_id,
-    so they should match on format compatibility check.
+    Wire-observable: if canonicalization stopped equating the two spellings the product's
+    format would not resolve against the creative's, no assignment would be created, and
+    assigned_to would come back empty. That is why this is a scenario and not a unit test
+    of a string helper.
+
+    Host case rather than a trailing slash: step 5 collapses a trailing slash only on an
+    EMPTY path, so a trailing-slash scenario is true of the in-process seed and false of
+    the e2e one, whose agent_url carries "/api/creative-agent". Host case is spec-true on
+    every transport, so the expectation does not need revisiting per transport -- or when
+    the vendored canonicalizer is replaced by the SDK's.
     """
-    env = ctx["env"]
-    if not ctx.get("creatives"):
-        given_creative_with_format(ctx)
+
+    def upper_host(url: str) -> str:
+        scheme, sep, rest = url.partition("://")
+        host, slash, path = rest.partition("/")
+        return f"{scheme}{sep}{host.upper()}{slash}{path}"
+
+    _product_format_at_respelled_agent(ctx, upper_host)
 
 
-@given("matching format_id strings")
-def given_matching_format_id_strings(ctx: dict) -> None:
-    """Ensure the creative and product use the same format_id string.
+@given("a product whose format agent_url is the same host at a different path")
+def given_product_agent_url_different_path(ctx: dict) -> None:
+    """BR-RULE-039 INV-1b: the PATH is preserved, so a different path is a different agent.
 
-    For URL normalization testing: the agent_urls may differ (trailing slash,
-    /mcp suffix) but the format_id strings must match exactly.
+    The negative half. ``remove_dot_segments`` normalizes a path but never discards one,
+    and the pin's own example agent_url is path-bearing
+    ("https://publisher.com/.well-known/adcp/sales") -- so one host may serve MCP at /mcp
+    and A2A at /a2a as two distinct agents. A canonicalizer that collapsed too much would
+    satisfy INV-1 and fail here; only the pair pins the rule.
     """
-    env = ctx["env"]
-    creative_format = ctx.get("creative_format_id")
-    if not creative_format:
-        creative_format = "display_300x250"
-        ctx["creative_format_id"] = creative_format
-    # If no product/package exists yet, create one with matching format_id
-    # but the agent_url is already set by the preceding Given step
-    if "package" not in ctx:
-        product_agent_url = ctx.get("product_agent_url", env.DEFAULT_AGENT_URL)
-        _setup_assignment_package_for_format(
-            ctx,
-            product_format_ids=[{"agent_url": product_agent_url, "id": creative_format}],
-        )
+    _product_format_at_respelled_agent(ctx, lambda url: url.rstrip("/") + "/some-other-agent")
 
 
 @given("the creative agent is reachable")
@@ -3609,7 +3755,7 @@ def given_creative_agent_is_reachable(ctx: dict) -> None:
 
     env = ctx["env"]
     agent_url = env.DEFAULT_AGENT_URL
-    format_id = ctx.get("creative_format_id", "display_300x250")
+    format_id = _scenario_format_id(ctx, env)
 
     from tests.factories.format import FormatFactory, FormatIdFactory
 
@@ -3619,89 +3765,44 @@ def given_creative_agent_is_reachable(ctx: dict) -> None:
     registry.get_format = AsyncMock(return_value=fmt)
 
 
-@when("format compatibility is checked")
-def when_format_compatibility_checked(ctx: dict) -> None:
-    """Dispatch sync_creatives — the format compatibility check happens inside.
-
-    This is the same as 'the Buyer Agent syncs the creative' but named for
-    scenarios that focus on the format check behavior.
-    """
-    creatives = ctx.get("creatives", [])
-    kwargs: dict = {"creatives": creatives}
-    if "assignments" in ctx:
-        kwargs["assignments"] = ctx["assignments"]
-    if "validation_mode" in ctx:
-        kwargs["validation_mode"] = ctx["validation_mode"]
-    dispatch_request(ctx, **kwargs)
-
-
-@then('the formats should match using the "format_id" key')
-def then_formats_match_using_format_id_key(ctx: dict) -> None:
-    """Assert the format check passed with product using "format_id" key.
-
-    Production may not support the "format_id" key variant — if the assignment
-    fails with a format-related error, mark as SPEC-PRODUCTION GAP.
-    """
-    error = ctx.get("error")
-    if error is not None:
-        err_str = str(error).lower()
-        if "format" in err_str:
-            pytest.xfail(
-                f"SPEC-PRODUCTION GAP: product format_ids using 'format_id' key should be accepted, "
-                f"but production raised format error: {error}"
-            )
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected success with format_id key, "
-            f"but production raised {type(error).__name__}: {error}"
-        )
-    resp = require_payload(ctx)
-    assigned = _get_creative_assigned_to(ctx)
-    expected = ctx["package"].package_id
-    assert expected in assigned, f"Expected {expected!r} in assigned_to (format_id key variant), got {assigned}"
-
-
-@then("the formats should match after URL normalization")
-def then_formats_match_after_url_normalization(ctx: dict) -> None:
-    """Assert the format check passed after URL normalization.
-
-    This is the same assertion as 'the assignment should match after URL normalization'
-    but named for the rule-039-inv1 scenario.
-    """
-    error = ctx.get("error")
-    if error is not None:
-        err_str = str(error).lower()
-        if "format" in err_str or "url" in err_str:
-            pytest.xfail(f"SPEC-PRODUCTION GAP: URL normalization should allow match, but production raised: {error}")
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected success after URL normalization, "
-            f"but production raised {type(error).__name__}: {error}"
-        )
-    resp = require_payload(ctx)
-    assigned = _get_creative_assigned_to(ctx)
-    expected = ctx["package"].package_id
-    assert expected in assigned, f"Expected {expected!r} in assigned_to after URL normalization, got {assigned}"
-
-
 # --- rx9u: asset-level provenance replaces creative-level (BR-RULE-094 INV-5) ---
 
 
 @given(parsers.parse('a creative with provenance declaring digital_source_type "{source_type}"'))
 def given_creative_with_provenance_source_type(ctx: dict, source_type: str) -> None:
-    """Build a creative payload with creative-level provenance.digital_source_type."""
+    """Build a creative payload with creative-level provenance.digital_source_type.
+
+    BOTH HALVES of the format identity come from the transport switch, and the assets
+    with them. This step used to take the ID from ``_format_payload`` and pin the
+    ``agent_url`` to ``env.DEFAULT_AGENT_URL``, which is precisely the defect
+    ``_scenario_format_entry``'s docstring names with the halves swapped: over e2e_rest the
+    payload claimed the live catalog's ``display_300x250_image`` at
+    ``creative.test.example.com``, an agent that does not serve it. ``fetch_format_spec``
+    then resolved nothing and ``_validate_creative_input`` refused the entry with
+    ``AdCPFormatNotFoundError`` (src/core/tools/creatives/_validation.py) -- inside a
+    transport-level SUCCESS, so the compliance Then above passed and the read-back
+    underneath reported "No creative found in DB". The factory's default assets were wrong
+    for the same reason: they key an ``image`` slot, and the catalog format wants
+    ``banner_image``.
+
+    In process the pair and the assets are byte-identical to what this built before.
+    """
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
-    format_id = "display_300x250"
+    ensure_tenant_principal(ctx, env)
+    format_id_entry = _creative_format_id_entry(ctx, env)
+    _format_id, _agent_url, assets = _format_payload(ctx, env)
     creative_id = "creative-provenance-source-001"
-    payload: dict = {
-        "creative_id": creative_id,
-        "name": "Provenance Source Type Creative",
-        "format_id": {"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
-        "provenance": {"digital_source_type": source_type},
-        "assets": build_assets(image_spec("image", url="https://example.com/banner.png")),
-    }
+    payload: dict = CreativeAssetRequestFactory.payload(
+        creative_id=creative_id,
+        name="Provenance Source Type Creative",
+        format_id=format_id_entry,
+        assets=assets,
+        # ADDING a real field, not perturbing one: provenance is declared on
+        # CreativeAssetRequest, so extra="forbid" would catch a typo here.
+        provenance={"digital_source_type": source_type},
+    )
     ctx.setdefault("creatives", []).append(payload)
-    ctx["creative_format_id"] = format_id
-    ctx["creative_provenance_source_type"] = source_type
+    ctx["creative_format_id"] = format_id_entry["id"]
 
 
 @given(parsers.parse('an asset within the creative declaring digital_source_type "{source_type}"'))
@@ -3729,28 +3830,28 @@ def then_asset_has_provenance_not_inherited(ctx: dict, expected: str, inherited:
     provenance should replace creative-level entirely (no field-level merge).
     """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected provenance assertion but sync raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected provenance assertion but sync raised {type(error).__name__}: {error}"
+    )
     creative = _get_creative_from_db(ctx)
     data = getattr(creative, "data", None) or {}
-    assets = data.get("assets", {})
-    if not assets:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: creative.data has no 'assets' key — "
-            "asset-level provenance storage not implemented in production. "
-            "BR-RULE-094 INV-5: asset-level provenance should replace creative-level."
-        )
-    first_asset = next(iter(assets.values())) if assets else {}
-    asset_provenance = first_asset.get("provenance", {})
+    # `or {}` at every hop, never a .get default: the default applies only to an ABSENT
+    # key, and the live server stores these as explicit NULLs where the in-process path
+    # leaves them absent. `data.get("provenance", {})` therefore returned None in-network
+    # and the next .get raised AttributeError, which says nothing about the obligation.
+    # This is a band-aid, kept only so the next run reports the obligation instead of a
+    # crash — the defect is the untyped traversal itself: FIXME(#2236) on
+    # `_get_creative_from_db`.
+    assets = data.get("assets") or {}
+    assert assets, (
+        "SPEC-PRODUCTION GAP: creative.data has no 'assets' key — asset-level provenance storage not implemented in production. BR-RULE-094 INV-5: asset-level provenance should replace creative-level."
+    )
+    first_asset = next(iter(assets.values())) or {}
+    asset_provenance = (first_asset or {}).get("provenance") or {}
     asset_source = asset_provenance.get("digital_source_type")
-    if asset_source is None:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: asset-level provenance.digital_source_type not stored "
-            "in creative.data.assets — production may not support per-asset provenance yet. "
-            "BR-RULE-094 INV-5."
-        )
+    assert asset_source is not None, (
+        "SPEC-PRODUCTION GAP: asset-level provenance.digital_source_type not stored in creative.data.assets — production may not support per-asset provenance yet. BR-RULE-094 INV-5."
+    )
     assert asset_source == expected, (
         f"INV-5: Expected asset provenance '{expected}', got '{asset_source}' "
         f"(creative-level was '{inherited}' — should NOT be inherited)"
@@ -3768,23 +3869,25 @@ def then_no_field_level_merging(ctx: dict) -> None:
     assert "error" not in ctx, f"Expected no-merge assertion but sync raised: {ctx.get('error')}"
     creative = _get_creative_from_db(ctx)
     data = getattr(creative, "data", None) or {}
-    assets = data.get("assets", {})
-    if not assets:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: creative.data has no 'assets' key — "
-            "cannot verify no-merge semantics. BR-RULE-094 INV-5."
-        )
-    creative_provenance = data.get("provenance", {})
-    first_asset = next(iter(assets.values())) if assets else {}
-    asset_provenance = first_asset.get("provenance", {})
-    if not asset_provenance:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: no asset-level provenance stored — "
-            "cannot verify replacement semantics. BR-RULE-094 INV-5."
-        )
-    # Full replacement: creative-only provenance keys must NOT appear in asset
-    creative_only_keys = set(creative_provenance.keys()) - {"digital_source_type"}
-    leaked = {k for k in creative_only_keys if k in asset_provenance}
+    # `or {}` at every hop — see the sibling step above: a .get default does not fire on a
+    # key that is present and null, which is how the live server stores an undeclared
+    # block. Band-aid, same FIXME(#2236).
+    assets = data.get("assets") or {}
+    assert assets, (
+        "SPEC-PRODUCTION GAP: creative.data has no 'assets' key — cannot verify no-merge semantics. BR-RULE-094 INV-5."
+    )
+    creative_provenance = data.get("provenance") or {}
+    first_asset = next(iter(assets.values())) or {}
+    asset_provenance = (first_asset or {}).get("provenance") or {}
+    assert asset_provenance, (
+        "SPEC-PRODUCTION GAP: no asset-level provenance stored — cannot verify replacement semantics. BR-RULE-094 INV-5."
+    )
+    # Full replacement: a creative-only provenance VALUE must not appear on the asset.
+    # Provenance is stored as the typed model it is, so every optional field is present
+    # on both sides, None when undeclared; a None is an absent field, not a merged one,
+    # and only a declared creative-level value that turns up on the asset is a leak.
+    creative_only_keys = {k for k, v in creative_provenance.items() if v is not None} - {"digital_source_type"}
+    leaked = {k for k in creative_only_keys if asset_provenance.get(k) is not None}
     assert not leaked, (
         f"INV-5: Field-level merge detected — creative-only provenance fields "
         f"leaked into asset provenance: {leaked}. "
@@ -3830,38 +3933,6 @@ def then_no_provenance_warning(ctx: dict) -> None:
         assert not provenance_warnings, f"Expected no provenance warnings, got: {provenance_warnings}"
 
 
-@then("the creative should have a provenance warning")
-@then("the response should include a warning about missing provenance")
-@then("a warning should be appended about missing provenance")
-def then_creative_has_provenance_warning(ctx: dict) -> None:
-    """Assert the creative result contains a provenance-related warning."""
-    then_provenance_warning_generated(ctx)
-
-
-@then("the creative should be flagged for review")
-def then_creative_flagged_for_review(ctx: dict) -> None:
-    """Assert the creative status is 'pending_review' (flagged for review due to missing provenance)."""
-    _assert_success_response(ctx)
-    creative = _get_creative_from_db(ctx)
-    assert creative.status == "pending_review", (
-        f"Expected creative flagged for review (status='pending_review'), got '{creative.status}'"
-    )
-
-
-@then("the creative should be processed (not rejected)")
-def then_creative_processed_not_rejected(ctx: dict) -> None:
-    """Assert the creative was processed (not rejected) -- non-blocking enforcement (INV-1)."""
-    assert "error" not in ctx, f"Expected creative to be processed (not rejected), but got error: {ctx.get('error')}"
-    resp = require_payload(ctx)
-    results = resp.creatives
-    assert results, "Expected creative results, but response.creatives is empty"
-    first = results[0]
-    action_str = _action_str(first.action)
-    assert action_str != "failed", (
-        f"Expected creative to be processed (not rejected), but action was 'failed'. Errors: {first.errors}"
-    )
-
-
 @then("no workflow steps should be created")
 def then_no_workflow_steps(ctx: dict) -> None:
     """Assert no workflow steps were created (INV-2: auto-approve)."""
@@ -3871,32 +3942,14 @@ def then_no_workflow_steps(ctx: dict) -> None:
 
 @then("no Slack notification should be sent")
 def then_no_slack_notification(ctx: dict) -> None:
-    """Assert no Slack notification was sent (INV-2/INV-6).
-
-    The harness must wire the send_notifications mock so absence of the
-    notification seam is detectable. A missing mock is a harness setup error.
-    """
-    _assert_success_response(ctx)
-    mock_notify = ctx["env"].mock.get("send_notifications")
-    assert mock_notify is not None, "Harness must wire send_notifications mock to verify no-notification invariant"
-    assert mock_notify.call_count == 0, (
-        f"Expected no Slack notification but send_notifications was called "
-        f"{mock_notify.call_count} time(s). See BR-RULE-037 INV-6."
-    )
+    """Assert no Slack notification was sent (INV-2/INV-6)."""
+    _assert_slack_notified(ctx, [], why="BR-RULE-037 INV-6: Slack requires require-human AND a webhook")
 
 
 @then("a Slack notification should be sent immediately")
 def then_slack_notification_sent(ctx: dict) -> None:
     """Assert Slack notification was sent immediately (INV-3: require-human + webhook configured)."""
-    _assert_success_response(ctx)
-    mock_notify = ctx["env"].mock.get("send_notifications")
-    assert mock_notify is not None, (
-        "send_notifications mock must be wired in CreativeSyncEnv to verify Slack notification"
-    )
-    assert mock_notify.call_count == 1, (
-        f"Expected exactly 1 Slack notification call (require-human + webhook configured), "
-        f"got {mock_notify.call_count} call(s)"
-    )
+    _assert_slack_notified(ctx, [latest_creative_id(ctx)], why="INV-3: require-human + webhook configured")
 
 
 @then(parsers.parse('a workflow step should be created with type "{step_type}"'))
@@ -3950,25 +4003,23 @@ def given_creative_exists_for_principal(ctx: dict, creative_id: str, principal_i
         principal=principal,
         creative_id=creative_id,
         name=f"Pre-existing creative {creative_id}",
-        agent_url=env.DEFAULT_AGENT_URL,
-        format="display_300x250",
+        agent_url=_scenario_format_entry(ctx, env)["agent_url"],
+        format=_scenario_format_entry(ctx, env)["id"],
     )
     env._commit_factory_data()
     ctx["pre_existing_creative_id"] = creative_id
-    ctx["pre_existing_creative"] = creative
 
 
 @when(parsers.parse('the Buyer Agent syncs creative "{creative_id}"'))
 def when_sync_specific_creative(ctx: dict, creative_id: str) -> None:
     """Sync a specific creative by ID (uses the authenticated principal from ctx)."""
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
-    creative_payload = {
-        "creative_id": creative_id,
-        "name": f"Synced creative {creative_id}",
-        "format_id": {"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": build_assets(image_spec("image")),
-    }
+    ensure_tenant_principal(ctx, env)
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id=creative_id,
+        name=f"Synced creative {creative_id}",
+        format_id=_creative_format_id_entry(ctx, env),
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     dispatch_request(ctx, creatives=ctx["creatives"])
 
@@ -3980,19 +4031,16 @@ def then_existing_creative_updated_by_triple_key(ctx: dict) -> None:
 
     from src.core.database.models import Creative
 
-    _xfail_if_e2e(ctx)
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected creative update by triple key, "
-            f"but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected creative update by triple key, but production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
 
     creative_id = ctx["pre_existing_creative_id"]
     tenant = ctx["tenant"]
     principal = ctx["principal"]
-    with db_session(ctx) as session:
+    with _readback(ctx) as session:
         rows = session.scalars(
             select(Creative).filter_by(
                 tenant_id=tenant.tenant_id,
@@ -4021,20 +4069,23 @@ def then_existing_creative_updated_by_triple_key(ctx: dict) -> None:
 def given_two_creatives_one_valid_one_empty_name(ctx: dict) -> None:
     """Set up two creative payloads: one valid, one with empty name (triggers per-creative failure)."""
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     format_id, agent_url, assets = _format_payload(ctx, env)
-    valid_payload = {
-        "creative_id": "creative-valid-001",
-        "name": "Valid Creative",
-        "format_id": {"id": format_id, "agent_url": agent_url},
-        "assets": assets,
-    }
-    invalid_payload = {
-        "creative_id": "creative-invalid-empty-name",
-        "name": "",
-        "format_id": {"id": format_id, "agent_url": agent_url},
-        "assets": assets,
-    }
+    valid_payload = CreativeAssetRequestFactory.payload(
+        creative_id="creative-valid-001",
+        name="Valid Creative",
+        format_id={"id": format_id, "agent_url": agent_url},
+        assets=assets,
+    )
+    # "invalid" to PRODUCTION, not to the pin: an empty name is schema-conformant
+    # and fails per-creative validation, which is what makes the pair grade a
+    # partial success rather than a whole-request refusal.
+    invalid_payload = CreativeAssetRequestFactory.payload(
+        creative_id="creative-invalid-empty-name",
+        name="",
+        format_id={"id": format_id, "agent_url": agent_url},
+        assets=assets,
+    )
     ctx["creatives"] = [valid_payload, invalid_payload]
     ctx["valid_creative_id"] = "creative-valid-001"
     ctx["invalid_creative_id"] = "creative-invalid-empty-name"
@@ -4062,11 +4113,9 @@ def _get_creative_result_by_id(ctx: dict, creative_id: str) -> object | None:
 def then_valid_creative_action(ctx: dict, action: str) -> None:
     """Assert the valid creative has the expected action."""
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected valid creative action '{action}' "
-            f"but dispatch raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected valid creative action '{action}' but dispatch raised {type(error).__name__}: {error}"
+    )
     result = _get_creative_result_by_id(ctx, ctx["valid_creative_id"])
     assert result is not None, f"No result found for valid creative {ctx['valid_creative_id']}"
     action_str = str(getattr(getattr(result, "action", None), "value", getattr(result, "action", None)))
@@ -4077,11 +4126,9 @@ def then_valid_creative_action(ctx: dict, action: str) -> None:
 def then_invalid_creative_action(ctx: dict, action: str) -> None:
     """Assert the invalid creative has the expected action."""
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected invalid creative action '{action}' "
-            f"but dispatch raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected invalid creative action '{action}' but dispatch raised {type(error).__name__}: {error}"
+    )
     result = _get_creative_result_by_id(ctx, ctx["invalid_creative_id"])
     assert result is not None, f"No result found for invalid creative {ctx['invalid_creative_id']}"
     action_str = str(getattr(getattr(result, "action", None), "value", getattr(result, "action", None)))
@@ -4092,10 +4139,9 @@ def then_invalid_creative_action(ctx: dict, action: str) -> None:
 def then_valid_not_affected_by_invalid(ctx: dict) -> None:
     """Assert both results are present — the valid one was not aborted by the invalid one."""
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected per-creative isolation, but dispatch raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected per-creative isolation, but dispatch raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     assert len(results) == 2, f"Expected 2 creative results (one valid, one failed), got {len(results)}"
@@ -4117,17 +4163,15 @@ def then_valid_not_affected_by_invalid(ctx: dict) -> None:
 def given_creative_with_adapter_format(ctx: dict) -> None:
     """Set up a creative whose format_id has a non-HTTP agent_url (adapter format)."""
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     format_id = "adapter_display_300x250"
-    creative_payload = {
-        "creative_id": "creative-adapter-fmt-001",
-        "name": "Adapter Format Creative",
-        "format_id": {"id": format_id, "agent_url": "adapter://local-gam"},
-        "assets": build_assets(image_spec("image")),
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id="creative-adapter-fmt-001",
+        name="Adapter Format Creative",
+        format_id={"id": format_id, "agent_url": "adapter://local-gam"},
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
-    ctx["adapter_format"] = True
 
 
 @then("the creative should be processed without external agent validation")
@@ -4150,34 +4194,27 @@ def then_processed_without_external_validation(ctx: dict) -> None:
     assert action_str in ("created", "updated", "unchanged"), (
         f"Expected creative processed successfully (created/updated/unchanged), got action='{action_str}'"
     )
-    # Assert the external validation agent was NOT called
-    mock_validate = (
-        ctx["env"].mock.get("validate_creative")
-        or ctx["env"].mock.get("external_validation")
-        or ctx["env"].mock.get("creative_agent_validate")
+    # The external validation IS the creative-agent registry lookup: _validation.py
+    # resolves a dialled agent_url through fetch_format_spec -> registry.get_format,
+    # and skips that call for an adapter (non-HTTP) agent_url. CreativeSyncEnv patches
+    # that registry, so "no external validation" is measurable as "get_format was never
+    # awaited". This used to look for validate_creative / external_validation /
+    # creative_agent_validate -- names no env has ever wired -- and refused on the
+    # missing mock, which parked every scenario carrying the sentence.
+    get_format = ctx["env"].mock["registry"].return_value.get_format
+    assert get_format.await_count == 0, (
+        f"an adapter (non-HTTP) format must not be looked up with the creative agent, "
+        f"but registry.get_format was awaited {get_format.await_count} time(s)"
     )
-    if mock_validate is not None:
-        assert mock_validate.call_count == 0, (
-            f"External agent validation should be skipped for adapter format, "
-            f"but was called {mock_validate.call_count} time(s)"
-        )
-    else:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: harness does not expose a mock for external "
-            "creative validation agent — cannot verify the validation path "
-            "was bypassed"
-        )
 
 
 @then('the creative should have action "created" or "updated"')
 def then_creative_action_created_or_updated(ctx: dict) -> None:
     """Assert the creative's action is either "created" or "updated"."""
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected action created/updated, "
-            f"but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected action created/updated, but production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     assert results, "Expected at least one SyncCreativeResult"
@@ -4191,72 +4228,31 @@ def then_creative_action_created_or_updated(ctx: dict) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-@given(parsers.parse('a creative with format agent_url "{agent_url}" and format_id "{format_id}"'))
-def given_creative_with_agent_url_and_format(ctx: dict, agent_url: str, format_id: str) -> None:
-    """Set up a creative with a specific agent_url and format_id."""
-    env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
-    creative_payload = {
-        "creative_id": "creative-fmt-match-001",
-        "name": "Format Match Creative",
-        "format_id": {"id": format_id, "agent_url": agent_url},
-        "assets": build_assets(image_spec("image")),
-    }
-    ctx.setdefault("creatives", []).append(creative_payload)
-    ctx["creative_format_id"] = format_id
-    ctx["creative_agent_url"] = agent_url
-    ctx["creative_id"] = "creative-fmt-match-001"
-
-
-@given(parsers.parse('a product with format agent_url "{agent_url}" and format_id "{format_id}"'))
-def given_product_with_agent_url_and_format(ctx: dict, agent_url: str, format_id: str) -> None:
-    """Set up a product and package whose format_ids contain the specified agent_url + format_id."""
-    from tests.factories import MediaBuyFactory, MediaPackageFactory, ProductFactory
-
-    env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
-    tenant = ctx["tenant"]
-    principal = ctx["principal"]
-    product = ProductFactory(
-        tenant=tenant,
-        format_ids=[{"agent_url": agent_url, "id": format_id}],
-    )
-    media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
-    package = MediaPackageFactory(
-        media_buy=media_buy,
-        package_config={"product_id": product.product_id, "budget": 1000.0},
-    )
-    env._commit_factory_data()
-    ctx["media_buy"] = media_buy
-    ctx["package"] = package
-    ctx["product"] = product
-    creative_id = ctx.get("creative_id") or ctx["creatives"][-1]["creative_id"]
-    ctx["assignments"] = {creative_id: [package.package_id]}
-
-
 @then(parsers.parse('the assignment should fail with "{error_code}"'))
 def then_assignment_should_fail_with(ctx: dict, error_code: str) -> None:
     """Assert the assignment failed with the specified error code.
 
     Hard-asserts production actually failed and the failure carries the expected
-    code. For AdCPError, checks error_code directly. For FORMAT_MISMATCH,
+    code. For AdCPSalesAgentError, checks error_code directly. For FORMAT_MISMATCH,
     also accepts 'not supported' in the error message (production's phrasing).
     """
-    from src.core.exceptions import AdCPError
 
     error = ctx.get("error")
     assert error is not None, (
         f"Expected assignment failure with {error_code}, but production succeeded. Response: {payload_or_none(ctx)}"
     )
-    if isinstance(error, AdCPError):
-        # Production may use different code names; accept message-based matching for FORMAT_MISMATCH
-        if error_code == "FORMAT_MISMATCH" and "not supported" in error.message.lower():
-            return
-        assert error.error_code == error_code, (
-            f"Expected error_code '{error_code}', got '{error.error_code}': {error.message}"
-        )
+    # The message-based escape hatch for FORMAT_MISMATCH is gone. It existed because
+    # "production may use different code names", and it matched on
+    # "not supported" in error.message -- a substring the derived sentence can no
+    # longer contain, so it had become a dead branch that
+    # merely looked lenient. Production now emits a published code for this outcome
+    # (CREATIVE_REJECTED, _assignments.py:236), so the scenario names it directly.
+    result = ctx.get("result")
+    wire_code = result.wire_error_code() if result is not None else None
+    if wire_code is not None:
+        assert wire_code == error_code, f"Expected wire error code {error_code!r}, got {wire_code!r}"
     else:
-        # Non-AdCPError: assert the error string contains the expected code
+        # Non-AdCPSalesAgentError: assert the error string contains the expected code
         assert error_code.lower() in str(error).lower(), (
             f"Expected error containing '{error_code}', got {type(error).__name__}: {error}"
         )
@@ -4273,13 +4269,12 @@ def given_assignments_two_packages_one_valid_one_missing(ctx: dict) -> None:
     from tests.factories import MediaBuyFactory, MediaPackageFactory, ProductFactory
 
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
-    agent_url = env.DEFAULT_AGENT_URL
 
     media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
-    product = ProductFactory(tenant=tenant, format_ids=[{"agent_url": agent_url, "id": "display_300x250"}])
+    product = ProductFactory(tenant=tenant, format_ids=[_product_format_entry(ctx, env)])
     valid_package = MediaPackageFactory(
         media_buy=media_buy,
         package_config={"product_id": product.product_id, "budget": 1000.0},
@@ -4288,7 +4283,7 @@ def given_assignments_two_packages_one_valid_one_missing(ctx: dict) -> None:
     ctx["media_buy"] = media_buy
     ctx["valid_package"] = valid_package
     ctx["nonexistent_package_id"] = "pkg-nonexistent-two-mix-404"
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: [valid_package.package_id, "pkg-nonexistent-two-mix-404"]}
 
 
@@ -4296,25 +4291,19 @@ def given_assignments_two_packages_one_valid_one_missing(ctx: dict) -> None:
 def then_valid_assignment_created(ctx: dict) -> None:
     """Assert the valid package assignment was created despite the non-existent one."""
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: lenient mode should continue despite invalid assignment, "
-            f"but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: lenient mode should continue despite invalid assignment, but production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
-    if not results:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: expected creative results with assignment info, "
-            "but response has no creatives/results."
-        )
+    assert results, (
+        "SPEC-PRODUCTION GAP: expected creative results with assignment info, but response has no creatives/results."
+    )
     assigned = results[0].assigned_to or []
     valid_pkg = ctx["valid_package"].package_id
-    if valid_pkg not in assigned:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: lenient mode should create valid assignment to {valid_pkg}, "
-            f"but assigned_to={assigned}"
-        )
+    assert valid_pkg in assigned, (
+        f"SPEC-PRODUCTION GAP: lenient mode should create valid assignment to {valid_pkg}, but assigned_to={assigned}"
+    )
     # The claim, stated on the path that RETURNS. The xfail above records the
     # known gap; without this the satisfied path returned having graded nothing.
     assert valid_pkg in assigned, f"expected assignment to {valid_pkg}, got assigned_to={assigned}"
@@ -4330,11 +4319,9 @@ def then_nonexistent_package_reported_as_warning(ctx: dict) -> None:
     failure.
     """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: lenient mode should warn about non-existent "
-            f"package, but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: lenient mode should warn about non-existent package, but production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     assert results, "Lenient mode must return per-creative results (POST-S1/S2)"
@@ -4363,11 +4350,9 @@ def then_processing_continues_normally(ctx: dict) -> None:
     a success outcome (created/updated), confirming the sync completed.
     """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: lenient mode should continue normally, "
-            f"but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: lenient mode should continue normally, but production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     assert results, "Expected at least one creative result from a completed sync"
@@ -4400,9 +4385,15 @@ def given_idempotency_key(ctx: dict, key_value: str | None, empty: str | None) -
 
     Handles: absent (empty match), empty string (""), and quoted strings.
     Some values use ]xN notation for length generation (e.g., "a]x254").
+
+    ABSENT MEANS ABSENT ON THE WIRE. This used to return without touching ctx, and
+    the harness then supplied its default key -- so the "absent" row sent a valid key
+    and graded nothing about absence. The sentinel makes the harness DROP the field;
+    the pin lists idempotency_key in sync-creatives-request.json /required, so what
+    the row grades is the schema rejection.
     """
     if key_value is None and empty is not None:
-        ctx["idempotency_key_absent"] = True
+        ctx["idempotency_key"] = OMIT_IDEMPOTENCY_KEY
         return
 
     actual_value = key_value or ""
@@ -4420,31 +4411,6 @@ def _expand_length_notation(value: str) -> str:
         length = int(match.group(2))
         return char * length
     return value
-
-
-@then("the request should proceed without idempotency check")
-def then_proceed_without_idempotency(ctx: dict) -> None:
-    """Assert request completed as a fresh sync (no idempotency short-circuit).
-
-    When idempotency_key is absent, the request must proceed as a normal
-    first-time sync: no error, and the response carries synced creative results.
-    """
-    error = ctx.get("error")
-    assert error is None, (
-        f"Expected request to proceed without idempotency check, but production raised {type(error).__name__}: {error}"
-    )
-    resp = require_payload(ctx)
-    # Verify the response represents a successful sync, not an error envelope
-    results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
-    assert results, (
-        "Expected at least one creative result from a fresh sync without idempotency key, "
-        f"but got empty results from {type(resp).__name__}"
-    )
-    # Verify at least one creative was actually processed (created/updated)
-    actions = [str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None))) for r in results]
-    assert any(a in ("created", "updated") for a in actions), (
-        f"Expected a fresh sync action (created/updated), got {actions}"
-    )
 
 
 @then("the request should proceed normally")
@@ -4474,24 +4440,22 @@ def then_request_proceed_normally(ctx: dict) -> None:
 def given_creative_with_generative_format(ctx: dict) -> None:
     """Set up a creative with a generative format (output_format_ids populated)."""
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
-    creative_payload = {
-        "creative_id": "creative-generative-001",
-        "name": "Generative Creative",
-        "format_id": fmt,
-        "assets": build_assets(text_spec("message", content="Generate a banner ad for summer sale")),
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id="creative-generative-001",
+        name="Generative Creative",
+        format_id=fmt,
+        assets=build_assets(text_spec("message", content="Generate a banner ad for summer sale")),
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
-    ctx["generative_creative"] = True
 
 
 @given("the Seller Agent does not have GEMINI_API_KEY configured")
 def given_no_gemini_api_key(ctx: dict) -> None:
     """Remove GEMINI_API_KEY from the config mock."""
-    env = ctx["env"]
-    env.mock["config"].return_value.gemini_api_key = None
+    ctx["env"].set_gemini_api_key(None)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -4502,22 +4466,182 @@ def given_no_gemini_api_key(ctx: dict) -> None:
 @given("a creative with a known HTTP-based format_id")
 @given("a creative with a known HTTP-registered format_id")
 def given_creative_with_known_http_format(ctx: dict) -> None:
-    """Set up a creative with a known format_id backed by an HTTP agent."""
+    """A creative whose format the registry SERVES, over a dialled HTTP agent_url.
+
+    The sentence names two properties and this step now arranges both instead of
+    inheriting them. KNOWN: ``configure_agent_served_creative`` puts the format in
+    the listing ``_processing.py`` searches, so ``find_format`` resolves it and
+    production enters the agent-backed branch that T-UC-006-rule-035-static grades
+    ("validated by the creative agent", "preview URLs should be generated").
+    Delegating to the plain known-format Given did NOT arrange that: the harness
+    default leaves ``run_async`` returning ``[]``, ``find_format`` returns None, and
+    the agent-backed branch is skipped entirely — so the scenario asserted a preview
+    that production had no path to produce.
+
+    HTTP-BASED: asserted rather than assumed, because it is the discriminator
+    against this outline's sibling row ``a creative with an adapter (non-HTTP)
+    format_id``. Production splits on ``is_dialled_agent_url`` (_validation.py:124),
+    so the same predicate decides it here — an ``adapter://`` DEFAULT_AGENT_URL would
+    silently turn this row into a duplicate of its sibling.
+    """
+    from src.core.format_resolver import is_dialled_agent_url
+
+    env = ctx["env"]
+    fmt = env.configure_agent_served_creative(generative=False, format_id="display_300x250")
+    assert is_dialled_agent_url(fmt["agent_url"]), (
+        f"this sentence promises an HTTP-based format, but the agent_url is {fmt['agent_url']!r}, "
+        "which production classifies as an adapter format and exempts from external validation"
+    )
     given_creative_with_format(ctx)
 
 
 @given("a creative with no format_id")
 def given_creative_with_no_format_id(ctx: dict) -> None:
-    """Set up a creative payload with format_id omitted."""
+    """Set up a creative payload with format_id omitted.
+
+    BOUND, despite grepping like dead code. No feature file contains this step's
+    literal text; it is reached through Examples substitution, from
+    ``BR-UC-006-sync-creatives.feature``'s "Format validation — <partition>" outline
+    (``And a creative with <format_setup>``, row ``missing_format_id`` whose
+    ``format_setup`` is ``no format_id``). That renders to exactly this step name and
+    resolves here — confirmed against pytest-bdd's own registered parsers, not by
+    grep. It grades three nodeids, ``test_format_validation__partition``
+    ``[a2a|mcp|rest-missing_format_id-...]``, all xfail-dormant at SETUP on
+    "UC-006 harness not yet wired for non-account scenarios" — so deleting this step
+    would leave every count unchanged while removing the binding.
+    """
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
-    creative_payload = {
-        "creative_id": "creative-no-fmt-001",
-        "name": "Creative Without Format",
-        "assets": build_assets(image_spec("image")),
-    }
+    ensure_tenant_principal(ctx, env)
+    creative_payload = malformed(
+        "absent_key",
+        "no 'format_id' key at all — the partition's subject is a request that never names a "
+        "format, so the key must be absent on the wire rather than null. CreativeAssetRequest "
+        "rejects it with [type=oneOf] provide exactly one of format_id or format_kind, the same "
+        "message an explicit None produces, which is why absent_key is declared rather than "
+        "inferred.",
+        CreativeAssetRequestFactory.payload(
+            creative_id="creative-no-fmt-001",
+            name="Creative Without Format",
+            # OMIT, not None: the key must be ABSENT. Drop this line and the factory
+            # default puts a valid format_id back — reported now, not silent.
+            format_id=OMIT,
+        ),
+        obligation=ErrorCode.INVALID_REQUEST,
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
-    ctx["creative_no_format"] = True
+
+
+#: vast-tracker-asset.json / daast-tracker-asset.json ``not: {enum: [...]}`` -- the events a
+#: tracker asset refuses because they belong to another VAST/DAAST element.
+_NON_TRACKING_EVENTS = frozenset(
+    {
+        "impression",
+        "clickTracking",
+        "customClick",
+        "error",
+        "viewable",
+        "notViewable",
+        "viewUndetermined",
+        "measurableImpression",
+        "viewableImpression",
+    }
+)
+
+_TRACKER_PHRASE = re.compile(
+    r'a (?P<kind>VAST|DAAST) tracker for "(?P<event>\w+)"'
+    r'(?: at offset "(?P<offset>[^"]+)")?(?P<no_offset> without an offset)?(?: targeting "(?P<target>\w+)")?$'
+)
+
+
+@given(parsers.parse("a creative with a known format_id whose assets carry {tracker_assets}"))
+def given_creative_with_tracker_assets(ctx: dict, tracker_assets: str) -> None:
+    """A creative on the transport's served format whose assets carry decomposed trackers.
+
+    ``tracker_assets`` is one or more ``a VAST tracker for "<event>"`` phrases joined by
+    " and ", each optionally ``at offset "<offset>"``, ``without an offset`` or
+    ``targeting "<target>"`` -- the fields core/assets/vast-tracker-asset.json and
+    daast-tracker-asset.json define. The specs are kept for the persisted-assets Then.
+    """
+    env = ctx["env"]
+    ensure_tenant_principal(ctx, env)
+    format_id, agent_url, assets = _format_payload(ctx, env)
+    specs = []
+    refusals: list[str] = []
+    for phrase in tracker_assets.split(" and "):
+        match = _TRACKER_PHRASE.fullmatch(phrase.strip())
+        assert match, f"unrecognised tracker phrase {phrase!r}"
+        kind, event = match["kind"].lower(), match["event"]
+        fields: dict[str, Any] = {
+            f"{kind}_event": event,
+            "url": f"https://tracking.example.com/{kind}/{event}",
+        }
+        if match["offset"]:
+            fields["offset"] = match["offset"]
+        if match["target"]:
+            fields["target"] = match["target"]
+        specs.append(asset_spec(f"{kind}_{event}_tracker", f"{kind}_tracker", **fields))
+        # The pin's refusals, named so the payload can DECLARE itself malformed: the
+        # non-TrackingEvents events, a progress tracker with no offset, a DAAST target
+        # outside {linear, companion}.
+        if event in _NON_TRACKING_EVENTS:
+            refusals.append(f"{kind}_event {event!r} belongs to another {kind.upper()} element")
+        if event == "progress" and not match["offset"]:
+            refusals.append("offset is required when the event is progress")
+        if match["target"] and match["target"] not in ("linear", "companion"):
+            refusals.append(f"DAAST target {match['target']!r} is not linear or companion")
+    ctx["tracker_specs"] = specs
+    creative_payload: dict[str, Any] = CreativeAssetRequestFactory.payload(
+        creative_id="creative-trackers-001",
+        name="Creative With Trackers",
+        format_id={"id": format_id, "agent_url": agent_url},
+        assets={**assets, **build_assets(*specs)},
+    )
+    if refusals:
+        # The reason is a literal so the declaration stays auditable; which rule the row
+        # breaks is the row's own phrase.
+        creative_payload = malformed(
+            "semantic",
+            "the tracker asset is shaped correctly but its VALUE breaks a rule the pin states on "
+            "vast-tracker-asset.json / daast-tracker-asset.json: a non-TrackingEvents event, a "
+            "progress tracker without offset, or a DAAST target outside {linear, companion}",
+            creative_payload,
+            obligation=ErrorCode.INVALID_REQUEST,
+        )
+    ctx.setdefault("creatives", []).append(creative_payload)
+
+
+@then("the creative should be created with its tracker assets stored")
+def then_creative_created_with_trackers_stored(ctx: dict) -> None:
+    """The entry reports ``created`` and the library row keeps every tracker as sent."""
+    _assert_success_response(ctx)
+    entry = _wire_creatives_entry(ctx, latest_creative_id(ctx))
+    assert entry.get("action") == "created", f"Expected action 'created', got {entry.get('action')!r}"
+    # The row is the only observable: sync-creatives-response.json's per-creative
+    # entry carries no assets, so "stored as sent" is a persistence obligation.
+    assert_assets(_stored_assets_for_last_creative(ctx), *ctx["tracker_specs"])
+
+
+@given("a creative with a known format_id whose agent returns no preview and that carries no media url")
+def given_creative_no_preview_no_media_url(ctx: dict) -> None:
+    """A text-only creative on a format the agent serves, answered with zero previews.
+
+    The format must be one the agent SERVES (``configure_agent_served_creative``): a
+    format absent from the agent's catalogue never reaches the preview step at all. The
+    agent then answers the preview with nothing, and with no image or video asset there
+    is no media_url to fall back on -- which production classifies as CREATIVE_REJECTED
+    carrying ``reasons`` (src/core/tools/creatives/_processing.py). The env method
+    declares its own e2e unrealizability: a live agent cannot be told to answer nothing.
+    """
+    env = ctx["env"]
+    ensure_tenant_principal(ctx, env)
+    fmt = env.configure_agent_no_preview(format_id=_scenario_format_id(ctx, env))
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id="creative-no-preview-001",
+        name="Nothing Renderable",
+        format_id={"id": fmt["id"], "agent_url": fmt["agent_url"]},
+        assets=build_assets(text_spec("headline", content="Nothing renderable here")),
+    )
+    ctx.setdefault("creatives", []).append(creative_payload)
 
 
 @given("a creative with a format_id unknown to all agents")
@@ -4531,21 +4655,6 @@ def given_creative_with_format_unknown_to_all(ctx: dict) -> None:
 def given_creative_with_unreachable_agent_format(ctx: dict) -> None:
     """Set up a creative whose format agent returns a connection error."""
     given_creative_with_unreachable_agent(ctx)
-
-
-@given("a creative with an empty name and a known format_id")
-def given_creative_empty_name_known_format(ctx: dict) -> None:
-    """Set up a creative with an empty name and a known format_id."""
-    env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
-    creative_payload = {
-        "creative_id": "creative-empty-name-001",
-        "name": "",
-        "format_id": {"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": build_assets(image_spec("image")),
-    }
-    ctx.setdefault("creatives", []).append(creative_payload)
-    ctx["creative_format_id"] = "display_300x250"
 
 
 # Format validation partition outcomes are handled by the existing
@@ -4564,10 +4673,9 @@ def _assert_standard_processing(ctx: dict) -> None:
     mock must NOT have been called.
     """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected 'standard processing' but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected 'standard processing' but production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     actions = [str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None))) for r in results]
@@ -4591,10 +4699,9 @@ def _assert_generative_build(ctx: dict, prompt_source: str) -> None:
                        "name_fallback" (prompt derived from creative name).
     """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected 'generative build' but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected 'generative build' but production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     actions = [str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None))) for r in results]
@@ -4633,13 +4740,23 @@ def _assert_generative_build(ctx: dict, prompt_source: str) -> None:
 @given("a creative with no output_format_ids")
 @given("a creative with a static format (no output_format_ids)")
 def given_creative_no_output_format_ids(ctx: dict) -> None:
-    """Set up a creative with a static format (no output_format_ids).
+    """A creative whose format is REGISTERED and carries an empty output_format_ids.
 
-    Uses the default registry mock which returns a format without
-    output_format_ids, so the creative is classified as static.
+    ``configure_agent_served_creative(generative=False, ...)`` is the single place
+    that decides what "static" means — it sets ``output_format_ids = []``, which is
+    exactly what ``format_resolver.is_generative`` reads — so this step states the
+    precondition instead of hoping for it.
+
+    It previously said it "uses the default registry mock which returns a format
+    without output_format_ids". That was not what happened. The default leaves
+    ``run_async`` returning ``[]``, so ``find_format`` resolves NOTHING and
+    ``_processing.py:329`` never reaches the generative/static split at all. The row
+    "static creative (no output_format_ids) -> processed without generative build"
+    was therefore passing on a request that had no format to classify, which is a
+    weaker fact than the one it claims and is true of an unknown format too.
     """
+    ctx["env"].configure_agent_served_creative(generative=False, format_id="display_300x250")
     given_creative_with_format(ctx)
-    ctx["generative_creative"] = False
 
 
 @given("a creative with output_format_ids present")
@@ -4648,18 +4765,29 @@ def given_creative_output_format_ids_present(ctx: dict) -> None:
 
     Delegates to the existing generative format setup but does NOT add
     assets — prompt source is controlled by the next Given step.
+
+    ``assets=OMIT`` states that absence rather than leaving it to happen: the
+    factory HAS a conformant assets default, so dropping the line would put an
+    image asset in a creative whose whole point is that its prompt source is
+    chosen later. NOT declared ``malformed``, and that is measured rather than
+    assumed — the pin does reject an absent ``assets``, but every scenario using
+    this sentence follows it with a step that writes the key
+    (``message asset with prompt text``, ``no prompt assets or inputs``,
+    ``message asset but no GEMINI_API_KEY``; feature lines 894-896), so the
+    DISPATCHED item is conformant. ``malformed(..., pin_rejects=True)`` here would
+    be graded against the dispatched bytes and reported as REPAIRED.
     """
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
-    creative_payload = {
-        "creative_id": "creative-generative-part-001",
-        "name": "Generative Partition Creative",
-        "format_id": fmt,
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id="creative-generative-part-001",
+        name="Generative Partition Creative",
+        format_id=fmt,
+        assets=OMIT,
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
-    ctx["generative_creative"] = True
 
 
 @given("a creative with output_format_ids present (create)")
@@ -4668,19 +4796,22 @@ def given_creative_output_format_ids_present_create(ctx: dict) -> None:
 
     Same as output_format_ids present but explicitly a new creative_id
     so production takes the create path where name fallback applies.
+
+    ``assets=OMIT`` for the reason given on ``given_creative_output_format_ids_present``:
+    the absence is deliberate and the next Given writes the key, so the dispatched
+    item is conformant and no malformation is declared.
     """
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
-    creative_payload = {
-        "creative_id": "creative-generative-create-001",
-        "name": "My Summer Campaign Banner",
-        "format_id": fmt,
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id="creative-generative-create-001",
+        name="My Summer Campaign Banner",
+        format_id=fmt,
+        assets=OMIT,
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
-    ctx["generative_creative"] = True
-    ctx["generative_create_path"] = True
 
 
 @given("any assets")
@@ -4741,9 +4872,7 @@ def given_message_asset_no_gemini_key(ctx: dict) -> None:
     last_creative.setdefault("assets", {}).update(
         build_assets(text_spec("message", content="Generate a banner ad for summer sale"))
     )
-    # Remove GEMINI_API_KEY from config mock
-    env = ctx["env"]
-    env.mock["config"].return_value.gemini_api_key = None
+    ctx["env"].set_gemini_api_key(None)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -4773,18 +4902,17 @@ def given_creative_adapter_non_http_format(ctx: dict) -> None:
 def given_creative_generative_with_prompt(ctx: dict) -> None:
     """Set up a generative creative with a message asset containing prompt text (boundary)."""
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
     asset_prompt = "Design a responsive ad for holiday promotion"
-    creative_payload = {
-        "creative_id": "creative-gen-prompt-001",
-        "name": "Generative With Prompt",
-        "format_id": fmt,
-        "assets": build_assets(text_spec("message", content=asset_prompt)),
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id="creative-gen-prompt-001",
+        name="Generative With Prompt",
+        format_id=fmt,
+        assets=build_assets(text_spec("message", content=asset_prompt)),
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
-    ctx["generative_creative"] = True
     ctx["expected_asset_prompt"] = asset_prompt
 
 
@@ -4796,18 +4924,19 @@ def given_new_creative_generative_no_prompt_with_name(ctx: dict) -> None:
     (BR-RULE-036 INV-4).
     """
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
-    creative_payload = {
-        "creative_id": "creative-gen-name-fallback-001",
-        "name": "Summer Sale Banner",
-        "format_id": fmt,
-        "assets": {},
-    }
+    # assets={}, not OMIT: an EMPTY assets object is what the scenario means by "no
+    # prompt", and the pin accepts it — so this is a conformant payload whose
+    # wrongness is downstream, not a malformation.
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id="creative-gen-name-fallback-001",
+        name="Summer Sale Banner",
+        format_id=fmt,
+        assets={},
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
-    ctx["generative_creative"] = True
-    ctx["generative_create_path"] = True
 
 
 @given("a creative with a generative format but GEMINI_API_KEY not configured")
@@ -4818,20 +4947,19 @@ def given_creative_generative_no_gemini(ctx: dict) -> None:
     for a generative format.
     """
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
-    # Set up generative format but WITHOUT gemini key
-    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
-    # Now remove the key — setup_generative_build sets it, we override
-    env.mock["config"].return_value.gemini_api_key = None
-    creative_payload = {
-        "creative_id": "creative-gen-no-key-001",
-        "name": "Generative No Key",
-        "format_id": fmt,
-        "assets": build_assets(text_spec("message", content="Generate a banner ad")),
-    }
+    ensure_tenant_principal(ctx, env)
+    # Generative format, and the key NOT configured. Said once, as an argument, rather
+    # than set and then unset: the two-step form left the env briefly in a state no
+    # scenario describes, and the second step had to know the config mock's shape.
+    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key=None)
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id="creative-gen-no-key-001",
+        name="Generative No Key",
+        format_id=fmt,
+        assets=build_assets(text_spec("message", content="Generate a banner ad")),
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
-    ctx["generative_creative"] = True
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -4859,14 +4987,24 @@ def then_processed_without_generative_build(ctx: dict) -> None:
     _assert_standard_processing(ctx)
 
 
+@then("the generative build should use the message asset as the prompt")
+def then_generative_build_uses_message_asset(ctx: dict) -> None:
+    """The build ran, and its prompt came from the request's message asset.
+
+    The outline row that says this does not record the prompt text the way the
+    INV-2 scenario's Given does, so it grades the prompt's SOURCE rather than its
+    exact value; the exact-value form is the sentence below.
+    """
+    _assert_generative_build(ctx, prompt_source="assets")
+
+
 @then("the system should invoke generative build with the asset prompt")
 def then_invoke_generative_with_asset_prompt(ctx: dict) -> None:
     """Assert generative build was invoked using the exact prompt from assets."""
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected 'generative build' but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected 'generative build' but production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     actions = [str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None))) for r in results]
@@ -4909,17 +5047,15 @@ def given_creative_format_with_output_format_ids(ctx: dict) -> None:
     INV-1: format_obj.output_format_ids is truthy -> creative classified as generative.
     """
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
-    creative_payload = {
-        "creative_id": "creative-gen-inv1-001",
-        "name": "Generative Detection Test",
-        "format_id": fmt,
-        "assets": build_assets(image_spec("image")),
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id="creative-gen-inv1-001",
+        name="Generative Detection Test",
+        format_id=fmt,
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
-    ctx["generative_creative"] = True
 
 
 @given("GEMINI_API_KEY is configured")
@@ -4929,8 +5065,7 @@ def given_gemini_api_key_configured(ctx: dict) -> None:
     If setup_generative_build was already called, the key is already set.
     This step acts as an explicit guard / documentation step.
     """
-    env = ctx["env"]
-    env.mock["config"].return_value.gemini_api_key = "test-gemini-key"
+    ctx["env"].set_gemini_api_key("test-gemini-key")
 
 
 @given(parsers.parse('a generative creative with an asset of role "{role}" containing "{content}"'))
@@ -4938,21 +5073,26 @@ def given_generative_creative_with_asset_role(ctx: dict, role: str, content: str
     """Set up a generative creative with a specific asset role containing prompt text.
 
     INV-2: prompt found in assets (message/brief/prompt role) -> that text used as build prompt.
+
+    The asset goes through ``text_spec`` rather than being written as
+    ``{role: {"content": content}}``: that hand-built form carries no
+    ``asset_type`` discriminator, and ``CreativeAssetRequest`` rejects it with
+    ``assets.<role>.AssetVariant Unable to extract tag using discriminator
+    'asset_type' [type=union_tag_not_found]``. The scenario's subject is WHICH
+    text becomes the build prompt, never the missing discriminator, so this is a
+    defect fixed rather than a malformation declared (GH #1391).
     """
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
-    creative_payload = {
-        "creative_id": "creative-gen-inv2-001",
-        "name": "Generative Prompt From Assets",
-        "format_id": fmt,
-        "assets": {
-            role: {"content": content},
-        },
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id="creative-gen-inv2-001",
+        name="Generative Prompt From Assets",
+        format_id=fmt,
+        assets=build_assets(text_spec(role, content=content)),
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
-    ctx["generative_creative"] = True
 
 
 @given(
@@ -4967,18 +5107,19 @@ def given_generative_creative_with_context_description(ctx: dict, description: s
     -> context_description used as build prompt.
     """
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
-    creative_payload = {
-        "creative_id": "creative-gen-inv3-001",
-        "name": "Generative Context Description",
-        "format_id": fmt,
-        "assets": {},
-        "inputs": [{"name": "default", "context_description": description}],
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id="creative-gen-inv3-001",
+        name="Generative Context Description",
+        format_id=fmt,
+        assets={},
+        # inputs is a declared CreativeAssetRequest field, so this ADDS a real key
+        # rather than smuggling one past extra="forbid".
+        inputs=[{"name": "default", "context_description": description}],
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
-    ctx["generative_creative"] = True
 
 
 @given(parsers.parse('a generative creative named "{name}" with no prompt assets or inputs'))
@@ -4989,18 +5130,16 @@ def given_generative_creative_named_no_prompt(ctx: dict, name: str) -> None:
     fallback: "Create a creative for: {name}".
     """
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
-    creative_payload = {
-        "creative_id": "creative-gen-inv4-001",
-        "name": name,
-        "format_id": fmt,
-        "assets": {},
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id="creative-gen-inv4-001",
+        name=name,
+        format_id=fmt,
+        assets={},
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
-    ctx["generative_creative"] = True
-    ctx["generative_create_path"] = True
 
 
 @given("a generative creative that already exists with generated content")
@@ -5014,7 +5153,7 @@ def given_generative_creative_exists_with_content(ctx: dict) -> None:
     from tests.factories import CreativeFactory
 
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
     fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
@@ -5044,33 +5183,19 @@ def given_generative_creative_exists_with_content(ctx: dict) -> None:
     )
     env._commit_factory_data()
 
-    # Prepare the update payload (no prompt assets or inputs yet — added by next step)
-    creative_payload = {
-        "creative_id": creative_id,
-        "name": "Existing Generative Creative",
-        "format_id": fmt,
-    }
+    # Prepare the update payload (no prompt assets or inputs yet — added by next step).
+    # assets=OMIT states the absence; "the update has no prompt assets or inputs"
+    # (feature line 489) then writes assets={}, which the pin accepts, so the
+    # dispatched item is conformant and takes no malformation declaration.
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id=creative_id,
+        name="Existing Generative Creative",
+        format_id=fmt,
+        assets=OMIT,
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
-    ctx["generative_creative"] = True
     ctx["existing_generative_data"] = existing_data
-
-
-@given("the update has no prompt assets or inputs")
-def given_update_no_prompt(ctx: dict) -> None:
-    """Ensure the update payload has NO prompt-bearing assets or inputs.
-
-    INV-5: no prompt in assets or inputs (update) -> generative build
-    skipped; existing creative data preserved.
-    """
-    creatives = ctx.get("creatives", [])
-    assert creatives, "No creative in context to strip prompt from"
-    last_creative = creatives[-1]
-    assets = last_creative.get("assets", {})
-    for role in ("message", "brief", "prompt"):
-        assets.pop(role, None)
-    last_creative["assets"] = assets
-    last_creative.pop("inputs", None)
 
 
 @given("a generative creative with both user-provided assets and generative prompt")
@@ -5081,18 +5206,17 @@ def given_generative_creative_with_user_assets_and_prompt(ctx: dict) -> None:
     user assets take priority over generative output.
     """
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
     user_image = image_spec("image", url="https://example.com/user-banner.png")
-    creative_payload = {
-        "creative_id": "creative-gen-inv6-001",
-        "name": "Generative With User Assets",
-        "format_id": fmt,
-        "assets": build_assets(text_spec("message", content="Generate a responsive ad"), user_image),
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id="creative-gen-inv6-001",
+        name="Generative With User Assets",
+        format_id=fmt,
+        assets=build_assets(text_spec("message", content="Generate a responsive ad"), user_image),
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
-    ctx["generative_creative"] = True
     # The same spec(s) used to build the mock are stored for verification (assert_assets).
     ctx["user_provided_assets"] = [user_image]
 
@@ -5134,8 +5258,7 @@ def then_processed_as_generative(ctx: dict) -> None:
     INV-1: format_obj.output_format_ids is truthy -> creative classified as generative.
     """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(f"SPEC-PRODUCTION GAP: expected generative processing but got {type(error).__name__}: {error}")
+    assert error is None, f"SPEC-PRODUCTION GAP: expected generative processing but got {type(error).__name__}: {error}"
     resp = require_payload(ctx)
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     actions = [str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None))) for r in results]
@@ -5157,20 +5280,19 @@ def then_creative_has_generated_content(ctx: dict) -> None:
     INV-1: verifies the generative build result was stored in the DB.
     """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(f"SPEC-PRODUCTION GAP: expected generated content but got {type(error).__name__}: {error}")
+    assert error is None, f"SPEC-PRODUCTION GAP: expected generated content but got {type(error).__name__}: {error}"
 
     # Verify via DB: read the creative back and check for generative data
     env = ctx["env"]
     session = env.get_session()
-    if session is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: no DB session available to verify generated content")
+    # A missing DB session is a HARNESS defect, not a production gap: production's behaviour cannot influence whether the env opened one. Excusing it as an expected failure meant the persistence claim silently graded nothing.
+    assert session is not None, "no DB session, so the generated-content claim cannot be verified against storage"
 
     from sqlalchemy import select
 
     from src.core.database.models import Creative as CreativeModel
 
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     db_creative = session.scalars(
         select(CreativeModel).filter_by(
             creative_id=creative_id,
@@ -5195,11 +5317,9 @@ def then_generative_build_uses_prompt(ctx: dict, expected_prompt: str) -> None:
     and INV-4 (name fallback: "Create a creative for: {name}").
     """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected generative build with prompt "
-            f"'{expected_prompt}' but got {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected generative build with prompt '{expected_prompt}' but got {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
 
     env = ctx["env"]
@@ -5230,10 +5350,9 @@ def then_generative_build_skipped(ctx: dict) -> None:
     INV-5: no prompt in assets or inputs (update) -> generative build skipped.
     """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected generative build to be skipped but got {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected generative build to be skipped but got {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     actions = [str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None))) for r in results]
@@ -5262,7 +5381,7 @@ def then_existing_data_preserved(ctx: dict) -> None:
 
     from src.core.database.models import Creative as CreativeModel
 
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     db_creative = session.scalars(
         select(CreativeModel).filter_by(
             creative_id=creative_id,
@@ -5293,14 +5412,13 @@ def _stored_assets_for_last_creative(ctx: dict) -> dict:
     from src.core.database.models import Creative as CreativeModel
 
     env = ctx["env"]
-    session = env.get_session()
-    assert session is not None, "Harness must provide a DB session for asset verification"
-    creative_id = ctx["creatives"][-1]["creative_id"]
-    db_creative = session.scalars(
-        select(CreativeModel).filter_by(creative_id=creative_id, tenant_id=env._tenant_id)
-    ).first()
-    assert db_creative is not None, f"Creative {creative_id} not found in DB"
-    return (db_creative.data or {}).get("assets", {})
+    creative_id = latest_creative_id(ctx)
+    with _readback(ctx) as session:
+        db_creative = session.scalars(
+            select(CreativeModel).filter_by(creative_id=creative_id, tenant_id=env._tenant_id)
+        ).first()
+        assert db_creative is not None, f"Creative {creative_id} not found in DB"
+        return (db_creative.data or {}).get("assets", {})
 
 
 @then("the user-provided assets should be preserved")
@@ -5314,8 +5432,7 @@ def then_user_assets_preserved(ctx: dict) -> None:
     catches generated content overwriting user values.
     """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(f"SPEC-PRODUCTION GAP: expected user assets preserved but got {type(error).__name__}: {error}")
+    assert error is None, f"SPEC-PRODUCTION GAP: expected user assets preserved but got {type(error).__name__}: {error}"
 
     stored_assets = _stored_assets_for_last_creative(ctx)
     specs = ctx["user_provided_assets"]
@@ -5332,10 +5449,11 @@ def then_user_assets_priority_over_generated(ctx: dict) -> None:
     not the generated ones from build_creative.
     """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(f"SPEC-PRODUCTION GAP: expected user asset priority but got {type(error).__name__}: {error}")
-    if ctx["env"].get_session() is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: no DB session available to verify asset priority")
+    assert error is None, f"SPEC-PRODUCTION GAP: expected user asset priority but got {type(error).__name__}: {error}"
+    # A missing DB session is a HARNESS defect, not a production gap: production's behaviour cannot influence whether the env opened one. Excusing it as an expected failure meant the persistence claim silently graded nothing.
+    assert ctx["env"].get_session() is not None, (
+        "no DB session, so the user-asset-priority claim cannot be verified against storage"
+    )
 
     stored_assets = _stored_assets_for_last_creative(ctx)
     # User-provided assets must survive the generative build (not overwritten by generated content).
@@ -5357,48 +5475,6 @@ def then_user_assets_priority_over_generated(ctx: dict) -> None:
 
 
 # --- 5o9e: bare error-code Then steps (without "with suggestion") ---
-
-
-@then("the error should be ASSIGNMENT_CREATIVE_ID_REQUIRED")
-def then_error_assignment_creative_id_required(ctx: dict) -> None:
-    """Assert the error code is ASSIGNMENT_CREATIVE_ID_REQUIRED.
-
-    Production's ``dict[creative_id -> list[package_id]]`` shape has no way to
-    express a missing creative_id. The spec requires this error code but
-    production cannot raise it — SPEC-PRODUCTION GAP.
-    """
-    error = ctx.get("error")
-    if error is None:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: production does not raise "
-            "ASSIGNMENT_CREATIVE_ID_REQUIRED — the dict[creative_id -> "
-            "list[package_id]] shape cannot express a missing creative_id"
-        )
-    actual_code, _ = _extract_error_code_and_suggestion(error)
-    assert actual_code == "ASSIGNMENT_CREATIVE_ID_REQUIRED", (
-        f"Expected error code 'ASSIGNMENT_CREATIVE_ID_REQUIRED', got '{actual_code}' ({type(error).__name__}: {error})"
-    )
-
-
-@then("the error should be ASSIGNMENT_PACKAGE_ID_REQUIRED")
-def then_error_assignment_package_id_required(ctx: dict) -> None:
-    """Assert the error code is ASSIGNMENT_PACKAGE_ID_REQUIRED.
-
-    Production's ``dict[creative_id -> list[package_id]]`` shape expresses
-    "no packages" as an empty list, not a missing key. The spec requires
-    this error code but production cannot raise it — SPEC-PRODUCTION GAP.
-    """
-    error = ctx.get("error")
-    if error is None:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: production does not raise "
-            "ASSIGNMENT_PACKAGE_ID_REQUIRED — the dict[creative_id -> "
-            "list[package_id]] shape uses empty list for no packages"
-        )
-    actual_code, _ = _extract_error_code_and_suggestion(error)
-    assert actual_code == "ASSIGNMENT_PACKAGE_ID_REQUIRED", (
-        f"Expected error code 'ASSIGNMENT_PACKAGE_ID_REQUIRED', got '{actual_code}' ({type(error).__name__}: {error})"
-    )
 
 
 # --- pzlv: Given steps for format compatibility scenarios ---
@@ -5424,31 +5500,29 @@ def given_assignments_two_packages_format_compat(ctx: dict) -> None:
     from tests.factories import MediaBuyFactory, MediaPackageFactory, ProductFactory
 
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
     agent_url = ctx.get("creative_agent_url", env.DEFAULT_AGENT_URL)
-    creative_format = ctx.get("creative_format_id", "display_300x250")
+    creative_format = _scenario_format_id(ctx, env)
 
-    # Use UUID-based IDs for e2e_rest to avoid collisions in shared Docker DB
-    extra_mb: dict = {}
-    extra_pkg_compat: dict = {}
-    extra_pkg_incompat: dict = {}
-    extra_prod_compat: dict = {}
-    extra_prod_incompat: dict = {}
-    if is_e2e(ctx):
-        extra_mb["media_buy_id"] = _e2e_unique_id("mb")
-        extra_pkg_compat["package_id"] = _e2e_unique_id("pkg")
-        extra_pkg_incompat["package_id"] = _e2e_unique_id("pkg")
-        extra_prod_compat["product_id"] = _e2e_unique_id("prod")
-        extra_prod_incompat["product_id"] = _e2e_unique_id("prod")
+    # Unique ids on every transport, the same way. The factory's default package_id is
+    # one constant, so leaving it to the factory gave both packages the same id: the
+    # assignment lookup then resolved both entries to whichever row won, and the
+    # "compatible" assignment was graded against the incompatible product. There is no
+    # reason to mint ids only for e2e_rest -- a fresh id is right everywhere.
+    extra_mb: dict = {"media_buy_id": _e2e_unique_id("mb")}
+    extra_pkg_compat: dict = {"package_id": _e2e_unique_id("pkg")}
+    extra_pkg_incompat: dict = {"package_id": _e2e_unique_id("pkg")}
+    extra_prod_compat: dict = {"product_id": _e2e_unique_id("prod")}
+    extra_prod_incompat: dict = {"product_id": _e2e_unique_id("prod")}
 
     media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active", **extra_mb)
 
     # Compatible package: product accepts the creative's format
     compatible_product = ProductFactory(
         tenant=tenant,
-        format_ids=[{"agent_url": agent_url, "id": creative_format}],
+        format_ids=[_scenario_format_entry(ctx, env)],
         **extra_prod_compat,
     )
     compatible_package = MediaPackageFactory(
@@ -5473,7 +5547,7 @@ def given_assignments_two_packages_format_compat(ctx: dict) -> None:
     ctx["media_buy"] = media_buy
     ctx["compatible_package"] = compatible_package
     ctx["incompatible_package"] = incompatible_package
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {
         creative_id: [compatible_package.package_id, incompatible_package.package_id],
     }
@@ -5491,21 +5565,17 @@ def then_response_includes_assignment_errors(ctx: dict) -> None:
     Warnings are NOT a substitute for assignment_errors.
     """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: lenient mode should return response with assignment_errors, "
-            f"but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: lenient mode should return response with assignment_errors, but production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     assert results, "Expected at least one creative result to check for assignment_errors"
     first = results[0]
     assignment_errors = getattr(first, "assignment_errors", None) or []
-    if not assignment_errors:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: expected non-empty assignment_errors on creative result "
-            f"(INV-4 lenient mode), but assignment_errors is empty: {assignment_errors!r}"
-        )
+    assert assignment_errors, (
+        f"SPEC-PRODUCTION GAP: expected non-empty assignment_errors on creative result (INV-4 lenient mode), but assignment_errors is empty: {assignment_errors!r}"
+    )
 
 
 # --- wsc1: creative setup and assertion steps ---
@@ -5522,7 +5592,6 @@ def given_creative_exists_for_principal_same_tenant(ctx: dict, creative_id: str,
     gets its own get-or-create row, never overwriting ctx["principal"]).
     """
     given_creative_exists_for_principal(ctx, creative_id, principal_id)
-    ctx["pre_existing_principal_id"] = principal_id
 
 
 @then(parsers.parse('the created creative should be associated with principal "{principal_id}"'))
@@ -5530,23 +5599,24 @@ def then_creative_associated_with_principal(ctx: dict, principal_id: str) -> Non
     """Assert the synced creative's principal_id matches the authenticated principal.
 
     BR-RULE-034 INV-3: new creatives are stamped with the authenticated principal.
+
+    The row is the only observable: the principal is the seller's own attribution
+    of the creative and sync-creatives-response.json carries no principal on the
+    per-creative entry (``account`` is the buying account, a different thing).
     """
     from sqlalchemy import select
 
     from src.core.database.models import Creative as CreativeModel
 
-    _xfail_if_e2e(ctx)
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected creative created for principal '{principal_id}', "
-            f"but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected creative created for principal '{principal_id}', but production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
 
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     tenant_id = ctx["tenant"].tenant_id
-    with db_session(ctx) as session:
+    with _readback(ctx) as session:
         creative = session.scalars(
             select(CreativeModel).filter_by(
                 creative_id=creative_id,
@@ -5571,7 +5641,7 @@ def when_sync_creative_as_principal(ctx: dict, creative_id: str, principal_id: s
     principal rather than updating the existing one.
     """
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     # The auth Given only mutates the env identity; the AUTHENTICATED principal
     # (e.g. buyer-B) still needs a DB row — the pre-existing creative's Given
     # seeded only the OTHER principal. Without it the new creative's insert
@@ -5587,21 +5657,28 @@ def when_sync_creative_as_principal(ctx: dict, creative_id: str, principal_id: s
         {"principal_id": principal_id, "tenant_id": tenant.tenant_id},
         lambda: PrincipalFactory(tenant=tenant, principal_id=principal_id),
     )
-    creative_payload = {
-        "creative_id": creative_id,
-        "name": f"Synced creative {creative_id}",
-        "format_id": {"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": build_assets(image_spec("image")),
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id=creative_id,
+        name=f"Synced creative {creative_id}",
+        format_id=_creative_format_id_entry(ctx, env),
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     dispatch_request(ctx, creatives=ctx["creatives"])
 
 
 @when('the Buyer Agent syncs an assignment of creative "creative-xp" to a package owned by the authenticated principal')
 def when_sync_cross_principal_assignment(ctx: dict) -> None:
-    """Dispatch sync_creatives with ONLY an assignment referencing another
-    principal's creative (no creatives array) — the cross-principal FK-500
-    surface (local feature; upstream storyboard gap, PR #1430 review).
+    """Dispatch sync_creatives carrying the caller's OWN creative plus an assignment
+    referencing another principal's creative — the cross-principal FK-500 surface
+    (local feature; upstream storyboard gap, PR #1430 review).
+
+    The caller's own creative is present because the PIN REQUIRES it: in
+    3.1/media-buy/sync-creatives-request.json, ``creatives`` is in ``required`` and
+    carries ``minItems: 1``. This step used to send ``creatives=[]``, so every
+    transport correctly refused the whole request with INVALID_REQUEST before the
+    assignment logic was ever reached — the scenario could not observe the skip it
+    exists to grade, and the refusal it got instead read as a production bug.
+    A spec-valid request is the only one that reaches the behavior under test.
     """
     from src.core.database.models import Principal
     from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory
@@ -5619,7 +5696,19 @@ def when_sync_cross_principal_assignment(ctx: dict) -> None:
     pkg = MediaPackageFactory(media_buy=media_buy)
     env._commit_factory_data()
     ctx["xp_package_id"] = pkg.package_id
-    dispatch_request(ctx, creatives=[], assignments={"creative-xp": [pkg.package_id]}, validation_mode="lenient")
+    format_id, agent_url, assets = _format_payload(ctx, env)
+    own_creative = CreativeAssetRequestFactory.payload(
+        creative_id="creative-own-b",
+        name="Own Creative",
+        format_id={"id": format_id, "agent_url": agent_url},
+        assets=assets,
+    )
+    dispatch_request(
+        ctx,
+        creatives=[own_creative],
+        assignments=[{"creative_id": "creative-xp", "package_id": pkg.package_id}],
+        validation_mode="lenient",
+    )
 
 
 @then("the sync operation should not fail")
@@ -5673,13 +5762,10 @@ def then_new_creative_created_for_principal(ctx: dict, principal_id: str) -> Non
 
     from src.core.database.models import Creative as CreativeModel
 
-    _xfail_if_e2e(ctx)
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected creative created for principal '{principal_id}', "
-            f"but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected creative created for principal '{principal_id}', but production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
 
     # Assert response has action="created"
@@ -5691,7 +5777,7 @@ def then_new_creative_created_for_principal(ctx: dict, principal_id: str) -> Non
     assert action_str == "created", f"Expected creative action 'created' for cross-principal sync, got '{action_str}'"
 
     # Assert DB creative has correct principal_id
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     tenant_id = ctx["tenant"].tenant_id
     with db_session(ctx) as session:
         creative = session.scalars(
@@ -5718,11 +5804,10 @@ def then_existing_creative_unchanged(ctx: dict, principal_id: str) -> None:
 
     from src.core.database.models import Creative as CreativeModel
 
-    _xfail_if_e2e(ctx)
     pre_existing_id = ctx["pre_existing_creative_id"]
     tenant_id = ctx["tenant"].tenant_id
 
-    with db_session(ctx) as session:
+    with _readback(ctx) as session:
         creative = session.scalars(
             select(CreativeModel).filter_by(
                 creative_id=pre_existing_id,
@@ -5749,11 +5834,9 @@ def then_creative_validated_by_agent(ctx: dict) -> None:
     and that the response shows a successful sync outcome (action created/updated).
     """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected creative agent validation, "
-            f"but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected creative agent validation, but production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
 
     # Assert observable outcome: the creative was successfully synced
@@ -5774,8 +5857,12 @@ def then_creative_validated_by_agent(ctx: dict) -> None:
     )
     expected_format_id = ctx.get("creative_format_id")
     if expected_format_id is not None:
-        call_args_list = registry_instance.get_format.call_args_list
-        called_format_ids = [c.args[0] if c.args else c.kwargs.get("format_id") for c in call_args_list]
+        # get_format(agent_url, format_id): the id is the SECOND positional argument (or
+        # the keyword). This read args[0] -- the agent_url -- and so could never match.
+        called_format_ids = [
+            c.kwargs.get("format_id", c.args[1] if len(c.args) > 1 else None)
+            for c in registry_instance.get_format.call_args_list
+        ]
         assert expected_format_id in called_format_ids, (
             f"Expected get_format called with format_id={expected_format_id!r}, but was called with {called_format_ids}"
         )
@@ -5789,11 +5876,9 @@ def then_response_includes_one_creative_with_action(ctx: dict, action: str) -> N
     and the response contains mixed results (e.g. one "created", one "failed").
     """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected one creative with action '{action}', "
-            f"but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected one creative with action '{action}', but production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     assert results, f"Expected at least one SyncCreativeResult, got empty: {resp}"
@@ -5820,16 +5905,26 @@ def given_creative_with_invalid_format_id(ctx: dict) -> None:
     (e.g. contains spaces or special characters).
     """
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
 
     format_id = "invalid format!!!"
     creative_id = "creative-invalid-fmt-001"
-    creative_payload = {
-        "creative_id": creative_id,
-        "name": "Invalid Format Creative",
-        "format_id": {"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": build_assets(image_spec("image")),
-    }
+    creative_payload = malformed(
+        "semantic",
+        "format_id is shaped correctly — a str in the id slot, alongside a real agent_url — but "
+        "its VALUE breaks FormatId.id's pattern: CreativeAssetRequest rejects it with "
+        "format_id.id String should match pattern '^[a-zA-Z0-9_-]+$' "
+        "[type=string_pattern_mismatch]. The scenario grades syntactic format-id validation, so "
+        "the spaces and '!!!' are the payload's point and must survive to the wire.",
+        CreativeAssetRequestFactory.payload(
+            creative_id=creative_id,
+            name="Invalid Format Creative",
+            format_id={"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
+        ),
+        # semantic, and the pin REJECTS it. The kind says nothing about that: a different
+        # semantic case — an unknown but well-formed format id — the pin ACCEPTS.
+        obligation=ErrorCode.INVALID_REQUEST,
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
 
@@ -5850,21 +5945,6 @@ def given_validation_mode_not_set(ctx: dict) -> None:
 # --- yqpf: assignment lifecycle steps ---
 
 
-@given("an assignment with a package that does not exist")
-def given_assignment_with_nonexistent_package(ctx: dict) -> None:
-    """Reference a package_id that does NOT exist in any tenant.
-
-    Similar to ``given_assignment_to_missing_package`` but with different
-    step text (used by validation_mode boundary scenarios). Does NOT
-    pre-set validation_mode — the scenario controls it separately.
-    """
-    env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
-    env._commit_factory_data()
-    creative_id = ctx["creatives"][-1]["creative_id"]
-    ctx["assignments"] = {creative_id: ["pkg-nonexistent-yqpf-404"]}
-
-
 @given("assignments to an existing package")
 def given_assignments_to_existing_package(ctx: dict) -> None:
     """Create an existing package and assign the creative to it.
@@ -5875,16 +5955,16 @@ def given_assignments_to_existing_package(ctx: dict) -> None:
     from tests.factories import MediaBuyFactory, MediaPackageFactory, ProductFactory
 
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
     agent_url = env.DEFAULT_AGENT_URL
-    creative_format = ctx.get("creative_format_id", "display_300x250")
+    creative_format = _scenario_format_id(ctx, env)
 
     media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
     product = ProductFactory(
         tenant=tenant,
-        format_ids=[{"agent_url": agent_url, "id": creative_format}],
+        format_ids=[_scenario_format_entry(ctx, env)],
     )
     package = MediaPackageFactory(
         media_buy=media_buy,
@@ -5893,7 +5973,7 @@ def given_assignments_to_existing_package(ctx: dict) -> None:
     env._commit_factory_data()
     ctx["media_buy"] = media_buy
     ctx["package"] = package
-    creative_id = ctx.get("creative_id") or ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: [package.package_id]}
 
 
@@ -5913,16 +5993,16 @@ def given_creative_already_assigned_to_package_partition(ctx: dict) -> None:
     )
 
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
     agent_url = env.DEFAULT_AGENT_URL
-    creative_format = ctx.get("creative_format_id", "display_300x250")
+    creative_format = _scenario_format_id(ctx, env)
 
     media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
     product = ProductFactory(
         tenant=tenant,
-        format_ids=[{"agent_url": agent_url, "id": creative_format}],
+        format_ids=[_scenario_format_entry(ctx, env)],
     )
     package = MediaPackageFactory(
         media_buy=media_buy,
@@ -5963,7 +6043,7 @@ def given_assignments_three_packages_mixed(ctx: dict) -> None:
     from tests.factories import MediaBuyFactory, MediaPackageFactory, ProductFactory
 
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
     format_id, agent_url, _assets = _format_payload(ctx, env)
@@ -5973,12 +6053,16 @@ def given_assignments_three_packages_mixed(ctx: dict) -> None:
         tenant=tenant,
         format_ids=[{"agent_url": agent_url, "id": format_id}],
     )
+    # Two DISTINCT packages: the factory's default package_id is one literal, so two
+    # rows built from it collapsed into one assignment.
     valid_pkg_1 = MediaPackageFactory(
         media_buy=media_buy,
+        package_id=_e2e_unique_id("pkg"),
         package_config={"product_id": product.product_id, "budget": 1000.0},
     )
     valid_pkg_2 = MediaPackageFactory(
         media_buy=media_buy,
+        package_id=_e2e_unique_id("pkg"),
         package_config={"product_id": product.product_id, "budget": 1000.0},
     )
     env._commit_factory_data()
@@ -5986,7 +6070,7 @@ def given_assignments_three_packages_mixed(ctx: dict) -> None:
     ctx["valid_packages"] = [valid_pkg_1, valid_pkg_2]
     nonexistent_pkg_id = "pkg-nonexistent-three-mix-404"
     ctx["nonexistent_package_id"] = nonexistent_pkg_id
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {
         creative_id: [valid_pkg_1.package_id, valid_pkg_2.package_id, nonexistent_pkg_id],
     }
@@ -5994,39 +6078,13 @@ def given_assignments_three_packages_mixed(ctx: dict) -> None:
 
 @then("the assignment should use equal rotation")
 def then_assignment_equal_rotation(ctx: dict) -> None:
-    """Assert the assignment uses equal rotation (weight omitted/absent).
+    """weight omitted: "the creative receives equal rotation with other unweighted creatives".
 
-    Spec: when weight is absent, the creative receives equal rotation with
-    other unweighted creatives. Production hard-codes weight=100, which is
-    functionally "full weight" — the concept of equal rotation doesn't
-    apply when there's only one assignment. SPEC-PRODUCTION GAP if production
-    doesn't support the equal-rotation semantic.
+    Every unweighted assignment is persisted with the same default, 100 -- one value for
+    all of them is what equal rotation means, so the default is what this reads.
     """
-    assert "error" not in ctx, f"Expected assignment with equal rotation, but production raised: {ctx.get('error')}"
-    assigned = _get_creative_assigned_to(ctx)
-    expected_pkg = ctx["package"].package_id
-    assert expected_pkg in assigned, f"Expected {expected_pkg!r} in assigned_to, got {assigned}"
-
-    # Verify weight in DB — canonical equal-rotation default is null or 100
-    from sqlalchemy import select
-
-    from src.core.database.models import CreativeAssignment
-
-    tenant_id = ctx["tenant"].tenant_id
-    creative_id = ctx["creatives"][-1]["creative_id"]
-    with db_session(ctx) as session:
-        assignment = session.scalars(
-            select(CreativeAssignment).filter_by(
-                tenant_id=tenant_id,
-                creative_id=creative_id,
-                package_id=expected_pkg,
-            )
-        ).first()
-        assert assignment is not None, f"No CreativeAssignment found for creative={creative_id}, package={expected_pkg}"
-        assert assignment.weight is None or assignment.weight == 100, (
-            f"Equal rotation requires canonical default weight (None or 100), "
-            f"got weight={assignment.weight} for creative={creative_id}"
-        )
+    assignment = _get_assignment_from_db(ctx)
+    assert assignment.weight == 100, f"Expected the equal-rotation default weight 100, got {assignment.weight}"
 
 
 @then("the assignment should be created")
@@ -6044,40 +6102,11 @@ def then_assignment_created_bare(ctx: dict) -> None:
 
 @then("the assignment should be created with placement targeting")
 def then_assignment_created_with_placement(ctx: dict) -> None:
-    """Assert the assignment was created with placement targeting.
-
-    Verifies:
-    1. The package was assigned to the creative (response check)
-    2. A CreativeAssignment row exists in the DB
-    3. The persisted placement_ids contains the expected placement
-    """
-    assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
-    assigned = _get_creative_assigned_to(ctx)
-    expected_pkg = ctx["package"].package_id
-    assert expected_pkg in assigned, f"Expected {expected_pkg!r} in assigned_to, got {assigned}"
-
-    # Verify placement_ids in the DB
-    from sqlalchemy import select
-
-    from src.core.database.models import CreativeAssignment
-
-    tenant_id = ctx["tenant"].tenant_id
-    creative_id = ctx["creatives"][-1]["creative_id"]
-    with db_session(ctx) as session:
-        assignment = session.scalars(
-            select(CreativeAssignment).filter_by(
-                tenant_id=tenant_id,
-                creative_id=creative_id,
-                package_id=expected_pkg,
-            )
-        ).first()
-        assert assignment is not None, f"No CreativeAssignment found for creative={creative_id}, package={expected_pkg}"
-        assert assignment.placement_ids is not None, (
-            f"Expected placement_ids to be set, got None for assignment {assignment.assignment_id}"
-        )
-        assert "slot_a" in assignment.placement_ids, (
-            f"Expected 'slot_a' in placement_ids, got {assignment.placement_ids}"
-        )
+    """The persisted assignment carries the placement_ids the entry asked for."""
+    assignment = _get_assignment_from_db(ctx)
+    assert assignment.placement_ids == ["slot_a"], (
+        f"Expected placement_ids ['slot_a'], got {assignment.placement_ids} for assignment {assignment.assignment_id}"
+    )
 
 
 @then("the second should be an idempotent upsert")
@@ -6092,15 +6121,13 @@ def then_second_is_idempotent_upsert(ctx: dict) -> None:
     from src.core.database.models import CreativeAssignment
 
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: idempotent upsert should succeed, "
-            f"but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: idempotent upsert should succeed, but production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
 
     tenant_id = ctx["tenant"].tenant_id
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     package_id = ctx["package"].package_id
     with db_session(ctx) as session:
         all_rows = session.scalars(
@@ -6133,11 +6160,12 @@ def then_assignment_created_as_paused_no_delivery(ctx: dict) -> None:
     expected_pkg = ctx["package"].package_id
     assert expected_pkg in assigned, f"Expected {expected_pkg!r} in assigned_to, got {assigned}"
 
-    # Verify the DB row exists
-    _xfail_if_e2e(ctx)
+    # Verify the DB row exists. The weight is nowhere on the wire, so the row is
+    # the only observable for it (sync-creatives-response.json carries assigned_to
+    # and assignment_errors, no per-assignment attributes).
     tenant_id = ctx["tenant"].tenant_id
-    creative_id = ctx["creatives"][-1]["creative_id"]
-    with db_session(ctx) as session:
+    creative_id = latest_creative_id(ctx)
+    with _readback(ctx) as session:
         assignment = session.scalars(
             select(CreativeAssignment).filter_by(
                 tenant_id=tenant_id,
@@ -6146,13 +6174,12 @@ def then_assignment_created_as_paused_no_delivery(ctx: dict) -> None:
             )
         ).first()
         assert assignment is not None, f"No CreativeAssignment found for creative={creative_id}, package={expected_pkg}"
-        # Xfail ONLY the specific unimplemented claim
-        if assignment.weight != 0:
-            pytest.xfail(
-                "SPEC-PRODUCTION GAP: Per-assignment weight (weight=0 → paused, no delivery) "
-                f"is not supported. Expected weight=0, got weight={assignment.weight}. "
-                "Production hard-codes weight=100 on create."
-            )
+        # GAP: the pinned 3.1 sync-creatives-request.json defines assignments[].weight, production
+        # hard-codes 100. Declared ONCE in _SELECTIVE_XFAIL so it XPASSes
+        # loudly if production implements it; this step now ASSERTS instead of excusing itself.
+        assert assignment.weight == 0, (
+            f"weight=0 means assigned but PAUSED, receiving no delivery; got {assignment.weight}"
+        )
 
 
 @then("the response should include the creative with assignment results")
@@ -6162,11 +6189,9 @@ def then_response_includes_creative_with_assignment_results(ctx: dict) -> None:
     POST-S3: Buyer knows which packages each creative was assigned to.
     """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected creative with assignment results, "
-            f"but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected creative with assignment results, but production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     assert results, f"Expected at least one SyncCreativeResult, got empty: {resp}"
@@ -6174,46 +6199,6 @@ def then_response_includes_creative_with_assignment_results(ctx: dict) -> None:
     assigned = first.assigned_to or []
     # The response should include assignment results (assigned_to list)
     assert assigned, f"POST-S3: Expected non-empty assigned_to on SyncCreativeResult, got assigned_to={assigned}"
-
-
-@then("the assignment should be created with the specified weight")
-def then_assignment_created_with_specified_weight(ctx: dict) -> None:
-    """Assert the assignment was created with the weight specified in the Given step.
-
-    Reads the requested weight from ctx["assignment_requested_weight"] (set by
-    the ``an assignment with package_id "..." and weight N`` Given step).
-    Production hard-codes weight=100 — SPEC-PRODUCTION GAP when weight != 100.
-    """
-    assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
-    assigned = _get_creative_assigned_to(ctx)
-    expected_pkg = ctx["package"].package_id
-    assert expected_pkg in assigned, f"Expected {expected_pkg!r} in assigned_to, got {assigned}"
-
-    requested_weight = ctx.get("assignment_requested_weight")
-    if requested_weight is None:
-        return  # No specific weight to check
-
-    from sqlalchemy import select
-
-    from src.core.database.models import CreativeAssignment
-
-    tenant_id = ctx["tenant"].tenant_id
-    creative_id = ctx["creatives"][-1]["creative_id"]
-    with db_session(ctx) as session:
-        assignment = session.scalars(
-            select(CreativeAssignment).filter_by(
-                tenant_id=tenant_id,
-                creative_id=creative_id,
-                package_id=expected_pkg,
-            )
-        ).first()
-        assert assignment is not None, f"No CreativeAssignment found for creative={creative_id}, package={expected_pkg}"
-        if assignment.weight != requested_weight:
-            pytest.xfail(
-                f"SPEC-PRODUCTION GAP: Per-assignment weight not supported. "
-                f"Expected weight={requested_weight}, got weight={assignment.weight}. "
-                f"Production hard-codes weight=100 on create."
-            )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -6225,30 +6210,29 @@ def then_assignment_created_with_specified_weight(ctx: dict) -> None:
 def then_operation_should_abort_package_not_found(ctx: dict) -> None:
     """Assert strict-mode abort with PACKAGE_NOT_FOUND for non-existent package.
 
-    Production raises AdCPNotFoundError with error_code="NOT_FOUND" (not the
+    Production raises AdCPNotFoundError with error_code="REFERENCE_NOT_FOUND" (not the
     spec-required "PACKAGE_NOT_FOUND"). We assert the error was raised and
     xfail on the error_code mismatch.
     """
-    from src.core.exceptions import AdCPError
 
     error = ctx.get("error")
-    if error is None:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: strict mode with non-existent package should abort "
-            "with PACKAGE_NOT_FOUND, but production succeeded without raising. "
-            f"Response: {payload_or_none(ctx)!r}"
-        )
+    assert error is not None, (
+        f"SPEC-PRODUCTION GAP: strict mode with non-existent package should abort with PACKAGE_NOT_FOUND, but production succeeded without raising. Response: {payload_or_none(ctx)!r}"
+    )
 
-    assert isinstance(error, AdCPError), f"Expected AdCPError, got {type(error).__name__}: {error}"
-
-    actual_code = error.error_code
-    if actual_code != "PACKAGE_NOT_FOUND":
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: error_code is '{actual_code}', "
-            f"spec expects 'PACKAGE_NOT_FOUND'. AdCPNotFoundError.error_code "
-            f"is 'NOT_FOUND' — needs a domain-specific subclass. "
-            f"See _assignments.py:62-69."
-        )
+    # The xfail that used to sit here said "AdCPNotFoundError.error_code is
+    # 'NOT_FOUND' -- needs a domain-specific subclass". That subclass now exists and
+    # is used: _assignments.py:163 raises AdCPPackageNotFoundError, which emits the
+    # published PACKAGE_NOT_FOUND. The gap is closed, so the scenario asserts it
+    # rather than excusing it.
+    result = ctx.get("result")
+    wire_code = result.wire_error_code() if result is not None else None
+    assert wire_code is not None, (
+        f"Expected PACKAGE_NOT_FOUND on the wire, but no envelope was captured: {type(error).__name__}: {error}"
+    )
+    assert wire_code == "PACKAGE_NOT_FOUND", (
+        f"Strict mode with a non-existent package must reject with PACKAGE_NOT_FOUND, got {wire_code!r}"
+    )
 
 
 @then("the assignment_errors should contain the package_id")
@@ -6260,12 +6244,9 @@ def then_assignment_errors_contain_package_id(ctx: dict) -> None:
     dict[str, str] where keys are package_ids and values are error messages.
     """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: lenient mode should return response with "
-            f"assignment_errors, but production raised "
-            f"{type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: lenient mode should return response with assignment_errors, but production raised {type(error).__name__}: {error}"
+    )
 
     resp = require_payload(ctx)
 
@@ -6274,11 +6255,9 @@ def then_assignment_errors_contain_package_id(ctx: dict) -> None:
 
     first = results[0]
     assignment_errors = getattr(first, "assignment_errors", None)
-    if not assignment_errors:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: expected non-empty assignment_errors in response, "
-            f"but got assignment_errors={assignment_errors!r}"
-        )
+    assert assignment_errors, (
+        f"SPEC-PRODUCTION GAP: expected non-empty assignment_errors in response, but got assignment_errors={assignment_errors!r}"
+    )
 
     # Retrieve the expected non-existent package_id from ctx
     assignments_dict = ctx.get("assignments", {})
@@ -6301,83 +6280,27 @@ def then_assignment_errors_contain_package_id(ctx: dict) -> None:
 
 @then("the system should reject with VALIDATION_ERROR")
 def then_system_should_reject_validation_error(ctx: dict) -> None:
-    """Assert rejection with VALIDATION_ERROR for invalid validation_mode value.
+    """Assert an unknown validation_mode is rejected, graded ON THE WIRE.
 
-    When validation_mode is an unknown value (e.g. "partial"), the system
-    should reject the request with VALIDATION_ERROR.
-
-    SPEC-PRODUCTION GAP: MCP transport rejects via FastMCP TypeAdapter
-    before reaching _impl. The error is a ToolError with a Pydantic
-    ValidationError message, not an AdCPError. The rejection is functionally
-    correct (invalid enum value rejected) but uses a transport-specific
-    error type. We xfail for the error_code mismatch.
+    The pinned 3.1 enums/validation-mode.json admits exactly ["strict", "lenient"], so
+    "partial" is schema-invalid and MUST be refused. Which LAYER refuses it differs by
+    transport -- MCP's TypeAdapter rejects before _impl, REST/A2A reach the boundary --
+    and that is precisely why this reads the wire code rather than the class of
+    ctx["error"]: the buyer sees a code, not a Python type, and asserting on the rebuilt
+    exception is what tests/CLAUDE.md forbids. Two xfails used to record the transport
+    difference as a production gap; the gap was in the assertion's layer.
     """
-    from src.core.exceptions import AdCPError
-
-    error = ctx.get("error")
-    if error is None:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: invalid validation_mode 'partial' should be rejected "
-            "with VALIDATION_ERROR, but production accepted it. Production may not validate "
-            f"the validation_mode enum at input. Response: {payload_or_none(ctx)!r}"
-        )
-
-    # MCP transport: FastMCP TypeAdapter rejects invalid enum before _impl
-    if not isinstance(error, AdCPError):
-        err_str = str(error)
-        if "validation_mode" in err_str and ("enum" in err_str or "partial" in err_str):
-            pytest.xfail(
-                f"SPEC-PRODUCTION GAP: MCP TypeAdapter rejected invalid validation_mode "
-                f"'partial' with {type(error).__name__} instead of AdCPError(VALIDATION_ERROR). "
-                f"Rejection is functionally correct but uses transport-specific error type."
-            )
-        pytest.xfail(f"SPEC-PRODUCTION GAP: expected AdCPError(VALIDATION_ERROR), got {type(error).__name__}: {error}")
-
-    actual_code = error.error_code
+    result = ctx.get("result")
+    assert result is not None, "no dispatch result recorded — the When step did not run"
+    wire_code = result.wire_error_code()
+    assert wire_code is not None, (
+        f"validation_mode 'partial' is not in the pinned enum [strict, lenient] and must be "
+        f"refused, but no error reached the wire. Response: {payload_or_none(ctx)!r}"
+    )
     expected_codes = {"VALIDATION_ERROR", "INVALID_REQUEST"}
-    if actual_code not in expected_codes:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected error_code in {expected_codes}, "
-            f"got '{actual_code}' ({type(error).__name__}: {error})"
-        )
-    # The claim this step's text makes, stated on the path that RETURNS. The
-    # xfail above records the known gap; without this the accepted path returned
-    # having graded nothing.
-    assert actual_code in expected_codes, f"expected error_code in {expected_codes}, got {actual_code!r}"
-
-
-@then("preview URLs should be generated")
-def then_preview_urls_generated(ctx: dict) -> None:
-    """Assert at least one creative result has a non-empty preview_url.
-
-    For generative/HTTP-based creatives, the creative agent should return
-    preview URLs in the sync response.
-    """
-    error = ctx.get("error")
-    assert error is None, f"Expected success but got error: {error}"
-
-    resp = require_payload(ctx)
-
-    results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
-    assert results, f"Response has no creative results: {resp}"
-
-    preview_found = False
-    for r in results:
-        preview_url = getattr(r, "preview_url", None)
-        if preview_url is not None and str(preview_url):
-            preview_found = True
-            break
-
-    if not preview_found:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: expected at least one creative with a non-empty "
-            "preview_url, but none found. Production may not generate preview URLs "
-            "for this creative format. Results: "
-            + ", ".join(
-                f"creative_id={getattr(r, 'creative_id', '?')}, preview_url={getattr(r, 'preview_url', None)!r}"
-                for r in results
-            )
-        )
+    assert wire_code in expected_codes, (
+        f"expected the refusal to carry one of {sorted(expected_codes)} on the wire, got {wire_code!r}"
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -6394,11 +6317,9 @@ def then_compatible_package_assignment_created(ctx: dict) -> None:
     should appear in assigned_to.
     """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected compatible assignment to succeed, "
-            f"but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected compatible assignment to succeed, but production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     assert results, f"Expected at least one SyncCreativeResult, got empty: {resp}"
@@ -6425,11 +6346,9 @@ def then_assignment_skipped_with_warning(ctx: dict) -> None:
     referencing the skipped package.
     """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: lenient mode should skip and warn, "
-            f"but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: lenient mode should skip and warn, but production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     assert results, f"Expected at least one SyncCreativeResult, got empty: {resp}"
@@ -6437,7 +6356,7 @@ def then_assignment_skipped_with_warning(ctx: dict) -> None:
 
     # The non-existent package should NOT be in assigned_to
     assigned = first.assigned_to or []
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     nonexistent_pkgs = ctx["assignments"][creative_id]
     for pkg_id in nonexistent_pkgs:
         assert pkg_id not in assigned, (
@@ -6449,12 +6368,9 @@ def then_assignment_skipped_with_warning(ctx: dict) -> None:
     warnings = first.warnings or []
     has_error_entry = any(pkg_id in assignment_errors for pkg_id in nonexistent_pkgs)
     has_warning_entry = any(any(pkg_id in w for pkg_id in nonexistent_pkgs) for w in warnings)
-    if not has_error_entry and not has_warning_entry:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: expected assignment_errors or warnings referencing "
-            f"skipped package(s) {nonexistent_pkgs}, but assignment_errors={assignment_errors}, "
-            f"warnings={warnings}"
-        )
+    assert has_error_entry or has_warning_entry, (
+        f"SPEC-PRODUCTION GAP: expected assignment_errors or warnings referencing skipped package(s) {nonexistent_pkgs}, but assignment_errors={assignment_errors}, warnings={warnings}"
+    )
     # If we have an error entry, verify it has a meaningful message
     if has_error_entry:
         for pkg_id in nonexistent_pkgs:
@@ -6462,45 +6378,6 @@ def then_assignment_skipped_with_warning(ctx: dict) -> None:
                 assert assignment_errors[pkg_id], (
                     f"assignment_errors[{pkg_id!r}] should have a non-empty message, got {assignment_errors[pkg_id]!r}"
                 )
-
-
-@then("the creative should receive equal rotation with other unweighted creatives")
-def then_creative_equal_rotation_with_unweighted(ctx: dict) -> None:
-    """Assert the unweighted assignment carries the canonical equal-rotation default.
-
-    Spec (BR-RULE-093 INV-2): when weight is omitted, creatives receive
-    equal rotation. Production hard-codes weight=100, which is the canonical
-    equal-rotation default.
-
-    Hard-asserts the weight is either None or 100. No vacuous cross-assignment
-    uniqueness check -- the scenario creates a single assignment so comparing
-    a one-element set proves nothing.
-    """
-    from sqlalchemy import select
-
-    from src.core.database.models import CreativeAssignment
-
-    assert "error" not in ctx, f"Expected assignment with equal rotation, but production raised: {ctx.get('error')}"
-    assigned = _get_creative_assigned_to(ctx)
-    expected_pkg = ctx["package"].package_id
-    assert expected_pkg in assigned, f"Expected {expected_pkg!r} in assigned_to, got {assigned}"
-
-    tenant_id = ctx["tenant"].tenant_id
-    creative_id = ctx["creatives"][-1]["creative_id"]
-    with db_session(ctx) as session:
-        assignment = session.scalars(
-            select(CreativeAssignment).filter_by(
-                tenant_id=tenant_id,
-                creative_id=creative_id,
-                package_id=expected_pkg,
-            )
-        ).first()
-        assert assignment is not None, f"No CreativeAssignment found for creative={creative_id}, package={expected_pkg}"
-        # Hard-assert the canonical equal-rotation default (null or 100)
-        assert assignment.weight is None or assignment.weight == 100, (
-            f"Equal rotation requires canonical default weight (None or 100), "
-            f"got weight={assignment.weight} for creative={creative_id}"
-        )
 
 
 @then("the assignment results should list the assigned packages")
@@ -6512,10 +6389,9 @@ def then_assignment_results_list_assigned_packages(ctx: dict) -> None:
     the response's assigned_to field.
     """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected assignment results, but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected assignment results, but production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     assert results, f"Expected at least one SyncCreativeResult, got empty: {resp}"
@@ -6523,7 +6399,7 @@ def then_assignment_results_list_assigned_packages(ctx: dict) -> None:
     assigned = first.assigned_to or []
 
     # Get the expected package_ids from the Given step's assignments
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     expected_pkgs = ctx["assignments"][creative_id]
     for pkg_id in expected_pkgs:
         assert pkg_id in assigned, f"Expected package {pkg_id!r} in assigned_to, got {assigned}"
@@ -6537,11 +6413,9 @@ def then_two_assignments_created_successfully(ctx: dict) -> None:
     1 non-existent). The two valid packages should appear in assigned_to.
     """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected 2 successful assignments, "
-            f"but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected 2 successful assignments, but production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     assert results, f"Expected at least one SyncCreativeResult, got empty: {resp}"
@@ -6567,12 +6441,9 @@ def then_response_includes_assignment_errors_for_nonexistent(ctx: dict) -> None:
     assignment_errors with a non-empty error message.
     """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: lenient mode should return response with "
-            f"assignment_errors, but production raised "
-            f"{type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: lenient mode should return response with assignment_errors, but production raised {type(error).__name__}: {error}"
+    )
 
     resp = require_payload(ctx)
 
@@ -6583,11 +6454,9 @@ def then_response_includes_assignment_errors_for_nonexistent(ctx: dict) -> None:
     assignment_errors = getattr(first, "assignment_errors", None)
     nonexistent_pkg_id = ctx["nonexistent_package_id"]
 
-    if not assignment_errors:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: expected non-empty assignment_errors in response, "
-            f"but got assignment_errors={assignment_errors!r}"
-        )
+    assert assignment_errors, (
+        f"SPEC-PRODUCTION GAP: expected non-empty assignment_errors in response, but got assignment_errors={assignment_errors!r}"
+    )
 
     assert isinstance(assignment_errors, dict), (
         f"Expected assignment_errors to be a dict, got {type(assignment_errors).__name__}"
@@ -6618,14 +6487,12 @@ def _build_creative_scope_payload(ctx: dict, creative_id: str) -> dict:
     """
     env = ctx["env"]
     _ensure_tenant_principal_from_db(ctx, env)
-    creative_payload = {
-        "creative_id": creative_id,
-        "name": f"Creative {creative_id}",
-        "format_id": {"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": build_assets(image_spec("image")),
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id=creative_id,
+        name=f"Creative {creative_id}",
+        format_id=_creative_format_id_entry(ctx, env),
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
-    ctx["creative_id"] = creative_id
     return creative_payload
 
 
@@ -6664,12 +6531,11 @@ def _preseed_creative_for_principal(ctx: dict, creative_id: str, principal_id: s
         principal=owner_principal,
         creative_id=creative_id,
         name=f"Pre-existing creative {creative_id}",
-        agent_url=env.DEFAULT_AGENT_URL,
-        format="display_300x250",
+        agent_url=_scenario_format_entry(ctx, env)["agent_url"],
+        format=_scenario_format_entry(ctx, env)["id"],
     )
     env._commit_factory_data()
     ctx["pre_existing_creative_id"] = creative_id
-    ctx["pre_existing_principal_id"] = principal_id
 
     # Build the creative payload for the sync request
     _build_creative_scope_payload(ctx, creative_id)
@@ -6754,18 +6620,17 @@ def then_new_creative_created_for_principal_scope(ctx: dict, principal_id: str) 
     action_str = _get_action_str(result)
     assert action_str == "created", f"Expected creative action 'created', got '{action_str}'"
 
-    # Verify the creative was stamped with the correct principal_id in DB
-    _xfail_if_e2e(ctx)
-
+    # Verify the creative was stamped with the correct principal_id in DB — the
+    # principal is the seller's own attribution and is not on the wire.
     from sqlalchemy import select
 
     from src.core.database.models import Creative
 
-    creative_id = getattr(result, "creative_id", None) or ctx.get("creative_id")
+    creative_id = getattr(result, "creative_id", None) or latest_creative_id(ctx)
     assert creative_id is not None, "No creative_id found in result or ctx"
 
     env = ctx["env"]
-    with db_session(ctx) as session:
+    with _readback(ctx) as session:
         creative = session.scalars(
             select(Creative).filter_by(
                 tenant_id=env._tenant_id,
@@ -6791,10 +6656,7 @@ def given_creative_assigned_to_package_with_weight(ctx: dict, creative_id: str, 
     """Set up a creative payload with an assignment to a package at a given weight.
 
     Builds the creative payload (if not already present for this creative_id)
-    and adds an assignment entry with the specified weight. The assignment is
-    stored in ctx["assignments"] as the dict shape that _sync_creatives_impl
-    expects, and the weight is tracked in ctx["assignment_weights"] for Then
-    step assertions.
+    and adds an assignment entry with the specified weight.
     """
     from tests.factories import MediaBuyFactory, MediaPackageFactory, ProductFactory
 
@@ -6817,10 +6679,9 @@ def given_creative_assigned_to_package_with_weight(ctx: dict, creative_id: str, 
     # Create the package if it doesn't exist yet
     packages = ctx.setdefault("_packages", {})
     if package_id not in packages:
-        agent_url = env.DEFAULT_AGENT_URL
         product = ProductFactory(
             tenant=tenant,
-            format_ids=[{"agent_url": agent_url, "id": "display_300x250"}],
+            format_ids=[_product_format_entry(ctx, env)],
         )
         package = MediaPackageFactory(
             media_buy=ctx["media_buy"],
@@ -6830,15 +6691,12 @@ def given_creative_assigned_to_package_with_weight(ctx: dict, creative_id: str, 
         env._commit_factory_data()
         packages[package_id] = package
 
-    # Add the assignment mapping (creative_id -> [package_id])
+    # Add the assignment mapping (creative_id -> [package_id]) and its weight
     assignments = ctx.setdefault("assignments", {})
     assignments.setdefault(creative_id, [])
     if package_id not in assignments[creative_id]:
         assignments[creative_id].append(package_id)
-
-    # Track weights for Then step assertions
-    weights = ctx.setdefault("assignment_weights", {})
-    weights[creative_id] = weight
+    _ask_assignment_terms(ctx, creative_id, package_id, weight=weight)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -6846,69 +6704,31 @@ def given_creative_assigned_to_package_with_weight(ctx: dict, creative_id: str, 
 # ═══════════════════════════════════════════════════════════════════════
 
 
-@then("creative-A should receive proportionally more delivery than creative-B")
-def then_creative_a_more_delivery_than_b(ctx: dict) -> None:
-    """Assert creative-A (higher weight) has more delivery weight than creative-B.
+@then(parsers.parse('the assignment of "{creative_id}" to "{package_id}" should carry weight {weight:d}'))
+def then_assignment_of_creative_carries_weight(ctx: dict, creative_id: str, package_id: str, weight: int) -> None:
+    """assignments[].weight is per entry: two creatives on one package each keep their own.
 
-    Spec (BR-RULE-093 INV-3): When two creatives are assigned to the same
-    package with different weights (e.g. 80 vs 20), the higher-weighted
-    creative should receive proportionally more delivery.
-
-    We verify this by reading the CreativeAssignment rows from the DB and
-    comparing their weight values. Production currently hard-codes weight=100
-    for all assignments, so a SPEC-PRODUCTION GAP is expected.
+    "When multiple creatives are assigned to the same package, weights determine
+    impression distribution proportionally" (the pin). The persisted weights are what
+    the ad server rotates on; delivery itself is not observable on this tool.
     """
     from sqlalchemy import select
 
     from src.core.database.models import CreativeAssignment
 
-    _xfail_if_e2e(ctx)
-
-    error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected proportional delivery, "
-            f"but production raised {type(error).__name__}: {error}"
-        )
-
-    # Retrieve requested weights from the Given step
-    assignment_weights = ctx.get("assignment_weights", {})
-    assert "creative-A" in assignment_weights, "Given step did not set weight for creative-A"
-    assert "creative-B" in assignment_weights, "Given step did not set weight for creative-B"
-    weight_a_requested = assignment_weights["creative-A"]
-    weight_b_requested = assignment_weights["creative-B"]
-    assert weight_a_requested > weight_b_requested, (
-        f"Test precondition: creative-A weight ({weight_a_requested}) must exceed "
-        f"creative-B weight ({weight_b_requested})"
+    _assert_success_response(ctx)
+    with _readback(ctx) as session:
+        assignment = session.scalars(
+            select(CreativeAssignment).filter_by(
+                tenant_id=ctx["tenant"].tenant_id,
+                creative_id=creative_id,
+                package_id=package_id,
+            )
+        ).first()
+    assert assignment is not None, f"No CreativeAssignment found for creative={creative_id}, package={package_id}"
+    assert assignment.weight == weight, (
+        f"Expected assignment weight {weight} for creative={creative_id}, package={package_id}, got {assignment.weight}"
     )
-
-    # Read actual weights from DB
-    tenant_id = ctx["tenant"].tenant_id
-    with db_session(ctx) as session:
-        assignment_a = session.scalars(
-            select(CreativeAssignment).filter_by(
-                tenant_id=tenant_id,
-                creative_id="creative-A",
-            )
-        ).first()
-        assignment_b = session.scalars(
-            select(CreativeAssignment).filter_by(
-                tenant_id=tenant_id,
-                creative_id="creative-B",
-            )
-        ).first()
-
-    assert assignment_a is not None, "No CreativeAssignment found for creative-A"
-    assert assignment_b is not None, "No CreativeAssignment found for creative-B"
-
-    # Compare actual DB weights: creative-A should have strictly more weight
-    if assignment_a.weight <= assignment_b.weight:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: Per-assignment weight not supported. "
-            f"Requested weights creative-A={weight_a_requested}, creative-B={weight_b_requested}, "
-            f"but DB has creative-A.weight={assignment_a.weight}, creative-B.weight={assignment_b.weight}. "
-            f"Production hard-codes weight=100 on all assignments."
-        )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -6925,18 +6745,18 @@ def given_creatives_all_fail(ctx: dict, count: int) -> None:
     variant rather than collapsing the whole operation to the error variant.
     """
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
 
     format_id, agent_url, assets = _format_payload(ctx, env)
     creatives = ctx.setdefault("creatives", [])
     for i in range(count):
         creatives.append(
-            {
-                "creative_id": f"creative-fail-{i:03d}",
-                "name": "",  # empty name → per-creative validation failure
-                "format_id": {"id": format_id, "agent_url": agent_url},
-                "assets": assets,
-            }
+            CreativeAssetRequestFactory.payload(
+                creative_id=f"creative-fail-{i:03d}",
+                name="",  # empty name → per-creative validation failure, and pin-conformant
+                format_id={"id": format_id, "agent_url": agent_url},
+                assets=assets,
+            )
         )
     ctx["validation_mode"] = "lenient"
 
@@ -6959,8 +6779,24 @@ def then_success_variant_with_creatives(ctx: dict) -> None:
 
 @then(parsers.parse('every creative result has action "{action}"'))
 def then_every_creative_action(ctx: dict, action: str) -> None:
-    """Every per-creative result carries the given action (e.g. 'failed')."""
+    """Every per-creative result carries the given action (e.g. 'failed').
+
+    Also the dry_run parity grader: suppressing the outbound creative-agent call
+    must not change WHAT the preview reports. dry_run "returns what would be
+    created/updated/deleted" (sync-creatives-request.json#/properties/dry_run @
+    v3.1.1), so a preview of a create still says "created" -- never a
+    SERVICE_UNAVAILABLE blaming the agent for a call the gate never made. The
+    live control binds this same step, so preview and live are compared on the
+    same field.
+
+    Read off the typed success payload through ``require_payload`` -- the one
+    guarded accessor for the dispatch's own payload -- because CreativeSyncEnv
+    stashes no success-path wire envelope on a2a (verified). Deliberately NOT an
+    either-layer wire-or-typed fallback -- that is the antipattern that lets a
+    one-layer regression pass every call site. One locus, stated.
+    """
     response = require_payload(ctx)
+    assert response is not None, "expected a sync_creatives response payload"
     assert response.creatives, "expected at least one per-creative result"
     actions = [_action_str(c.action) for c in response.creatives]
     assert actions == [action] * len(actions), f"expected every action == {action!r}, got {actions}"
@@ -6978,6 +6814,196 @@ def then_no_operation_level_errors(ctx: dict) -> None:
     operation_errors = getattr(response, "errors", None)
     assert operation_errors is None, (
         f"success variant must not carry operation-level errors[]; got {operation_errors!r}"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# The workflow-step write path and its escaping notification (GH #2002)
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Three rows make up that write -- one Context, one WorkflowStep per creative
+# awaiting approval, one ObjectWorkflowMapping per step -- and today
+# _create_sync_workflow_steps writes them through its OWN WorkflowUoW, outside
+# the transaction that owns the creatives. Every assertion below therefore reads
+# them over an INDEPENDENT connection (CreativeSyncEnv.committed_* ), never
+# through env.get_workflow_steps(): that accessor reads the SCOPED session,
+# which inside a request IS the transaction under test, so it cannot tell a row
+# that is committed from a row that is about to be rolled back -- the only
+# question a preview asks.
+
+
+def _synced_creative_ids(ctx: dict) -> list[str]:
+    """The creative_ids this scenario's request carried, sorted."""
+    return sorted(c["creative_id"] for c in ctx["creatives"])
+
+
+@given("the effects escaping the sync transaction are observed as they fire")
+def given_observe_escaping_effects(ctx: dict) -> None:
+    """Record committed DB state at the instant the Slack notification fires.
+
+    Ordering is only observable AT the effect: once the request has returned,
+    the steps are committed and the assignments are committed under either
+    order, and nothing distinguishes them.
+    """
+    ctx["env"].observe_effects_at_notification()
+
+
+@then("the committed workflow rows name exactly the synced creatives")
+def then_committed_workflow_rows_name_synced_creatives(ctx: dict) -> None:
+    """The live control: one Context, one step and one mapping per creative.
+
+    Counts AND identities. A count alone would pass against a mapping that
+    pointed at some other object, and an identity check alone would pass against
+    a second, duplicate step -- the two together are what the preview branch's
+    "zero rows" assertion is measured against.
+    """
+    _assert_success_response(ctx)
+    expected_ids = _synced_creative_ids(ctx)
+    effects = ctx["env"].committed_sync_effects()
+
+    assert effects.workflow_object_ids == expected_ids, (
+        f"expected one committed workflow mapping per synced creative {expected_ids}, got {effects.workflow_object_ids}"
+    )
+    assert len(effects.workflow_step_ids) == len(expected_ids), (
+        f"expected {len(expected_ids)} committed workflow step(s) for {expected_ids}, got {effects.workflow_step_ids}"
+    )
+    assert len(effects.context_ids) == 1, (
+        f"expected exactly one committed Context row for the tenant, got {effects.context_ids}"
+    )
+    # Each mapping must name a row that is actually on file: a mapping pointing
+    # at a creative the request did not persist is a dangling approval queue
+    # entry, which is the failure the whole write path exists to avoid.
+    persisted = sorted(_persisted_creative_fingerprints(ctx))
+    assert effects.workflow_object_ids == sorted(set(effects.workflow_object_ids) & set(persisted)), (
+        f"committed workflow mappings name creatives that are not persisted: "
+        f"mapped {effects.workflow_object_ids}, persisted {persisted}"
+    )
+
+
+@then("no workflow step, mapping or context row is committed for the tenant")
+def then_no_committed_workflow_rows(ctx: dict) -> None:
+    """The preview branch: the write path ran, and the rollback took all of it.
+
+    Measured against the live control above, which proves this exact payload on
+    this exact tenant does produce all three rows.
+    """
+    _assert_success_response(ctx)
+    effects = ctx["env"].committed_sync_effects()
+    observed = (effects.workflow_step_ids, effects.workflow_object_ids, effects.context_ids)
+    assert observed == ([], [], []), (
+        f"dry_run committed workflow state — steps {effects.workflow_step_ids}, "
+        f"mappings {effects.workflow_object_ids}, contexts {effects.context_ids}; these rows are "
+        "written outside the creatives transaction, so the preview's rollback never reached them"
+    )
+
+
+def _notification_observation(ctx: dict) -> tuple[tuple[list[str], list[str]], int]:
+    """What an independent connection saw at Slack-notification time.
+
+    Fails loudly rather than returning a default when nothing was observed: a
+    scenario that forgot the observer Given, or a request that never notified,
+    must redden here rather than silently grading None.
+    """
+    env = ctx["env"]
+    rows = env.workflow_rows_at_notification
+    count = env.assignment_count_at_notification
+    assert rows is not None and count is not None, (
+        "no Slack notification was observed — the scenario must bind 'the effects escaping the "
+        "sync transaction are observed as they fire' before the When step, and the request must "
+        "actually notify"
+    )
+    return rows, count
+
+
+@then("the workflow steps the request committed were already visible when Slack was notified")
+def then_workflow_steps_visible_at_notification(ctx: dict) -> None:
+    """The notification must not overtake the steps it tells a human to open.
+
+    Compares two reads of the same rows: what an INDEPENDENT connection could
+    see at the instant _send_creative_notifications was entered, and what the
+    finished request left committed. Equality is the whole invariant -- the
+    person following the Slack link opens exactly the state that connection
+    could see, so any difference is a step the message names and nobody can
+    find. A flush without a commit yields an empty read here, so the assertion
+    cannot hold vacuously.
+    """
+    _assert_success_response(ctx)
+    rows, _count = _notification_observation(ctx)
+    effects = ctx["env"].committed_sync_effects()
+    expected_ids = _synced_creative_ids(ctx)
+    assert effects.workflow_object_ids == expected_ids, (
+        f"the request committed no workflow mapping for {expected_ids} "
+        f"(got {effects.workflow_object_ids}), so comparing the notification-time read against it "
+        "would prove nothing"
+    )
+    assert rows == (effects.workflow_step_ids, effects.workflow_object_ids), (
+        f"Slack was notified about workflow state that was not committed yet: at notification time "
+        f"an independent connection saw {rows}, the request finally committed "
+        f"{(effects.workflow_step_ids, effects.workflow_object_ids)}"
+    )
+
+
+@then("no creative assignment was committed when Slack was notified")
+def then_no_assignment_committed_at_notification(ctx: dict) -> None:
+    """The approval notification precedes the assignment stage.
+
+    Once the workflow-step write joins the creatives transaction, the
+    notification is an after_commit effect draining at ``stack.close()`` — which
+    is BEFORE _process_assignments runs. Today it fires at the end of the impl,
+    after that stage has committed its rows, so this reads a non-zero count.
+    Graded together with the step visibility above: one observation, taken at
+    one instant, that reddens if either ordering regresses.
+    """
+    _assert_success_response(ctx)
+    _rows, count = _notification_observation(ctx)
+    assert count == 0, (
+        f"{count} creative assignment(s) were already committed when Slack was notified — the "
+        "approval notification is an effect of the creatives commit and must drain before the "
+        "assignment stage runs"
+    )
+
+
+@then("the assignment the request made is committed")
+def then_assignment_is_committed(ctx: dict) -> None:
+    """Non-vacuity control for the ordering assertion above.
+
+    Without it, "no assignment at notification time" also holds for a request
+    that never created one — i.e. it would grade nothing.
+    """
+    _assert_success_response(ctx)
+    committed = ctx["env"].committed_sync_effects().assignment_count
+    assert committed == 1, (
+        f"expected the request to leave exactly 1 committed creative assignment, got {committed}; "
+        "without one the notification-time count of 0 proves nothing"
+    )
+
+
+@then("every committed creative awaiting approval has a committed workflow step")
+def then_no_orphan_creative_awaiting_approval(ctx: dict) -> None:
+    """GH #1987: no creative left in the queue unqueued.
+
+    A creative committed at ``pending_review`` is a promise that a human will be
+    asked to review it, and the workflow step is the only thing that asks. When
+    _process_assignments raises in strict mode the creatives are already
+    committed (``if not dry_run: stack.close()``) while the workflow-step call
+    sits after the raise — so the promise is committed and the queue entry never
+    written. Once the steps join the creatives' transaction they commit in the
+    same ``stack.close()``, before the raise, and the two cannot diverge.
+    """
+    effects = ctx["env"].committed_sync_effects()
+    awaiting = effects.creatives_awaiting_approval
+    expected_ids = _synced_creative_ids(ctx)
+    # Non-vacuity: the require-human tenant must actually have committed the
+    # creative before the raise. If it did not, there is no orphan to look for
+    # and the mapping comparison below would hold over two empty sets.
+    assert awaiting == expected_ids, (
+        f"expected the strict-mode failure to leave {expected_ids} committed at pending_review, "
+        f"got {awaiting}; without a committed creative there is no orphan to grade"
+    )
+    assert sorted(set(effects.workflow_object_ids) & set(awaiting)) == awaiting, (
+        f"creatives {sorted(set(awaiting) - set(effects.workflow_object_ids))} were committed "
+        "awaiting approval with no workflow step naming them — the assignment failure aborted "
+        "before the steps were written, but after the creatives were committed (GH #1987)"
     )
 
 

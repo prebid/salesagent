@@ -13,6 +13,7 @@ Configuration priority:
 import json
 import logging
 import os
+import secrets
 from urllib.parse import unquote, urlsplit
 
 from authlib.integrations.flask_client import OAuth
@@ -20,15 +21,15 @@ from flask import Blueprint, abort, current_app, flash, redirect, render_templat
 from sqlalchemy import select
 
 from src.admin.auth_utils import extract_user_info
-from src.admin.utils import is_admin_production, is_super_admin
+from src.admin.blueprints.core import get_tenant_from_hostname
+from src.admin.utils import is_super_admin, require_tenant_access
+from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant
 from src.core.domain_config import (
-    extract_subdomain_from_host,
     get_oauth_redirect_uri,
     get_sales_agent_url,
     get_super_admin_domain,
-    is_sales_agent_domain,
 )
 from src.core.security.outbound_http import OutboundError
 from src.services.google_oauth_client import exchange_authorization_code
@@ -76,7 +77,7 @@ OIDC_PROVIDERS = {
 
 def get_oauth_provider_name():
     """Get the configured OAuth provider name."""
-    return os.environ.get("OAUTH_PROVIDER", "google").lower()
+    return get_settings().auth.oauth_provider.lower()
 
 
 def get_oauth_config():
@@ -91,10 +92,11 @@ def get_oauth_config():
     4. Legacy file: client_secret.json
     """
     # Option 1: Full generic OIDC configuration
-    discovery_url = os.environ.get("OAUTH_DISCOVERY_URL")
-    client_id = os.environ.get("OAUTH_CLIENT_ID")
-    client_secret = os.environ.get("OAUTH_CLIENT_SECRET")
-    scopes = os.environ.get("OAUTH_SCOPES", "openid email profile")
+    auth_settings = get_settings().auth
+    discovery_url = auth_settings.oauth_discovery_url
+    client_id = auth_settings.oauth_client_id
+    client_secret = auth_settings.oauth_client_secret
+    scopes = auth_settings.oauth_scopes
 
     if discovery_url and client_id and client_secret:
         logger.info(f"Using generic OIDC provider with discovery URL: {discovery_url}")
@@ -111,8 +113,8 @@ def get_oauth_config():
             logger.warning(f"Provider '{provider}' requires OAUTH_DISCOVERY_URL to be set")
 
     # Option 3: Google-specific environment variables (backwards compatible)
-    google_client_id = os.environ.get("GOOGLE_CLIENT_ID")
-    google_client_secret = os.environ.get("GOOGLE_CLIENT_SECRET")
+    google_client_id = auth_settings.google_client_id
+    google_client_secret = auth_settings.google_client_secret
 
     if google_client_id and google_client_secret:
         logger.info("Using Google OAuth (legacy GOOGLE_CLIENT_ID configuration)")
@@ -200,9 +202,10 @@ def login():
     client_id, client_secret, discovery_url, _ = get_oauth_config()
     oauth_configured = bool(client_id and client_secret and discovery_url)
 
-    # Determine test_mode from env var only
-    # tenant.auth_setup_mode is only used when NO global OAuth is configured
-    test_mode = os.environ.get("ADCP_AUTH_TEST_MODE", "").lower() == "true"
+    # No test-credential form: the route that served it is gone, and with it the global
+    # flag that composed it. A deployment logs in through its identity provider; a tenant
+    # still setting one up uses Setup Mode, which lets OIDC run before it is enabled.
+    test_mode = False
 
     from src.core.config_loader import is_single_tenant_mode
 
@@ -212,40 +215,13 @@ def login():
     tenant_name = None
 
     # Extract tenant from headers FIRST (before any redirects)
-    # This is needed for multi-tenant subdomain routing
-    host = request.headers.get("Host", "")
-
-    # Check for Approximated routing headers first
-    approximated_host = request.headers.get("Apx-Incoming-Host")
-    if approximated_host:
-        with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(virtual_host=approximated_host)).first()
-            if tenant:
-                tenant_context = tenant.tenant_id
-                tenant_name = tenant.name
-                # Only use auth_setup_mode if no global OAuth configured
-                if not oauth_configured and hasattr(tenant, "auth_setup_mode") and tenant.auth_setup_mode:
-                    test_mode = True
-                logger.info(
-                    f"Detected tenant context from Approximated headers: {approximated_host} -> {tenant_context}"
-                )
-
-    # Fallback to direct domain routing (subdomain detection)
-    if not tenant_context:
-        tenant_subdomain = None
-        if is_sales_agent_domain(host) and not host.startswith("admin."):
-            tenant_subdomain = extract_subdomain_from_host(host)
-
-        if tenant_subdomain:
-            with get_db_session() as db_session:
-                tenant = db_session.scalars(select(Tenant).filter_by(subdomain=tenant_subdomain)).first()
-                if tenant:
-                    tenant_context = tenant.tenant_id
-                    tenant_name = tenant.name
-                    # Only use auth_setup_mode if no global OAuth configured
-                    if not oauth_configured and hasattr(tenant, "auth_setup_mode") and tenant.auth_setup_mode:
-                        test_mode = True
-                    logger.info(f"Detected tenant context from Host header: {tenant_subdomain} -> {tenant_context}")
+    # The admin plane's one host -> tenant lookup. ``requested_host`` is the one place that
+    # decides which header carried the host, so the log line below does not name one.
+    detected_tenant = get_tenant_from_hostname()
+    if detected_tenant:
+        tenant_context = detected_tenant.tenant_id
+        tenant_name = detected_tenant.name
+        logger.info(f"Detected tenant context from request host: {tenant_context}")
 
     # Check for tenant-specific OIDC configuration (multi-tenant or single-tenant)
     if tenant_context:
@@ -271,14 +247,10 @@ def login():
         from src.core.database.models import TenantAuthConfig
 
         with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id="default")).first()
             config = db_session.scalars(select(TenantAuthConfig).filter_by(tenant_id="default")).first()
             if config and config.oidc_client_id:
                 oidc_configured = True
                 oidc_enabled = config.oidc_enabled
-            # Only use auth_setup_mode in single-tenant mode if no global OAuth
-            if not oauth_configured and tenant and hasattr(tenant, "auth_setup_mode") and tenant.auth_setup_mode:
-                test_mode = True
 
         if oidc_enabled and not test_mode and not just_logged_out:
             return redirect(url_for("oidc.login", tenant_id="default"))
@@ -324,14 +296,8 @@ def tenant_login(tenant_id):
             abort(404)
         tenant_name = tenant.name
 
-        # Determine test_mode:
-        # - ADCP_AUTH_TEST_MODE env var enables test mode globally
-        # - tenant.auth_setup_mode enables test mode for this tenant ONLY if no global OAuth
-        #   (for multi-tenant with global OAuth, tenants use global OAuth, not setup mode)
-        test_mode = os.environ.get("ADCP_AUTH_TEST_MODE", "").lower() == "true"
-        if not test_mode and not oauth_configured:
-            # No global OAuth - use tenant's auth_setup_mode (for single-tenant SSO setup)
-            test_mode = tenant.auth_setup_mode if hasattr(tenant, "auth_setup_mode") else True
+        # No test-credential form — see the note in ``login``.
+        test_mode = False
 
         # Check if tenant-specific OIDC is configured and enabled
         from src.services.auth_config_service import get_oidc_config_for_auth
@@ -385,9 +351,10 @@ def google_auth():
         current_app.config.get("SESSION_COOKIE_SAMESITE"),
     )
 
-    redirect_uri = os.environ.get("GOOGLE_OAUTH_REDIRECT_URI")
+    settings = get_settings()
+    redirect_uri = settings.auth.google_oauth_redirect_uri
     if redirect_uri:
-        logger.info(f"Using GOOGLE_OAUTH_REDIRECT_URI from env: {redirect_uri}")
+        logger.info(f"Using configured GOOGLE_OAUTH_REDIRECT_URI: {redirect_uri}")
     else:
         # Build the URL
         base_url = url_for("auth.google_callback", _external=True)
@@ -395,8 +362,8 @@ def google_auth():
 
         # Only add /admin prefix in production mode with nginx (not in Docker standalone)
         # SKIP_NGINX=true indicates Docker standalone mode without nginx reverse proxy
-        skip_nginx = os.environ.get("SKIP_NGINX", "").lower() == "true"
-        production = os.environ.get("PRODUCTION", "").lower() == "true"
+        skip_nginx = settings.runtime.skip_nginx
+        production = settings.runtime.is_production
 
         if not skip_nginx and production and "/admin/" not in base_url:
             # Production with nginx: add /admin prefix for nginx routing
@@ -456,7 +423,7 @@ def tenant_google_auth(tenant_id):
     host = request.headers.get("Host", "")
 
     # Always use the registered OAuth redirect URI for Google (no modifications allowed)
-    if os.environ.get("PRODUCTION") == "true":
+    if get_settings().runtime.is_production:
         # For production, always use the exact registered redirect URI
         redirect_uri = get_oauth_redirect_uri()
     else:
@@ -466,13 +433,10 @@ def tenant_google_auth(tenant_id):
     # Store originating host and tenant context in session for OAuth callback
     session["oauth_originating_host"] = host
 
-    # Store external domain and tenant context in session for OAuth callback
-    # Note: This works for same-domain OAuth but has limitations for cross-domain scenarios
-    approximated_host = request.headers.get("Apx-Incoming-Host")
-
-    if approximated_host:
-        session["oauth_external_domain"] = approximated_host
-        logger.info(f"Stored external domain for OAuth redirect: {approximated_host}")
+    # NO oauth_external_domain. It was written here from the Approximated vendor header and
+    # read NOWHERE — grep the tree: nothing pops it, and the Google callback below redirects
+    # off `oauth_originating_host`. So it was a session key that only ever cost a cookie.
+    # Its GAM sibling IS read, and the note there says why the Host now carries the value.
 
     session["oauth_tenant_context"] = tenant_id
 
@@ -640,14 +604,14 @@ def google_callback():
 
         if is_single_tenant_mode() and len(session["available_tenants"]) == 1:
             # Auto-select the only tenant
-            tenant = session["available_tenants"][0]
-            tenant_id = tenant["tenant_id"]
+            membership = session["available_tenants"][0]
+            tenant_id = membership["tenant_id"]
 
             # Ensure User record exists
             from src.admin.domain_access import ensure_user_in_tenant
 
             user_name = session.get("user_name", email.split("@")[0].title())
-            role = "admin" if tenant.get("is_admin") else "viewer"
+            role = "admin" if membership.get("is_admin") else "viewer"
 
             try:
                 ensure_user_in_tenant(email, tenant_id, role=role, name=user_name)
@@ -655,7 +619,7 @@ def google_callback():
                 logger.error(f"Failed to create User record for {email} in tenant {tenant_id}: {e}")
 
             session["tenant_id"] = tenant_id
-            session["is_tenant_admin"] = tenant.get("is_admin", True)
+            session["is_tenant_admin"] = membership.get("is_admin", True)
             session.pop("available_tenants", None)
             flash(f"Welcome {user.get('name', email)}!", "success")
             # Check for saved redirect URL
@@ -699,15 +663,15 @@ def select_tenant():
         tenant_id = request.form.get("tenant_id")
 
         # Verify user has access to selected tenant
-        for tenant in session["available_tenants"]:
-            if tenant["tenant_id"] == tenant_id:
+        for membership in session["available_tenants"]:
+            if membership["tenant_id"] == tenant_id:
                 # Ensure User record exists in the database
                 # This is critical for require_tenant_access decorator to work
                 from src.admin.domain_access import ensure_user_in_tenant
 
                 email = session["user"]
                 user_name = session.get("user_name", email.split("@")[0].title())
-                role = "admin" if tenant["is_admin"] else "viewer"
+                role = "admin" if membership["is_admin"] else "viewer"
 
                 try:
                     ensure_user_in_tenant(email, tenant_id, role=role, name=user_name)
@@ -718,9 +682,9 @@ def select_tenant():
                     return redirect(url_for("auth.select_tenant"))
 
                 session["tenant_id"] = tenant_id
-                session["is_tenant_admin"] = tenant["is_admin"]
+                session["is_tenant_admin"] = membership["is_admin"]
                 session.pop("available_tenants", None)  # Clean up
-                flash(f"Welcome to {tenant['name']}!", "success")
+                flash(f"Welcome to {membership['name']}!", "success")
                 # Check for saved redirect URL
                 next_url = _safe_redirect(
                     session.pop("login_next_url", None),
@@ -768,131 +732,17 @@ def logout():
     return redirect(url_for("auth.login", logged_out=1))
 
 
-# Test authentication endpoints (only enabled in test mode)
-@auth_bp.route("/test/auth", methods=["POST"])
-def test_auth():
-    """Test authentication endpoint.
-
-    Works only when BOTH conditions are true:
-    - ADCP_AUTH_TEST_MODE=true (global deployment flag), AND
-    - The requested tenant has auth_setup_mode=True (per-tenant setting)
-
-    Either condition alone is no longer sufficient. A tenant operator
-    disabling Setup Mode via the Admin UI immediately blocks test auth
-    for that tenant, regardless of the global env var.
-    """
-    email = request.form.get("email", "").lower()
-    password = request.form.get("password")
-    tenant_id = request.form.get("tenant_id")
-
-    # In single-tenant mode, default to "default" tenant if not specified
-    from src.core.config_loader import is_single_tenant_mode
-
-    if is_single_tenant_mode() and not tenant_id:
-        tenant_id = "default"
-
-    # Production-like deployments must never expose test auth, regardless of flags.
-    if is_admin_production():
-        logger.warning(
-            "[SECURITY] test_auth blocked: production mode detected. "
-            "Switch to SSO or disable production mode for non-production use."
-        )
-        abort(404)
-
-    # Check if test auth is allowed
-    env_test_mode = os.environ.get("ADCP_AUTH_TEST_MODE", "").lower() == "true"
-    tenant_setup_mode = False
-
-    if tenant_id:
-        with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-            if tenant and hasattr(tenant, "auth_setup_mode"):
-                tenant_setup_mode = tenant.auth_setup_mode
-
-    # Require BOTH: env var enabled AND tenant still in setup mode (F-02).
-    # The env var alone is no longer sufficient — the tenant operator's
-    # decision to disable Setup Mode via the UI must also be respected.
-    if not env_test_mode or not tenant_setup_mode:
-        if not env_test_mode:
-            logger.debug("[SECURITY] test_auth blocked: ADCP_AUTH_TEST_MODE not set.")
-        else:
-            logger.warning(
-                "[SECURITY] test_auth blocked for tenant %r: auth_setup_mode is disabled. "
-                "Re-enable Setup Mode or configure SSO.",
-                tenant_id,
-            )
-        abort(404)
-
-    # Define test users — credentials are always read from env vars, never hardcoded
-    test_users = {
-        os.environ.get("TEST_SUPER_ADMIN_EMAIL", "test_super_admin@example.com"): {
-            "password": os.environ.get("TEST_SUPER_ADMIN_PASSWORD", "test123"),
-            "name": "Test Super Admin",
-            "role": "super_admin",
-        },
-        os.environ.get("TEST_TENANT_ADMIN_EMAIL", "test_tenant_admin@example.com"): {
-            "password": os.environ.get("TEST_TENANT_ADMIN_PASSWORD", "test123"),
-            "name": "Test Tenant Admin",
-            "role": "tenant_admin",
-        },
-        os.environ.get("TEST_TENANT_USER_EMAIL", "test_tenant_user@example.com"): {
-            "password": os.environ.get("TEST_TENANT_USER_PASSWORD", "test123"),
-            "name": "Test Tenant User",
-            "role": "tenant_user",
-        },
-    }
-
-    # Check test users — all credentials go through the test_users table, no bypasses
-    if email in test_users and test_users[email]["password"] == password:
-        user_info = test_users[email]
-        session["test_user"] = email
-        session["test_user_name"] = user_info["name"]
-        session["test_user_role"] = user_info["role"]
-        session["user"] = email
-        session["user_name"] = user_info["name"]
-        session["role"] = user_info["role"]
-        session["authenticated"] = True
-        session["email"] = email
-
-        if user_info["role"] == "super_admin":
-            session["is_super_admin"] = True
-
-        if tenant_id:
-            session["test_tenant_id"] = tenant_id
-            session["tenant_id"] = tenant_id
-            next_url = _safe_redirect(
-                session.pop("login_next_url", None),
-                fallback=url_for("tenants.dashboard", tenant_id=tenant_id),
-            )
-            return redirect(next_url)
-        else:
-            next_url = _safe_redirect(session.pop("login_next_url", None), fallback=url_for("core.index"))
-            return redirect(next_url)
-
-    flash("Invalid test credentials", "error")
-    return redirect(request.referrer or url_for("auth.login"))
-
-
-@auth_bp.route("/test/login")
-def test_login_form():
-    """Show test login form.
-
-    Works when ADCP_AUTH_TEST_MODE=true as a global override.
-    For per-tenant setup mode, use /tenant/<tenant_id>/login instead.
-    """
-    if os.environ.get("ADCP_AUTH_TEST_MODE", "").lower() != "true":
-        abort(404)
-
-    from src.core.config_loader import is_single_tenant_mode
-
-    return render_template("login.html", test_mode=True, test_only=True, single_tenant_mode=is_single_tenant_mode())
-
-
 # GAM OAuth Flow endpoints
 @auth_bp.route("/auth/gam/authorize/<tenant_id>")
+@require_tenant_access()
 def gam_authorize(tenant_id):
-    """Initiate GAM OAuth flow for tenant."""
-    # Verify tenant exists and user has access
+    """Initiate GAM OAuth flow for tenant.
+
+    ``require_tenant_access`` is what makes the callback safe: the tenant it binds
+    the refresh token to is the one this authenticated member started the flow for,
+    read back from the session — never from the request (#2205).
+    """
+    # Verify tenant exists
     with get_db_session() as db_session:
         tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
         if not tenant:
@@ -907,29 +757,35 @@ def gam_authorize(tenant_id):
 
     try:
         # Get GAM OAuth configuration
-        from src.core.config import get_gam_oauth_config
-
         try:
-            gam_config = get_gam_oauth_config()
-            if not gam_config.client_id or not gam_config.client_secret:
+            gam_auth = get_settings().auth
+            if not gam_auth.gam_oauth_configured:
                 raise ValueError("GAM OAuth credentials not configured")
         except Exception as config_error:
             logger.error(f"GAM OAuth configuration error: {config_error}")
             flash(f"GAM OAuth not properly configured: {str(config_error)}", "error")
             return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
 
-        # Store tenant context for callback
+        # Store tenant context for callback. The Host is the operator's own domain, so it
+        # is what the callback sends them back to.
+        #
+        # NO gam_oauth_external_domain alongside it. That key held the Approximated vendor
+        # header because, behind that proxy, the Host named this BACKEND (adcp-sales-agent
+        # .fly.dev, the same for every publisher) and redirecting an operator there would
+        # have bounced them off their own domain mid-OAuth. The edge now folds the vendor
+        # header into Host and drops it (config/nginx/nginx-multi-tenant.conf), so this
+        # single value carries the operator's domain on both the proxied and the direct
+        # path, and the callback's two-branch redirect collapses to one.
+        #
+        # ``gam_oauth_state`` is an unguessable value the callback compares against
+        # before it trusts anything else (#2205).
+        state = secrets.token_urlsafe(32)
+        session["gam_oauth_state"] = state
         session["gam_oauth_tenant_id"] = tenant_id
         session["gam_oauth_originating_host"] = request.headers.get("Host", "")
 
-        # Store external domain context if available
-        approximated_host = request.headers.get("Apx-Incoming-Host")
-        if approximated_host:
-            session["gam_oauth_external_domain"] = approximated_host
-            logger.info(f"Stored external domain for GAM OAuth redirect: {approximated_host}")
-
         # Determine callback URI
-        if os.environ.get("PRODUCTION") == "true":
+        if get_settings().runtime.is_production:
             callback_uri = f"{get_sales_agent_url()}/admin/auth/gam/callback"
         else:
             callback_uri = url_for("auth.gam_callback", _external=True)
@@ -940,13 +796,13 @@ def gam_authorize(tenant_id):
         # Build authorization URL with GAM-specific scope
         auth_url = (
             "https://accounts.google.com/o/oauth2/v2/auth?"
-            f"client_id={gam_config.client_id}&"
+            f"client_id={gam_auth.gam_oauth_client_id}&"
             f"redirect_uri={callback_uri}&"
             "scope=https://www.googleapis.com/auth/dfp&"
             "response_type=code&"
             "access_type=offline&"
             "prompt=consent&"  # Force consent to get refresh token
-            f"state={tenant_id}"
+            f"state={state}"
         )
 
         logger.debug(f"GAM OAuth authorization URL (redacted): {auth_url.split('client_id=')[0]}client_id=REDACTED...")
@@ -971,6 +827,12 @@ def gam_callback():
         logger.info(f"GAM OAuth callback received - code present: {bool(code)}, state: {state}, error: {error}")
         logger.debug(f"GAM OAuth callback full args: {dict(request.args)}")
 
+        # The flow's context lives only in the session that started it. Popped
+        # first so a nonce is consumed whatever the outcome of this callback.
+        tenant_id = session.pop("gam_oauth_tenant_id", None)
+        issued_state = session.pop("gam_oauth_state", None)
+        originating_host = session.pop("gam_oauth_originating_host", None)
+
         if error:
             error_description = request.args.get("error_description", "No description provided")
             logger.error(f"GAM OAuth error: {error} - {error_description}")
@@ -981,22 +843,19 @@ def gam_callback():
             flash("No authorization code received", "error")
             return redirect(url_for("auth.login"))
 
-        # Get tenant context from session
-        tenant_id = session.pop("gam_oauth_tenant_id", state)
-        originating_host = session.pop("gam_oauth_originating_host", None)
-        external_domain = session.pop("gam_oauth_external_domain", None)
-
-        if not tenant_id:
+        # ``state`` is compared with the value this session was issued; it is never
+        # a source for the tenant. No session, no issued state, or a mismatch all
+        # mean this callback did not come from a flow the caller started (#2205).
+        if not tenant_id or not issued_state or not state or not secrets.compare_digest(issued_state, state):
+            logger.warning("GAM OAuth callback rejected: state does not match a flow started in this session")
             flash("Invalid OAuth state - no tenant context", "error")
             return redirect(url_for("auth.login"))
 
         # Get GAM OAuth configuration
-        from src.core.config import get_gam_oauth_config
-
-        gam_config = get_gam_oauth_config()
+        gam_auth = get_settings().auth
 
         # Determine callback URI (must match the one used in authorization)
-        if os.environ.get("PRODUCTION") == "true":
+        if get_settings().runtime.is_production:
             callback_uri = f"{get_sales_agent_url()}/admin/auth/gam/callback"
         else:
             callback_uri = url_for("auth.gam_callback", _external=True)
@@ -1004,20 +863,20 @@ def gam_callback():
         # Exchange authorization code for tokens
 
         logger.info(f"Exchanging authorization code for tokens - tenant: {tenant_id}, callback_uri: {callback_uri}")
-        logger.debug(f"Token exchange request - client_id: {gam_config.client_id[:20]}...")
+        logger.debug(f"Token exchange request - client_id: {gam_auth.gam_oauth_client_id[:20]}...")
 
         try:
             token_response = exchange_authorization_code(
                 code,
-                client_id=gam_config.client_id,
-                client_secret=gam_config.client_secret,
+                client_id=gam_auth.gam_oauth_client_id,
+                client_secret=gam_auth.gam_oauth_client_secret,
                 redirect_uri=callback_uri,
             )
         except OutboundError as exc:
-            # The seam RAISES on a non-2xx rather than returning one, so what used to
-            # be an `if not token_response.ok` branch is this handler. Google's error
-            # body is not readable here by design — the seam discards a failed
-            # response — so the specific-cause messages below now key off the status.
+            # The seam RAISES on a non-2xx rather than returning one, so a failed exchange
+            # arrives here rather than as a falsy response. Google's error body is not
+            # readable here by design — the seam discards a failed response — so the
+            # specific-cause messages below key off the status.
             status = exc.http_status
             logger.error("Token exchange failed: status=%s, error=%s", status, exc)
 
@@ -1081,12 +940,13 @@ def gam_callback():
             logger.warning(f"Could not suggest auto-detect: {detect_error}")
 
         # Redirect back to tenant settings
-        if external_domain and os.environ.get("PRODUCTION") == "true":
-            return redirect(f"https://{external_domain}/admin/tenant/{tenant_id}/settings")
-        elif originating_host and os.environ.get("PRODUCTION") == "true":
+        # Back to the domain the operator started on. This was two branches — the vendor
+        # header's value, then the Host — which since the edge normalization carried the
+        # same string on the proxied path and only the Host on the direct one.
+        is_production = get_settings().runtime.is_production
+        if originating_host and is_production:
             return redirect(f"https://{originating_host}/admin/tenant/{tenant_id}/settings")
-        else:
-            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
+        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
 
     except Exception as e:
         logger.error(f"Error in GAM OAuth callback: {e}", exc_info=True)

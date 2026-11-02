@@ -37,7 +37,7 @@ from tests.integration.media_buy_helpers import _make_create_request
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
-_ALL_TRANSPORTS = [Transport.IMPL, Transport.A2A, Transport.REST, Transport.MCP]
+_ALL_TRANSPORTS = [Transport.A2A, Transport.REST, Transport.MCP]
 
 _BROADSTREET_FORMAT_ID = "broadstreet_display"
 

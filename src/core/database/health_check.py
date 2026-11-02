@@ -68,10 +68,13 @@ def check_database_health() -> dict[str, Any]:
                 "property_tags",
                 "format_performance_metrics",
                 "push_notification_configs",
+                # The live per-package store behind MediaBuy (models.py MediaPackage),
+                # read by media_buy_create and media_buy_list.
+                "media_packages",
             }
 
             # Deprecated tables that may still exist but are not used
-            deprecated_tables = {"tasks", "human_tasks", "creative_associations", "media_packages"}
+            deprecated_tables = {"tasks", "human_tasks", "creative_associations"}
 
             # Check for missing tables
             missing = expected_tables - existing_tables

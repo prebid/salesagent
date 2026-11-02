@@ -2,7 +2,7 @@
 
 import json
 import logging
-import os
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from flask import Blueprint, jsonify, render_template, request, session
@@ -13,7 +13,9 @@ from src.adapters.gam_inventory_discovery import GAMInventoryDiscovery
 from src.adapters.gam_reporting_service import GAMReportingService
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
+from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
+from src.core.database.integrity import resolve_or_write
 from src.core.database.models import AdapterConfig, GAMLineItem, GAMOrder, Tenant
 from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
@@ -21,6 +23,38 @@ logger = logging.getLogger(__name__)
 
 # Create blueprint
 gam_bp = Blueprint("gam", __name__, url_prefix="/tenant/<tenant_id>/gam")
+
+
+@dataclass(frozen=True)
+class _GamLineItemView:
+    """Display-only view of a line item fetched live from GAM.
+
+    NOT an ORM instance on purpose: the fetch-from-GAM fallback of
+    ``view_gam_line_item`` only needs attribute access for the template and
+    the order lookup, and constructing a ``GAMLineItem`` here both risked
+    accidental persistence and drifted from the mapper (seven phantom kwargs
+    raised TypeError — salesagent-3pj8). Attribute names mirror the real
+    ``GAMLineItem`` columns so templates cannot tell the two apart.
+    """
+
+    tenant_id: str
+    line_item_id: str
+    name: str
+    order_id: str
+    status: str
+    start_date: object
+    end_date: object
+    line_item_type: str
+    priority: int | None
+    cost_type: str | None
+    cost_per_unit: int | None
+    goal_type: str | None
+    primary_goal_units: int | None
+    stats_impressions: int
+    stats_clicks: int
+    stats_ctr: float
+    targeting: dict | None
+    last_synced: datetime
 
 
 def _validate_gam_config(session, tenant_id: str) -> tuple[AdapterConfig | None, str | None]:
@@ -152,11 +186,11 @@ def detect_gam_network(tenant_id):
 
         # Get OAuth credentials from validated configuration
         try:
-            from src.core.config import get_gam_oauth_config
-
-            gam_config = get_gam_oauth_config()
-            client_id = gam_config.client_id
-            client_secret = gam_config.client_secret
+            gam_auth = get_settings().auth
+            if not gam_auth.gam_oauth_configured:
+                raise ValueError("GAM OAuth credentials not configured")
+            client_id = gam_auth.gam_oauth_client_id
+            client_secret = gam_auth.gam_oauth_client_secret
 
         except Exception as e:
             return (
@@ -453,15 +487,21 @@ def configure_gam(tenant_id):
                 from src.core.database.models import CurrencyLimit
 
                 stmt = select(CurrencyLimit).filter_by(tenant_id=tenant_id, currency_code=network_currency)
-                existing_limit = db_session.scalars(stmt).first()
-                if not existing_limit:
-                    currency_limit = CurrencyLimit(
-                        tenant_id=tenant_id,
-                        currency_code=network_currency,
-                        max_daily_package_spend=Decimal("10000.00"),
-                        min_package_budget=Decimal("1.00"),
-                    )
-                    db_session.add(currency_limit)
+                currency_limit = CurrencyLimit(
+                    tenant_id=tenant_id,
+                    currency_code=network_currency,
+                    max_daily_package_spend=Decimal("10000.00"),
+                    min_package_budget=Decimal("1.00"),
+                )
+                already_there = resolve_or_write(
+                    db_session,
+                    conflict=lambda: db_session.scalars(stmt).first(),
+                    write=lambda: db_session.add(currency_limit),
+                    # The pair is both the primary key and uq_currency_limit; an
+                    # INSERT can be rejected by either index.
+                    constraint=("currency_limits_pkey", "uq_currency_limit"),
+                )
+                if already_there is None:
                     logger.info(f"Auto-created CurrencyLimit for GAM currency {network_currency}")
 
             db_session.commit()
@@ -489,8 +529,8 @@ def view_gam_line_item(tenant_id, line_item_id):
     """View details of a GAM line item."""
     try:
         with get_db_session() as db_session:
-            # Get the line item
-            line_item = db_session.scalars(
+            # Get the line item (falls back to a live-GAM display view below)
+            line_item: GAMLineItem | _GamLineItemView | None = db_session.scalars(
                 select(GAMLineItem).filter_by(tenant_id=tenant_id, line_item_id=line_item_id)
             ).first()
 
@@ -518,8 +558,10 @@ def view_gam_line_item(tenant_id, line_item_id):
                 if not line_item_data:
                     return render_template("error.html", error="Line item not found in GAM"), 404
 
-                # Create a temporary line item object for display
-                line_item = GAMLineItem(
+                # Display-only view — deliberately not an ORM instance (see
+                # _GamLineItemView). No delivery stats: this item was never
+                # synced locally.
+                line_item = _GamLineItemView(
                     tenant_id=tenant_id,
                     line_item_id=line_item_id,
                     name=line_item_data.get("name", "Unknown"),
@@ -531,15 +573,13 @@ def view_gam_line_item(tenant_id, line_item_id):
                     priority=line_item_data.get("priority"),
                     cost_type=line_item_data.get("costType"),
                     cost_per_unit=line_item_data.get("costPerUnit", {}).get("microAmount"),
-                    currency_code=line_item_data.get("costPerUnit", {}).get("currencyCode"),
                     goal_type=line_item_data.get("primaryGoal", {}).get("goalType"),
-                    goal_units=line_item_data.get("primaryGoal", {}).get("units"),
-                    units_delivered=0,
-                    impressions_delivered=0,
-                    clicks_delivered=0,
-                    ctr=0.0,
+                    primary_goal_units=line_item_data.get("primaryGoal", {}).get("units"),
+                    stats_impressions=0,
+                    stats_clicks=0,
+                    stats_ctr=0.0,
+                    targeting=line_item_data.get("targeting"),
                     last_synced=datetime.now(UTC),
-                    raw_data=json.dumps(line_item_data),
                 )
 
                 # Get the order if available
@@ -569,6 +609,9 @@ def view_gam_line_item(tenant_id, line_item_id):
                 "gam_line_item_viewer.html",
                 tenant={"tenant_id": tenant_obj.tenant_id, "name": tenant_obj.name},
                 tenant_id=tenant_id,
+                # Prefills the viewer's input and branches its auto-load fetch —
+                # without it the page rendered permanently empty.
+                line_item_id=line_item_id,
                 line_item=line_item,
                 order=order,
             )
@@ -596,9 +639,10 @@ def get_gam_custom_targeting_keys(tenant_id):
                 return jsonify({"error": gam_error}), 400
 
             # Create OAuth2 client
+            gam_auth = get_settings().auth
             oauth2_client = oauth2.GoogleRefreshTokenClient(
-                client_id=os.environ.get("GAM_OAUTH_CLIENT_ID"),
-                client_secret=os.environ.get("GAM_OAUTH_CLIENT_SECRET"),
+                client_id=gam_auth.gam_oauth_client_id,
+                client_secret=gam_auth.gam_oauth_client_secret,
                 refresh_token=adapter_config.gam_refresh_token,
             )
 
@@ -765,7 +809,7 @@ def create_service_account(tenant_id):
 
     try:
         # Get GCP project ID from environment or configuration
-        gcp_project_id = os.environ.get("GCP_PROJECT_ID")
+        gcp_project_id = get_settings().auth.gcp_project_id
         if not gcp_project_id:
             return (
                 jsonify(
@@ -814,7 +858,7 @@ def get_service_account_email(tenant_id):
     Returns the service account email if one has been created for this tenant.
     """
     try:
-        gcp_project_id = os.environ.get("GCP_PROJECT_ID")
+        gcp_project_id = get_settings().auth.gcp_project_id
         if not gcp_project_id:
             return jsonify({"error": "GCP_PROJECT_ID not configured"}), 500
 
@@ -861,9 +905,10 @@ def test_gam_connection(tenant_id):
             else:
                 auth_method = "service_account"
 
-        # Get OAuth credentials from environment variables
-        client_id = os.environ.get("GAM_OAUTH_CLIENT_ID")
-        client_secret = os.environ.get("GAM_OAUTH_CLIENT_SECRET")
+        # Get OAuth credentials from the settings
+        gam_auth = get_settings().auth
+        client_id = gam_auth.gam_oauth_client_id
+        client_secret = gam_auth.gam_oauth_client_secret
 
         oauth2_client = None
 
@@ -1098,7 +1143,6 @@ def test_gam_connection(tenant_id):
                     network_code=network_code,
                     advertiser_id=None,
                     trafficker_id=None,
-                    dry_run=False,
                     tenant_id=tenant_id,
                 )
 

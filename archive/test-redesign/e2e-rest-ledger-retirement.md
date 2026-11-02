@@ -46,7 +46,7 @@ Each validated by an in-network BDD run with 0 failures:
 
 - **M1 — REST 422 wire shape (6 uc004):** `parse_rest_error`'s `STATUS_TO_ERROR`
   map lacked 422, so a FastAPI request-validation envelope (`{"detail":[...]}`)
-  surfaced as a plain `Exception` instead of the `AdCPError` the Then step
+  surfaced as a plain `Exception` instead of the `AdCPSalesAgentError` the Then step
   expects. Mapped 422 → `AdCPValidationError`. Graduated.
 - **M3 — idempotent tenant seed (6 get_products):** `given_tenant` seeded
   `TenantFactory(test_tenant)` non-idempotently into the shared server DB

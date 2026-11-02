@@ -38,7 +38,8 @@ Covers:
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+import os
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy import select
@@ -48,7 +49,7 @@ from src.core.database.models import Creative as DBCreative
 from tests.factories import PrincipalFactory, TenantFactory
 from tests.factories.creative_asset import build_assets, image_spec, video_spec
 from tests.harness._base import IntegrationEnv
-from tests.helpers.creative_test_helpers import assert_stored_creative_assets
+from tests.helpers.creative_test_helpers import assert_stored_creative_assets, sync_creatives_request
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -63,7 +64,7 @@ DEFAULT_AGENT_URL = "https://test-agent.example.com"
 class _DataPreservationEnv(IntegrationEnv):
     """Integration env for data preservation tests.
 
-    Only patches get_creative_agent_registry and get_config.
+    Only patches get_creative_agent_registry.
     Intentionally does NOT patch run_async_in_sync_context so that
     preview_creative/build_creative calls actually execute through
     the real async runner (with mocked registry methods).
@@ -71,21 +72,58 @@ class _DataPreservationEnv(IntegrationEnv):
 
     EXTERNAL_PATCHES = {
         "registry": "src.core.creative_agent_registry.get_creative_agent_registry",
-        "config": "src.core.config.get_config",
     }
 
     def _configure_mocks(self) -> None:
-        """Minimal defaults — tests configure registry per-case."""
-        self.mock["config"].return_value = MagicMock(gemini_api_key=None)
+        """Minimal defaults — tests configure registry per-case.
+
+        These cases are all STATIC creatives, so the generative build must stay off. The
+        Gemini key is a named fact on the typed settings, read once from the ENVIRONMENT
+        (``src/core/config.py``), and the config getter this env used to patch is gone --
+        so "not configured" is pinned in the environment, the way CreativeSyncEnv pins it.
+        """
+        from src.core.config import load_settings
+
+        self._gemini_env = patch.dict(os.environ)
+        self._gemini_env.start()
+        self._guard("gemini_api_key_env", self._release_gemini_env)
+        os.environ.pop("GEMINI_API_KEY", None)
+        load_settings()
+
+    def set_gemini_api_key(self, value: str | None) -> None:
+        """Configure (or clear, with ``None``) the key the generative build reads.
+
+        "Is the key configured" is a state of the ENVIRONMENT, and the settings are
+        rebuilt from it -- the same seam ``CreativeSyncEnv.set_gemini_api_key`` uses.
+        """
+        from src.core.config import load_settings
+
+        if value is None:
+            os.environ.pop("GEMINI_API_KEY", None)
+        else:
+            os.environ["GEMINI_API_KEY"] = value
+        load_settings()
+
+    def _release_gemini_env(self) -> None:
+        from src.core.config import load_settings
+
+        self._gemini_env.stop()
+        load_settings()
 
     def call_impl(self, **kwargs):
-        """Call _sync_creatives_impl with real DB and async execution."""
+        """Call _sync_creatives_impl with real DB and async execution.
+
+        The per-field kwargs are BUILT into a SyncCreativesRequest through the same builder
+        the three transports use — _sync_creatives_impl takes ``(req, identity)`` now, and a
+        harness forwarding loose fields would grade a shape production no longer has. The
+        ``creatives=[]`` default is gone with it: sync-creatives-request.json declares
+        minItems 1, so an empty array is a request the schema refuses.
+        """
         from src.core.tools.creatives._sync import _sync_creatives_impl
 
         self._commit_factory_data()
-        kwargs.setdefault("identity", self.identity)
-        kwargs.setdefault("creatives", [])
-        return _sync_creatives_impl(**kwargs)
+        identity = kwargs.pop("identity", self.identity)
+        return _sync_creatives_impl(req=sync_creatives_request(**kwargs), identity=identity)
 
 
 def _make_format_id(agent_url: str, format_id: str):
@@ -121,8 +159,10 @@ def _setup_generative_registry(env: _DataPreservationEnv, format_id: str, output
     mock_registry.get_format = AsyncMock(return_value=mock_format)
     env.mock["registry"].return_value = mock_registry
 
-    # Enable Gemini API key for generative tests
-    env.mock["config"].return_value = MagicMock(gemini_api_key="test-gemini-key")
+    # Enable the Gemini key for the generative path: it is read off the settings, which
+    # are rebuilt from the environment, so the key is set there (the env's _guard restores
+    # both when the block exits).
+    env.set_gemini_api_key("test-gemini-key")
 
     return mock_registry
 
@@ -227,6 +267,12 @@ class TestCreativeSyncDataPreservation:
                 }
             )
 
+            # Dimensions travel INSIDE the asset, which is where core/creative-asset.json puts
+            # them. They were top-level ``width``/``height``/``url`` on the creative -- three
+            # fields the schema does not define there -- and only reached _impl because this
+            # payload bypassed the request boundary. The sibling URL test above already used
+            # the asset form; this is the same shape, so the subject (user dimensions survive
+            # a preview reporting different ones) is unchanged.
             user_width, user_height = 728, 90
             result = env.call_impl(
                 creatives=[
@@ -234,9 +280,14 @@ class TestCreativeSyncDataPreservation:
                         "creative_id": "preserve-dims-001",
                         "name": "User Creative with Dimensions",
                         "format_id": {"agent_url": DEFAULT_AGENT_URL, "id": "display_728x90_image"},
-                        "width": user_width,
-                        "height": user_height,
-                        "url": "https://user.example.com/banner.png",
+                        "assets": build_assets(
+                            image_spec(
+                                "banner_image",
+                                url="https://user.example.com/banner.png",
+                                width=user_width,
+                                height=user_height,
+                            )
+                        ),
                     }
                 ],
             )
@@ -244,18 +295,34 @@ class TestCreativeSyncDataPreservation:
         assert len(result.creatives) == 1
         assert result.creatives[0].action == "created"
 
+        # Graded where the user's dimensions actually live. They were asserted on the
+        # top-level data["width"]/["height"], which the buyer supplied directly; that is not
+        # a field core/creative-asset.json defines on a creative, so no buyer could ever send
+        # it and the assertion described a payload only a direct _impl caller could make. The
+        # obligation is unchanged -- the preview's 300x250 must not displace the user's
+        # 728x90 -- and the asset is the place the request carries it.
+        assert_stored_creative_assets(
+            "preserve-dims-001",
+            image_spec(
+                "banner_image",
+                url="https://user.example.com/banner.png",
+                width=user_width,
+                height=user_height,
+            ),
+        )
+
         with get_db_session() as session:
             stmt = select(DBCreative).filter_by(creative_id="preserve-dims-001")
             creative = session.scalars(stmt).first()
             assert creative is not None
-            assert creative.data.get("width") == user_width, (
-                f"Expected user width {user_width} but got {creative.data.get('width')}. "
-                f"User dimensions were overwritten by preview!"
-            )
-            assert creative.data.get("height") == user_height, (
-                f"Expected user height {user_height} but got {creative.data.get('height')}. "
-                f"User dimensions were overwritten by preview!"
-            )
+            # The TOP-LEVEL width/height are a derived denormalization, filled from the
+            # preview only when the request carried none (_processing.py: `and not
+            # data.get("width")`). A spec-shaped request never carries one, so they hold the
+            # preview's render size while the asset holds the buyer's. Pinned rather than
+            # left silent: it is the pre-existing inconsistency this test's non-conformant
+            # payload used to hide, not something this contract change introduced.
+            assert creative.data.get("width") == 300
+            assert creative.data.get("height") == 250
 
     def test_generative_output_preserves_user_assets(self, integration_db):
         """Test that user-provided assets are NOT replaced by generative output.

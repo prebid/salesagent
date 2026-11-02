@@ -31,9 +31,7 @@ production, though: ``get_media_buys`` refines against *today*
 request's *end_date* (``media_buy_delivery.py``) — current-state vs
 period-scoped. So for a serving buy near its flight boundary the two may
 legitimately report different date-refined statuses; the mapping is identical,
-the reference date is the buyer-visible difference. Under time simulation
-(``mock_time`` / ``jump_to_event``) only ``get_media_buy_delivery`` advances the
-clock, a further legitimate divergence.
+the reference date is the buyer-visible difference.
 """
 
 from __future__ import annotations
@@ -128,7 +126,7 @@ NO_MORE_DATA_STATUSES: frozenset[str] = TERMINAL_STATUSES - {"paused"}
 # property of the vocabulary itself, not of this module's date refinement. Re-exported
 # here because this module is where callers already look for them, and because
 # ``resolve_canonical_status`` below is their only refinement.
-def resolve_canonical_status(buy: Any, reference_date: date, *, simulate: bool = False) -> str:
+def resolve_canonical_status(buy: Any, reference_date: date) -> str:
     """Resolve a media buy's canonical status from its persisted column.
 
     The persisted ``MediaBuy.status`` is the source of truth. A generic serving
@@ -155,14 +153,8 @@ def resolve_canonical_status(buy: Any, reference_date: date, *, simulate: bool =
     Args:
         buy: A media buy exposing ``status``, ``start_date``/``end_date``,
             optional ``start_time``/``end_time``, and ``is_paused``.
-        reference_date: The date the status is evaluated against (the request's
-            end date, or the simulated clock in time-simulation mode).
-        simulate: When True (time-simulation via ``mock_time`` / ``jump_to_event``),
-            any NON-terminal persisted state also follows the flight window so a
-            buyer can observe the full lifecycle (pending -> active -> completed)
-            and reach the "final" delivery notification. Terminal/explicit
-            decisions are still preserved — simulation must not resurrect a buy
-            the seller deliberately stopped.
+        reference_date: The date the status is evaluated against (today, or the
+            request's end date).
 
     Returns:
         One of ``CANONICAL_STATUSES``.
@@ -182,12 +174,11 @@ def resolve_canonical_status(buy: Any, reference_date: date, *, simulate: bool =
         else CANONICAL_SERVING
     )
 
-    should_refine = canonical == CANONICAL_SERVING or (simulate and canonical not in TERMINAL_STATUSES)
-    if not should_refine:
+    if canonical != CANONICAL_SERVING:
         return canonical
 
-    # Generic serving state (or a simulated non-terminal state) — refine against
-    # the flight window. Prefer the precise start_time/end_time when present.
+    # Generic serving state — refine against the flight window. Prefer the precise
+    # start_time/end_time when present.
     start_time = getattr(buy, "start_time", None)
     end_time = getattr(buy, "end_time", None)
     start_compare = start_time.date() if start_time else buy.start_date

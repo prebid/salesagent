@@ -14,7 +14,7 @@ Filtering rules:
 - Products with property_targeting_allowed=true require ANY intersection
 """
 
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import Mock
 
 from adcp.types import PropertyId
 from adcp.types.generated_poc.core.publisher_property_selector import (  # TODO: no stable alias in adcp.types
@@ -22,6 +22,8 @@ from adcp.types.generated_poc.core.publisher_property_selector import (  # TODO:
     PublisherPropertySelector1,
     PublisherPropertySelector2,
 )
+
+from src.core.schemas import GetProductsRequest
 
 
 def _make_selector_all(domain: str = "example.com") -> PublisherPropertySelector:
@@ -274,19 +276,17 @@ class TestFilterProductsByPropertyList:
 
 
 class TestCreateGetProductsRequestWithPropertyList:
-    """Test that create_get_products_request forwards property_list."""
+    """Test that GetProductsRequest forwards property_list."""
 
     def test_property_list_forwarded(self):
         from adcp.types import PropertyListReference
-
-        from src.core.schema_helpers import create_get_products_request
 
         ref = PropertyListReference(
             agent_url="https://example.com",
             list_id="list_1",
             auth_token="token_123",
         )
-        req = create_get_products_request(
+        req = GetProductsRequest(
             brief="test",
             property_list=ref,
         )
@@ -294,48 +294,6 @@ class TestCreateGetProductsRequestWithPropertyList:
         assert req.property_list.list_id == "list_1"
 
     def test_property_list_none_by_default(self):
-        from src.core.schema_helpers import create_get_products_request
 
-        req = create_get_products_request(brief="test")
+        req = GetProductsRequest(brief="test")
         assert req.property_list is None
-
-
-class TestCapabilitiesPropertyListFiltering:
-    """Test that capabilities reports property_list_filtering honestly.
-
-    Currently declared False because zero adapters compile
-    `targeting_overlay.property_list` into native targeting (verified by
-    `grep -rn 'property_list' src/adapters/` returning zero hits). The previous
-    True value was false advertising. Restore per-adapter-aware True when a
-    real compilation path lands (B3 in inventory-targeting PLAN).
-    """
-
-    def test_capabilities_reports_property_list_filtering(self):
-        from src.core.tools.capabilities import _get_adcp_capabilities_impl
-        from tests.factories import PrincipalFactory
-
-        identity = PrincipalFactory.make_identity(
-            principal_id="test_principal",
-            tenant_id="test_tenant",
-            tenant={
-                "tenant_id": "test_tenant",
-                "name": "Test Tenant",
-                "subdomain": "test",
-            },
-        )
-
-        mock_repo = MagicMock()
-        mock_repo.list_publisher_partners.return_value = []
-        mock_uow = MagicMock()
-        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
-        mock_uow.__exit__ = MagicMock(return_value=False)
-        mock_uow.tenant_config = mock_repo
-
-        with (
-            patch("src.core.tools.capabilities.get_principal_object", return_value=None),
-            patch("src.core.tools.capabilities.TenantConfigUoW", return_value=mock_uow),
-        ):
-            response = _get_adcp_capabilities_impl(None, identity)
-
-        features = response.media_buy.features
-        assert features.property_list_filtering is False

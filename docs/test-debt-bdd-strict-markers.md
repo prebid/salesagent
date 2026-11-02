@@ -1,386 +1,279 @@
 # BDD strict-marker debt
 
-Inventory of BDD scenarios still wearing non-strict xfail markers after the
-2026-05-08 cleanup that removed ~244 stale markers from `tests/bdd/conftest.py`.
-Every entry below corresponds to a marker that requires either a production
-change or a test rewrite before it can be flipped to `strict=True`.
+`tests/bdd/conftest.py` names item ids from this file in the `reason` text of
+about a dozen xfail markers, so this file is the register those reasons point
+at. Each item is either a production gap or a test defect that keeps a scenario
+xfailed.
 
-**Goal:** zero non-strict xfail markers. Every scenario must be `pass`, `fail`,
-or `xfail-strict`. No gray zone.
+**Goal:** zero non-strict xfail markers. A scenario is `pass`, `fail`, or
+`xfail-strict`.
 
-This file is the single source of truth referenced from FIXME comments in
-`tests/bdd/conftest.py`. When the underlying gap is closed, remove the entry
-here and the corresponding marker block.
+This page was rewritten against the source after the boundary rework. The
+mechanisms several items described — per-transport account resolution,
+`enrich_identity_with_account`, the `*_raw` transport wrappers, and
+`Transport.IMPL` — no longer exist. So this page restates the items that named
+them in terms of what the code does, and it marks a closed gap as closed rather
+than deleting the item, because conftest reasons still cite the ids.
 
----
+## Where each item stands
 
-## 2026-05-19 — 18h.10 Phase-2 reconciliation & bead tracking
+| Item | Status | Basis |
+|------|--------|-------|
+| C1 / C2 (account not resolved per transport) | Restated — resolution closed, result scoping open | `src/core/resolved_identity.py:408-412`, `src/core/tools/media_buy_delivery.py:697` |
+| C3 (cross-principal access) | Closed | reconciled against adcp 3.1.1; the gap was in the grading |
+| C4 (pydantic `ValidationError` not translated) | Closed | `src/core/exceptions.py:1204-1216` |
+| C5 (`include_package_daily_breakdown` no-op) | Open | `src/core/tools/media_buy_delivery.py:467` |
+| C6 (date-range validation in the success envelope) | Closed | `src/core/tools/media_buy_delivery.py:187` |
+| C7 (end-only `date_range` default) | Open, restated | `src/core/tools/media_buy_delivery.py:181-191` |
+| C10 (description-only spec constraints) | Half closed | `src/core/tools/media_buy_delivery.py:29,132`; no geo validator |
+| C11 (`reporting_period` echo) | Closed | `tests/bdd/conftest.py:2344-2348` records the graduation |
+| B1 (Gherkin `pending_activation`) | Closed in the feature, dead rows in conftest | `tests/bdd/features/BR-UC-004-deliver-media-buy-metrics.feature:991,995` |
+| B2 (`date_range` sent as a fake kwarg) | Closed | `tests/bdd/steps/domain/uc004_delivery.py:3909-3929` |
+| B3 (symbolic resolution/ownership labels) | Closed | `tests/bdd/steps/domain/uc004_delivery.py:1438,1453,3932` |
+| B4 (`sampling_method` on the wrong feature) | Closed | the two outlines are deleted; `BR-UC-004-deliver-media-buy-metrics.feature` carries a RETIRED note in their place |
+| B5 (`webhook_credentials` wrong dispatch) | Closed | `tests/bdd/steps/domain/uc004_delivery.py:1412-1421,3737` |
+| B6 (`disclosure_positions` filter) | Closed | `src/core/tools/creative_formats.py:402-404`; `tests/bdd/steps/generic/when_request.py:419-441` |
+| B7 (UC-006 faked `AdCPValidationError`) | Closed | `SyncCreativesRequest.account` is required; the impl takes `AccountIdentity` |
+| H1 / H2 (`_assert_partition_outcome` under-asserts) | Closed | `tests/bdd/steps/generic/then_payload.py:366-396` |
 
-Every remaining item now has a full-context bead (the doc is no longer the
-only record). Reconciled items were fixed by the Phase-2 wave (run
-`190526_2039`, bdd 0-failed) and need no bead.
+## Open items
 
-| Item | Status | Bead |
-|------|--------|------|
-| C1 + C2 (account not enforced at _impl boundary; +9d5 REST FIXME) | OPEN P1 sec | `salesagent-xpcd` |
-| C3 (cross-principal 200+empty, not 403) | OPEN P1 sec | `salesagent-h25j` |
-| C4 (ValidationError→AdCPError boundary translator) | OPEN P2 broad | `salesagent-l6ev` |
-| C5 (`include_package_daily_breakdown` no-op) | OPEN P2 | `salesagent-kzk0` |
-| C6 (date-range validation in success envelope) | OPEN P3 | `salesagent-t6y9` |
-| C7 (end-only date_range default) | OPEN P3 | `salesagent-losz` |
-| C8 (MCP list_creative_formats missing fmt-id params) | RECONCILED (PR #1331) | — |
-| C10 (description-only spec constraints) | OPEN P3 | `salesagent-o9w4` |
-| C11 (reporting_period echo) | RECONCILED (salesagent-18h.1) | — |
-| B1 (Gherkin `pending_activation`) | OPEN P2 | `salesagent-8c78` |
-| B2 (date_range fake kwarg) | RECONCILED (pilot a56621ea) | — |
-| B3 (resolution/ownership symbolic names) | RECONCILED (exec-uc004) | — |
-| B4 (sampling_method wrong feature) | OPEN P3 (relocate) | `salesagent-uofj` |
-| B5 (webhook_credentials wrong dispatch) | RECONCILED (exec-uc004 f8u4) | — |
-| B6 test half (disclosure enum literals) | RECONCILED (exec-uc005 9z2t) | — |
-| B6 production half (disclosure filter impl) | OPEN P2 | `salesagent-1z7m` |
-| B7 (UC-006 fake AdCPValidationError) | RECONCILED (salesagent-miva) | — |
-| H1, H2 (`_assert_partition_outcome` weak) | RECONCILED (salesagent-6oq) | — |
-| reporting_dimensions breakdowns (was phantom "zk1") | OPEN P2 | `salesagent-z8nf` |
-| creative per-format resilience (one bad fmt nukes all) | OPEN P2 | `salesagent-az8d` (← `w8yn`) |
-| non-UC004/5/6 audit remainder | OPEN | epic `salesagent-pvo2` |
+### C1 / C2 — the resolved account does not narrow the delivery read
 
----
+The original pair said the A2A skill dropped the `account` parameter and only
+REST resolved it. Neither half survives: every transport hands the raw payload
+to `serve`, and the resolver loads the account inside the single identity it
+builds (`src/core/resolved_identity.py:408-412`), refusing one the principal may
+not use (`src/core/database/repositories/account_lookup.py:36-64`). So an
+inaccessible account is a typed refusal on all transports.
+`GetMediaBuyDeliveryRequest` declares `account` as an optional field, which makes
+the identity an `AccountIdentity` whenever a request names one.
 
-## How to read this
+What is still true is narrower: `get_media_buy_delivery` never reads
+`identity.account`. It selects by tenant and principal —
+`repo.get_by_principal(principal_id, media_buy_ids=...)`
+(`src/core/tools/media_buy_delivery.py:697,699`) — so naming an account changes
+which account must be accessible and nothing about which buys come back. Before
+flipping the scenarios that assert an account-scoped read, ground the obligation
+in the pinned spec: it is not settled here whether delivery results must be
+narrowed by account.
 
-- **Scope** lists the affected scenario tags or selective entries in
-  `tests/bdd/conftest.py`.
-- **Impact** is the count of currently-skipped/xfailed test runs (rows ×
-  transports) that block.
-- **Unblocks** describes the production change or test rewrite that closes
-  the item; once landed, the marker can flip to `strict=True` (or be removed
-  if no rows remain xfail).
-- **Origin** points to the audit batch that surfaced the item.
-
----
-
-## Production gaps (P0–P2) — require code changes
-
-### C1 — A2A skill silently discards `account` parameter
-- **Scope:** `T-UC-004-partition-account` and `T-UC-004-boundary-account`,
-  error-code rows on the `[a2a]` transport
-- **Where:** `src/a2a_server/adcp_a2a_server.py:1937-1980` (handler does not
-  forward `account` to `_raw()` and does not call `enrich_identity_with_account`)
-- **Impact:** Security gap. A buyer with a token scoped to one tenant could
-  request delivery and the account scope would be ignored. Surfaces as
-  asymmetric pass/fail across transports for the boundary/partition account
-  scenarios.
-- **Unblocks:** flip the error-code rows to `strict=True` once A2A forwards
-  the parameter and `enrich_identity_with_account` runs on the A2A path.
-- **Severity:** P1 (security gap)
-- **Origin:** Batch 3 audit
-
-### C2 — IMPL `_get_media_buy_delivery_impl` does not resolve `AccountReference`
-- **Scope:** Same as C1 (account error-code rows)
-- **Where:** `src/core/tools/media_buy_delivery.py` — only REST currently calls
-  `enrich_identity_with_account` (`src/routes/api_v1.py:265-289`); IMPL receives
-  `account` as a request kwarg but never resolves it against the DB
-- **Impact:** `account_not_found` rows pass through IMPL silently; cross-
-  transport contract is broken
-- **Unblocks:** move account resolution into the `_impl` boundary so all
-  transports share the validation step
-- **Severity:** P1 (correctness; pairs with C1)
-- **Origin:** Batch 3 audit
-
-### C3 — Cross-principal media-buy access returns 200+empty instead of 403
-- **Scope:** `T-UC-004-partition-ownership` / `-boundary-ownership`,
-  mismatch rows
-- **Where:** `src/core/database/repositories/media_buy.py:99-107`
-  (`get_by_principal` filters silently)
-- **Impact:** Security gap. A request with a foreign principal_id receives
-  an empty deliveries list rather than `AdCPAuthorizationError`.
-- **Unblocks:** raise `AdCPAuthorizationError` (or 404 with suggestion) when
-  the requesting principal does not own any of the requested media_buys.
-  Then the ownership mismatch rows can flip to `strict=True`.
-- **Severity:** P1 (security gap)
-- **Origin:** Batch 3 audit
-
-### C4 — Pydantic `ValidationError` not translated to `AdCPError(INVALID_REQUEST, suggestion)`
-- **Scope:** ~32 partition rows across UC-004 (`reporting_dimensions`,
-  `attribution_window`, possibly more) — currently `strict=True` xfail
-  pointing at this item
-- **Where:** transport boundary in `_get_media_buy_delivery_impl` and other
-  `_impl` functions
-- **Impact:** Many invalid partition rows correctly fail validation but
-  produce a Pydantic `ValidationError`, not an `AdCPError` with `error_code
-  == "INVALID_REQUEST"` and `details["suggestion"]`. The BDD step's stricter
-  invalid-with-error-code path requires the AdCPError shape.
-- **Unblocks:** add a transport-boundary translator that wraps Pydantic
-  `ValidationError` in `AdCPError(INVALID_REQUEST, suggestion=…)`. One change
-  clears ~32 currently-xfailed rows across UC-004 and probably more across
-  UC-005.
-- **Severity:** P2 (broad payoff)
-- **Origin:** Batch 1, Batch 2, Batch 4 audits
+- **Where conftest cites it:** the `T-UC-004-boundary-account` row
+  (`tests/bdd/conftest.py:2485-2503`), whose only remaining substring is
+  `impl-account_id present + not found` — an `impl` nodeid that can no longer
+  exist.
+- **Severity:** P2.
 
 ### C5 — `include_package_daily_breakdown` is a no-op
-- **Scope:** `T-UC-004-partition-daily-breakdown` and
-  `-boundary-daily-breakdown` valid rows (currently strict=False)
-- **Where:** `src/core/tools/media_buy_delivery.py:480` hard-codes
-  `daily_breakdown=None` regardless of `req.include_package_daily_breakdown`
-- **Impact:** The schema declares the field; production silently ignores it.
-  All 6 valid rows pass vacuously. The Then-step does not verify response
-  shape, so coverage is illusory.
-- **Unblocks:** populate `daily_breakdown` per-package when the flag is True.
-  Strengthen the Then-step to verify shape differential. Then strict-flip.
-- **Severity:** P2 (feature gap, not security)
-- **Origin:** Batch 4 audit
 
-### C6 — Date-range validation returned in success envelope, not raised
-- **Scope:** `T-UC-004-daterange-invalid` and `T-UC-004-daterange-equal`
-  (currently strict=True with stale reason)
-- **Where:** `src/core/tools/media_buy_delivery.py:141-161` returns a
-  `GetMediaBuyDeliveryResponse` with `errors=[Error(code="VALIDATION_ERROR",
-  …)]` instead of raising. The BDD Then-step inspects `ctx["error"]` only.
-- **Impact:** 2 scenarios stuck in strict=True xfail; production validation
-  IS happening, just in the wrong shape.
-- **Unblocks:** either change production to raise `AdCPValidationError`,
-  OR change the Then-step to also inspect `response.errors[]`. Refresh
-  the strict=True reason text.
-- **Severity:** P3 (cosmetic — already strict)
-- **Origin:** Batch 2 audit
+`GetMediaBuyDeliveryRequest` declares the field and production hard-codes
+`daily_breakdown=None` (`src/core/tools/media_buy_delivery.py:467`). The valid
+rows pass without the response differing, so the coverage is vacuous until the
+Then step grades the shape differential too.
 
-### C7 — End-only date_range defaults to today-30d, not creation date (Gap G40)
-- **Scope:** `T-UC-004-daterange-end-only` (currently strict=False)
-- **Where:** `src/core/tools/media_buy_delivery.py:162-165` — when only
-  `end_date` provided, code sets `start_dt = now - 30d`. Spec says start
-  defaults to media buy creation date.
-- **Impact:** 1 scenario stuck non-strict.
-- **Unblocks:** when `end_date` provided alone, default `start_date` to
-  media buy creation date (look up `MediaBuy.created_at`).
-- **Severity:** P3
-- **Origin:** Batch 2 audit
+- **Unblocks:** populate `daily_breakdown` per package when the flag is set,
+  strengthen the Then step, then flip to strict.
+- **Severity:** P2.
 
-### C10 — Description-only spec constraints in adcp library
-- **Scope:** Two specific Examples rows already xfailed strict=True:
-  - `geo with geo_level=metro but no system` (`T-UC-004-boundary-reporting-dims`)
-  - `unit=campaign with interval=2` (`T-UC-004-boundary-attribution`,
-    `T-UC-004-attr-campaign-invalid`, `campaign_interval_not_one` partition row)
-- **Where:** `.venv/.../adcp/types/generated_poc/core/duration.py:27` and
-  `.venv/.../media_buy/get_media_buy_delivery_request.py:57-62` —
-  constraints exist in field descriptions only, no Pydantic validators
-- **Impact:** 3 scenarios xfailed strict=True awaiting either a model
-  validator addition OR an upstream AdCP spec PR
-- **Unblocks:** either (a) add a `model_validator(mode="after")` on
-  `Duration` and `Geo` in our extending classes, OR (b) file an upstream
-  AdCP PR adding the validators
-- **Severity:** P3 (cosmetic)
-- **Origin:** Batch 1 audit
+### C7 — an end-only `date_range` reports the last 30 days
 
-### C11 — `start_date` / `end_date` not echoed in `response.reporting_period` — RETIRED (salesagent-18h.1, 2026-05-19)
-- **Status:** RETIRED. The "production ignores buyer start_date" failure was
-  an artefact of the greedy `with {request_params}` step shadowing
-  `when_request_date_range` and mis-parsing the request — not real production
-  behaviour. With correct step routing (greedy step restricted to `\w+=`),
-  production echoes the buyer-supplied `start_date`/`end_date` in
-  `response.reporting_period` and all 4 transport variants pass. The
-  `T-UC-004-daterange` strict-xfail row was removed from `conftest.py`.
-- **Scope:** `T-UC-004-daterange` ("Custom date range used as reporting
-  period" — added to strict=True genuine-xfails on 2026-05-08)
-- **Where:** `src/core/tools/media_buy_delivery.py` — when buyer supplies
-  explicit `start_date` and `end_date`, response's `reporting_period.start`
-  is computed as `now - 30d` instead of echoing the request value
-- **Impact:** Discovered during the 2026-05-08 strict-flip executor run.
-  4 transport variants of one scenario.
-- **Unblocks:** populate `reporting_period.start = req.start_date or
-  default` and `reporting_period.end = req.end_date or default` in the
-  response constructor.
-- **Severity:** P2 (visible buyer-facing bug)
-- **Origin:** discovered during executor verification, 2026-05-08
+Production uses the buyer's dates only when BOTH are present
+(`src/core/tools/media_buy_delivery.py:181`); otherwise the window is
+`now - 30d` to `now` (`:191`). So an `end_date` supplied alone is ignored
+entirely, not merely paired with a default start. The spec asks for the start to
+default to the media buy's creation date.
 
----
+- **Unblocks:** honour a one-sided window, defaulting the missing start to
+  `MediaBuy.created_at`.
+- **Where conftest cites it:** `tests/bdd/conftest.py:2442`
+  (`T-UC-004-daterange-end-only`).
+- **Severity:** P3.
 
-## Test rewrites (P2–P3) — no production change needed
+### C10 — the geo `system` requirement has no validator
 
-### B1 — Gherkin uses `pending_activation` which is not a valid `MediaBuyStatus`
-- **Scope:** `T-UC-004-filter` (Examples row at feature line 154);
-  `T-UC-004-partition-status-filter` rows `single_pending` and
-  `all_statuses_array`; `T-UC-004-boundary-status-filter` rows
-  `pending_activation (first enum value)` and `all 6 statuses`
-- **Where:** `tests/bdd/features/BR-UC-004-deliver-media-buy-metrics.feature`
-- **Source of truth:** AdCP library
-  `.venv/.../enums/media_buy_status.py:11-17` —
-  `{pending_creatives, pending_start, active, paused, completed, rejected,
-  canceled}`. Library/spec is authoritative; existing test/code is not.
-- **Fix:** replace `pending_activation` with `pending_creatives` (true first
-  enum value) or `pending_start` per scenario context. Update
-  `all_statuses_array` to `["pending_start", "active", "paused", "completed",
-  "rejected", "canceled"]`.
-- **Impact:** ~5 substring matches across 3 scenarios; once fixed, the
-  `T-UC-004-filter` selective entry shrinks to empty (remove entirely)
-- **Severity:** P2 (Gherkin error)
-- **Origin:** Batch 2 audit
-- **Update 2026-05-18 (salesagent-18h.1):** status_filter *selection* now
-  uses the persisted `MediaBuy.status` (was date-derived and ignored the
-  column entirely). `rejected`/`canceled` rows now pass and were removed
-  from the `_UC004_FILTER_SELECTIVE` substring set. The `paused`/`completed`
-  rows still xfail because the *response* delivery status (`d.status`) is
-  still computed from flight dates — a buy persisted as `completed` with a
-  current flight window is selected correctly but reported as `active`.
-  Remaining substrings: `{pending_activation, paused, completed}`. Closing
-  the response-status-display gap (re-deriving `d.status` from the persisted
-  column) plus the `pending_activation` Gherkin rewrite empties this entry.
+The attribution half of this item is closed: `_validate_attribution_window`
+refuses a campaign-unit window with `interval != 1`
+(`src/core/tools/media_buy_delivery.py:29,132`), and the controller calls it
+before delegating, so every transport gets the same refusal.
 
-### B2 — `_dispatch_partition` for `date_range` sends fake `date_range="…"` kwarg
-- **Scope:** `T-UC-004-boundary-date-range` and
-  `T-UC-004-partition-date-range` (currently in `_UC004_BOUNDARY_TAGS` /
-  `_UC004_PARTITION_TAGS` blanket — scheduled for removal once this is
-  fixed)
-- **Where:** `tests/bdd/steps/domain/uc004_delivery.py:937-945`
-- **Fix:** translate symbolic partition labels (`start_before_end`,
-  `dates_omitted`, `start_equals_end`, `start_after_end`, etc.) to actual
-  `start_date` / `end_date` request kwargs
-- **Impact:** ~16 rows × 4 transports currently dispatch through Pydantic
-  `extra="forbid"` rejection by accident; once wired, those rows test the
-  real validation path
-- **Severity:** P2
-- **Origin:** Batch 2 audit
+The geo half is open. The pin states the `metro` / `postal_area` requirement for
+`system` in a field description only, and no local extending class adds a model
+validator for it, so production accepts `geo_level=metro` with no `system`.
 
-### B3 — Resolution and ownership scenarios use symbolic names that never exercise the code path
-- **Scope:** `T-UC-004-partition-resolution`,
-  `T-UC-004-boundary-resolution`, `T-UC-004-partition-ownership`,
-  `T-UC-004-boundary-ownership` (currently in blanket strict=False)
-- **Where:** `tests/bdd/steps/domain/uc004_delivery.py:2076-2098`
-  (`_dispatch_partition`)
-- **Fix:** for resolution rows, construct concrete `media_buy_ids` /
-  `buyer_refs` request shapes per partition. For ownership rows, set
-  `ctx["principal_id"]` before dispatch (existing pattern at line 670-676).
-- **Impact:** ~37 scenarios currently pass vacuously; the `owner_mismatch`
-  variant cannot fail at all because identity is never swapped
-- **Severity:** P2 (test bug; pairs with C3 security gap to fully validate)
-- **Origin:** Batch 3 audit
+- **Unblocks:** a `model_validator(mode="after")` on the extending geo model, or
+  an upstream AdCP change adding the constraint to the schema.
+- **Where conftest cites it:** `tests/bdd/conftest.py:2380`
+  (`T-UC-004-boundary-reporting-dims`, row `geo with geo_level=metro but no
+  system`).
+- **Severity:** P3.
 
-### B4 — `sampling_method` scenarios live on the wrong feature
-- **Scope:** `T-UC-004-boundary-sampling`, `T-UC-004-partition-sampling`
-  (currently in blanket strict=False)
-- **Where:** `tests/bdd/features/BR-UC-004-deliver-media-buy-metrics.feature`
-- **Source of truth:** AdCP library
-  `.venv/.../media_buy/get_media_buy_delivery_request.py:142-202` does NOT
-  declare `sampling_method`. The field belongs to content standards
-  (`docs/test-obligations/constraints.md:1396` `CONSTR-SAMPLING-METHOD-01`).
-- **Fix:** delete from `BR-UC-004.feature`; if needed under UC-024
-  (content standards) re-author there
-- **Impact:** ~17 scenarios become real passes/fails after relocation
-- **Severity:** P3 (cleanup)
-- **Origin:** Batch 3 audit
+## Closed items, kept for the ids conftest still names
 
-### B5 — `webhook_credentials` scenarios dispatch through `get_media_buy_delivery`
-- **Scope:** `T-UC-004-boundary-credentials`,
-  `T-UC-004-partition-credentials` (currently in blanket strict=False;
-  tagged `@BR-RULE-029` which is the wrong rule — that's about retry/
-  backoff, not credentials)
-- **Where:** `tests/bdd/steps/domain/uc004_delivery.py:954-957`
-- **Fix:** either rewire through `CircuitBreakerEnv` and the real
-  `WebhookDeliveryService.send_delivery_webhook` (which has the 32-char
-  HMAC check at `webhook_delivery_service.py:337,463`), OR delete in favor
-  of the dedicated scenarios at feature lines 373-396 which already test
-  the rule properly with `when_validate_webhook_config`
-- **Impact:** 10 scenarios with mismatched dispatch
-- **Severity:** P3 (test mis-routing; rule already tested elsewhere)
-- **Origin:** Batch 4 audit
+- **B4** — the two `sampling_method` outlines are deleted, not corrected. The
+  field appears nowhere in the pinned 3.1 schemas:
+  `get-media-buy-delivery-request.json` declares twelve properties and none is
+  it, and no pinned enum carries `random` / `stratified` / `recent` /
+  `systematic`. So the outlines' own "valid" rows asked this seller to accept an
+  invented field, and their "invalid" row asked for a refusal the specification
+  never requests. They passed anyway, which is what hid the defect: the DTO
+  declares no `sampling_method`, so the accepted-shape strip refuses it as an
+  undeclared field with `INVALID_REQUEST` — the identical rejection the "valid"
+  rows received, so the Then could not tell "this enum value is refused" from
+  "this field does not exist". `BR-UC-004-deliver-media-buy-metrics.feature`
+  carries a RETIRED note where they were. The one real sampling concept in the
+  pin is `failures_only`, a boolean on a different tool, already graded at
+  `BR-UC-024-content-compliance.feature`.
 
-### B6 — `disclosure_positions` filter not implemented; `all_positions` step uses non-existent enum values
-- **Scope:** `T-UC-005-partition-disclosure`, `-boundary-disclosure`,
-  `T-UC-005-inv-049-8-violated`, `-8-nofield` (currently strict=False)
-- **Where:** production filter missing in `src/core/tools/creative_formats.py`;
-  step bug in `tests/bdd/steps/generic/when_request.py:405-411`
-  (uses `corner, inline, before, after` — none in
-  `.venv/.../enums/disclosure_position.py:10-19`)
-- **Fix (production):** add `if req.disclosure_positions: …` filter to
-  `_list_creative_formats_impl`. AND-match per BR-RULE-049 INV-8
-  (all requested positions must be supported).
-- **Fix (test):** correct `all_positions` step to use the 8 real enum
-  values: `prominent, footer, audio, subtitle, overlay, end_card, pre_roll,
-  companion`
-- **Impact:** ~28 vacuous xpasses + 2 vacuous-exclusion xpasses
-- **Severity:** P2 (production feature gap)
-- **Origin:** Batch 5 audit
+- **C3** — production answers a non-owned media buy like a nonexistent one: no
+  delivery data plus a `MEDIA_BUY_NOT_FOUND` advisory per id. That is the
+  fail-closed answer L1 security asks for, and the entry's demand for a hard 403
+  discloses that someone else's buy exists. The scenarios were the defect: they
+  asserted a verdict word the step had to interpret, and their When injected a
+  fabricated identity as a request kwarg, so no transport tested ownership. Both
+  outlines name the outcome in their Examples, and the When presents a second
+  principal's token.
+- **C4** — `adcp_error_for` maps a pydantic `ValidationError` to
+  `AdCPInvalidRequestError`, with the field and the `issues[]` entries derived
+  from the error, and it checks that mapping before the `ValueError` branch the
+  error subclasses (`src/core/exceptions.py:1204-1216`). Rows that failed only
+  for the missing translation were graduated; `tests/bdd/conftest.py:2355-2364`
+  records which, and that `geo_metro_missing_system` stayed because it did not
+  xpass.
+- **C6** — an inverted or equal window raises `AdCPValidationError`
+  (`src/core/tools/media_buy_delivery.py:187`) instead of returning the error
+  inside a success envelope.
+- **B1** — the UC-004 feature no longer uses `pending_activation`. The
+  status-filter boundary Examples name `pending_creatives` as the first enum
+  value and list all seven statuses in the array row (feature lines 991, 995).
+- **B2** — `_dispatch_date_range_partition` translates the symbolic label into
+  real `start_date` / `end_date` kwargs
+  (`tests/bdd/steps/domain/uc004_delivery.py:3909-3929`).
+- **B3** — both the partition and the boundary When route through
+  `_dispatch_ownership_partition`, which swaps the identity
+  (`tests/bdd/steps/domain/uc004_delivery.py:1438,1453,3932`).
+- **B5** — the credentials rows validate the reporting-webhook authentication at
+  the `create_media_buy` boundary through
+  `_validate_reporting_webhook_credentials`
+  (`tests/bdd/steps/domain/uc004_delivery.py:1412-1421,3737`), not through
+  `get_media_buy_delivery`.
+- **B6** — production filters on `disclosure_positions` with AND semantics, and
+  resolves a format's positions through `disclosure_capabilities` with a
+  fallback to `supported_disclosure_positions`
+  (`src/core/tools/creative_formats.py:299-328,402-404`). The `all_positions`
+  step uses the eight real enum values
+  (`tests/bdd/steps/generic/when_request.py:419-441`).
+- **B7** — `SyncCreativesRequest.account` is required, so `_sync_creatives_impl`
+  declares `AccountIdentity` and the boundary resolves the account before it
+  runs; validation refuses a request that names none. The
+  `_UC006_VALIDATION_XFAIL` set no longer exists in conftest.
+- **H1 / H2** — `_assert_partition_outcome` has no bare `invalid` branch left.
+  The Examples cell names the wire code and the assertion goes through the
+  harness's `assert_wire_error` against the envelope the buyer received
+  (`tests/bdd/steps/generic/then_payload.py:366-396`).
 
-### B7 — UC-006 account_resolution step layer fakes the `AdCPValidationError` — RECONCILED
-- **Scope:** `T-UC-006-partition-account` (rows `missing_account`,
-  `invalid_oneOf_both`) and `T-UC-006-boundary-account` (rows
-  `account field absent`, `both account_id and brand`)
-- **Status:** RECONCILED (salesagent-miva, 18h.10 Phase-2). The step layer
-  no longer synthesizes an `AdCPValidationError`. `when_sync_creative`
-  (`tests/bdd/steps/domain/uc006_sync_creatives.py`) now genuinely
-  dispatches the absent payload to production (`account=None`) and parses
-  the both-keys payload through the real `adcp` `AccountReference` union
-  before dispatch. The rows now genuinely exercise production and fail for
-  the real, named gap below — they are strict=True xfails tied to that gap
-  (`tests/bdd/conftest.py` `_UC006_VALIDATION_XFAIL`), no longer xpassing
-  for the wrong reason.
-- **Underlying production gap (now genuinely exercised):**
-  - `missing_account` / `account field absent`: production performs no
-    required-account schema validation. `enrich_identity_with_account()`
-    returns identity unchanged and `_sync_creatives_impl` succeeds — no
-    `INVALID_REQUEST` is raised.
-  - `invalid_oneOf_both` / `both account_id and brand`: the `adcp`
-    `AccountReference` union raises a Pydantic `ValidationError` at parse
-    time, which production does not translate into
-    `AdCPError(INVALID_REQUEST, suggestion)` — the same C4 gap.
-- **Unblocks:** add a transport-boundary translator that wraps Pydantic
-  `ValidationError` in `AdCPError(INVALID_REQUEST, suggestion=…)` (C4) plus
-  required-account enforcement. The moment those land, these rows xpass and
-  the strict=True markers force their removal.
-- **Severity:** P2 (real production gap, no longer masked by a fake test)
-- **Origin:** Batch 6 audit; reconciled salesagent-miva
+## Stale reason text in conftest
 
----
+These three stay unfixed here, because `tests/bdd/conftest.py` is not this
+file's to edit:
 
-## Cross-cutting test-helper weaknesses
+- The `T-UC-004-boundary-account` row and the `T-UC-004-boundary-status-filter`
+  row both key on `impl-` / `pending_activation` substrings that no nodeid can
+  match (`tests/bdd/conftest.py:2485-2503`, `:2613-2628`).
+- Three reasons still cite C4 as the cause (`:2368`, `:2461`, `:2467`) although
+  the translation landed; the rows that remain stayed for a different, unnamed
+  reason.
+- `is_impl` (`:1452`) and the `impl-` ledger substrings are dead with the
+  transport.
 
-### H1 — `_assert_partition_outcome` invalid branch under-asserts
-- **Where:** `tests/bdd/steps/generic/then_payload.py:209-230`
-- **Issue:** the `invalid` branch only checks `"error" in ctx`. Any
-  exception type satisfies it, including unrelated bugs (e.g., `KeyError`
-  in step setup masquerading as "production rejected the input").
-- **Fix:** add `isinstance(error, (AdCPError, ValidationError))` guard,
-  matching UC-004's richer helper at
-  `tests/bdd/steps/domain/uc004_delivery.py:1966-1968`
-- **Severity:** P3 (latent risk; no current coverage harm)
+## Lifecycle of an entry
 
-### H2 — `_assert_partition_outcome` valid branch lacks domain content checks
-- **Where:** same file
-- **Issue:** `valid` branch only asserts `"response" in ctx` and (for the
-  formats domain) `formats is not None`. A degenerate response with empty
-  `media_buy_deliveries` or empty `formats=[]` passes.
-- **Fix:** route by the captured `field` to a domain-specific assertion
-  (the regex already captures `field` but discards it). UC-004 has the
-  pattern at `_assert_valid_content`.
-- **Severity:** P3
+1. File the item here with a stable id.
+2. Name that id in the conftest marker's reason.
+3. Close the gap in production or in the test.
+4. Flip the marker to `strict=True`, or remove it when no rows stay xfailed.
+5. Move the item to "Closed items" here with the file and line that closed it.
+6. Delete the item once no conftest reason names its id.
 
----
+Step 4 forces step 5: once you set `strict=True`, drift on that scenario fails
+the suite instead of passing quietly.
 
-## Reference: how to track these
+## UC-026 connected to the suite, and what it now admits
 
-The expected lifecycle of an entry:
+UC-026 (package media buy) had never graded anything. Its 75 scenarios, its
+2784-line step module and its own xfail tag set were all written and maintained,
+while every node xfailed at fixture setup with `No harness wired for UC-026`.
+Nothing flagged it, because the use case is absent from `dormant_scenarios.txt`
+too, so it read as ordinary xfail volume.
 
-1. Item filed here with a unique ID (B1, C1, C11, etc.).
-2. The corresponding `tests/bdd/conftest.py` marker has a FIXME pointing
-   at this doc and the item ID.
-3. Engineer fixes the gap (production change, test rewrite, or both).
-4. They flip the marker to `strict=True` (or remove if no rows remain
-   xfail), removing the FIXME.
-5. They delete the entry from this doc.
+The harness was never the missing piece. `MediaBuyDualEnv`'s first line says it
+is "a composite environment for UC-026 and UC-003 BDD scenarios": it was built
+for this and left unreferenced. UC-026 was disconnected in two independent
+places, either of which alone was fatal:
 
-Step 4 forces step 5 because once `strict=True` is set, further drift on
-that scenario causes a hard suite failure rather than silent xpass.
+1. no row in `_UC_BUCKET_ROUTES`, so no environment was ever built;
+2. `tests.bdd.steps.domain.uc026_package_media_buy` absent from
+   `pytest_plugins`, so no sentence had a binding.
 
----
+Wiring both turns several hundred nodes that reported nothing into a few hundred
+that pass and a smaller set that states precisely what is missing. Nothing
+fails.
 
-## Tally
+### Read this before trusting an xfail here
 
-- **Production gaps:** 8 (C1–C11; C8, C9, and C11 retired)
-- **Test rewrites:** 7 (B1–B7)
-- **Test-helper improvements:** 2 (H1, H2)
-- **Total:** ~18 items
+A tag in `_UC026_XFAIL_TAGS` xfails every parametrized row it carries, so
+whole-tag xfail is a coverage decision rather than bookkeeping. Listing an
+outline that fails two rows out of twelve converts the other ten from passing to
+xpassed, which removes grading instead of adding it. That mistake was made and
+measured here: routing the keyword, replacement and format-id outlines by tag
+cut the passing count by more than half. Those are keyed by ROW in
+`_UC026_PARTITION_SELECTIVE` instead. Only four tags fail wholesale on a2a, mcp
+and rest alike, and only those four are in the set.
 
-Severity distribution: 3× P1 (security/correctness), 6× P2, 9× P3.
+Every reason is the assertion the scenario reports. The misclassification
+tripwire in `conftest.py` refuses a dormancy or a Given-side error dressed as a
+production gap, and each entry below cleared it.
 
-If filed as one umbrella GH issue with a checklist, this fits comfortably
-in a single tracking issue. If filed individually, only the 3 P1s warrant
-separate issues; the rest can stay in this doc as the canonical reference.
+### Production is not ready — graded, not assumed
+
+| Gap | Tag or rows |
+|---|---|
+| `format_ids` is neither defaulted to the product's formats when omitted nor echoed when supplied, though pinned 3.1 `core/package.json` declares the field on the returned package | `main-required-fields`, `main-explicit-formats` |
+| a `format_id` the product does not carry is accepted instead of refused | `boundary-format-ids`, `partition-format-ids` (unsupported rows only) |
+| `catalogs` is accepted but not echoed on the created package | `inv-089-2` |
+| `price_breakdown` is absent from the create response, so the default `list_price == option rate` claim has nothing to read | `inv-196-3` |
+| keyword and negative-keyword conflict validation, and empty-value validation, are missing on the REST update path (a2a and mcp pass the same rows) | the eight `kw` and `neg-kw` row entries |
+| `targeting_overlay` is not replaced wholesale on update | `boundary-replacement`, `partition-replacement` (overlay rows only) |
+
+### The harness is not ready — one scenario, stated as such
+
+`@T-UC-026-ext-j` opens "the Buyer owns a media buy with a package that has
+already settled". Nothing reaches that state: settlement is billing-side, no
+buyer-facing request performs it, and no seeding path writes one. Its Given
+creates the package and stops, so production receives an ordinary active package
+and cancels it rather than refusing with `NOT_CANCELLABLE`.
+
+Production is not failing there. It is answering a different question than the
+scenario means to ask, and the xfail says so rather than blaming the seller.
+Graduating it needs a way to persist a settled package, after which the scenario
+grades the refusal for real.
+
+The sibling precondition — an already-canceled package — is realized rather than
+asserted: the Given creates the package and then cancels it through the real
+update path, which is a buyer-facing operation. That scenario grades for real.
+
+### Two defects this exposed, both fixed
+
+- **A label mistaken for a key.** The feature names its product `prod-1` while
+  the shared seed creates `prod_1`, and five steps asserted the two matched.
+  Requests are built from the seeded row's own id, so the feature's spelling
+  never reached the wire and the two were never required to agree. The package
+  builder now resolves the label the way `pricing_option_id` already did, and
+  only for the label the scenario declared, so a scenario deliberately naming an
+  absent product still gets its refusal.
+- **Two scenarios that could not run on any transport.** "Create package via
+  MCP" and "Create package via REST" graded identical behaviour, differed only
+  in an arbitrary budget, and the second contradicted its own title by naming an
+  A2A task. Their `@mcp` and `@rest` tags put them in `_TRANSPORT_SPECIFIC_TAGS`,
+  which skips parametrization on the premise that the When steps dispatch
+  explicitly — UC-026's do not. They are one transport-independent scenario now,
+  running on all three.

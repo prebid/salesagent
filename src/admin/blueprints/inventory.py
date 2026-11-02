@@ -8,8 +8,10 @@ from sqlalchemy import String, func, or_, select
 
 from src.admin.utils import execute_limited, get_tenant_config_from_db, require_auth, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
+from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
-from src.core.database.models import GAMInventory, GAMOrder, MediaBuy, Principal, Tenant
+from src.core.database.models import GAMInventory, GAMOrder, MediaBuy, Tenant
+from src.core.database.repositories.principal import PrincipalRepository
 
 logger = logging.getLogger(__name__)
 
@@ -226,7 +228,6 @@ def get_targeting_values(tenant_id, key_id):
                 )
 
             # Initialize GAM adapter to query values
-            import os
             import tempfile
 
             from google.oauth2 import service_account as google_service_account
@@ -265,9 +266,10 @@ def get_targeting_values(tenant_id, key_id):
             else:
                 logger.debug(f"Using OAuth authentication for tenant {tenant_id}")
                 # Create OAuth client
+                gam_auth = get_settings().auth
                 oauth2_client = oauth2.GoogleRefreshTokenClient(
-                    client_id=os.environ.get("GAM_OAUTH_CLIENT_ID"),
-                    client_secret=os.environ.get("GAM_OAUTH_CLIENT_SECRET"),
+                    client_id=gam_auth.gam_oauth_client_id,
+                    client_secret=gam_auth.gam_oauth_client_secret,
                     refresh_token=adapter_config.gam_refresh_token,
                 )
                 # Create Ad Manager client
@@ -606,7 +608,7 @@ def analyze_ad_server_inventory(tenant_id):
 
         # Get a principal for API calls
         with get_db_session() as db_session:
-            principal_obj = db_session.scalars(select(Principal).filter_by(tenant_id=tenant_id)).first()
+            principal_obj = next(iter(PrincipalRepository(db_session, tenant_id).list_all()), None)
 
             if not principal_obj:
                 return jsonify({"error": "No principal found for tenant"}), 404

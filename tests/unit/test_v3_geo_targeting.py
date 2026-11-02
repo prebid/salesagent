@@ -4,7 +4,6 @@ Covers:
 - GeoCountry/GeoRegion (RootModel[str]) construction
 - GeoMetro/GeoPostalArea (structured with system enum) construction
 - Targeting model_dump JSON safety (regression: Bug A — MetroAreaSystem enum serialization)
-- Targeting model_dump_internal JSON safety
 - FrequencyCap inheritance from library type + scope field
 - Exclusion field construction and serialization
 """
@@ -120,16 +119,10 @@ class TestTargetingModelDumpSerialization:
         # Must not raise TypeError for enum objects
         json.dumps(d)
 
-    def test_model_dump_internal_json_safe(self):
-        """json.dumps(t.model_dump_internal()) must succeed — regression for Bug A."""
-        t = Targeting(
-            geo_metros=[{"system": "nielsen_dma", "values": ["501"]}],
-            geo_postal_areas=[{"system": "us_zip", "values": ["10001"]}],
-            geo_countries=["US"],
-            key_value_pairs={"k": "v"},
-        )
-        d = t.model_dump_internal(exclude_none=True)
-        json.dumps(d)
+    # REMOVED: test_model_dump_internal_json_safe. It dumped through
+    # ``model_dump_internal`` and seeded ``key_value_pairs``; neither exists. JSON safety is
+    # a property of the document that is SENT, and test_model_dump_json_safe above grades
+    # exactly that over the same geo inputs (CLAUDE.md pattern 4 — one serializer seat).
 
     def test_model_dump_geo_country_is_string(self):
         t = Targeting(geo_countries=["US", "CA"])
@@ -158,16 +151,14 @@ class TestTargetingModelDumpSerialization:
         assert "geo_metros" not in d
         assert "frequency_cap" not in d
 
-    def test_model_dump_excludes_managed_fields(self):
-        t = Targeting(geo_countries=["US"], key_value_pairs={"k": "v"})
-        d = t.model_dump(exclude_none=True)
-        assert "key_value_pairs" not in d
-
-    def test_model_dump_internal_includes_managed_fields(self):
-        t = Targeting(geo_countries=["US"], key_value_pairs={"k": "v"})
-        d = t.model_dump_internal(exclude_none=True)
-        assert "key_value_pairs" in d
-        assert d["key_value_pairs"] == {"k": "v"}
+    # REMOVED: test_model_dump_excludes_managed_fields and
+    # test_model_dump_internal_includes_managed_fields. Both seeded ``key_value_pairs``,
+    # which Targeting no longer declares (src/core/schemas/_base.py — the pinned
+    # core/targeting.json declares no managed-only field), and the second one graded the
+    # deleted ``model_dump_internal`` seat. Keeping a managed field off the wire stopped
+    # being a serialization property when the field was deleted: an undeclared key is now
+    # refused on construction in dev and dropped in production by
+    # ``get_pydantic_extra_mode()`` (CLAUDE.md pattern 7), so there is nothing here to dump.
 
     def test_model_dump_mode_override(self):
         """Explicit mode='python' still works when caller needs it."""

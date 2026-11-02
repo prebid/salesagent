@@ -161,7 +161,6 @@ class TestSchemaLibraryInheritance:
         #
         # Note: Some schemas have nested type incompatibilities with library types:
         # - GetSignalsRequest/Response: Library DeliverTo requires 'deployments', local has 'platforms'
-        # - ListAuthorizedPropertiesResponse: Library uses list[PublisherDomain], local uses list[str]
         # - ListCreativesResponse: Library Pagination/QuerySummary/Creative types differ
         # These require upstream coordination or adapter patterns to migrate.
         KNOWN_NOT_EXTENDED = {
@@ -179,8 +178,6 @@ class TestSchemaLibraryInheritance:
             # GetSignalsRequest — migrated (uses library DeliverTo)
             # GetSignalsResponse — migrated (uses local Signal with exclude=True)
             # Property types - nested PublisherDomain type incompatibility
-            "ListAuthorizedPropertiesRequest",
-            "ListAuthorizedPropertiesResponse",
             # GetMediaBuyDeliveryResponse — migrated (local MediaBuyDeliveryData override)
             # GetMediaBuysRequest/Response — added in adcp 3.6.0, migration tracked
             "GetMediaBuysRequest",

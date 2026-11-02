@@ -6,8 +6,6 @@ but have no ``Covers:`` tags — they test infrastructure, not obligations.
 
 from __future__ import annotations
 
-import pytest
-
 from src.core.schemas import GetProductsResponse
 from tests.harness.product_unit import ProductEnv
 
@@ -59,7 +57,8 @@ class TestProductEnvContract:
         """env.mock[name] provides access to all patch targets."""
         with ProductEnv() as env:
             assert "uow" in env.mock
-            assert "principal" in env.mock
+            # No "principal" patch: the principal comes off the identity the env builds,
+            # so there is no get_principal_object for the env to stand in for.
             assert "convert" in env.mock
             assert "policy_service" in env.mock
             assert "dynamic_variants" in env.mock
@@ -102,16 +101,14 @@ class TestProductEnvContract:
             assert "guaranteed_prod" in product_ids
             assert "non_guaranteed_prod" not in product_ids
 
-    async def test_no_identity_raises(self):
-        """_get_products_impl without identity raises."""
-
-        with ProductEnv(principal_id=None) as env:  # type: ignore[arg-type]
-            # The identity still has tenant, but no principal_id
-            # The brand_manifest_policy defaults to "require_auth" which checks principal_id
-            from src.core.exceptions import AdCPAuthenticationError
-
-            with pytest.raises(AdCPAuthenticationError):
-                await env.call_impl(brief="test")
+    # (Retired) test_no_identity_raises called _get_products_impl with a principal-less
+    # identity and expected the IMPLEMENTATION to mint the require_auth refusal. It does
+    # not: `require_auth` is answered by the RESOLVER through
+    # ToolSpec.requires_credential(tenant), so an anonymous caller on such a seller is
+    # refused before get_products runs and the implementation only ever sees a resolved
+    # caller (src/core/tools/products.py states this at the policy branch). The refusal is
+    # graded on the wire across transports by BR-UC-001 @T-UC-001-ext-b
+    # ("authentication required but caller is anonymous" -> AUTH_MISSING).
 
     async def test_ranking_disabled_by_default(self):
         """AI ranking is disabled by default (no product_ranking_prompt in tenant)."""

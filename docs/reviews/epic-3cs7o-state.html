@@ -1,0 +1,301 @@
+<title>Epic 3cs7o state</title>
+<style>
+:root {
+  --bg:#fbfbf9; --fg:#1b1b1a; --mut:#6a6a66; --line:#e2e0da; --card:#fff;
+  --ok:#2f7d4f; --bad:#b3261e; --warn:#8a6d00; --accent:#2b5fa8;
+  --p1:#b3261e; --p2:#8a6d00; --p3:#4a6a8a; --p4:#6a6a66;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme=light]) {
+    --bg:#16161a; --fg:#e8e6e1; --mut:#9a978f; --line:#2e2e34; --card:#1d1d22;
+    --ok:#6cc08b; --bad:#f2837c; --warn:#d6b45a; --accent:#7aa8e8;
+    --p1:#f2837c; --p2:#d6b45a; --p3:#9ab8d8; --p4:#9a978f;
+  }
+}
+:root[data-theme=dark] {
+  --bg:#16161a; --fg:#e8e6e1; --mut:#9a978f; --line:#2e2e34; --card:#1d1d22;
+  --ok:#6cc08b; --bad:#f2837c; --warn:#d6b45a; --accent:#7aa8e8;
+  --p1:#f2837c; --p2:#d6b45a; --p3:#9ab8d8; --p4:#9a978f;
+}
+* { box-sizing:border-box }
+body { background:var(--bg); color:var(--fg); margin:0;
+  font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+.wrap { max-width:1180px; margin:0 auto; padding:2.2rem 1.2rem 5rem }
+h1 { font-size:1.65rem; margin:0 0 .3rem; letter-spacing:-.01em }
+h2 { font-size:1.18rem; margin:2.6rem 0 .5rem; padding-bottom:.3rem;
+  border-bottom:2px solid var(--line) }
+h3 { font-size:.97rem; margin:1.5rem 0 .4rem; color:var(--mut);
+  text-transform:uppercase; letter-spacing:.06em }
+.sub { color:var(--mut); margin:0 0 1.6rem; font-size:.93rem }
+code { font:.88em ui-monospace,SFMono-Regular,Menlo,monospace;
+  background:color-mix(in srgb, var(--line) 55%, transparent);
+  padding:.08em .34em; border-radius:3px }
+.cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+  gap:.7rem; margin:1.2rem 0 }
+.card { background:var(--card); border:1px solid var(--line); border-radius:8px;
+  padding:.85rem .95rem }
+.card .n { font-size:1.7rem; font-weight:650; letter-spacing:-.02em; display:block }
+.card .l { color:var(--mut); font-size:.79rem; text-transform:uppercase;
+  letter-spacing:.05em }
+.bar { height:9px; border-radius:5px; background:var(--line); overflow:hidden;
+  margin:.4rem 0 1.4rem }
+.bar i { display:block; height:100%; width:48%; background:var(--ok) }
+.tw { overflow-x:auto; margin:.6rem 0 }
+table { border-collapse:collapse; width:100%; font-size:.875rem;
+  background:var(--card); border:1px solid var(--line); border-radius:8px }
+th,td { text-align:left; padding:.46rem .6rem; border-bottom:1px solid var(--line);
+  vertical-align:top }
+th { font-size:.75rem; text-transform:uppercase; letter-spacing:.05em;
+  color:var(--mut); font-weight:600 }
+tbody tr:last-child td { border-bottom:0 }
+td.num { font:.85em ui-monospace,Menlo,monospace; color:var(--mut);
+  white-space:nowrap; text-align:right }
+td.title { font-weight:550; width:27% }
+td.state { color:var(--mut) }
+td.pri { font-weight:650; font-size:.8rem; white-space:nowrap }
+td.P1 { color:var(--p1) } td.P2 { color:var(--p2) }
+td.P3 { color:var(--p3) } td.P4 { color:var(--p4) }
+tr.closed td.title::before { content:"\2713\00a0"; color:var(--ok); font-weight:700 }
+.bug { font-size:.66rem; background:var(--bad); color:#fff; padding:.06em .32em;
+  border-radius:3px; vertical-align:middle; letter-spacing:.04em }
+.ok { color:var(--ok) } .bad { color:var(--bad); font-weight:600 }
+tr.bdd td { background:color-mix(in srgb, var(--accent) 8%, transparent) }
+.note { background:var(--card); border:1px solid var(--line);
+  border-left:3px solid var(--accent); border-radius:0 8px 8px 0;
+  padding:.8rem 1rem; margin:1rem 0 }
+.note.stop { border-left-color:var(--bad) }
+.note.warn { border-left-color:var(--warn) }
+.note p { margin:.35rem 0 }
+ol.steps { padding-left:1.3rem }
+ol.steps li { margin:.5rem 0 }
+.none { color:var(--mut); font-style:italic }
+footer { margin-top:3rem; padding-top:1rem; border-top:1px solid var(--line);
+  color:var(--mut); font-size:.83rem }
+</style>
+
+<div class=wrap>
+<h1>salesagent-3cs7o &mdash; state of the epic</h1>
+<p class=sub>The buyer&rsquo;s context object is echoed from the boundary alone, and its
+plumbing is out of business logic. Branch <code>feature/spec-gaps-1210</code>, tip
+<code>a9affe06b</code>. Verification: <code>innet_150926_0618</code>, the box run of that tip.</p>
+
+<div class=cards>
+  <div class=card><span class=n>52</span><span class=l>children</span></div>
+  <div class=card><span class=n>25</span><span class=l>closed</span></div>
+  <div class=card><span class=n>27</span><span class=l>open</span></div>
+  <div class=card><span class=n>11</span><span class=l>open P1</span></div>
+  <div class=card><span class=n>0</span><span class=l>lanes in flight</span></div>
+</div>
+<div class=bar><i></i></div>
+
+<h2>The short answer</h2>
+
+<div class="note">
+<p><strong>The rule the epic exists for is delivered and cannot be violated.</strong>
+<code>_boundary.py</code> is the only writer of the context echo, a context write elsewhere does
+not compile, identity resolves once, the environment is read once, and serialization happens at
+named edges. Those are children .1, .2, .3, .6, .9, .12, .13, .24, .28 and .30 &mdash; all closed,
+each verified by a reviewer who re-ran every line.</p>
+<p><strong>Both lanes that were in flight are now merged.</strong> .16 landed as
+<code>9bcb62f66</code>; .7&rsquo;s credential disclosure landed as <code>a9affe06b</code>. Nothing
+is uncommitted and nothing is awaiting review.</p>
+<p><strong>What is left is not the boundary.</strong> Of 27 open children, 8 are buyer-facing spec
+defects found while doing the work, 7 are defects in the grading machinery, 2 are test-suite
+reconciliation, and 10 are cleanups or decisions. None of them re-open the rule.</p>
+</div>
+
+<div class="note stop">
+<p><strong>The distance to &ldquo;all BDD scenarios are properly fixed&rdquo; is set by .52, not by
+the failure count.</strong> The in-process suite has zero failures and the in-network suite has one.
+But 18 of 52 feature files are collected by no test module, so <strong>1473 scenarios have never
+run</strong>. A suite cannot be called correct over scenarios it does not execute.</p>
+<p>Split by whether the use case names a tool this seller implements:
+<strong>763 scenarios across 9 files</strong> grade shipped tools and are
+real missing coverage; <strong>710 scenarios across 9 files</strong>
+name no implemented tool and would collect as a ledger rather than as coverage. The second group
+needs one scope decision, not 710 triages.</p>
+</div>
+
+<h2>Measured state of the suites</h2>
+<p>From <code>innet_150926_0618</code>, the box run of the current tip. BDD rows are highlighted
+because they are the ones the goal is about.</p>
+<div class=tw><table><thead><tr><th>Suite</th><th>Ran</th><th>Passed</th><th>Failed</th>
+<th>Error</th><th>xfail</th><th>xpass</th><th>Skip</th></tr></thead>
+<tbody>
+<tr class=bdd><td class=title>bdd_inprocess</td><td>8326</td><td>3755</td><td class=ok>0</td><td class=ok>0</td><td>4565</td><td>3</td><td>3</td></tr>
+<tr class=bdd><td class=title>bdd_e2e</td><td>2855</td><td>1013</td><td class=bad>1</td><td class=ok>0</td><td>1816</td><td>23</td><td>2</td></tr>
+<tr><td class=title>storyboard</td><td>87</td><td>0</td><td class=bad>47</td><td class=ok>0</td><td>0</td><td>0</td><td>40</td></tr>
+<tr><td class=title>e2e</td><td>119</td><td>95</td><td class=ok>0</td><td class=ok>0</td><td>0</td><td>0</td><td>24</td></tr>
+<tr><td class=title>ui</td><td>5</td><td>5</td><td class=ok>0</td><td class=ok>0</td><td>0</td><td>0</td><td>0</td></tr>
+<tr><td class=title>admin</td><td>143</td><td>107</td><td class=bad>8</td><td class=bad>25</td><td>3</td><td>0</td><td>0</td></tr>
+<tr><td class=title>integration</td><td>2690</td><td>2116</td><td class=bad>225</td><td class=bad>294</td><td>42</td><td>0</td><td>13</td></tr>
+<tr><td class=title>unit</td><td>6128</td><td>5361</td><td class=bad>605</td><td class=bad>124</td><td>31</td><td>0</td><td>7</td></tr>
+<tr><td class=title>quality</td><td>4</td><td>2</td><td class=bad>2</td><td class=ok>0</td><td>0</td><td>0</td><td>0</td></tr>
+</tbody></table></div>
+
+<div class="note warn">
+<p><code>storyboard</code> showing zero passed is an artifact of the row, not a score: a storyboard
+pass is not a pytest item. The runner summary is <strong>30 passed / 21 failed / 249 skipped per
+protocol</strong>, 72 storyboards executed, and <strong>zero disparity between MCP and A2A</strong>.
+Fifteen of the 21 failures share one cause, an <code>ACCOUNT_NOT_FOUND</code> on a
+<code>get_products</code> prerequisite.</p>
+<p>The <code>unit</code>, <code>integration</code> and <code>admin</code> columns are not 888
+defects. Two names account for most of them: <strong>664</strong> call sites pass
+<code>Principal.access_token</code>, a column the credential work removed (.7, .31), and
+<strong>206</strong> construct a <code>Product</code> without <code>reporting_capabilities</code>,
+now required (.21). Both are owned by open tickets, which is why fixture work must follow those
+tickets rather than precede them.</p>
+</div>
+
+<h2>The 1473 uncollected scenarios (.52)</h2>
+<div class=tw><table><thead><tr><th>Use case</th><th>Scenarios</th>
+<th>Implemented tools it names</th></tr></thead><tbody>
+<tr><td class=title>UC-001-discover-available-inventory</td><td class=num>121</td><td class=state>create_media_buy, get_adcp_capabilities, get_products, list_accounts, sync_accounts</td></tr>
+<tr><td class=title>UC-017-account-financials-usage</td><td class=num>116</td><td class=state>get_adcp_capabilities, list_accounts</td></tr>
+<tr><td class=title>UC-023-sync-product-catalogs</td><td class=num>109</td><td class=state>get_adcp_capabilities</td></tr>
+<tr><td class=title>UC-027-manage-async-tasks</td><td class=num>93</td><td class=state>complete_task, create_media_buy, list_tasks</td></tr>
+<tr><td class=title>UC-020-build-creative</td><td class=num>84</td><td class=state>list_accounts, list_creative_formats, sync_accounts, sync_creatives</td></tr>
+<tr><td class=title>UC-022-creative-delivery-features</td><td class=num>81</td><td class=state>get_adcp_capabilities, list_accounts</td></tr>
+<tr><td class=title>UC-016-sync-audiences</td><td class=num>73</td><td class=state>get_adcp_capabilities</td></tr>
+<tr><td class=title>UC-030-manage-governance-binding</td><td class=num>45</td><td class=state>create_media_buy</td></tr>
+<tr><td class=title>UC-032-compliance-test-controller</td><td class=num>41</td><td class=state>create_media_buy</td></tr>
+<tr><td class=title>UC-014-sponsored-intelligence-session</td><td class=num>130</td><td class=state>&mdash;</td></tr>
+<tr><td class=title>UC-024-content-compliance</td><td class=num>101</td><td class=state>&mdash;</td></tr>
+<tr><td class=title>UC-015-track-conversions</td><td class=num>98</td><td class=state>&mdash;</td></tr>
+<tr><td class=title>UC-008-manage-audience-signals</td><td class=num>87</td><td class=state>&mdash;</td></tr>
+<tr><td class=title>UC-021-preview-creative</td><td class=num>71</td><td class=state>&mdash;</td></tr>
+<tr><td class=title>UC-028-manage-collection-lists</td><td class=num>69</td><td class=state>&mdash;</td></tr>
+<tr><td class=title>UC-013-manage-property-lists</td><td class=num>65</td><td class=state>&mdash;</td></tr>
+<tr><td class=title>UC-025-property-features-validation</td><td class=num>51</td><td class=state>&mdash;</td></tr>
+<tr><td class=title>UC-012-manage-content-standards</td><td class=num>38</td><td class=state>&mdash;</td></tr>
+</tbody></table></div>
+
+<h2>Every child, by band</h2>
+<p>Five bands. The first is the epic&rsquo;s own rule; the rest is what doing it turned up.</p>
+
+<h2>The rule itself</h2>
+<h3>Open &mdash; 0</h3>
+<div class=tw><p class=none>None.</p></div>
+<h3>Delivered &mdash; 10</h3>
+<div class=tw><table><thead><tr><th>#</th><th>Ticket</th><th>Pri</th><th>State</th></tr></thead><tbody>
+<tr class="closed"><td class=num>.1</td><td class=title>Every outcome is an AdcpResponse, so the context echo is one field on one class</td><td class="pri P1">P1</td><td class=state>Every outcome is one response class, so the echo is one field the boundary writes.</td></tr>
+<tr class="closed"><td class=num>.2</td><td class=title>Delete the context plumbing from business logic</td><td class="pri P1">P1</td><td class=state>The context plumbing is out of business logic.</td></tr>
+<tr class="closed"><td class=num>.3</td><td class=title>Make a context write outside the boundary inexpressible</td><td class="pri P1">P1</td><td class=state>A context write outside the boundary does not compile: AdcpResponse refuses the field.</td></tr>
+<tr class="closed"><td class=num>.6</td><td class=title>Credential path: identity resolution in one place</td><td class="pri P1">P1</td><td class=state>Identity resolves once, in the resolver; nothing below re-checks.</td></tr>
+<tr class="closed"><td class=num>.9</td><td class=title>Read the environment once at startup and compose typed state; no os.environ branch in business logic</td><td class="pri P1">P1</td><td class=state>The environment is read once at the roots into typed settings.</td></tr>
+<tr class="closed"><td class=num>.12</td><td class=title>Serialize only at the edges: no model_dump in business logic or persistence</td><td class="pri P1">P1</td><td class=state>Serialization happens only at named edges.</td></tr>
+<tr class="closed"><td class=num>.13</td><td class=title>internal_detail carries only provenance, never an authored sentence</td><td class="pri P2">P2</td><td class=state>internal_detail is the caught exception, never an authored sentence.</td></tr>
+<tr class="closed"><td class=num>.28</td><td class=title>A tool whose registry row requires a credential receives an identity whose principal is not optional</td><td class="pri P2">P2</td><td class=state>A tool whose row requires a credential receives an identity whose principal is not optional.</td></tr>
+<tr class="closed"><td class=num>.30</td><td class=title>A public tool served to a caller whose presented credential was rejected: AUTH_INVALID per the pinned enum, or 200 by design? <span class="bug">BUG</span></td><td class="pri P2">P2</td><td class=state>A public tool served to a caller whose credential was rejected answers per the pinned enum.</td></tr>
+<tr class="closed"><td class=num>.24</td><td class=title>One log record per cause: collapse the boundary&#x27;s double traceback</td><td class="pri P3">P3</td><td class=state>One log record per cause; the boundary&#x27;s double traceback is collapsed.</td></tr>
+</tbody></table></div>
+
+<h2>What a buyer sees or sends</h2>
+<h3>Open &mdash; 8</h3>
+<div class=tw><table><thead><tr><th>#</th><th>Ticket</th><th>Pri</th><th>State</th></tr></thead><tbody>
+<tr class="open"><td class=num>.7</td><td class=title>Remove the tenant admin token as a buyer credential and hash principal tokens</td><td class="pri P1">P1</td><td class=state>Disclosure FIXED (a9affe06b): the token renders in the response body, never a flash. Open for its end-to-end criterion — the credential is graded at the resolver lookup, not over a transport carrying a Bearer header.</td></tr>
+<tr class="open"><td class=num>.36</td><td class=title>Production silently discards the seven fields a package update must not carry, and reports success <span class="bug">BUG</span></td><td class="pri P1">P1</td><td class=state>A package update accepts all seven pin-forbidden fields, drops them silently and reports success, so a buyer who asks to swap a product is told it worked.</td></tr>
+<tr class="open"><td class=num>.40</td><td class=title>Two tools advertise 40 parameters the pin does not define, nested where the added-field guard cannot see them</td><td class="pri P1">P1</td><td class=state>Two tools advertise 40 parameters the pin does not define. Every instance is nested, which is why the added-field check sees none of them.</td></tr>
+<tr class="open"><td class=num>.44</td><td class=title>An untyped exception inside create_media_buy reaches the buyer as a transient dependency failure <span class="bug">BUG</span></td><td class="pri P1">P1</td><td class=state>An untyped exception inside create_media_buy reaches the buyer as a transient dependency failure.</td></tr>
+<tr class="open"><td class=num>.51</td><td class=title>A parked UC-003 scenario demands the idempotency leak the spec forbids <span class="bug">BUG</span></td><td class="pri P1">P1</td><td class=state>A parked UC-003 scenario demands the idempotency leak L1/security.mdx forbids. Its CONFLICT sibling is legitimate, because a media buy carries revision.</td></tr>
+<tr class="open"><td class=num>.35</td><td class=title>An error can reach a buyer with recovery absent: 39 error fields carry the ungraded SDK class</td><td class="pri P2">P2</td><td class=state>Three field names, not the thirty-nine the title claims. Absorbed by .39.</td></tr>
+<tr class="open"><td class=num>.39</td><td class=title>Wire response models declare exactly what they emit: extra=forbid at one seat, not allow</td><td class="pri P2">P2</td><td class=state>One inherited seat setting extra=forbid, with every exception documented at its declaration. Changes what every response model accepts, so it precedes fixture work.</td></tr>
+<tr class="open"><td class=num>.48</td><td class=title>Apply the disclosure_persistence filter list_creative_formats accepts and drops <span class="bug">BUG</span></td><td class="pri P2">P2</td><td class=state>list_creative_formats accepts disclosure_persistence and drops it. Not a parameter swap: the filter is a per-mode existential quantification.</td></tr>
+</tbody></table></div>
+<h3>Delivered &mdash; 7</h3>
+<div class=tw><table><thead><tr><th>#</th><th>Ticket</th><th>Pri</th><th>State</th></tr></thead><tbody>
+<tr class="closed"><td class=num>.11</td><td class=title>Adapters return a carrier type, not the wire response model</td><td class="pri P2">P2</td><td class=state>Adapters return a carrier type, not the wire response model.</td></tr>
+<tr class="closed"><td class=num>.14</td><td class=title>Wire models conform by inheritance: delete the weakening redeclarations and the serializer hooks they made necessary</td><td class="pri P2">P2</td><td class=state>Wire models conform by inheritance; the weakening redeclarations and their serializer hooks are deleted.</td></tr>
+<tr class="closed"><td class=num>.15</td><td class=title>Decouple wire models from persistence: no internal or storage field on a pinned response model</td><td class="pri P2">P2</td><td class=state>Seven persistence fields left the request and response package classes.</td></tr>
+<tr class="closed"><td class=num>.19</td><td class=title>update_media_buy never populates the pinned implementation_date</td><td class="pri P2">P2</td><td class=state>A completed update reports the instant the pin names.</td></tr>
+<tr class="closed"><td class=num>.32</td><td class=title>PricingOption adopts an SDK sibling by dumping it, the one spelling the serialization rule forbids</td><td class="pri P2">P2</td><td class=state>PricingOption adopts its SDK sibling by reading attributes, not by dumping it.</td></tr>
+<tr class="closed"><td class=num>.20</td><td class=title>Delete the seven persistence fields PackageRequest declares beyond the pinned schema</td><td class="pri P3">P3</td><td class=state>The seven beyond-pin PackageRequest fields are gone.</td></tr>
+<tr class="closed"><td class=num>.29</td><td class=title>Adapters take a typed carrier, not the buyer&#x27;s CreateMediaBuyRequest: stop rebuilding the DTO in the approval executor</td><td class="pri P3">P3</td><td class=state>The approval executor hands adapters a typed carrier and no longer impersonates a buyer.</td></tr>
+</tbody></table></div>
+
+<h2>Whether anything above is graded</h2>
+<h3>Open &mdash; 8</h3>
+<div class=tw><table><thead><tr><th>#</th><th>Ticket</th><th>Pri</th><th>State</th></tr></thead><tbody>
+<tr class="open"><td class=num>.4</td><td class=title>BDD grades error objects but never the response envelope, so a missing required status passes <span class="bug">BUG</span></td><td class="pri P1">P1</td><td class=state>BDD asserts error objects and never the envelope, so a missing required status passes.</td></tr>
+<tr class="open"><td class=num>.37</td><td class=title>A blanket xfail route aborts BDD scenarios before any step runs, and bypasses the dormancy ledger <span class="bug">BUG</span></td><td class="pri P1">P1</td><td class=state>Six blanket routes apply an expected failure inside the fixture, so the scenario builds no environment, evaluates no assertion, can never report an unexpected pass, and never reaches the dormancy ledger.</td></tr>
+<tr class="open"><td class=num>.38</td><td class=title>The liveness classifier records never-run scenarios as harness-wired, on a substring match <span class="bug">BUG</span></td><td class="pri P1">P1</td><td class=state>The liveness classifier decides a structural question by matching substrings in a free-text reason, so never-run scenarios come back harness-wired.</td></tr>
+<tr class="open"><td class=num>.45</td><td class=title>Grade UC-019 and UC-004 auth refusals against the pinned error codes</td><td class="pri P1">P1</td><td class=state>Grade the UC-019 and UC-004 auth refusals against the pinned error codes.</td></tr>
+<tr class="open"><td class=num>.52</td><td class=title>18 of 52 BDD feature files are collected by no test module, so ~1473 scenarios cannot run <span class="bug">BUG</span></td><td class="pri P1">P1</td><td class=state>18 of 52 feature files are collected by no module, so 1473 scenarios cannot run. This is the largest single gap in the epic.</td></tr>
+<tr class="open"><td class=num>.8</td><td class=title>BDD gaps revealed when the seam-tracking unit tests were deleted</td><td class="pri P2">P2</td><td class=state>Seven behaviours lost when the credential-path unit tests were deleted have no scenario at any level. Must be written BEFORE the tests they replace are deleted.</td></tr>
+<tr class="open"><td class=num>.33</td><td class=title>No test grades the notification-credential scrub on list_accounts, a pinned MUST NOT</td><td class="pri P2">P2</td><td class=state>The notification-credential scrub is measured working AND measured detectable, and nothing asserts it — so deleting it ships green.</td></tr>
+<tr class="open"><td class=num>.34</td><td class=title>Nothing protects the two notification-authentication shapes: either collapse is silently green</td><td class="pri P2">P2</td><td class=state>Neither notification-authentication shape is protected; either collapse is silently green.</td></tr>
+</tbody></table></div>
+<h3>Delivered &mdash; 0</h3>
+<div class=tw><p class=none>None.</p></div>
+
+<h2>Test-suite reconciliation</h2>
+<h3>Open &mdash; 2</h3>
+<div class=tw><table><thead><tr><th>#</th><th>Ticket</th><th>Pri</th><th>State</th></tr></thead><tbody>
+<tr class="open"><td class=num>.31</td><td class=title>Reconcile the test suite with the architecture rewrite (epic-wide)</td><td class="pri P1">P1</td><td class=state>Epic-wide test debt, deferred while the architecture moved. Owns the 664 Principal.access_token call sites and the 23 files naming deleted helpers.</td></tr>
+<tr class="open"><td class=num>.46</td><td class=title>Sweep the epic&#x27;s stale test call sites so the unit suite runs clean</td><td class="pri P2">P2</td><td class=state>Sweep the epic&#x27;s stale test call sites so the unit suite runs clean.</td></tr>
+</tbody></table></div>
+<h3>Delivered &mdash; 0</h3>
+<div class=tw><p class=none>None.</p></div>
+
+<h2>Cleanups and decisions</h2>
+<h3>Open &mdash; 9</h3>
+<div class=tw><table><thead><tr><th>#</th><th>Ticket</th><th>Pri</th><th>State</th></tr></thead><tbody>
+<tr class="open"><td class=num>.41</td><td class=title>The serialization edge list is duplicated in two files and 14 of 15 ruff entries are inert</td><td class="pri P2">P2</td><td class=state>One rule in two syntaxes; 14 of 15 lint entries are inert because the ban covers imported names while the offending spelling is a method call.</td></tr>
+<tr class="open"><td class=num>.42</td><td class=title>Integration schema comes from the models, so a migration-only property is ungraded unless a test asks for migration_db</td><td class="pri P2">P2</td><td class=state>The integration schema is built from the models, so a migration-only property is ungraded. Autogeneration proposes 194 operations to reconcile the two schemas.</td></tr>
+<tr class="open"><td class=num>.50</td><td class=title>Five mock-adapter simulations sit on a config key the admin UI silently deletes <span class="bug">BUG</span></td><td class="pri P2">P2</td><td class=state>Five mock-adapter simulations sit on a config key the admin UI silently deletes.</td></tr>
+<tr class="open"><td class=num>.53</td><td class=title>The sampling_method scenario family grades a field absent from the entire AdCP 3.1 pin <span class="bug">BUG</span></td><td class="pri P2">P2</td><td class=state>The sampling_method family grades a field absent from the entire AdCP 3.1 pin.</td></tr>
+<tr class="open"><td class=num>.21</td><td class=title>Make products.reporting_capabilities NOT NULL with a backfill so the wire model needs no default</td><td class="pri P3">P3</td><td class=state>Persistence only: make reporting_capabilities NOT NULL with a backfill. Owns the 206 Product validation failures in the unit and integration suites.</td></tr>
+<tr class="open"><td class=num>.22</td><td class=title>Decide Targeting.key_value_pairs: delete it or give AEE managed key-values a seller-side home</td><td class="pri P3">P3</td><td class=state>Decide: delete Targeting.key_value_pairs or give managed key-values a seller-side home.</td></tr>
+<tr class="open"><td class=num>.47</td><td class=title>Give the iso-test tenant and its token one owner, as ci-test now has</td><td class="pri P3">P3</td><td class=state>Give the iso-test tenant and its token one owner, as ci-test now has.</td></tr>
+<tr class="open"><td class=num>.49</td><td class=title>Two list_creatives behaviours are graded by exactly one scenario row each</td><td class="pri P3">P3</td><td class=state>Two list_creatives behaviours are graded by exactly one scenario row each.</td></tr>
+<tr class="open"><td class=num>.43</td><td class=title>Six tenant children and two principal references are NO ACTION, so a tenant with media buys cannot be deleted in SQL</td><td class="pri P4">P4</td><td class=state>Seven foreign keys claim a cascade the database lacks. No bug today: each still has a surviving cascade in the object graph.</td></tr>
+</tbody></table></div>
+<h3>Delivered &mdash; 8</h3>
+<div class=tw><table><thead><tr><th>#</th><th>Ticket</th><th>Pri</th><th>State</th></tr></thead><tbody>
+<tr class="closed"><td class=num>.5</td><td class=title>tox -p race: the narrowed bdd_e2e stage overwrites bdd_scenario_liveness.json while unit reads it <span class="bug">BUG</span></td><td class="pri P2">P2</td><td class=state>The tox -p race that let bdd_e2e overwrite the liveness artifact is closed.</td></tr>
+<tr class="closed"><td class=num>.10</td><td class=title>Remove the mock_dry_run adapter-config column and its admin toggle</td><td class="pri P2">P2</td><td class=state>The dead mock_dry_run column and its admin toggle are gone.</td></tr>
+<tr class="closed"><td class=num>.16</td><td class=title>Delete the legacy flat geo migration; it never shipped and there is nothing to migrate</td><td class="pri P2">P2</td><td class=state>The legacy geo revision is deleted rather than compensated for. One post-close correction: a child migration&#x27;s docstring still named the deleted parent (fixed a9affe06b).</td></tr>
+<tr class="closed"><td class=num>.17</td><td class=title>alembic upgrade head fails on a fresh database at media_buys.payload_hash <span class="bug">BUG</span></td><td class="pri P2">P2</td><td class=state>alembic upgrade head runs clean on a fresh database.</td></tr>
+<tr class="closed"><td class=num>.18</td><td class=title>Hash the tenant-management API key and show it once, like principal tokens</td><td class="pri P2">P2</td><td class=state>The tenant-management API key is hashed and shown once.</td></tr>
+<tr class="closed"><td class=num>.23</td><td class=title>Delete validate_gam_response and its re-export: no caller</td><td class="pri P3">P3</td><td class=state>validate_gam_response and its re-export are deleted; no caller.</td></tr>
+<tr class="closed"><td class=num>.26</td><td class=title>Drop the Tenant.principals backref, or confine relationship reads of Principal rows to admin</td><td class="pri P3">P3</td><td class=state>A principal cannot outlive its tenant because the schema says so.</td></tr>
+<tr class="closed"><td class=num>.27</td><td class=title>Move the four alias-hidden raw selects into repositories</td><td class="pri P3">P3</td><td class=state>The four alias-hidden raw selects are inside repositories.</td></tr>
+</tbody></table></div>
+
+<h2>Order to finish in</h2>
+<ol class=steps>
+<li><strong>.38 then .37</strong> &mdash; restore the coverage signal. .38 first: .37&rsquo;s own
+acceptance asks for per-route counts with denominators, and that is the number .38 computes wrongly.
+Until both land, every &ldquo;BDD already covers this&rdquo; deletion is unverifiable, and the 13
+UC-019 xpasses sit behind .37&rsquo;s route.</li>
+<li><strong>.52</strong> &mdash; decide the two halves separately. Collect the 763 scenarios
+that grade shipped tools; make one scope ruling on the 710 that do not.</li>
+<li><strong>Graduate the 6 xpassing ledger entries</strong> &mdash; a third of
+<code>e2e_rest_known_failures.txt</code>, now gradable against a run of the current tip.</li>
+<li><strong>.36, .40, .44, .48, .51</strong> &mdash; the buyer-facing spec defects. .36 is the
+worst: a buyer is told a product swap succeeded when it was dropped.</li>
+<li><strong>.39, then .21</strong> &mdash; the last two shape changes. .39 changes what every
+response model accepts, so it precedes fixture work; .21 settles 206 failures and is persistence
+only.</li>
+<li><strong>.31 and .46</strong> &mdash; test-suite reconciliation, per cluster. Write .8 and .33
+as scenarios <em>before</em> deleting the tests they replace: both record behaviour that has no
+coverage at any level today.</li>
+<li><strong>The cleanups</strong> &mdash; .41, .42, .43, .47, .49, .50, .53, .22, .34, .35.</li>
+</ol>
+
+<div class="note">
+<p><strong>What &ldquo;done&rdquo; costs, honestly.</strong> The boundary rule is finished. The
+goal as stated &mdash; in-flight merged, box-verified, every BDD scenario correct against AdCP
+3.1.1 &mdash; is two clauses done and one gated on .52. Steps 1 and 3 are days of work on measured
+ground. Step 2&rsquo;s first half is the large one: 763 scenarios across nine use cases have
+never executed, and what they will say when they do is unknown, because nothing has ever asked
+them.</p>
+</div>
+
+<footer>
+Generated from the beads tracker and <code>test-results/innet_150926_0618</code>.
+Counts are from that run; ledger and scenario counts are read from the working tree at
+<code>a9affe06b</code>. Every open ticket&rsquo;s state line is written, not scraped &mdash; read the
+ticket with <code>bd show &lt;id&gt;</code> for its full body, acceptance criteria and notes.
+</footer>
+</div>

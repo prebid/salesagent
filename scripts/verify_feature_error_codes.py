@@ -12,12 +12,14 @@ This script is BOTH:
   * the Phase-1 reconciliation worklist generator (lists what to fix), and
   * the Phase-4 Guard A engine (``--strict``-style: exit 1 on any finding).
 
-Canonical source: ``adcp.ErrorCode``, the installed SDK's own generated enum
-(offline — no ~/projects/adcp clone needed). The SDK generates that enum from
-the very schema file this script used to re-read itself, so reading the enum
-directly means there is no second copy to drift. Only the code LIST; the
-``enumMetadata`` recovery/suggestion content stays on the separately-pinned
-vendored fixture — see docs/adcp-spec-version.md "Pinned schema sources".
+Canonical source: ``src.core.errors.codes.CODE_TABLE`` — the codes a raise site
+can actually EMIT, read offline with no ~/projects/adcp clone needed. CODE_TABLE
+is the same table ``TransportResult.assert_wire_error`` and ``is_pinned_error_code``
+resolve through, so this gate answers the same question as the assertions it backs;
+see ``load_enum`` below for why the published ``adcp.ErrorCode`` set is the wrong
+question. The ``enumMetadata`` recovery/suggestion content stays on the
+separately-pinned vendored fixture — see docs/adcp-spec-version.md "Pinned schema
+sources".
 
 Usage:
     # Worklist for specific use cases
@@ -47,11 +49,25 @@ FEATURES_DIR = PROJECT_ROOT / "tests" / "bdd" / "features"
 CODE_RE = re.compile(r"^[A-Z][A-Z0-9_]*$|^[a-z][a-z0-9_]*_error$")
 
 # `Then the error code should be "X"` — X may be a literal code or an Examples
-# placeholder like "<error_code>".
-SHOULD_RE = re.compile(r'error code should be "([^"]+)"')
+# placeholder like "<error_code>". `is` is accepted alongside `should be`: both
+# forms are live in the corpus, and matching only `should be` let 8 assertions in
+# BR-UC-008 (`And the error code is "APPROVAL_REQUIRED"`) sit in a file this
+# script reported CLEAN.
+SHOULD_RE = re.compile(r'error code (?:should be|is) "([^"]+)"')
 
 # Quoted Examples cell form: `| error "X" with suggestion |`.
-CELL_RE = re.compile(r'\berror "([^"]+)"')
+#
+# NEGATIVE LOOKBEHIND ON `response has`, because `the response has error "X"` is
+# NOT the wire error code — it is a PAYLOAD FIELD with its own enum. BR-UC-032's
+# comply_test_controller declares
+# comply-test-controller-response.json oneOf[7].properties.error.enum =
+# [INVALID_TRANSITION, INVALID_STATE, NOT_FOUND, UNKNOWN_SCENARIO, INVALID_PARAMS,
+#  FORBIDDEN, JCS_NON_FINITE_NUMBER, INTERNAL_ERROR].
+# Grading those against the wire vocabulary is a category error, and it did real
+# damage: this script flagged NOT_FOUND, and "fixing" it to REFERENCE_NOT_FOUND
+# (b47c5dae7) put a value outside the payload enum on the wire — breaking the
+# conformance the scenario exists to check. Two namespaces, one regex.
+CELL_RE = re.compile(r'(?<!response has )\berror "([^"]+)"')
 
 # Prose form `... error code "X"` (and any `or "Y"` continuation on the same
 # line), distinct from the `should be` assertion above. Catches descriptive
@@ -62,22 +78,68 @@ CELL_RE = re.compile(r'\berror "([^"]+)"')
 PROSE_RE = re.compile(r'error code "')
 QUOTED_RE = re.compile(r'"([^"]+)"')
 
+# Bare (UNQUOTED) sentence form: `Then the error should be ASSIGNMENTS_EMPTY`.
+# Structurally identifiable, so it can be graded without guessing whether a bare
+# ALL_CAPS token is an error code at all.
+BARE_SENTENCE_RE = re.compile(r"\berror should be ([A-Z][A-Z0-9_]*)")
+
+# Examples columns whose HEADER declares the cell is an error code, so bare
+# ALL_CAPS values in them are codes by declaration rather than by guesswork.
+#
+# This is the whole reason bare tokens are graded by column NAME and not by
+# shape: the corpus is full of ALL_CAPS values that are NOT wire error codes --
+# `snapshot_unavailable_reason` values (SNAPSHOT_UNSUPPORTED,
+# SNAPSHOT_PERMISSION_DENIED), comply_test_controller's own payload `error` enum
+# (NOT_FOUND, INVALID_TRANSITION, UNKNOWN_SCENARIO), config names like
+# GEMINI_API_KEY. Grading every bare token would flag all of them, which is the
+# same namespace confusion that made CELL_RE flag a payload field and led to a
+# scenario being "fixed" into a conformance break (see the CELL_RE note above).
+ERROR_COLUMN_RE = re.compile(r"^(error|error_code|expected_error|error_type)$", re.IGNORECASE)
+BARE_CODE_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
 # Gherkin block boundaries — placeholder resolution is scoped to the owning
 # Scenario Outline's Examples table (file-wide resolution bleeds across tables).
 BLOCK_RE = re.compile(r"^\s*(Feature|Rule|Background|Scenario|Scenario Outline):")
 
 
 def load_enum() -> set[str]:
+    """Every code a raise site can actually emit -- CODE_TABLE, not the published enum.
+
+    EMITTABILITY, not spec membership. This used to return ``adcp.ErrorCode``, the
+    pinned spec's 92 published members, which made every legitimate PLATFORM code a
+    finding. That is the wrong question twice over:
+
+    * The AdCP error vocabulary is OPEN (core/error.json types ``error.code`` as a
+      wire-typed string; published codes are documentary; senders MAY emit codes
+      outside the set and receivers MUST decode an unknown one by reading
+      ``recovery``). A platform code on the wire is conformant, not a violation.
+    * It disagreed with the assertion helper it is supposed to back.
+      ``TransportResult.assert_wire_error`` and ``is_pinned_error_code`` both resolve
+      through CODE_TABLE, whose own comment states the rule: "EMITTABILITY, not spec
+      membership. The question is CODE_TABLE membership -- can production put this
+      code on the wire at all". A gate that answers a different question than the
+      assertion it guards is drift, and it fired on AGENT_UNREACHABLE, a code
+      salesagent-3dawm.16 deliberately KEPT after checking the pin.
+
+    What the gate still catches -- and what it exists for -- is a scenario naming a
+    code NO raise site can emit, which is what #1753 is about.
+    """
+    # The repo root, so `src.` resolves however this script is invoked (make
+    # quality-ci runs it as `uv run python scripts/...`, which puts scripts/ on
+    # sys.path, not the root).
+    repo_root = str(Path(__file__).resolve().parent.parent)
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
     try:
-        import adcp
+        from src.core.errors.codes import CODE_TABLE
     except ModuleNotFoundError as e:
         # An instrument failure, not "findings exist" -- must exit 2 (this
         # script's diagnostic code) rather than fall through to an uncaught
         # traceback, which exits 1, the SAME code this script uses for
         # "findings exist" and which gates make quality.
-        print(f"ERROR: pinned enum not found: {e}", file=sys.stderr)
+        print(f"ERROR: emittable code table not found: {e}", file=sys.stderr)
         sys.exit(2)
-    return {code.value for code in adcp.ErrorCode}
+    return {str(code) for code in CODE_TABLE}
 
 
 def _iter_blocks(lines: list[str]):
@@ -145,6 +207,19 @@ def expected_codes(feature: Path) -> list[tuple[int, str]]:
             if line.strip().startswith("|"):
                 for match in CELL_RE.finditer(line):
                     found.append((lineno, match.group(1)))
+            for match in BARE_SENTENCE_RE.finditer(line):
+                found.append((lineno, match.group(1)))
+        # Bare values in Examples columns the header declares to be error codes.
+        # Reported against the block start: _block_columns flattens the table, so
+        # the per-cell line number is not preserved. The file+code is enough to
+        # locate it, and keeping the column map as the single table parser beats
+        # a second, drifting one.
+        for name, values in columns.items():
+            if not ERROR_COLUMN_RE.match(name):
+                continue
+            for value in values:
+                if BARE_CODE_RE.match(value):
+                    found.append((start + 1, value))
     return found
 
 

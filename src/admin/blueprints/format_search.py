@@ -8,13 +8,11 @@ import asyncio
 
 from flask import Blueprint, jsonify, request
 from pydantic import BaseModel
-from sqlalchemy import select
 
 from src.admin.utils import require_auth
 from src.core.creative_agent_registry import get_creative_agent_registry
 from src.core.database.database_session import get_db_session
-from src.core.database.models import CreativeAgent as CreativeAgentModel
-from src.core.database.models import Tenant as TenantModel
+from src.core.database.repositories.agent import CreativeAgentRepository
 
 bp = Blueprint("format_search", __name__, url_prefix="/api/formats")
 
@@ -265,8 +263,9 @@ def list_creative_agents():
     try:
         # Get tenant config
         with get_db_session() as session:
-            stmt = select(TenantModel).filter_by(tenant_id=tenant_id)
-            tenant = session.scalars(stmt).first()
+            from src.core.database.repositories.tenant_config import TenantConfigRepository
+
+            tenant = TenantConfigRepository(session, tenant_id).get_tenant()
 
             if not tenant:
                 return jsonify({"error": "Tenant not found"}), 404
@@ -286,8 +285,7 @@ def list_creative_agents():
             )
 
             # Tenant-specific agents from database
-            stmt = select(CreativeAgentModel).filter_by(tenant_id=tenant_id, enabled=True)
-            db_agents = session.scalars(stmt).all()
+            db_agents = CreativeAgentRepository(session, tenant_id).get_enabled()
 
             for db_agent in db_agents:
                 agents.append(

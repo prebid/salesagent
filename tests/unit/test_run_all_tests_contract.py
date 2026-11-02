@@ -13,21 +13,21 @@ Docker stack is needed.
 import os
 import re
 import subprocess
-from pathlib import Path
 
 import pytest
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-_RUNNER = _REPO_ROOT / "run_all_tests.sh"
-_HOST_RUNNER = _REPO_ROOT / "run_all_tests_host.sh"
-_TOX_INI = _REPO_ROOT / "tox.ini"
-_ALL_SUITES = "unit,integration,bdd,admin,e2e,ui,collection"
+from scripts.ci.shard_split import SHARD_COUNTS
+from tests.unit._run_all_tests_helpers import REPO_ROOT, RUNNER
+
+_HOST_RUNNER = REPO_ROOT / "run_all_tests_host.sh"
+_TOX_INI = REPO_ROOT / "tox.ini"
+_ALL_SUITES = "unit,integration,bdd,admin,e2e,ui,quality,storyboard,collection"
 
 
 def _resolve(*args: str) -> str:
     proc = subprocess.run(
-        ["bash", str(_RUNNER), *args],
-        cwd=_REPO_ROOT,
+        ["bash", str(RUNNER), *args],
+        cwd=REPO_ROOT,
         env={**os.environ, "RUN_ALL_TESTS_RESOLVE_ONLY": "1"},
         capture_output=True,
         text=True,
@@ -62,7 +62,7 @@ def _tox_env_list() -> set[str]:
 
 
 def _runner_all_suites() -> set[str]:
-    m = re.search(r'ALL_SUITES="([^"]+)"', _RUNNER.read_text())
+    m = re.search(r'ALL_SUITES="([^"]+)"', RUNNER.read_text())
     assert m, "run_all_tests.sh has no ALL_SUITES"
     return {s.strip() for s in m.group(1).split(",") if s.strip()}
 
@@ -94,3 +94,15 @@ def test_six_suite_list_is_single_sourced():
     assert _runner_all_suites() == canonical, "run_all_tests.sh ALL_SUITES drifted from tox env_list"
     assert _host_runner_collect_suites() == canonical, "run_all_tests_host.sh collect_reports drifted from tox env_list"
     assert {s.strip() for s in _ALL_SUITES.split(",")} == canonical, "_ALL_SUITES constant drifted from tox env_list"
+
+
+def test_tox_declares_one_in_process_env_per_bdd_shard():
+    """The runner asks for SHARD_COUNTS["bdd"] envs and the compose block forwards their paths."""
+    match = re.search(r"^\[testenv:bdd-inprocess-s\{([\d,]+)\}\]", _TOX_INI.read_text(), re.MULTILINE)
+    assert match, "tox.ini no longer declares the bdd-inprocess-s{...} envs"
+    expected = [str(shard) for shard in range(1, SHARD_COUNTS["bdd"] + 1)]
+    assert match.group(1).split(",") == expected
+
+    for carrier in (_TOX_INI, REPO_ROOT / "docker-compose.e2e.yml"):
+        carried = re.findall(r"BDD_SHARD_PATHS_(\d+)", carrier.read_text())
+        assert sorted(set(carried)) == expected, f"{carrier.name} forwards the wrong shard path variables"

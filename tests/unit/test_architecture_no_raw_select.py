@@ -13,14 +13,13 @@ are also exempt.
 
 """
 
-import ast
-from pathlib import Path
-
 import pytest
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist, find_raw_select_violations
-
-ROOT = Path(__file__).resolve().parents[2]
+from tests.unit._architecture_helpers import (
+    assert_violations_match_allowlist,
+    find_raw_select_violations,
+    orm_model_class_defs,
+)
 
 # ── Exempt directories and files ────────────────────────────────────
 # These are ALLOWED to use raw select() — they are the abstraction layer.
@@ -35,31 +34,14 @@ INFRASTRUCTURE_FILES = {
 
 
 def _discover_orm_model_names() -> set[str]:
-    """Parse src/core/database/models.py and return all ORM model class names.
+    """Every ORM model class name declared in src/core/database/models.py.
 
     A class is an ORM model if it inherits from Base (directly or with mixins).
-    The Base class itself is excluded.
+    The Base class itself is excluded. Discovery reads the shared
+    ``models_module_tree()`` parse so this guard, the uniqueness-index-verdict
+    guard and every other models.py reader agree on one inventory.
     """
-    models_file = ROOT / "src" / "core" / "database" / "models.py"
-    tree = ast.parse(models_file.read_text())
-    model_names: set[str] = set()
-
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.ClassDef):
-            continue
-        if node.name == "Base":
-            continue
-        for base in node.bases:
-            base_name = ""
-            if isinstance(base, ast.Name):
-                base_name = base.id
-            elif isinstance(base, ast.Attribute):
-                base_name = base.attr
-            if base_name in ("Base", "JSONValidatorMixin"):
-                model_names.add(node.name)
-                break
-
-    return model_names
+    return {cls.name for cls in orm_model_class_defs()}
 
 
 # Cache the model names at module load (fast — single file parse)
@@ -115,8 +97,8 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/auth.py", "login"),
     ("src/admin/blueprints/auth.py", "logout"),
     ("src/admin/blueprints/auth.py", "tenant_login"),
-    ("src/admin/blueprints/auth.py", "test_auth"),
-    ("src/admin/blueprints/authorized_properties.py", "_construct_agent_url"),
+    # _construct_agent_url removed — the agent URL is stored tenant state, reached
+    # through a repository instead of selected here
     ("src/admin/blueprints/authorized_properties.py", "_save_properties_batch"),
     ("src/admin/blueprints/authorized_properties.py", "create_property"),
     ("src/admin/blueprints/authorized_properties.py", "create_property_tag"),
@@ -127,8 +109,10 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/authorized_properties.py", "list_property_tags"),
     ("src/admin/blueprints/authorized_properties.py", "sync_properties_from_adagents"),
     ("src/admin/blueprints/authorized_properties.py", "upload_authorized_properties"),
-    ("src/admin/blueprints/core.py", "create_tenant"),
-    ("src/admin/blueprints/core.py", "get_tenant_from_hostname"),
+    # create_tenant fixed — its duplicate check goes through TenantLookupRepository
+    # get_tenant_from_hostname fixed — the admin plane's one host -> tenant lookup now goes
+    # through TenantLookupRepository.find_active_by_virtual_host, and public.landing and
+    # auth.login call it instead of each hand-rolling the same select (#2263)
     ("src/admin/blueprints/core.py", "index"),
     ("src/admin/blueprints/core.py", "reactivate_tenant"),
     ("src/admin/blueprints/core.py", "render_super_admin_index"),
@@ -176,15 +160,15 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/policy.py", "review_task"),
     ("src/admin/blueprints/policy.py", "update"),
     ("src/admin/blueprints/principals.py", "create_principal"),
-    ("src/admin/blueprints/principals.py", "delete_principal"),
+    # delete_principal removed — the lookup goes through PrincipalRepository.get()
+    # delete_webhook / register_webhook / toggle_webhook removed — rewired onto
+    # PushNotificationConfigRepository via PushNotificationConfigUoW (salesagent-tayg;
+    # both sides removed these independently). manage_webhooks below deliberately KEEPS
+    # its raw select — it must list INACTIVE rows, which list_active_by_principal cannot.
     ("src/admin/blueprints/principals.py", "edit_principal"),
     ("src/admin/blueprints/principals.py", "get_gam_advertisers"),
-    ("src/admin/blueprints/principals.py", "get_principal"),
-    ("src/admin/blueprints/principals.py", "get_principal_config"),
     ("src/admin/blueprints/principals.py", "list_principals"),
     ("src/admin/blueprints/principals.py", "manage_webhooks"),
-    ("src/admin/blueprints/principals.py", "save_testing_config"),
-    ("src/admin/blueprints/principals.py", "update_mappings"),
     ("src/admin/blueprints/products.py", "_render_add_product_form"),
     ("src/admin/blueprints/products.py", "add_product"),
     ("src/admin/blueprints/products.py", "assign_inventory_to_product"),
@@ -193,7 +177,7 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/products.py", "get_product_inventory"),
     ("src/admin/blueprints/products.py", "list_products"),
     ("src/admin/blueprints/products.py", "unassign_inventory_from_product"),
-    ("src/admin/blueprints/public.py", "landing"),
+    # landing fixed — it asks core.get_tenant_from_hostname instead of selecting tenants
     ("src/admin/blueprints/public.py", "provision_tenant"),
     ("src/admin/blueprints/public.py", "signup_complete"),
     ("src/admin/blueprints/publisher_partners.py", "add_publisher_partner"),
@@ -222,33 +206,38 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/tenants.py", "update"),
     ("src/admin/blueprints/tenants.py", "update_favicon_url"),
     ("src/admin/blueprints/tenants.py", "upload_favicon"),
-    ("src/admin/blueprints/users.py", "add_domain"),
+    # add_domain/remove_domain removed — atomic authorized-list mutation via
+    # TenantConfigRepository/TenantConfigUoW (salesagent-v8dt); ditto the four
+    # domain_access add/remove_authorized_* helpers.
     ("src/admin/blueprints/users.py", "add_user"),
     ("src/admin/blueprints/users.py", "disable_setup_mode"),
     ("src/admin/blueprints/users.py", "enable_setup_mode"),
     ("src/admin/blueprints/users.py", "list_users"),
-    ("src/admin/blueprints/users.py", "remove_domain"),
     ("src/admin/blueprints/users.py", "toggle_user"),
     ("src/admin/blueprints/users.py", "update_role"),
     ("src/admin/blueprints/workflows.py", "list_workflows"),  # select(Tenant) — no tenant repo yet
     ("src/admin/blueprints/workflows.py", "review_workflow_step"),  # select(Context) — context lookup
+    # ── Alias-hidden, now visible (#2128) ──
+    # Both wrote `from ...models import X as ModelX` and then `select(ModelX)`, which the
+    # finder judged by the local name and so never counted. One of these had its row
+    # removed as fixed while all four of its raw selects remained. The finder resolves
+    # aliases now, so they are debt that shows rather than debt that hides.
+    ("src/routes/health.py", "debug_db_state"),
+    ("src/core/tools/media_buy_update.py", "_update_media_buy_impl"),
     # ── Admin services / utils ──
-    ("src/admin/domain_access.py", "add_authorized_domain"),
-    ("src/admin/domain_access.py", "add_authorized_email"),
     ("src/admin/domain_access.py", "ensure_user_in_tenant"),
     ("src/admin/domain_access.py", "find_tenant_by_authorized_domain"),
     ("src/admin/domain_access.py", "find_tenants_by_authorized_email"),
     ("src/admin/domain_access.py", "find_tenants_by_user_record"),
-    ("src/admin/domain_access.py", "remove_authorized_domain"),
-    ("src/admin/domain_access.py", "remove_authorized_email"),
     ("src/admin/services/business_activity_service.py", "get_business_activities"),
     ("src/admin/services/dashboard_service.py", "get_tenant"),
     ("src/admin/services/media_buy_readiness_service.py", "get_readiness_state"),
     ("src/admin/sync_api.py", "get_sync_history"),
     ("src/admin/sync_api.py", "get_sync_stats"),
     ("src/admin/sync_api.py", "get_sync_status"),
-    ("src/admin/auth_helpers.py", "get_api_key_from_config"),  # Shared auth helper — single select for API key lookup
-    ("src/admin/sync_api.py", "initialize_tenant_management_api_key"),
+    # auth_helpers.get_api_key_from_config and sync_api.initialize_tenant_management_api_key
+    # fixed — both went through TenantManagementConfigRepository when the operator API key
+    # stopped being stored in plaintext (salesagent-3cs7o.18)
     ("src/admin/sync_api.py", "list_tenants"),
     ("src/admin/sync_api.py", "sync_tenant_orders"),
     ("src/admin/sync_api.py", "trigger_sync"),
@@ -265,14 +254,12 @@ ALLOWLIST: set[tuple[str, str]] = {
     # ── Core ──
     ("src/core/audit_logger.py", "log_operation"),
     ("src/core/audit_logger.py", "log_security_violation"),
-    ("src/core/auth_utils.py", "_lookup_principal"),
-    ("src/core/auth_utils.py", "get_principal_from_token"),
-    ("src/core/config_loader.py", "ensure_default_tenant_exists"),
-    ("src/core/config_loader.py", "get_default_tenant"),
-    ("src/core/config_loader.py", "get_tenant_by_id"),
-    ("src/core/config_loader.py", "get_tenant_by_subdomain"),
-    ("src/core/config_loader.py", "get_tenant_by_virtual_host"),
-    ("src/core/context_manager.py", "add_message"),
+    # config_loader's tenant lookups fixed — every lookup it still has delegates to
+    # TenantLookupRepository, which owns every cross-tenant query on ``tenants`` (#2263).
+    # ensure_default_tenant_exists still CREATES the row; only its lookup moved.
+    # add_message removed — now sa_update + jsonb_list_append, zero selects.
+    # _send_push_notifications removed — its config lookup routes through
+    # PushNotificationConfigRepository.
     ("src/core/context_manager.py", "get_context"),
     ("src/core/context_manager.py", "get_context_status"),
     ("src/core/context_manager.py", "get_contexts_for_principal"),
@@ -288,8 +275,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/core/database/queries.py", "get_creatives_needing_human_review"),
     ("src/core/database/queries.py", "get_recent_reviews"),
     # adapter_helpers.py removed — now uses AdapterConfigRepository
-    ("src/core/strategy.py", "_load_state"),
-    ("src/core/strategy.py", "_upsert_state"),
     ("src/core/tenant_status.py", "get_tenant_status"),
     ("src/core/tenant_status.py", "is_tenant_ad_server_configured"),
     # ── Core tools ──
@@ -297,8 +282,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/core/tools/media_buy_create.py", "execute_approved_media_buy"),
     ("src/core/tools/media_buy_list.py", "_fetch_creative_approvals"),
     # ── Routes ──
-    ("src/routes/health.py", "debug_db_state"),
-    ("src/routes/health.py", "debug_root_logic"),
     # ── Services ──
     ("src/services/auth_config_service.py", "delete_oidc_config"),
     ("src/services/auth_config_service.py", "disable_oidc"),
@@ -347,8 +330,9 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/services/media_buy_status_scheduler.py", "_are_creatives_approved"),
     ("src/services/order_approval_service.py", "_mark_approval_complete"),
     ("src/services/order_approval_service.py", "_mark_approval_failed"),
-    # _run_approval_thread removed — uses AdapterConfigRepository
-    ("src/services/order_approval_service.py", "_send_approval_webhook"),
+    # _run_approval_thread removed — uses AdapterConfigRepository (salesagent-zj9)
+    # _send_approval_webhook removed — auth lookup moved to _build_approval_webhook_headers
+    # which routes through PushNotificationConfigRepository (C901 ratchet fix)
     ("src/services/order_approval_service.py", "_update_approval_progress"),
     ("src/services/order_approval_service.py", "get_approval_status"),
     ("src/services/order_approval_service.py", "start_order_approval_background"),
@@ -357,8 +341,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/services/policy_service.py", "update_policies"),
     ("src/services/property_discovery_service.py", "_batch_sync_properties"),
     ("src/services/property_discovery_service.py", "_batch_sync_tags"),
-    ("src/services/property_verification_service.py", "_verify_property_async"),
-    ("src/services/property_verification_service.py", "verify_all_properties"),
     ("src/services/setup_checklist_service.py", "_check_critical_tasks"),
     ("src/services/setup_checklist_service.py", "_check_optional_tasks"),
     ("src/services/setup_checklist_service.py", "get_bulk_setup_status"),

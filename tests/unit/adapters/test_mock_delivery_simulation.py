@@ -24,7 +24,11 @@ from src.core.schemas.delivery import (
 
 
 def _principal() -> Principal:
-    return Principal(principal_id="principal_test", name="Test Principal", platform_mappings={})
+    return Principal(
+        principal_id="principal_test",
+        name="Test Principal",
+        platform_mappings={},
+    )
 
 
 def _adapter(tenant_id: str | None = "tenant_test") -> MockAdServer:

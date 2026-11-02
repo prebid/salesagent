@@ -66,10 +66,14 @@
 
         <div class="form-group">
             <label for="billing">Billing Model</label>
+            {# Options come from BILLING_PARTY_VALUES, not a hand-written list: the
+               enum and the ck_accounts_billing constraint both allow 'advertiser',
+               which this form silently could not emit. #}
             <select id="billing" name="billing">
                 <option value="">-- Select --</option>
-                <option value="operator" {{ 'selected' if edit_mode and account.billing == 'operator' }}>Operator</option>
-                <option value="agent" {{ 'selected' if edit_mode and account.billing == 'agent' }}>Agent</option>
+                {% for bp in billing_options %}
+                <option value="{{ bp }}" {{ 'selected' if edit_mode and account.billing == bp }}>{{ bp | title }}</option>
+                {% endfor %}
             </select>
         </div>
 
@@ -90,13 +94,25 @@
                    placeholder="e.g., Standard 2024">
         </div>
 
+        {# sandbox is a natural-key component, so it is set at CREATE only. Editing it
+           would re-key the account and the buyer's next sync_accounts call would
+           provision a duplicate (salesagent-8sfr). Disabled rather than hidden in edit
+           mode so the operator can still SEE which kind of account this is. The
+           repository refuses the field regardless — this is the affordance, not the
+           enforcement. #}
         <div class="form-group">
             <div class="checkbox-group">
                 <input type="checkbox" id="sandbox" name="sandbox"
-                       {{ 'checked' if edit_mode and account.sandbox }}>
+                       {{ 'checked' if edit_mode and account.sandbox }}
+                       {{ 'disabled' if edit_mode else '' }}>
                 <label for="sandbox" style="margin: 0;">Sandbox Account</label>
             </div>
+            {% if edit_mode %}
+            <small>Fixed at creation — it is part of the account's natural key. Create a separate
+                   account to use the other mode.</small>
+            {% else %}
             <small>Sandbox accounts are for testing — no real ad platform resources are created.</small>
+            {% endif %}
         </div>
 
         <div style="display: flex; gap: 1rem; margin-top: 1.5rem;">

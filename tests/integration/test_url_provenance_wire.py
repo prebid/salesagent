@@ -33,6 +33,19 @@ the variant the proof: there is no field to omit, and ``OperatorEndpoint``
 refuses a name containing ``"://"`` at construction, so the label above becomes
 unconstructible rather than hand-corrected.
 
+Where the operator branch's SENTENCE lives moved under ADR-010, and this module was
+re-pointed to follow it rather than to lower its bar. Buyer-facing ``message`` is
+now a read-only function of the code (``CODE_TABLE``), so the authored
+"The configured endpoint for … is not reachable …" text moved to
+``internal_detail`` (server log only, never serialized) and the role reaches an
+operator through ``_processing.py``'s own ``logger.error`` line. That makes the
+two halves of "names a role, never an address" land on two different surfaces,
+so they are graded on two different surfaces: the ROLE on the operator's log,
+the ABSENCE of the address across every buyer-visible error region — the typed
+response AND, wherever bytes crossed a wire, the ``creatives[].errors[]`` the
+buyer actually received. The absence half is wider than the single ``message``
+field it used to scan, not narrower.
+
 Recovery hints below are read off the pinned enum, never off
 ``STANDARD_ERROR_CODES``: ``dist/schemas/3.1.1/enums/error-code.json``
 ``enumMetadata`` gives ``VALIDATION_ERROR`` = {recovery: correctable,
@@ -52,18 +65,24 @@ beads: salesagent-6gpt.1
 from __future__ import annotations
 
 import json
+import logging
 import uuid
+from typing import Any
+from urllib.parse import urlsplit
 
 import pytest
+from adcp.types import ErrorCode
 
+from src.core.errors.codes import CODE_TABLE
 from src.core.security.outbound_http import OutboundRequestBlocked
 from tests.factories import CreativeFactory
 from tests.factories.creative_asset import CreativeAssetFactory
 from tests.factories.format import AGENT_URL, FormatFactory
 from tests.harness.creative_sync import CreativeSyncEnv
 from tests.harness.media_buy_create import RealFormatResolverMediaBuyCreateEnv
-from tests.harness.transport import Transport
+from tests.harness.transport import Transport, TransportResult
 from tests.helpers import assert_envelope_shape
+from tests.helpers.envelope_assertions import assert_no_marker_in_payload_errors
 from tests.integration.media_buy_helpers import _single_creative_request
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -73,17 +92,51 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 # what a buyer receives.
 _WIRE_TRANSPORTS = [Transport.REST, Transport.MCP, Transport.A2A]
 
-_ALL_TRANSPORTS = [Transport.IMPL, Transport.A2A, Transport.REST, Transport.MCP]
+_ALL_TRANSPORTS = [Transport.A2A, Transport.REST, Transport.MCP]
 
 _FORMAT_ID = "display_300x250"
 
-# What the operator arm of ``raise_mapped_outbound_error`` must say once its
+# The ROLE the operator branch of ``raise_mapped_outbound_error`` names once its
 # label is an ``OperatorEndpoint("the creative agent")`` rather than an
-# interpolated attribute read: the mapper's own template, filled with a name
-# that identifies a ROLE, not an address.
-_OPERATOR_REFUSAL_MESSAGE = (
-    "The configured endpoint for the creative agent is not reachable under this deployment's egress policy."
-)
+# interpolated attribute read — and the logger it names it through. Under
+# ADR-010 the sentence itself is no longer buyer-visible, so the operator's log
+# is the surface that carries "which of our configured endpoints failed".
+_OPERATOR_ROLE = "the creative agent"
+_OPERATOR_REFUSAL_LOGGER = "src.core.tools.creatives._processing"
+
+# The endpoint, in both spellings a leak could take, plus the scheme marker that
+# catches a third. ``urlsplit`` rather than a second literal: a hostname
+# transcribed by hand is one edit away from disagreeing with the URL it is
+# supposed to be the host of.
+_AGENT_HOST = urlsplit(AGENT_URL).hostname
+_WITHHELD_FROM_THE_BUYER = (AGENT_URL, _AGENT_HOST, "://")
+
+
+def _buyer_visible_error_regions(result: TransportResult, creative_id: str) -> list[dict[str, Any]]:
+    """Every buyer-visible carrier of this creative's refusal, in the shape the scanner grades.
+
+    Two carriers, not one. The typed response model is the only one ``IMPL`` has;
+    wherever bytes actually crossed a wire there is also the serialized
+    ``creatives[].errors[]`` the buyer really received, and a leak that reached
+    only the second would be invisible to a scan of only the first.
+
+    Each region is handed to :func:`assert_no_marker_in_payload_errors` — the
+    sanctioned success-payload scanner — as ``{"errors": [...]}``, which is
+    literally the region it grades; these errors are simply nested one level
+    deeper than a top-level ``errors[]``. That helper asserts the region is
+    NON-EMPTY before scanning, so a response that carried no errors at all
+    cannot make the absence checks pass by vacuity.
+    """
+    entries = [c for c in result.payload.creatives if c.creative_id == creative_id]
+    assert entries, f"no result for {creative_id!r} in {result.payload.creatives!r}"
+    regions = [{"errors": [error.model_dump(mode="json") for error in entries[0].errors]}]
+
+    wire = result.wire_response
+    if wire is not None:
+        wire_entries = [c for c in (wire.get("creatives") or []) if c.get("creative_id") == creative_id]
+        assert wire_entries, f"no {creative_id!r} entry on the wire the buyer received: {wire!r}"
+        regions.append({"errors": wire_entries[0].get("errors")})
+    return regions
 
 
 class TestACounterpartyRefusalNamesNoFabricatedLocator:
@@ -148,17 +201,30 @@ class TestAnOperatorRefusalNamesNoEndpoint:
 
     ``sync_creatives`` dials the tenant's own registered creative agent to
     validate a creative (``_processing.py``). When the seam refuses that dial the
-    per-item error the buyer reads is the operator arm of
+    per-item error the buyer reads is the operator branch of
     ``raise_mapped_outbound_error`` — CONFIGURATION_ERROR / terminal per the
-    pinned ``enumMetadata`` — and its message is built from the label the call
-    site passed. Today that label is
-    ``f"creative agent {getattr(format_obj, 'agent_url', None)}"``: an attribute
-    read interpolated into buyer-visible text, which is a topology disclosure
-    whenever it resolves and a bare ``None`` when it does not. Neither is a name.
+    pinned ``enumMetadata`` — built from the label the call site passed. That
+    label was ``f"creative agent {getattr(format_obj, 'agent_url', None)}"``: an
+    attribute read interpolated into buyer-visible text, which is a topology
+    disclosure whenever it resolves and a bare ``None`` when it does not. Neither
+    is a name.
+
+    Under ADR-010 the two halves of the obligation land on two surfaces, so both
+    are graded, each where it now lives:
+
+    * the BUYER's ``message`` is a read-only function of the code, so it is
+      asserted THROUGH ``CODE_TABLE`` rather than transcribed — a refusal
+      rendered under some other code's sentence (the counterparty branch's
+      VALIDATION_ERROR, say) fails here;
+    * the ROLE is asserted on the operator's own log line, which is where
+      ``raise_mapped_outbound_error`` names ``provenance.name``;
+    * the ADDRESS is asserted absent from EVERY buyer-visible error region —
+      typed response and real wire bytes alike — which is a wider scan than the
+      single ``message`` field this class used to check.
     """
 
     @pytest.mark.parametrize("transport", _ALL_TRANSPORTS, ids=lambda t: t.value)
-    def test_a_refused_operator_dial_message_names_a_role_not_an_address(self, integration_db, transport):
+    def test_a_refused_operator_dial_message_names_a_role_not_an_address(self, integration_db, transport, caplog):
         creative_id = f"c_operator_label_{uuid.uuid4().hex[:8]}"
 
         with CreativeSyncEnv() as env:
@@ -170,15 +236,16 @@ class TestAnOperatorRefusalNamesNoEndpoint:
 
             from adcp.types import FormatId
 
-            result = env.call_via(
-                transport,
-                creatives=[
-                    CreativeAssetFactory(
-                        creative_id=creative_id,
-                        format_id=FormatId(id=_FORMAT_ID, agent_url=AGENT_URL),
-                    )
-                ],
-            )
+            with caplog.at_level(logging.ERROR):
+                result = env.call_via(
+                    transport,
+                    creatives=[
+                        CreativeAssetFactory(
+                            creative_id=creative_id,
+                            format_id=FormatId(id=_FORMAT_ID, agent_url=AGENT_URL),
+                        )
+                    ],
+                )
 
             payload = result.payload
             assert payload is not None, f"expected a sync response, got {result!r}"
@@ -189,17 +256,45 @@ class TestAnOperatorRefusalNamesNoEndpoint:
             assert error.code == "CONFIGURATION_ERROR", f"errors[0].code={error.code!r}"
             assert error.recovery == "terminal", f"errors[0].recovery={error.recovery!r}"
 
-            assert error.message == _OPERATOR_REFUSAL_MESSAGE, (
-                f"errors[0].message={error.message!r} — an operator refusal names the ROLE whose endpoint was "
-                f"refused, exactly {_OPERATOR_REFUSAL_MESSAGE!r}. Interpolating "
-                "getattr(format_obj, 'agent_url', None) instead yields a topology disclosure when it resolves "
-                "and the literal 'None' when it does not"
+            # Asserted through the table, and only discriminating while the two
+            # codes in play resolve to different text — so that is asserted too
+            # rather than assumed. The counterparty branch's VALIDATION_ERROR is the
+            # misclassification this equality has to be able to catch.
+            assert CODE_TABLE[ErrorCode.CONFIGURATION_ERROR].message != CODE_TABLE[ErrorCode.VALIDATION_ERROR].message
+            assert error.message == CODE_TABLE[ErrorCode.CONFIGURATION_ERROR].message, (
+                f"errors[0].message={error.message!r} — buyer-facing text is a function of the CODE (ADR-010), "
+                f"so an operator refusal renders {CODE_TABLE[ErrorCode.CONFIGURATION_ERROR].message!r}. A "
+                "sentence interpolated at the raise site would put the label back on the wire, which is the "
+                "disclosure this class exists to close"
             )
-            assert "://" not in error.message, (
-                f"a scheme rode into a buyer-visible refusal message: {error.message!r} — security.mdx @3.1.1 "
-                "point 6 forbids disclosing network topology on a refusal"
+
+            # The absence, over every carrier the buyer can read — not just the
+            # one field. security.mdx @3.1.1 point 6 forbids disclosing network
+            # topology on a refusal, and transport-errors.mdx § Security
+            # Considerations opens with "Every field is client-facing".
+            for region in _buyer_visible_error_regions(result, creative_id):
+                for withheld in _WITHHELD_FROM_THE_BUYER:
+                    assert_no_marker_in_payload_errors(region, withheld)
+
+            # The ROLE, on the surface ADR-010 left it on. Without this the class
+            # would grade only what a refusal must NOT say, and a refusal that
+            # named nothing at all anywhere would pass.
+            refusals = [
+                record.getMessage()
+                for record in caplog.records
+                if record.name == _OPERATOR_REFUSAL_LOGGER and record.levelno >= logging.ERROR
+            ]
+            named = [line for line in refusals if _OPERATOR_ROLE in line]
+            assert named, (
+                f"no ERROR line from {_OPERATOR_REFUSAL_LOGGER} named {_OPERATOR_ROLE!r}: {refusals!r} — with the "
+                "authored sentence off the buyer's message, this log is the only place an operator learns WHICH "
+                "of their configured endpoints egress policy refused"
             )
-            assert AGENT_URL not in error.message, f"the operator's registered endpoint leaked into {error.message!r}"
+            for line in named:
+                assert AGENT_URL not in line and _AGENT_HOST not in line, (
+                    f"the label is an address, not a role: {line!r} — an OperatorEndpoint names what this "
+                    "deployment stands behind, and a name that is a URL is exactly what its constructor refuses"
+                )
 
 
 class TestOperatorEndpointRefusesAnAddressAsItsName:

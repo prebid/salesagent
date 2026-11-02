@@ -1,7 +1,7 @@
 """DeliveryPollEnv — integration test environment for _get_media_buy_delivery_impl.
 
 Patches: get_adapter ONLY (external ad server).
-Real: MediaBuyUoW, get_principal_object, _get_pricing_options (all hit real DB).
+Real: MediaBuyUoW, _get_pricing_options (all hit real DB).
 
 Requires: integration_db fixture (creates test PostgreSQL DB).
 
@@ -37,7 +37,7 @@ class DeliveryPollEnv(DeliveryPollMixin, IntegrationEnv):
 
     Only mocks the adapter (external ad server). Everything else is real:
     - Real MediaBuyUoW -> real DB queries
-    - Real get_principal_object -> real DB queries
+    - The principal comes off the identity; nothing looks one up
     - Real _get_pricing_options -> real DB queries
 
     Fluent API (from DeliveryPollMixin):
@@ -93,6 +93,4 @@ class DeliveryPollEnv(DeliveryPollMixin, IntegrationEnv):
         )
         return {k: kwargs[k] for k in _BODY_FIELDS if k in kwargs and kwargs[k] is not None}
 
-    def parse_rest_response(self, data: dict[str, Any]) -> GetMediaBuyDeliveryResponse:
-        """Parse REST JSON into GetMediaBuyDeliveryResponse."""
-        return GetMediaBuyDeliveryResponse(**data)
+    # parse_rest_response: the base's, which revives RESPONSE_MODEL.

@@ -34,12 +34,6 @@ class TestAccountSchemaInheritance:
 class TestListAccountsResponse:
     """ListAccountsResponse serialization."""
 
-    def test_str_returns_human_readable_count(self):
-        from src.core.schemas.account import ListAccountsResponse
-
-        resp = ListAccountsResponse(accounts=[], pagination={"has_more": False})
-        assert "0" in str(resp)
-
     def test_accounts_field_exists(self):
         from src.core.schemas.account import ListAccountsResponse
 

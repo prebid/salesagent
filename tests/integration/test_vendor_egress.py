@@ -1,6 +1,6 @@
 """Vendor and operator egress, driven at a REAL local origin — the retry-drift gate.
 
-salesagent-gstl migrates the ten remaining operator-configured call sites onto
+#1589 migrates the ten remaining operator-configured call sites onto
 ``src/core/security/outbound_http.py``. The seam decides address policy, TLS
 policy, redirect refusal, the response-size cap, the attempt count and the
 backoff schedule, and it grades all six exactly once, in
@@ -60,18 +60,20 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 import requests
 
-from src.core.exceptions import AdCPError
+from src.core.exceptions import AdCPSalesAgentError
 from src.core.schemas import Principal, ReportingPeriod
 from src.core.security.egress.attempts import OutboundDeliveryFailed
 from src.core.security.outbound_http import OutboundError
+from tests.factories import TenantFactory, UserFactory
 from tests.harness._base import IntegrationEnv
+from tests.helpers.egress_backoff import fast_backoff
 from tests.helpers.local_http_origin import LocalOrigin, OriginResponse
 
 # Reused rather than restated: which escape hatches a case opens is one decision
 # with one home, and the backoff knob that keeps a retry case fast is the seam
 # suite's own helper.
+from tests.integration.gam_oauth_helpers import callback, log_in, start_flow
 from tests.integration.property_list_helpers import allow_local_origin
-from tests.integration.test_outbound_http import fast_backoff
 
 pytestmark = [pytest.mark.integration]
 
@@ -79,11 +81,11 @@ _TODAY = datetime(2026, 7, 29, tzinfo=UTC)
 
 # The exception TYPE a vendor call raises is exactly what the migration changes:
 # ``requests.exceptions.RequestException`` today, an ``OutboundError`` or a mapped
-# ``AdCPError`` once the site routes through the seam. This file grades attempt
+# ``AdCPSalesAgentError`` once the site routes through the seam. This file grades attempt
 # counts, so it names all three and leaves the taxonomy to be graded where it
 # belongs — ``tests/integration/test_outbound_http.py`` for the seam's own
 # classes, the adapter's error tests for the mapping.
-_VENDOR_FAILURE = (requests.exceptions.RequestException, OutboundError, AdCPError)
+_VENDOR_FAILURE = (requests.exceptions.RequestException, OutboundError, AdCPSalesAgentError)
 
 
 class _BareEnv(IntegrationEnv):
@@ -126,7 +128,6 @@ def _kevel(origin: LocalOrigin):
     adapter = Kevel(
         config={"network_id": "456", "api_key": "test-key"},
         principal=_principal("kevel"),
-        dry_run=False,
         tenant_id="test_tenant",
     )
     real_headers = require_vendor(adapter._vendor, vendor="Kevel").headers
@@ -138,14 +139,14 @@ def _dry_run_kevel():
     """A dry-run Kevel adapter — constructed with no credentials at all."""
     from src.adapters.kevel import Kevel
 
-    return Kevel(config={}, principal=_principal("kevel"), dry_run=True, tenant_id="test_tenant")
+    return Kevel(config={}, principal=_principal("kevel"), tenant_id="test_tenant")
 
 
 def _dry_run_triton():
     """A dry-run Triton adapter — constructed with no credentials at all."""
     from src.adapters.triton_digital import TritonDigital
 
-    return TritonDigital(config={}, principal=_principal("triton"), dry_run=True, tenant_id="test_tenant")
+    return TritonDigital(config={}, principal=_principal("triton"), tenant_id="test_tenant")
 
 
 def _triton(origin: LocalOrigin):
@@ -154,7 +155,6 @@ def _triton(origin: LocalOrigin):
     return TritonDigital(
         config={"base_url": origin.base_url, "auth_token": "test-token"},
         principal=_principal("triton"),
-        dry_run=False,
         tenant_id="test_tenant",
     )
 
@@ -207,6 +207,7 @@ def _xandr_authenticated(origin: LocalOrigin):
     adapter.token_expiry = datetime.now(UTC) + timedelta(hours=1)
     adapter._vendor = VendorHttpClient(
         base_url=origin.base_url,
+        # ast-grep-ignore: test-credential-header-single-producer - outbound vendor credential (not Bearer; the vendor's own scheme)
         headers={"Authorization": "seeded-token", "Content-Type": "application/json"},
     )
     return adapter
@@ -230,7 +231,7 @@ def _mock_ad_server(origin: LocalOrigin):
             }
         },
     )
-    return MockAdServer(config={}, principal=principal, dry_run=False, tenant_id="test_tenant")
+    return MockAdServer(config={}, principal=principal, tenant_id="test_tenant")
 
 
 def _broadstreet(origin: LocalOrigin):
@@ -360,7 +361,7 @@ def test_kevel_update_does_not_retry_a_failing_origin(local_origin_tls, monkeypa
     would grade an implementation detail the migration deliberately changes at
     every site.
     """
-    from src.core.exceptions import AdCPError
+    from src.core.exceptions import AdCPSalesAgentError
 
     allow_local_origin(monkeypatch)
     fast_backoff(monkeypatch)
@@ -368,7 +369,7 @@ def test_kevel_update_does_not_retry_a_failing_origin(local_origin_tls, monkeypa
 
     adapter = _kevel(local_origin_tls)
 
-    with pytest.raises(AdCPError) as exc_info:
+    with pytest.raises(AdCPSalesAgentError) as exc_info:
         adapter.update_media_buy(
             media_buy_id="kevel_999",
             action="pause_media_buy",
@@ -385,7 +386,7 @@ def test_kevel_update_does_not_retry_a_failing_origin(local_origin_tls, monkeypa
 def test_triton_status_check_does_not_retry_a_failing_origin(local_origin_tls, monkeypatch):
     """A failed Triton status check costs one hit and degrades to ``unknown``.
 
-    The degradation is asserted alongside the count because it is the arm the
+    The degradation is asserted alongside the count because it is the branch the
     migration has to preserve: ``except requests.exceptions.RequestException``
     narrows to ``except OutboundError``, and a miss there turns a soft
     "unknown" into a raised error on a read path.
@@ -402,19 +403,38 @@ def test_triton_status_check_does_not_retry_a_failing_origin(local_origin_tls, m
 
 
 def test_broadstreet_request_does_not_retry_a_failing_origin(local_origin_tls, monkeypatch):
-    """A 500 from Broadstreet costs one hit and raises ``BroadstreetAPIError``."""
-    from src.adapters.broadstreet.client import BroadstreetAPIError
+    """A 500 from Broadstreet costs one hit and surfaces as a transient service failure.
 
+    Asserts the WIRE contract (SERVICE_UNAVAILABLE / transient, carrying the
+    origin's status) rather than a per-adapter exception class, for the same
+    reason the Kevel case above does. ``BroadstreetAPIError`` was a bare
+    ``Exception`` outside the AdCP taxonomy that restated, per adapter, the
+    status classification ``src/core/helpers/outbound_error_mapping.py`` already
+    owns; the migration deleted it, and ``_raise_broadstreet_error`` keeps only
+    the three rows that are genuinely Broadstreet's own (403/404/other-4xx).
+    A 5xx is not one of them: it falls through to
+    ``raise_mapped_outbound_error``, which re-raises the seam's
+    ``OutboundDeliveryFailed`` unchanged — it already IS an
+    ``AdCPServiceUnavailableError``, and it carries the ``attempts``/
+    ``last_status`` a freshly built one would drop.
+
+    ``details.last_status`` is where the 500 the old case pinned as
+    ``status_code`` now lives: the buyer-visible key, sourced from the status the
+    origin really returned, not from a class name.
+    """
     allow_local_origin(monkeypatch)
     fast_backoff(monkeypatch)
     local_origin_tls.respond_with(500, body=b'{"error": "boom"}')
 
     client = _broadstreet(local_origin_tls)
 
-    with pytest.raises(BroadstreetAPIError) as exc_info:
+    with pytest.raises(AdCPSalesAgentError) as exc_info:
         client.get("/networks")
 
-    assert exc_info.value.status_code == 500
+    assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
+    assert exc_info.value.recovery == "transient"
+    assert isinstance(exc_info.value, OutboundDeliveryFailed)
+    assert exc_info.value.details.last_status == 500
     assert local_origin_tls.hits == 1
 
 
@@ -455,7 +475,7 @@ def test_gam_report_download_does_not_retry_a_failing_origin(local_origin_tls, m
     # to assert on was that relabelled string -- and the download branch's
     # migration onto `raise_mapped_outbound_error` bought nothing observable,
     # because this outer handler swallowed the classification on the way out.
-    # An `except AdCPError: raise` arm ahead of the catch-all is what changed, and
+    # An `except AdCPSalesAgentError: raise` branch ahead of the catch-all is what changed, and
     # this is where it shows: the seam's own class, its attempt count, and its
     # fixed message survive to the caller.
     with pytest.raises(OutboundDeliveryFailed) as raised:
@@ -479,27 +499,19 @@ def test_base_workflow_slack_notification_reaches_the_origin_once(local_origin_t
     either.
     """
     from src.adapters.base_workflow import BaseWorkflowManager
-    from src.core.config_loader import current_tenant
+    from tests.factories import TenantFactory
 
     allow_local_origin(monkeypatch)
     fast_backoff(monkeypatch)
     local_origin_tls.respond_with(200, body=b"ok")
 
-    # The tenant context is a ContextVar, so it is reset explicitly rather than
-    # left behind for whichever test this worker runs next.
-    token = current_tenant.set(
-        {
-            "tenant_id": "test_tenant",
-            "name": "Test Tenant",
-            "slack_webhook_url": local_origin_tls.base_url,
-            "slack": {"webhook_url": local_origin_tls.base_url},
-        }
-    )
-    try:
-        manager = BaseWorkflowManager(tenant_id="test_tenant")
-        manager._send_workflow_notification("step_1", {"platform": "mock", "automation_mode": "manual"})
-    finally:
-        current_tenant.reset(token)
+    # The notifier loads its tenant BY ID (``TenantContext.load``), so the webhook is
+    # configured on the ROW -- the ambient tenant ContextVar this used to set is deleted.
+    with _BareEnv():
+        TenantFactory(tenant_id="workflow_slack_tenant", slack_webhook_url=local_origin_tls.base_url)
+
+    manager = BaseWorkflowManager(tenant_id="workflow_slack_tenant")
+    manager._send_workflow_notification("step_1", {"platform": "mock", "automation_mode": "manual"})
 
     assert local_origin_tls.hits == 1
 
@@ -575,10 +587,12 @@ def test_google_token_exchange_does_not_retry_a_retryable_failure(local_origin_t
     assert local_origin_tls.hits == 1
 
 
-def test_gam_callback_flashes_googles_rejection_on_a_400(local_origin_tls, monkeypatch, admin_client):
+def test_gam_callback_flashes_googles_rejection_on_a_400(
+    local_origin_tls, monkeypatch, admin_client, gam_oauth_configured, bound_factory_session
+):
     """``GET /auth/gam/callback`` turns Google's 400 into the operator's message.
 
-    This is the arm of the extraction that must NOT move: the service raises,
+    This is the branch of the extraction that must NOT move: the service raises,
     and the status-keyed wording stays in the blueprint because it is UI copy,
     not vendor logic. The message is asserted whole rather than by substring —
     it names the three causes a 400 collapses (expired code, redirect-URI
@@ -587,26 +601,23 @@ def test_gam_callback_flashes_googles_rejection_on_a_400(local_origin_tls, monke
     the only diagnosis they get.
 
     Driven at a real origin rather than by patching the exchange out: a mocked
-    exception proves the ``except`` arm can be entered, not that a real 400
+    exception proves the ``except`` branch can be entered, not that a real 400
     from a real socket arrives there as an ``OutboundError`` whose
     ``http_status`` is 400. Only the second claim survives the extraction.
-    """
-    from src.core import config
-    from src.core.config import GAMOAuthConfig
 
+    The callback is reached the way a member reaches it — after authorize, with
+    the state that step issued — because since #2205 it denies anything else
+    before the exchange. ``gam_oauth_configured`` sets the seller's Google
+    credentials on the live settings object the view reads.
+    """
     allow_local_origin(monkeypatch)
     fast_backoff(monkeypatch)
     _point_google_token_url_at(local_origin_tls, monkeypatch)
     local_origin_tls.respond_with(400, body=b'{"error": "invalid_grant"}')
-    # Real credentials object, not a mock: the view reads ``client_id`` and
-    # ``client_secret`` off it and puts both on the wire.
-    monkeypatch.setattr(
-        config,
-        "get_gam_oauth_config",
-        lambda: GAMOAuthConfig(client_id=_GOOGLE_CLIENT_ID, client_secret=_GOOGLE_CLIENT_SECRET),
-    )
+    tenant = TenantFactory(tenant_id="gam_oauth_tenant")
+    log_in(admin_client, UserFactory(tenant=tenant))
 
-    response = admin_client.get(f"/auth/gam/callback?code={_GOOGLE_AUTH_CODE}&state=gam_oauth_tenant")
+    response = callback(admin_client, start_flow(admin_client, tenant.tenant_id))
 
     assert response.status_code == 302
     assert urlsplit(response.headers["Location"]).path == "/tenant/gam_oauth_tenant/settings"
@@ -1017,7 +1028,14 @@ def test_google_token_url_is_injectable():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("vendor", ["Kevel", "Triton Digital", "Xandr"])
+#: Every vendor that holds a ``VendorHttpClient | None``. Named once so the
+#: parametrization and the "no other vendor is blamed" check below cannot drift:
+#: the second read is what turns "the name appears" into "the name was
+#: interpolated from THIS call's argument".
+_VENDORS_WITH_A_CLIENT = ["Kevel", "Triton Digital", "Xandr"]
+
+
+@pytest.mark.parametrize("vendor", _VENDORS_WITH_A_CLIENT)
 def test_require_vendor_refuses_an_unconfigured_client(vendor):
     """``require_vendor(None, ...)`` raises a typed, vendor-named configuration error.
 
@@ -1025,14 +1043,66 @@ def test_require_vendor_refuses_an_unconfigured_client(vendor):
     argument, not baked into one adapter's copy of the guard: exactly one
     ``require_vendor`` exists in ``src/`` (DRY tier-1), so it must be able to
     speak for every vendor that holds a ``VendorHttpClient``.
+
+    That obligation is graded by CHANNEL, not by sentence — the same reading
+    ``tests/unit/adapters/test_vendor_http.py`` applies to the sibling clash
+    refusal. Under ADR-010 the buyer-facing ``message`` is a function of the
+    code, so an assertion on ``str(exc)`` would grade ``CODE_TABLE`` instead of
+    this guard. The vendor name is the STRUCTURED fact and lives in
+    ``details.provider``; the authored sentence is a server-side diagnostic and
+    lives in the non-wire ``internal_detail``; and per AdCP 3.1.1
+    ``transport-errors.mdx`` § Security Considerations the buyer-facing text
+    must name no third-party service at all.
     """
+    from adcp.types import ErrorCode
+
     from src.adapters.vendor_http import require_vendor
+    from src.core.errors.codes import CODE_TABLE, Recovery
+    from src.core.errors.details import ConfigurationDetails
     from src.core.exceptions import AdCPConfigurationError
 
     with pytest.raises(AdCPConfigurationError) as exc_info:
         require_vendor(None, vendor=vendor)
 
-    assert str(exc_info.value) == f"{vendor} credentials are not configured; cannot dial the vendor API."
+    exc = exc_info.value
+
+    # Classification. Terminal and 500 are the point of choosing this class: the
+    # deployment's own wiring is wrong, so the buyer has no lever and MUST NOT retry.
+    assert exc.error_code == ErrorCode.CONFIGURATION_ERROR
+    assert exc.recovery == Recovery.TERMINAL
+    assert exc.status_code == 500
+
+    # The structured fact, and the whole reason this case is parametrized: the
+    # name reaching ``provider`` is the argument this call passed.
+    assert isinstance(exc.details, ConfigurationDetails)
+    assert exc.details.provider == vendor
+
+    # RFC 9421 MERGE NOTE. The incoming branch graded the same obligation — "the vendor
+    # that cannot be dialled is named from the ARGUMENT, not enumerated in one adapter's
+    # copy of the guard" — through ``exc.internal_detail``, asserting it was a str
+    # CONTAINING the name. That API is gone: on this branch ``internal_detail`` is typed
+    # ``BaseException | None`` (src/core/exceptions.py:247), the non-wire CAUSE rather
+    # than an authored sentence, and ``require_vendor`` has no cause to carry. The
+    # obligation is not dropped, it is graded one line up and more strictly: the
+    # ``details.provider == vendor`` equality above admits no other vendor's name at all,
+    # where "other not in text" only ruled out the ones the test remembered to list.
+    for other in _VENDORS_WITH_A_CLIENT:
+        if other != vendor:
+            assert exc.details.provider != other, (
+                f"{other!r} must not be blamed for {vendor!r}'s missing credentials — the name has to be "
+                "interpolated from the argument, not enumerated in one adapter's copy of the guard"
+            )
+
+    # Buyer-facing text is a function of the code (ADR-010) — not authored here.
+    assert exc.message == CODE_TABLE[ErrorCode.CONFIGURATION_ERROR].message
+    assert str(exc) == exc.message
+
+    # AdCP 3.1.1 transport-errors.mdx § Security Considerations: an internal
+    # service name must not reach buyer-facing TEXT. ``details.provider`` is the
+    # structured slot a named provider legitimately occupies, so the prohibition
+    # is asserted where it applies — the sentence, not the field.
+    assert vendor not in exc.message
+    assert vendor not in exc.suggestion
 
 
 def test_vendor_client_refuses_post_construction_mutation():

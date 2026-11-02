@@ -9,7 +9,6 @@ Provides tenant management API endpoints for:
 
 import json
 import logging
-import secrets
 from datetime import UTC, datetime
 from typing import Any
 
@@ -17,9 +16,8 @@ from flask import Blueprint, Response, jsonify, request
 from sqlalchemy import func, select
 
 from src.adapters.google_ad_manager import GoogleAdManager
-from src.admin.auth_helpers import require_api_key_auth
-from src.core.database.database_session import get_db_session
-from src.core.database.models import AdapterConfig, SyncJob, Tenant, TenantManagementConfig
+from src.admin.auth_helpers import api_key_prefix, mint_stored_api_key, require_api_key_auth
+from src.core.database.models import AdapterConfig, SyncJob, Tenant
 from src.services.gam_inventory_service import db_session as gam_db_session
 
 logger = logging.getLogger(__name__)
@@ -30,10 +28,13 @@ sync_api = Blueprint("sync_api", __name__, url_prefix="/api/v1/sync")
 # Get database session
 db_session = gam_db_session
 
+#: The ``superadmin_config`` row holding this API key's digest. Named once: the
+#: decorator below and the mint/prefix helpers at the bottom must agree on it.
+SYNC_API_CONFIG_KEY = "api_key"
 
 require_sync_api_key = require_api_key_auth(
-    env_var="SYNC_API_KEY",
-    config_key="api_key",
+    setting="sync_api_key",
+    config_key=SYNC_API_CONFIG_KEY,
     header="X-API-Key",
 )
 
@@ -144,7 +145,6 @@ def trigger_sync(tenant_id: str) -> tuple[Response, int]:
                 network_code=adapter_config.gam_network_code or "",
                 advertiser_id=None,  # Not needed for inventory sync
                 trafficker_id=adapter_config.gam_trafficker_id or None,
-                dry_run=False,
                 audit_logger=None,
                 tenant_id=tenant_id,
             )
@@ -670,29 +670,17 @@ def get_tenant_line_items(tenant_id: str) -> tuple[Response, int]:
         db_session.remove()
 
 
-def initialize_tenant_management_api_key() -> str:
-    """Initialize tenant management API key if not exists. Always returns a valid API key."""
-    with get_db_session() as session:
-        # Check if API key exists
-        stmt = select(TenantManagementConfig).filter_by(config_key="api_key")
-        config = session.scalars(stmt).first()
+def mint_tenant_management_api_key() -> str:
+    """Mint the sync API key and return it ONCE. Rotates any key already in place.
 
-        if config and config.config_value:
-            return config.config_value
+    The database keeps ``sha256`` of the key and a display prefix, never the key, so
+    there is no "return the existing one" branch to have: a key already issued cannot
+    be recovered. ``tenant_management_api_key_prefix()`` is how a caller checks whether
+    one exists before rotating it out from under whoever holds it.
+    """
+    return mint_stored_api_key(SYNC_API_CONFIG_KEY, "Tenant management API key for programmatic access")
 
-        # Generate new API key
-        api_key = f"sk_{secrets.token_urlsafe(32)}"
 
-        # Store in database
-        new_config = TenantManagementConfig(
-            config_key="api_key",
-            config_value=api_key,
-            description="Tenant management API key for programmatic access",
-            updated_by="system",
-            updated_at=datetime.now(UTC),
-        )
-        session.add(new_config)
-        session.commit()
-
-        logger.info("Generated new sync API key")
-        return api_key
+def tenant_management_api_key_prefix() -> str | None:
+    """The display head of the sync API key already in place, or None when there is none."""
+    return api_key_prefix(SYNC_API_CONFIG_KEY)

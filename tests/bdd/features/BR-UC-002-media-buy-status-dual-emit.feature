@@ -8,7 +8,8 @@
 # the deprecated "both identical" model, #4908). On the flattened wire envelope,
 # TaskResultEnvelope._serialize sets top-level `status` to the protocol TaskStatus (e.g. completed/
 # submitted) — a DIFFERENT namespace from the domain status; they are NOT identical. The domain
-# status survives under `media_buy_status`. See docs/adcp-spec-version.md "Behavior target vs SDK pin".
+# status survives under `media_buy_status`. See docs/adcp-spec-version.md
+# "`status` vs `media_buy_status` on media-buy responses".
 
 @schema-v3.1 @media-buy-status-dual-emit
 Feature: AdCP 3.1 media_buy_status on create/update responses
@@ -20,7 +21,7 @@ Feature: AdCP 3.1 media_buy_status on create/update responses
   Background:
     Given a Seller Agent is operational and accepting requests
     And a tenant exists with completed setup checklist
-    And the Buyer is authenticated with a valid principal_id
+    And the Buyer is authenticated
 
   # @T-UC-002-ext-dual-emit routes through MediaBuyCreateEnv (dispatch_mode=create),
   # exercising the real _create_media_buy_impl flow on every transport (conftest _harness_env).
@@ -40,7 +41,8 @@ Feature: AdCP 3.1 media_buy_status on create/update responses
     And the account "acc-001" exists and is active
     And the ad server adapter is available
     When the Buyer Agent sends the create_media_buy request
-    Then the response should succeed
+    Then the response is compliant with the create_media_buy success spec
+    And the response should succeed
     And the response carries the domain media_buy_status and the protocol status separately
     # Pin the exact DOMAIN value (not mere membership): a protocol value in the
     # MediaBuyStatus∩TaskStatus overlap {completed,canceled,rejected} leaked into
@@ -69,7 +71,8 @@ Feature: AdCP 3.1 media_buy_status on create/update responses
     And the package "pkg_001" exists in the media buy
     And the updated daily spend does not exceed max_daily_package_spend
     When the Buyer Agent sends the update_media_buy request
-    Then the response should succeed
+    Then the response is compliant with the update_media_buy success spec
+    And the response should succeed
     And the response carries the domain media_buy_status and the protocol status separately
     # Pin the exact DOMAIN value (not mere membership) — closes the overlap hole where
     # a protocol value {completed,canceled,rejected} leaked into media_buy_status would
@@ -103,7 +106,8 @@ Feature: AdCP 3.1 media_buy_status on create/update responses
     And the package "pkg_001" exists in the media buy
     And the updated daily spend does not exceed max_daily_package_spend
     When the Buyer Agent sends the update_media_buy request
-    Then the response should succeed
+    Then the response is compliant with the update_media_buy success spec
+    And the response should succeed
     And the wire media_buy_status should be "pending_start"
     And the wire valid_actions should include "update_budget"
     And the wire valid_actions should include "cancel"
@@ -131,7 +135,8 @@ Feature: AdCP 3.1 media_buy_status on create/update responses
     And the package "pkg_001" exists in the media buy
     And the updated daily spend does not exceed max_daily_package_spend
     When the Buyer Agent sends the update_media_buy request
-    Then the response should succeed
+    Then the response is compliant with the update_media_buy success spec
+    And the response should succeed
     # Flight ended (end_time 2020-02) → resolve_canonical_status refines 'active' → 'completed'.
     # Before the 109m fix the update dual-emit emitted the un-refined persisted 'active'.
     # Mutation: revert the fix → this asserts 'active' again, red.

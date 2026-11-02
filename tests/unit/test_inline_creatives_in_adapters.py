@@ -14,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from src.adapters.base import AdapterCreateRequest
 from src.core.schemas import (
     CreateMediaBuyRequest,
     Creative,
@@ -47,6 +48,7 @@ class TestInlineCreativesInAdapters:
         # Per AdCP v2.2.0: budget removed from top-level (now at package level)
         # adcp 3.6.0: brand_manifest → brand (BrandReference with domain field)
         return CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "example.com"},
             idempotency_key="unit-test-key-inline-creatives-0001",
             start_time=datetime.now(UTC),
@@ -60,7 +62,6 @@ class TestInlineCreativesInAdapters:
                     creatives=[
                         Creative(
                             creative_id="creative_1",
-                            variants=[],
                             name="Test Creative 1",
                             format_id=FormatId(agent_url="https://creative.test", id="display_300x250"),
                             assets=build_assets(
@@ -126,10 +127,13 @@ class TestInlineCreativesInAdapters:
         from src.adapters.mock_ad_server import MockAdServer
         from src.core.schemas import Principal
 
-        # Mock get_current_tenant to avoid database access in unit test
-        mocker.patch("src.core.config_loader.get_current_tenant", return_value={"tenant_id": "tenant_123"})
-
-        principal = Principal(principal_id="principal_123", name="Test Principal", platform_mappings={})
+        # No tenant patch: the adapter is given its tenant_id, and the ambient tenant
+        # ContextVar an adapter used to read is deleted.
+        principal = Principal(
+            principal_id="principal_123",
+            name="Test Principal",
+            platform_mappings={},
+        )
         adapter = MockAdServer(
             config={},
             principal=principal,
@@ -139,8 +143,11 @@ class TestInlineCreativesInAdapters:
         start_time = datetime.now(UTC)
         end_time = start_time + timedelta(days=30)
 
+        # The CARRIER, built as the tool builds it. The adapter seam takes
+        # AdapterCreateRequest (one summed total_budget), not the buyer's request, so
+        # handing over the buyer DTO reached production's ``request.total_budget`` as None.
         response = adapter.create_media_buy(
-            request=mock_request,
+            request=AdapterCreateRequest.from_buyer_request(mock_request),
             packages=[mock_package_with_creatives],
             start_time=start_time,
             end_time=end_time,

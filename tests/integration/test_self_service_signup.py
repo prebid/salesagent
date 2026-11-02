@@ -10,20 +10,104 @@ Tests the complete signup journey:
 6. Success page and dashboard redirect
 """
 
+import re
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
 from sqlalchemy import select
 
+from src.core.credentials import hash_token
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AdapterConfig, CurrencyLimit, Tenant, User
+from src.core.database.repositories.principal import PrincipalRepository
+from tests.harness._base import IntegrationEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
+
+_UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+_TOKEN_RE = re.compile(r"tok_[A-Za-z0-9_-]{20,}")
+
+
+def _provisioned_tenant_id(response) -> str:
+    """The tenant id read off the completion page the provision POST renders itself.
+
+    The POST renders ``signup_complete.html`` in its own response instead of flashing
+    and redirecting, because the one-time credential reveal must not travel in the
+    signed session cookie (``src/admin/blueprints/public.py``). So the tenant id comes
+    out of the rendered body, not a ``Location`` header.
+    """
+    assert response.status_code == 200, (
+        f"expected the completion page rendered in the POST response, got {response.status_code}"
+    )
+    ids = set(_UUID_RE.findall(response.data.decode()))
+    assert len(ids) == 1, f"expected exactly one tenant id on the completion page, found {sorted(ids)}"
+    return ids.pop()
 
 
 class TestSelfServiceSignupFlow:
     """Test self-service tenant signup flow."""
+
+    @pytest.fixture(autouse=True)
+    def _multi_tenant_deployment(self, monkeypatch, client):
+        """Self-serve signup only exists on a deployment that can host a self-serve tenant.
+
+        A signing-up publisher cannot know where the deployment answers, so signup is the one
+        creation path that DERIVES its tenant's ``virtual_host`` — and it may only do so where
+        ``config/nginx/nginx-multi-tenant.conf`` serves ``*.${SALES_AGENT_DOMAIN}`` and lets the
+        app pick the tenant from the ``Host``. Those two settings together are what make the
+        derived name a host something actually serves; without them the route refuses, because
+        deriving anyway publishes an unreachable agent URL (#1845).
+
+        So these cases have to declare the deployment they are testing. Two traps:
+
+        * Set on the settings OBJECT, not the environment. Settings are built once and an env
+          write lands only before the first read, so ``monkeypatch.setenv`` is silently ignored.
+        * Takes ``client`` so it runs AFTER it. ``create_app`` calls ``load_settings()``
+          (``src/admin/app.py``), which REBUILDS the global settings — patching first and
+          building the client second throws the patch away, and the route then refuses with
+          the fields apparently set.
+        """
+        from src.core.config import get_settings
+
+        runtime = get_settings().runtime
+        monkeypatch.setattr(runtime, "adcp_multi_tenant", True)
+        monkeypatch.setattr(runtime, "sales_agent_domain", "sales-agent.adcp.test")
+
+    def test_signup_is_refused_when_the_deployment_hosts_no_wildcard(self, integration_db, client, monkeypatch):
+        """Without the wildcard, signup refuses rather than inventing a host for the tenant.
+
+        The other half of the rule above, and the half nothing graded until now: on a
+        single-tenant install nginx is ``server_name _`` with no wildcard, so
+        ``f"{subdomain}.{sales_agent_domain}"`` names nothing. Refusing is what keeps the
+        derivation true by construction of the deployment that permits it.
+        """
+        from src.core.config import get_settings
+
+        monkeypatch.setattr(get_settings().runtime, "adcp_multi_tenant", False)
+
+        with client.session_transaction() as sess:
+            sess["signup_flow"] = True
+            sess["user"] = "newpublisher@example.com"
+            sess["user_name"] = "New Publisher"
+
+        response = client.post(
+            "/signup/provision",
+            data={"publisher_name": "No Wildcard Publisher", "adapter": "mock"},
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 302, "a refused signup redirects back to onboarding"
+        assert "/signup/onboarding" in response.headers["Location"]
+
+        # Through the harness's own session rather than get_db_session() in a test body —
+        # the surrounding file is allowlisted for that and a new test does not inherit the
+        # exemption. Queried by name because that is the only key the caller supplied: the
+        # subdomain and the host are both derived server-side, and the refusal fires before
+        # either exists.
+        with IntegrationEnv() as env:
+            created = env.get_session().scalars(select(Tenant).filter_by(name="No Wildcard Publisher")).first()
+        assert created is None, "a tenant was provisioned on a deployment that serves no wildcard host"
 
     def test_landing_page_accessible_without_auth(self, integration_db, client):
         """Test that landing page is accessible without authentication."""
@@ -85,14 +169,7 @@ class TestSelfServiceSignupFlow:
 
         response = client.post("/signup/provision", data=form_data, follow_redirects=False)
 
-        # Should redirect to completion page
-        assert response.status_code == 302
-        assert "/signup/complete" in response.headers["Location"]
-
-        # Extract tenant_id from redirect URL
-        redirect_url = response.headers["Location"]
-        tenant_id = redirect_url.split("tenant_id=")[1] if "tenant_id=" in redirect_url else None
-        assert tenant_id is not None
+        tenant_id = _provisioned_tenant_id(response)
 
         # Verify tenant was created
         with get_db_session() as db_session:
@@ -149,14 +226,7 @@ class TestSelfServiceSignupFlow:
 
         response = client.post("/signup/provision", data=form_data, follow_redirects=False)
 
-        # Should redirect to completion page
-        assert response.status_code == 302
-        assert "/signup/complete" in response.headers["Location"]
-
-        # Extract tenant_id from redirect URL
-        redirect_url = response.headers["Location"]
-        tenant_id = redirect_url.split("tenant_id=")[1] if "tenant_id=" in redirect_url else None
-        assert tenant_id is not None
+        tenant_id = _provisioned_tenant_id(response)
 
         # Verify tenant and adapter config
         with get_db_session() as db_session:
@@ -193,14 +263,7 @@ class TestSelfServiceSignupFlow:
 
         response = client.post("/signup/provision", data=form_data, follow_redirects=False)
 
-        # Should redirect to completion page
-        assert response.status_code == 302
-        assert "/signup/complete" in response.headers["Location"]
-
-        # Extract tenant_id from redirect URL
-        redirect_url = response.headers["Location"]
-        tenant_id = redirect_url.split("tenant_id=")[1] if "tenant_id=" in redirect_url else None
-        assert tenant_id is not None
+        tenant_id = _provisioned_tenant_id(response)
 
         # Verify tenant was created with GAM adapter (no credentials yet)
         with get_db_session() as db_session:
@@ -236,12 +299,7 @@ class TestSelfServiceSignupFlow:
         }
 
         response = client.post("/signup/provision", data=form_data, follow_redirects=False)
-        assert response.status_code == 302
-
-        # Extract tenant_id from redirect URL
-        redirect_url = response.headers["Location"]
-        tenant_id = redirect_url.split("tenant_id=")[1] if "tenant_id=" in redirect_url else None
-        assert tenant_id is not None
+        tenant_id = _provisioned_tenant_id(response)
 
         # Verify subdomain is 8-char hex (first 8 chars of UUID)
         with get_db_session() as db_session:
@@ -278,14 +336,7 @@ class TestSelfServiceSignupFlow:
         }
 
         response1 = client.post("/signup/provision", data=form_data, follow_redirects=False)
-        assert response1.status_code == 302
-
-        # Extract first tenant_id
-        tenant_id_1 = (
-            response1.headers["Location"].split("tenant_id=")[1]
-            if "tenant_id=" in response1.headers["Location"]
-            else None
-        )
+        tenant_id_1 = _provisioned_tenant_id(response1)
 
         # Create second tenant - should get different UUID/subdomain
         with client.session_transaction() as sess:
@@ -295,13 +346,7 @@ class TestSelfServiceSignupFlow:
 
         form_data["publisher_name"] = "Second Publisher"
         response2 = client.post("/signup/provision", data=form_data, follow_redirects=False)
-        assert response2.status_code == 302
-
-        tenant_id_2 = (
-            response2.headers["Location"].split("tenant_id=")[1]
-            if "tenant_id=" in response2.headers["Location"]
-            else None
-        )
+        tenant_id_2 = _provisioned_tenant_id(response2)
 
         # Verify different tenant_ids and subdomains
         with get_db_session() as db_session:
@@ -330,6 +375,7 @@ class TestSelfServiceSignupFlow:
                 tenant_id="completiontest",
                 name="Completion Test Publisher",
                 subdomain="completiontest",
+                virtual_host="completiontest.adcp.test",
                 ad_server="mock",
                 is_active=True,
                 billing_plan="standard",
@@ -396,6 +442,65 @@ class TestSelfServiceSignupFlow:
                     assert sess.get("user_name") == "New User"
                     assert sess.get("signup_flow") is True
 
+    def test_provision_reveals_the_token_in_the_body_and_never_in_a_response_header(self, integration_db, client):
+        """The minted principal token is shown once in the page body and rides no header.
+
+        A flash is stored in the signed session cookie, so a flashed credential leaves
+        the server in ``Set-Cookie``. In production that cookie is ``HTTPONLY=False``,
+        ``SAMESITE="None"`` and shared across subdomains (``src/admin/app.py``:126-136),
+        which makes it readable by any script on the domain and sent on cross-site
+        requests. Both halves are asserted here, because either one alone passes for the
+        wrong reason: a page that reveals nothing has no token to leak, and a header
+        check over a token the page never minted grades nothing.
+
+        The reveal is genuine rather than decorative: the token found in the body is
+        hashed and looked up, so it must be the credential that actually authenticates
+        the principal the signup created.
+        """
+        with client.session_transaction() as sess:
+            sess["signup_flow"] = True
+            sess["user"] = "admin@revealtest.com"
+            sess["user_name"] = "Reveal Test"
+
+        form_data = {"publisher_name": "Reveal Test Publisher", "adapter": "mock"}
+        response = client.post("/signup/provision", data=form_data, follow_redirects=False)
+        tenant_id = _provisioned_tenant_id(response)
+
+        body = response.data.decode()
+        found = _TOKEN_RE.findall(body)
+        assert len(found) == 1, f"expected the plaintext token exactly once in the body, found {len(found)}"
+        revealed = found[0]
+
+        # Genuine credential: the stored row keeps only a hash, so this resolves only if
+        # the revealed value is the one that authenticates. Through the harness's own
+        # session rather than get_db_session() in a test body — the surrounding file is
+        # allowlisted for that, and a new test does not inherit the exemption.
+        with IntegrationEnv() as env:
+            principal = PrincipalRepository(env.get_session(), tenant_id).find_by_token_hash(hash_token(revealed))
+            assert principal is not None, "the revealed token does not hash to any stored principal"
+            assert principal.principal_id == f"{tenant_id}_default"
+
+        # The disclosure path is closed. This has to read the DECODED session, not the
+        # Set-Cookie header: Flask signs and base64-encodes the session, so a flashed
+        # token is not a literal substring of the header and a header scan would pass
+        # over the exact defect this test exists for.
+        with client.session_transaction() as sess:
+            for key, value in sess.items():
+                assert revealed not in repr(value), f"the plaintext token is stored in session[{key!r}]"
+
+        # The header scan catches the other shape of the same mistake — a token put in a
+        # redirect URL or a custom header, where it lands in logs and Referer.
+        for name, value in response.headers.items():
+            assert revealed not in value, f"the plaintext token leaked in the {name} header"
+
+        # Cleanup through the harness's session, for the same reason as the read-back.
+        with IntegrationEnv() as env:
+            session = env.get_session()
+            tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+            if tenant:
+                session.delete(tenant)
+                session.commit()
+
     def test_session_cleanup_after_provisioning(self, integration_db, client):
         """Test that signup session flags are cleared after provisioning."""
         with client.session_transaction() as sess:
@@ -411,12 +516,7 @@ class TestSelfServiceSignupFlow:
         }
 
         response = client.post("/signup/provision", data=form_data, follow_redirects=False)
-        assert response.status_code == 302
-
-        # Extract tenant_id from redirect URL
-        redirect_url = response.headers["Location"]
-        tenant_id = redirect_url.split("tenant_id=")[1] if "tenant_id=" in redirect_url else None
-        assert tenant_id is not None
+        tenant_id = _provisioned_tenant_id(response)
 
         # Verify session flags are cleaned up
         with client.session_transaction() as sess:

@@ -51,11 +51,20 @@ from sqlalchemy import select
 
 from src.core.database.models import Tenant as TenantModel
 from src.core.database.repositories.uow import ProductUoW
-from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError
+from src.core.exceptions import (
+    AdCPAuthenticationError,
+    AdCPAuthorizationError,
+    AdCPAuthRequiredError,
+    AdCPPolicyViolationError,
+)
 from src.core.product_conversion import convert_product_model_to_schema
 from src.core.resolved_identity import ResolvedIdentity
+from src.core.schemas import GetProductsRequest
 from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
-from tests.harness._base import IntegrationEnv
+from tests.factories.principal import plaintext_token_for
+from tests.harness._base import INVALID_TOKEN, IntegrationEnv
+from tests.helpers.credentials import credential_headers
+from tests.helpers.envelope_assertions import raises_adcp
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -74,11 +83,10 @@ def _make_identity(
     """Build a ResolvedIdentity for integration tests."""
     if tenant is None:
         tenant = {"tenant_id": tenant_id}
-    return ResolvedIdentity(
+    return PrincipalFactory.make_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
         tenant=tenant,
-        protocol=protocol,
     )
 
 
@@ -93,33 +101,56 @@ async def _call_get_products(
     filters: dict | None = None,
     property_list: dict | None = None,
     tenant_overrides: dict | None = None,
+    token: str | None = None,
 ):
-    """Convenience wrapper for get_products_raw with identity resolution."""
-    from src.core.tools.products import get_products_raw
+    """Dispatch get_products at the shared boundary, letting the resolver resolve.
 
-    tenant_dict: dict[str, Any] = {"tenant_id": tenant_id}
+    Hands over HEADERS, not an identity. ``invoke_tool`` takes the headers a request
+    arrived with and the resolver is their one reader, so a test that built its own
+    identity and passed it in was bypassing the very step the boundary owns. The
+    credential is the one the factory principal answers to
+    (``plaintext_token_for``), so the real resolver runs here exactly as in
+    production. ``token`` overrides that credential for the one case whose subject is
+    the credential itself -- a presented-and-rejected one.
+
+    ``tenant_overrides`` names the SELLER CONFIG the case needs and is written to the
+    tenant row before the dispatch. It used to be accepted and dropped, which made
+    every policy case run against the factory tenant's defaults: a seller asking for
+    "public" was served as "require_auth" (the column's server default) and a seller
+    with an enabled advertising_policy had none, so the paths those cases name never
+    ran. Both the resolver (through ``TenantContext.load``) and the implementation read
+    the row, so the row is where the config has to be.
+    """
+    from src.core.resolved_identity import TransportProtocol
+    from src.core.tools._boundary import invoke_tool
+
     if tenant_overrides:
-        tenant_dict.update(tenant_overrides)
+        with IntegrationEnv(tenant_id=tenant_id) as env:
+            for field, value in tenant_overrides.items():
+                assert field in TenantModel.__table__.columns, f"{field!r} is not a Tenant column"
+                env.configure_tenant_field(field, value)
 
-    identity = _make_identity(
-        principal_id=principal_id,
-        tenant_id=tenant_id,
-        tenant=tenant_dict,
+    # Through credential_headers, the one producer of a test's credential headers: a change
+    # in what production reads off the wire stays one edit. It carries x-adcp-tenant because
+    # the principal lookup is tenant-scoped, and omits Authorization when there is no
+    # principal, so an anonymous case presents the tenant and no credential.
+    headers = credential_headers(
+        token=token if token is not None else (plaintext_token_for(principal_id) if principal_id is not None else None),
+        tenant=tenant_id,
     )
-    ctx = Mock()
-    ctx.meta = {"headers": {"x-adcp-auth": "test_token"}}
-
     if brand is _BRAND_DEFAULT:
         brand = {"domain": "testbrand.com"}
 
-    return await get_products_raw(
+    # Built, then handed to the boundary -- the same two steps every transport takes. This
+    # one helper drives every get_products case in the module, so the build lives here
+    # rather than at 77 call sites.
+    req = GetProductsRequest(
         brief=brief,
         brand=brand,
         filters=filters,
         property_list=property_list,
-        ctx=ctx,
-        identity=identity,
     )
+    return await invoke_tool("get_products", req, headers, TransportProtocol.MCP)
 
 
 # ---------------------------------------------------------------------------
@@ -136,13 +167,11 @@ def uc001_tenant(integration_db):
             tenant=tenant,
             principal_id="test_principal",
             name="Test Advertiser",
-            access_token="test_token",
         )
         PrincipalFactory(
             tenant=tenant,
             principal_id="other_principal",
             name="Other Advertiser",
-            access_token="other_token",
         )
     return "uc001_tenant"
 
@@ -243,13 +272,13 @@ class TestPreconditions:
 
     @pytest.mark.asyncio
     async def test_mcp_connection_established(self, uc001_products):
-        """Verify MCP tool function is callable and returns valid response.
+        """Verify the tool is reachable through the registry and returns a valid response.
 
         Covers: UC-001-PRECOND-03
         """
-        from src.core.tools.products import get_products_raw
+        from src.core.tools.registry import TOOLS
 
-        assert callable(get_products_raw)
+        assert callable(TOOLS["get_products"].impl)
         result = await _call_get_products(brief="any campaign")
         assert result is not None
 
@@ -525,7 +554,15 @@ class TestExtensionA:
                 )
             )
 
-            with pytest.raises(AdCPAuthorizationError) as exc_info:
+            # POLICY_VIOLATION, not PERMISSION_DENIED. A blocked brief is a refusal about
+            # the CONTENT of the request -- 3.1/enums/error-code.json, POLICY_VIOLATION:
+            # "Request violates the seller's content or advertising policies" -- whereas
+            # PERMISSION_DENIED says the CALLER is not authorized. Different subjects.
+            # The failure shape is defined for this task: get-products-response.json's
+            # `status == "failed"` branch requires errors[]. Graded on every transport by
+            # @T-UC-001-ext-a / @T-UC-001-inv-002 in
+            # tests/bdd/features/BR-UC-001-discover-available-inventory.feature.
+            with raises_adcp(AdCPPolicyViolationError):
                 await _call_get_products(
                     brief="tobacco advertising campaign",
                     tenant_overrides={
@@ -533,7 +570,6 @@ class TestExtensionA:
                         "gemini_api_key": "test-key",
                     },
                 )
-            assert "Tobacco advertising is prohibited" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_brief_restricted_manual_review(self, uc001_products):
@@ -553,7 +589,9 @@ class TestExtensionA:
                 )
             )
 
-            with pytest.raises(AdCPAuthorizationError):
+            # Same code as the BLOCKED case, per @T-UC-001-ext-a-restricted: a RESTRICTED
+            # brief the seller sends to manual review is still a content refusal.
+            with raises_adcp(AdCPPolicyViolationError):
                 await _call_get_products(
                     brief="craft beer advertising",
                     tenant_overrides={
@@ -586,10 +624,18 @@ class TestExtensionA:
             assert len(result.products) > 0
 
     @pytest.mark.asyncio
-    async def test_policy_blocked_error_contains_reason(self, uc001_products):
-        """Error response includes LLM-provided reason for blocked brief.
+    async def test_policy_blocked_error_carries_recovery_the_buyer_can_act_on(self, uc001_products):
+        """A blocked brief answers with POLICY_VIOLATION plus its recovery hint.
 
         Covers: UC-001-EXT-A-04
+
+        NOT the LLM's reason, and the rename says so. The reason is recorded in the
+        policy_check audit entry and deliberately never reaches the buyer: a raise site
+        authors no text (``AdCPSalesAgentError.__init__`` is keyword-only with no
+        ``message``), so the buyer-facing message and suggestion come from CODE_TABLE.
+        What the buyer is owed is the code and an actionable recovery, which is also what
+        @T-UC-001-ext-a grades ("the error should include suggestion field"). The old
+        name promised the LLM reason and then asserted nothing at all.
         """
         with patch("src.core.tools.products.PolicyCheckService") as MockService:
             from src.services.policy_check_service import PolicyCheckResult, PolicyStatus
@@ -603,7 +649,7 @@ class TestExtensionA:
                 )
             )
 
-            with pytest.raises(AdCPAuthorizationError) as exc_info:
+            with raises_adcp(AdCPPolicyViolationError) as exc_info:
                 await _call_get_products(
                     brief="online gambling ads",
                     tenant_overrides={
@@ -611,7 +657,15 @@ class TestExtensionA:
                         "gemini_api_key": "test-key",
                     },
                 )
-            assert "Gambling ads violate policy section 3.2" in str(exc_info.value)
+
+        error = exc_info.value.response.adcp_error
+        assert error is not None
+        assert error.recovery == "correctable", error.recovery
+        assert error.suggestion, "buyer got POLICY_VIOLATION with no suggestion to act on"
+        # The LLM's own wording is NOT disclosed: the seller's screening prose stays in
+        # the audit trail. Asserting its absence is the point of the pair.
+        assert "gambling" not in (error.message or "")
+        assert "gambling" not in (error.suggestion or "")
 
     @pytest.mark.asyncio
     async def test_policy_disabled_check_skipped(self, uc001_products):
@@ -637,24 +691,40 @@ class TestExtensionB:
         """Unauthenticated request with require_auth policy is rejected.
 
         Covers: UC-001-EXT-B-01
+
+        AUTH_MISSING, not AUTH_INVALID. The pinned enum keys the two on what arrived:
+        AUTH_MISSING is "No credentials were presented", AUTH_INVALID is "an
+        `Authorization` header was present but verification failed"
+        (3.1/enums/error-code.json). Nothing is presented here, and the refusal is minted
+        by the resolver, which asks ``ToolSpec.requires_credential(tenant)`` once the
+        seller row is loaded. Graded on every transport by @T-UC-001-ext-b /
+        @T-UC-001-inv-001-v.
         """
-        with pytest.raises(AdCPAuthenticationError) as exc_info:
+        with raises_adcp(AdCPAuthRequiredError):
             await _call_get_products(
                 principal_id=None,
                 brief="display ads",
                 tenant_overrides={"brand_manifest_policy": "require_auth"},
             )
-        assert "Authentication required" in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_invalid_token_treated_as_unauthenticated(self, uc001_products):
-        """Invalid token results in null principal, request is rejected.
+    async def test_invalid_token_rejected_as_auth_invalid(self, uc001_products):
+        """A presented-and-rejected credential is refused, not taken as anonymous.
 
         Covers: UC-001-EXT-B-02
+
+        The obligation's old title ("invalid token treated as unauthenticated") no longer
+        describes this seller, and the test used to send NO token at all -- making it a
+        duplicate of B-01 that could not observe its own subject. AUTH_INVALID's MUST
+        ("an `Authorization` header was present but verification failed",
+        3.1/enums/error-code.json) names no task, so it binds on a public row too; see
+        src/core/resolved_identity.py, where the rejected credential is refused before
+        the public-tool branch.
         """
-        with pytest.raises(AdCPAuthenticationError):
+        with raises_adcp(AdCPAuthenticationError):
             await _call_get_products(
                 principal_id=None,
+                token=INVALID_TOKEN,
                 brief="display ads",
                 tenant_overrides={"brand_manifest_policy": "require_auth"},
             )
@@ -686,14 +756,20 @@ class TestExtensionC:
         """Request without brand when require_brand policy is set is rejected.
 
         Covers: UC-001-EXT-C-01
+
+        PERMISSION_DENIED is what this seller emits: the request is schema-valid (``brand``
+        is optional on get-products-request.json) and it is the SELLER'S policy that
+        refuses it, which is PERMISSION_DENIED's own definition -- "not authorized for the
+        requested action under the seller's own policies" (3.1/enums/error-code.json).
+        NOTE: @T-UC-001-ext-c and @T-UC-001-inv-001-2v grade VALIDATION_ERROR for this
+        same case; that divergence is real and is reported, not papered over here.
         """
-        with pytest.raises(AdCPAuthorizationError) as exc_info:
+        with raises_adcp(AdCPAuthorizationError):
             await _call_get_products(
                 brief="display ads",
                 brand=None,
                 tenant_overrides={"brand_manifest_policy": "require_brand"},
             )
-        assert "Brand manifest required" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_require_brand_unresolvable_brand_rejected(self, uc001_products):
@@ -705,7 +781,7 @@ class TestExtensionC:
         "unresolvable" scenario at runtime is brand=None — same as C-01.
         We pass brand=None explicitly to test the policy rejection path.
         """
-        with pytest.raises(AdCPAuthorizationError):
+        with raises_adcp(AdCPAuthorizationError):
             await _call_get_products(
                 brief="display ads",
                 brand=None,
@@ -914,8 +990,10 @@ class TestAnonymousDiscovery:
         """Anonymous with require_auth policy is rejected.
 
         Covers: UC-001-ALT-ANONYMOUS-DISCOVERY-10
+
+        AUTH_MISSING: nothing was presented (see B-01 for the pinned enum's split).
         """
-        with pytest.raises(AdCPAuthenticationError):
+        with raises_adcp(AdCPAuthRequiredError):
             await _call_get_products(
                 principal_id=None,
                 brief="display ads",
@@ -1354,7 +1432,7 @@ class TestPostconditions:
             before = len(uow.products.list_all())
 
         # Trigger a failure
-        with pytest.raises(AdCPAuthenticationError):
+        with raises_adcp(AdCPAuthRequiredError):
             await _call_get_products(
                 principal_id=None,
                 brief="display ads",
@@ -1374,14 +1452,20 @@ class TestPostconditions:
 
         Covers: UC-001-POST-10
         """
-        with pytest.raises(AdCPAuthenticationError) as exc_info:
+        with raises_adcp(AdCPAuthRequiredError) as exc_info:
             await _call_get_products(
                 principal_id=None,
                 brief="display ads",
                 tenant_overrides={"brand_manifest_policy": "require_auth"},
             )
-        # Error message should be actionable
-        assert "Authentication required" in str(exc_info.value)
+
+        # "Enough info to correct and retry" is two structured positions, not a message:
+        # the recovery classification says retrying is worth it, and the suggestion says
+        # what to change. The comment that used to stand here asserted neither.
+        error = exc_info.value.response.adcp_error
+        assert error is not None
+        assert error.recovery == "correctable", error.recovery
+        assert error.suggestion, "buyer got AUTH_MISSING with no suggestion to act on"
 
 
 # ===========================================================================

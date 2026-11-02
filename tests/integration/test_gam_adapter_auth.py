@@ -27,24 +27,20 @@ from src.core.database.models import AdapterConfig
 from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.models import Tenant as ModelTenant
 from src.core.helpers import get_adapter
-from src.core.schemas import Principal
+from src.core.resolved_identity import ResolvedIdentity
+from src.core.tenant_context import TenantContext
+from tests.factories.principal import PrincipalFactory
+from tests.helpers.gam_credentials import service_account_json
 
 # Test encryption key (only for tests — Fernet requires a valid key)
 _TEST_ENCRYPTION_KEY = Fernet.generate_key().decode()
 
-# Minimal valid service account JSON (not a real key)
-_TEST_SA_JSON = json.dumps(
-    {
-        "type": "service_account",
-        "project_id": "test-project",
-        "private_key_id": "key123",
-        "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBg==\n-----END PRIVATE KEY-----\n",
-        "client_email": "test@test-project.iam.gserviceaccount.com",
-        "client_id": "123456789",
-        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-        "token_uri": "https://oauth2.googleapis.com/token",
-    }
-)
+
+# Service account JSON for a key that exists only in this process. The document comes from
+# tests/helpers/gam_credentials so the adapter-construction suite uses the same one: a GAM
+# adapter deserializes the key when it is built (no dry-run flag exists any more), so the
+# placeholder PEM that stood here was never parsed and would now fail inside google.auth.
+_TEST_SA_JSON = service_account_json()
 
 
 @pytest.fixture
@@ -160,34 +156,16 @@ def sa_tenant(integration_db, _encryption_key):
         session.commit()
 
 
-def _load_principal(tenant_id: str, principal_id: str) -> Principal:
-    """Load principal from DB and convert to schema object."""
-    with get_db_session() as session:
-        db_principal = session.scalars(
-            select(ModelPrincipal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
-        ).first()
-        return Principal(
-            principal_id=db_principal.principal_id,
-            name=db_principal.name,
-            platform_mappings=db_principal.platform_mappings or {},
-        )
+def _identity_for(tenant_id: str, principal_id: str) -> ResolvedIdentity:
+    """The identity ``get_adapter`` takes: the seeded tenant row, with the buyer inside.
 
-
-def _set_tenant_context(tenant_id: str):
-    """Set the current tenant context for get_adapter()."""
-    from src.core.config_loader import set_current_tenant
-
-    with get_db_session() as session:
-        db_tenant = session.scalars(select(ModelTenant).filter_by(tenant_id=tenant_id)).first()
-        set_current_tenant(
-            {
-                "tenant_id": db_tenant.tenant_id,
-                "name": db_tenant.name,
-                "subdomain": db_tenant.subdomain,
-                "ad_server": db_tenant.ad_server,
-                "is_active": db_tenant.is_active,
-            }
-        )
+    ``get_adapter(identity)`` reads the tenant and the principal off one object
+    (commit a1b79d22d), so there is no ambient tenant to seed and no second principal
+    load -- and an adapter carries no dry-run flag, because nothing could set one.
+    """
+    tenant = TenantContext.load(tenant_id)
+    assert tenant is not None, f"the fixture must have committed tenant {tenant_id}"
+    return PrincipalFactory.make_identity(principal_id=principal_id, tenant_id=tenant_id, tenant=tenant)
 
 
 @pytest.mark.integration
@@ -235,14 +213,10 @@ class TestGetAdapterGAMAuth:
         """get_adapter() with OAuth tenant must return a GoogleAdManager."""
         from src.adapters.google_ad_manager import GoogleAdManager
 
-        _set_tenant_context(oauth_tenant["tenant_id"])
-        principal = _load_principal(oauth_tenant["tenant_id"], oauth_tenant["principal_id"])
-
-        adapter = get_adapter(principal, dry_run=True)
+        adapter = get_adapter(_identity_for(oauth_tenant["tenant_id"], oauth_tenant["principal_id"]))
 
         assert isinstance(adapter, GoogleAdManager)
         assert adapter.refresh_token == "test_oauth_refresh_token"
-        assert adapter.dry_run is True
 
     def test_sa_tenant_creates_adapter_successfully(self, sa_tenant, _encryption_key):
         """get_adapter() with service account tenant must return a GoogleAdManager.
@@ -256,15 +230,11 @@ class TestGetAdapterGAMAuth:
         """
         from src.adapters.google_ad_manager import GoogleAdManager
 
-        _set_tenant_context(sa_tenant["tenant_id"])
-        principal = _load_principal(sa_tenant["tenant_id"], sa_tenant["principal_id"])
-
         # This should NOT raise — but currently does (#1163)
-        adapter = get_adapter(principal, dry_run=True)
+        adapter = get_adapter(_identity_for(sa_tenant["tenant_id"], sa_tenant["principal_id"]))
 
         assert isinstance(adapter, GoogleAdManager)
         assert adapter.service_account_json is not None
-        assert adapter.dry_run is True
 
     def test_sa_tenant_config_dict_has_correct_keys(self, sa_tenant, _encryption_key):
         """The config dict built by build_gam_config_from_adapter must contain service_account_json.

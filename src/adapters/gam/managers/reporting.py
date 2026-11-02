@@ -8,7 +8,9 @@ import threading
 from datetime import UTC, datetime
 
 from src.core.thread_registry import ThreadRegistry
-from src.services.webhook_delivery_service import webhook_delivery_service
+
+# NOTE: `src.services.webhook_delivery_service` is imported inside
+# `_run_reporting`, NOT at module scope. See the comment there for the cycle.
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +140,25 @@ class GAMReportingManager:
             reporting_interval_hours: Hours between reports
             stop_signal: Event to signal reporting stop
         """
+        # Deferred import — do NOT hoist to module scope. At module scope it
+        # closes an import cycle that aborts collection of the whole BDD suite:
+        #   webhook_delivery_service -> webhook_conclusion
+        #     -> core.database.repositories -> repositories.account
+        #     -> core.helpers -> core.helpers.adapter_helpers -> src.adapters
+        #     -> adapters.gam.managers -> THIS MODULE -> webhook_delivery_service
+        # Outbound signing adds a SECOND edge that closes the same cycle by a
+        # different route — webhook_delivery_service -> src.core.signing, whose
+        # `provider` imports core.database.repositories.signing_key and so joins
+        # the tail above at `repositories`. webhook_delivery_service defers its
+        # own signing import for that reason; this one stays deferred either way,
+        # because the first edge is already enough on its own.
+        # Whichever end is imported first, the other is only partially
+        # initialized. Adapters sit below services, so an adapter must not bind
+        # a service at import time — only at call time. This matches how every
+        # other adapter reaches into src.services (mock_ad_server,
+        # google_ad_manager, xandr, gam.managers.sync all import theirs locally).
+        from src.services.webhook_delivery_service import webhook_delivery_service
+
         try:
             reporting_interval_seconds = reporting_interval_hours * 3600
 

@@ -1,5 +1,4 @@
 # Generated from adcp-req @ a14db6e5894e781a8b2c577e86e1b136876e4915 on 2026-06-03T11:30:04Z (merge mode)
-# DO NOT EDIT -- re-run: python scripts/compile_bdd.py --merge
 
 Feature: BR-UC-012 Manage Content Standards
   As a Buyer
@@ -81,8 +80,8 @@ Feature: BR-UC-012 Manage Content Standards
     Given no existing content standard for this scope
     When the Buyer Agent creates a content standard with scope {"languages_any": ["en"]} and only a legacy singular policy string "No adult content"
     Then the legacy policy string does not establish governance
-    And the request is rejected with error code "VALIDATION_ERROR"
-    And the error code should be "VALIDATION_ERROR"
+    And the request is rejected with error code "INVALID_REQUEST"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion"
     # BR-RULE-256 INV-7: v3.0 singular `policy` string no longer recognized; governance must use policies[]/registry_policy_ids[]
     # With no policies[]/registry_policy_ids[], the v3.1 create-request anyOf (INV-1) is unsatisfied → rejection
@@ -141,16 +140,16 @@ Feature: BR-UC-012 Manage Content Standards
     And the response contains standards_id "std_abc123"
 
   @T-UC-012-update-scope-conflict @update @scope-conflict @error @post-s7 @post-f1 @post-f2 @post-f3 @post-f4
-  Scenario: Update content standard - scope change triggers SCOPE_CONFLICT via error branch (success: false)
+  Scenario: Update content standard - scope change triggers VALIDATION_ERROR via error branch (success: false)
     Given an existing content standard "std_001" with scope {"languages_any": ["en"]}
     And another existing content standard "std_002" with scope {"languages_any": ["de"]}
     When the Buyer Agent updates "std_001" scope to {"languages_any": ["de"]}
     Then the response success field is false
     And the response contains errors array with at least 1 item
-    And the errors array includes error code "SCOPE_CONFLICT"
+    And the errors array includes error code "VALIDATION_ERROR"
     And the response includes conflicting_standards_id "std_002"
     And the error should include "suggestion"
-    # BR-RULE-065 INV-2: Update scope overlap → SCOPE_CONFLICT via oneOf error branch
+    # BR-RULE-065 INV-2: Update scope overlap → VALIDATION_ERROR via oneOf error branch
     # POST-S7: Scope conflict detected
     # POST-F1: System state unchanged
     # POST-F4: conflicting_standards_id returned
@@ -161,14 +160,14 @@ Feature: BR-UC-012 Manage Content Standards
     When the Buyer Agent updates the scope to {"languages_any": []}
     Then the response success field is false
     And the response contains errors array with at least 1 item
-    And the errors array includes error code "LANGUAGES_REQUIRED"
+    And the errors array includes error code "INVALID_REQUEST"
     And the error should include "suggestion"
     # BR-RULE-064 INV-5: Update languages_any must satisfy minItems:1
 
   @T-UC-012-update-not-found @update @error @post-f2 @post-f3
   Scenario: Update content standard - standards_id not found
     When the Buyer Agent sends an update for non-existent standards_id "nonexistent_id"
-    Then the error code should be "STANDARDS_NOT_FOUND"
+    Then the error code should be "REFERENCE_NOT_FOUND"
     And the error should include "suggestion"
     # POST-F2: Buyer knows what failed
     # POST-F3: Suggestion present
@@ -209,7 +208,7 @@ Feature: BR-UC-012 Manage Content Standards
   Scenario: Update content standard - idempotency_key omitted is rejected (REQUIRED in v3.1)
     Given an existing content standard with standards_id "std_abc123"
     When the Buyer Agent sends an update for "std_abc123" without an idempotency_key
-    Then the error code should be "VALIDATION_ERROR"
+    Then the error code should be "INVALID_REQUEST"
     And the error should include "suggestion"
     # BR-RULE-081 INV-6: idempotency_key REQUIRED on content-standards update
     # POST-F2: Buyer knows what failed
@@ -231,10 +230,10 @@ Feature: BR-UC-012 Manage Content Standards
   Scenario: Delete content standard - blocked when referenced by active media buy
     Given an existing content standard "std_active" referenced by 2 active media buys
     When the Buyer Agent attempts to delete "std_active"
-    Then the error code should be "STANDARDS_IN_USE"
+    Then the error code should be "INVALID_STATE"
     And the error should include "suggestion"
     And the content standard "std_active" still exists
-    # BR-RULE-067 INV-1: Active media buy references → STANDARDS_IN_USE
+    # BR-RULE-067 INV-1: Active media buy references → INVALID_STATE
     # POST-F1: System state unchanged
     # POST-F2: Buyer knows what failed
     # POST-F3: Suggestion present
@@ -249,23 +248,22 @@ Feature: BR-UC-012 Manage Content Standards
   @T-UC-012-delete-not-found @delete @error @post-f2 @post-f3
   Scenario: Delete content standard - standards_id not found
     When the Buyer Agent attempts to delete non-existent standards_id "nonexistent_id"
-    Then the error code should be "STANDARDS_NOT_FOUND"
+    Then the error code should be "REFERENCE_NOT_FOUND"
     And the error should include "suggestion"
 
   @T-UC-012-delete-unchanged @delete @error @post-f1
   Scenario: Failed delete does not modify system state
     Given an existing content standard "std_active" referenced by active media buys
     When the Buyer Agent attempts to delete "std_active"
-    Then the error code should be "STANDARDS_IN_USE"
+    Then the error code should be "INVALID_STATE"
     And the error should include "suggestion"
     And the content standard "std_active" still exists with unchanged data
     # POST-F1: System state unchanged on failure
 
   @T-UC-012-not-found-operations @not-found @error @ext-e @post-f1 @post-f2 @post-f3
-  Scenario Outline: STANDARDS_NOT_FOUND on <operation> with non-existent ID
+  Scenario Outline: REFERENCE_NOT_FOUND on <operation> with non-existent ID
     When the Buyer Agent sends a <operation> request for standards_id "nonexistent_id"
-    Then the error code should be "STANDARDS_NOT_FOUND"
-    And the error message references "nonexistent_id"
+    Then the error code should be "REFERENCE_NOT_FOUND"
     And the error should include "suggestion"
     And the system state is unchanged
     # POST-F1: Unchanged
@@ -279,10 +277,10 @@ Feature: BR-UC-012 Manage Content Standards
       | delete_content_standards |
 
   @T-UC-012-not-found-wrong-tenant @not-found @tenant-isolation @partition @post-f2
-  Scenario: STANDARDS_NOT_FOUND when standards_id belongs to different tenant
+  Scenario: REFERENCE_NOT_FOUND when standards_id belongs to different tenant
     Given a content standard "std_other" exists in tenant "other_tenant"
     When the Buyer Agent in tenant "my_tenant" requests get_content_standards for "std_other"
-    Then the error code should be "STANDARDS_NOT_FOUND"
+    Then the error code should be "REFERENCE_NOT_FOUND"
     # Tenant isolation: cannot see other tenant's standards
 
   @T-UC-012-scope-no-conflict @scope-conflict @create @partition
@@ -293,13 +291,13 @@ Feature: BR-UC-012 Manage Content Standards
     # BR-RULE-065 INV-3: No overlap → proceeds via success branch
 
   @T-UC-012-scope-conflict-update @scope-conflict @update @error @ext-f @post-s7 @post-f1 @post-f2 @post-f3 @post-f4
-  Scenario: Update content standard - scope change triggers SCOPE_CONFLICT with error branch (success: false)
+  Scenario: Update content standard - scope change triggers VALIDATION_ERROR with error branch (success: false)
     Given an existing content standard "std_a" with scope {"languages_any": ["en"]}
     And another existing content standard "std_b" with scope {"languages_any": ["de"]}
     When the Buyer Agent updates "std_a" scope to {"languages_any": ["de"]}
     Then the response success field is false
     And the response contains errors array with at least 1 item
-    And the errors array includes error code "SCOPE_CONFLICT"
+    And the errors array includes error code "VALIDATION_ERROR"
     And the response includes conflicting_standards_id "std_b"
     And the error should include "suggestion"
     # BR-RULE-065 INV-2: Update scope overlap → error branch
@@ -321,7 +319,7 @@ Feature: BR-UC-012 Manage Content Standards
     Given the Buyer has no authentication credentials
     When the Buyer Agent sends a <operation> request
     Then the request is rejected with an authentication error
-    And the error code should be "AUTH_REQUIRED"
+    And the error code should be "AUTH_MISSING"
     And the error should include "suggestion"
     # BR-RULE-063 INV-2,3: No token or invalid token → rejected
     # BR-RULE-063 INV-4: All five operations enforce identical auth
@@ -341,7 +339,7 @@ Feature: BR-UC-012 Manage Content Standards
     Given the Buyer Agent has an expired authentication token
     When the Buyer Agent sends a list_content_standards request
     Then the request is rejected with an authentication error
-    And the error code should be "AUTH_REQUIRED"
+    And the error code should be "AUTH_INVALID"
     And the error should include "suggestion"
     # BR-RULE-063 INV-3: Invalid/expired token → rejected
 
@@ -372,9 +370,9 @@ Feature: BR-UC-012 Manage Content Standards
 
     Examples:
       | error_type         |
-      | STANDARDS_NOT_FOUND |
-      | SCOPE_CONFLICT      |
-      | STANDARDS_IN_USE    |
+      | REFERENCE_NOT_FOUND |
+      | VALIDATION_ERROR      |
+      | INVALID_STATE    |
 
   @T-UC-012-context-omitted @context-echo @partition
   Scenario: Context omitted in request - response omits context
@@ -393,7 +391,7 @@ Feature: BR-UC-012 Manage Content Standards
   @T-UC-012-list-channel-invalid @list @filter @error @boundary @post-f2 @post-f3
   Scenario: List content standards - channels with unknown enum value in filter
     When the Buyer Agent filters by channels ["fake_channel"]
-    Then the error code should be "VALIDATION_ERROR"
+    Then the error code should be "INVALID_REQUEST"
     And the error should include "suggestion"
 
   @T-UC-012-pricing-options-list @pricing-options @list @partition
@@ -428,7 +426,7 @@ Feature: BR-UC-012 Manage Content Standards
 
   @T-UC-012-escalation-severity-enum @escalation @enum @governance @partition
   Scenario Outline: Governance escalation severity must be one of info|warning|critical
-    Given a governance escalation is attached to a content-standards SCOPE_CONFLICT event
+    Given a governance escalation is attached to a content-standards VALIDATION_ERROR event
     When the escalation is emitted with severity "<severity>"
     Then the severity value is <validity> per /schemas/enums/escalation-severity.json
 

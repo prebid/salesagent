@@ -11,11 +11,10 @@ Covers obligations:
 
 import pytest
 
-from src.core.exceptions import AdCPAuthenticationError
-from src.core.resolved_identity import ResolvedIdentity
-from src.core.tenant_context import LazyTenantContext
-from src.core.testing_hooks import AdCPTestContext
+from src.core.resolved_identity import PublicIdentity, ResolvedIdentity
+from src.core.tenant_context import TenantContext
 from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
+from tests.harness._identity import make_identity
 from tests.harness.product import ProductEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -25,22 +24,28 @@ def _lazy_identity(
     tenant_id: str,
     principal_id: str | None = None,
     protocol: str = "mcp",
-) -> ResolvedIdentity:
-    """Create a ResolvedIdentity using LazyTenantContext for real DB tenant lookup."""
-    return ResolvedIdentity(
+) -> ResolvedIdentity | PublicIdentity:
+    """An identity carrying the tenant row the database holds for *tenant_id*.
+
+    Through the canonical harness helper, so ``principal_id=None`` builds the
+    ``PublicIdentity`` a public tool takes rather than a ``ResolvedIdentity`` whose
+    principal is None -- a shape the type no longer has.
+    """
+    return make_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
-        tenant=LazyTenantContext(tenant_id),
-        protocol=protocol,
-        testing_context=AdCPTestContext(dry_run=False, mock_time=None, jump_to_event=None, test_session_id=None),
+        tenant=TenantContext.load(tenant_id),
     )
 
 
 class TestDiscoveryEndpointAuthentication:
     """BR-RULE-041-01: Discovery endpoint authentication.
 
-    Auth is optional for discovery. Invalid tokens are treated as missing
-    (anonymous) in MCP. Data is not scoped by identity for unrestricted products.
+    Auth is optional for discovery: an absent credential is served anonymously. A presented
+    credential that does not resolve is refused with AUTH_INVALID by the resolver before the
+    implementation runs (BR-SECURITY-002); the "invalid token" test below builds the identity
+    the implementation would see only if it did run, which is the anonymous one. Data is not
+    scoped by identity for unrestricted products.
     """
 
     @pytest.mark.asyncio
@@ -115,25 +120,24 @@ class TestDiscoveryEndpointAuthentication:
         assert "locked-product" not in product_ids
         assert len(result.products) == 1
 
-    @pytest.mark.asyncio
-    async def test_require_auth_policy_rejects_anonymous(self, integration_db):
-        """Default require_auth policy rejects anonymous requests.
-
-        Covers: BR-RULE-041-01
-        """
-        with ProductEnv(tenant_id="auth-reqd", principal_id=None) as env:
-            tenant = TenantFactory(
-                tenant_id="auth-reqd",
-                subdomain="auth-reqd",
-                brand_manifest_policy="require_auth",
-            )
-            p = ProductFactory(tenant=tenant, product_id="any-product", allowed_principal_ids=None)
-            PricingOptionFactory(product=p)
-
-            env._identity = _lazy_identity("auth-reqd", principal_id=None)
-
-            with pytest.raises(AdCPAuthenticationError):
-                await env.call_impl(brief="test")
+    # test_require_auth_policy_rejects_anonymous is REMOVED. It built an anonymous identity
+    # against a tenant whose brand_manifest_policy is "require_auth" and asserted
+    # _get_products_impl raised AdCPAuthenticationError itself.
+    #
+    # Neither half is constructible now. The anonymous caller of a public tool is a
+    # PublicIdentity, not a ResolvedIdentity with a None principal (the field is required),
+    # and the seller policy is no longer read in the implementation at all --
+    # src/core/tools/products.py:214 says so, and the refusal is minted by the resolver,
+    # which asks ToolSpec.requires_credential(tenant) once the tenant row is loaded
+    # (registry.py:195). ruff-boundary.toml bans raising AUTH_MISSING / AUTH_INVALID
+    # anywhere but the resolver.
+    #
+    # The obligation (BR-RULE-041-01 / BR-UC-001 INV-1: a require_auth seller makes
+    # get_products need a caller) is graded where it is decided -- the resolver, for every
+    # transport at once -- by the transport-blind auth scenarios asserting the AUTH_MISSING
+    # wire envelope across a2a, mcp and rest.
+    #
+    # Same removal, same reason, as tests/unit/test_media_buy.py:3869.
 
 
 class TestPrincipalScopedProductVisibility:

@@ -34,14 +34,13 @@ _XFAIL_NO_IMPL = pytest.mark.xfail(
 
 
 def _lazy_identity(tenant_id: str, principal_id: str = "p1"):
-    """Build a ResolvedIdentity for the given tenant."""
-    from src.core.resolved_identity import ResolvedIdentity
-    from src.core.tenant_context import LazyTenantContext
+    """An identity carrying the tenant row the database holds for *tenant_id*."""
+    from src.core.tenant_context import TenantContext
 
-    return ResolvedIdentity(
+    return PrincipalFactory.make_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
-        tenant=LazyTenantContext(tenant_id),
+        tenant=TenantContext.load(tenant_id),
     )
 
 

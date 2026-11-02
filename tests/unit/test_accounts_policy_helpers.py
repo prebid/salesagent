@@ -15,7 +15,12 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from src.core.tenant_context import TenantContext
-from src.core.tools.accounts import _build_setup_for_approval, _build_sync_result, _check_billing_policy
+from src.core.tools.accounts import (
+    _FAILURE_CLASS_TO_CODE,
+    _build_setup_for_approval,
+    _build_sync_result,
+    _check_billing_policy,
+)
 from tests.factories import PrincipalFactory
 
 
@@ -26,7 +31,9 @@ def _identity_with(**tenant_overrides):
 
 def _identity_with_tenantcontext(**fields):
     """Build a ResolvedIdentity whose .tenant is a TenantContext (not a dict)."""
-    ctx = TenantContext(tenant_id="t1", name="T1", subdomain="t1", **fields)
+    # virtual_host is required on the projection (a tenant always declares its host);
+    # these cases grade billing policy and never read it.
+    ctx = TenantContext(tenant_id="t1", name="T1", virtual_host="t1.adcp.test", **fields)
     return PrincipalFactory.make_identity(tenant_id="t1", tenant=ctx.model_dump())
 
 
@@ -43,49 +50,83 @@ class TestCheckBillingPolicy:
         assert _check_billing_policy("agent", identity) is None
 
     def test_unsupported_value_rejected(self):
-        identity = _identity_with(supported_billing=["agent"])
-        errors = _check_billing_policy("operator", identity)
-        assert errors is not None
-        assert len(errors) == 1
-        assert errors[0].code == "BILLING_NOT_SUPPORTED"
+        """The gate states a failure CLASS; the wire code is derived from it.
 
-    def test_error_message_includes_supported_list(self):
+        #1721 moved the gates onto GateFailure + _FAILURE_CLASS_TO_CODE, so the
+        code is no longer chosen at the refusal site — asserting the class here
+        and the mapping below keeps the same claim without re-pinning a literal
+        the gate no longer owns.
+        """
+        identity = _identity_with(supported_billing=["agent"])
+        failures = _check_billing_policy("operator", identity)
+        assert failures is not None
+        assert len(failures) == 1
+        assert failures[0].failure_class == "billing_not_supported"
+        assert _FAILURE_CLASS_TO_CODE[failures[0].failure_class] == "BILLING_NOT_SUPPORTED"
+
+    def test_failure_carries_the_supported_list_in_details(self):
+        """The supported models travel STRUCTURALLY, not in a sentence.
+
+        billing-not-supported.json puts them at details.supported_billing, and
+        after salesagent-3dawm.13 GateFailure has no message to interpolate them
+        into -- the buyer-facing sentence is derived from the code.
+        """
         identity = _identity_with(supported_billing=["agent", "operator"])
         errors = _check_billing_policy("prepaid", identity)
         assert errors is not None
-        assert "agent" in errors[0].message
-        assert "operator" in errors[0].message
+        # to_wire() is the wire shape; the details block itself is a declared class
+        # now, so a misspelled key is a typecheck failure rather than a silent absence.
+        assert errors[0].details is not None
+        assert errors[0].details.to_wire() == {"scope": "capability", "supported_billing": ["agent", "operator"]}
 
-    def test_error_includes_suggestion_field(self):
+    def test_failure_names_the_code_and_the_one_supported_model(self):
+        """The suggestion is a function of the code (ADR-010), so it is asserted
+        on the wire Error the gate produces, not on GateFailure -- which no longer
+        carries prose at all."""
         identity = _identity_with(supported_billing=["agent"])
         errors = _check_billing_policy("operator", identity)
         assert errors is not None
-        assert errors[0].suggestion is not None
-        assert "agent" in errors[0].suggestion
+        assert _FAILURE_CLASS_TO_CODE[errors[0].failure_class] == "BILLING_NOT_SUPPORTED"
+        assert errors[0].details is not None
+        assert errors[0].details.supported_billing == ["agent"]
 
     def test_empty_supported_list_rejects_all(self):
         identity = _identity_with(supported_billing=[])
-        errors = _check_billing_policy("agent", identity)
-        assert errors is not None
-        assert errors[0].code == "BILLING_NOT_SUPPORTED"
+        failures = _check_billing_policy("agent", identity)
+        assert failures is not None
+        assert _FAILURE_CLASS_TO_CODE[failures[0].failure_class] == "BILLING_NOT_SUPPORTED"
 
-    def test_tenant_none_accepts(self):
-        identity = PrincipalFactory.make_identity(tenant_id="t1", tenant=None)
-        assert _check_billing_policy("operator", identity) is None
+    # test_tenant_none_accepts is REMOVED. It built an identity with principal_id=None and
+    # tenant=None and asserted _check_billing_policy accepted it.
+    #
+    # Neither half is constructible now. _check_billing_policy takes a ResolvedIdentity,
+    # whose principal AND tenant are both required fields, so "no principal" and "no tenant"
+    # are not values the parameter can hold -- PrincipalFactory.make_identity cannot build
+    # either, and the branch the test drove (resolve_supported_billing's `if tenant` arm) is
+    # unreachable from every caller: accounts.py:770 passes the identity the resolver built,
+    # and the resolver refuses a missing credential before it can construct one.
+    #
+    # There is no obligation to re-home. The guarantee the test was probing is now carried
+    # by the TYPE -- that is the whole point of a protected tool declaring ResolvedIdentity --
+    # and mypy grades it on every run instead of one test asserting one arm of it.
 
     def test_tenantcontext_access_works(self):
-        """When identity.tenant is a TenantContext object, the same .get() contract applies."""
+        """The policy reads supported_billing off identity.tenant via the .get() contract.
+
+        The sibling this replaces, ``test_dict_access_works``, claimed to grade the
+        OTHER shape — "a raw dict (IMPL transport)" — and asserted
+        ``isinstance(identity.tenant, dict)``. Both halves of that premise are gone:
+        ``ResolvedIdentity.tenant`` is typed ``LazyTenantContext | None``, so a raw
+        dict is not a value it can hold, and ``Transport.IMPL`` is deleted. Both tests
+        built their identity through ``PrincipalFactory.make_identity``, which coerces,
+        so the pair was one shape tested twice — and only the one with the isinstance
+        said so out loud, by failing.
+        """
         identity = _identity_with_tenantcontext(supported_billing=["agent"])
         assert _check_billing_policy("agent", identity) is None
-        errors = _check_billing_policy("operator", identity)
-        assert errors is not None
-        assert errors[0].code == "BILLING_NOT_SUPPORTED"
-
-    def test_dict_access_works(self):
-        """When identity.tenant is a raw dict (IMPL transport), same behavior."""
-        identity = _identity_with(supported_billing=["agent"])
-        assert isinstance(identity.tenant, dict)
-        assert _check_billing_policy("agent", identity) is None
+        failures = _check_billing_policy("operator", identity)
+        assert failures is not None
+        assert _FAILURE_CLASS_TO_CODE[failures[0].failure_class] == "BILLING_NOT_SUPPORTED"
 
 
 class TestBuildSetupForApproval:

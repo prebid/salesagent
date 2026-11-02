@@ -19,7 +19,9 @@ from sqlalchemy import func, select
 
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
+from src.admin.utils.operator_errors import safe_error_message
 from src.core.database.database_session import get_db_session
+from src.core.database.integrity import resolve_or_write
 from src.core.database.models import (
     AuthorizedProperty,
     InventoryProfile,
@@ -309,15 +311,19 @@ def add_inventory_profile(tenant_id: str):
 
             # Create inventory profile
             with get_db_session() as session:
-                # Check for duplicate profile_id
-                existing = session.scalar(
-                    select(InventoryProfile).where(
-                        InventoryProfile.tenant_id == tenant_id, InventoryProfile.profile_id == profile_id
-                    )
+                # Check for duplicate profile_id. uq_inventory_profile is the
+                # authority, so this same answer serves the loser of a concurrent
+                # create rather than a flash carrying the driver's message.
+                existing_profile_stmt = select(InventoryProfile).where(
+                    InventoryProfile.tenant_id == tenant_id, InventoryProfile.profile_id == profile_id
                 )
-                if existing:
-                    flash(f"Inventory profile with ID '{profile_id}' already exists", "error")
-                    return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
+
+                def already_exists():
+                    existing = session.scalar(existing_profile_stmt)
+                    if existing:
+                        flash(f"Inventory profile with ID '{profile_id}' already exists", "error")
+                        return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
+                    return None
 
                 profile = InventoryProfile(
                     tenant_id=tenant_id,
@@ -330,7 +336,14 @@ def add_inventory_profile(tenant_id: str):
                     targeting_template=targeting_template,
                 )
 
-                session.add(profile)
+                conflict = resolve_or_write(
+                    session,
+                    conflict=already_exists,
+                    write=lambda: session.add(profile),
+                    constraint="uq_inventory_profile",
+                )
+                if conflict is not None:
+                    return conflict
                 session.commit()
 
                 flash(f"Inventory profile '{name}' created successfully!", "success")
@@ -338,7 +351,7 @@ def add_inventory_profile(tenant_id: str):
 
         except Exception as e:
             logger.error(f"Error creating inventory profile: {e}", exc_info=True)
-            flash(f"Error creating inventory profile: {str(e)}", "error")
+            flash(f"Error creating inventory profile: {safe_error_message(e)}", "error")
             return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
 
     # GET: Show form
@@ -558,7 +571,7 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
 
             except Exception as e:
                 logger.error(f"Error updating inventory profile: {e}", exc_info=True)
-                flash(f"Error updating inventory profile: {str(e)}", "error")
+                flash(f"Error updating inventory profile: {safe_error_message(e)}", "error")
                 session.rollback()
 
         # GET: Show form with existing data

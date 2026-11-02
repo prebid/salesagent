@@ -1,7 +1,8 @@
-"""mpo1 repro: typed transient creative-agent errors must stay transient on the wire.
+"""Typed transient creative-agent errors must stay transient on the wire.
 
-Split from test_creative_sync_behavioral.py so the (intentionally red, pre-fix)
-repro ships with the fix commit, not before it.
+Split from the (since retired) creative-sync integration file so the intentionally
+red, pre-fix repro shipped with the fix commit, not before it. The same rule is
+graded on every transport by @T-UC-006-ext-g in BR-UC-006-sync-creatives.feature.
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ class TestFormatFetchTransientErrors:
     """Typed transient errors from the creative-agent registry must stay
     transient ON THE WIRE for sync_creatives — matching create_media_buy.
 
-    : _validation.py catches bare Exception around the format
+    _validation.py catches bare Exception around the format
     fetch and rewraps typed AdCPRateLimitError/AdCPServiceUnavailableError into
     AdCPAdapterError; the per-item handler in _sync.py then swallows even that
     into a terminal-looking action='failed' entry — the buyer is told to fix
@@ -46,13 +47,8 @@ class TestFormatFetchTransientErrors:
     @pytest.mark.parametrize("transport", _WIRE_TRANSPORTS, ids=lambda t: t.value)
     def test_typed_transient_registry_error_reaches_wire(self, integration_db, raised, wire_code, transport):
         from src.core.exceptions import AdCPRateLimitError, AdCPServiceUnavailableError
-        from tests.helpers import assert_envelope_shape
 
-        exc = (
-            AdCPRateLimitError("Creative agent rate limited (429)")
-            if raised == "rate_limit"
-            else AdCPServiceUnavailableError("Creative agent unavailable (503)")
-        )
+        exc = AdCPRateLimitError() if raised == "rate_limit" else AdCPServiceUnavailableError()
 
         with CreativeSyncEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
@@ -71,17 +67,13 @@ class TestFormatFetchTransientErrors:
                 f"not return success with a terminal-looking per-item failure. Got: "
                 f"{getattr(result, 'wire_response', None) or result.payload!r}"
             )
-            assert_envelope_shape(
-                result.wire_error_envelope,
-                wire_code,
-                recovery="transient",
-            )
+            result.assert_wire_error(wire_code, recovery="transient")
 
 
 class TestCreateMediaBuyFormatFetchTransientErrors:
     """Same contract on create_media_buy: a typed transient error from the
     format-spec fetch must reach the buyer as a transient wire envelope
-    (the ticket requires BOTH tools asserted on the wire). .
+    (the ticket requires BOTH tools asserted on the wire).
     """
 
     @pytest.mark.parametrize(
@@ -96,14 +88,9 @@ class TestCreateMediaBuyFormatFetchTransientErrors:
         from src.core.exceptions import AdCPRateLimitError, AdCPServiceUnavailableError
         from tests.factories import CreativeFactory
         from tests.harness.media_buy_create import MediaBuyCreateEnv
-        from tests.helpers import assert_envelope_shape
         from tests.integration.media_buy_helpers import _single_creative_request
 
-        exc = (
-            AdCPRateLimitError("Creative agent rate limited (429)")
-            if raised == "rate_limit"
-            else AdCPServiceUnavailableError("Creative agent unavailable (503)")
-        )
+        exc = AdCPRateLimitError() if raised == "rate_limit" else AdCPServiceUnavailableError()
 
         with MediaBuyCreateEnv() as env:
             tenant, principal, _product, _po = env.setup_media_buy_data()
@@ -122,8 +109,4 @@ class TestCreateMediaBuyFormatFetchTransientErrors:
             assert result.is_error, (
                 f"A transient fetch failure must fail create_media_buy transiently: {result.payload!r}"
             )
-            assert_envelope_shape(
-                result.wire_error_envelope,
-                wire_code,
-                recovery="transient",
-            )
+            result.assert_wire_error(wire_code, recovery="transient")

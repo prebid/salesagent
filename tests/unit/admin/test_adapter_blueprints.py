@@ -34,9 +34,9 @@ class TestAdapterConfigEndpoint:
         schemas = get_adapter_schemas("mock")
 
         # Valid config should pass
-        valid_config = {"dry_run": True, "manual_approval_required": False}
+        valid_config = {"manual_approval_required": False}
         validated = schemas.connection_config(**valid_config)
-        assert validated.dry_run is True
+        assert validated.manual_approval_required is False
 
         # Invalid config should fail
         with pytest.raises(ValidationError):
@@ -65,13 +65,12 @@ class TestAdapterConfigValidation:
         from src.adapters import get_adapter_schemas
 
         schemas = get_adapter_schemas("mock")
-        config_data = {"dry_run": True, "manual_approval_required": True}
+        config_data = {"manual_approval_required": True}
 
         # Validate and serialize
         validated = schemas.connection_config(**config_data)
         serialized = validated.model_dump()
 
-        assert serialized["dry_run"] is True
         assert serialized["manual_approval_required"] is True
 
     def test_mock_config_rejects_invalid(self):

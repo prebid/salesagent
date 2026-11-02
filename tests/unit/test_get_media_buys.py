@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from adcp.types import MediaBuyStatus
-from pydantic import RootModel, ValidationError
+from pydantic import RootModel
 
 from src.core.exceptions import AdCPPersistedStateError
 from src.core.schemas import (
@@ -48,7 +48,6 @@ def make_identity(
     tenant_id="tenant_1",
     principal_id="principal_1",
     tenant=None,
-    testing_context=None,
 ):
     """Create a ResolvedIdentity for testing."""
     from tests.factories import PrincipalFactory
@@ -59,8 +58,6 @@ def make_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
         tenant=tenant,
-        protocol="mcp",
-        testing_context=testing_context,
     )
 
 
@@ -300,8 +297,17 @@ class TestFetchTargetMediaBuys:
         assert advisory.recovery == "terminal", (
             "a persisted-state defect cannot be retried into success; the advisory must say so"
         )
-        assert "buy_corrupt" in advisory.message
-        assert "MEDIA_BUY_UNRENDERABLE" in advisory.message
+        # Read off the advisory's DATA, not its prose. ``Error`` derives
+        # message/suggestion/recovery from CODE_TABLE and discards whatever a call site
+        # passes for them (ADR-010), so an assertion on ``message`` would grade the
+        # table rather than this advisory — and would pass just as well for an advisory
+        # that named no row at all, which is exactly the defect it must catch.
+        assert advisory.details["media_buy_id"] == "buy_corrupt", (
+            "the advisory must name the row it stands in for; a buyer cannot otherwise "
+            "tell whether the buy they are looking for is missing or was never there"
+        )
+        assert advisory.details["reasons"] == ["MEDIA_BUY_UNRENDERABLE"]
+        assert advisory.field == "media_buys[]"
 
     def test_a_null_revision_is_refused_like_a_below_minimum_one(self):
         """The ``revision is None`` operand has an oracle now.
@@ -382,16 +388,13 @@ def patched_internals():
     """
     with (
         patch("src.core.tools.media_buy_list.MediaBuyUoW") as m_uow,
-        patch("src.core.tools.media_buy_list.get_principal_object") as m_principal,
         patch("src.core.tools.media_buy_list._fetch_target_media_buys") as m_buys,
         patch("src.core.tools.media_buy_list._fetch_packages") as m_packages,
         patch("src.core.tools.media_buy_list._fetch_creative_approvals") as m_approvals,
     ):
-        m_principal.return_value = MagicMock(principal_id="principal_1")
         m_approvals.return_value = {}
         yield SimpleNamespace(
             uow=m_uow,
-            principal=m_principal,
             buys=m_buys,
             packages=m_packages,
             approvals=m_approvals,
@@ -421,16 +424,23 @@ class TestGetMediaBuysImpl:
         assert len(response.media_buys) == 1
         assert response.media_buys[0].media_buy_id == "buy_active"
 
-    def test_missing_principal_returns_error(self):
-        """If principal ID not in identity, return empty list with error."""
-        identity = make_identity(principal_id=None)
-
-        req = self._make_request()
-        response = _get_media_buys_impl(req, identity=identity)
-
-        assert response.media_buys == []
-        assert response.errors is not None
-        assert len(response.errors) > 0
+    # test_missing_principal_raises_rather_than_degrading is REMOVED. It built an identity
+    # with principal_id=None and asserted _get_media_buys_impl raised
+    # AdCPAuthRequiredError / AUTH_MISSING itself. This is the same case
+    # tests/unit/test_media_buy.py:3869 already documents removing (GMB-A02, Covers: #1651)
+    # -- one copy of it survived here.
+    #
+    # Neither half is constructible now. A ResolvedIdentity ALWAYS carries a principal
+    # (the field is required and make_identity takes no None), and the in-tool guards that
+    # raised went with the rest of the re-checks when the resolver became the one place a
+    # credential is judged (47d57e5d6); ruff-boundary.toml's TID251 ban forbids raising
+    # AUTH_MISSING or AUTH_INVALID anywhere but the resolver.
+    #
+    # The conformance obligation is unchanged (#1651: a fatal auth failure must populate the
+    # ENVELOPE, not answer HTTP 200 with a payload-only errors[], per
+    # transport-errors.mdx :206-220) and is graded where it is decided: the resolver mints
+    # the refusal for every tool and every transport at once, and the wire shape is asserted
+    # by the transport-blind auth scenarios rather than once per tool.
 
     def test_snapshot_not_requested_when_false(self, patched_internals):
         """When include_snapshot=False, adapter.get_packages_snapshot not called."""
@@ -444,7 +454,7 @@ class TestGetMediaBuysImpl:
 
         with patch("src.core.tools.media_buy_list.get_adapter", return_value=mock_adapter):
             req = self._make_request()
-            _get_media_buys_impl(req, identity=make_identity(), include_snapshot=False)
+            _get_media_buys_impl(req.model_copy(update={"include_snapshot": False}), identity=make_identity())
 
         mock_adapter.get_packages_snapshot.assert_not_called()
 
@@ -468,7 +478,7 @@ class TestGetMediaBuysImpl:
 
         with patch("src.core.tools.media_buy_list.get_adapter", return_value=mock_adapter):
             req = self._make_request()
-            response = _get_media_buys_impl(req, identity=make_identity(), include_snapshot=True)
+            response = _get_media_buys_impl(req.model_copy(update={"include_snapshot": True}), identity=make_identity())
 
         mock_adapter.get_packages_snapshot.assert_called_once()
         # The package_refs passed should include the platform_line_item_id
@@ -490,19 +500,11 @@ class TestGetMediaBuysImpl:
 
         with patch("src.core.tools.media_buy_list.get_adapter", return_value=mock_adapter):
             req = self._make_request()
-            response = _get_media_buys_impl(req, identity=make_identity(), include_snapshot=True)
+            response = _get_media_buys_impl(req.model_copy(update={"include_snapshot": True}), identity=make_identity())
 
         pkg_response = response.media_buys[0].packages[0]
         assert pkg_response.snapshot is None
         assert pkg_response.snapshot_unavailable_reason == SnapshotUnavailableReason.SNAPSHOT_UNSUPPORTED
-
-    def test_identity_required(self):
-        """identity=None raises AdCPAuthenticationError."""
-        from src.core.exceptions import AdCPAuthenticationError
-
-        req = self._make_request()
-        with pytest.raises(AdCPAuthenticationError, match="Authentication required"):
-            _get_media_buys_impl(req, None)
 
 
 class TestTargetingOverlayRoundTrip:
@@ -632,58 +634,22 @@ class TestTargetingOverlayRoundTrip:
 
         assert response.media_buys[0].packages[0].targeting_overlay is None
 
-    def test_internal_targeting_fields_not_leaked(self, patched_internals):
-        """Targeting carries internal fields (had_city_targeting, tenant_id, etc.) — none
-        of them may leak into the response. Targeting.model_dump excludes the full set:
-        key_value_pairs, tenant_id, created_at, updated_at, metadata, had_city_targeting.
-        """
-        buy = make_media_buy(start_date=date(2020, 1, 1), end_date=date(2099, 12, 31))
-        pkg = make_package(
-            package_config={
-                "product_id": "prod_1",
-                "targeting_overlay": {
-                    "property_list": {
-                        "agent_url": "https://gov.example",
-                        "list_id": "v1",
-                    },
-                    # Legacy city targeting triggers had_city_targeting=True via normalizer
-                    "geo_city_any_of": ["NYC"],
-                    # Each of these must be excluded by Targeting.model_dump
-                    "tenant_id": "leaky_tenant_id",
-                    "created_at": "2025-01-01T00:00:00Z",
-                    "updated_at": "2025-01-02T00:00:00Z",
-                    "metadata": {"private": "do_not_leak"},
-                    "key_value_pairs": {"aee_segment": "secret"},
-                },
-            }
-        )
-        patched_internals.buys.return_value = [buy]
-        patched_internals.packages.return_value = {"buy_1": [pkg]}
-
-        req = self._make_request()
-        response = _get_media_buys_impl(req, identity=make_identity())
-
-        dumped = response.model_dump(exclude_none=True)
-        targeting = dumped["media_buys"][0]["packages"][0]["targeting_overlay"]
-        # Full excluded set per Targeting.model_dump + Field(exclude=True)
-        excluded_internal_fields = {
-            "key_value_pairs",
-            "tenant_id",
-            "created_at",
-            "updated_at",
-            "metadata",
-            "had_city_targeting",
-        }
-        leaked = excluded_internal_fields & set(targeting.keys())
-        assert not leaked, f"Internal Targeting fields leaked into response: {sorted(leaked)}"
-        # property_list still surfaces
-        assert targeting["property_list"]["list_id"] == "v1"
+    # DELETED: test_internal_targeting_fields_not_leaked. It graded the six internal
+    # ``Field(exclude=True)`` fields ``Targeting`` used to carry — key_value_pairs,
+    # tenant_id, created_at, updated_at, metadata, had_city_targeting (plus the
+    # geo_city_any_of normalizer that set the last one). Every one of them is deleted from
+    # the model (``src/core/schemas/_base.py``: the seller key/value field went with
+    # salesagent-3cs7o.22, the city-level refusal with salesagent-3cs7o.15), so there is no
+    # field left to leak. Feeding those keys in a stored document now raises a pydantic
+    # ValidationError, which ``test_corrupted_targeting_surfaces_via_errors_channel`` below
+    # documents as the DELIBERATE dev/CI canary for field-declaration drift.
 
     def test_corrupted_targeting_surfaces_via_errors_channel(self, patched_internals):
         """A single bad package_config row must not crash the response.
 
-        Corrupted row → targeting_overlay=None for THAT package + one
-        ``TARGETING_REHYDRATION_FAILED`` entry on ``response.errors``. The
+        Corrupted row → targeting_overlay=None for THAT package + one advisory on
+        ``response.errors`` whose ``details.reasons`` carries
+        ``targeting_rehydration_failed``. The
         rest of the buy still renders (round-trip resilience). Catches only
         ``TypeError`` (real corruption) — pydantic ``ValidationError`` is
         intentionally NOT caught so dev/CI canary fires on field-declaration
@@ -727,8 +693,12 @@ class TestTargetingOverlayRoundTrip:
         assert len(response.errors) == 1
         err = response.errors[0]
         assert err.code == "CONFIGURATION_ERROR"
-        assert err.recovery == "terminal"
-        assert "TARGETING_REHYDRATION_FAILED" in err.message
+        assert err.recovery == "terminal", "a row the buyer cannot repair must not invite a retry"
+        # The discriminator is ``details.reasons``, not the message: ``message`` is
+        # derived from CODE_TABLE, so no raise site can stamp a
+        # ``TARGETING_REHYDRATION_FAILED:`` prefix into it (salesagent-3dawm).
+        assert err.details is not None
+        assert "targeting_rehydration_failed" in err.details["reasons"]
         assert err.field is not None and "targeting_overlay" in err.field
 
 
@@ -824,20 +794,31 @@ class TestGetMediaBuysResponseStructure:
 # ---------------------------------------------------------------------------
 
 
-class TestGetMediaBuysRequestRejectsInternalFlags:
-    """Regression: internal behavior flags must NOT be accepted by GetMediaBuysRequest.
+class TestGetMediaBuysRequestCarriesSpecFields:
+    """``include_snapshot`` is a SPEC field, so the request must carry it.
 
-    External callers must never control _impl behavior through the request object.
-    Flags like include_snapshot are passed as explicit _impl parameters by transport
-    wrappers, not embedded in the request.
+    This class previously asserted the opposite -- that GetMediaBuysRequest REJECTS
+    include_snapshot, on the reasoning that "external callers must never control _impl
+    behavior through the request object". AdCP 3.1.1 disagrees:
+    get-media-buys-request.json declares include_snapshot (alongside include_history,
+    include_webhook_activity, pagination and webhook_activity_limit), so it is buyer-facing
+    request data, not an internal flag.
+
+    The old belief was enforced by a hand-written GetMediaBuysRequest that subclassed
+    SalesAgentBaseModel instead of the library type and silently dropped six spec fields.
+    Restoring the inheritance made the spec's fields reachable and surfaced these tests as
+    encoding the wrong contract.
     """
 
-    def test_include_snapshot_rejected(self):
-        """include_snapshot must NOT be accepted by GetMediaBuysRequest."""
-        with pytest.raises(ValidationError):
-            GetMediaBuysRequest(include_snapshot=True)
+    def test_include_snapshot_is_accepted(self):
+        """The spec declares it, so the request model must take it."""
+        req = GetMediaBuysRequest(include_snapshot=True)
+        assert req.include_snapshot is True, (
+            "include_snapshot is declared in get-media-buys-request.json; refusing it means "
+            "a spec-conformant buyer cannot ask for snapshots"
+        )
 
-    def test_include_snapshot_false_also_rejected(self):
-        """Even include_snapshot=False must be rejected — the field doesn't belong here."""
-        with pytest.raises(ValidationError):
-            GetMediaBuysRequest(include_snapshot=False)
+    def test_include_snapshot_false_is_accepted_and_preserved(self):
+        """False must round-trip as False, not be collapsed to the default."""
+        req = GetMediaBuysRequest(include_snapshot=False)
+        assert req.include_snapshot is False

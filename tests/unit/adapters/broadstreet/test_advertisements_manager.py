@@ -1,4 +1,9 @@
-"""Unit tests for Broadstreet Advertisement Manager."""
+"""Unit tests for Broadstreet Advertisement Manager.
+
+The manager has no dry-run mode: an advertisement exists only once Broadstreet has
+been called, so what these tests stand in for is the VENDOR CLIENT, and what they
+grade is the call the manager makes on it.
+"""
 
 import pytest
 
@@ -7,6 +12,13 @@ from src.adapters.broadstreet.managers.advertisements import (
     AdvertisementInfo,
     BroadstreetAdvertisementManager,
 )
+from tests.helpers.broadstreet_client import stub_broadstreet_client
+
+
+@pytest.fixture
+def client():
+    """A stand-in Broadstreet API client that hands back a distinct id per ad."""
+    return stub_broadstreet_client()
 
 
 class TestAdvertisementInfo:
@@ -85,15 +97,22 @@ class TestFormatToAdType:
 
 
 class TestBroadstreetAdvertisementManager:
-    """Tests for BroadstreetAdvertisementManager."""
+    """Tests for BroadstreetAdvertisementManager.
+
+    No test here builds the manager with ``client=None``. One briefly did, asserting the
+    ``AdCPConfigurationError`` that ``create_advertisement`` raises in that case — but
+    that state is unreachable: ``BroadstreetAdapter.__init__`` always constructs a real
+    ``BroadstreetClient`` (after requiring ``api_key`` and ``network_id``) and hands it
+    to all four managers. The optional client and its two guards are dry-run residue —
+    ``client=None`` WAS the dry-run signal — so a test for them grades dead code.
+    """
 
     @pytest.fixture
-    def manager(self):
-        """Create an advertisement manager in dry-run mode."""
+    def manager(self, client):
+        """Create an advertisement manager over the stand-in client."""
         return BroadstreetAdvertisementManager(
-            client=None,
+            client=client,
             advertiser_id="adv_123",
-            dry_run=True,
         )
 
     def test_get_ad_type_from_format(self, manager):
@@ -187,8 +206,8 @@ class TestBroadstreetAdvertisementManager:
         assert "Special Offer" in params["default_text"]
         assert "50% off today!" in params["default_text"]
 
-    def test_create_advertisement_dry_run(self, manager):
-        """Test creating advertisement in dry-run mode."""
+    def test_create_advertisement_static(self, manager, client):
+        """A static ad is created through the client and keeps the returned id."""
         asset = {
             "creative_id": "creative_1",
             "name": "Test Ad",
@@ -198,11 +217,28 @@ class TestBroadstreetAdvertisementManager:
 
         info = manager.create_advertisement("mb_1", asset)
 
+        client.create_advertisement.assert_called_once_with(
+            advertiser_id="adv_123",
+            name="Test Ad",
+            ad_type="static",
+            params={"image": "https://example.com/ad.png"},
+        )
         assert info.creative_id == "creative_1"
         assert info.name == "Test Ad"
         assert info.ad_type == "static"
         assert info.status == "approved"
-        assert info.broadstreet_id == "bs_ad_creative_1"
+        assert info.broadstreet_id == "bs_1"
+
+    def test_create_advertisement_records_failure_when_the_client_raises(self, manager, client):
+        """A vendor failure is recorded on the ad, not swallowed into a success."""
+        client.create_advertisement.side_effect = RuntimeError("Broadstreet said no")
+
+        info = manager.create_advertisement(
+            "mb_1", {"creative_id": "creative_1", "media_url": "https://example.com/ad.png"}
+        )
+
+        assert info.status == "failed"
+        assert info.broadstreet_id is None
 
     def test_create_advertisement_html(self, manager):
         """Test creating HTML advertisement."""
@@ -282,30 +318,35 @@ class TestBroadstreetAdvertisementManager:
         manager.create_advertisements("mb_1", assets)
 
         ids = manager.get_broadstreet_ids("mb_1")
-        assert len(ids) == 2
-        assert "bs_ad_c1" in ids
-        assert "bs_ad_c2" in ids
+        assert ids == ["bs_1", "bs_2"]
 
-    def test_update_advertisement_dry_run(self, manager):
-        """Test updating advertisement in dry-run mode."""
+    def test_update_advertisement(self, manager, client):
+        """An update reaches the client under the ad's Broadstreet id."""
         asset = {"creative_id": "c1", "name": "Ad", "media_url": "https://example.com/ad.png"}
         manager.create_advertisement("mb_1", asset)
 
         result = manager.update_advertisement("mb_1", "c1", {"name": "Updated Ad"})
+
         assert result is True
+        client.update_advertisement.assert_called_once_with(
+            advertiser_id="adv_123",
+            advertisement_id="bs_1",
+            params={"name": "Updated Ad"},
+        )
 
     def test_update_advertisement_not_found(self, manager):
         """Test updating non-existent advertisement."""
         result = manager.update_advertisement("mb_1", "c_unknown", {"name": "New"})
         assert result is False
 
-    def test_delete_advertisement_dry_run(self, manager):
-        """Test deleting advertisement in dry-run mode."""
+    def test_delete_advertisement(self, manager, client):
+        """A delete reaches the client and drops the ad from the cache."""
         asset = {"creative_id": "c1", "name": "Ad", "media_url": "https://example.com/ad.png"}
         manager.create_advertisement("mb_1", asset)
 
         result = manager.delete_advertisement("mb_1", "c1")
         assert result is True
+        client.delete_advertisement.assert_called_once_with(advertiser_id="adv_123", advertisement_id="bs_1")
 
         # Should be removed from cache
         info = manager.get_advertisement("mb_1", "c1")
@@ -364,16 +405,21 @@ class TestBroadstreetAdvertisementManager:
         assert is_valid is False
         assert "text" in error.lower()
 
-    def test_get_delivery_report_dry_run(self, manager):
-        """Test getting delivery report in dry-run mode."""
+    def test_get_delivery_report(self, manager, client):
+        """The report is the client's, asked for under the ad's id and date range."""
+        client.get_advertisement_report.return_value = [{"impressions": 1000, "clicks": 7}]
         asset = {"creative_id": "c1", "name": "Ad", "media_url": "https://example.com/ad.png"}
         manager.create_advertisement("mb_1", asset)
 
         report = manager.get_delivery_report("mb_1", "c1", "2024-01-01", "2024-01-31")
 
-        assert len(report) == 1
-        assert "impressions" in report[0]
-        assert "clicks" in report[0]
+        client.get_advertisement_report.assert_called_once_with(
+            advertiser_id="adv_123",
+            advertisement_id="bs_1",
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+        )
+        assert report == [{"impressions": 1000, "clicks": 7}]
 
     def test_get_delivery_report_not_found(self, manager):
         """Test getting delivery report for non-existent ad."""
@@ -407,12 +453,11 @@ class TestTemplateAdvertisements:
     """Tests for template-based advertisement support."""
 
     @pytest.fixture
-    def manager(self):
-        """Create a manager in dry-run mode."""
+    def manager(self, client):
+        """Create a manager over the stand-in client."""
         return BroadstreetAdvertisementManager(
-            client=None,
+            client=client,
             advertiser_id="test_advertiser",
-            dry_run=True,
             log_func=lambda msg: None,
         )
 
@@ -515,8 +560,8 @@ class TestTemplateAdvertisements:
         assert params["caption_1"] == "Image 1"
         assert params["timeout"] == 3000
 
-    def test_create_template_advertisement_dry_run(self, manager):
-        """Test creating template ad in dry-run mode."""
+    def test_create_template_advertisement(self, manager, client):
+        """A template ad is a base HTML ad plus a source set to the template type."""
         asset = {
             "creative_id": "cube_ad_1",
             "name": "3D Cube Ad",
@@ -530,12 +575,31 @@ class TestTemplateAdvertisements:
         }
         info = manager.create_advertisement("mb_1", asset)
 
+        client.create_advertisement.assert_called_once_with(
+            advertiser_id="test_advertiser",
+            name="3D Cube Ad",
+            ad_type="html",
+            params={},
+        )
+        client.set_advertisement_source.assert_called_once_with(
+            advertiser_id="test_advertiser",
+            advertisement_id="bs_1",
+            source_type="cube",
+            params={
+                "front_image": "https://front.png",
+                "back_image": "https://back.png",
+                "left_image": "https://left.png",
+                "right_image": "https://right.png",
+                "top_image": "https://top.png",
+                "bottom_image": "https://bottom.png",
+            },
+        )
         assert info.creative_id == "cube_ad_1"
         assert info.ad_type == "template:cube_3d"
         assert info.status == "approved"
-        assert info.broadstreet_id.startswith("bs_template_")
+        assert info.broadstreet_id == "bs_1"
 
-    def test_create_template_advertisement_explicit_type(self, manager):
+    def test_create_template_advertisement_explicit_type(self, manager, client):
         """Test creating template ad with explicit template_type parameter."""
         asset = {
             "creative_id": "gallery_1",
@@ -546,9 +610,15 @@ class TestTemplateAdvertisements:
         info = manager.create_advertisement("mb_1", asset, template_type="gallery")
 
         assert info.ad_type == "template:gallery"
+        client.set_advertisement_source.assert_called_once_with(
+            advertiser_id="test_advertiser",
+            advertisement_id="bs_1",
+            source_type="gallery",
+            params={"image_1": "https://1.png", "image_2": "https://2.png"},
+        )
 
-    def test_standard_ad_not_affected_by_template_detection(self, manager):
-        """Test that standard ads work when template detection returns False."""
+    def test_standard_ad_not_affected_by_template_detection(self, manager, client):
+        """A standard ad takes the one-call path: no template source is ever set."""
         asset = {
             "creative_id": "banner_1",
             "name": "Standard Banner",
@@ -557,4 +627,5 @@ class TestTemplateAdvertisements:
         info = manager.create_advertisement("mb_1", asset)
 
         assert info.ad_type == "static"
-        assert info.broadstreet_id.startswith("bs_ad_")
+        assert info.broadstreet_id == "bs_1"
+        client.set_advertisement_source.assert_not_called()

@@ -1,0 +1,60 @@
+# Production behavior never branches on a test flag (CLAUDE.md pattern 11).
+#
+# `ADCP_TESTING` is a TEST-RUN fact: it says a suite is executing, and nothing about the
+# seller being served. A production path that reads it serves a different seller under test
+# than in deployment, which makes the whole suite's verdict conditional on the suite being
+# the thing that ran it. That is not a weak test, it is a test of something else.
+#
+# WHAT THIS BANS. Any read of `adcp_testing` under `src/`, in every spelling -- a property
+# body (`return self.testing.adcp_testing`), a conditional
+# (`if get_settings().testing.adcp_testing:`), an attribute chain off any receiver. The
+# field's own DECLARATION in `TestingSettings` is not a read and is exempt by path below.
+#
+# WHY IT IS A BUG AND NOT A KNOB. A behavior worth having is worth having in production; a
+# behavior not worth having in production is not worth testing. So a fork on this flag is
+# always one of two things, and both have a fix that is not the fork:
+#
+#   * the production behavior needs a real input -- a tenant column, an AdapterConfig row, a
+#     settings field a deployment can actually set -- and the test seeds it like any other
+#     state. `mock_adapter_counts_as_configured` is this case: the setup checklist asks
+#     whether a tenant's ad server is configured, and "the mock one counts, but only under
+#     test" answers a different question than the one a deployed seller answers.
+#   * the test wanted to skip a production step, and skipping a production step is what makes
+#     a scenario grade a seller that does not exist. tests/CLAUDE.md § "Which kind of test"
+#     carries the same rule for the test side: a patch between layers is not a substitute for
+#     the state the layer reads.
+#
+# WHY AST-GREP AND NOT RUFF. TID251 bans a NAME that is IMPORTED, and this is an attribute
+# read off a settings object -- `get_settings().testing.adcp_testing` imports nothing the ban
+# could see. ruff-environment.toml is the sibling that CAN use TID251, because `os.environ`
+# is a name; the split between the two configs is the same one serialize-only-at-the-edges
+# documents for model_dump.
+#
+# THE EXEMPTION, AND WHY IT IS ONE FILE. `src/core/config.py` declares the field and, today,
+# seven properties that are each `return self.testing.adcp_testing` with production readers
+# behind them. Those seven ARE the outstanding violations, not settled exceptions: they are
+# enumerated with their reader counts in
+# tests/unit/test_test_flag_properties_only_shrink.py, which fails when the list grows and
+# forces it down when one goes. Exempting the file rather than each property keeps the
+# ban expressible in one rule; the companion test is what keeps the seven visible and
+# shrinking. GH #2255 owns removing them.
+id: test-flag-never-reaches-production
+language: Python
+severity: error
+message: >-
+  Production behavior must not branch on a test flag. `adcp_testing` says a suite is running,
+  not what this seller is -- read a real input (a tenant column, an AdapterConfig row, a
+  settings field a deployment sets) and let the test seed it (CLAUDE.md pattern 11, GH #2255).
+files:
+  - "src/**/*.py"
+ignores:
+  # Declares the field, and holds the seven outstanding properties that read it. Their count
+  # is pinned and shrink-only by tests/unit/test_test_flag_properties_only_shrink.py.
+  - "src/core/config.py"
+rule:
+  # The attribute read, which is every real spelling: the flag is a FIELD on a settings
+  # group, so it is always reached through a receiver -- "self.testing.adcp_testing",
+  # "get_settings().testing.adcp_testing", "settings.testing.adcp_testing". A bare-name
+  # pattern sat beside this one and matched the same site twice, reporting one violation
+  # as two; nothing reaches this field without a receiver, so it added no coverage.
+  pattern: $X.adcp_testing

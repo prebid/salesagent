@@ -156,11 +156,6 @@ def _make_media_package(
     return pkg
 
 
-def _make_create_request() -> MagicMock:
-    """Create a minimal CreateMediaBuyRequest-like object."""
-    return MagicMock()
-
-
 def _make_adapter_instance() -> Any:
     """Instantiate a concrete AdServerAdapter subclass for testing base methods.
 
@@ -175,7 +170,6 @@ def _make_adapter_instance() -> Any:
     return MockAdServer(
         config={"enabled": True},
         principal=principal,
-        dry_run=False,
         tenant_id="test-tenant",
     )
 
@@ -227,11 +221,9 @@ class TestBuildCreateSuccess:
     def test_basic_success_response(self):
         """Creates success with media_buy_id, packages, and deadline."""
         adapter = _make_adapter_instance()
-        request = _make_create_request()
         packages = [_make_media_package(package_id="p1")]
 
         result = adapter._build_create_success(
-            request=request,
             media_buy_id="mb-123",
             packages=packages,
         )
@@ -245,7 +237,6 @@ class TestBuildCreateSuccess:
         adapter = _make_adapter_instance()
         before = datetime.now(UTC)
         result = adapter._build_create_success(
-            request=_make_create_request(),
             media_buy_id="mb-1",
             packages=[_make_media_package()],
         )
@@ -260,7 +251,6 @@ class TestBuildCreateSuccess:
         adapter = _make_adapter_instance()
         before = datetime.now(UTC)
         result = adapter._build_create_success(
-            request=_make_create_request(),
             media_buy_id="mb-1",
             packages=[_make_media_package()],
             creative_deadline_days=5,
@@ -275,7 +265,6 @@ class TestBuildCreateSuccess:
         """paused=True propagates to generated package responses."""
         adapter = _make_adapter_instance()
         result = adapter._build_create_success(
-            request=_make_create_request(),
             media_buy_id="mb-1",
             packages=[_make_media_package()],
             paused=True,
@@ -290,7 +279,6 @@ class TestBuildCreateSuccess:
         adapter = _make_adapter_instance()
         pre_built = [ResponsePackage(package_id="custom-p1", paused=False)]
         result = adapter._build_create_success(
-            request=_make_create_request(),
             media_buy_id="mb-1",
             packages=[_make_media_package()],  # these should be ignored
             package_responses=pre_built,
@@ -299,37 +287,40 @@ class TestBuildCreateSuccess:
         assert len(result.packages) == 1
         assert result.packages[0].package_id == "custom-p1"
 
-    def test_buyer_ref_not_serialized_on_success_response(self):
-        """buyer_ref must never reach the wire on CreateMediaBuySuccess.
+    def test_buyer_ref_no_longer_on_success_response(self):
+        """buyer_ref must not be part of CreateMediaBuySuccess.
 
-        adcp 6.6 (spec 3.1.1) removed buyer_ref from the create-media-buy response type —
-        it belongs on the request, not the response. The adcp 6.6 parent therefore no
-        longer declares it, so it is not a field on CreateMediaBuySuccess at all and can
-        never be serialized. (The obsolete SDK-5.7 exclude=True redeclaration that used to
-        neutralize a wrongly-inherited parent field is gone with the 6.6 bump.)
+        SDK 5.7 codegen incorrectly declared buyer_ref on the response schema; adcp 6.6
+        (spec 3.1.1) removed it — buyer_ref belongs on the request, not the response. The
+        field is now entirely absent from the model rather than present-but-None.
         """
         adapter = _make_adapter_instance()
         result = adapter._build_create_success(
-            request=_make_create_request(),
             media_buy_id="mb-1",
             packages=[_make_media_package()],
         )
 
-        # The obligation is on the wire: buyer_ref never serializes. Under adcp 6.6 that
-        # holds because it is not a field on the response type at all.
+        # buyer_ref is not a field on the success response at all
         assert "buyer_ref" not in type(result).model_fields
         assert "buyer_ref" not in result.model_dump()
         assert "buyer_ref" not in result.model_dump_json()
 
-    def test_result_is_create_media_buy_success_type(self):
-        """Return type is CreateMediaBuySuccess."""
+    def test_result_is_the_adapter_carrier_not_the_wire_model(self):
+        """The helper returns ``AdapterCreateResult``, never the buyer's success model.
+
+        The adapter hands the tool a seller-internal carrier (it holds the
+        per-package ad-server line-item ids); ``media_buy_create`` builds the
+        buyer's ``CreateMediaBuySuccess`` from the persisted row. Asserting the
+        carrier is NOT the wire model is what keeps the two from merging again.
+        """
+        from src.adapters.base import AdapterCreateResult
         from src.core.schemas import CreateMediaBuySuccess
 
         adapter = _make_adapter_instance()
         result = adapter._build_create_success(
-            request=_make_create_request(),
             media_buy_id="mb-1",
             packages=[_make_media_package()],
         )
 
-        assert isinstance(result, CreateMediaBuySuccess)
+        assert isinstance(result, AdapterCreateResult)
+        assert not isinstance(result, CreateMediaBuySuccess)

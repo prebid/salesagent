@@ -37,12 +37,27 @@ def _assert_success_equivalent(via, client_result) -> None:
     assert via.wire_response == client_result.wire_response
 
 
-def _assert_error_equivalent(via, client_result, code: str) -> None:
-    """Shared error-path equivalence assertion — see ``_assert_success_equivalent``."""
+def _assert_error_equivalent(via, client_result, code: str, *, recovery: str) -> None:
+    """Shared error-path equivalence assertion — see ``_assert_success_equivalent``.
+
+    ``recovery`` is passed EXPLICITLY rather than left to ``assert_wire_error``'s
+    CODE_TABLE default. The default is derived from the same table production
+    emits from, so a drift in that table would move the expectation and the
+    emission together and this assertion would stay green through it; the literal
+    is the pinned spec's classification, checked independently.
+    """
+    from src.core.errors.codes import CODE_TABLE
+
     assert via.is_error, "env.call_via unexpectedly succeeded"
     assert client_result.is_error, "AdCPTestClient.call unexpectedly succeeded"
-    via.assert_wire_error(code)
-    client_result.assert_wire_error(code)
+    via.assert_wire_error(code, recovery=recovery)
+    client_result.assert_wire_error(code, recovery=recovery)
+    # ADR-010: the buyer-facing sentence is a read-only CODE_TABLE property, so it
+    # is asserted by identity with the table rather than against a literal.
+    assert via.wire_error_envelope["adcp_error"]["message"] == CODE_TABLE[code].message, (
+        f"adcp_error.message={via.wire_error_envelope['adcp_error']['message']!r}, "
+        f"expected the first-party sentence {CODE_TABLE[code].message!r}"
+    )
     assert via.wire_error_envelope == client_result.wire_error_envelope
     # The transport envelope too, not just the wire body: the two paths held
     # SEPARATE copies of each transport's error unwrap, which is how the derived
@@ -118,11 +133,17 @@ def _dispatch_via_env_pinning_one_dispatch_core(env, transport: Transport, tool:
 #   ``last_updated`` timestamp minted per call, so a byte-exact wire comparison
 #   between two dispatches is non-deterministic by construction. Pinning
 #   equivalence for it needs a clock freeze, not a looser assertion.
-# * ``TaskManagementEnv``/``list_tasks`` — covered separately below for the
-#   dispatch MECHANISM only; see that test for why the wire half is excluded.
 _NEWLY_DELEGATING_ENVS: list[tuple[str, str, str, dict, tuple[Transport, ...]]] = [
     ("tests.harness.account_list", "AccountListEnv", "list_accounts", {}, (Transport.MCP, Transport.A2A)),
     ("tests.harness.creative_list", "CreativeListEnv", "list_creatives", {}, (Transport.MCP, Transport.A2A)),
+    # list_tasks is MCP-only (no A2A skill, no REST route). It joins this list because
+    # #2201 made its response conformant: it previously had a deliver_mcp override, and a
+    # test HERE asserting the core's pinned parse still failed. That test went RED ("DID
+    # NOT RAISE") the moment the response was fixed, which is what it was built to do, so
+    # the override, its allowlist row and the test itself were deleted together. This row
+    # is the positive replacement: deleting a "cannot join" test without adding the "does
+    # join, equivalently" one would leave the dispatch ungraded rather than graded.
+    ("tests.harness.task_management", "TaskManagementEnv", "list_tasks", {}, (Transport.MCP,)),
 ]
 
 _DELEGATION_CASES = [
@@ -181,7 +202,7 @@ def _reset_principal_token_sequence(suffix: str) -> None:
     process's counter restarting at 0 collides with an EARLIER run's
     committed ``token_00000000`` row on ``principals_access_token_key`` — a
     collision that happens INSIDE ``BaseTestEnv.__enter__``'s e2e auto-seed
-    (``_seed_e2e_identity``), before any test-body code gets a chance to
+    (``_seed_identity``), before any test-body code gets a chance to
     intervene. *suffix* is already unique per test (the same one used for
     tenant_id), so reseeding the counter from it makes the collision
     astronomically unlikely without a destructive reset of the live
@@ -190,6 +211,27 @@ def _reset_principal_token_sequence(suffix: str) -> None:
     from tests.factories import PrincipalFactory
 
     PrincipalFactory.reset_sequence(int(suffix, 16) % 10_000_000, force=True)
+
+
+def _seed_seller(env) -> None:
+    """Ensure this env's TENANT row exists, and nothing else.
+
+    AUTH_MISSING answers "no credential was presented", which the resolver only reaches
+    once it knows which seller the request addresses. With no tenant it refuses
+    TENANT_UNDEFINED first, and the assertion then grades the wrong refusal.
+
+    The tenant ALONE: ``setup_default_data`` also creates the env's default principal, and
+    ``principals.token_hash`` is globally unique, so seeding one here collides with the
+    principal the success leg of the same test already committed.
+    """
+    from sqlalchemy import select
+
+    from src.core.database.models import Tenant
+    from tests.factories import TenantFactory
+
+    if env.get_session().scalars(select(Tenant).filter_by(tenant_id=env.tenant_id)).first() is None:
+        TenantFactory(tenant_id=env.tenant_id)
+        env._commit_factory_data()
 
 
 @pytest.fixture(scope="module")
@@ -257,12 +299,39 @@ class TestClientCrossTransportConsistency:
         assert mcp_ids == a2a_ids == rest_ids
 
     def test_rest_unauthenticated_dispatch_surfaces_auth_required(self, integration_db):
+        """No ``Authorization`` header at all is AUTH_MISSING, not the deprecated alias.
+
+        AdCP 3.1.1 ``enums/error-code.json`` splits the old ``AUTH_REQUIRED``:
+        AUTH_MISSING is "No credentials were presented. Sellers MUST return this
+        code when no ``Authorization`` header was included in the request";
+        AUTH_INVALID is credentials presented and rejected; ``AUTH_REQUIRED``
+        itself is "**Deprecated** — use ``AUTH_MISSING`` … Retained as a
+        backward-compatible alias during the 3.x deprecation window". This
+        dispatch sends no header, so it is the MUST above.
+        """
+        from src.core.errors.codes import CODE_TABLE
+
         with BareIntegrationEnv(tenant_id="client-parity-noauth", principal_id="p1") as env:
+            _seed_seller(env)
             client = AdCPTestClient(env)
-            result = client.call("list_accounts", {}, Transport.REST, identity=None)
+            result = client.call("list_accounts", {}, Transport.REST, credential=env.credential(token=None))
 
         assert result.is_error
-        result.assert_wire_error("AUTH_REQUIRED")
+        result.assert_wire_error("AUTH_MISSING", recovery="correctable")
+
+        # ADR-010: the buyer-facing sentence is a read-only CODE_TABLE property.
+        # Asserted by identity with the table, then kept non-vacuous by pinning
+        # that the OTHER side of the 3.1.1 split says something different — a
+        # seller that collapsed "none presented" into "presented and rejected"
+        # would satisfy an equality-only check against whichever it emitted.
+        adcp_error = result.wire_error_envelope["adcp_error"]
+        assert adcp_error["message"] == CODE_TABLE["AUTH_MISSING"].message, (
+            f"adcp_error.message={adcp_error['message']!r}, expected the first-party sentence "
+            f"{CODE_TABLE['AUTH_MISSING'].message!r}"
+        )
+        assert CODE_TABLE["AUTH_MISSING"].message != CODE_TABLE["AUTH_INVALID"].message, (
+            "the two halves of the 3.1.1 auth split must not advise the buyer identically"
+        )
 
 
 @pytest.mark.integration
@@ -304,10 +373,13 @@ class TestEnvVsClientEquivalence:
         _assert_success_equivalent(via, client_result)
 
         with AccountListEnv(tenant_id="ev-mcp-e", principal_id="p1") as env:
-            via = env.call_via(Transport.MCP, identity=None)
-            client_result = AdCPTestClient(env).call("list_accounts", {}, Transport.MCP, identity=None)
+            _seed_seller(env)
+            via = env.call_via(Transport.MCP, credential=env.credential(token=None))
+            client_result = AdCPTestClient(env).call(
+                "list_accounts", {}, Transport.MCP, credential=env.credential(token=None)
+            )
 
-        _assert_error_equivalent(via, client_result, "AUTH_REQUIRED")
+        _assert_error_equivalent(via, client_result, "AUTH_MISSING", recovery="correctable")
 
     def test_a2a_success_and_error_equivalence(self, integration_db):
         from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
@@ -326,10 +398,13 @@ class TestEnvVsClientEquivalence:
         _assert_success_equivalent(via, client_result)
 
         with AccountListEnv(tenant_id="ev-a2a-e", principal_id="p1") as env:
-            via = env.call_via(Transport.A2A, identity=None)
-            client_result = AdCPTestClient(env).call("list_accounts", {}, Transport.A2A, identity=None)
+            _seed_seller(env)
+            via = env.call_via(Transport.A2A, credential=env.credential(token=None))
+            client_result = AdCPTestClient(env).call(
+                "list_accounts", {}, Transport.A2A, credential=env.credential(token=None)
+            )
 
-        _assert_error_equivalent(via, client_result, "AUTH_REQUIRED")
+        _assert_error_equivalent(via, client_result, "AUTH_MISSING", recovery="correctable")
 
     def test_rest_success_and_error_equivalence(self, integration_db):
         from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
@@ -348,10 +423,13 @@ class TestEnvVsClientEquivalence:
         _assert_success_equivalent(via, client_result)
 
         with AccountListEnv(tenant_id="ev-rest-e", principal_id="p1") as env:
-            via = env.call_via(Transport.REST, identity=None)
-            client_result = AdCPTestClient(env).call("list_accounts", {}, Transport.REST, identity=None)
+            _seed_seller(env)
+            via = env.call_via(Transport.REST, credential=env.credential(token=None))
+            client_result = AdCPTestClient(env).call(
+                "list_accounts", {}, Transport.REST, credential=env.credential(token=None)
+            )
 
-        _assert_error_equivalent(via, client_result, "AUTH_REQUIRED")
+        _assert_error_equivalent(via, client_result, "AUTH_MISSING", recovery="correctable")
 
 
 @pytest.mark.integration
@@ -399,35 +477,6 @@ class TestNewlyDelegatingEnvEquivalence:
 
         _assert_success_equivalent(via, client_result)
 
-    def test_task_management_env_stops_hand_rolling_mcp_dispatch(self, integration_db):
-        """Change-set B7: the 34th quartet env routes through the client.
-
-        ``TaskManagementEnv`` (``tests/harness/task_management.py``) is new in
-        the PR under remediation and was written on the old pattern — its
-        ``call_mcp`` is a hand-written ``self._run_mcp_client("list_tasks",
-        dict, **kwargs)``. B7 deletes it; ``list_tasks`` is MCP-only (no A2A
-        skill, no REST route — see that module's docstring), so MCP is the
-        whole surface.
-
-        MECHANISM only, no wire-equivalence half, and the reason is a real
-        finding rather than a convenience: ``AdCPTestClient``'s UNWRAP parses
-        the wire into ``spec_response_model("list_tasks")`` — the pinned
-        ``ListTasksResponse`` — and production's ``list_tasks`` wire body has
-        neither the required ``query_summary`` nor ``pagination`` field, so
-        that parse raises ``ValidationError``. The env's own ``call_mcp``
-        never noticed because it passes ``dict`` as the response class and
-        validates nothing. That is a ``list_tasks``-vs-pinned-schema
-        conformance gap, NOT a dispatch defect, so it is graded
-        elsewhere and not smuggled into this lane's gate — but it does mean
-        B7's "route its scenarios through the client" needs that gap resolved
-        (or an explicit env ``response_parser`` override) to land.
-        """
-        from tests.harness.task_management import TaskManagementEnv
-
-        with TaskManagementEnv(tenant_id="nd-list-tasks-mcp", principal_id="p1") as env:
-            env.setup_default_data()
-            _dispatch_via_env_pinning_one_dispatch_core(env, Transport.MCP, "list_tasks")
-
 
 @pytest.mark.integration
 @pytest.mark.requires_db
@@ -440,7 +489,7 @@ class TestEnvVsClientEquivalenceE2E:
     ...)`` and ``AdCPTestClient(env).call(..., T)`` must dispatch the same
     production code and agree byte-for-byte on the wire — but every hop is
     real: real ``httpx``/``fastmcp.Client``/A2A JSON-RPC request, a real
-    ``UnifiedAuthMiddleware`` auth chain, a real live-server response. Before
+    resolver reading the request headers, a real live-server response. Before
     this, ``Transport.E2E_MCP``/``Transport.E2E_A2A`` had ZERO callers
     anywhere against a live stack (confirmed: every existing reference is
     either the in-process E2E_REST-only BDD ledger or a mocked-httpx unit
@@ -506,10 +555,13 @@ class TestEnvVsClientEquivalenceE2E:
         _assert_success_equivalent(via, client_result)
 
         with AccountListEnv(tenant_id=f"ev-e2erest-e-{suffix}", principal_id="p1", e2e_config=e2e_live_config) as env:
-            via = env.call_via(Transport.E2E_REST, identity=None)
-            client_result = AdCPTestClient(env).call("list_accounts", {}, Transport.E2E_REST, identity=None)
+            _seed_seller(env)
+            via = env.call_via(Transport.E2E_REST, credential=env.credential(token=None))
+            client_result = AdCPTestClient(env).call(
+                "list_accounts", {}, Transport.E2E_REST, credential=env.credential(token=None)
+            )
 
-        _assert_error_equivalent(via, client_result, "AUTH_REQUIRED")
+        _assert_error_equivalent(via, client_result, "AUTH_MISSING", recovery="correctable")
 
     def test_e2e_mcp_success_and_error_equivalence(self, integration_db, e2e_live_config):
         import uuid
@@ -531,10 +583,13 @@ class TestEnvVsClientEquivalenceE2E:
         _assert_success_equivalent(via, client_result)
 
         with AccountListEnv(tenant_id=f"ev-e2emcp-e-{suffix}", principal_id="p1", e2e_config=e2e_live_config) as env:
-            via = env.call_via(Transport.E2E_MCP, tool_name="list_accounts", identity=None)
-            client_result = AdCPTestClient(env).call("list_accounts", {}, Transport.E2E_MCP, identity=None)
+            _seed_seller(env)
+            via = env.call_via(Transport.E2E_MCP, tool_name="list_accounts", credential=env.credential(token=None))
+            client_result = AdCPTestClient(env).call(
+                "list_accounts", {}, Transport.E2E_MCP, credential=env.credential(token=None)
+            )
 
-        _assert_error_equivalent(via, client_result, "AUTH_REQUIRED")
+        _assert_error_equivalent(via, client_result, "AUTH_MISSING", recovery="correctable")
 
     def test_e2e_a2a_success_and_error_equivalence(self, integration_db, e2e_live_config):
         import uuid
@@ -556,7 +611,10 @@ class TestEnvVsClientEquivalenceE2E:
         _assert_success_equivalent(via, client_result)
 
         with AccountListEnv(tenant_id=f"ev-e2ea2a-e-{suffix}", principal_id="p1", e2e_config=e2e_live_config) as env:
-            via = env.call_via(Transport.E2E_A2A, tool_name="list_accounts", identity=None)
-            client_result = AdCPTestClient(env).call("list_accounts", {}, Transport.E2E_A2A, identity=None)
+            _seed_seller(env)
+            via = env.call_via(Transport.E2E_A2A, tool_name="list_accounts", credential=env.credential(token=None))
+            client_result = AdCPTestClient(env).call(
+                "list_accounts", {}, Transport.E2E_A2A, credential=env.credential(token=None)
+            )
 
-        _assert_error_equivalent(via, client_result, "AUTH_REQUIRED")
+        _assert_error_equivalent(via, client_result, "AUTH_MISSING", recovery="correctable")

@@ -58,20 +58,17 @@ class BroadstreetPlacementManager:
         self,
         client: BroadstreetClient | None,
         advertiser_id: str,
-        dry_run: bool = False,
         log_func: Callable[[str], None] | None = None,
     ):
         """Initialize the placement manager.
 
         Args:
-            client: Broadstreet API client (None for dry-run mode)
+            client: Broadstreet API client
             advertiser_id: Broadstreet advertiser ID
-            dry_run: Whether to simulate operations
             log_func: Optional logging function
         """
         self.client = client
         self.advertiser_id = advertiser_id
-        self.dry_run = dry_run
         self.log = log_func or (lambda msg: logger.info(msg))
 
         # Track placement state per media buy (same-request only)
@@ -170,19 +167,7 @@ class BroadstreetPlacementManager:
 
         for zone_id in info.zone_ids:
             for ad_id in advertisement_ids:
-                if self.dry_run:
-                    self.log(f"Would create placement: ad {ad_id} → zone {zone_id}")
-                    placement_id = f"placement_{zone_id}_{ad_id}"
-                    results.append(
-                        {
-                            "id": placement_id,
-                            "zone_id": zone_id,
-                            "advertisement_id": ad_id,
-                            "campaign_id": campaign_id,
-                        }
-                    )
-                    info.placement_ids.append(placement_id)
-                elif self.client:
+                if self.client:
                     try:
                         placement_data = self.client.create_placement(
                             advertiser_id=self.advertiser_id,

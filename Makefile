@@ -16,16 +16,48 @@ quality-ci:
 	uv run ruff format --check .
 	uv run ruff check .
 	uv run ruff check --config ruff-egress.toml --ignore-noqa --no-respect-gitignore src/ scripts/
+	uv run ruff check --config ruff-boundary.toml --no-respect-gitignore src/ scripts/
+	uv run ruff check --config ruff-ownership.toml --no-respect-gitignore src/ scripts/
+	uv run ruff check --config ruff-serialization.toml --no-respect-gitignore src/ scripts/
+	uv run ruff check --config ruff-environment.toml --no-respect-gitignore src/ scripts/
+	# Structural rules, for the checks ruff cannot express. TID251 bans imports and
+	# attributes, which is what makes the egress line above work; a credential header is
+	# a dict-key string literal, so nothing in ruff or mypy can see it. .ast-grep/rules/
+	# is scoped by each rule's own `files:`. Runs HERE and not only at the pre-push stage
+	# the hook declares, because this repo's workflow merges locally and never pushes, so
+	# a pre-push-only rule never executes at all.
+	uv run ast-grep scan --config sgconfig.yml
 	uv run mypy src/ --config-file=mypy.ini
+	# Layer-2 ratchets. These are declared stages:[pre-push] in .pre-commit-config.yaml, and
+	# this repo's documented workflow (ephemeral branches merged LOCALLY, `git push` never run)
+	# means the pre-push stage NEVER FIRES. They therefore ran nowhere, and drift accumulated
+	# unseen: measured on 2026-09-01, mypy --check-untyped-defs was 15 above its committed
+	# baseline on origin/main itself. Running them here is what makes `make quality` the gate
+	# the workflow already assumes it is (salesagent-aemue.13).
+	uv run python .pre-commit-hooks/check_type_ignore_count.py
+	uv run python .pre-commit-hooks/check_fixme_citation_count.py
+	uv run python .pre-commit-hooks/check_mypy_untyped_defs_count.py
+	uv run python .pre-commit-hooks/check_ruff_complexity_count.py
+	uv run python .pre-commit-hooks/check_route_conflicts.py
+	uv run python .pre-commit-hooks/check_migration_completeness.py
 	uv run python .pre-commit-hooks/check_code_duplication.py
 	uv run python .pre-commit-hooks/check-gam-auth-support.py
 	uv run python scripts/hooks/check_response_attribute_access.py $$(find src -name '*.py')
-	uv run python .pre-commit-hooks/check_roundtrip_tests.py
-	uv run python scripts/verify_feature_error_codes.py --uc UC-002 UC-003
+	# ALL 38 feature files, bound and unbound, at ZERO -- no --uc filter and no
+	# baseline. Widened in three steps: UC-002/UC-003 -> the 16 bound files
+	# (salesagent-3dawm.17) -> everything (salesagent-yz8mo), once the 529
+	# non-canonical occurrences across 148 invented codes in the 20 unbound files
+	# were corrected rather than allowlisted. An invented error code is now
+	# unaddable ANYWHERE, including in a file no test module runs -- which is
+	# where they were hiding, since an unbound file grades nothing and so never
+	# failed on them.
+	uv run python scripts/verify_feature_error_codes.py
 	uv run python .pre-commit-hooks/check_route_conflicts.py
 	uv run python .pre-commit-hooks/check_type_ignore_count.py
 	uv run python .pre-commit-hooks/check_ruff_complexity_count.py
 	uv run python .pre-commit-hooks/check_mypy_untyped_defs_count.py
+	uv run python .pre-commit-hooks/check_fixme_citation_count.py
+	uv run python .pre-commit-hooks/check_admin_raw_session_count.py
 	uv run python .pre-commit-hooks/check_docs_links.py
 	uv run python .pre-commit-hooks/check_hardcoded_urls.py $$(find templates static -type f \( -name '*.html' -o -name '*.js' \) 2>/dev/null)
 

@@ -46,15 +46,15 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from typing import Annotated, Any, cast
+from typing import Any
 
-from fastmcp.server.context import Context
-from pydantic import BaseModel, Field, RootModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, RootModel, TypeAdapter, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from src.core.errors.codes import ErrorCode
+from src.core.errors.details import ConfigurationDetails, ValidationDetails
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.tool_context import ToolContext
 from src.core.tools._media_buy_status import resolve_canonical_status
 
 logger = logging.getLogger(__name__)
@@ -117,15 +117,12 @@ class _PackageData:
 
 
 from adcp.server.helpers import valid_actions_for_status
-from adcp.types import AccountReference as LibraryAccountReference
-from adcp.types import ContextObject, MediaBuyStatus
+from adcp.types import MediaBuyStatus
 
-from src.core.auth import get_principal_object, require_identity, require_tenant
 from src.core.database.models import CreativeAssignment, MediaBuy
 from src.core.database.repositories import MediaBuyUoW
 from src.core.database.repositories.creative import CreativeRepository
 from src.core.exceptions import (
-    AdCPCapabilityNotSupportedError,
     AdCPPersistedStateError,
     AdCPValidationError,
 )
@@ -143,62 +140,51 @@ from src.core.schemas import (
     Targeting,
 )
 from src.core.schemas._pinned_fields import revision_minimum
-from src.core.tools._mcp import mcp_result
-from src.core.validation_helpers import adcp_validation_boundary
 
 
 def _get_media_buys_impl(
     req: GetMediaBuysRequest,
-    identity: ResolvedIdentity | None = None,
-    include_snapshot: bool = False,
+    identity: ResolvedIdentity,
 ) -> GetMediaBuysResponse:
     """Get media buys with status, creative approval state, and optional delivery snapshots.
 
     Args:
         req: Validated GetMediaBuysRequest with all protocol fields
         identity: ResolvedIdentity with principal/tenant info (transport-agnostic)
-        include_snapshot: When True, include near-real-time delivery stats per package.
             This is an internal flag controlled by transport wrappers, not by the request object.
 
     Returns:
         GetMediaBuysResponse with matching media buys
     """
-    identity = require_identity(identity, context=req.context)
+    # get-media-buys-request.json, `account`: "Account to retrieve media buys for. When
+    # omitted, returns data across all accessible accounts."
+    #
+    # The resolver puts an account on the identity iff the REQUEST named one, so a None here
+    # is exactly "omitted": a listing that spans all accessible accounts, as the spec says.
+    account_filter = identity.account.account_id if identity.account is not None else None
 
-    if req.account is not None or req.account_id is not None:
-        raise AdCPCapabilityNotSupportedError(
-            "account filtering is not yet supported",
-            suggestion="Omit account/account_id from the request; the seller infers the account from the auth token.",
-        )
-
-    testing_ctx = identity.testing_context
-    principal_id = identity.principal_id
-    if not principal_id:
-        return GetMediaBuysResponse(
-            media_buys=[],
-            errors=[
-                Error(  # structural-guard: advisory: get_media_buys degrades to empty list + error, not a raise
-                    code="AUTH_REQUIRED", message="Principal ID not found in context"
-                )
-            ],
-        )
-
-    principal = get_principal_object(principal_id, tenant_id=identity.tenant_id)
-    if not principal:
-        return GetMediaBuysResponse(
-            media_buys=[],
-            errors=[
-                Error(  # structural-guard: advisory: get_media_buys degrades to empty list + error, not a raise
-                    code="AUTH_REQUIRED", message=f"Principal {principal_id} not found"
-                )
-            ],
-        )
-
-    # require_tenant raises the canonical auth envelope instead of a raw TypeError
-    # if no tenant resolved (the principal advisories above take precedence).
-    tenant = require_tenant(identity, context=req.context)
+    # Both guards RAISE rather than degrading to an empty list plus a payload
+    # advisory, and both now use the shared helpers every other media-buy tool
+    # already uses -- get_media_buys was the one tool open-coding them, precisely
+    # because it degraded instead of raising.
+    #
+    # Why raising is the correct shape: a credential that is absent or does not
+    # resolve means the task did NOT run, so the empty media_buys was never a
+    # result. transport-errors.mdx separates the two layers on exactly that line
+    # (:206-207 -- envelope "the task failed", payload errors[] "the task ran ...
+    # issues"), says a fatal failure SHOULD populate both (:209), and then names
+    # this precise shape in the client detection order (:220): "a fatal task that
+    # surfaces errors only via the payload is a conformance gap on the agent side".
+    #
+    # Only MCP ever reached these branches -- REST and A2A reject an
+    # unauthenticated request at the boundary and already return the two-layer
+    # envelope -- which is why get_media_buys was the ONE tool of 16 answering a
+    # fatal auth failure with HTTP 200 and isError:false (#1651).
+    principal = identity.principal
+    principal_id = principal.principal_id
+    tenant = identity.tenant
     today = datetime.now(UTC).date()
-    tenant_id: str = tenant["tenant_id"]
+    tenant_id: str = tenant.tenant_id
 
     # Every non-fatal per-row advisory lands here — a degraded optional field and an
     # omitted unrenderable row alike. Surfaced on the response so the buyer can
@@ -210,7 +196,9 @@ def _get_media_buys_impl(
     with MediaBuyUoW(tenant_id) as uow:
         assert uow.media_buys is not None
         # Resolve which media buys to return
-        target_media_buys = _fetch_target_media_buys(req, principal_id, uow, today, row_advisories)
+        target_media_buys = _fetch_target_media_buys(
+            req, principal_id, uow, today, row_advisories, account_id=account_filter
+        )
 
         # Resolve creative approvals for all packages in one batch query
         all_media_buy_ids = [buy.media_buy_id for buy in target_media_buys]
@@ -227,13 +215,8 @@ def _get_media_buys_impl(
     snapshot_data: dict[str, dict[str, Snapshot | None]] = {}  # media_buy_id -> package_id -> Snapshot
     unavailable_reason: SnapshotUnavailableReason | None = None
 
-    if include_snapshot:
-        adapter = get_adapter(
-            principal,
-            dry_run=testing_ctx.dry_run if testing_ctx else False,
-            testing_context=testing_ctx,
-            tenant=tenant,
-        )
+    if req.include_snapshot:
+        adapter = get_adapter(identity)
         if adapter.capabilities.supports_realtime_reporting:
             # Build list of (media_buy_id, package_id, platform_line_item_id) for the adapter
             package_refs = []
@@ -248,7 +231,6 @@ def _get_media_buys_impl(
 
     # Build response
     response_media_buys = []
-    buyer_named_rows = _buyer_named_rows(req)
     for buy in target_media_buys:
         # No policy here, and none is possible: the row's status was resolved at the
         # fetch seam and a row whose status could not be resolved never became a
@@ -270,7 +252,7 @@ def _get_media_buys_impl(
             # Get snapshot for this package
             snapshot = buy_snapshots.get(pkg_id)
             snapshot_unavailable = None
-            if include_snapshot and snapshot is None:
+            if req.include_snapshot and snapshot is None:
                 snapshot_unavailable = unavailable_reason or SnapshotUnavailableReason.SNAPSHOT_TEMPORARILY_UNAVAILABLE
 
             # Materialize targeting_overlay from package_config so callers can verify
@@ -304,25 +286,35 @@ def _get_media_buys_impl(
                         pkg_id,
                         exc,
                     )
-                    # Seller-side data-integrity failure (the buyer can't fix it),
-                    # surfaced with ``CONFIGURATION_ERROR`` / recovery ``terminal``
-                    # (see _BLOB_DEFECT_CODE) rather than the ``SERVICE_UNAVAILABLE``
-                    # the sibling per-creative advisory in creatives/_processing.py
-                    # uses: that code's pinned recovery is ``transient``, which advises
-                    # a retry that can never succeed against a permanently corrupt
-                    # stored blob. The ``TARGETING_REHYDRATION_FAILED`` shape stays in
-                    # the message so callers can still grep/route on it.
+                    # CONFIGURATION_ERROR, not SERVICE_UNAVAILABLE. This is a stored
+                    # package_config the buyer neither owns nor can repair, and the
+                    # comment here previously said "the buyer can't fix it" while the
+                    # code said transient — telling them to retry a request that fails
+                    # identically until someone at the seller fixes the row. The pinned
+                    # enum classifies CONFIGURATION_ERROR terminal. Both branches
+                    # reached that same conclusion independently (main via
+                    # ``_BLOB_DEFECT_CODE``/``_BLOB_DEFECT_RECOVERY``); this is the one
+                    # copy of it.
+                    #
+                    # It was chosen "matching the sibling per-creative advisory in
+                    # creatives/_processing.py" — copied rather than reasoned
+                    # (salesagent-tay20). Recovery still comes from CODE_TABLE via
+                    # Error.of; only the code was wrong.
+                    #
+                    # The discriminator is ``details.reasons``, NOT the message:
+                    # message is derived from CODE_TABLE, so no site can stamp a
+                    # ``TARGETING_REHYDRATION_FAILED:`` prefix into it (salesagent-3dawm).
+                    # ``row_advisories`` is main's renamed accumulator — it also
+                    # collects the omitted-row advisories, which did not exist here.
                     row_advisories.append(
-                        Error(  # structural-guard: advisory per-package result in GetMediaBuysResponse.errors[]
-                            code=_BLOB_DEFECT_CODE,
-                            recovery=_BLOB_DEFECT_RECOVERY,
-                            message=(
-                                f"TARGETING_REHYDRATION_FAILED: targeting overlay for "
-                                f"package '{pkg_id}' on media buy '{buy.media_buy_id}' "
-                                f"could not be rehydrated; returning "
-                                f"targeting_overlay=None for this package."
-                            ),
+                        Error.of(  # structural-guard: advisory per-package result in GetMediaBuysResponse.errors[]
+                            ErrorCode.CONFIGURATION_ERROR,
                             field=f"media_buys[].packages[{pkg_id}].targeting_overlay",
+                            details=ValidationDetails(
+                                reasons=["targeting_rehydration_failed"],
+                                package_id=pkg_id,
+                                media_buy_id=buy.media_buy_id,
+                            ),
                         )
                     )
                     targeting_overlay = None
@@ -352,7 +344,7 @@ def _get_media_buys_impl(
                     targeting_overlay=targeting_overlay,
                     creative_approvals=approvals if approvals else None,
                     snapshot=snapshot,
-                    snapshot_unavailable_reason=snapshot_unavailable if include_snapshot else None,
+                    snapshot_unavailable_reason=snapshot_unavailable if req.include_snapshot else None,
                 )
             )
 
@@ -396,95 +388,11 @@ def _get_media_buys_impl(
 
     return GetMediaBuysResponse(
         media_buys=response_media_buys,
-        context=req.context,
         errors=row_advisories or None,
+        message=f"Found {len(response_media_buys)} media buy{'s' if len(response_media_buys) != 1 else ''}."
+        if response_media_buys
+        else "No media buys found.",
     )
-
-
-def _build_get_media_buys_request(
-    media_buy_ids: list[str] | None,
-    status_filter: MediaBuyStatus | list[MediaBuyStatus] | None,
-    account: LibraryAccountReference | None,
-    context: ContextObject | None,
-) -> GetMediaBuysRequest:
-    """Build a GetMediaBuysRequest from individual wire params.
-
-    Shared by the MCP wrapper and the A2A/REST raw wrapper so request
-    construction runs inside the ONE validation boundary — previously the raw
-    wrapper built the request unprotected and REST leaked a raw pydantic
-    ``ValidationError`` with no top-level suggestion (#1417).
-    """
-    with adcp_validation_boundary(context="get_media_buys request"):
-        return GetMediaBuysRequest(
-            media_buy_ids=media_buy_ids,
-            status_filter=cast(MediaBuyStatus | list[MediaBuyStatus] | None, status_filter),
-            account=account,
-            context=cast(ContextObject | None, context),
-        )
-
-
-async def get_media_buys(
-    media_buy_ids: list[str] | None = None,
-    status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
-    include_snapshot: Annotated[
-        bool, Field(description="When true, include near-real-time delivery stats per package")
-    ] = False,
-    account: LibraryAccountReference | None = None,
-    context: ContextObject | None = None,
-    ctx: Context | ToolContext | None = None,
-):
-    """Get media buys with status, creative approval state, and optional delivery snapshots.
-
-    MCP tool wrapper that resolves identity and delegates to the shared implementation.
-
-    Args:
-        media_buy_ids: Array of publisher media buy IDs to retrieve (optional)
-        status_filter: Filter by status - single status or array of MediaBuyStatus values (optional)
-        include_snapshot: When true, include near-real-time delivery stats per package (default: false)
-        account: Account reference per AdCP 3.x (optional). Legacy account_id is normalized by middleware.
-        context: Application level context object (optional)
-        ctx: FastMCP context (automatically provided)
-
-    Returns:
-        ToolResult with GetMediaBuysResponse data
-    """
-    req = _build_get_media_buys_request(media_buy_ids, status_filter, account, context)
-    # Read identity pre-resolved by MCPAuthMiddleware
-    identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
-    response = _get_media_buys_impl(req, identity=identity, include_snapshot=include_snapshot)
-    return mcp_result(response)
-
-
-def get_media_buys_raw(
-    media_buy_ids: list[str] | None = None,
-    status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
-    include_snapshot: bool = False,
-    account: LibraryAccountReference | None = None,
-    context: ContextObject | None = None,
-    ctx: Context | ToolContext | None = None,
-    identity: ResolvedIdentity | None = None,
-):
-    """Get media buys (raw function for A2A server use).
-
-    Args:
-        media_buy_ids: Array of publisher media buy IDs to retrieve (optional)
-        status_filter: Filter by status - single status or array of MediaBuyStatus values (optional)
-        include_snapshot: When true, include near-real-time delivery stats per package (default: false)
-        account: Account reference per AdCP 3.x (optional). Legacy account_id is normalized by middleware.
-        context: Application level context (optional)
-        ctx: Context for authentication (used if identity not pre-resolved)
-        identity: Pre-resolved identity (preferred over ctx)
-
-    Returns:
-        GetMediaBuysResponse
-    """
-    if identity is None:
-        from src.core.transport_helpers import resolve_identity_from_context
-
-        identity = resolve_identity_from_context(ctx, require_valid_token=True, protocol="a2a")
-
-    req = _build_get_media_buys_request(media_buy_ids, status_filter, account, context)
-    return _get_media_buys_impl(req, identity=identity, include_snapshot=include_snapshot)
 
 
 # --- Helper functions ---
@@ -569,25 +477,31 @@ def _omitted_row_advisory(media_buy_id: str, exc: AdCPPersistedStateError) -> Er
     Names the ``media_buy_id`` deliberately. An advisory that says a row was dropped
     without saying which one cannot be reconciled against: the buyer has no way to
     tell whether the buy they are looking for is missing or was never there.
+
+    It names it in ``details``, not in an authored sentence. ``Error`` DERIVES
+    ``message``/``suggestion``/``recovery`` from ``CODE_TABLE`` (ADR-010), discarding
+    anything a call site passes for them — so the f-string this replaces named the row
+    only in a string the model threw away, leaving the buyer an advisory that pointed
+    at no row at all. The marker and the id travel as data instead, which is also
+    where a client can read them without parsing prose.
     """
-    # CONFIGURATION_ERROR, not SERVICE_UNAVAILABLE, and the pin's own enumMetadata is
-    # the reason. SERVICE_UNAVAILABLE carries recovery "transient" / "retry with
-    # exponential backoff" — advice that can never succeed here, because no amount of
-    # backoff repairs a row whose persisted revision is 0. CONFIGURATION_ERROR carries
-    # "terminal" / "surface to a human at the seller ... MUST NOT auto-retry", which is
-    # what this fault actually needs. It is also the code ruling R-M1 chose for the
-    # REFUSAL on this same fault: one defect, one code, two mechanisms.
-    # recovery is stated rather than left to be inferred from the code's enumMetadata:
-    # a client that does not consult the enum still learns not to retry.
-    return Error(  # structural-guard: advisory per-row omission in GetMediaBuysResponse.errors[]
-        code="CONFIGURATION_ERROR",
-        recovery="terminal",
-        message=(
-            f"MEDIA_BUY_UNRENDERABLE: media buy {media_buy_id!r} is omitted from this "
-            f"listing because a spec-required field could not be published from the "
-            f"persisted row; the remaining media buys are unaffected. Cause: {exc}"
-        ),
+    # The code comes from the refusal itself rather than being transcribed here: one
+    # defect, one code, two mechanisms (ruling R-M1 chose CONFIGURATION_ERROR for the
+    # REFUSAL on this same fault). That also settles the code question the same way it
+    # was settled there — SERVICE_UNAVAILABLE carries "transient" / "retry with
+    # exponential backoff", advice that can never succeed, because no amount of backoff
+    # repairs a row whose persisted revision is 0; CONFIGURATION_ERROR carries
+    # "terminal" / "surface to a human at the seller ... MUST NOT auto-retry".
+    # ``field`` is the LISTING slot, not the refusal's own column: this advisory
+    # explains an absence from ``media_buys[]``, and the offending column travels
+    # with the cause in the server log.
+    return Error.of(  # structural-guard: advisory per-row omission in GetMediaBuysResponse.errors[]
+        exc.error_code,
         field="media_buys[]",
+        details=ValidationDetails(
+            reasons=["MEDIA_BUY_UNRENDERABLE"],
+            media_buy_id=media_buy_id,
+        ),
     )
 
 
@@ -597,6 +511,7 @@ def _fetch_target_media_buys(
     uow: MediaBuyUoW,
     today: date,
     row_advisories: list[Error],
+    account_id: str | None = None,
 ) -> list[_MediaBuyData]:
     """Fetch media buys from database matching the request filters.
 
@@ -616,9 +531,14 @@ def _fetch_target_media_buys(
     buyer_named_rows = _buyer_named_rows(req)
     filter_statuses = _resolve_status_filter(req.status_filter, skip_default=buyer_named_rows)
 
+    # ``account_id`` is the RESOLVED account, not the reference the buyer sent: the boundary
+    # turns an AccountReference -- id, or a natural key of brand + operator -- into one id on
+    # the identity, once, for every tool. Filtering here on the raw reference would re-do that
+    # resolution in a read path and get a different answer for the natural-key form.
     buys = uow.media_buys.get_by_principal(
         principal_id,
         media_buy_ids=req.media_buy_ids,
+        account_id=account_id,
     )
 
     renderable: list[_MediaBuyData] = []
@@ -695,9 +615,8 @@ def _resolve_status_filter(
         # 500. (A dedicated STATUS_FILTER_INVALID_VALUE code is a separate,
         # unimplemented gap; see the xfailed boundary-status-filter rows.)
         raise AdCPValidationError(
-            f"Invalid status_filter value: {e}",
+            internal_detail=e,
             field="status_filter",
-            suggestion="status_filter values must be valid media-buy statuses",
         ) from e
 
 
@@ -718,9 +637,17 @@ def _persisted_revision(buy) -> int:
     minimum = revision_minimum()
     revision = buy.revision
     if revision is None or revision < minimum:
+        # The buy and the refused value travel as typed details: buyer-facing text
+        # is a function of the code (``AdCPSalesAgentError.message``), so this raise
+        # site names the subject instead of writing the sentence — the same shape
+        # the sibling status door uses (``PersistedMediaBuyStatus.parse``).
+        # ``accepted_values`` stays unset: the pin states a MINIMUM here, not an
+        # enumerable member set.
         raise AdCPPersistedStateError(
-            f"media buy {buy.media_buy_id!r} carries persisted revision {revision!r}, below the "
-            f"pinned minimum of {minimum}; the optimistic-concurrency token cannot be published",
+            details=ConfigurationDetails(
+                media_buy_id=buy.media_buy_id,
+                rejected_value=repr(revision),
+            ),
             field="revision",
         )
     return revision

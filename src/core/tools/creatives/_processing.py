@@ -11,57 +11,215 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from adcp.types import CreativeAsset
-from pydantic import BaseModel
 
-from src.core.exceptions import AdCPConfigurationError, wire_advisory
+from src.core.errors.details import AdapterFailureDetails, ConfigurationDetails, CreativeRejectionDetails
+from src.core.exceptions import (
+    AdCPConfigurationError,
+    AdCPCreativeRejectedError,
+    AdCPSalesAgentError,
+    AdCPServiceUnavailableError,
+)
 from src.core.format_resolver import find_format, is_agent_backed, is_generative
 from src.core.helpers import _extract_format_info, _validate_creative_assets
 from src.core.helpers.outbound_error_mapping import raise_mapped_outbound_error
 from src.core.schemas import CreativeStatusEnum, SyncCreativeResult
+from src.core.schemas import Error as AdCPErrorDetail
 from src.core.security.outbound_http import OperatorEndpoint, OutboundError
+from src.core.tenant_context import TenantContext
 from src.core.validation_helpers import run_async_in_sync_context
 
-from ._assets import _build_creative_data, _extract_message_from_assets, _extract_url_from_assets
+from ._assets import _build_creative_data, _extract_message_from_assets, _extract_url_from_assets, _generative_assets
 
 if TYPE_CHECKING:
     from src.core.database.repositories.creative import CreativeRepository
 
 logger = logging.getLogger(__name__)
 
+#: Fields a full upsert rewrites on every update. They used to be reported as changed
+#: unconditionally, which made ``action: unchanged`` unreachable: a resync of identical
+#: data always listed all five. They are now compared against the row's prior values.
+_UPSERT_FIELDS = ("url", "click_url", "width", "height", "duration")
 
-def _failed_sync_result(
+
+@dataclass(frozen=True)
+class PriorCreativeState:
+    """The values an update is compared AGAINST: the persisted row, pre-update.
+
+    Snapshotted before the row is mutated, so ``comparison_changes`` can report
+    what an update actually changed. There is one source and one branch --
+    ``dry_run`` no longer builds a parallel "previewed" state (#1721: it is a
+    transaction-disposal decision at the UoW boundary), so the second
+    constructor this class used to carry is gone with it.
+    """
+
+    name: str | None
+    agent_url: str | None
+    format: str | None
+    format_parameters: dict | None
+    #: The upsert-rewritten data fields as the row held them, so an update can report
+    #: which of them it actually changed instead of listing all five every time.
+    upsert_fields: dict[str, Any]
+
+    @classmethod
+    def from_row(cls, existing_creative) -> PriorCreativeState:
+        row_data = existing_creative.data or {}
+        return cls(
+            name=existing_creative.name,
+            agent_url=existing_creative.agent_url,
+            format=existing_creative.format,
+            format_parameters=existing_creative.format_parameters,
+            upsert_fields={key: row_data.get(key) for key in _UPSERT_FIELDS},
+        )
+
+
+def comparison_changes(creative: CreativeAsset, prior: PriorCreativeState, format_value) -> list[str]:
+    """The part of ``changes`` derived purely by comparison -- no mutation, no agent.
+
+    Deliberately decoupled from the field assignments it used to be interleaved
+    with, which is what makes an update's reported ``changes`` derivable from a
+    before/after pair rather than from the mutation code. The ``name`` quirk is preserved exactly as the live path had it: a
+    ``None`` incoming name that differs from the prior one still reports ``name``
+    as changed even though the live branch assigns nothing (the assignment keeps its
+    ``is not None`` guard at the call site).
+    """
+    changes: list[str] = []
+    if creative.name != prior.name:
+        changes.append("name")
+
+    format_info = _extract_format_info(format_value)
+    if (
+        format_info["agent_url"] != prior.agent_url
+        or format_info["format_id"] != prior.format
+        or format_info["parameters"] != prior.format_parameters
+    ):
+        changes.append("format")
+    return changes
+
+
+def build_update_sync_result(
     creative_id: str,
-    error_msg: str,
     *,
-    code: str = "SERVICE_UNAVAILABLE",
-    field: str | None = None,
+    creative: CreativeAsset,
+    prior: PriorCreativeState,
+    format_value,
+    data: Mapping[str, Any],
+    agent_derived_changes: Sequence[str] = (),
+    internal_status: str | None = None,
 ) -> SyncCreativeResult:
+    """The ONE place an ``updated`` or ``unchanged`` sync result is built, for both branches.
+
+    ``changes`` is ``[name?, format?] + agent-derived + the upsert fields whose value
+    differs from the row's``, each field once. The last group used to be all five
+    unconditionally, which made ``unchanged`` -- a member of the pinned
+    enums/creative-action.json -- unreachable: a resync of identical data always
+    reported five changed fields. Comparing against the row's prior values is what
+    lets identical data answer ``unchanged`` and a real change name the field.
+
+    ``internal_status`` is absent for an in-request duplicate, which has no row to
+    read a status from. The field is ``exclude=True``, so it never reaches the
+    wire and its absence cannot make a preview diverge from a live run.
+    """
+    changed_upsert_fields = [key for key in _UPSERT_FIELDS if data.get(key) != prior.upsert_fields.get(key)]
+    # dict.fromkeys: each field once, first occurrence's position kept.
+    changes = list(
+        dict.fromkeys(
+            [*comparison_changes(creative, prior, format_value), *agent_derived_changes, *changed_upsert_fields]
+        )
+    )
+
+    action: Literal["updated", "unchanged"] = "updated" if changes else "unchanged"
+
+    return SyncCreativeResult(
+        creative_id=creative_id,
+        action=action,
+        internal_status=internal_status,
+        changes=changes,
+        review_feedback=None,
+    )
+
+
+def _failed_sync_result(creative_id: str, source: AdCPSalesAgentError) -> SyncCreativeResult:
     """Build a SyncCreativeResult for a failed creative sync operation.
 
-    The CODE is the choice; the recovery follows from it. ``wire_advisory``
-    derives the buyer-facing retry classification from the pinned enumMetadata,
-    so a call site says what happened and the retry signal follows — for EVERY
-    call site now: the last hand-forwarded recovery went with the constructor
-    kwarg. Pass the condition-specific code: ``CONFIGURATION_ERROR`` for a
-    seller-side misconfiguration (pinned terminal — the buyer must not retry),
-    ``CREATIVE_NOT_FOUND`` for an assignment referencing an unknown creative_id
-    (matching the strict-mode ``AdCPCreativeNotFoundError`` raise since
-    287c93099), ``VALIDATION_ERROR`` for other buyer-correctable causes. The
-    default ``SERVICE_UNAVAILABLE`` (pinned transient) covers a creative agent
-    that is simply down.
+    Takes the TYPED error and nothing else. The advisory carries the exception's CODE
+    plus its structured specifics; the sentence, recovery and suggestion are resolved
+    from ``CODE_TABLE`` by ``Error.of`` — the same single derivation the transport
+    envelope uses — so a per-creative advisory and the request-level envelope cannot
+    disagree about the same failure.
+
+    Provenance-bearing text belongs on ``internal_detail`` at the RAISE site (server log
+    only), never in ``details``: a diagnostic in ``details`` is on the buyer's wire, which
+    is the forward ``adcp_error_for`` exists to prevent.
     """
     return SyncCreativeResult(
         creative_id=creative_id,
         action="failed",
-        errors=[wire_advisory(code, error_msg, field=field)],
+        # structural-guard: advisory per-creative result in SyncCreativeResult.errors[]
+        # from_exception, NOT a hand-rolled decomposition: reading error_code/field/details
+        # off the exception separately re-implemented the conversion and skipped the one
+        # place that renders a details CLASS to its wire dict, so a typed detail shape
+        # reached Error(details=...) as a model and failed validation.
+        errors=[AdCPErrorDetail.from_exception(source)],
         review_feedback=None,
         assigned_to=None,
         assignment_errors=None,
     )
+
+
+def _defer_ai_review(
+    creative_repo: CreativeRepository,
+    *,
+    creative_id: str,
+    tenant: TenantContext,
+    webhook_url: str | None,
+    principal_id: str,
+) -> None:
+    """Hand the creative to the background AI reviewer, AFTER this transaction commits.
+
+    The job opens its OWN AdminCreativeUoW, commits a review verdict, and then
+    sends Slack and the push webhook -- none of it inside this transaction, so a
+    rollback cannot reach any of it. Registering it on the unit of work instead
+    of calling it here means the preview branch needs no gate: a preview rolls back,
+    the queue is discarded, and nothing was submitted.
+
+    It also fixes an ordering bug that had nothing to do with previews. This used
+    to flush and submit inline, but flush() is not commit() and the job reads
+    through its own session -- so on the create branch the row might not exist yet,
+    and on the update branch the job read PRE-update state and committed a verdict
+    over it. Deferring past the commit removes the race by construction.
+
+    Captures scalars only. Holding the ORM row here would hand a detached
+    instance to a thread after this session is gone.
+    """
+    from src.admin.blueprints.creatives import _ai_review_executor, _ai_review_lock, _ai_review_tasks
+
+    def _submit() -> None:
+        from src.admin.blueprints.creatives import _ai_review_creative
+
+        task_id = f"ai_review_{creative_id}_{uuid.uuid4().hex[:8]}"
+        future = _ai_review_executor.submit(
+            _ai_review_creative,
+            creative_id=creative_id,
+            tenant_id=tenant.tenant_id,
+            webhook_url=webhook_url,
+            slack_webhook_url=tenant.slack_webhook_url,
+            principal_name=principal_id,
+        )
+        with _ai_review_lock:
+            _ai_review_tasks[task_id] = {
+                "future": future,
+                "creative_id": creative_id,
+                "created_at": time.time(),
+            }
+        logger.info(f"[sync_creatives] Submitted AI review for {creative_id} (task: {task_id})")
+
+    creative_repo.after_commit(_submit, label=f"ai_review:{creative_id}")
 
 
 def _update_existing_creative(
@@ -70,9 +228,8 @@ def _update_existing_creative(
     creative_repo: CreativeRepository,
     format_value: Any,
     approval_mode: str,
-    tenant: dict[str, Any],
+    tenant: TenantContext,
     webhook_url: str | None,
-    context: dict[str, Any] | BaseModel | None,
     all_formats: list[Any],
     registry: Any,
     principal_id: str,
@@ -91,7 +248,6 @@ def _update_existing_creative(
         approval_mode: Tenant approval mode (auto-approve, ai-powered, require-human).
         tenant: Tenant dict with tenant_id, slack_webhook_url, etc.
         webhook_url: Push notification webhook URL for AI review callbacks.
-        context: Application-level context per AdCP spec.
         all_formats: Pre-fetched creative formats from registry.
         registry: CreativeAgentRegistry instance.
         principal_id: Authenticated principal ID for AI review callbacks.
@@ -99,22 +255,28 @@ def _update_existing_creative(
     Returns:
         Tuple of (SyncCreativeResult, needs_approval).
     """
-
-    from typing import Literal
-
     # Update updated_at timestamp
     now = datetime.now(UTC)
     existing_creative.updated_at = now
 
-    # Track changes for result
+    # Snapshot what this update is compared against BEFORE mutating the row, and
+    # derive the comparison-based part of `changes` from it. The dry_run branch runs
+    # the identical comparison against the state an earlier entry previewed, which
+    # is the only way the two branches can agree — see build_update_sync_result.
+    prior = PriorCreativeState.from_row(existing_creative)
+
+    # `changes` here accumulates ONLY the agent-derived entries (generative build,
+    # preview render). The comparison-based and always-changed parts are added by
+    # the builder at the end, in the order the live path has always produced.
     changes: list[str] = []
 
-    # Upsert mode: update provided fields
+    # Upsert mode: update provided fields. Assignment stays guarded on `is not
+    # None`; the comparison that decides whether `name` counts as changed lives in
+    # comparison_changes and deliberately does NOT share that guard.
     if creative.name != existing_creative.name:
         name_value = creative.name
         if name_value is not None:
             existing_creative.name = str(name_value)
-        changes.append("name")
     # Extract complete format info including parameters (AdCP 2.5)
     format_info = _extract_format_info(format_value)
     new_agent_url = format_info["agent_url"]
@@ -129,7 +291,6 @@ def _update_existing_creative(
         existing_creative.format = new_format
         # Cast TypedDict to dict for SQLAlchemy column type
         existing_creative.format_parameters = cast(dict | None, new_params)
-        changes.append("format")
 
     # Determine creative status based on approval mode
     creative_format = creative.format_id
@@ -141,43 +302,17 @@ def _update_existing_creative(
         elif approval_mode == "ai-powered":
             # Submit to background AI review (async)
 
-            from src.admin.blueprints.creatives import (
-                _ai_review_executor,
-                _ai_review_lock,
-                _ai_review_tasks,
-            )
-
             # Set status to pending_review for AI review
             existing_creative.status = CreativeStatusEnum.pending_review.value
             needs_approval = True
 
-            # Submit background task
-            task_id = f"ai_review_{existing_creative.creative_id}_{uuid.uuid4().hex[:8]}"
-
-            # Need to flush to ensure creative_id is available
-            creative_repo.flush()
-
-            # Import the async function
-            from src.admin.blueprints.creatives import _ai_review_creative_async
-
-            future = _ai_review_executor.submit(
-                _ai_review_creative_async,
+            _defer_ai_review(
+                creative_repo,
                 creative_id=existing_creative.creative_id,
-                tenant_id=tenant["tenant_id"],
+                tenant=tenant,
                 webhook_url=webhook_url,
-                slack_webhook_url=tenant.get("slack_webhook_url"),
-                principal_name=principal_id,
+                principal_id=principal_id,
             )
-
-            # Track the task
-            with _ai_review_lock:
-                _ai_review_tasks[task_id] = {
-                    "future": future,
-                    "creative_id": existing_creative.creative_id,
-                    "created_at": time.time(),
-                }
-
-            logger.info(f"[sync_creatives] Submitted AI review for {existing_creative.creative_id} (task: {task_id})")
         else:  # require-human
             existing_creative.status = CreativeStatusEnum.pending_review.value
             needs_approval = True
@@ -185,18 +320,19 @@ def _update_existing_creative(
     # Store creative properties in data field
     # AdCP 2.5: Full upsert semantics (replace all data, not merge)
     url = _extract_url_from_assets(creative)
-    data = _build_creative_data(creative, url, context)
+    data = _build_creative_data(creative, url)
 
     # ALWAYS validate updates with creative agent
     if creative_format:
         try:
             # Use pre-fetched formats (fetched outside transaction at function start)
-            # This avoids async HTTP calls inside savepoint
-
-            # ONE answer to "same format?", from format_resolver — not a local
-            # `==` over the model, which compares Python CLASSES as well as
-            # values and so missed every format the A2A path pre-upgraded.
-            format_obj = find_format(creative_format, all_formats)
+            # This avoids async HTTP calls inside savepoint.
+            #
+            # find_format, not a `==` loop: format references reach this point in
+            # either of two classes and pydantic v2 equality is class-sensitive,
+            # so a raw comparison silently matched NOTHING on A2A and demoted
+            # every generative creative to a static one (salesagent-kyc89).
+            format_obj = find_format(all_formats, creative_format)
 
             if format_obj and is_agent_backed(format_obj):
                 if is_generative(format_obj):
@@ -207,17 +343,16 @@ def _update_existing_creative(
                     )
 
                     # Get Gemini API key from config
-                    from src.core.config import get_config
+                    from src.core.config import get_settings
 
-                    config = get_config()
-                    gemini_api_key = config.gemini_api_key
+                    gemini_api_key = get_settings().integrations.gemini_api_key
 
                     if not gemini_api_key:
                         error_msg = (
                             f"Cannot update generative creative {creative_format}: GEMINI_API_KEY not configured"
                         )
                         logger.error(f"[sync_creatives] {error_msg}")
-                        raise AdCPConfigurationError(error_msg)
+                        raise AdCPConfigurationError()
 
                     # Extract message/brief from assets or inputs
                     message = _extract_message_from_assets(creative)
@@ -248,15 +383,21 @@ def _update_existing_creative(
                             f"context_id={context_id}"
                         )
 
-                        build_result = run_async_in_sync_context(
-                            registry.build_creative(
-                                agent_url=format_obj.agent_url,
-                                format_id=creative_format,
-                                message=message,
-                                gemini_api_key=gemini_api_key,
-                                promoted_offerings=promoted_offerings,
-                                context_id=context_id,
-                                finalize=getattr(creative, "approved", False),
+                        # OUT-OF-TRANSACTION EFFECT: a preview must not fire a request at a
+                        # creative agent's endpoint (same rule accounts.py states for
+                        # activation proofs). None here is already the no-result case the
+                        # consumer below guards for, so no second result path appears.
+                        build_result = creative_repo.outbound(
+                            lambda: run_async_in_sync_context(
+                                registry.build_creative(
+                                    agent_url=format_obj.agent_url,
+                                    format_id=creative_format,
+                                    message=message,
+                                    gemini_api_key=gemini_api_key,
+                                    promoted_offerings=promoted_offerings,
+                                    context_id=context_id,
+                                    finalize=getattr(creative, "approved", False),
+                                )
                             )
                         )
 
@@ -274,7 +415,7 @@ def _update_existing_creative(
                                 # Only use generative assets if user didn't provide their own
                                 user_provided_assets = creative.assets
                                 if creative_output.get("assets") and not user_provided_assets:
-                                    data["assets"] = creative_output["assets"]
+                                    data["assets"] = _generative_assets(creative_output["assets"])
                                     changes.append("assets")
                                     logger.info("[sync_creatives] Using assets from generative output (update)")
                                 elif user_provided_assets:
@@ -354,11 +495,17 @@ def _update_existing_creative(
                         f"has_url={bool(data.get('url'))}"
                     )
 
-                    preview_result = run_async_in_sync_context(
-                        registry.preview_creative(
-                            agent_url=format_obj.agent_url,
-                            format_id=format_id_str,
-                            creative_manifest=creative_manifest,
+                    # OUT-OF-TRANSACTION EFFECT: a preview must not fire a request at a
+                    # creative agent's endpoint (same rule accounts.py states for
+                    # activation proofs). None here is already the no-result case the
+                    # consumer below guards for, so no second result path appears.
+                    preview_result = creative_repo.outbound(
+                        lambda: run_async_in_sync_context(
+                            registry.preview_creative(
+                                agent_url=format_obj.agent_url,
+                                format_id=format_id_str,
+                                creative_manifest=creative_manifest,
+                            )
                         )
                     )
 
@@ -419,59 +566,104 @@ def _update_existing_creative(
                     # Continue with update - preview is optional for static creatives
                 else:
                     # Creative agent should have generated previews but didn't
-                    error_msg = f"Preview generation failed for {existing_creative.creative_id}: no previews returned and no media_url provided"
-                    logger.error(f"[sync_creatives] {error_msg}")
-                    return (_failed_sync_result(existing_creative.creative_id, error_msg), False)
+                    logger.error(
+                        "[sync_creatives] Preview generation returned nothing for %s and no media_url",
+                        existing_creative.creative_id,
+                    )
+                    return (
+                        _failed_sync_result(
+                            existing_creative.creative_id,
+                            AdCPCreativeRejectedError(
+                                field="media_url",
+                                details=CreativeRejectionDetails(
+                                    creative_id=existing_creative.creative_id, reasons=["no_previews"]
+                                ),
+                            ),
+                        ),
+                        False,
+                    )
 
         except AdCPConfigurationError as config_error:
             # Server-side misconfiguration (e.g. GEMINI_API_KEY missing) is terminal
             # and admin-fixable — not a transient creative-agent outage. Surface it
             # honestly so the buyer does not retry a misconfiguration.
-            error_msg = str(config_error)
             logger.error(
-                "[sync_creatives] %s for update of %s", error_msg, existing_creative.creative_id, exc_info=True
+                "[sync_creatives] configuration error for update of %s",
+                existing_creative.creative_id,
+                exc_info=True,
             )
-            return (_failed_sync_result(existing_creative.creative_id, error_msg, code="CONFIGURATION_ERROR"), False)
+            return (
+                _failed_sync_result(
+                    existing_creative.creative_id,
+                    AdCPConfigurationError(
+                        details=ConfigurationDetails(creative_id=existing_creative.creative_id),
+                        internal_detail=config_error,
+                    ),
+                ),
+                False,
+            )
         except OutboundError as outbound_error:
             # A refused/undeliverable egress request is already correctly classified
             # by the seam — delegate rather than laundering it into the generic
-            # "Retry recommended" transient message below. raise_mapped_outbound_error
-            # always raises; the mapped AdCPError propagates out of this function to
-            # _sync.py's per-creative `except AdCPError as e:` handler, which already
-            # forwards a typed error's own code/recovery onto the per-item result.
+            # transient branch below. This branch MUST precede the typed branch: both
+            # OutboundError subclasses are also AdCPSalesAgentError subclasses
+            # (OutboundRequestBlocked/AdCPBlockedUrlError,
+            # OutboundDeliveryFailed/AdCPServiceUnavailableError), so a typed catch
+            # first would swallow the provenance classification.
+            # raise_mapped_outbound_error always raises; the mapped error propagates
+            # out of this function to _sync.py's per-creative typed handler, which
+            # builds the per-item result from the typed error itself.
             raise_mapped_outbound_error(
                 outbound_error,
                 provenance=OperatorEndpoint("the creative agent"),
                 logger=logger,
             )
+        except AdCPSalesAgentError as typed_error:
+            # GENERALIZES the AdCPConfigurationError branch above. That branch was added so a
+            # missing GEMINI_API_KEY would not read as a transient creative-agent outage;
+            # the same is true of every other typed error the registry raises. A
+            # rate limit degraded to SERVICE_UNAVAILABLE tells the buyer to retry
+            # immediately, which is the one thing a 429 says not to do.
+            logger.error(
+                "[sync_creatives] typed %s for update of %s",
+                typed_error.error_code,
+                existing_creative.creative_id,
+                exc_info=True,
+            )
+            return (_failed_sync_result(existing_creative.creative_id, typed_error), False)
         except Exception as validation_error:
             # Creative agent validation failed for update (network error, agent down, etc.)
             # Do NOT update the creative - it needs validation before acceptance
-            error_msg = (
-                f"Creative agent unreachable or validation error: {str(validation_error)}. "
-                f"Retry recommended - creative agent may be temporarily unavailable."
-            )
             logger.error(
-                f"[sync_creatives] {error_msg} for update of {existing_creative.creative_id}",
+                "[sync_creatives] creative agent unreachable or validation error for update of %s",
+                existing_creative.creative_id,
                 exc_info=True,
             )
-            return (_failed_sync_result(existing_creative.creative_id, error_msg), False)
-
-    # In full upsert, consider all fields as changed
-    changes.extend(["url", "click_url", "width", "height", "duration"])
+            return (
+                _failed_sync_result(
+                    existing_creative.creative_id,
+                    AdCPServiceUnavailableError(
+                        details=AdapterFailureDetails(creative_id=existing_creative.creative_id),
+                        internal_detail=validation_error,
+                    ),
+                ),
+                False,
+            )
 
     creative_repo.update_data(existing_creative, data)
 
-    # Record result for updated creative
-    action: Literal["updated", "unchanged"] = "updated" if changes else "unchanged"
-
+    # Record result for updated creative. The builder adds the comparison-based
+    # entries and the always-changed five around the agent-derived ones collected
+    # above, preserving the order this function has always emitted.
     return (
-        SyncCreativeResult(
-            creative_id=existing_creative.creative_id,
-            action=action,
+        build_update_sync_result(
+            existing_creative.creative_id,
+            creative=creative,
+            prior=prior,
+            format_value=format_value,
+            data=data,
+            agent_derived_changes=changes,
             internal_status=existing_creative.status,
-            changes=changes,
-            review_feedback=None,
         ),
         needs_approval,
     )
@@ -482,9 +674,8 @@ def _create_new_creative(
     creative_repo: CreativeRepository,
     format_value: Any,
     approval_mode: str,
-    tenant: dict[str, Any],
+    tenant: TenantContext,
     webhook_url: str | None,
-    context: dict[str, Any] | BaseModel | None,
     all_formats: list[Any],
     registry: Any,
     principal_id: str,
@@ -506,7 +697,7 @@ def _create_new_creative(
 
     # Prepare data field with all creative properties
     url = _extract_url_from_assets(creative)
-    data = _build_creative_data(creative, url, context)
+    data = _build_creative_data(creative, url)
 
     # Store user-provided assets for preservation check
     user_provided_assets = creative.assets
@@ -516,12 +707,13 @@ def _create_new_creative(
     if creative_format:
         try:
             # Use pre-fetched formats (fetched outside transaction at function start)
-            # This avoids async HTTP calls inside savepoint
-
-            # ONE answer to "same format?", from format_resolver — not a local
-            # `==` over the model, which compares Python CLASSES as well as
-            # values and so missed every format the A2A path pre-upgraded.
-            format_obj = find_format(creative_format, all_formats)
+            # This avoids async HTTP calls inside savepoint.
+            #
+            # find_format, not a `==` loop: format references reach this point in
+            # either of two classes and pydantic v2 equality is class-sensitive,
+            # so a raw comparison silently matched NOTHING on A2A and demoted
+            # every generative creative to a static one (salesagent-kyc89).
+            format_obj = find_format(all_formats, creative_format)
 
             if format_obj and is_agent_backed(format_obj):
                 if is_generative(format_obj):
@@ -531,15 +723,14 @@ def _create_new_creative(
                     )
 
                     # Get Gemini API key from config
-                    from src.core.config import get_config
+                    from src.core.config import get_settings
 
-                    config = get_config()
-                    gemini_api_key = config.gemini_api_key
+                    gemini_api_key = get_settings().integrations.gemini_api_key
 
                     if not gemini_api_key:
                         error_msg = f"Cannot build generative creative {creative_format}: GEMINI_API_KEY not configured"
                         logger.error(f"[sync_creatives] {error_msg}")
-                        raise AdCPConfigurationError(error_msg)
+                        raise AdCPConfigurationError()
 
                     # Extract message/brief from assets or inputs
                     message = _extract_message_from_assets(creative)
@@ -567,15 +758,21 @@ def _create_new_creative(
                         f"message_length={len(message) if message else 0}"
                     )
 
-                    build_result = run_async_in_sync_context(
-                        registry.build_creative(
-                            agent_url=format_obj.agent_url,
-                            format_id=format_id_str,
-                            message=message,
-                            gemini_api_key=gemini_api_key,
-                            promoted_offerings=promoted_offerings,
-                            context_id=getattr(creative, "context_id", None),
-                            finalize=getattr(creative, "approved", False),
+                    # OUT-OF-TRANSACTION EFFECT: a preview must not fire a request at a
+                    # creative agent's endpoint (same rule accounts.py states for
+                    # activation proofs). None here is already the no-result case the
+                    # consumer below guards for, so no second result path appears.
+                    build_result = creative_repo.outbound(
+                        lambda: run_async_in_sync_context(
+                            registry.build_creative(
+                                agent_url=format_obj.agent_url,
+                                format_id=format_id_str,
+                                message=message,
+                                gemini_api_key=gemini_api_key,
+                                promoted_offerings=promoted_offerings,
+                                context_id=getattr(creative, "context_id", None),
+                                finalize=getattr(creative, "approved", False),
+                            )
                         )
                     )
 
@@ -591,7 +788,7 @@ def _create_new_creative(
 
                             # Only use generative assets if user didn't provide their own
                             if creative_output.get("assets") and not user_provided_assets:
-                                data["assets"] = creative_output["assets"]
+                                data["assets"] = _generative_assets(creative_output["assets"])
                                 logger.info("[sync_creatives] Using assets from generative output")
                             elif user_provided_assets:
                                 logger.info(
@@ -651,11 +848,17 @@ def _create_new_creative(
                         f"has_url={bool(data.get('url'))}"
                     )
 
-                    preview_result = run_async_in_sync_context(
-                        registry.preview_creative(
-                            agent_url=format_obj.agent_url,
-                            format_id=format_id_str,
-                            creative_manifest=creative_manifest,
+                    # OUT-OF-TRANSACTION EFFECT: a preview must not fire a request at a
+                    # creative agent's endpoint (same rule accounts.py states for
+                    # activation proofs). None here is already the no-result case the
+                    # consumer below guards for, so no second result path appears.
+                    preview_result = creative_repo.outbound(
+                        lambda: run_async_in_sync_context(
+                            registry.preview_creative(
+                                agent_url=format_obj.agent_url,
+                                format_id=format_id_str,
+                                creative_manifest=creative_manifest,
+                            )
                         )
                     )
 
@@ -697,6 +900,25 @@ def _create_new_creative(
                         f"height={data.get('height')}, "
                         f"variants={len(preview_result.get('previews', []))}"
                     )
+                elif creative_repo.is_preview:
+                    # The boundary SUPPRESSED the call (an outbound request is not
+                    # undoable by the transaction's rollback), so a falsy result
+                    # here means "we did not ask", NOT "the agent had none".
+                    # Asked of the TRANSACTION, deliberately: testing
+                    # `preview_result is None` would conflate those two, which is
+                    # the confusion this branch exists to prevent.
+                    # Failing the entry would report a fault that does not exist
+                    # and would break the pinned dry_run contract: a preview
+                    # "returns what would be created/updated/deleted"
+                    # (sync-creatives-request.json#/properties/dry_run), not a
+                    # SERVICE_UNAVAILABLE blaming the creative agent. The
+                    # agent-derived fields are simply absent from the preview --
+                    # the known residual divergence build_update_sync_result's
+                    # docstring already records, not a failure.
+                    logger.info(
+                        f"[sync_creatives] dry_run: skipped preview generation for "
+                        f"{creative_id}; the preview reports the create it would make."
+                    )
                 else:
                     # Preview generation returned no previews
                     # Only acceptable if creative has a media_url (direct URL to creative asset)
@@ -709,41 +931,79 @@ def _create_new_creative(
                         # Continue with creative creation - preview is optional for static creatives
                     else:
                         # Creative agent should have generated previews but didn't
-                        error_msg = f"Preview generation failed for {creative_id}: no previews returned and no media_url provided"
-                        logger.error(f"[sync_creatives] {error_msg}")
-                        return (_failed_sync_result(creative_id, error_msg), False)
+                        logger.error(
+                            "[sync_creatives] Preview generation returned nothing for %s and no media_url",
+                            creative_id,
+                        )
+                        return (
+                            _failed_sync_result(
+                                creative_id,
+                                AdCPCreativeRejectedError(
+                                    field="media_url",
+                                    details=CreativeRejectionDetails(creative_id=creative_id, reasons=["no_previews"]),
+                                ),
+                            ),
+                            False,
+                        )
 
         except AdCPConfigurationError as config_error:
             # Server-side misconfiguration (e.g. GEMINI_API_KEY missing) is terminal
             # and admin-fixable — not a transient creative-agent outage. Surface it
             # honestly so the buyer does not retry a misconfiguration.
-            error_msg = str(config_error)
-            logger.error("[sync_creatives] %s - rejecting creative %s", error_msg, creative_id, exc_info=True)
-            return (_failed_sync_result(creative_id, error_msg, code="CONFIGURATION_ERROR"), False)
+            logger.error("[sync_creatives] configuration error - rejecting creative %s", creative_id, exc_info=True)
+            return (
+                _failed_sync_result(
+                    creative_id,
+                    AdCPConfigurationError(
+                        details=ConfigurationDetails(creative_id=creative_id),
+                        internal_detail=config_error,
+                    ),
+                ),
+                False,
+            )
         except OutboundError as outbound_error:
             # A refused/undeliverable egress request is already correctly classified
             # by the seam — delegate rather than laundering it into the generic
-            # "Retry recommended" transient message below. raise_mapped_outbound_error
-            # always raises; the mapped AdCPError propagates out of this function to
-            # _sync.py's per-creative `except AdCPError as e:` handler, which already
-            # forwards a typed error's own code/recovery onto the per-item result.
+            # transient branch below. This branch MUST precede the typed branch: both
+            # OutboundError subclasses are also AdCPSalesAgentError subclasses
+            # (OutboundRequestBlocked/AdCPBlockedUrlError,
+            # OutboundDeliveryFailed/AdCPServiceUnavailableError), so a typed catch
+            # first would swallow the provenance classification.
+            # raise_mapped_outbound_error always raises; the mapped error propagates
+            # out of this function to _sync.py's per-creative typed handler, which
+            # builds the per-item result from the typed error itself.
             raise_mapped_outbound_error(
                 outbound_error,
                 provenance=OperatorEndpoint("the creative agent"),
                 logger=logger,
             )
+        except AdCPSalesAgentError as typed_error:
+            # Same generalization as the update path above.
+            logger.error(
+                "[sync_creatives] typed %s - rejecting creative %s",
+                typed_error.error_code,
+                creative_id,
+                exc_info=True,
+            )
+            return (_failed_sync_result(creative_id, typed_error), False)
         except Exception as validation_error:
             # Creative agent validation failed (network error, agent down, etc.)
             # Do NOT store the creative - it needs validation before acceptance
-            error_msg = (
-                f"Creative agent unreachable or validation error: {str(validation_error)}. "
-                f"Retry recommended - creative agent may be temporarily unavailable."
-            )
             logger.error(
-                f"[sync_creatives] {error_msg} - rejecting creative {creative_id}",
+                "[sync_creatives] creative agent unreachable or validation error - rejecting creative %s",
+                creative_id,
                 exc_info=True,
             )
-            return (_failed_sync_result(creative_id, error_msg), False)
+            return (
+                _failed_sync_result(
+                    creative_id,
+                    AdCPServiceUnavailableError(
+                        details=AdapterFailureDetails(creative_id=creative_id),
+                        internal_detail=validation_error,
+                    ),
+                ),
+                False,
+            )
 
     # Determine creative status based on approval mode
 
@@ -778,41 +1038,16 @@ def _create_new_creative(
     elif approval_mode == "ai-powered":
         # Submit to background AI review (async)
 
-        from src.admin.blueprints.creatives import (
-            _ai_review_executor,
-            _ai_review_lock,
-            _ai_review_tasks,
-        )
-
         # Set status to pending_review for AI review
         db_creative.status = CreativeStatusEnum.pending_review.value
         needs_approval = True
 
-        # Submit background task
-        task_id = f"ai_review_{db_creative.creative_id}_{uuid.uuid4().hex[:8]}"
-
-        # Import the async function
-        from src.admin.blueprints.creatives import _ai_review_creative_async
-
-        future = _ai_review_executor.submit(
-            _ai_review_creative_async,
+        _defer_ai_review(
+            creative_repo,
             creative_id=db_creative.creative_id,
-            tenant_id=tenant["tenant_id"],
+            tenant=tenant,
             webhook_url=webhook_url,
-            slack_webhook_url=tenant.get("slack_webhook_url"),
-            principal_name=principal_id,
-        )
-
-        # Track the task
-        with _ai_review_lock:
-            _ai_review_tasks[task_id] = {
-                "future": future,
-                "creative_id": db_creative.creative_id,
-                "created_at": time.time(),
-            }
-
-        logger.info(
-            f"[sync_creatives] Submitted AI review for new creative {db_creative.creative_id} (task: {task_id})"
+            principal_id=principal_id,
         )
     else:  # require-human
         db_creative.status = CreativeStatusEnum.pending_review.value

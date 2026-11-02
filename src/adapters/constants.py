@@ -23,8 +23,25 @@ REQUIRED_UPDATE_ACTIONS = list(UPDATE_ACTIONS.keys())
 # These were moved to src/core/platform_mappings.py to fix the reverse
 # dependency (core importing from adapters).  Adapter code that already
 # imports from this module continues to work via these re-exports.
+from src.core.errors.details import CapabilityRefusalDetails
 from src.core.platform_mappings import (  # noqa: F401
     _OLD_FIELD_MAP,
     ADAPTER_PLATFORM_MAP,
     resolve_adapter_id,
 )
+
+
+def require_supported_update_action(action: str) -> None:
+    """Refuse an update action no adapter models, identically across adapters.
+
+    Three adapters had a byte-identical copy of this check. CLAUDE.md treats duplicated
+    logic as a defect, not a style preference: the next fix to one copy misses the others.
+    """
+    from src.core.exceptions import AdCPCapabilityNotSupportedError
+
+    if action not in REQUIRED_UPDATE_ACTIONS:
+        raise AdCPCapabilityNotSupportedError(
+            details=CapabilityRefusalDetails(
+                capability="update_action", rejected_value=action, accepted_values=sorted(REQUIRED_UPDATE_ACTIONS)
+            ),
+        )

@@ -26,18 +26,23 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.core.database.models import AdapterConfig
+from src.core.errors.details import ConfigurationDetails
+from src.core.exceptions import AdCPConfigurationError
 
 
-class TenantNotConfiguredError(Exception):
-    """Raised when a tenant has no AdapterConfig row.
+class TenantNotConfiguredError(AdCPConfigurationError):
+    """A tenant exists but has no AdapterConfig row.
 
-    This indicates a setup/configuration issue — the tenant exists but has
-    not been configured with an ad server adapter yet.
+    In the AdCP hierarchy because we define it and we raise it. CONFIGURATION_ERROR
+    is what it always meant -- seller-side setup the buyer cannot supply, which the
+    pinned enum classifies terminal. The tenant id travels in ``details.tenant_id``
+    rather than an interpolated message: AdCPSalesAgentError has no message parameter, so the
+    sentence comes from CODE_TABLE.
     """
 
     def __init__(self, tenant_id: str) -> None:
         self.tenant_id = tenant_id
-        super().__init__(f"No adapter configuration found for tenant {tenant_id!r}")
+        super().__init__(details=ConfigurationDetails(tenant_id=tenant_id))
 
 
 class AdapterConfigRepository:
@@ -173,3 +178,25 @@ class AdapterConfigRepository:
         """
         config = self.get_by_tenant()  # raises if missing
         config.custom_targeting_keys = keys
+
+
+def read_adapter_config(tenant_id: str) -> AdapterConfig | None:
+    """Read a tenant's AdapterConfig in a fresh, single-use session, detached
+    for use after the session closes.
+
+    The ONE session-owning read for AdapterConfig outside the UoW/impl layer.
+    ``src/core/helpers/adapter_helpers.py`` (4 call sites) routes through this
+    instead of each opening its own ``get_db_session()`` -- the guard's
+    legitimate session home is the repository layer, not a helper module one
+    call frame from ``_impl`` (#1721 M2). ``AdapterConfig`` has no
+    relationships and every column is eagerly loaded by the plain SELECT below,
+    so ``session.expunge()`` is enough to detach it safely -- no
+    ``DetachedInstanceError`` risk on later attribute access.
+    """
+    from src.core.database.database_session import get_db_session
+
+    with get_db_session() as session:
+        config = AdapterConfigRepository(session, tenant_id).find_by_tenant()
+        if config is not None:
+            session.expunge(config)
+        return config

@@ -206,8 +206,17 @@ def log_admin_action(
             else:
                 user_email = str(user_info) if user_info else "unknown"
 
-            # Get tenant_id from kwargs (most admin routes have this)
-            tenant_id: str | None = kwargs.get("tenant_id")
+            # The tenant this action belongs to, resolved so it survives either decorator
+            # ORDER. Flask hands URL parameters to the OUTERMOST wrapper as kwargs, so
+            # reading only kwargs works when this decorator is outermost and silently
+            # returns None when it is not: require_tenant_access calls
+            # ``f(tenant_id, *args, **kwargs)`` positionally, so tenant_id arrives in args.
+            # Since the row is written only ``if tenant_id``, that produced NO audit row at
+            # all rather than a wrong one — auditing off, silently, on every route that put
+            # authorization outside (which is the order this module's own docstring asks
+            # for). request.view_args holds the URL parameters whatever the wrapper chain
+            # did with them, so it is the reliable source.
+            tenant_id: str | None = kwargs.get("tenant_id") or (request.view_args or {}).get("tenant_id")
 
             # Call the actual route function
             result: Any = None

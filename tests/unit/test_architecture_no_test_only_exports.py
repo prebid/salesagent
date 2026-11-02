@@ -7,20 +7,16 @@ module is the "owned by two concerns" state the plan forbids leaving silent, and
 the cheapest way for it to come back is for someone to re-import it "because it's
 already there".
 
+The companion assertion that `src/core/version_compat.py` does not re-export it is
+gone, along with that module: v2 backward-compat was deleted whole, so there is no
+longer a module for the symbol to come back to. What remains is the pair that still
+grades something — the helper resolves from its home under `tests/`, and nothing in
+`src/` imports it.
+
 Deliberately narrow: this pins the ONE symbol the lane moved, rather than trying
 to infer test-only-ness across the tree. A broad heuristic here would be a guard
 that fails for reasons nobody can act on.
 """
-
-
-def test_spec_response_model_is_not_a_production_export():
-    from src.core import version_compat
-
-    assert not hasattr(version_compat, "spec_response_model"), (
-        "spec_response_model is back in src/core/version_compat.py. It is a "
-        "response-side parse-back helper for the test harness with no production "
-        "caller; its home is tests/harness/spec_models.py."
-    )
 
 
 def test_spec_response_model_resolves_from_its_new_home():

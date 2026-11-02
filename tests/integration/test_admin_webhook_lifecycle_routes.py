@@ -14,7 +14,7 @@ generic error:
   is not a column (the primary key is ``id``, ``models.py:2074``). Both are
   reached from ``templates/webhook_management.html`` (:129 and :447) with
   ``webhook.id``, so ``filter_by(config_id=...)`` raises ``InvalidRequestError``
-  for EVERY row and both broad ``except Exception`` arms (:729-732, :759-761)
+  for EVERY row and both broad ``except Exception`` branches (:729-732, :759-761)
   render it as an operator-facing failure. Neither route has ever worked.
 
 Why the routes and not the repository: the defect IS the hand-written filter in
@@ -54,18 +54,18 @@ import pytest
 from src.core.database.repositories.uow import PushNotificationConfigUoW
 from tests.factories import PrincipalFactory, TenantFactory
 from tests.harness._base import IntegrationEnv
+from tests.helpers.egress_backoff import set_flags
 
 # The registration form, the flash reader and the admitted URL are already
 # spelled once, by the module that owns this route's ingest cases. Imported
 # rather than re-typed: two copies of "what a browser posts to the webhook
 # registration form" drift the moment the form changes, and the non-canonical
 # ``hmac_sha256`` spelling the gate refuses is exactly what crept in last time.
-from tests.integration.test_admin_ingest_url_policy import (
+from tests.integration._egress_ingest_helpers import (
     ADMITTED_URL,
     flashes,
     post_register_hmac_webhook,
 )
-from tests.integration.test_outbound_http import set_flags
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -234,7 +234,7 @@ def test_delete_webhook_removes_the_row_the_listing_links_to(authenticated_admin
     assert active_config_ids() == []
     assert flashes(client) == [REGISTERED, DELETED], (
         "delete_webhook filters on config_id, which is not a column, and its broad "
-        "except arm renders the resulting programming error as an operator failure"
+        "except branch renders the resulting programming error as an operator failure"
     )
 
 
@@ -246,7 +246,7 @@ def test_toggle_webhook_flips_is_active_on_the_row_the_listing_links_to(
     Both directions, because a route that only ever set ``is_active=False``
     would satisfy a single flip while leaving the operator unable to re-enable
     the row — which is half of the deadlock. The JSON body is asserted too: the
-    listing's ``fetch()`` arm (``webhook_management.html:447``) reads
+    listing's ``fetch()`` branch (``webhook_management.html:447``) reads
     ``data.success`` and ``data.is_active`` to repaint the row.
     """
     set_flags(monkeypatch, private=True)
@@ -283,7 +283,7 @@ def test_a_non_canonical_spelling_of_a_registered_url_is_still_a_duplicate(
     not equal.
 
     Keyed on the raw form value, the lookup then misses the row it just wrote,
-    BOTH branches of the duplicate check collapse into the "not found" arm, and
+    BOTH branches of the duplicate check collapse into the "not found" branch, and
     a SECOND active row is inserted for the same destination. The operator is
     told "registered successfully" twice, the sender delivers twice, and one
     copy is signed with a secret the receiver cannot verify.

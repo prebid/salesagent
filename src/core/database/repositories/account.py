@@ -7,10 +7,81 @@ is set at construction time and injected into all queries automatically.
 
 from __future__ import annotations
 
-from sqlalchemy import select
+import uuid
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import Any
+
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Account, AgentAccountAccess
+from src.core.errors.details import ConflictDetails
+from src.core.exceptions import AdCPConflictError
+from src.core.helpers.brand_key import brand_key_parts
+
+#: The index that IS the natural-key invariant. ``_find_natural_key_conflict`` is
+#: only the fast path in front of it.
+NATURAL_KEY_INDEX = "uq_accounts_natural_key"
+
+
+class NaturalKeyConflict(AdCPConflictError, ValueError):
+    """The account natural key is already occupied.
+
+    BOTH bases are load-bearing, which is why this is the one class in the
+    disposition that keeps a second one:
+
+    * ``AdCPConflictError`` puts it in the hierarchy (salesagent-rys3u.5) and gives
+      it CONFLICT. It DOES escape: ``sync_accounts`` re-raises at accounts.py:1711
+      when the conflict names a row that has since vanished. As a bare
+      ``ValueError`` that escape reached the buyer as VALIDATION_ERROR -- their
+      request called malformed for a race the seller lost track of.
+    * ``ValueError`` keeps the admin blueprint's existing ``except ValueError``
+      working (src/admin/blueprints/accounts.py:101). Dropping it would silently
+      stop that handler catching, which is the same defect class as an
+      ``except`` naming a type nothing raises.
+
+    ``sync_accounts`` still catches this specific type and resolves to
+    ``existing_account_id`` rather than failing the entry.
+
+    Raised for BOTH ways the key can be occupied (the pre-check finding a
+    committed row, and losing the index race to a concurrent create), because to
+    every caller they are the same condition; only the timing differs.
+    """
+
+    def __init__(self, message: str, *, existing_account_id: str | None = None) -> None:
+        # OPERATOR-facing, never the buyer wire: the admin form flashes this so the
+        # human sees which account to edit. The buyer-facing sentence is CODE_TABLE's,
+        # resolved from CONFLICT.
+        self.operator_message = message
+        self.existing_account_id = existing_account_id
+        super().__init__(details=ConflictDetails(account_id=existing_account_id))
+
+
+@dataclass(frozen=True)
+class NaturalKey:
+    """The identity a sync_accounts entry resolves to: (brand_domain, brand_id, operator, sandbox).
+
+    The FULL key the unique index and every resolver use. A partial key would
+    collapse accounts that differ only by brand_id or sandbox, which are
+    legitimately distinct -- this type exists so the four-tuple cannot be built
+    two different ways at three call sites and quietly disagree about its order.
+    """
+
+    brand_domain: str
+    brand_id: str | None
+    operator: str
+    sandbox: bool | None
+
+    @classmethod
+    def from_reference(cls, ref: Any) -> NaturalKey:
+        brand_domain, brand_id = brand_key_parts(ref.brand)
+        return cls(brand_domain or "", brand_id, ref.operator or "", ref.sandbox)
+
+    @classmethod
+    def from_parts(cls, brand_domain: str, brand_id: str | None, operator: str, sandbox: bool | None) -> NaturalKey:
+        return cls(brand_domain, brand_id, operator, sandbox)
 
 
 class AccountRepository:
@@ -27,7 +98,23 @@ class AccountRepository:
         tenant_id: Tenant scope for all queries.
     """
 
-    _IMMUTABLE_FIELDS: frozenset[str] = frozenset({"tenant_id", "account_id", "created_at"})
+    #: Fields ``update_fields`` refuses. Beyond the PK and creation stamp, this
+    #: includes the NATURAL-KEY components: ``get_by_natural_key`` resolves a
+    #: buyer's ``sync_accounts`` entry on (tenant_id, operator, brand.domain[,
+    #: brand_id], sandbox), so ``operator`` and ``sandbox`` are load-bearing
+    #: identity, not settings. Mutating either RE-KEYS the account — the buyer's
+    #: next sync carrying the original key stops matching and provisions a
+    #: DUPLICATE, stranding the account_id they hold (salesagent-8sfr; the admin
+    #: edit form wrote both). Enforced here rather than in the form so any future
+    #: caller is refused too.
+    #: ``brand`` is the third component (the lookups read ``brand_domain`` /
+    #: ``brand_id`` out of that JSON column) and is listed even though nothing
+    #: writes it today: this bug stayed latent for exactly as long as nothing
+    #: wrote ``sandbox``, so protection that rests on the absence of a caller is
+    #: not protection.
+    _IMMUTABLE_FIELDS: frozenset[str] = frozenset(
+        {"tenant_id", "account_id", "created_at", "operator", "sandbox", "brand"}
+    )
 
     def __init__(self, session: Session, tenant_id: str) -> None:
         self._session = session
@@ -50,17 +137,18 @@ class AccountRepository:
             )
         ).first()
 
-    def get_by_natural_key(
-        self,
-        operator: str,
-        brand_domain: str,
-        brand_id: str | None = None,
-        sandbox: bool | None = None,
-    ) -> Account | None:
-        """Get an account by its natural key (operator + brand + sandbox).
+    def get_by_natural_key(self, key: NaturalKey) -> Account | None:
+        """Get an account by its :class:`NaturalKey` (operator + brand + sandbox).
+
+        Takes the key as ONE value rather than four loose positional parts: the
+        four are meaningless apart, and passing them separately let a caller
+        reorder or drop one (brand_id and sandbox are both optional, so a
+        three-arg call still type-checked while silently querying a different
+        key).
 
         The brand field is JSONType containing {"domain": ..., "brand_id": ...}.
         """
+        operator, brand_domain, brand_id, sandbox = key.operator, key.brand_domain, key.brand_id, key.sandbox
         stmt = select(Account).where(
             Account.tenant_id == self._tenant_id,
             Account.operator == operator,
@@ -135,15 +223,13 @@ class AccountRepository:
         For ambiguity *detection* prefer list_by_natural_key(limit=2) (single query).
         This exact count is for ambiguity *disclosure* on the error path only — once
         detection has confirmed >1 match, callers use it to tell the buyer how many
-        accounts collide (see account_helpers._resolve_by_natural_key).
+        accounts collide (see ``account_lookup.find_account``).
 
         ``principal_id`` MUST mirror the value passed to list_by_natural_key so the
         disclosed count is scoped to the agent's accessible accounts — disclosing a
         tenant-wide count to an agent who can access fewer is an info leak
         (#1417).
         """
-        from sqlalchemy import func
-
         stmt = (
             select(func.count())
             .select_from(Account)
@@ -205,19 +291,232 @@ class AccountRepository:
     # Write methods (flush, never commit)
     # ------------------------------------------------------------------
 
+    #: JSON columns whose stored shape is this repository's business, keyed to the
+    #: serializer that produces it.
+    _FIELD_SERIALIZERS = {
+        "notification_configs": "serialize_notification_configs",
+        "governance_agents": "serialize_governance_agents",
+        "billing_entity": "serialize_business_entity",
+    }
+
+    @classmethod
+    def serialize_field(cls, field: str, value: object) -> object:
+        """The stored form of *value* for *field*.
+
+        THE serialization boundary. Callers hand over whatever the buyer sent --
+        a model or a mapping -- and never need to know that these columns are
+        JSONType or what shape they hold; that is a property of how this
+        repository persists them, not of the business logic deciding what to
+        write. Idempotent, so a value that is already in stored form passes
+        through unchanged.
+        """
+        serializer_name = cls._FIELD_SERIALIZERS.get(field)
+        if serializer_name is None:
+            return value
+        from src.core.database.repositories import account_serialization
+
+        return getattr(account_serialization, serializer_name)(value)
+
+    @staticmethod
+    def persisted_value(account: Account | None, field: str) -> object:
+        """The persisted value of *field*, serialized for comparison with a resolved one.
+
+        ``None`` account means nothing is persisted yet (the create path), which
+        answers ``None`` rather than making every caller guard -- the resolvers
+        ask this question with an optional row in hand.
+
+        Serialization is a REPOSITORY concern: these columns are JSONType, and how
+        a stored model round-trips to its JSON shape is a property of how this
+        repository persists it. It lived in the tools layer, which meant a caller
+        comparing "what is stored" against "what was requested" had to know the
+        storage encoding -- and account_serialization.py stayed public for that
+        one caller instead of being the repository's private business.
+        """
+        from src.core.database.repositories.account_serialization import (
+            serialize_business_entity,
+            serialize_governance_agents,
+            serialize_notification_configs,
+        )
+
+        if account is None:
+            return None
+        current = getattr(account, field, None)
+        if field == "notification_configs":
+            return serialize_notification_configs(current)
+        if field == "governance_agents":
+            return serialize_governance_agents(current)
+        if field == "billing_entity":
+            return serialize_business_entity(current)
+        return current
+
+    @staticmethod
+    def mint_account_id() -> str:
+        """Mint a new account_id.
+
+        The repository owns account identity. This used to be minted in two
+        places -- the sync tool and the admin blueprint -- each free to drift in
+        format, which is how an id scheme becomes two id schemes.
+        """
+        return f"acc_{uuid.uuid4().hex[:12]}"
+
+    @staticmethod
+    def build_row(
+        *,
+        tenant_id: str,
+        account_id: str,
+        name: str,
+        status: str,
+        brand_domain: str,
+        brand_id: str | None,
+        # ``str | None``, matching the NULLABLE column this writes (``models.py`` :864).
+        # It was declared ``str`` and the sync path simply never passed None, so the
+        # narrowing never surfaced; routing the admin blueprint — which writes
+        # ``operator or None`` so an empty form field becomes SQL NULL rather than "" —
+        # through the shared builder is what exposed a pre-existing type lie (#1878).
+        operator: str | None,
+        principal_id: str | None,
+        created_fields: Mapping[str, object],
+    ) -> Account:
+        """Build the Account row a provisioning entry would create.
+
+        Pure, non-persisting factory -- no DB access. THE row-construction site
+        for every caller: sync_accounts' provisioning branch and the admin create
+        form (src/admin/blueprints/accounts.py), which used to hand-build its own
+        Account with its own id mint. Two independent definitions of what an
+        account row is, is how they drift (#1721).
+
+        Natural-key assembly (``build_row`` OWNS the row's identity columns --
+        ``tenant_id``/``account_id``/``brand``/``operator``) lives here rather
+        than in the tools layer: it is the exact shape CLAUDE.md Pattern #3
+        names (raw ORM kwargs assembled in business logic), now on the
+        repository the guard actually scans (#1721 M2).
+        """
+        return Account(
+            tenant_id=tenant_id,
+            account_id=account_id,
+            name=name,
+            status=status,
+            # No domain means NO brand reference, not a reference with an empty domain:
+            # ``Account.brand`` is nullable and a ``{"domain": ""}`` row is a different
+            # value from ``None``. A no-op whenever a domain is present, which is every
+            # sync/provisioning call; it is the admin form that can legitimately omit one
+            # (#1878).
+            brand=({"domain": brand_domain, **({"brand_id": brand_id} if brand_id else {})} if brand_domain else None),
+            operator=operator,
+            principal_id=principal_id,
+            # Every settable field comes from the one walk in the caller -- naming
+            # them here is what let a field be added to the re-sync branch and
+            # forgotten at create. Serialized HERE, so the caller hands over what
+            # the buyer sent and this repository decides its stored shape.
+            **{field: AccountRepository.serialize_field(field, value) for field, value in created_fields.items()},
+        )
+
     def create(self, account: Account) -> Account:
         """Add a new account to the session.
 
-        Raises ValueError if the account's tenant_id doesn't match.
+        Raises ValueError if the account's tenant_id doesn't match, and
+        :class:`NaturalKeyConflict` if its natural key is already occupied —
+        whether the pre-check saw the occupant (the common case) or this create
+        LOST the race to the unique index (#1721).
+
+        The insert runs inside a SAVEPOINT so losing that race stays recoverable.
+        Without it the failed statement aborts the enclosing transaction, and
+        ``sync_accounts`` — which processes its whole batch in one ``AccountUoW``
+        — could not continue to the next entry: every later statement would raise
+        ``PendingRollbackError``. The savepoint rolls back this insert alone and
+        leaves the surrounding transaction healthy enough to both re-resolve the
+        winner and finish the batch.
         """
         if account.tenant_id != self._tenant_id:
             raise ValueError(
                 f"Tenant mismatch: repository is scoped to '{self._tenant_id}' "
                 f"but account has tenant_id='{account.tenant_id}'"
             )
-        self._session.add(account)
-        self._session.flush()
+
+        def write() -> None:
+            self._session.add(account)
+            self._session.flush()
+
+        occupant = resolve_or_write(
+            self._session,
+            conflict=lambda: self._find_natural_key_conflict(account),
+            write=write,
+            constraint=NATURAL_KEY_INDEX,
+        )
+        if occupant is not None:
+            raise self._natural_key_conflict(account, occupant)
         return account
+
+    def _find_natural_key_conflict(self, account: Account) -> Account | None:
+        """The account already occupying *account*'s natural key, or ``None``.
+
+        RETURNS rather than raises so it can serve as ``resolve_or_write``'s ``conflict``
+        callback, which distinguishes "occupied" from "free" by ``None``. ``create()``
+        translates a non-``None`` answer into :class:`NaturalKeyConflict` at its one call
+        site — the same raise-to-return adaptation ``push_notification_config.py``'s
+        ``register_admin_webhook`` already makes.
+
+        The other half of salesagent-8sfr. That bug closed the UPDATE path by
+        making the key components immutable; a second CREATE reached the same
+        buyer-visible harm from the other side. Once two rows share a key,
+        ``get_by_natural_key().first()`` answers non-deterministically and
+        ``list_by_natural_key`` reports the key unresolvable — and the buyer
+        cannot repair either, because the natural key is the only handle their
+        ``sync_accounts`` entry has and they do not own the extra row.
+
+        Here rather than in the admin form for the same reason ``_IMMUTABLE_FIELDS``
+        is here: there are two create callers (the admin blueprint and
+        ``sync_accounts``), and a guard living in one form guards one form. The
+        ``uq_accounts_natural_key`` index is the actual invariant — this check
+        exists so the common case gets a usable message instead of an
+        IntegrityError, and cannot replace the index (two concurrent creates can
+        both pass it).
+
+        Matches the index's key semantics exactly, NOT ``get_by_natural_key``'s
+        caller-facing ones: a lookup that omits ``brand_id`` deliberately matches
+        any brand_id, which would make this refuse two accounts that differ only
+        in brand_id — legitimately distinct accounts under the AdCP key
+        (brand.domain + brand.brand_id + operator + sandbox). A check that
+        disagreed with its own index would refuse rows the database accepts.
+        """
+        brand_domain, brand_id = brand_key_parts(account.brand)
+
+        if brand_domain is None:
+            # No brand domain, no natural key: nothing resolves such a row (every
+            # lookup supplies a domain), so there is no ambiguity to prevent.
+            # Matches the partial `uq_accounts_natural_key` index — a check
+            # stricter than its own index would refuse rows the DB accepts.
+            return None
+
+        existing = self._session.scalars(
+            select(Account).where(
+                Account.tenant_id == self._tenant_id,
+                Account.operator.is_not_distinct_from(account.operator),
+                Account.brand["domain"].as_string().is_not_distinct_from(brand_domain),
+                Account.brand["brand_id"].as_string().is_not_distinct_from(brand_id),
+                # NULL and false are ONE key to every resolver, so they must be
+                # one key here too — mirrors COALESCE(sandbox, false) in the index.
+                func.coalesce(Account.sandbox, False) == bool(account.sandbox),
+            )
+        ).first()
+
+        return existing
+
+    def _natural_key_conflict(self, account: Account, existing: Account) -> NaturalKeyConflict:
+        """The one conflict message, whether the pre-check or the index caught it.
+
+        Built here rather than at the raise site so the buyer sees identical wording
+        regardless of which of the two detected the collision.
+        """
+        brand_domain, brand_id = brand_key_parts(account.brand)
+        return NaturalKeyConflict(
+            f"Natural key already in use: account '{existing.account_id}' already exists for "
+            f"operator={account.operator!r}, brand.domain={brand_domain!r}, "
+            f"brand.brand_id={brand_id!r}, sandbox={bool(account.sandbox)!r}. "
+            "Edit that account instead — a second account on one natural key makes the "
+            "buyer's sync_accounts entry unresolvable, and they cannot repair it.",
+            existing_account_id=existing.account_id,
+        )
 
     def update_status(self, account_id: str, status: str) -> Account | None:
         """Update an account's status. Returns None if not found."""
@@ -240,7 +539,7 @@ class AccountRepository:
         if account is None:
             return None
         for key, value in kwargs.items():
-            setattr(account, key, value)
+            setattr(account, key, self.serialize_field(key, value))
         self._session.flush()
         return account
 

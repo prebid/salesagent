@@ -37,6 +37,9 @@ from typing import Any
 import pytest
 
 from scripts.audit import ledger, storyboard_spec
+from scripts.setup.seed_storyboard_tenant import STORYBOARD_TOKEN, STORYBOARD_VIRTUAL_HOST
+from tests.storyboard import collected, corrected_storyboards, corrected_vectors
+from tests.storyboard.bundle import materialize_bundle as _materialize_bundle
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _RUNNER_DIR = Path(__file__).parent / "runner"
@@ -54,22 +57,108 @@ _PROTOCOLS: tuple[str, ...] = ("mcp", "a2a")
 # A2A takes the agent's BASE url, NOT its JSON-RPC endpoint. A2A is card-first:
 # the SDK calls buildCardUrls(), which appends `/.well-known/agent.json` then
 # `/.well-known/agent-card.json` to the url verbatim — it does NOT strip a
-# transport suffix the way computeBaseUrl() does. Passing `http://proxy:8000/a2a`
-# therefore asks for `/a2a/.well-known/agent-card.json`, which 404s (verified live
-# against the e2e stack), and the runner reports the agent unreachable without
+# transport suffix the way computeBaseUrl() does. Passing the url WITH its `/a2a`
+# suffix therefore asks for `/a2a/.well-known/agent-card.json`, which 404s (verified
+# live against the e2e stack), and the runner reports the agent unreachable without
 # grading anything. From the base url the card is found at
 # `/.well-known/agent-card.json` and the RPC endpoint (`/a2a`) comes off the card.
+#
+# The agent is `adcp-server-storyboard`, NOT the `adcp-server` behind `proxy` that the
+# other in-network suites drive. It is the same image, the same database and the same
+# anchored configuration, differing in one variable: ENVIRONMENT=production, so the
+# boundary runs `extra="ignore"` and DROPS a property this seller's schemas do not
+# declare instead of refusing it. That is what a deployed seller does, and a conformance
+# storyboard grades a deployed seller. Under the development strictness the other suites
+# want, the five read tools answered INVALID_REQUEST to a request carrying
+# `idempotency_key` -- a field AdCP 3.1 puts on every task request and
+# compliance/universal/read-tool-idempotency.yaml requires sellers to TOLERATE.
+#
+# ONE ORIGIN, BOTH PROTOCOLS. Same host, same TLS front, same Host header, therefore the
+# same tenant resolution and the same published identity — differing only in the path,
+# which the protocols themselves fix. That sameness is the POINT of grading two surfaces:
+# what the axes are for is proving one deployment behaves the same either way, and two
+# axes on two origins compare nothing. A green A2A reached by dialing it differently from
+# MCP is a label, not evidence.
+#
+# The origin is `storyboard.adcp.test:8443`, behind `tls-proxy` (alias in
+# docker-compose.e2e.yml, SNI map in config/nginx/nginx-tls-test.conf.template) rather
+# than the service on plaintext :8080 — and A2A is why the scheme has to be real. A2A is
+# card-first: the runner reads the RPC endpoint off `/.well-known/agent-card.json` rather
+# than being told it, and `src/app.py`'s `get_protocol` renders **https** for any host
+# that is not loopback. Dialed on plaintext, the card therefore publishes an https URL for
+# a plaintext port and every card-derived call fails with `fetch failed` — including the
+# capability probe the runner SELECTS storyboards from, so the axis executes a fraction of
+# the storyboards its sibling does. The card is right and the origin is wrong. This front
+# forwards `Host` verbatim and sets `X-Forwarded-Proto`, the signal `get_protocol` prefers,
+# so what it publishes is what it speaks.
+#
+# MCP takes its endpoint directly (`/mcp/`, trailing slash included — FastMCP mounts it
+# that way). A2A takes the BASE url: the SDK appends `/.well-known/...` verbatim, so a
+# `/a2a` suffix would ask for `/a2a/.well-known/agent-card.json`, which 404s.
+#
+# The ORIGIN is imported, not spelled here. `scripts/setup/seed_storyboard_tenant.py`
+# writes it onto the tenant as its `virtual_host`, which is what makes a BEARER-LESS signed
+# vector resolve a tenant at all — those probes carry no `x-adcp-tenant`, so the Host is the
+# only thing left to name a tenant with. Two literals of it is a posture nothing enforces
+# and 20+ negative vectors answered 200, with the two spellings looking identical in review.
 _DEFAULT_AGENT_URLS: dict[str, str] = {
-    "mcp": "http://proxy:8000/mcp/",
-    "a2a": "http://proxy:8000",
+    "mcp": f"https://{STORYBOARD_VIRTUAL_HOST}/mcp/",
+    "a2a": f"https://{STORYBOARD_VIRTUAL_HOST}",
 }
 
-# Env vars the CI job (the storyboard-conformance job Implementation Plan step 6) must set. No defaults
-# for the compliance/schema paths — those come from a pinned GitHub release
-# asset (see .github/actions/_adcp-bundle), never guessed at.
+# Env vars the storyboard-conformance job MAY set. The compliance/schema paths
+# have no default LITERAL, but they are DERIVED when unset: _bundle_path() resolves
+# them through storyboard_spec.adcp_home(), whose second candidate is the pinned
+# GitHub release bundle that .github/actions/_adcp-bundle extracts in-tree. The CI
+# job therefore sets neither of them, and set-ness is NOT what decides whether a
+# session can run — resolvability is (see _bundle_gate).
 _AUTH_TOKEN_ENV = "STORYBOARD_AUTH_TOKEN"
 _COMPLIANCE_DIR_ENV = "STORYBOARD_COMPLIANCE_DIR"
 _SCHEMA_ROOT_ENV = "STORYBOARD_SCHEMA_ROOT"
+
+
+# WHICH SELLER the credential belongs to, as the `-H KEY=VALUE` the runner sends on every
+# request. A token is only ever verified INSIDE the tenant a request addresses, so a request
+# that names no tenant has no tenant to look the token up in.
+#
+# There are two ways to name one, and the storyboard uses both: the `Host` it dials
+# (`STORYBOARD_VIRTUAL_HOST`, the front the tenant declares and its agent card publishes)
+# and this header. The header is the one that still works when Host routing is what broke,
+# which is the only reason it is here.
+#
+# The token comes from the seeding script rather than being spelled again, because that
+# script is what makes it true in the database. The two move together: a principal belongs
+# to one tenant, so the storyboard's token is valid only inside the storyboard's tenant.
+#
+# The pinned runner SDK carries the header for exactly this case: `-H, --header K=V  Extra
+# HTTP header on every request ... Common use: -H x-adcp-tenant=<id> for tenant routing
+# behind a reverse proxy` (bin/adcp.js), forwarded into `AgentConfig.headers` so MCP and A2A
+# both see it. It softens no graded check: the pinned compliance tree says nothing about
+# tenant routing, so no storyboard step grades how a buyer selects a seller.
+def _tenant_routing_header() -> str:
+    """``x-adcp-tenant=<the seeded tenant's id>``, resolved when the runner is invoked.
+
+    The header names a tenant by its id, literally. The seeded id is a fresh uuid4 per
+    seed and the seeding runs in a separate process (tox ``commands_pre``), so it cannot
+    be a constant here — it is asked for at call time, through the same function the
+    resolver uses to turn a ``Host`` into a tenant. One source of truth: whatever the
+    seeder wrote is what the runner sends.
+
+    Raises rather than degrading. A header that resolves nothing leaves the run passing on
+    ``Host`` alone, which is indistinguishable from success until the day ``Host`` routing
+    is what broke — and this header exists to be the other way in.
+    """
+    from src.core.config_loader import tenant_id_for
+
+    tenant_id = tenant_id_for(virtual_host=STORYBOARD_VIRTUAL_HOST)
+    if tenant_id is None:
+        raise RuntimeError(
+            f"no active tenant is served at {STORYBOARD_VIRTUAL_HOST!r}, so the storyboard "
+            "runner has no tenant to name. Run scripts.setup.seed_storyboard_tenant first, "
+            "and check DATABASE_URL points at the stack's database rather than the suite's."
+        )
+    return f"x-adcp-tenant={tenant_id}"
+
 
 # Where each lives INSIDE the extracted bundle. The bundle root comes from
 # storyboard_spec.adcp_home(); only the leaf differs, so neither the version nor
@@ -105,6 +194,41 @@ def _summary_path(protocol: str) -> Path:
     return _RUNNER_DIR / "results" / f"ci-summary-{protocol}.json"
 
 
+def _node_ca_env(agent_url: str) -> dict[str, str]:
+    """``NODE_EXTRA_CA_CERTS`` for an https agent, or nothing for plaintext.
+
+    The runner is Node, and the TLS front serves a leaf signed by the test CA that
+    ``scripts/dev/gen_test_tls.py`` generates. Node trusts its own bundle only, so
+    without this every https call fails the handshake — indistinguishable, in the
+    runner's output, from the plaintext-port failure this URL change fixes.
+
+    The path comes from ``E2E_CA_BUNDLE``, the variable compose already sets and tox
+    already passes through, with the same repo-relative fallback ``tests/e2e/conftest.py``
+    uses. Absent for an http URL: pointing Node at a CA it does not need would make a
+    missing bundle look like a passing configuration.
+    """
+    if not agent_url.startswith("https://"):
+        return {}
+    bundle = os.environ.get("E2E_CA_BUNDLE") or str(_REPO_ROOT / ".test-tls" / "ca.pem")
+    return {"NODE_EXTRA_CA_CERTS": bundle}
+
+
+#: Set on the in-network runner. Names the shared TLS front the receiver is
+#: published behind (host suffix + port), e.g. ``adcp-e2e.dev:8443``. Absent
+#: host-side, where the SDK's loopback receiver already works.
+_WEBHOOK_TLS_FRONT_ENV = "STORYBOARD_WEBHOOK_TLS_FRONT"
+
+
+def _webhook_tls_origin(protocol: str, tls_front: str) -> str:
+    """``storyboard-webhooks-<protocol>.<suffix>:<port>`` -- the advertised origin.
+
+    Per-protocol because :func:`_webhook_port` gives each run its own bind port and
+    nginx selects the upstream by SNI NAME: one hostname cannot route to two ports,
+    so each protocol needs its own row in the ``$ssl_server_name`` map.
+    """
+    return f"storyboard-webhooks-{protocol}.{tls_front}"
+
+
 def _webhook_port(protocol: str) -> str:
     """Per-protocol receiver port, offset from the base by protocol index.
 
@@ -116,8 +240,96 @@ def _webhook_port(protocol: str) -> str:
     return str(base + _PROTOCOLS.index(protocol))
 
 
-def _missing_env() -> list[str]:
-    return [name for name in (_COMPLIANCE_DIR_ENV, _SCHEMA_ROOT_ENV) if not os.environ.get(name)]
+def _unresolvable_bundle_paths() -> list[str]:
+    """The bundle paths that do not resolve to a directory on disk.
+
+    Asks the FILESYSTEM, not the environment. The two env vars are OVERRIDES; when one is
+    unset :func:`_bundle_path` derives the location from ``storyboard_spec.adcp_home()``,
+    and that derivation is the normal case rather than the exception -- nothing sets them,
+    not CI (the storyboard job runs ``./run_all_tests.sh storyboard`` after extracting the
+    bundle and sets neither) and not a developer.
+
+    This used to read ``os.environ.get(name)`` and call an absent var missing. tox.ini
+    declares both as ``{env:NAME:}``, which sets them to the EMPTY STRING on every run, so
+    the check reported both missing every time, parametrized a single config skip, and
+    returned before the derivation could run.
+    The branch :func:`_bundle_path` documents as "Unset: derive it" was therefore
+    unreachable, and every storyboard run graded nothing -- 1 passed, 1 skipped, exit 0.
+    That is the false green ``_no_graded_checks`` exists to refuse, arriving one layer above
+    it where that guard cannot see it (measured: cassini run 097b0091, storyboard.json
+    summary {'passed': 1, 'skipped': 1}).
+
+    An empty list here means the bundle really is on disk; a non-empty one names the paths
+    that do not exist, and :func:`_bundle_gate` turns that into a failure.
+    """
+    return [name for name in (_COMPLIANCE_DIR_ENV, _SCHEMA_ROOT_ENV) if not Path(_bundle_path(name)).is_dir()]
+
+
+def _bundle_gate() -> tuple[str, dict[str, Any]] | None:
+    """The ``(test id, check)`` to grade when the pinned bundle cannot be used, or None.
+
+    Asks :func:`_bundle_path` -- the SAME resolver that builds the runner's
+    ``--compliance-dir``/``--schema-root`` arguments -- so the gate and the runner can
+    never disagree about where the bundle is. Set-ness of the two env vars is not the
+    question: they are overrides, and the derivation is the normal case.
+
+    Two dispositions, and what separates them is whether this environment could have
+    graded at all:
+
+    * **skip** -- the PIN itself does not resolve. ``pinned_version()`` reads
+      ``docs/adcp-spec-version.md`` and raises ``StoryboardAuditError`` when the doc has
+      drifted from the installed SDK (``OSError`` when the file is absent). A contributor
+      in a drifted or incomplete checkout has no version to fetch a bundle FOR, so there
+      is nothing to grade and nothing to blame -- a skip, never a collection error.
+    * **fail** -- the pin resolves, so the bundle is obtainable: already extracted, a
+      tarball beside the runner, or the pinned release asset (:func:`_materialize_bundle`).
+      If the paths still do not resolve after that, the run would grade zero conformance
+      checks and exit 0, which is indistinguishable from a clean run at a glance and is
+      how a bundle-path regression survives. There is no legitimate run in which grading
+      nothing is a pass, so the absence is a FAILURE whose reason names what was missing.
+
+    Each disposition keeps its own test id, and both are load-bearing:
+    ``environment-not-configured`` is the id the collection-gate and ledger-fitness
+    graders join on for the unconfigured-session case, and ``bundle-not-present`` names
+    the failure so a false green cannot hide behind a word meaning "skipped".
+    """
+    try:
+        storyboard_spec.pinned_version(_REPO_ROOT)
+    except (storyboard_spec.StoryboardAuditError, OSError) as exc:
+        return "environment-not-configured", _bundle_gate_check(
+            "skip",
+            f"pinned bundle could not be resolved: {type(exc).__name__}: {exc}",
+            "unresolvable-pin",
+        )
+    # Resolve our own bundle before deciding anything. The suite grades a buyer contract;
+    # it does not wait for a separate download step to have happened.
+    extraction_failure = _materialize_bundle()
+    unresolved = _unresolvable_bundle_paths()
+    if not unresolved:
+        return None
+    detail = ", ".join(f"{name}={_bundle_path(name)}" for name in unresolved)
+    cause = f"{extraction_failure}; " if extraction_failure else ""
+    return "bundle-not-present", _bundle_gate_check(
+        "fail", f"{cause}pinned AdCP bundle not found: {detail}", "not-present"
+    )
+
+
+def _bundle_gate_check(status: str, reason: str, step_id: str) -> dict[str, Any]:
+    """One synthetic check in the shape every other check has.
+
+    ``test_storyboard_check``'s assertion message reads the identity keys, so a synthetic
+    check carries them too and the failure reads like every other one rather than as a
+    ``KeyError``.
+    """
+    return {
+        "status": status,
+        "reason": reason,
+        "reason_kind": "config",
+        "protocol": "-",
+        "track": "-",
+        "storyboard_id": "bundle",
+        "step_id": step_id,
+    }
 
 
 def _bundle_path(env_name: str) -> str:
@@ -143,6 +355,34 @@ def _bundle_path(env_name: str) -> str:
     return str((storyboard_spec.adcp_home(_REPO_ROOT) / _BUNDLE_SUBDIR[env_name]).resolve())
 
 
+def _graded_compliance_dir() -> str:
+    """The compliance tree the runner is pointed at: the pinned one, fixtures corrected.
+
+    THE PINNED TREE IS NOT EDITED. This writes a sibling (``adcp-<version>-corrected/``,
+    covered by the runner directory's existing ``adcp-*/`` ignore) and hands the runner
+    that. Two corrections, both to fixtures rather than to anything a check grades:
+
+    * request-signing vector BODIES (``corrected_vectors``, adcp#7567). A seller
+      validates the payload before it authenticates the caller, so the corpus's stub
+      bodies (``{"plan_id":"plan_001"}``) are answered ``INVALID_REQUEST`` and the RFC
+      9421 checklist never runs — measured here as all 27 graded signed-requests checks
+      failing with ``got 200 (error="(none)")``.
+    * a product for ``webhook_emission`` to buy (``corrected_storyboards``, adcp#7609).
+      That storyboard discovers no product, so its four ``create_media_buy`` triggers
+      ship the SDK's ``"test-product"`` placeholder and are answered
+      ``PRODUCT_NOT_FOUND`` — measured as 4 of the 7 webhook_emission failures in run
+      innet_200926_0635.
+
+    Everything else is copied through byte-for-byte. Both are local stand-ins until the
+    fixes land upstream.
+    """
+    source = Path(_bundle_path(_COMPLIANCE_DIR_ENV))
+    dest = source.parent.parent / f"{source.parent.name}-corrected" / source.name
+    tree = corrected_vectors.corrected_compliance_tree(source, dest)
+    corrected_storyboards.correct_webhook_emission(tree)
+    return str(tree)
+
+
 def _webhook_receiver_args(protocol: str) -> tuple[list[str], dict[str, str]]:
     """CLI args + extra env that let the runner host a reachable webhook receiver.
 
@@ -157,15 +397,13 @@ def _webhook_receiver_args(protocol: str) -> tuple[list[str], dict[str, str]]:
     * **Host-side**: runner and published ports share a network namespace, so the
       SDK's default loopback receiver already works. Returns no args at all.
 
-    ADCP_WEBHOOK_RECEIVER_HOST is NOT an upstream feature. The CLI has no
-    `--webhook-receiver-host`, so it cannot pass `host` through to
-    createWebhookReceiver() even though the library accepts it -- filed as
-    adcontextprotocol/adcp-client#2448 and bridged meanwhile by
-    tests/storyboard/runner/patches/ (version-keyed by patch-package), which adds the
-    env var the issue proposes. Delete both when the flag ships.
+    The bind address is passed as ``--webhook-receiver-host``, a first-class CLI flag.
+    It was bridged by a patch-package edit while the flag did not exist (filed as
+    adcontextprotocol/adcp-client#2448); the flag ships in the pinned SDK, so the patch
+    and the ADCP_WEBHOOK_RECEIVER_HOST env var it added are both gone.
     """
-    callback_host = os.environ.get(_WEBHOOK_CALLBACK_HOST_ENV)
-    if not callback_host:
+    tls_front = os.environ.get(_WEBHOOK_TLS_FRONT_ENV)
+    if not tls_front:
         return [], {}
 
     port = _webhook_port(protocol)
@@ -175,9 +413,21 @@ def _webhook_receiver_args(protocol: str) -> tuple[list[str], dict[str, str]]:
         "--webhook-receiver-port",
         port,
         "--webhook-receiver-public-url",
-        f"http://{callback_host}:{port}/",
+        # HTTPS at the shared TLS front, never http:// at a bare service name.
+        # The advertised URL is what the SERVER dials, so it is the one place a
+        # plaintext webhook destination could enter the stack -- which is exactly
+        # why ADCP_WEBHOOK_HOST was retired and is guarded against
+        # (tests/unit/test_architecture_e2e_compose_tls_origins.py). Per-protocol
+        # hostname because the two runs bind different ports and SNI selects the
+        # upstream by NAME, so one name cannot reach two ports.
+        f"https://{_webhook_tls_origin(protocol, tls_front)}/",
+        # Not loopback: the server is a DIFFERENT container and calls back to this
+        # runner's compose alias, so a receiver bound to 127.0.0.1 puts the delivery on
+        # the container's eth0 with nothing listening.
+        "--webhook-receiver-host",
+        "0.0.0.0",
     ]
-    return args, {"ADCP_WEBHOOK_RECEIVER_HOST": "0.0.0.0"}
+    return args, {}
 
 
 def _run_storyboard_runner(protocol: str) -> dict[str, Any]:
@@ -189,7 +439,7 @@ def _run_storyboard_runner(protocol: str) -> dict[str, Any]:
     protocol surfaces.
     """
     agent_url = os.environ.get(_agent_url_env(protocol), _DEFAULT_AGENT_URLS[protocol])
-    auth_token = os.environ.get(_AUTH_TOKEN_ENV, "ci-test-token")
+    auth_token = os.environ.get(_AUTH_TOKEN_ENV, STORYBOARD_TOKEN)
     summary_path = _summary_path(protocol)
     cmd = [
         str(_ADCP_BIN),
@@ -200,11 +450,13 @@ def _run_storyboard_runner(protocol: str) -> dict[str, Any]:
         protocol,
         "--auth",
         auth_token,
+        "-H",
+        _tenant_routing_header(),
         "--allow-http",
         "--compliance-version",
         storyboard_spec.pinned_version(_REPO_ROOT),
         "--compliance-dir",
-        _bundle_path(_COMPLIANCE_DIR_ENV),
+        _graded_compliance_dir(),
         "--schema-root",
         _bundle_path(_SCHEMA_ROOT_ENV),
         "--timeout",
@@ -215,6 +467,7 @@ def _run_storyboard_runner(protocol: str) -> dict[str, Any]:
     ]
     webhook_args, webhook_env = _webhook_receiver_args(protocol)
     cmd += webhook_args
+    tls_env = _node_ca_env(agent_url)
     # Grade only what THIS invocation measured. A summary left by an earlier run
     # would otherwise be read as if it were fresh whenever the runner dies before
     # writing one — inferred rather than measured, which is the Core Invariant.
@@ -231,8 +484,9 @@ def _run_storyboard_runner(protocol: str) -> dict[str, Any]:
         capture_output=True,
         text=True,
         timeout=700,
-        env={**os.environ, **webhook_env},
+        env={**os.environ, **webhook_env, **tls_env},
     )
+    _publish_runner_record(protocol, result)
     if not summary_path.exists():
         pytest.fail(
             f"storyboard runner ({protocol}) did not produce a summary (exit={result.returncode}): "
@@ -255,6 +509,86 @@ def _graded_total(summary: dict[str, Any]) -> int:
     failure is a verdict.
     """
     return sum(int(summary.get(key, 0)) for key in ("passed", "failed"))
+
+
+#: Per-protocol floor on the runner's own ``passed`` count, the one number no pytest
+#: outcome can carry. See :func:`_below_pass_floor`.
+_PASS_FLOOR_PATH = _REPO_ROOT / ".storyboard-pass-floor"
+
+
+def _pass_floor(protocol: str) -> int:
+    """The recorded floor for *protocol*. Refuses rather than defaulting.
+
+    A missing file and a misspelt key both used to answer 0, which is a floor no run can
+    breach — the one direction this exists to catch, with infinite slack. Neither is a
+    state to tolerate: the file is committed, so its absence means the checkout is
+    broken, and a key the file does not carry means nobody set a floor for a protocol
+    this suite grades. Both are the path being wrong, not a value being absent.
+    """
+    if not _PASS_FLOOR_PATH.is_file():
+        raise FileNotFoundError(
+            f"{_PASS_FLOOR_PATH} is committed and missing from this checkout, so there is no floor "
+            f"to grade {protocol!r} against. A default of 0 is a floor nothing can breach."
+        )
+    recorded = json.loads(_PASS_FLOOR_PATH.read_text(encoding="utf-8"))
+    if protocol not in recorded:
+        raise KeyError(
+            f"{_PASS_FLOOR_PATH.name} records no floor for {protocol!r} (it has {sorted(recorded)}). "
+            "Record one from a measured run; a missing key must not read as a floor of 0."
+        )
+    return int(recorded[protocol])
+
+
+def _below_pass_floor(protocol: str, summary: dict[str, Any]) -> dict[str, Any] | None:
+    """One synthetic FAILING check when *protocol* graded fewer passes than the floor.
+
+    THE HOLE THIS CLOSES. A parametrized item exists only for a FAILURE or a SKIP:
+    ``_collect_checks`` builds them from ``summary["failures"]`` and
+    ``summary["skip_causes"]``, because the runner publishes no per-check pass record,
+    so a passing check has no id to carry. The item count therefore moves INVERSELY
+    to health, and the pass count reaches pytest through nothing at all.
+
+    So a check that regresses from PASS to SKIP makes the suite greener: its failing
+    item never existed, its skip item does not fail, and the only trace is a number in
+    a JSON artifact. 30 passes could become 5 with every item still xfail-or-skip and
+    CI still green. ``agent_reachability`` catches only the total collapse to zero.
+
+    Only reached when the runner graded SOMETHING: a run that graded nothing is
+    ``agent_reachability``'s case, and reporting both would double-count one cause.
+
+    ONE-DIRECTIONAL, deliberately. A surplus does not fail; it prints in the
+    scoreboard so the floor gets raised on purpose. The mypy and duplication ratchets
+    fail on slack because their counts are deterministic -- this one is a live run
+    against a real stack, where one environment-dependent skip cause moves the number,
+    and a ratchet that manufactures a red for GOOD news teaches people to edit the
+    file without reading it.
+    """
+    # Only a session that actually DIALLED an agent has a pass count worth flooring.
+    # The ledger-fitness module drives this same collection through a stub runner
+    # (``stub://`` urls, a handful of synthetic checks) to grade the fitness join; a
+    # recorded floor against a stub that grades 1 is not a regression, it is a category
+    # error, and it changed that module's expected outcome counts when this landed.
+    if not str(summary.get("agent_url", "")).startswith("http"):
+        return None
+    floor = _pass_floor(protocol)
+    passed = int(summary.get("passed", 0))
+    if passed >= floor:
+        return None
+    return {
+        "protocol": protocol,
+        "track": "_runner",
+        "storyboard_id": ledger.PASS_FLOOR_STORYBOARD_ID,
+        "step_id": ledger.PASS_FLOOR_STEP_ID,
+        "status": "fail",
+        "reason": (
+            f"graded {passed} passing checks against {summary.get('agent_url')}, "
+            f"below the recorded floor of {floor}. Either a check regressed (look at "
+            f"skip_causes: a pass that became a SKIP removes its own failing item and "
+            f"shows up nowhere else), or the floor in {_PASS_FLOOR_PATH.name} is stale "
+            f"and lowering it is a deliberate decision."
+        ),
+        "reason_kind": "below_pass_floor",
+    }
 
 
 def _no_graded_checks(protocol: str, summary: dict[str, Any]) -> dict[str, Any]:
@@ -286,6 +620,102 @@ def _no_graded_checks(protocol: str, summary: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _publish_runner_record(protocol: str, result: subprocess.CompletedProcess[str]) -> None:
+    """Publish the runner's OWN output, in full, beside the summary.
+
+    ``--summary-output`` writes a digest: counts, plus the failures enumerated and the skip
+    causes truncated to a sample. It cannot answer which checks PASSED, so two runs with
+    the same totals are indistinguishable from two runs that passed different checks --
+    and comparing a branch against main means comparing the SETS, not the counts.
+
+    ``--json`` already makes the runner emit its complete per-check record on stdout, and
+    that record was captured and dropped on the floor: read only to quote 2000 characters
+    into a failure message. Written here whatever the exit code, because a run that died
+    is exactly when the record is worth having.
+    """
+    out = _REPO_ROOT / "test-results"
+    out.mkdir(parents=True, exist_ok=True)
+    (out / f"storyboard_run_{protocol}.json").write_text(result.stdout)
+    if result.stderr:
+        (out / f"storyboard_run_{protocol}.stderr.log").write_text(result.stderr)
+
+
+def _publish_summary(protocol: str, summary: dict[str, Any]) -> None:
+    """Copy the runner's summary into ``test-results/`` so it leaves the box.
+
+    The runner writes it under ``tests/storyboard/runner/results/``, which is gitignored
+    and outside the three paths a remote run pulls home (``test-results/``,
+    ``coverage.json``, ``htmlcov/`` — cassini's ``results.py``). So the one artifact
+    recording how many checks PASSED stayed on the runner box, and reading the score
+    meant an ssh. Published beside ``storyboard_collected.json``, which already rides
+    home this way.
+    """
+    dest = _REPO_ROOT / "test-results" / f"storyboard_summary_{protocol}.json"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(json.dumps(summary, indent=2, sort_keys=True))
+
+
+def _scoreboard(protocol: str, summary: dict[str, Any]) -> str:
+    """The runner's own verdict for *protocol*, as one line.
+
+    Printed because the pytest outcome line CANNOT carry it: only failures and skips
+    become test items, so a protocol passing 33 checks and one passing none produce the
+    same "0 passed" in the suite total. Every denominator is named together —
+    passed/failed/skipped/not_selected plus how many storyboards were EXECUTED, which is
+    what explains one axis grading fewer checks than its sibling.
+    """
+    return (
+        f"storyboard[{protocol}] {summary.get('overall_status')}: "
+        f"passed={summary.get('passed')} failed={summary.get('failed')} "
+        f"skipped={summary.get('skipped')} not_selected={summary.get('not_selected_count')} "
+        f"storyboards_executed={len(summary.get('storyboards_executed', []))} "
+        f"floor={_pass_floor(protocol)}{_surplus_note(protocol, summary)} "
+        f"agent_url={summary.get('agent_url')}"
+    )
+
+
+def _surplus_note(protocol: str, summary: dict[str, Any]) -> str:
+    """`` (+N, raise the floor)`` when this run beat the recorded floor.
+
+    The other half of the floor, and deliberately a PRINT rather than a failure: a
+    surplus is good news, and a ratchet that reds the build for good news gets its
+    file edited without being read. Named here so raising it is a decision someone
+    makes on seeing the number, not a thing nobody knows to do.
+    """
+    surplus = int(summary.get("passed", 0)) - _pass_floor(protocol)
+    return f" (+{surplus}, raise the floor)" if surplus > 0 else ""
+
+
+def _drain_grading_replay_rows() -> None:
+    """Empty the replay cache of the conformance keyids before a protocol run.
+
+    THE TWO PROTOCOL RUNS SHARE ONE DEPLOYMENT AND ONE REPLAY STORE, and vector
+    ``020-rate-abuse`` deliberately drives ``test-ed25519-2026`` to its per-keyid cap. The
+    ``replay_ttl_overrides`` clamp drains those rows between VECTORS, which is what it was
+    sized for; it does not drain them between PROTOCOL RUNS, because the second run starts
+    seconds after the first ends rather than a TTL later.
+
+    Measured: with the a2a card grading for the first time, its first four signed vectors
+    were answered ``request_signature_rate_abuse`` — including ``positive/001`` and
+    ``negative/016``'s must-be-accepted first submission. That is the mcp run's cap bleeding
+    into the a2a run, not a verdict about either surface.
+
+    Deleting the rows rather than sleeping out the TTL: a sleep long enough to be safe is
+    longer than the run it protects, and an arithmetic relationship between two sleeps and a
+    clamp is the kind of thing that is right once and silently wrong after any of the three
+    moves.
+    """
+    from sqlalchemy import delete
+
+    from scripts.setup.storyboard_signing import counterparty_registry
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import ReplayNonce
+
+    with get_db_session() as session:
+        session.execute(delete(ReplayNonce).where(ReplayNonce.keyid.in_(sorted(counterparty_registry()))))
+        session.commit()
+
+
 def _collect_checks(protocol: str) -> list[dict[str, Any]]:
     """One entry per (protocol, track, storyboard_id, step_id): a failure or a skip.
 
@@ -294,7 +724,10 @@ def _collect_checks(protocol: str) -> list[dict[str, Any]]:
     passing check has no ledger identity to track; only failures and skips
     are gradeable per-check here.
     """
+    _drain_grading_replay_rows()
     summary = _run_storyboard_runner(protocol)
+    _publish_summary(protocol, summary)
+    print(_scoreboard(protocol, summary))
     checks: list[dict[str, Any]] = []
     for f in summary["failures"]:
         checks.append(
@@ -326,7 +759,13 @@ def _collect_checks(protocol: str) -> list[dict[str, Any]]:
                 }
             )
     if _graded_total(summary) == 0:
+        # The total collapse. Reported by ``agent_reachability`` alone: the floor below
+        # would also fire here, and two failing checks for one cause reads as two
+        # problems. The floor covers "graded FEWER than before", which only means
+        # anything once the runner graded something at all.
         checks.append(_no_graded_checks(protocol, summary))
+    elif (breach := _below_pass_floor(protocol, summary)) is not None:
+        checks.append(breach)
     return checks
 
 
@@ -338,19 +777,17 @@ def _stale_ledger_entries(collected_ids: list[str]) -> list[str]:
     re-deriving either.
     """
     collected = set(collected_ids)
-    return [entry.format() for entry in ledger.load(ledger.LEDGER) if entry.format() not in collected]
+    entries = ledger.load(ledger.ledger_path(_REPO_ROOT))
+    return [entry.format() for entry in entries if entry.format() not in collected]
 
 
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     if "storyboard_check" not in metafunc.fixturenames:
         return
-    missing = _missing_env()
-    if missing:
-        metafunc.parametrize(
-            "storyboard_check",
-            [{"status": "skip", "reason": f"missing env: {', '.join(missing)}", "reason_kind": "config"}],
-            ids=["environment-not-configured"],
-        )
+    gate = _bundle_gate()
+    if gate is not None:
+        gate_id, check = gate
+        metafunc.parametrize("storyboard_check", [check], ids=[gate_id])
         return
     checks = [check for protocol in _PROTOCOLS for check in _collect_checks(protocol)]
     # Built through the shared grammar (scripts.audit.ledger.LedgerCheckId) so
@@ -388,6 +825,15 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
             }
         )
         ids.append("ledger::fitness::ledger_fitness::stale_entries")
+
+    # PUBLISH WHAT THIS SESSION COLLECTED. `checks` here is the exact set the run will
+    # grade, which storyboard_check_index otherwise has to INFER from the failure
+    # ledger (salesagent-v03pe.3). Stashed rather than written here because
+    # pytest_generate_tests runs once per parametrized function, not once per session;
+    # tests/storyboard/conftest.py writes it at sessionfinish. Deliberately set only on
+    # this path -- the bundle-missing return above collects one synthetic skip, and
+    # publishing that would claim a run that never started.
+    setattr(metafunc.config, collected.STASH_ATTR, list(checks))
 
     metafunc.parametrize("storyboard_check", checks, ids=ids)
 

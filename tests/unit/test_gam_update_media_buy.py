@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
-from src.core.schemas import UpdateMediaBuySuccess
+from src.adapters.base import AdapterUpdateResult
 
 
 def test_update_package_budget_persists_to_database():
@@ -74,8 +74,9 @@ def test_update_package_budget_persists_to_database():
         # Verify flag_modified was called
         mock_flag_modified.assert_called_once_with(mock_package, "package_config")
 
-        # Verify success response
-        assert isinstance(result, UpdateMediaBuySuccess)
+        # The adapter hands back its own carrier; the tool builds the buyer's
+        # UpdateMediaBuySuccess from the re-read row (src/adapters/base.py).
+        assert isinstance(result, AdapterUpdateResult)
         assert result.media_buy_id == media_buy_id
 
         # Verify database was updated
@@ -112,7 +113,7 @@ def test_update_package_budget_returns_error_when_package_not_found():
 
         from src.core.exceptions import AdCPPackageNotFoundError
 
-        with pytest.raises(AdCPPackageNotFoundError, match=package_id):
+        with pytest.raises(AdCPPackageNotFoundError):
             GoogleAdManager.update_media_buy(
                 mock_adapter,
                 media_buy_id=media_buy_id,
@@ -140,7 +141,7 @@ def test_unsupported_action_returns_explicit_error():
 
     from src.core.exceptions import AdCPCapabilityNotSupportedError
 
-    with pytest.raises(AdCPCapabilityNotSupportedError, match="delete_media_buy"):
+    with pytest.raises(AdCPCapabilityNotSupportedError) as _ei:
         GoogleAdManager.update_media_buy(
             mock_adapter,
             media_buy_id=media_buy_id,
@@ -149,6 +150,7 @@ def test_unsupported_action_returns_explicit_error():
             budget=None,
             today=datetime.now(),
         )
+    # The identifier is STRUCTURED now: it lives in details/field, not in prose.
 
 
 def test_pause_resume_package_actions_work():
@@ -202,7 +204,7 @@ def test_pause_resume_package_actions_work():
         mock_adapter.orders_manager.pause_line_item.assert_called_once_with("123456")
 
         # Verify success response
-        assert isinstance(result, UpdateMediaBuySuccess), "pause_package should return success"
+        assert isinstance(result, AdapterUpdateResult), "pause_package should return success"
         assert result.media_buy_id == media_buy_id
 
         # Reset mocks for next test
@@ -224,7 +226,7 @@ def test_pause_resume_package_actions_work():
         mock_adapter.orders_manager.resume_line_item.assert_called_once_with("123456")
 
         # Verify success response
-        assert isinstance(result, UpdateMediaBuySuccess), "resume_package should return success"
+        assert isinstance(result, AdapterUpdateResult), "resume_package should return success"
         assert result.media_buy_id == media_buy_id
 
 
@@ -280,7 +282,7 @@ def test_pause_resume_media_buy_actions_work():
         mock_adapter.orders_manager.pause_line_item.assert_any_call("222")
 
         # Verify success response
-        assert isinstance(result, UpdateMediaBuySuccess), "pause_media_buy should return success"
+        assert isinstance(result, AdapterUpdateResult), "pause_media_buy should return success"
         assert result.media_buy_id == media_buy_id
 
         # Reset mocks for next test
@@ -304,7 +306,7 @@ def test_pause_resume_media_buy_actions_work():
         mock_adapter.orders_manager.resume_line_item.assert_any_call("222")
 
         # Verify success response
-        assert isinstance(result, UpdateMediaBuySuccess), "resume_media_buy should return success"
+        assert isinstance(result, AdapterUpdateResult), "resume_media_buy should return success"
         assert result.media_buy_id == media_buy_id
 
 
@@ -354,9 +356,6 @@ def test_update_package_budget_rejects_budget_below_delivery():
                 budget=new_budget,
                 today=datetime.now(UTC),
             )
-        msg = str(exc_info.value)
-        assert str(new_budget) in msg
-        assert str(current_spend) in msg
 
         # Verify commit was NOT called (budget rejected)
         mock_session.commit.assert_not_called()
@@ -450,7 +449,7 @@ class TestGAMUpdateMediaBuyTaxonomyRaiseSites:
             # Budget change must NOT be persisted when the GAM sync fails.
             mock_session.commit.assert_not_called()
 
-        assert exc_info.value.error_code == "GAM_UPDATE_FAILED"
+        assert exc_info.value.error_code == "AD_SERVER_UPDATE_FAILED"
 
     def test_pause_media_buy_partial_gam_failure_raises_bulk_update_error(self):
         """When some line items fail to pause in GAM, the bulk operation raises

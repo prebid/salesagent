@@ -9,11 +9,12 @@ from enum import StrEnum
 from typing import Any, ClassVar
 
 from adcp.types import AggregatedTotals as LibraryAggregatedTotals
+from adcp.types import ByPackageItem as LibraryByPackageItem
+from adcp.types import DailyBreakdownItem as LibraryDailyBreakdownItem
 from adcp.types import DeliveryMeasurement as LibraryDeliveryMeasurement
 from adcp.types import DeliveryMetrics as LibraryDeliveryMetrics
 from adcp.types import (
     DeliveryStatus,  # noqa: F401 — re-exported for backward compat
-    PricingModel,
 )
 from adcp.types import GetCreativeDeliveryResponse as LibraryGetCreativeDeliveryResponse
 from adcp.types import GetMediaBuyDeliveryRequest as LibraryGetMediaBuyDeliveryRequest
@@ -26,10 +27,16 @@ from adcp.types.generated_poc.core.geo_delivery_metrics import (
 from adcp.types.generated_poc.media_buy.get_media_buy_delivery_response import (
     ByDeviceTypeItem as LibraryByDeviceTypeItem,
 )  # TODO: no stable alias in adcp.types
+from adcp.types.generated_poc.media_buy.get_media_buy_delivery_response import (
+    ByPlacementItem as LibraryByPlacementItem,
+)  # TODO: no stable alias in adcp.types
+from adcp.types.generated_poc.media_buy.get_media_buy_delivery_response import (
+    MediaBuyDelivery as LibraryMediaBuyDelivery,
+)  # TODO: no stable alias in adcp.types
 from pydantic import ConfigDict, Field
 
 from src.core.config import get_pydantic_extra_mode
-from src.core.schemas._base import AlwaysIncludeFieldsMixin, NestedModelSerializerMixin, SalesAgentBaseModel
+from src.core.schemas._base import AdcpResponse, BuyerRequest, NestedModelSerializerMixin, SalesAgentBaseModel
 
 # ---------------------------------------------------------------------------
 # Simple enum / leaf types
@@ -62,7 +69,7 @@ class DeliveryType(StrEnum):
 # ---------------------------------------------------------------------------
 
 
-class GetMediaBuyDeliveryRequest(LibraryGetMediaBuyDeliveryRequest):
+class GetMediaBuyDeliveryRequest(BuyerRequest, LibraryGetMediaBuyDeliveryRequest):
     """Request delivery data for one or more media buys.
 
     Extends library GetMediaBuyDeliveryRequest - all fields inherited from AdCP spec.
@@ -78,6 +85,14 @@ class GetMediaBuyDeliveryRequest(LibraryGetMediaBuyDeliveryRequest):
     Use ext field for extensions until spec is updated.
     """
 
+    TAGS: ClassVar[tuple[str, ...]] = (
+        "delivery",
+        "metrics",
+        "performance",
+        "monitoring",
+        "adcp",
+    )
+
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
     # account, reporting_dimensions, attribution_window, time_granularity,
@@ -90,42 +105,20 @@ class GetMediaBuyDeliveryRequest(LibraryGetMediaBuyDeliveryRequest):
 # ---------------------------------------------------------------------------
 
 
-# AdCP-compliant delivery models
-# FIXME(#2130): DeliveryTotals and PackageDelivery duplicate fields from
-# adcp library Totals/ByPackageItem instead of inheriting. These should extend the
-# library types (Pattern #1). Field names are now spec-aligned (completed_views);
-# remaining work is switching to inheritance.
-class DeliveryTotals(SalesAgentBaseModel):
-    """Aggregate metrics for a media buy or package.
+class DeliveryTotals(LibraryDeliveryMetrics):
+    """Aggregate metrics for a media buy or package, extending the pinned delivery metrics.
 
-    Note: Does not yet extend library Totals, but field names are aligned with
-    the AdCP spec (delivery-metrics.json), including ``completed_views``.
+    Every field is inherited. This hand-declared nine of the library's forty-one and added
+    none, which is the shape GH #2130 filed: a copy cannot track the pin, and the nine it
+    chose were the only ones this seller could ever emit.
     """
 
-    impressions: float = Field(ge=0, description="Total impressions delivered")
-    spend: float = Field(ge=0, description="Total amount spent")
-    clicks: float | None = Field(None, ge=0, description="Total clicks (if applicable)")
-    ctr: float | None = Field(None, ge=0, le=1, description="Click-through rate (clicks/impressions)")
-    completed_views: float | None = Field(None, ge=0, description="Total completed views (if applicable)")
-    completion_rate: float | None = Field(
-        None, ge=0, le=1, description="Video completion rate (completions/impressions)"
-    )
-    conversions: float | None = Field(None, ge=0, description="Total conversions (if applicable)")
-    conversion_value: float | None = Field(
-        None,
-        ge=0,
-        description="Total monetary value of attributed conversions in the reporting currency (if applicable)",
-    )
-    viewability: float | None = Field(None, ge=0, le=1, description="Viewability percentage as 0.0-1.0 (if applicable)")
 
+class PlacementBreakdown(LibraryByPlacementItem):
+    """Delivery metrics for a single placement within a package (extends the pinned item).
 
-class PlacementBreakdown(SalesAgentBaseModel):
-    """Delivery metrics for a single placement within a package."""
-
-    placement_id: str = Field(description="Placement identifier")
-    impressions: float = Field(ge=0, description="Placement impressions")
-    spend: float = Field(ge=0, description="Placement spend")
-    clicks: float | None = Field(None, ge=0, description="Placement clicks")
+    Library provides ``placement_id`` plus the full DeliveryMetrics surface.
+    """
 
 
 class GeoBreakdown(LibraryByGeoItem):
@@ -156,77 +149,59 @@ class DeviceTypeBreakdown(LibraryByDeviceTypeItem):
     pass  # All fields inherited from library ByDeviceTypeItem
 
 
-class PackageDelivery(SalesAgentBaseModel):
-    """Metrics broken down by package.
+# Why the six ``# type: ignore[assignment]`` below, and why they are not suppression.
+#
+# Each one redeclares an inherited field with a SUBCLASS of the SDK's element type, so
+# ``NestedModelSerializerMixin`` re-dumps nested children as the local class (critical
+# pattern #4) and a response rebuilt from a replay cache comes back as the local class rather
+# than the parent.
+# ``list`` is invariant, so ``list[PlacementBreakdown]`` is not assignable to
+# ``list[ByPlacementItem]`` even though every element is one -- a limitation of the
+# annotation, not a defect in the value.
+#
+# Widening the annotations back to the parent types is not the alternative: pydantic would
+# then construct PARENT instances when validating a dict, and the replay path does exactly
+# that. The narrowing is load-bearing; the ignore is the only part that is cosmetic.
 
-    Note: Does not yet extend library ByPackageItem. See DeliveryTotals note.
+
+class PackageDelivery(LibraryByPackageItem):
+    """Metrics broken down by package, extending the pinned ``by_package`` item.
+
+    Redeclares only the three breakdown lists, to point them at the local models, which
+    are re-dumped by ``NestedModelSerializerMixin`` (Pattern #4). Everything else -- including
+    ``pricing_model``, ``rate`` and ``currency``, which the pin lists in ``required``
+    and types non-nullable -- is inherited.
+
+    This used to be hand-written on ``SalesAgentBaseModel``, declaring 15 of the
+    library's 67 fields and adding none, with those three widened to ``| None = None``.
+    The SDK base serializes with a blanket ``exclude_none=True``, so an unset one was
+    dropped and every delivery response was schema-invalid; the compliance Then step
+    graded it on 470 UC-004 scenarios at once. A subclass could not have widened them:
+    ``test_architecture_schema_inheritance`` grades a redeclaration against its library
+    parent, and required -> optional needs an allowlist row naming the weakened axis.
     """
 
-    package_id: str = Field(description="Publisher's package identifier")
-    impressions: float = Field(ge=0, description="Package impressions")
-    spend: float = Field(ge=0, description="Package spend")
-    clicks: float | None = Field(None, ge=0, description="Package clicks")
-    completed_views: float | None = Field(None, ge=0, description="Package completed views")
-    pacing_index: float | None = Field(
-        None, ge=0, description="Delivery pace (1.0 = on track, <1.0 = behind, >1.0 = ahead)"
-    )
-    pricing_model: str | None = Field(
-        None, description="Pricing model for this package during delivery (e.g., 'cpm', 'cpc', 'vpm', 'flat_rate')"
-    )
-    rate: float | None = Field(
-        None,
-        ge=0,
-        description="Pricing rate for this package during delivery (required if fixed pricing, null for auction-based)",
-    )
-    currency: str | None = Field(
-        None,
-        pattern=r"^[A-Z]{3}$",
-        description="ISO 4217 currency code for this package during delivery (e.g., USD, EUR, GBP)",
-    )
-    by_placement: list[PlacementBreakdown] | None = Field(
+    by_placement: list[PlacementBreakdown] | None = Field(  # type: ignore[assignment]  # covariant narrowing; see _NARROWED_LIST_NOTE
         None,
         description="Placement-level delivery breakdown (populated when reporting_dimensions includes 'placement')",
     )
-    by_placement_truncated: bool | None = Field(
-        None,
-        description="True when by_placement was truncated by the requested limit; false when complete. "
-        "MUST be present whenever by_placement is present "
-        "(get-media-buy-delivery-response.json §by_placement_truncated; get_media_buy_delivery.mdx §Truncation).",
-    )
-    by_geo: list[GeoBreakdown] | None = Field(
+    by_geo: list[GeoBreakdown] | None = Field(  # type: ignore[assignment]  # covariant narrowing; see _NARROWED_LIST_NOTE
         None,
         description="Geographic delivery breakdown (populated when reporting_dimensions includes 'geo'). "
         "For metro/postal_area levels each entry declares the classification 'system' used.",
     )
-    by_geo_truncated: bool | None = Field(
+    by_device_type: list[DeviceTypeBreakdown] | None = Field(  # type: ignore[assignment]  # covariant narrowing; see _NARROWED_LIST_NOTE
         None,
-        description="True when by_geo was truncated by the requested limit; false when complete. "
-        "MUST be present whenever by_geo is present "
-        "(get-media-buy-delivery-response.json §by_geo_truncated; get_media_buy_delivery.mdx §Truncation).",
-    )
-    by_device_type: list[DeviceTypeBreakdown] | None = Field(
-        None,
-        description="Device-type delivery breakdown (populated when reporting_dimensions includes 'device_type'). "
-        "Entries cover device_type enum values: desktop, mobile, tablet, ctv, dooh, unknown.",
-    )
-    by_device_type_truncated: bool | None = Field(
-        None,
-        description="True when by_device_type was truncated by the requested limit; false when complete. "
-        "MUST be present whenever by_device_type is present "
-        "(get-media-buy-delivery-response.json §by_device_type_truncated; get_media_buy_delivery.mdx §Truncation).",
+        description="Device-type delivery breakdown (populated when reporting_dimensions includes 'device_type')",
     )
 
 
-class DailyBreakdown(SalesAgentBaseModel):
-    """Day-by-day delivery metrics.
+class DailyBreakdown(LibraryDailyBreakdownItem):
+    """Day-by-day delivery metrics (extends the pinned ``daily_breakdown`` item).
 
-    Note: Does not yet extend library DailyBreakdownItem. Library also includes
-    conversions, conversion_value, roas, new_to_brand_rate fields.
+    Library provides ``date`` plus the metrics surface, including the conversions,
+    conversion_value, roas and new_to_brand_rate this used to be unable to express.
     """
-
-    date: str = Field(description="Date (YYYY-MM-DD)", pattern=r"^\d{4}-\d{2}-\d{2}$")
-    impressions: float = Field(ge=0, description="Daily impressions")
-    spend: float = Field(ge=0, description="Daily spend")
 
 
 # Status vocabulary of the AdCP delivery response. Re-export the pinned adcp
@@ -239,48 +214,29 @@ class DailyBreakdown(SalesAgentBaseModel):
 MediaBuyDeliveryStatus = LibraryMediaBuyDeliveryStatus
 
 
-class MediaBuyDeliveryData(SalesAgentBaseModel):
-    """AdCP-compliant delivery data for a single media buy.
+class MediaBuyDeliveryData(LibraryMediaBuyDelivery):
+    """Delivery data for a single media buy, extending the pinned ``media_buy_deliveries`` item.
 
-    Note: Does not yet extend library MediaBuyDelivery. Field names are
-    spec-aligned (completed_views); remaining work is switching DeliveryTotals
-    and PackageDelivery to extend their library counterparts.
+    Redeclares only the three nested collections, to point them at the local models, which
+    are re-dumped by ``NestedModelSerializerMixin`` (Pattern #4). Everything else is inherited, which is how
+    ``finalized_at``, ``is_final``, ``windows`` and ``buyer_campaign_ref`` become expressible
+    -- the hand-written version declared ten fields and could emit none of those.
 
-    TODO: Add buyer_campaign_ref field from adcp spec
-    (present in library MediaBuyDelivery but missing here).
+    ``ext`` and ``pricing_options`` are GONE. The pinned item declares exactly
+    ``by_package, daily_breakdown, expected_availability, finalized_at, is_adjusted,
+    is_final, media_buy_id, pricing_model, status, totals, windows`` and neither of those is
+    among them -- ``ext`` is per-object in AdCP, not universal, so carrying it on other
+    objects does not license it here. Nothing undeclared passes the boundary.
     """
 
-    # use_enum_values keeps ``status`` (and ``pricing_model``) as their str
-    # values after validation, so the library MediaBuyDeliveryStatus enum
-    # validates the wire vocabulary while downstream ``status == "completed"``
-    # comparisons and JSON serialization stay string-native.
+    # use_enum_values keeps ``status`` (and ``pricing_model``) as their str values after
+    # validation, so the pinned enum grades the wire vocabulary while downstream
+    # ``status == "completed"`` comparisons and JSON serialization stay string-native.
     model_config = ConfigDict(extra=get_pydantic_extra_mode(), use_enum_values=True)
 
-    media_buy_id: str = Field(description="Publisher's media buy identifier")
-    status: MediaBuyDeliveryStatus = Field(
-        description="Current media buy status per the AdCP delivery-response taxonomy (get-media-buy-delivery-response.json)."
-    )
-    expected_availability: str | None = Field(
-        default=None,
-        description="When delayed data is expected to be available (only present when status is reporting_delayed)",
-        pattern=r"^\d{4}-\d{2}-\d{2}$",
-    )
-    is_adjusted: bool = Field(
-        description="Indicates this delivery contains updated data for a previously reported period. Buyer should replace previous period data with these totals.",
-        default=False,
-    )
-    pricing_model: PricingModel | None = Field(default=None, description="Pricing model for this media buy")
-    pricing_options: list[dict[str, Any]] | None = Field(
-        default=None,
-        description="Pricing options active for this media buy, linking back to PricingOption records",
-    )
-    totals: DeliveryTotals = Field(description="Aggregate metrics for this media buy across all packages")
-    by_package: list[PackageDelivery] = Field(description="Metrics broken down by package")
-    daily_breakdown: list[DailyBreakdown] | None = Field(None, description="Day-by-day delivery")
-    ext: dict[str, Any] = Field(
-        default_factory=dict,
-        description="AdCP extension object for adapter-specific data",
-    )
+    totals: DeliveryTotals = Field(description="Aggregate metrics for this media buy across all packages")  # type: ignore[assignment]  # covariant narrowing; see _NARROWED_LIST_NOTE
+    by_package: list[PackageDelivery] = Field(description="Metrics broken down by package")  # type: ignore[assignment]  # covariant narrowing; see _NARROWED_LIST_NOTE
+    daily_breakdown: list[DailyBreakdown] | None = Field(None, description="Day-by-day delivery")  # type: ignore[assignment]  # covariant narrowing; see _NARROWED_LIST_NOTE
 
 
 class ReportingPeriod(LibraryReportingPeriod):
@@ -307,9 +263,7 @@ class AggregatedTotals(LibraryAggregatedTotals):
 # ---------------------------------------------------------------------------
 
 
-class GetMediaBuyDeliveryResponse(
-    AlwaysIncludeFieldsMixin, NestedModelSerializerMixin, LibraryGetMediaBuyDeliveryResponse
-):
+class GetMediaBuyDeliveryResponse(NestedModelSerializerMixin, LibraryGetMediaBuyDeliveryResponse, AdcpResponse):
     """Extends library GetMediaBuyDeliveryResponse with local overrides.
 
     Library provides: reporting_period, currency, errors, context, ext,
@@ -324,7 +278,7 @@ class GetMediaBuyDeliveryResponse(
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
     aggregated_totals: AggregatedTotals = Field(..., description="Combined metrics across all returned media buys")
-    media_buy_deliveries: list[MediaBuyDeliveryData] = Field(  # type: ignore[assignment]
+    media_buy_deliveries: list[MediaBuyDeliveryData] = Field(
         ..., description="Array of delivery data for each media buy"
     )
 
@@ -334,50 +288,8 @@ class GetMediaBuyDeliveryResponse(
     # own description says it is "only present in webhook deliveries when
     # notification_type is not 'final'", so a null is never the right wire value and
     # `notification_type is not None` included 'final', the one case the pin excludes.
-    _PINNED_SCHEMA_REF: ClassVar[str] = "media-buy/get-media-buy-delivery-response.json"
-
-    def __str__(self) -> str:
-        """Return human-readable summary message for protocol envelope."""
-        count = len(self.media_buy_deliveries)
-        if count == 0:
-            return "No delivery data found for the specified period."
-        elif count == 1:
-            return "Retrieved delivery data for 1 media buy."
-        return f"Retrieved delivery data for {count} media buys."
-
-    def webhook_payload(
-        self,
-        requested_metrics: list[str] | None = None,
-    ) -> dict[str, Any]:
-        """Serialize response as a webhook payload.
-
-        Webhook payloads differ from polling responses:
-        - ``aggregated_totals`` is excluded (polling-only field)
-        - When *requested_metrics* is provided, each media-buy ``totals``
-          dict is filtered to only include those metric keys.
-
-        Args:
-            requested_metrics: If provided, only these metric names are
-                kept in each ``totals`` dict.  Non-metric keys (like
-                ``media_buy_id``, ``status``) are never filtered.
-
-        Returns:
-            JSON-ready dict suitable for webhook POST body.
-        """
-        data = self.model_dump(mode="json", exclude={"aggregated_totals"})
-
-        if requested_metrics is not None:
-            metrics_set = set(requested_metrics)
-            for delivery in data.get("media_buy_deliveries", []):
-                totals = delivery.get("totals")
-                if totals is not None:
-                    filtered = {k: v for k, v in totals.items() if k in metrics_set}
-                    delivery["totals"] = filtered
-
-        return data
 
 
-# Deprecated - kept for backward compatibility
 class GetAllMediaBuyDeliveryRequest(SalesAgentBaseModel):
     """DEPRECATED: Use GetMediaBuyDeliveryRequest with filter='all' instead."""
 
@@ -510,15 +422,6 @@ class GetCreativeDeliveryResponse(NestedModelSerializerMixin, LibraryGetCreative
     creatives: list[CreativeDeliveryData] = Field(  # type: ignore[assignment]
         ..., description="Array of creative delivery data"
     )
-
-    def __str__(self) -> str:
-        """Return human-readable summary message for protocol envelope."""
-        count = len(self.creatives)
-        if count == 0:
-            return "No creative delivery data found for the specified period."
-        elif count == 1:
-            return "Retrieved delivery data for 1 creative."
-        return f"Retrieved delivery data for {count} creatives."
 
 
 class AdapterCreativeDeliveryItem(SalesAgentBaseModel):

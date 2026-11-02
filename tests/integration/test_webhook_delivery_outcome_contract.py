@@ -82,7 +82,8 @@ from typing import Any
 import pytest
 
 from tests.helpers import SIGNATURE_HEADER, assert_signature_verifies_over_wire_body
-from tests.helpers.egress_hatches import egress_hatch_env
+from tests.helpers.settings_injection import inject_limits
+from tests.integration.test_outbound_http import set_backoff_base
 
 # Both entry points get every case. The async twin is a separate code path and it
 # is the one this lane finally gives a caller (protocol_webhook_service), so an
@@ -117,9 +118,10 @@ METADATA_URL = "https://169.254.169.254/webhook"
 # The seam's own logger — the refusal's only operator surface.
 SEAM_LOGGER = "src.core.security.webhook_egress"
 
-# The retry backoff base, driven from outside the seam exactly as the seam's own
-# suite drives it, so an exhaustion case does not wait out a real 1s/2s schedule.
-BACKOFF_BASE_ENV = "ADCP_OUTBOUND_BACKOFF_BASE_SECONDS"
+# The retry backoff base is set through the seam suite's own ``set_backoff_base``, which
+# injects the typed value onto the settings the seam reads, so an exhaustion case does not
+# wait out a real 1s/2s schedule. (It used to write ADCP_OUTBOUND_BACKOFF_BASE_SECONDS,
+# which reached the seam only when nothing had yet built the cached settings.)
 
 # Non-ASCII on purpose. An ASCII payload would also be accepted by a sender that
 # re-serialized with ``json=`` (compact separators but ``ensure_ascii=False``),
@@ -153,13 +155,13 @@ def deliver(seam_call: str, url: str, payload: dict[str, Any], **kwargs: Any):
 def open_private_hatch(monkeypatch) -> None:
     """Let the seam dial the loopback origin, explicitly.
 
-    Always written — including the ``"false"`` half of the mapping — so an
-    ambient value exported into the shell cannot decide what these cases dial.
-    The name and literal come from ``tests.helpers.egress_hatches``, the one
-    place in the test tree that spells them.
+    Always stated, so an ambient value cannot decide what these cases dial — and stated
+    on the SETTINGS OBJECT the seam reads (``limits.adcp_outbound_allow_private``) rather
+    than in the environ, because the settings are built once and cached: a ``setenv``
+    landed only while nothing had read them yet, which made the guarantee depend on
+    fixture order rather than on this call.
     """
-    for name, value in egress_hatch_env(private=True).items():
-        monkeypatch.setenv(name, value)
+    inject_limits(monkeypatch, adcp_outbound_allow_private=True)
 
 
 def canonical_bytes(payload: dict[str, Any]) -> bytes:
@@ -358,7 +360,7 @@ def test_a_bearer_row_delivers_the_header_and_an_unsigned_body(seam_call, scheme
     """200 + Bearer: ``Authorization`` present, body UNSIGNED.
 
     Signing is gated by the SCHEME, never by "a credential is lying around" —
-    this row holds the very credential the HMAC arm signs with. A seam that asks
+    this row holds the very credential the HMAC branch signs with. A seam that asks
     the second question attaches HMAC headers to a receiver expecting a plain
     bearer POST.
 
@@ -564,7 +566,7 @@ def test_a_terminal_client_error_reports_one_attempt_and_the_status(seam_call, m
 def test_an_exhausted_delivery_counts_every_attempt(seam_call, monkeypatch, local_origin_tls):
     """503 to exhaustion -> ``exhausted``, with the attempt count and the last status."""
     open_private_hatch(monkeypatch)
-    monkeypatch.setenv(BACKOFF_BASE_ENV, "0.001")
+    set_backoff_base(monkeypatch, 0.001)
     local_origin_tls.respond_with(503, body=b'{"error": "unavailable"}')
 
     outcome = deliver(

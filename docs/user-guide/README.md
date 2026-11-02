@@ -47,7 +47,7 @@ from fastmcp.client import Client, StreamableHttpTransport
 # Get your endpoint and token from Admin UI > Advertisers > View Token
 transport = StreamableHttpTransport(
     url="https://your-domain.com/mcp/",
-    headers={"x-adcp-auth": "your-principal-token"}
+    headers={"Authorization": "Bearer your-principal-token"}
 )
 
 async with Client(transport=transport) as client:

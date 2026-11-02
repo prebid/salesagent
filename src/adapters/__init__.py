@@ -1,5 +1,8 @@
 # from .xandr import XandrAdapter  # Temporarily disabled - needs schema updates
 from dataclasses import dataclass
+from typing import cast
+
+from src.core.exceptions import AdCPConfigurationError
 
 from .base import AdapterCapabilities as AdapterCapabilities
 from .base import AdServerAdapter as AdServerAdapter
@@ -62,30 +65,31 @@ def get_adapter(adapter_type: str, config: dict, principal):
     """Factory function to get the appropriate adapter instance."""
     adapter_class = ADAPTER_REGISTRY.get(adapter_type.lower())
     if not adapter_class:
-        raise ValueError(f"Unknown adapter type: {adapter_type}")
+        raise AdCPConfigurationError()
     return adapter_class(config, principal)
 
 
-def get_adapter_class(adapter_type: str):
+def get_adapter_class(adapter_type: str) -> type[AdServerAdapter]:
     """Get the adapter class for a given adapter type."""
     adapter_class = ADAPTER_REGISTRY.get(adapter_type.lower())
     if not adapter_class:
-        raise ValueError(f"Unknown adapter type: {adapter_type}")
-    return adapter_class
+        raise AdCPConfigurationError()
+    return cast("type[AdServerAdapter]", adapter_class)
 
 
-def get_adapter_default_channels(adapter_type: str) -> list[str]:
+def get_adapter_default_channels(adapter_type: str | None) -> list[str]:
     """Get default advertising channels for an adapter type.
 
     Default channels are defined on each adapter class's default_channels attribute.
 
     Args:
-        adapter_type: Adapter type name (e.g., "google_ad_manager", "mock", "kevel", "triton")
+        adapter_type: Adapter type name (e.g., "google_ad_manager", "mock", "kevel", "triton"),
+            or ``None`` for a tenant with no ad server configured, which has no defaults.
 
     Returns:
-        List of default channel names for the adapter
+        List of default channel names for the adapter; empty when none is configured.
     """
-    adapter_class = ADAPTER_REGISTRY.get(adapter_type)
+    adapter_class = ADAPTER_REGISTRY.get(adapter_type) if adapter_type else None
     if adapter_class and hasattr(adapter_class, "default_channels"):
         return adapter_class.default_channels
     return []

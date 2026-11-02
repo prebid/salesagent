@@ -27,20 +27,18 @@ def authenticate_env_as(ctx: dict, principal_id: str) -> Any:
 
     Owns the full principal-switch contract so callers don't re-implement it:
 
-    - re-points the env via the public ``env.switch_principal`` (clears the identity
-      cache so the next ``env.identity`` re-resolves — picking up a principal row
-      committed after the env was created);
+    - re-points the env via the public ``env.switch_principal``, so the next
+      ``env.credential()`` reads the new principal's token at dispatch time --
+      picking up a principal row committed after the env was created;
     - records the canonical ``ctx["principal_id"]`` (the key read downstream by
-      uc004/uc006 — there is no second key for this concept);
-    - asserts the identity mutation took effect.
+      uc004/uc006 — there is no second key for this concept).
 
-    Callers add only genuinely use-case-specific ctx state (e.g. uc003's ``has_auth``).
+    Deliberately does NOT build a credential here (salesagent-z9e0): the token is read
+    at dispatch time from real DB state, so a Given step later in the same scenario can
+    still create the row. Callers add only genuinely use-case-specific ctx state (e.g.
+    uc003's ``has_auth``).
     """
     env = ctx["env"]
     env.switch_principal(principal_id)
     ctx["principal_id"] = principal_id
-    actual = env.identity.principal_id
-    assert actual == principal_id, (
-        f"env.identity.principal_id is {actual!r} after switching to {principal_id!r} — cache not rebuilt"
-    )
     return env

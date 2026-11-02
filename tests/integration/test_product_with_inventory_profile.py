@@ -15,6 +15,7 @@ from src.core.database.models import (
     PropertyTag,
     Tenant,
 )
+from tests.utils.database_helpers import seed_tenant_with_product_prerequisites, vhost_for
 
 
 @pytest.mark.requires_db
@@ -27,33 +28,11 @@ def test_create_product_with_inventory_profile(integration_db):
     tenant_id = "test_profile_product"
 
     with get_db_session() as session:
-        # Create tenant
-        tenant = Tenant(
-            tenant_id=tenant_id,
-            name="Test Tenant",
-            subdomain="test-profile",
-            ad_server="mock",
-            billing_plan="basic",
-            is_active=True,
+        # The tenant and the two rows a product cannot exist without (CLAUDE.md's chain:
+        # Tenant -> USD CurrencyLimit -> "all_inventory" PropertyTag).
+        seed_tenant_with_product_prerequisites(
+            session, tenant_id, subdomain="test-profile", ad_server="mock", billing_plan="basic", is_active=True
         )
-        session.add(tenant)
-
-        # Create required setup data
-        currency_limit = CurrencyLimit(
-            tenant_id=tenant_id,
-            currency_code="USD",
-            min_package_budget=100.0,
-            max_daily_package_spend=10000.0,
-        )
-        session.add(currency_limit)
-
-        property_tag = PropertyTag(
-            tenant_id=tenant_id,
-            tag_id="all_inventory",
-            name="All Inventory",
-            description="All inventory",
-        )
-        session.add(property_tag)
 
         # Create inventory profile (using proper ADCP agent URL)
         inventory_profile = InventoryProfile(
@@ -120,6 +99,7 @@ def test_product_creation_validates_profile_belongs_to_tenant(integration_db):
             tenant_id=tenant1_id,
             name="Tenant 1",
             subdomain="tenant1",
+            virtual_host=vhost_for(tenant1_id),
             ad_server="mock",
             billing_plan="basic",
             is_active=True,
@@ -128,6 +108,7 @@ def test_product_creation_validates_profile_belongs_to_tenant(integration_db):
             tenant_id=tenant2_id,
             name="Tenant 2",
             subdomain="tenant2",
+            virtual_host=vhost_for(tenant2_id),
             ad_server="mock",
             billing_plan="basic",
             is_active=True,

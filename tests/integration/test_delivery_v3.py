@@ -15,14 +15,10 @@ import pytest
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
-    CurrencyLimit,
     MediaBuy,
     MediaPackage,
-    PricingOption,
     Principal,
     Product,
-    PropertyTag,
-    Tenant,
 )
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
@@ -32,8 +28,11 @@ from src.core.schemas import (
     GetMediaBuyDeliveryRequest,
     ReportingPeriod,
 )
-from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
+from tests.factories import PricingOptionFactory
+from tests.factories.media_buy import request_package
+from tests.factories.principal import PrincipalFactory, plaintext_token_for
+from tests.utils.database_helpers import add_product_prerequisites, create_tenant_with_timestamps
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -46,17 +45,10 @@ def _make_identity(
     principal_id: str = "test_principal",
     tenant_id: str = "test_tenant",
 ) -> ResolvedIdentity:
-    return ResolvedIdentity(
+    return PrincipalFactory.make_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
         tenant={"tenant_id": tenant_id, "name": "Test Tenant"},
-        protocol="mcp",
-        testing_context=AdCPTestContext(
-            dry_run=False,
-            mock_time=None,
-            jump_to_event=None,
-            test_session_id=None,
-        ),
     )
 
 
@@ -104,7 +96,10 @@ def _setup_base_state(session) -> dict:
     tenant_id = "test_tenant"
     principal_id = "test_principal"
 
-    tenant = Tenant(
+    # Through the shared builder rather than a hand-written Tenant(...): it supplies the
+    # timestamps and the host, and spelling the same row out here made it a byte-for-byte
+    # duplicate of tests/integration/conftest.py's tenant (pylint R0801).
+    tenant = create_tenant_with_timestamps(
         tenant_id=tenant_id,
         name="Test Tenant",
         subdomain="test",
@@ -115,33 +110,23 @@ def _setup_base_state(session) -> dict:
         human_review_required=False,
         policy_settings={},
         authorized_emails=["test@example.com"],
-        created_at=now,
-        updated_at=now,
     )
     session.add(tenant)
     session.flush()
 
-    currency_limit = CurrencyLimit(
-        tenant_id=tenant_id,
-        currency_code="USD",
+    add_product_prerequisites(
+        session,
+        tenant_id,
         min_package_budget=1.00,
         max_daily_package_spend=100000.00,
+        tag_description="All available inventory",
     )
-    session.add(currency_limit)
 
-    property_tag = PropertyTag(
-        tenant_id=tenant_id,
-        tag_id="all_inventory",
-        name="All Inventory",
-        description="All available inventory",
-    )
-    session.add(property_tag)
-
-    principal = Principal(
+    principal = Principal.with_token(
+        plaintext_token_for(principal_id),
         tenant_id=tenant_id,
         principal_id=principal_id,
         name="Test Principal",
-        access_token="test_token_12345",
         platform_mappings={"mock": {"id": "test_advertiser"}},
         created_at=now,
     )
@@ -162,7 +147,7 @@ def _setup_base_state(session) -> dict:
     session.add(product)
     session.flush()
 
-    pricing_option = PricingOption(
+    pricing_option = PricingOptionFactory.build(
         tenant_id=tenant_id,
         product_id="prod_display",
         pricing_model="cpm",
@@ -179,7 +164,8 @@ def _setup_base_state(session) -> dict:
         "tenant_id": tenant_id,
         "principal_id": principal_id,
         "product_id": "prod_display",
-        "pricing_option_id": pricing_option.id,  # auto-increment int
+        # The id a package names this option by, read off the row rather than rebuilt.
+        "pricing_option_id": pricing_option.pricing_option_id,
     }
 
 
@@ -194,19 +180,13 @@ def _create_media_buy(
     budget: Decimal = Decimal("10000.00"),
     currency: str = "USD",
     raw_request: dict | None = None,
-    pricing_option_id: int | None = None,
 ) -> MediaBuy:
     """Create a MediaBuy row with sensible defaults."""
     s_date = start_date or date(2025, 1, 1)
     e_date = end_date or date(2025, 12, 31)
 
     if raw_request is None:
-        packages = [{"package_id": f"pkg_{media_buy_id}", "product_id": "prod_display"}]
-        if pricing_option_id is not None:
-            packages[0]["pricing_option_id"] = str(pricing_option_id)
-        raw_request = {
-            "packages": packages,
-        }
+        raw_request = {"packages": [request_package(package_id=f"pkg_{media_buy_id}", product_id="prod_display")]}
 
     buy = MediaBuy(
         media_buy_id=media_buy_id,
@@ -223,7 +203,9 @@ def _create_media_buy(
     )
     session.add(buy)
 
-    # Also create MediaPackage rows for package delivery queries
+    # Also create MediaPackage rows for package delivery queries. No pricing_info on them:
+    # every package here names the tenant's real PricingOption row, which is where the
+    # delivery report resolves the pricing_model/rate/currency it must state per package.
     for pkg_data in raw_request.get("packages", []):
         pkg_id = pkg_data.get("package_id", f"pkg_{media_buy_id}")
         media_pkg = MediaPackage(
@@ -261,7 +243,7 @@ class TestDeliverySingleBuyIntegration:
                 start_date=date(2025, 1, 1),
                 end_date=date(2025, 12, 31),
                 raw_request={
-                    "packages": [{"package_id": "pkg_a", "product_id": "prod_display"}],
+                    "packages": [request_package(package_id="pkg_a", product_id="prod_display")],
                 },
             )
             session.commit()
@@ -516,16 +498,15 @@ class TestDeliveryPricingOptionIntegration:
     """Integration: pricing_option_id type safety with real DB (CRIT-2)."""
 
     def test_pricing_option_roundtrip(self, integration_db):
-        """_get_pricing_options resolves string pricing_option_id to real PricingOption row.
+        """A package's pricing_option_id resolves to the tenant's real PricingOption row.
 
         Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-01
-        Spec: UNSPECIFIED. CRITICAL: validates the int() cast at the boundary
-        . Creates a PricingOption with auto-increment int PK,
-        stores the string ID in raw_request, and verifies delivery resolves it.
+        Spec: get-media-buy-delivery-response.json — pricing_model, rate and currency are
+        required on every by_package entry, and this is where they come from when the
+        MediaPackage row carries no pricing_info of its own.
         """
         with get_db_session() as session:
             base = _setup_base_state(session)
-            po_id = base["pricing_option_id"]  # int PK
 
             _create_media_buy(
                 session,
@@ -537,7 +518,7 @@ class TestDeliveryPricingOptionIntegration:
                         {
                             "package_id": "pkg_priced",
                             "product_id": "prod_display",
-                            "pricing_option_id": str(po_id),
+                            "pricing_option_id": base["pricing_option_id"],
                         }
                     ],
                 },
@@ -563,10 +544,23 @@ class TestDeliveryPricingOptionIntegration:
         with patch(f"{_PATCH_PREFIX}.get_adapter", return_value=mock_adapter):
             response = _get_media_buy_delivery_impl(req, identity)
 
-        # Pricing option resolved successfully
         assert len(response.media_buy_deliveries) == 1
         assert response.aggregated_totals.impressions == 10000.0
         assert response.aggregated_totals.spend == 50.0
+        # Resolved BY VALUE: the terms on the wire are the seeded row's, so a lookup that
+        # matched nothing (or matched a different option) fails here.
+        package = response.media_buy_deliveries[0].by_package[0]
+        assert (package.pricing_model, package.rate, package.currency) == ("cpm", 5.00, "USD")
+
+    # test_uppercase_pricing_model_resolves_through_a_lowercase_id lived here. It
+    # graded builder/matcher AGREEMENT about the case of an id that both sides
+    # recomputed from pricing_model/currency/is_fixed. pricing_options now stores the
+    # id in its own column and _get_pricing_options keys on it, so there is no second
+    # derivation left to disagree with — the hazard is structurally gone, not merely
+    # unobserved. The surviving obligation, that the DEFAULT id lowercases a seller's
+    # "CPM", is graded live on a2a/mcp/rest by "the announced pricing_option_id is
+    # lowercase whatever case the seller stored" in
+    # tests/bdd/features/BR-UC-GET-PRODUCTS-pricing-options.feature.
 
 
 @pytest.mark.requires_db
@@ -585,11 +579,11 @@ class TestDeliveryOwnershipIntegration:
             now = datetime.now(UTC)
 
             # Create second principal
-            principal_b = Principal(
+            principal_b = Principal.with_token(
+                plaintext_token_for("other_principal"),
                 tenant_id="test_tenant",
                 principal_id="other_principal",
                 name="Other Principal",
-                access_token="other_token",
                 platform_mappings={"mock": {"id": "other_advertiser"}},
                 created_at=now,
             )
@@ -642,11 +636,11 @@ class TestDeliveryOwnershipIntegration:
             base = _setup_base_state(session)
             now = datetime.now(UTC)
 
-            principal_b = Principal(
+            principal_b = Principal.with_token(
+                plaintext_token_for("secret_principal"),
                 tenant_id="test_tenant",
                 principal_id="secret_principal",
                 name="Secret Principal",
-                access_token="secret_token",
                 platform_mappings={"mock": {"id": "secret"}},
                 created_at=now,
             )
@@ -687,11 +681,11 @@ class TestDeliveryOwnershipIntegration:
             base = _setup_base_state(session)
             now = datetime.now(UTC)
 
-            principal_b = Principal(
+            principal_b = Principal.with_token(
+                plaintext_token_for("other_principal"),
                 tenant_id="test_tenant",
                 principal_id="other_principal",
                 name="Other Principal",
-                access_token="other_token_2",
                 platform_mappings={"mock": {"id": "other"}},
                 created_at=now,
             )
@@ -740,7 +734,8 @@ class TestDeliveryOwnershipIntegration:
         assert response.errors is not None
         assert len(response.errors) == 1
         assert response.errors[0].code == "MEDIA_BUY_NOT_FOUND"
-        assert "mb_not_owned" in response.errors[0].message
+        # WHICH buy travels in details: message is derived from the code (ADR-010).
+        assert response.errors[0].details == {"media_buy_id": "mb_not_owned"}
 
 
 @pytest.mark.requires_db
@@ -763,7 +758,7 @@ class TestDeliverySerializationIntegration:
                 start_date=date(2025, 1, 1),
                 end_date=date(2025, 12, 31),
                 raw_request={
-                    "packages": [{"package_id": "pkg_serial", "product_id": "prod_display"}],
+                    "packages": [request_package(package_id="pkg_serial", product_id="prod_display")],
                 },
             )
             session.commit()

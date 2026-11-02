@@ -25,26 +25,35 @@ ROOT = Path(__file__).resolve().parents[2]
 # Invariant 1: No get_db_session() in _impl functions
 # ---------------------------------------------------------------------------
 
+# Directories scanned by discovery glob (not a hand-maintained file list) for
+# _impl-adjacent get_db_session() calls. A glob so that a new tools module is
+# covered the day it is added, and ``helpers/`` is in scope because a
+# session-opening helper one call frame from _impl is the same violation
+# (#1721 M2).
+_IMPL_DISCOVERY_DIRS = ("src/core/tools", "src/core/helpers")
+
+# Two files that fall outside the discovery dirs and must still be scanned.
+# Kept explicit so widening scan scope never NARROWS it for these.
+_IMPL_LEGACY_EXTRA_FILES = frozenset({"src/core/context_manager.py", "src/admin/blueprints/creatives.py"})
+
+
+def _glob_python_files(root: Path, dirs: tuple[str, ...]) -> set[str]:
+    """``.py`` files under any of ``dirs`` (relative to ``root``), pycache excluded."""
+    return {
+        str(p.relative_to(root))
+        for scan_dir in dirs
+        for p in (root / scan_dir).rglob("*.py")
+        if "__pycache__" not in str(p)
+    }
+
+
+def _discover_impl_files() -> list[str]:
+    """_impl-adjacent files scanned for direct get_db_session() calls."""
+    return sorted(_glob_python_files(ROOT, _IMPL_DISCOVERY_DIRS) | _IMPL_LEGACY_EXTRA_FILES)
+
+
 # Production files that contain _impl functions to scan
-IMPL_FILES = [
-    "src/core/tools/media_buy_create.py",
-    "src/core/tools/media_buy_update.py",
-    "src/core/tools/media_buy_delivery.py",
-    "src/core/tools/media_buy_list.py",
-    "src/core/tools/products.py",
-    "src/core/tools/capabilities.py",
-    "src/core/tools/creative_formats.py",
-    "src/core/tools/properties.py",
-    "src/core/tools/creatives/listing.py",
-    "src/core/tools/creatives/_sync.py",
-    "src/core/tools/creatives/_assignments.py",
-    "src/core/tools/creatives/_workflow.py",
-    "src/core/tools/performance.py",
-    "src/core/tools/signals.py",
-    "src/core/tools/task_management.py",
-    "src/core/context_manager.py",
-    "src/admin/blueprints/creatives.py",
-]
+IMPL_FILES = _discover_impl_files()
 
 # Was: pre-existing violations, (file_path, function_name).
 # EMPTY AND MUST STAY EMPTY: the _impl-side migration completed in #1094 (closed
@@ -76,7 +85,11 @@ def _discover_integration_test_files() -> list[str]:
         test_files.extend(glob.glob(f"{root}/**/test_*.py", recursive=True))
         conftest_files.extend(glob.glob(f"{root}/conftest.py", recursive=True))
     helper_files = glob.glob("tests/helpers/**/*.py", recursive=True)
-    return sorted(set(test_files + conftest_files + helper_files))
+    # tests/utils/** too: the consolidation moved session.add out of the test bodies into
+    # database_helpers.py and tenant_setup.py, and two allowlist rows were removed as
+    # "fixed" when the calls had only moved somewhere this glob did not reach.
+    util_files = glob.glob("tests/utils/**/*.py", recursive=True)
+    return sorted(set(test_files + conftest_files + helper_files + util_files))
 
 
 INTEGRATION_TEST_FILES = _discover_integration_test_files()
@@ -84,13 +97,21 @@ INTEGRATION_TEST_FILES = _discover_integration_test_files()
 # Pre-existing violations: (file_path, function_or_fixture_name)
 # FIXME(#2133): integration tests should use polyfactory fixtures
 INTEGRATION_SESSION_ADD_ALLOWLIST = {
+    # tests/utils/** — the SAME pre-existing violations, at the address they moved to.
+    # Two rows were removed from this allowlist as "removed by the consolidation"; the
+    # calls were not removed, they were lifted out of the test bodies into these shared
+    # helpers, which this file's discovery glob did not reach until it did. Restoring them
+    # is bookkeeping, not a new concession: the count that changed was the visible one.
+    ("tests/utils/database_helpers.py", "add_product_prerequisites"),
+    ("tests/utils/database_helpers.py", "seed_tenant_with_principal"),
+    ("tests/utils/database_helpers.py", "seed_tenant_with_product_prerequisites"),
+    ("tests/utils/tenant_setup.py", "seed_gam_tenant"),
     # tests/integration/conftest.py
     ("tests/integration/conftest.py", "authenticated_admin_session"),
     ("tests/integration/conftest.py", "test_tenant_with_data"),
     ("tests/integration/conftest.py", "sample_tenant"),
     ("tests/integration/conftest.py", "sample_principal"),
     ("tests/integration/conftest.py", "sample_products"),
-    ("tests/integration/conftest.py", "test_media_buy_workflow"),
     # tests/integration/test_adapter_factory.py
     ("tests/integration/test_adapter_factory.py", "setup_adapters"),
     # tests/integration/test_gam_adapter_auth.py — no AdapterConfigFactory exists yet
@@ -130,8 +151,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration/test_cross_principal_security.py", "test_cross_tenant_isolation_also_enforced"),
     # tests/integration/test_database_health_integration.py
     ("tests/integration/test_database_health_integration.py", "test_health_check_performance_with_real_database"),
-    # tests/integration/test_database_integration.py
-    ("tests/integration/test_database_integration.py", "test_settings_queries"),
     # tests/integration/test_delivery_simulator_restart.py
     ("tests/integration/test_delivery_simulator_restart.py", "test_tenant"),
     ("tests/integration/test_delivery_simulator_restart.py", "test_principal"),
@@ -226,23 +245,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
         "test_updating_profile_inventory_affects_product_implementation_config",
     ),
     ("tests/integration/test_inventory_profile_updates.py", "test_updating_profile_properties_affects_all_products"),
-    # tests/integration/test_list_authorized_properties_integration.py
-    (
-        "tests/integration/test_list_authorized_properties_integration.py",
-        "test_list_authorized_properties_reads_from_publisher_partner",
-    ),
-    (
-        "tests/integration/test_list_authorized_properties_integration.py",
-        "test_list_authorized_properties_returns_all_registered_publishers",
-    ),
-    (
-        "tests/integration/test_list_authorized_properties_integration.py",
-        "test_list_authorized_properties_returns_empty_when_no_publishers",
-    ),
-    (
-        "tests/integration/test_list_authorized_properties_integration.py",
-        "test_list_authorized_properties_returns_sorted_domains",
-    ),
     # tests/integration/test_media_buy_readiness.py
     ("tests/integration/test_media_buy_readiness.py", "test_tenant"),
     ("tests/integration/test_media_buy_readiness.py", "test_principal"),
@@ -359,17 +361,11 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration/test_tenant_dashboard.py", "test_dashboard_metrics_calculation"),
     ("tests/integration/test_tenant_dashboard.py", "test_tenant_config_building"),
     ("tests/integration/test_tenant_dashboard.py", "test_dashboard_with_empty_tenant"),
-    # tests/integration/test_tenant_isolation_breach_fix.py
-    ("tests/integration/test_tenant_isolation_breach_fix.py", "test_cross_tenant_token_rejected"),
     # tests/integration/test_tenant_isolation_fix.py
-    ("tests/integration/test_tenant_isolation_fix.py", "test_tenant_isolation_with_subdomain_and_cross_tenant_token"),
-    ("tests/integration/test_tenant_isolation_fix.py", "test_global_token_lookup_sets_tenant_from_principal"),
-    ("tests/integration/test_tenant_isolation_fix.py", "test_admin_token_with_subdomain_preserves_tenant_context"),
     # tests/integration/test_tenant_management_api_integration.py
-    ("tests/integration/test_tenant_management_api_integration.py", "mock_api_key_auth"),
+    # mock_api_key_auth fixed — stores the API key digest through
+    # TenantManagementConfigRepository (salesagent-3cs7o.18)
     ("tests/integration/test_tenant_management_api_integration.py", "test_tenant"),
-    # tests/integration/test_tenant_settings_comprehensive.py
-    ("tests/integration/test_tenant_settings_comprehensive.py", "test_database_queries"),
     # tests/integration/test_tenant_utils.py
     ("tests/integration/test_tenant_utils.py", "test_serialize_tenant_json_fields_are_deserialized"),
     ("tests/integration/test_tenant_utils.py", "test_serialize_tenant_nullable_fields_have_defaults"),
@@ -379,10 +375,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
         "test_update_media_buy_assigns_creatives_to_package",
     ),
     ("tests/integration/test_update_media_buy_creative_assignment.py", "test_update_media_buy_replaces_creatives"),
-    (
-        "tests/integration/test_update_media_buy_creative_assignment.py",
-        "test_update_media_buy_rejects_missing_creatives",
-    ),
     ("tests/integration/test_update_media_buy_creative_assignment.py", "test_creative_assignments_with_weights"),
     ("tests/integration/test_update_media_buy_creative_assignment.py", "test_creative_assignments_replaces_all"),
     # tests/integration/test_update_media_buy_persistence.py
@@ -397,9 +389,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration/conftest.py", "create_test_product_with_pricing"),
     ("tests/integration/conftest.py", "authenticated_admin_session"),
     ("tests/integration/conftest.py", "test_tenant_with_data"),
-    # tests/integration/test_a2a_skill_invocation.py
-    ("tests/integration/test_a2a_skill_invocation.py", "test_update_media_buy_skill"),
-    ("tests/integration/test_a2a_skill_invocation.py", "test_list_authorized_properties_skill"),
     # tests/integration/test_admin_ui_data_validation.py
     ("tests/integration/test_admin_ui_data_validation.py", "test_products_list_no_duplicates_with_pricing_options"),
     ("tests/integration/test_admin_ui_data_validation.py", "test_principals_list_no_duplicates_with_relationships"),
@@ -408,15 +397,12 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration/test_admin_ui_data_validation.py", "test_media_buys_list_no_duplicates_with_packages"),
     ("tests/integration/test_admin_ui_data_validation.py", "test_media_buys_list_shows_all_statuses"),
     ("tests/integration/test_admin_ui_data_validation.py", "test_workflows_list_no_duplicate_steps"),
-    # tests/integration/test_create_media_buy_roundtrip.py
-    ("tests/integration/test_create_media_buy_roundtrip.py", "setup_test_tenant"),
     # tests/integration/test_create_media_buy_v24.py
     ("tests/integration/test_create_media_buy_v24.py", "setup_test_tenant"),
     # tests/integration/test_creative_lifecycle_mcp.py
     ("tests/integration/test_creative_lifecycle_mcp.py", "setup_test_data"),
     ("tests/integration/test_creative_lifecycle_mcp.py", "test_sync_creatives_upsert_existing_creative"),
     ("tests/integration/test_creative_lifecycle_mcp.py", "test_list_creatives_with_media_buy_assignments"),
-    ("tests/integration/test_creative_lifecycle_mcp.py", "test_validate_creatives_missing_required_fields"),
     # tests/integration/test_gam_automation_focused.py
     ("tests/integration/test_gam_automation_focused.py", "test_tenant_data"),
     # tests/integration/test_get_products_database_integration.py — migrated to factories
@@ -424,11 +410,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     # tests/integration/test_get_products_filters.py — migrated to factories
     # tests/integration/test_get_products_format_id_filter.py — migrated to factories
     # tests/integration/test_mcp_endpoints_comprehensive.py — requires_server suite removed (#1233 D11)
-    # tests/integration/test_mcp_tool_roundtrip_validation.py
-    ("tests/integration/test_mcp_tool_roundtrip_validation.py", "test_tenant_id"),
-    # tests/integration/test_mcp_tools_audit.py
-    ("tests/integration/test_mcp_tools_audit.py", "test_tenant_id"),
-    ("tests/integration/test_mcp_tools_audit.py", "test_get_media_buy_delivery_roundtrip_safety"),
     # tests/integration/test_minimum_spend_validation.py
     ("tests/integration/test_minimum_spend_validation.py", "setup_test_data"),
     ("tests/integration/test_minimum_spend_validation.py", "test_no_minimum_when_not_set"),
@@ -612,6 +593,25 @@ class TestImplNoDirectDbSession:
             fix_hint="Remove fixed entries from IMPL_SESSION_ALLOWLIST.",
         )
 
+    @pytest.mark.arch_guard
+    def test_discovery_glob_catches_a_synthetic_new_file(self, tmp_path):
+        """Guard self-test: the discovery glob picks up a file it has never seen
+        before, proving it is a LIVE glob (re-evaluated every run) and not a
+        frozen snapshot masquerading as one (#1721 M2)."""
+        scan_dir = tmp_path / "src" / "core" / "tools"
+        scan_dir.mkdir(parents=True)
+        (scan_dir / "_never_seen_before.py").write_text("def f():\n    pass\n")
+        found = _glob_python_files(tmp_path, ("src/core/tools",))
+        assert "src/core/tools/_never_seen_before.py" in found
+
+    @pytest.mark.arch_guard
+    def test_discovery_glob_covers_the_files_the_old_list_missed(self):
+        """accounts.py and helpers/ were invisible to the hand-maintained
+        IMPL_FILES list -- confirm the discovery glob now sees them."""
+        assert "src/core/tools/accounts.py" in IMPL_FILES
+        assert "src/core/helpers/adapter_helpers.py" in IMPL_FILES
+        assert "src/core/helpers/activity_helpers.py" in IMPL_FILES
+
 
 class TestIntegrationTestsNoInlineSessionAdd:
     """Integration tests must use factories/fixtures, not inline session.add().
@@ -648,12 +648,11 @@ class TestIntegrationTestsNoInlineSessionAdd:
 # ─────────────────────────────────────────────────────────────────────────
 # Invariant 3: No get_db_session() in integration test bodies (#1417)
 # ─────────────────────────────────────────────────────────────────────────
-# Invariant 1 scans get_db_session() only in src/ (_impl) files, so a
-# get_db_session() opened in a NEW test function inside an EXISTING test file
-# slipped through (e.g. test_resolve_account.py's new natural-key test). This
-# invariant closes that gap: it scans the same test scope as Invariant 2 and
-# flags any get_db_session() in a test/fixture body outside the legacy
-# allowlist. DB access in tests belongs in factories / the harness UoW
+# Invariant 1 scans get_db_session() only in src/ (_impl) files, which leaves a
+# get_db_session() opened in a test body uncovered -- including one in a NEW test
+# function inside an EXISTING test file. This invariant covers it: it scans the same
+# test scope as Invariant 2 and flags any get_db_session() in a test/fixture body
+# outside the legacy allowlist. DB access in tests belongs in factories / the harness UoW
 # (e.g. `with AccountUoW(...) as uow: uow.accounts`), never a raw inline session.
 GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/admin/test_accounts_blueprint.py", "test_create_account_via_post"),
@@ -696,11 +695,7 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/conftest.py", "sample_principal"),
     ("tests/integration/conftest.py", "sample_products"),
     ("tests/integration/conftest.py", "sample_tenant"),
-    ("tests/integration/conftest.py", "test_media_buy_workflow"),
     ("tests/integration/conftest.py", "test_tenant_with_data"),
-    ("tests/integration/test_a2a_skill_invocation.py", "test_explicit_skill_create_media_buy_manual_approval"),
-    ("tests/integration/test_a2a_skill_invocation.py", "test_list_authorized_properties_skill"),
-    ("tests/integration/test_a2a_skill_invocation.py", "test_update_media_buy_skill"),
     ("tests/integration/test_adapter_config_repository.py", "_tenants"),
     ("tests/integration/test_adapter_config_repository.py", "test_find_by_tenant_returns_config"),
     ("tests/integration/test_adapter_config_repository.py", "test_find_by_tenant_returns_none_for_unconfigured"),
@@ -719,8 +714,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_adapter_config_repository.py", "test_has_gam_credentials_service_account"),
     ("tests/integration/test_adapter_config_repository.py", "test_update_custom_targeting_keys_raises_when_missing"),
     ("tests/integration/test_adapter_factory.py", "setup_adapters"),
-    ("tests/integration/test_adapter_factory.py", "test_gam_adapter_requires_network_code"),
-    ("tests/integration/test_adapter_factory.py", "test_get_adapter_instantiates_all_adapter_types"),
     ("tests/integration/test_admin_ui_data_validation.py", "_bind_factories_for_sizes"),
     ("tests/integration/test_admin_ui_data_validation.py", "test_dashboard_media_buy_count_accurate"),
     ("tests/integration/test_admin_ui_data_validation.py", "test_inventory_browser_no_duplicate_ad_units"),
@@ -741,7 +734,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_audit_decorator.py", "test_decorator_skips_logging_without_tenant_id"),
     ("tests/integration/test_audit_decorator.py", "test_decorator_truncates_long_values"),
     ("tests/integration/test_context_persistence.py", "test_simplified_context"),
-    ("tests/integration/test_create_media_buy_roundtrip.py", "setup_test_tenant"),
     ("tests/integration/test_create_media_buy_v24.py", "setup_test_tenant"),
     ("tests/integration/test_creative_assignment_principal_id.py", "_query_assignments"),
     ("tests/integration/test_creative_assignment_principal_id.py", "ca_creatives"),
@@ -761,9 +753,7 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_creative_lifecycle_mcp.py", "setup_test_data"),
     ("tests/integration/test_creative_lifecycle_mcp.py", "test_create_media_buy_with_creative_ids"),
     ("tests/integration/test_creative_lifecycle_mcp.py", "test_list_creatives_no_filters"),
-    ("tests/integration/test_creative_lifecycle_mcp.py", "test_list_creatives_pagination_and_sorting"),
     ("tests/integration/test_creative_lifecycle_mcp.py", "test_list_creatives_with_date_filters"),
-    ("tests/integration/test_creative_lifecycle_mcp.py", "test_list_creatives_with_format_filter"),
     ("tests/integration/test_creative_lifecycle_mcp.py", "test_list_creatives_with_media_buy_assignments"),
     ("tests/integration/test_creative_lifecycle_mcp.py", "test_list_creatives_with_search"),
     ("tests/integration/test_creative_lifecycle_mcp.py", "test_list_creatives_with_status_filter"),
@@ -772,34 +762,11 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_creative_lifecycle_mcp.py", "test_sync_creatives_validation_failures"),
     ("tests/integration/test_creative_lifecycle_mcp.py", "test_sync_creatives_with_assignments_lookup"),
     ("tests/integration/test_creative_lifecycle_mcp.py", "test_sync_creatives_with_package_assignments"),
-    ("tests/integration/test_creative_lifecycle_mcp.py", "test_validate_creatives_missing_required_fields"),
     ("tests/integration/test_creative_review_model.py", "test_get_ai_review_stats_empty"),
     ("tests/integration/test_creative_review_model.py", "test_get_creative_reviews_filters_by_review_type"),
     ("tests/integration/test_creative_review_model.py", "test_get_creative_reviews_query"),
     ("tests/integration/test_creative_review_model.py", "test_get_creative_reviews_tenant_isolation"),
     ("tests/integration/test_creative_review_model.py", "test_get_creative_with_latest_review_tenant_isolation"),
-    ("tests/integration/test_creative_sync_behavioral.py", "test_assignment_persists_to_db"),
-    ("tests/integration/test_creative_sync_behavioral.py", "test_auto_approve_sets_approved_status"),
-    ("tests/integration/test_creative_sync_behavioral.py", "test_creative_visible_only_to_owning_principal"),
-    ("tests/integration/test_creative_sync_behavioral.py", "test_default_approval_mode_is_require_human"),
-    ("tests/integration/test_creative_sync_behavioral.py", "test_delete_missing_archives_unlisted_creatives"),
-    ("tests/integration/test_creative_sync_behavioral.py", "test_delete_missing_false_preserves_unlisted"),
-    (
-        "tests/integration/test_creative_sync_behavioral.py",
-        "test_draft_with_approved_at_transitions_to_pending_creatives",
-    ),
-    ("tests/integration/test_creative_sync_behavioral.py", "test_draft_without_approved_at_stays_draft"),
-    ("tests/integration/test_creative_sync_behavioral.py", "test_dry_run_does_not_persist"),
-    ("tests/integration/test_creative_sync_behavioral.py", "test_existing_creative_updates_in_place"),
-    ("tests/integration/test_creative_sync_behavioral.py", "test_idempotent_assignment_upsert"),
-    ("tests/integration/test_creative_sync_behavioral.py", "test_lenient_savepoint_isolation_with_real_db"),
-    ("tests/integration/test_creative_sync_behavioral.py", "test_new_creative_creates_db_record"),
-    ("tests/integration/test_creative_sync_behavioral.py", "test_new_creative_stamped_with_correct_principal"),
-    ("tests/integration/test_creative_sync_behavioral.py", "test_non_draft_status_unchanged"),
-    ("tests/integration/test_creative_sync_behavioral.py", "test_none_assignments_produces_no_records"),
-    ("tests/integration/test_creative_sync_behavioral.py", "test_require_human_sets_pending_review"),
-    ("tests/integration/test_creative_sync_behavioral.py", "test_same_creative_id_different_principals_are_separate"),
-    ("tests/integration/test_creative_sync_behavioral.py", "test_upsert_assignment_still_transitions"),
     ("tests/integration/test_creative_sync_data_preservation.py", "test_generative_output_preserves_user_assets"),
     ("tests/integration/test_creative_sync_data_preservation.py", "test_generative_output_preserves_user_url"),
     (
@@ -845,16 +812,16 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
         "tests/integration/test_cross_principal_security.py",
         "test_update_media_buy_cannot_modify_other_principals_media_buy",
     ),
-    ("tests/integration/test_dashboard_integration.py", "test_db"),
+    # test_dashboard_integration.py::test_db is gone with the file: 8 tests that seeded rows
+    # with raw SQL, queried them with raw SQL, and asserted the query returned what they
+    # seeded. The file's only two src imports were in that fixture, both to get a connection,
+    # so no test called a production function. DashboardService is graded by
+    # tests/unit/test_dashboard_service.py and tests/integration/test_dashboard_reliability.py,
+    # 21 tests that construct it and call get_dashboard_metrics.
     ("tests/integration/test_database_health_integration.py", "test_health_check_performance_with_real_database"),
     ("tests/integration/test_database_health_integration.py", "test_health_check_table_existence_validation"),
     ("tests/integration/test_database_health_integration.py", "test_health_check_with_real_schema_validation"),
     ("tests/integration/test_database_integration.py", "test_settings_queries"),
-    ("tests/integration/test_database_timeouts.py", "test_circuit_breaker_fail_fast"),
-    ("tests/integration/test_database_timeouts.py", "test_circuit_breaker_recovery"),
-    ("tests/integration/test_database_timeouts.py", "test_connection_timeout_configuration"),
-    ("tests/integration/test_database_timeouts.py", "test_query_timeout_configuration"),
-    ("tests/integration/test_database_timeouts.py", "test_statement_timeout_enforced"),
     ("tests/integration/test_delivery_poll_behavioral.py", "test_get_pricing_options_uses_string_id_not_integer_pk"),
     ("tests/integration/test_delivery_poll_behavioral.py", "test_integer_pk_lookup_returns_none"),
     (
@@ -931,14 +898,16 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_dynamic_products.py", "test_tenant_filter_scoping"),
     ("tests/integration/test_dynamic_products_integration.py", "test_archives_expired_variant"),
     ("tests/integration/test_dynamic_products_integration.py", "test_templates_with_signals_creates_variants"),
-    ("tests/integration/test_error_paths.py", "test_rest_error_with_valid_token_writes_audit_row"),
     ("tests/integration/test_execute_approved_platform_ids.py", "test_empty_platform_line_item_ids_dict"),
     (
         "tests/integration/test_execute_approved_platform_ids.py",
         "test_manual_approval_enriches_concept_and_is_filterable",
     ),
     ("tests/integration/test_execute_approved_platform_ids.py", "test_multiple_packages_all_persisted"),
-    ("tests/integration/test_execute_approved_platform_ids.py", "test_no_platform_line_item_ids_attr"),
+    # Re-keyed, not added: same pre-existing violation under the test's current name.
+    # This allowlist is keyed on the test NAME, so a rename has to re-point the entry in
+    # the same change or the stale-entry check fires.
+    ("tests/integration/test_execute_approved_platform_ids.py", "test_omitted_platform_line_item_ids"),
     ("tests/integration/test_execute_approved_platform_ids.py", "test_platform_line_item_ids_persisted_after_approval"),
     ("tests/integration/test_format_conversion_approval.py", "create_media_package"),
     ("tests/integration/test_format_conversion_approval.py", "test_currency_limit"),
@@ -955,8 +924,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_format_conversion_approval.py", "test_tenant"),
     ("tests/integration/test_format_conversion_approval.py", "test_valid_format_id_dict_conversion"),
     ("tests/integration/test_format_conversion_approval.py", "test_valid_format_reference_dict_conversion"),
-    ("tests/integration/test_gam_adapter_auth.py", "_load_principal"),
-    ("tests/integration/test_gam_adapter_auth.py", "_set_tenant_context"),
     ("tests/integration/test_gam_adapter_auth.py", "oauth_tenant"),
     ("tests/integration/test_gam_adapter_auth.py", "sa_tenant"),
     ("tests/integration/test_gam_adapter_auth.py", "test_oauth_config_includes_refresh_token"),
@@ -967,8 +934,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_gam_pricing_models_integration.py", "setup_gam_tenant_with_all_pricing_models"),
     ("tests/integration/test_gam_pricing_models_integration.py", "test_gam_auction_cpc_creates_price_priority"),
     ("tests/integration/test_gam_pricing_restriction.py", "setup_gam_tenant_with_non_cpm_product"),
-    ("tests/integration/test_gam_tenant_setup.py", "test_gam_tenant_creation_with_network_code"),
-    ("tests/integration/test_gam_tenant_setup.py", "test_gam_tenant_creation_without_network_code"),
     ("tests/integration/test_generative_creatives.py", "test_generative_format_detection_calls_build_creative"),
     ("tests/integration/test_get_products_database_integration.py", "access_fields"),
     ("tests/integration/test_get_products_database_integration.py", "database_operation"),
@@ -1060,30 +1025,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ),
     ("tests/integration/test_inventory_profile_updates.py", "test_updating_profile_properties_affects_all_products"),
     ("tests/integration/test_inventory_tree_lazy_loading.py", "_bind_factories"),
-    (
-        "tests/integration/test_list_authorized_properties_integration.py",
-        "test_list_authorized_properties_reads_from_publisher_partner",
-    ),
-    (
-        "tests/integration/test_list_authorized_properties_integration.py",
-        "test_list_authorized_properties_returns_all_registered_publishers",
-    ),
-    (
-        "tests/integration/test_list_authorized_properties_integration.py",
-        "test_list_authorized_properties_returns_empty_when_no_publishers",
-    ),
-    (
-        "tests/integration/test_list_authorized_properties_integration.py",
-        "test_list_authorized_properties_returns_sorted_domains",
-    ),
-    (
-        "tests/integration/test_list_authorized_properties_integration.py",
-        "test_list_authorized_properties_tenant_isolation",
-    ),
-    ("tests/integration/test_mcp_tool_roundtrip_validation.py", "real_products_in_db"),
-    ("tests/integration/test_mcp_tool_roundtrip_validation.py", "test_tenant_id"),
-    ("tests/integration/test_mcp_tools_audit.py", "test_get_media_buy_delivery_roundtrip_safety"),
-    ("tests/integration/test_mcp_tools_audit.py", "test_tenant_id"),
     ("tests/integration/test_media_buy_readiness.py", "test_completed_state"),
     ("tests/integration/test_media_buy_readiness.py", "test_draft_state_no_packages"),
     ("tests/integration/test_media_buy_readiness.py", "test_live_state"),
@@ -1237,11 +1178,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ),
     ("tests/integration/test_property_targeting_allowed_enforcement.py", "_seed_media_buy"),
     ("tests/integration/test_property_targeting_allowed_enforcement.py", "property_targeting_tenant"),
-    ("tests/integration/test_resolve_account.py", "test_natural_key_not_found_raises"),
-    ("tests/integration/test_resolve_account.py", "test_no_access_raises"),
-    ("tests/integration/test_resolve_account.py", "test_not_found_raises"),
-    ("tests/integration/test_resolve_account.py", "test_resolves_by_account_id"),
-    ("tests/integration/test_resolve_account.py", "test_resolves_by_natural_key"),
     ("tests/integration/test_schema_database_mapping.py", "test_database_field_access_validation"),
     ("tests/integration/test_schema_database_mapping.py", "test_database_json_field_handling"),
     ("tests/integration/test_schema_database_mapping.py", "test_schema_to_database_conversion_safety"),
@@ -1286,12 +1222,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_tenant_dashboard.py", "test_dashboard_with_empty_tenant"),
     ("tests/integration/test_tenant_dashboard.py", "test_dashboard_with_media_buys"),
     ("tests/integration/test_tenant_dashboard.py", "test_tenant_config_building"),
-    ("tests/integration/test_tenant_isolation_breach_fix.py", "test_cross_tenant_token_rejected"),
-    ("tests/integration/test_tenant_isolation_breach_fix.py", "test_no_fallback_to_first_tenant"),
-    ("tests/integration/test_tenant_isolation_breach_fix.py", "test_tenant_isolation_with_valid_subdomain"),
-    ("tests/integration/test_tenant_isolation_fix.py", "test_admin_token_with_subdomain_preserves_tenant_context"),
-    ("tests/integration/test_tenant_isolation_fix.py", "test_global_token_lookup_sets_tenant_from_principal"),
-    ("tests/integration/test_tenant_isolation_fix.py", "test_tenant_isolation_with_subdomain_and_cross_tenant_token"),
     ("tests/integration/test_tenant_management_api_integration.py", "mock_api_key_auth"),
     ("tests/integration/test_tenant_management_api_integration.py", "test_tenant"),
     ("tests/integration/test_tenant_settings_comprehensive.py", "test_database_queries"),
@@ -1302,10 +1232,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     (
         "tests/integration/test_update_media_buy_creative_assignment.py",
         "test_update_media_buy_assigns_creatives_to_package",
-    ),
-    (
-        "tests/integration/test_update_media_buy_creative_assignment.py",
-        "test_update_media_buy_rejects_missing_creatives",
     ),
     ("tests/integration/test_update_media_buy_creative_assignment.py", "test_update_media_buy_replaces_creatives"),
     ("tests/integration/test_update_media_buy_persistence.py", "test_tenant_setup"),
@@ -1336,9 +1262,7 @@ class TestIntegrationTestsNoGetDbSession:
     Pattern #8 (tests/CLAUDE.md): DB access in tests goes through factories and
     the harness (AccountUoW / IntegrationEnv), not a session opened inline. The
     legacy allowlist captures pre-existing debt; a NEW test-body get_db_session()
-    fails immediately — including a new function in an EXISTING file, which is how
-    the #1417 test_resolve_account.py natural-key test slipped when this guard was
-    src-only.
+    fails immediately — including a new function in an EXISTING file.
     """
 
     @pytest.mark.arch_guard
@@ -1363,4 +1287,283 @@ class TestIntegrationTestsNoGetDbSession:
             INTEGRATION_TEST_FILES,
             GET_DB_SESSION_IN_TESTS_ALLOWLIST,
             fix_hint="Remove fixed entries from GET_DB_SESSION_IN_TESTS_ALLOWLIST.",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Invariant 4: Repositories may not import SDK protocol/response types (reverse layer)
+# ---------------------------------------------------------------------------
+
+# The generated-response-shape family: types describing a WIRE response, not a
+# DB row. IdempotencyPosture/to_sdk_union() imported Idempotency/Idempotency3
+# from here while living in repositories/idempotency_attempt.py (D2, salesagent-
+# c0ia.11 M2) -- business/wire-shaping logic belongs above the repository,
+# never inside it. Scoped to this specific submodule (not bare `adcp.types`,
+# whose top-level re-exports like ContextObject/Error are generic shared types
+# used legitimately in a handful of repository method signatures today) so the
+# check is crisp with zero false positives.
+_FORBIDDEN_REPOSITORY_IMPORT_PREFIX = "adcp.types.generated_poc.protocol"
+
+REPOSITORIES_DIR = "src/core/database/repositories"
+
+
+def _scan_for_protocol_imports(tree: ast.Module) -> list[tuple[str, int]]:
+    """(imported_module, line) for every ``from adcp.types.generated_poc.protocol...
+    import ...`` in ``tree``."""
+    return [
+        (node.module, node.lineno)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module
+        and node.module.startswith(_FORBIDDEN_REPOSITORY_IMPORT_PREFIX)
+    ]
+
+
+def _find_repository_protocol_imports() -> list[tuple[str, str, int]]:
+    """(file_path, imported_module, line) for every repositories/*.py file."""
+    violations: list[tuple[str, str, int]] = []
+    for py_file in sorted((ROOT / REPOSITORIES_DIR).rglob("*.py")):
+        if "__pycache__" in str(py_file):
+            continue
+        rel_path = str(py_file.relative_to(ROOT))
+        tree = ast.parse(py_file.read_text())
+        violations.extend((rel_path, module, lineno) for module, lineno in _scan_for_protocol_imports(tree))
+    return violations
+
+
+class TestRepositoriesDoNotImportProtocolResponseTypes:
+    """The repository layer sits BELOW schemas/tools -- importing an SDK
+    protocol-response type here is the reverse-direction violation of the same
+    layering rule CLAUDE.md Pattern #3 enforces one direction of (business
+    logic must not reach INTO the repository's session; a repository must not
+    reach UP into wire-response typing). Allowlist is empty and stays empty:
+    after M2's IdempotencyPosture relocation there are zero legitimate cases.
+    """
+
+    @pytest.mark.arch_guard
+    def test_no_repository_imports_adcp_protocol_response_types(self):
+        violations = _find_repository_protocol_imports()
+        assert not violations, (
+            "repositories/*.py importing adcp.types.generated_poc.protocol.* "
+            "(a response-shaped SDK type) -- move the business/wire-shaping logic "
+            "that needs this type OUT of the repository layer (see "
+            "src/core/idempotency_policy.py for the pattern):\n"
+            + "\n".join(f"  {f}:{line} imports {mod}" for f, mod, line in violations)
+        )
+
+    @pytest.mark.arch_guard
+    def test_guard_catches_a_reintroduced_protocol_import(self):
+        """Positive meta-test: reproduces the exact pre-M2 idempotency_attempt.py shape."""
+        drifted = ast.parse(
+            "from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import Idempotency\n"
+        )
+        assert _scan_for_protocol_imports(drifted), "a reintroduced protocol-response import must be flagged"
+
+    @pytest.mark.arch_guard
+    def test_guard_ignores_generic_adcp_types_imports(self):
+        """Negative meta-test: bare `adcp.types` re-exports (ContextObject, Error, ...)
+        are generic shared types legitimately used in repository method signatures
+        today (e.g. src/core/database/repositories/media_buy.py) -- not a violation."""
+        generic = ast.parse("from adcp.types import ContextObject, Error\n")
+        assert _scan_for_protocol_imports(generic) == []
+
+
+# ---------------------------------------------------------------------------
+# Signed outbound work owns its connection — enforced by SHAPE, not by scan
+# ---------------------------------------------------------------------------
+#
+# These two grade the same fault from opposite ends: a POOLED DB CONNECTION HELD ACROSS
+# time.sleep() AND A POST TO A BUYER-SUPPLIED URL, so a hanging receiver consumes a
+# database connection.
+#
+# A LEXICAL GUARD FOR THAT WAS WRITTEN AND DISCARDED, and the reason belongs here so it
+# is not helpfully re-added. The obvious invariant — "a `with get_db_session()` block
+# must not enclose a sleep or an outbound POST" — was GREEN ON ITS OWN MOTIVATING
+# DEFECT: the session block called ``self._deliver_with_backoff(...)`` and the
+# ``time.sleep`` lived one call frame deeper, inside that method, so a body-subtree scan
+# saw nothing. Any such scan is defeated by ordinary helper extraction. Measured on the
+# tree at the time it found 2 violations, neither of them the defect it existed for.
+#
+# So the API SHAPE is the guard instead. Together these make the defect UNREPRESENTABLE
+# rather than detectable after the fact, and neither needs a call graph:
+#
+#   (i)  a caller cannot DONATE a session lifetime, because no parameter accepts one;
+#   (ii) the retry loop cannot REACH a session, because the only thing it can see is a
+#        frozen dataclass of primitives — true at any call depth.
+#
+# Both allowlists are EMPTY and stay empty (#1757, salesagent-n78j0.4).
+
+#: Parameter names by which a caller could hand its own connection lifetime to the
+#: delivery boundary. ``repo=`` was the real one; the siblings are named so the next
+#: shape of the same mistake is covered rather than only the one we removed.
+_DONATED_SESSION_PARAMS = frozenset({"repo", "session", "db", "db_session", "uow"})
+
+#: The connection-lifetime boundary: the functions a caller reaches to do signed outbound
+#: work. Named for the INVARIANT rather than for the webhook path, because the boundary is
+#: about who owns the connection lifetime, not about what is being sent. The outbound
+#: client seam once had an entry here (``build_adcp_multi_agent_client``); #1802 deleted
+#: that function outright when the registries moved onto the guarded MCP seam, so the
+#: entry went with it — a deleted function cannot donate a session.
+#:
+#: The three ``webhook_sender_factory`` entries that used to head this list
+#: (``deliver_adcp_webhook``, ``deliver_adcp_webhook_sync``, ``adcp_webhook_sender``)
+#: existed to build and feed an ``adcp.webhooks.WebhookSender``, which opens its own
+#: httpx client and is therefore not a sanctioned dialer here; they were deleted with
+#: that second delivery path and the module was renamed to ``src/core/signing/outbound.py``.
+#: What replaced them is listed below: the egress seam's two delivery twins — the ONLY
+#: functions that now put a webhook on a socket — and the three caller-facing resolvers
+#: that hand them a signer.
+#:
+#: DELIBERATELY ABSENT: ``webhook_delivery_signer`` and ``adcp_challenge_signer``. Those
+#: two take ``repo=`` BY DESIGN — they are the inner half, composed onto a repository the
+#: caller already holds open for an unrelated read (``TrustRootUoW`` in sync_accounts),
+#: and they neither sleep nor dial. The boundary is the OUTER entry a sender reaches, and
+#: for the webhook path that is ``delivery_signer_for_tenant``, which composes
+#: ``signing_repo`` and closes the session before any socket opens. Do not add them here
+#: and do not answer a resulting RED by carving ``repo`` out of
+#: ``_DONATED_SESSION_PARAMS`` — that would disarm the guard for its own motivating defect.
+_DELIVERY_BOUNDARY = (
+    ("src/core/security/webhook_egress.py", "deliver_webhook"),
+    ("src/core/security/webhook_egress.py", "adeliver_webhook"),
+    ("src/core/signing/outbound.py", "signing_repo"),
+    ("src/core/signing/outbound.py", "delivery_signer_for_tenant"),
+    ("src/core/signing/outbound.py", "send_signed_challenge"),
+    ("src/core/helpers/adapter_helpers.py", "request_signer_for_tenant"),
+)
+
+#: The queued-delivery entry, which the retry loop is the sole consumer of.
+_QUEUE_ENTRY = ("src/services/webhook_delivery_service.py", "QueuedWebhook")
+
+
+def _function_def(rel_path: str, name: str) -> ast.FunctionDef | ast.AsyncFunctionDef:
+    """The named top-level function in *rel_path*, or fail loudly naming it.
+
+    Failing loudly matters: if a rename made this lookup return None and the test
+    silently passed, the guard would grade a function that no longer exists.
+    """
+    tree = ast.parse((ROOT / rel_path).read_text(encoding="utf-8"), rel_path)
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == name:
+            return node
+    raise AssertionError(
+        f"{rel_path} defines no top-level function {name!r} — this guard grades the "
+        "connection-lifetime boundary and cannot silently stop grading it because something "
+        "was renamed."
+    )
+
+
+def _class_def(rel_path: str, name: str) -> ast.ClassDef:
+    """The named top-level class in *rel_path*, or fail loudly naming it."""
+    tree = ast.parse((ROOT / rel_path).read_text(encoding="utf-8"), rel_path)
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name == name:
+            return node
+    raise AssertionError(f"{rel_path} defines no top-level class {name!r} — see {_QUEUE_ENTRY!r}.")
+
+
+class TestDeliveryBoundaryTakesNoDonatedSession:
+    """(i) No boundary entry point accepts a caller's session, repository or UoW.
+
+    The deleted ``deliver_adcp_webhook*`` used to take ``repo=``, and the webhook delivery
+    service passed one built on ITS OWN open session. That is how a pooled connection came
+    to be held across the retry loop's ``time.sleep`` and its POST to a buyer-supplied URL:
+    the connection's lifetime belonged to the caller, not to the work.
+
+    The parameter is gone, so the defect is unrepresentable at this boundary —
+    ``signing_repo`` always opens its own short session, and every remaining entry
+    enters it rather than taking one. ``deliver_webhook`` / ``adeliver_webhook`` take a
+    resolved ``signer=`` STRATEGY, which holds key material and no connection; the
+    resolvers that produce it (``delivery_signer_for_tenant``,
+    ``request_signer_for_tenant``) open and close their own session before any dial.
+
+    MUTATION: add ``repo: SigningKeyRepository | None = None`` back to any signature in
+    ``_DELIVERY_BOUNDARY`` and this goes RED.
+    """
+
+    @pytest.mark.arch_guard
+    def test_no_delivery_entry_point_accepts_a_session(self) -> None:
+        found: set[tuple[str, str]] = set()
+        for rel_path, name in _DELIVERY_BOUNDARY:
+            func = _function_def(rel_path, name)
+            args = func.args
+            for arg in [*args.posonlyargs, *args.args, *args.kwonlyargs]:
+                if arg.arg in _DONATED_SESSION_PARAMS:
+                    found.add((f"{rel_path}::{name}", arg.arg))
+        assert found == set(), (
+            "the connection-lifetime boundary must not accept a caller's connection "
+            f"lifetime; found {sorted(found)}. A donated session is held for the whole "
+            "retry loop — for a delivery, across time.sleep and a POST to a buyer-supplied "
+            "URL — so a hanging receiver consumes a database connection. The callee opens its own "
+            "short session instead (signing_repo)."
+        )
+
+
+class TestQueuedWebhookCarriesPrimitivesOnly:
+    """(ii) The queue entry is a frozen dataclass of primitives — no ORM, no session.
+
+    The retry loop's only input is this entry. If it can hold nothing but plain values,
+    it cannot lazy-load a relationship, cannot touch a session and cannot keep a
+    connection alive across a sleep — REGARDLESS of how many call frames deep the sleep
+    is, which is exactly what the discarded lexical scan could not express.
+
+    MUTATION: annotate any field with an ORM model (``PushNotificationConfig``), a
+    ``Mapped[...]``, or a repository/session type, or drop ``frozen=True``, and this
+    goes RED.
+    """
+
+    #: Annotations a queued entry may carry. Anything else — an ORM model, a
+    #: ``Mapped[...]``, a repository, a session — fails.
+    #: ``Any`` IS DELIBERATELY ABSENT. It was admitted for one revision, because the
+    #: payload is arbitrary JSON and ``Any`` is the ABSENCE of a type rather than an ORM
+    #: type — but that left the one hole this guard exists to close: an ``Any``-annotated
+    #: field can be handed an ORM row at runtime, which is precisely the shape that
+    #: occurred (a live ``PushNotificationConfig`` on the queue entry).
+    #:
+    #: ``pydantic.JsonValue`` closes it with no schema project: it is the recursive JSON
+    #: type (``str | int | float | bool | None | list[JsonValue] | dict[str, JsonValue]``),
+    #: so an ORM object in the payload is a TYPE ERROR at every producer, enforced by mypy,
+    #: rather than a runtime possibility this guard merely hopes against.
+    _PRIMITIVE_ROOTS = frozenset(
+        {"str", "int", "float", "bool", "bytes", "dict", "list", "tuple", "datetime", "None", "JsonValue"}
+    )
+
+    def _annotation_roots(self, node: ast.expr) -> set[str]:
+        """Every bare name appearing in an annotation, unions and subscripts included."""
+        return {n.id for n in ast.walk(node) if isinstance(n, ast.Name)} | {
+            n.attr for n in ast.walk(node) if isinstance(n, ast.Attribute)
+        }
+
+    @pytest.mark.arch_guard
+    def test_every_field_is_a_primitive(self) -> None:
+        rel_path, name = _QUEUE_ENTRY
+        cls = _class_def(rel_path, name)
+
+        offenders: set[tuple[str, str]] = set()
+        for stmt in cls.body:
+            if not isinstance(stmt, ast.AnnAssign) or stmt.annotation is None:
+                continue
+            field = stmt.target.id if isinstance(stmt.target, ast.Name) else "<expr>"
+            for root in self._annotation_roots(stmt.annotation) - self._PRIMITIVE_ROOTS:
+                offenders.add((field, root))
+
+        assert offenders == set(), (
+            f"{name} must carry PRIMITIVES ONLY; found {sorted(offenders)}. The retry loop's "
+            "sole input is this entry — an ORM row or a repository on it can lazy-load or hold "
+            "a session open across the loop's sleep and its outbound POST. Project the values "
+            "you need off the ORM row while the session is open, and queue those."
+        )
+
+    @pytest.mark.arch_guard
+    def test_it_is_frozen(self) -> None:
+        rel_path, name = _QUEUE_ENTRY
+        cls = _class_def(rel_path, name)
+        frozen = any(
+            isinstance(d, ast.Call)
+            and any(kw.arg == "frozen" and getattr(kw.value, "value", False) is True for kw in d.keywords)
+            for d in cls.decorator_list
+        )
+        assert frozen, (
+            f"{name} must be @dataclass(frozen=True): a mutable queue entry can be handed a "
+            "session-bound object after enqueue, which reintroduces exactly what the primitive "
+            "field rule removes."
         )

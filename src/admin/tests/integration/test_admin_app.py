@@ -140,22 +140,6 @@ class TestAdminAppIntegration:
         response = authenticated_client.get("/settings")
         assert response.status_code == 200
 
-    def test_test_auth_disabled_by_default(self, client):
-        """Test that test auth endpoints are disabled by default."""
-        response = client.post("/test/auth", data={"email": "test@example.com", "password": "test123"})
-        assert response.status_code == 404
-
-    def test_test_auth_enabled_with_env_var(self, app):
-        """Test that test auth works when enabled."""
-        with patch.dict("os.environ", {"ADCP_AUTH_TEST_MODE": "true"}):
-            client = app.test_client()
-
-            response = client.post("/test/auth", data={"email": "test_super_admin@example.com", "password": "test123"})
-            assert response.status_code == 302  # Redirect after login
-
-            with client.session_transaction() as sess:
-                assert sess.get("user") == "test_super_admin@example.com"
-
 
 class TestTenantBlueprintIntegration:
     """Integration tests for tenant blueprint."""

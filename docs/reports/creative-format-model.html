@@ -1,0 +1,517 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Creative formats: the spec model, the measured gaps, the design</title>
+<style>
+  :root {
+    --bg: #fbfaf8; --fg: #1c1b19; --muted: #6b6862; --rule: #e0dcd4;
+    --card: #ffffff; --accent: #8a3b12; --good: #2f6b3a; --bad: #a32a1f;
+    --code-bg: #f4f1ec;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14150f; --fg: #eae7df; --muted: #9b968c; --rule: #2f302a;
+      --card: #1b1c16; --accent: #e0a06a; --good: #7fbc8c; --bad: #e08076;
+      --code-bg: #21221b;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14150f; --fg: #eae7df; --muted: #9b968c; --rule: #2f302a;
+    --card: #1b1c16; --accent: #e0a06a; --good: #7fbc8c; --bad: #e08076;
+    --code-bg: #21221b;
+  }
+  body { background: var(--bg); color: var(--fg); font: 15px/1.62 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+         margin: 0; padding: 40px 24px 80px; }
+  main { max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 27px; line-height: 1.25; margin: 0 0 6px; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); margin: 0 0 34px; font-size: 14px; }
+  h2 { font-size: 19px; margin: 42px 0 12px; padding-bottom: 7px; border-bottom: 2px solid var(--rule); letter-spacing: -0.005em; }
+  h3 { font-size: 15.5px; margin: 26px 0 8px; color: var(--accent); }
+  p { margin: 0 0 13px; }
+  code { background: var(--code-bg); padding: 1.5px 5px; border-radius: 3px;
+         font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  pre { background: var(--code-bg); padding: 13px 15px; border-radius: 6px; overflow-x: auto;
+        font: 12.5px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 0 0 15px; }
+  .tw { overflow-x: auto; margin: 0 0 16px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+  th, td { text-align: left; padding: 8px 11px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { font-weight: 600; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+  td code { font-size: 12.5px; }
+  .card { background: var(--card); border: 1px solid var(--rule); border-radius: 8px; padding: 16px 19px; margin: 0 0 16px; }
+  .card > :last-child { margin-bottom: 0; }
+  .bad { color: var(--bad); font-weight: 600; }
+  .good { color: var(--good); font-weight: 600; }
+  ul, ol { margin: 0 0 13px; padding-left: 22px; }
+  li { margin-bottom: 5px; }
+  .note { color: var(--muted); font-size: 13.5px; }
+  .lede { font-size: 16px; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Creative formats: the spec model, the measured gaps, the design</h1>
+<p class="sub">Branch <code>feature/spec-gaps-1210</code> · AdCP 3.1.1 (<code>adcp==6.6.0</code>) · 2026-09-10</p>
+
+<p class="lede">This started as one question — can the legacy bare-string <code>format_id</code>
+compatibility be dropped — and the answer uncovered a subsystem built on inputs the pinned
+spec no longer defines that way. Every claim below carries the measurement or the schema
+citation that produced it. Nothing here is inferred from reading source alone.</p>
+
+<div class="card">
+<p><strong>The one-line summary.</strong> The pinned spec moved creative format identity from
+<em>a name in a vendor's namespace</em> to <em>a canonical shape plus product-scoped
+parameters</em>. This codebase implements the name, stores the name in three columns, resolves
+the name against a creative-agent registry, and admits the new shape at its boundary without
+implementing anything behind it.</p>
+</div>
+
+<h2>1. How the spec says it works</h2>
+
+<h3>Format identity is an object, never a string</h3>
+
+<p><code>core/format-id.json</code> requires <code>agent_url</code> and <code>id</code>, with
+optional <code>width</code>, <code>height</code>, and <code>duration_ms</code> that pin a
+template format to a variant. The schema states the rule outright: <em>"A JSON object — never a
+plain string ... Using a plain string here is a schema violation."</em> Callers comparing two
+values MUST canonicalize <code>agent_url</code> first.</p>
+
+<h3>An upload carries one of two identities, and one of them is legacy</h3>
+
+<p><code>core/creative-asset.json</code> is a root <code>oneOf</code>. Required across both
+branches: <code>creative_id</code>, <code>name</code>, <code>assets</code>.</p>
+
+<div class="tw">
+<table>
+<tr><th>Branch</th><th>Requires</th><th>The schema's own title</th></tr>
+<tr><td>1</td><td><code>format_id</code></td><td>Legacy creative (named-format reference) — <em>"remains supported through 4.x"</em></td></tr>
+<tr><td>2</td><td><code>format_kind</code></td><td>3.1+ creative (canonical format kind) — introduced by RFC #3305</td></tr>
+</table>
+</div>
+
+<p>So <code>format_id</code> on an upload is <strong>the legacy branch of 3.1.1 itself</strong>,
+not a pre-3.1.1 artifact. Dropping it means refusing a spec-legal 3.1.1 request.</p>
+
+<h3>Why the change was made</h3>
+
+<p>The pin names the failure mode of the old model directly, in <code>v1_format_ref</code>'s
+AAO-convention paragraph:</p>
+
+<div class="card"><p>Without this convention, every publisher's 300x250 ships with a different
+<code>v1_format_ref</code> (theirs vs nytimes.example vs cnn.example vs …) and the v1 wire
+<strong>fragments into per-publisher namespaces</strong> — exactly what canonical-formats was
+designed to eliminate.</p></div>
+
+<p>A <code>format_id</code> is a name someone owns, so the same IAB MREC had N identities and a
+buyer needed per-vendor catalog integration to learn they were the same thing.
+<code>format_kind</code> replaces a pointer with a description: a small closed set of shapes a
+buyer can reason about generically, plus open machine-readable parameters per product.</p>
+
+<p>Identity did not disappear — it changed scope. <code>format_option_id</code> is still a stable
+identifier, namespaced to the <strong>product</strong> (or to a publisher catalog) rather than to
+a creative agent's global namespace. Shape is global and closed; identity is local and open. A
+creative keeps its <code>creative_id</code> because a creative is an instance; a format stopped
+being an instance-with-a-name and became a type.</p>
+
+<h3>The enum is closed for producers and open for consumers</h3>
+
+<p><code>core/canonical-format-kind.json</code> lists 13 values: 12 canonicals plus
+<code>custom</code>. The asymmetry is normative:</p>
+
+<div class="card"><p><strong>Open-enum semantics (normative).</strong> … Consumer SDKs MUST
+treat this enum as <strong>open</strong> at parse time: an unknown <code>format_kind</code> value
+MUST be retained as-is on the in-memory object (not silently dropped or rewritten to
+<code>"custom"</code>) and MUST NOT cause the surrounding payload to fail validation. … The
+producer-side enum stays closed (sellers MUST NOT mint ad-hoc <code>format_kind</code> values —
+use <code>format_kind: "custom"</code> with <code>format_shape</code> +
+<code>format_schema</code> for non-registered shapes)</p></div>
+
+<p>So a new format is defined two ways: now, as <code>custom</code> plus
+<code>format_shape</code> (a recognized global pattern from
+<code>core/format-shape-vocabulary.json</code>) plus <code>format_schema</code> (a URI+digest
+reference to a fetchable schema); later, by promotion into the enum in a minor release
+(queue: adcp#3666), which the schema calls <em>"non-breaking by design"</em>.</p>
+
+<p>The payoff the spec claims for the fetchable schema: <em>"Buyer agents fetch the schema,
+validate manifests structurally, and reason about manifests without per-seller integration
+code."</em></p>
+
+<h3>The three-part 3.1+ identity</h3>
+
+<div class="tw">
+<table>
+<tr><th>Field</th><th>Answers</th><th>Scope</th></tr>
+<tr><td><code>format_kind</code></td><td>Which canonical shape</td><td>Global, closed (12 + <code>custom</code>)</td></tr>
+<tr><td><code>format_option_ref</code></td><td>Which of the product's concrete options realizes it</td><td><code>{scope:"publisher", publisher_domain, format_option_id}</code> or <code>{scope:"product", format_option_id}</code></td></tr>
+<tr><td><code>format_id</code></td><td>Which named format in an agent's namespace</td><td>Legacy; global name</td></tr>
+</table>
+</div>
+
+<h3>Assets is a slot map, and that is deliberate</h3>
+
+<p>Both <code>core/creative-asset.json</code> and <code>core/creative-manifest.json</code> key
+<code>assets</code> by slot. Legacy path: each key matches an <code>asset_id</code> from the
+format's <code>assets</code> array (<code>banner_image</code>, <code>vast_tag</code>). 3.1+ path:
+each key matches an <code>asset_group_id</code> from the format's <code>slots</code> declaration,
+drawn from the canonical vocabulary registry (<code>images_landscape</code>, <code>video</code>,
+<code>published_post</code>, <code>landing_page_url</code>). A value is a single asset object or
+an array for slots with <code>min</code>/<code>max &gt; 1</code> (carousel <code>cards</code>,
+responsive <code>headlines</code>), and each asset carries an <code>asset_type</code>
+discriminator selecting its schema.</p>
+
+<h3>Resolution between the two identities is asymmetric by design</h3>
+
+<p><strong>v1 to v2 resolves</strong>, through a six-step normative order in
+<code>registries/v1-canonical-mapping.json</code>: the seller's <code>v1_format_ref</code> → an
+explicit <code>canonical</code> field on the v1 file → registry glob → structural match →
+ambiguous-family → fail closed. Step 4 yields a <em>family</em>, which is what a
+<code>format_kind</code> is.</p>
+
+<p><strong>v2 to v1 does not resolve.</strong> The registry is <em>"authoritative for v1 → v2
+projection only"</em>, and:</p>
+
+<div class="card"><p>SDKs MUST NOT synthesize a v1 <code>format_id</code> from the registry by
+inverting structural matches: the registry's <code>id</code> slugs lack the
+<code>agent_url</code> half of a <code>FormatId</code>, and registry entries with
+<code>format_id_glob: '*'</code> or pure-structural matches have no single literal to invert
+to.</p></div>
+
+<p>At 3.1, <strong>all seven published registry entries are pure-structural</strong>, so nothing
+is invertible even best-effort. The only v2→v1 source is the seller asserting
+<code>v1_format_ref[]</code> on a product declaration, and <code>canonical_formats_only: true</code>
+is the explicit way to say there is none. Four canonicals carry
+<code>v1_translatable: false</code> and can never have a v1 form: <code>image_carousel</code>,
+<code>sponsored_placement</code>, <code>responsive_creative</code>, <code>agent_placement</code>
+— <em>"the v1-unreachability is structural."</em></p>
+
+<p><strong>Consequence for the internal model:</strong> the unifying representation must be
+<code>format_kind</code>, because that is the direction that resolves. The codebase does the
+opposite.</p>
+
+<h3>Products, packages, and the render shape</h3>
+
+<div class="tw">
+<table>
+<tr><th>Schema</th><th>What it carries</th><th>Escape when there is no v1 projection</th></tr>
+<tr><td><code>core/product.json</code></td><td><em>"Products MUST carry <code>format_ids</code>, <code>format_options</code>, or BOTH"</em></td><td>Root <code>anyOf</code>, plus <code>canonical_formats_only</code></td></tr>
+<tr><td><code>core/product-format-declaration.json</code></td><td><code>format_kind</code> + <code>params</code> (required), <code>format_option_id</code>, <code>v1_format_ref[]</code>, <code>canonical_formats_only</code>, <code>format_shape</code>, <code>format_schema</code></td><td>n/a</td></tr>
+<tr><td><code>media-buy/package-request.json</code></td><td><code>format_ids</code>, <code>format_kind</code>, <code>format_option_refs</code>, <code>creatives</code>, <code>creative_assignments</code></td><td>Carries all three identities</td></tr>
+<tr><td><code>core/creative-manifest.json</code></td><td><code>assets</code> (required) + <code>format_id</code> | <code>format_kind</code> | <code>format_option_ref</code></td><td>Accepts any of the three</td></tr>
+<tr><td><code>creative/list-creatives-response.json</code></td><td><code>format_id</code> <strong>required</strong>; no <code>format_kind</code> property exists</td><td class="bad">None</td></tr>
+</table>
+</div>
+
+<p><code>core/creative-manifest.json</code> is the spec's adapter-facing shape. Nothing in this
+codebase implements it.</p>
+
+<h3>Provenance</h3>
+
+<p><code>core/provenance.json</code> is AI-provenance metadata (EU AI Act Article 50) attached to
+a creative: <em>"Serves as the default provenance for all manifests and assets within this
+creative. A manifest or asset with its own provenance replaces this object entirely (no
+field-level merging)."</em> <code>provenance_required</code> is a <strong>product</strong> policy
+field on <code>core/creative-policy.json</code>, and the seller <em>"may independently verify
+claims via <code>get_creative_features</code>."</em></p>
+<h2>2. What the code does — thirteen measured gaps</h2>
+
+<p>Each row states how it was measured. These are candidate issues; the numbering is for
+reference in discussion, not priority.</p>
+
+<h3>G1 — The 3.1+ branch is admitted at the boundary and dies inside</h3>
+
+<p><code>CreativeAssetRequest._exactly_one_format_identifier</code> correctly accepts the
+<code>format_kind</code> branch. Then <code>tools/creatives/_validation.py:99</code> builds a
+<code>Creative(**schema_data)</code> whose <code>format_id</code> is <code>None</code>:</p>
+
+<pre>boundary ACCEPTS the format_kind branch: image | format_id: None
+Creative(**schema_data) -&gt; ValidationError
+    format_id: Input should be a valid dictionary or instance of
+               FormatReferenceStructuredObject [input_value=None]</pre>
+
+<p>A spec-legal upload clears validation and fails internally. This is the worst of the three
+possible states — worse than refusing it outright.</p>
+
+<h3>G2 — No resolution machinery exists at all</h3>
+
+<p><code>grep</code> over <code>src/</code>: <code>format_kind</code> appears only inside the
+validator that admits it and in comments. <code>v1_format_ref</code>,
+<code>format_options</code>, <code>canonical_formats_only</code>, and
+<code>format_option_ref</code> appear <strong>nowhere</strong> (one comment mention in
+<code>product.py</code>). So neither direction of the spec's resolution order is implemented.</p>
+
+<h3>G3 — <code>list_creatives</code> cannot report a <code>format_kind</code> creative</h3>
+
+<p>Filed upstream as <strong>adcp#7402</strong>. <code>sync_creatives</code> accepts both
+branches (<code>properties.creatives.items</code> is <code>$ref: ../core/creative-asset.json</code>);
+<code>list-creatives-response.json</code> requires <code>format_id</code> unconditionally and the
+strings <code>format_kind</code> and <code>format_option</code> appear nowhere in the file. All
+three supply routes are closed (see §1). This one is an upstream defect, not our bug — but it
+blocks any internal design until it is answered.</p>
+
+<h3>G4 — The ORM has no column for the 3.1+ identity</h3>
+
+<div class="tw">
+<table>
+<tr><th>Layer</th><th>Representation</th></tr>
+<tr><td>Wire / schema</td><td>one object: <code>FormatId {agent_url, id, width, height, duration_ms}</code></td></tr>
+<tr><td>DB / ORM (<code>creatives</code>)</td><td>three columns: <code>format: String(100)</code>, <code>agent_url</code>, <code>format_parameters: JSONB</code></td></tr>
+</table>
+</div>
+
+<p>No column can hold <code>format_kind</code> or <code>format_option_ref</code>, so even a
+resolved value has nowhere to live. Any fix to G1/G2 needs a migration.</p>
+
+<h3>G5 — No creative manifest; three divergent adapter dicts stand in</h3>
+
+<p>The spec's adapter-facing shape is <code>core/creative-manifest.json</code>. The live path,
+<code>media_buy_create._build_adapter_asset_from_creative:754</code>, emits a hand-rolled dict:</p>
+
+<pre>{creative_id, package_assignments, width, height, url, click_url, asset_type, name}</pre>
+
+<h3>G6 — Non-GAM adapters read a key the live builder never sets</h3>
+
+<p><code>kevel.py:366</code>, <code>triton_digital.py:277</code> and
+<code>mock_ad_server.py:1207</code> index <code>asset["format"]</code>. The dict above has no
+<code>format</code> key, so those branches raise <code>KeyError</code> on contact. GAM — the
+mature adapter — reads only <code>creative_id</code>, <code>package_assignments</code>,
+<code>snippet</code>, <code>snippet_type</code>, and never touches format.</p>
+
+<p class="note">Decision taken: declare the non-GAM adapters unsupported as part of this work.
+Mock needs a carve-out — the whole test harness and every BDD scenario run on it.</p>
+
+<h3>G7 — The SDK closes the <code>format_kind</code> enum</h3>
+
+<p>Filed upstream as <strong>adcp-client-python#1140</strong>, together with a second finding:
+the SDK is strict where the spec mandates openness and permissive where the spec constrains
+producers.</p>
+
+<pre>CreativeAsset2.model_validate({..., "format_kind": "a_future_canonical_from_3_2"})
+# ValidationError: [{'type': 'enum', ...}]     &lt;- spec says MUST be retained
+
+ProductFormatDeclaration.model_validate({"format_kind": "custom", "params": {}})
+# ACCEPTED                                     &lt;- spec says format_shape + format_schema REQUIRED
+ProductFormatDeclaration.model_validate({"format_kind": "image", "params": {},
+                                         "format_shape": "roadblock"})
+# ACCEPTED                                     &lt;- spec says MUST be absent</pre>
+
+<h3>G8 — <code>Creative</code> extends the listing RESPONSE model and serves three roles</h3>
+
+<p><code>class Creative(LibraryCreative)</code> where the parent is the SDK's
+<code>list_creatives_response.Creative</code>. It is used as a response type
+(<code>GetCreativesResponse.creatives</code>), as DB rehydration (<code>listing.py:392</code>),
+and as an internal validation vehicle (<code>_validation.py:99</code>). It adds
+<code>principal_id</code> (internal, <code>exclude=True</code>) and <code>provenance</code> (a
+local subclass, because the library <code>Provenance</code> is refused cross-hierarchy), and
+reshapes <code>assets</code>.</p>
+
+<h3>G9 — <code>assets</code> is retyped to <code>dict[str, Any]</code>, discarding the SDK's slot map</h3>
+
+<p>The SDK parent types it correctly:</p>
+
+<pre>dict[Annotated[str, StringConstraints(pattern='^[a-z0-9_]+$')],
+     AssetVariant | Assets] | None</pre>
+
+<p>The local override is <code>dict[str, Any] | None</code>, which throws away both the key
+constraint and the discriminated <code>asset_type</code> union. Every "coerce the blob" branch
+in <code>creatives/listing.py</code> is the bill for that.</p>
+
+<h3>G10 — The request DTO extends the legacy branch, and not on purpose</h3>
+
+<p><code>CreativeAssetRequest</code> extends <code>CreativeAsset1</code> — the
+<code>format_id</code> branch. That was not a choice:</p>
+
+<pre>CreativeAsset       base = RootModel[Union[CreativeAsset1, CreativeAsset2]]
+adcp.types.CreativeAsset -&gt; CreativeAsset1     # runtime resolves to the LEGACY branch</pre>
+
+<p>The public alias resolves to the legacy branch at runtime while mypy resolves it to the union,
+so the obvious import silently is the legacy branch. The code records this codegen defect as
+unreported upstream.</p>
+
+<p>There is no "modern branch" to switch to: <code>CreativeAsset2</code> requires
+<code>format_kind</code> and would mirror the problem. The union base is the only shape that
+expresses the <code>oneOf</code> natively, and it was rejected because a failing branch puts a
+codegen class name in the buyer-facing pointer:</p>
+
+<pre>union base error locs: ('CreativeAsset1', 'name')  ('CreativeAsset1', 'format_id')</pre>
+
+<p><code>core/error.json</code> requires <code>issues[].pointer</code> to address a field in the
+request payload, and <code>CreativeAsset1</code> names nothing a buyer sent. <strong>A callable
+discriminator dissolves that objection</strong> — see §3.</p>
+
+<h3>G11 — <code>Creative.format</code> is a non-spec alias with three production readers</h3>
+
+<p>A property returning <code>self.format_id</code>. The SDK parent declares no
+<code>format</code> field. It exists because the DB column is named <code>format</code>, so code
+straddling row and schema could use one name. Read by
+<code>tools/creatives/_validation.py:109</code>, <code>_processing.py:69</code>, and
+<code>_processing.py:279/283</code>.</p>
+
+<h3>G12 — A request is round-tripped through a response model to read one field back</h3>
+
+<p><code>_validation.py:99</code> builds a full <code>Creative</code> from a buyer's
+<code>CreativeAssetRequest</code>, then reads <code>.format</code> off it and hands the object to
+<code>check_provenance_required</code>. The request already carries <code>format_id</code>.</p>
+
+<p>Two of that function's four checks are real and cannot live in a DTO: format existence
+(<code>fetch_format_spec</code>, an outbound call whose typed failures propagate — 429 becomes
+RATE_LIMITED, 5xx becomes SERVICE_UNAVAILABLE) and the provenance policy (which depends on the
+<em>product's</em> policy, absent from the creative payload). Two are redundant: the empty-name
+check duplicates a required field, and <code>if not creative.format_id</code> duplicates
+<code>_exactly_one_format_identifier</code>.</p>
+
+<p class="note">Note that <code>fetch_format_spec</code> is the <em>legacy</em> branch's
+resolution mechanism. In 3.1+ format identity resolves against the product's own declarations,
+with no dialling out.</p>
+
+<h3>G13 — The live adapter path supports exactly one impression tracker</h3>
+
+<p>Found by deleting the dead converter. <code>_convert_creative_to_adapter_asset</code> built
+<code>tracking_urls["impression"]</code> as a multi-URL list from the creative's assets, and its
+tests asserted two buyer trackers survived. The live builder calls
+<code>extract_impression_tracker_url</code> — <strong>singular</strong>, returning
+<code>str | None</code> — and wraps it in a one-element list. So the dead code was more capable
+than the live code, and its tests were the only record of the multi-tracker claim. Both are now
+deleted; this row is the record.</p>
+<h2>3. The design these measurements point to</h2>
+
+<h3>Canonicalize internally on <code>format_kind</code></h3>
+
+<p>Not a preference — it follows from the resolution asymmetry. v1→v2 resolves through a
+normative order; v2→v1 is forbidden to derive and impossible for four canonicals. So the only
+representation everything downstream can share is the canonical kind. <code>format_id</code>
+becomes a <strong>retained buyer assertion</strong>: stored verbatim, echoed on the legacy wire,
+never the identity that business logic keys on.</p>
+
+<p>This removes the need for <code>isinstance</code> branching everywhere. The branch survives
+only at the edge, where an inbound legacy identity is projected to a kind.</p>
+
+<h3>A callable discriminator, not a flattened model</h3>
+
+<p>The reason the <code>oneOf</code> was flattened (codegen class names in the buyer's error
+pointer) is solvable. Pydantic's callable <code>Discriminator</code> selects a branch by
+<em>presence</em>, and the <code>Tag</code> names are chosen by us:</p>
+
+<pre>def which_branch(v):
+    if v.get("format_id") is not None:   return "format_id"
+    if v.get("format_kind") is not None: return "format_kind"
+
+Asset = Annotated[Union[Annotated[ByFormatId,   Tag("format_id")],
+                        Annotated[ByFormatKind, Tag("format_kind")]],
+                  Discriminator(which_branch)]</pre>
+
+<p>Measured behaviour:</p>
+
+<div class="tw">
+<table>
+<tr><th>Input</th><th>Result</th><th>vs the RootModel union</th></tr>
+<tr><td><code>format_id</code> branch</td><td>→ <code>ByFormatId</code></td><td>same</td></tr>
+<tr><td><code>format_kind</code> branch</td><td>→ <code>ByFormatKind</code></td><td>same</td></tr>
+<tr><td>missing <code>name</code>, modern branch</td><td><code>loc = ('format_kind', 'name')</code></td><td><code>('CreativeAsset1', 'name')</code></td></tr>
+<tr><td>neither identifier</td><td><code>loc = ()</code>, <code>union_tag_not_found</code></td><td>two branch-shaped errors</td></tr>
+</table>
+</div>
+
+<p>The extra loc segment is now a closed two-value set named after real spec fields, so the
+pointer builder can drop it deterministically. "Neither identifier" lands at the root, which is
+where a <code>oneOf</code> violation belongs.</p>
+
+<h3>One accessor, built on the helper that already exists</h3>
+
+<p>Downstream code should ask the request for its format identity once, not branch on which
+branch arrived. <code>CreativeAssetRequest</code> has no such accessor today;
+<code>Creative</code> has three ad-hoc ones (<code>format</code>, <code>format_id_str</code>,
+<code>format_agent_url</code>). Build on <code>format_id_identity()</code>
+(<code>src/core/schemas/_base.py:371</code>), which returns the
+<code>(canonical agent_url, id)</code> federation pair the pin mandates for comparison — do not
+write a second one beside it.</p>
+
+<h3><code>assets</code> takes the SDK's typed slot map</h3>
+
+<p>Stop overriding it to <code>dict[str, Any]</code>. The parent's type is already the correct
+slot map with a key constraint and a discriminated value union. The coercion branches in
+<code>listing.py</code> exist only because the type was discarded.</p>
+
+<h3>Sequencing: the refusal flips with the identity</h3>
+
+<p>This is the one decision that needs settling before work starts, because it is lane 1 either
+way. Refusing <code>format_kind</code> is right for <em>today's</em> tree, where
+<code>format_id</code> is the identity. Once the identity flips, the branch needing a resolver
+is <code>format_id</code>, and the refusal flips with it. Doing both in the stated order means
+building a refusal and then deleting it.</p>
+
+<div class="tw">
+<table>
+<tr><th>Option</th><th>Lane 1</th><th>Cost</th></tr>
+<tr><td>A</td><td>Flip the identity, accept both branches, build the six-step resolver now</td><td>Resolver up front, including catalog reads. Its refusal is the spec's own fail-closed, not ours.</td></tr>
+<tr><td>B</td><td>Flip the identity, accept only <code>format_kind</code>, refuse the legacy branch with <code>FORMAT_NOT_SUPPORTED</code> until the resolver lands</td><td>One refusal, built once, pointing the direction the design is going. Refuses spec-legal traffic explicitly.</td></tr>
+</table>
+</div>
+
+<p>B first, A as a later lane, is the reading that avoids throwaway work.
+<code>FORMAT_NOT_SUPPORTED</code> exists in <code>enums/error-code.json</code> but is
+<strong>not in our <code>CODE_TABLE</code></strong>, so wiring it is part of the lane. Neither it
+nor <code>UNSUPPORTED_FEATURE</code> carries an <code>x-error-metadata</code> block in the pin,
+so the recovery value has to be chosen and justified rather than read off.</p>
+
+<h2>4. What has already been done</h2>
+
+<p>The legacy bare-string compatibility is <strong>removed</strong>, and it changed no production
+behaviour. The reachability proof:</p>
+
+<ul>
+<li><strong>Buyers:</strong> <code>CreativeAssetRequest.format_id</code> and
+<code>PackageRequest.format_ids</code> already refused bare strings <em>before</em> the removal
+(measured: <code>ValidationError</code> both). No request that used to succeed now fails.</li>
+<li><strong>Stored rows:</strong> the only converter of a bare string was
+<code>upgrade_legacy_format_id</code>, whose one reachable entry point was
+<code>Creative.validate_format_id</code>. Both of that validator's producers already supply a
+structured value — the buyer path (strings refused upstream) and the DB path
+(<code>listing.py:284-287</code> builds the <code>FormatId</code> explicitly from the
+<code>agent_url</code> and <code>format</code> columns).</li>
+<li>The plural helper never handled strings at all — its only branch was
+<code>isinstance(fmt_id, dict) and "agent_url" in fmt_id and "id" in fmt_id</code>.</li>
+<li><code>products.py:547-556</code> does its own str/dict/model branching and was never
+touched.</li>
+</ul>
+
+<p>Removed: <code>upgrade_legacy_format_id</code>, <code>get_agent_url_for_format</code>,
+<code>load_format_cache</code>, <code>_upgrade_legacy_format_ids</code> and its three
+validators, the <code>format</code>-alias and bare-string branches of
+<code>Creative.validate_format_id</code>, the <code>legacy_id_map</code> from the fixture and
+the refresh script, and the dead <code>_convert_creative_to_adapter_asset</code> (192 lines, no
+production callers). Net across 19 files: <strong>1243 deletions, 60 insertions</strong>. The
+only added executable line in <code>src/</code> reads <code>.id</code> instead of
+<code>str(...)</code>.</p>
+
+<p>Three ratchets tightened rather than grew: <code>C901</code> 172→170,
+<code>PLR0912</code> 123→122, <code>PLR0915</code> 100→99.</p>
+
+<h2>5. Upstream, and open questions</h2>
+
+<div class="tw">
+<table>
+<tr><th>Where</th><th>What</th><th>Status</th></tr>
+<tr><td>adcp#7402</td><td><code>list_creatives</code> cannot report a creative that <code>sync_creatives</code> accepted on the <code>format_kind</code> branch</td><td>Filed</td></tr>
+<tr><td>adcp-client-python#1140</td><td><code>format_kind</code> typing (<code>CanonicalFormatKind | str</code>), plus the question of where the producer-side <code>custom</code> constraint belongs</td><td>Filed</td></tr>
+<tr><td>SDK, unreported</td><td><code>adcp.types.CreativeAsset</code> resolves to <code>CreativeAsset1</code> at runtime while mypy resolves the alias to the RootModel union</td><td>Noted in code; no issue</td></tr>
+</table>
+</div>
+
+<p>Questions this work has not answered:</p>
+
+<ul>
+<li>Does <code>list_creatives</code>' unconditional <code>format_id</code> get an escape upstream, or does the seller mint a seller-scoped synthetic identifier per the closed adcp#4599? The latter is a SHOULD on the products path only, and impossible for the four <code>v1_translatable: false</code> canonicals.</li>
+<li>Where does the producer-side validation of <code>custom</code> (<code>format_shape</code> + <code>format_schema</code>) belong — the seller's boundary, or the SDK?</li>
+<li>Does the <code>creatives</code> table get columns for <code>format_kind</code> and <code>format_option_ref</code>, or a single structured identity column replacing the current three?</li>
+</ul>
+
+<p class="note">Provenance for every claim: schema citations are from the vendored
+<code>_schemas/3.1</code> set in <code>adcp==6.6.0</code>; behavioural claims were measured by
+constructing the models and reading the result, not by reading source. The two upstream issues
+carry their own reproductions.</p>
+
+</main>
+</body>
+</html>

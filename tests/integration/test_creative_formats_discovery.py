@@ -2,7 +2,7 @@
 
 Covers:
 - UC-005-MAIN-MCP-02: Authentication optional for discovery
-- UC-005-EXT-A-01: Tenant resolution failure returns TENANT_REQUIRED error
+- UC-005-EXT-A-01: Tenant resolution failure returns TENANT_UNDEFINED
 
 The list_creative_formats endpoint is a discovery/catalog endpoint.
 While tenant context is required to resolve the format catalog, an
@@ -62,8 +62,6 @@ class TestAuthOptionalForDiscovery:
             identity_no_token = PrincipalFactory.make_identity(
                 principal_id="anon_buyer",
                 tenant_id="test_tenant",
-                protocol="mcp",
-                auth_token=None,
             )
             response = env.call_impl(identity=identity_no_token)
 
@@ -88,38 +86,12 @@ class TestAuthOptionalForDiscovery:
             identity_no_token = PrincipalFactory.make_identity(
                 principal_id="anon_buyer",
                 tenant_id="test_tenant",
-                protocol="a2a",
-                auth_token=None,
             )
             response = env.call_a2a(identity=identity_no_token)
 
         assert isinstance(response, ListCreativeFormatsResponse)
         assert len(response.formats) == 1
         assert response.formats[0].format_id.id == "a2a_fmt"
-
-    def test_impl_with_no_auth_token_via_call_via(self, integration_db):
-        """UC-005-MAIN-MCP-02: call_via(IMPL) with explicit no-token identity.
-
-        Uses the multi-transport dispatch path with an unauthenticated identity
-        to verify the TransportResult wrapper also succeeds.
-        """
-        formats = [_make_format("dispatch_fmt", "Dispatched Format")]
-
-        with CreativeFormatsEnv() as env:
-            TenantFactory(tenant_id="test_tenant")
-            env.set_registry_formats(formats)
-
-            identity_no_token = PrincipalFactory.make_identity(
-                principal_id="anon_buyer",
-                tenant_id="test_tenant",
-                protocol="mcp",
-                auth_token=None,
-            )
-            result = env.call_via(Transport.IMPL, identity=identity_no_token)
-
-        assert result.is_success
-        assert isinstance(result.payload, ListCreativeFormatsResponse)
-        assert len(result.payload.formats) == 1
 
     def test_a2a_with_no_auth_token_via_call_via(self, integration_db):
         """UC-005-MAIN-MCP-02: call_via(A2A) with explicit no-token identity.
@@ -135,8 +107,6 @@ class TestAuthOptionalForDiscovery:
             identity_no_token = PrincipalFactory.make_identity(
                 principal_id="anon_buyer",
                 tenant_id="test_tenant",
-                protocol="a2a",
-                auth_token=None,
             )
             result = env.call_via(Transport.A2A, identity=identity_no_token)
 
@@ -144,30 +114,8 @@ class TestAuthOptionalForDiscovery:
         assert isinstance(result.payload, ListCreativeFormatsResponse)
         assert len(result.payload.formats) == 1
 
-    def test_no_tenant_context_raises_auth_error(self, integration_db):
-        """UC-005-MAIN-MCP-02: missing tenant context IS an error, even though auth is optional.
-
-        Authentication is optional for discovery, but tenant context is still
-        required to resolve which format catalog to return. When tenant=None,
-        the AUTH_REQUIRED error code is returned.
-        """
-        formats = [_make_format("no_tenant_fmt", "Should Not Reach")]
-
-        with CreativeFormatsEnv() as env:
-            TenantFactory(tenant_id="test_tenant")
-            env.set_registry_formats(formats)
-
-            identity_no_tenant = PrincipalFactory.make_identity(
-                principal_id="anon_buyer",
-                tenant_id="orphan",
-                tenant=None,
-                protocol="mcp",
-                auth_token=None,
-            )
-            result = env.call_via(Transport.IMPL, identity=identity_no_tenant)
-
-        assert result.is_error
-        assert result.error.error_code == "AUTH_REQUIRED"
+    # There is no test for a tenant-less call: the identity type requires a tenant. See the
+    # note at the bottom of this file for where that refusal is graded instead.
 
     def test_authenticated_vs_unauthenticated_return_same_catalog(self, integration_db):
         """UC-005-MAIN-MCP-02: auth token does not affect the catalog returned.
@@ -187,14 +135,10 @@ class TestAuthOptionalForDiscovery:
             authed_identity = PrincipalFactory.make_identity(
                 principal_id="authed_buyer",
                 tenant_id="test_tenant",
-                protocol="mcp",
-                auth_token="valid-token-123",
             )
             unauthed_identity = PrincipalFactory.make_identity(
                 principal_id="anon_buyer",
                 tenant_id="test_tenant",
-                protocol="mcp",
-                auth_token=None,
             )
 
             authed_response = env.call_impl(identity=authed_identity)
@@ -211,57 +155,9 @@ class TestAuthOptionalForDiscovery:
 # ---------------------------------------------------------------------------
 
 
-class TestTenantResolutionFailure:
-    """Covers: UC-005-EXT-A-01
-
-    Given no auth token AND no hostname mapping resolves to a tenant,
-    When Buyer calls list_creative_formats,
-    Then error with tenant context message and suggestion to provide credentials.
-    """
-
-    def test_no_tenant_no_auth_raises_auth_error(self, integration_db):
-        """UC-005-EXT-A-01: tenant=None + auth_token=None -> AUTH_REQUIRED error code."""
-        with CreativeFormatsEnv() as env:
-            TenantFactory(tenant_id="test_tenant")
-            env.set_registry_formats([_make_format("unreachable", "Should Not Reach")])
-
-            identity = PrincipalFactory.make_identity(
-                principal_id="anon_buyer",
-                tenant_id="unknown",
-                tenant=None,
-                protocol="mcp",
-                auth_token=None,
-            )
-            result = env.call_via(Transport.IMPL, identity=identity)
-
-        assert result.is_error
-        assert result.error.error_code == "AUTH_REQUIRED"
-
-    def test_error_message_mentions_tenant(self, integration_db):
-        """UC-005-EXT-A-01: error message indicates tenant context could not be determined."""
-        with CreativeFormatsEnv() as env:
-            TenantFactory(tenant_id="test_tenant")
-            env.set_registry_formats([])
-
-            identity = PrincipalFactory.make_identity(
-                principal_id="anon_buyer",
-                tenant_id="unknown",
-                tenant=None,
-                protocol="a2a",
-                auth_token=None,
-            )
-            result = env.call_via(Transport.A2A, identity=identity)
-
-        assert result.is_error
-        # Wire-envelope assertion via the harness's captured A2A artifact DataPart —
-        # exercises the real on_message_send pipeline + serialize-for-a2a envelope
-        # build, not the lossy reconstructed exception. See tests/CLAUDE.md §
-        # Error Verification Policy.
-        from tests.helpers import assert_envelope_shape
-
-        assert_envelope_shape(
-            result.wire_error_envelope,
-            "AUTH_REQUIRED",
-            recovery="correctable",
-            message_substr="tenant",
-        )
+# There is no tenant-less identity to test this tool with: ``PublicIdentity`` declares
+# ``tenant`` required, because a request naming no seller this deployment serves is refused
+# TENANT_UNDEFINED by the resolver before any identity is built (``_addressed_tenant``).
+# So UC-005-EXT-A-01 ("no hostname mapping resolves to a tenant -> error") is graded where
+# the refusal happens -- on the wire, with no resolvable host -- not here with a fixture:
+# BR-UC-010 @T-UC-010-ext-a and local-tenant-identification-routes.feature.

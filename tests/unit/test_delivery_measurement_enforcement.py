@@ -18,7 +18,7 @@ from decimal import Decimal
 from src.adapters import get_adapter_default_delivery_measurement
 from src.core.database.models import PricingOption
 from src.core.database.models import Product as ProductModel
-from src.core.product_conversion import convert_product_model_to_schema
+from src.core.product_conversion import convert_product_model_to_schema, default_reporting_capabilities
 from src.core.schemas import Product
 from tests.helpers.adcp_factories import (
     create_test_cpm_pricing_option,
@@ -42,6 +42,9 @@ def _make_schema_product(**overrides) -> Product:
         "delivery_measurement": {"provider": "test_provider"},
         "publisher_properties": [create_test_publisher_properties_by_tag()],
         "pricing_options": [create_test_cpm_pricing_option()],
+        # Required by core/product.json and inherited as required; the edge default is
+        # the one production supplies for a row that stores NULL.
+        "reporting_capabilities": default_reporting_capabilities(),
     }
     defaults.update(overrides)
     return Product(**defaults)
@@ -58,7 +61,7 @@ def _make_db_product(**overrides) -> ProductModel:
     }
     defaults.update(overrides)
     product = create_test_db_product(**defaults)
-    pricing = PricingOption(
+    pricing = PricingOption.create(
         tenant_id=defaults["tenant_id"],
         product_id=defaults["product_id"],
         pricing_model="cpm",
@@ -88,6 +91,7 @@ class TestDeliveryMeasurementOptional:
             delivery_type="guaranteed",
             publisher_properties=[create_test_publisher_properties_by_tag()],
             pricing_options=[create_test_cpm_pricing_option()],
+            reporting_capabilities=default_reporting_capabilities(),
             # delivery_measurement intentionally omitted — now optional per adcp 3.10
         )
         assert product.delivery_measurement is None

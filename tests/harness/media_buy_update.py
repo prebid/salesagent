@@ -1,6 +1,6 @@
 """MediaBuyUpdateEnv — unit test environment for _update_media_buy_impl.
 
-Patches: MediaBuyUoW, get_principal_object, _verify_principal,
+Patches: MediaBuyUoW, _verify_principal,
          get_context_manager, get_adapter, get_audit_logger,
          ensure_tenant_context, get_db_session.
 
@@ -12,17 +12,15 @@ Usage::
             env.set_currency_limit(min_package_budget=Decimal("100"))
             result = env.call_impl(packages=[{"package_id": "pkg-1", "budget": 50.0}])
             env.mock["uow"].return_value.currency_limits.get_for_currency.assert_called_with("EUR")
-        assert isinstance(result.response, UpdateMediaBuyError)
-        assert result.response.errors[0].code == "BUDGET_TOO_LOW"
+        assert isinstance(result, UpdateMediaBuyError)
+        assert result.errors[0].code == "BUDGET_TOO_LOW"
 
 Available mocks via env.mock:
     "uow"       -- MediaBuyUoW class mock (env.mock["uow"].return_value is the UoW instance)
-    "principal" -- get_principal_object mock
     "verify"    -- _verify_principal mock
     "ctx_mgr"   -- get_context_manager mock
     "adapter"   -- get_adapter mock
     "audit"     -- get_audit_logger mock
-    "tenant"    -- ensure_tenant_context mock
     "db"        -- get_db_session mock
 
 Fluent API:
@@ -37,30 +35,11 @@ from decimal import Decimal
 from typing import Any
 from unittest.mock import MagicMock
 
+from src.core.errors.details import EntityRefDetails
 from tests.harness._base import BaseTestEnv
 
 _MODULE = "src.core.tools.media_buy_update"
 _DB_MODULE = "src.core.database.database_session"
-
-# UpdateMediaBuyRequest fields that the flat update wrappers (update_media_buy_raw /
-# update_media_buy MCP) do not accept as parameters. MediaBuyDualEnv pops these from
-# the model_dump before calling a wrapper so the flat-kwargs call doesn't fail on
-# unexpected keyword arguments. Kept in sync with update_media_buy_raw's signature.
-_WRAPPER_UNSUPPORTED_FIELDS = (
-    "account",
-    "adcp_major_version",
-    "canceled",
-    "cancellation_reason",
-    "invoice_recipient",
-    "new_packages",
-    "proposal_id",
-    # "revision" is NOT stripped: every wrapper declares it now (MCP tool, A2A raw,
-    # REST body), so stripping it would put the a2a/mcp legs back to passing without
-    # ever sending the field — which is how the revision scenarios read as graded on
-    # three transports while only REST actually carried the token.
-    "today",
-    "total_budget",
-)
 
 
 class _SimpleClock:
@@ -70,20 +49,29 @@ class _SimpleClock:
     given_media_buy.py. No-op for scenarios that don't use date tokens.
     """
 
+    @staticmethod
+    def _iso(dt: Any) -> str:
+        # One formatter for all three accessors, minting what it produces: these are
+        # clock-derived, reach dispatched payloads, and differ on every run. See
+        # ``BaseTestEnv._ClockMixin._iso`` for the same reasoning and spelling.
+        from tests.factories.mint import mint
+
+        return mint(dt.isoformat().replace("+00:00", "Z"))
+
     def now_iso(self) -> str:
         from datetime import UTC, datetime
 
-        return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        return self._iso(datetime.now(UTC))
 
     def future_iso(self, days: int) -> str:
         from datetime import UTC, datetime, timedelta
 
-        return (datetime.now(UTC) + timedelta(days=days)).isoformat().replace("+00:00", "Z")
+        return self._iso(datetime.now(UTC) + timedelta(days=days))
 
     def past_iso(self, days: int) -> str:
         from datetime import UTC, datetime, timedelta
 
-        return (datetime.now(UTC) - timedelta(days=days)).isoformat().replace("+00:00", "Z")
+        return self._iso(datetime.now(UTC) - timedelta(days=days))
 
 
 class MediaBuyUpdateEnv(BaseTestEnv):
@@ -105,12 +93,10 @@ class MediaBuyUpdateEnv(BaseTestEnv):
     MODULE = _MODULE
     EXTERNAL_PATCHES = {
         "uow": f"{_MODULE}.MediaBuyUoW",
-        "principal": "src.core.auth.get_principal_object",
         "verify": f"{_MODULE}._verify_principal",
         "ctx_mgr": f"{_MODULE}.get_context_manager",
         "adapter": f"{_MODULE}.get_adapter",
         "audit": f"{_MODULE}.get_audit_logger",
-        "tenant": "src.core.helpers.context_helpers.ensure_tenant_context",
         "db": f"{_DB_MODULE}.get_db_session",
     }
 
@@ -140,21 +126,26 @@ class MediaBuyUpdateEnv(BaseTestEnv):
         # not-found raise is the real typed error, not a bare MagicMock.
         _mb_repo = self._uow_instance.media_buys
 
-        def _get_by_id_or_raise(media_buy_id: str, *, context: Any = None) -> Any:
+        # Both stubs mirror the real helpers EXACTLY (src/core/database/repositories/
+        # media_buy.py:77, :199): positional ids only, and the typed details model. They
+        # used to take a ``context=`` keyword and forward it to the exception; a context is
+        # written by the boundary alone now, the constructor takes no such argument, and a
+        # stub that accepts one can only produce a call production would refuse.
+        def _get_by_id_or_raise(media_buy_id: str) -> Any:
             media_buy = _mb_repo.get_by_id(media_buy_id)
             if media_buy is None:
                 from src.core.exceptions import AdCPMediaBuyNotFoundError
 
-                raise AdCPMediaBuyNotFoundError(f"Media buy '{media_buy_id}' not found", context=context)
+                raise AdCPMediaBuyNotFoundError(details=EntityRefDetails(media_buy_id=media_buy_id))
             return media_buy
 
-        def _get_package_or_raise(media_buy_id: str, package_id: str, *, context: Any = None) -> Any:
+        def _get_package_or_raise(media_buy_id: str, package_id: str) -> Any:
             package = _mb_repo.get_package(media_buy_id, package_id)
             if package is None:
                 from src.core.exceptions import AdCPPackageNotFoundError
 
                 raise AdCPPackageNotFoundError(
-                    f"Package '{package_id}' not found for media buy '{media_buy_id}'", context=context
+                    details=EntityRefDetails(package_id=package_id, media_buy_id=media_buy_id),
                 )
             return package
 
@@ -199,13 +190,6 @@ class MediaBuyUpdateEnv(BaseTestEnv):
         default_cl.min_package_budget = Decimal("0")
         self._uow_instance.currency_limits.get_for_currency.return_value = default_cl
 
-        # Principal
-        self.mock["principal"].return_value = MagicMock(
-            principal_id=self._principal_id,
-            name="Test Principal",
-            platform_mappings={},
-        )
-
         # Context manager: workflow step
         mock_step = MagicMock()
         mock_step.step_id = "step_001"
@@ -221,7 +205,6 @@ class MediaBuyUpdateEnv(BaseTestEnv):
         self.mock["adapter"].return_value = mock_adapter
 
         # Tenant context
-        self.mock["tenant"].return_value = {"tenant_id": self._tenant_id, "name": "Test"}
 
         # Audit logger
         self.mock["audit"].return_value = MagicMock()
@@ -307,20 +290,12 @@ class MediaBuyUpdateEnv(BaseTestEnv):
         req = kwargs.pop("req", None)
         if req is None:
             identity = kwargs.pop("identity", self.identity)
-            req = UpdateMediaBuyRequest(media_buy_id=media_buy_id, **kwargs)
+            req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
+                media_buy_id=media_buy_id,
+                **kwargs,
+            )
         else:
             identity = kwargs.pop("identity", self.identity)
         return _update_media_buy_impl(req=req, identity=identity)
-
-    def call_via(self, transport: Any, **kwargs: Any) -> Any:
-        """Route all transports through call_impl for unit env.
-
-        Unit env has no real transport wrappers. All 4 transports exercise
-        the same _update_media_buy_impl code path via call_impl. This is
-        correct for testing validation logic that runs before any
-        transport-specific code.
-        """
-        from tests.harness.dispatchers import ImplDispatcher
-
-        kwargs.setdefault("identity", self.identity)
-        return ImplDispatcher().dispatch(self, **kwargs)

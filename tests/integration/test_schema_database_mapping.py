@@ -17,6 +17,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative, MediaBuy, Principal, Tenant
 from src.core.database.models import PricingOption as DBPricingOption
 from src.core.database.models import Product as ProductModel
+from src.core.product_conversion import default_reporting_capabilities
 from src.core.schemas import Principal as PrincipalSchema
 from src.core.schemas import Product
 from tests.helpers.adcp_factories import create_test_db_product
@@ -71,10 +72,10 @@ class TestSchemaFieldMapping:
             "material_submission",  # Material submission config from adcp 3.12 spec
             "measurement_readiness",  # Measurement readiness from adcp 3.12 spec
             "trusted_match",  # Trusted match config from adcp 3.12 spec
-            # AdCP 4.3+ fields - inherited from library Product, not yet stored in database
-            "measurement_terms",  # Measurement terms from adcp 4.3 spec
-            "cancellation_policy",  # Cancellation policy from adcp 4.3 spec
-            "performance_standards",  # Performance standards from adcp 4.3 spec
+            # AdCP 3.1.1 Product fields - inherited from library Product, not yet stored in database
+            "measurement_terms",  # product.json, optional in AdCP 3.1.1
+            "cancellation_policy",  # product.json, optional in AdCP 3.1.1
+            "performance_standards",  # product.json, optional in AdCP 3.1.1
             # AdCP 5.7+ fields - inherited from library Product, not yet stored in database
             "format_options",  # Format option config from adcp 5.7 spec
             "vendor_metric_optimization",  # Vendor metric optimization from adcp 5.7 spec
@@ -281,12 +282,16 @@ class TestSchemaFieldMapping:
                 {
                     "pricing_option_id": "cpm_usd_fixed",
                     "pricing_model": "cpm",
-                    "rate": 10.0,
+                    # V3 shape: fixed pricing carries fixed_price. Was
+                    # "rate" + "is_fixed" citing adcp 2.4.0+ -- both replaced when
+                    # V3 made presence the discriminator, and both accepted only
+                    # because the SDK DTO allowed extras.
+                    "fixed_price": 10.0,
                     "currency": "USD",
-                    "is_fixed": True,  # Required in adcp 2.4.0+
                 }
             ],
             "delivery_measurement": {"provider": "Test Provider", "notes": "Test measurement methodology"},
+            "reporting_capabilities": default_reporting_capabilities(),
         }
 
         product = Product(**product_data)
@@ -417,12 +422,16 @@ class TestSchemaFieldMapping:
                     {
                         "pricing_option_id": "cpm_usd_fixed",
                         "pricing_model": "cpm",
-                        "rate": 7.25,
+                        # V3 shape: fixed pricing carries fixed_price. Was
+                        # "rate" + "is_fixed" citing adcp 2.5.0 -- both replaced when
+                        # V3 made presence the discriminator, and both accepted only
+                        # because the SDK DTO allowed extras.
+                        "fixed_price": 7.25,
                         "currency": "USD",
-                        "is_fixed": True,  # Required by adcp 2.5.0
                     }
                 ],
                 "delivery_measurement": {"provider": "Test Provider", "notes": "Test measurement methodology"},
+                "reporting_capabilities": default_reporting_capabilities(),
             }
 
             # This should succeed without validation errors
@@ -432,7 +441,7 @@ class TestSchemaFieldMapping:
                 # adcp 2.14.0+ uses RootModel wrapper - access via .root
                 pricing = validated_product.pricing_options[0]
                 pricing_inner = pricing.root
-                assert pricing_inner.rate == 7.25
+                assert pricing_inner.fixed_price == 7.25
                 assert pricing_inner.pricing_model == "cpm"
             except Exception as e:
                 pytest.fail(f"Schema validation failed with database data: {e}")
@@ -465,12 +474,16 @@ class TestFieldAccessPatterns:
                 {
                     "pricing_option_id": "cpm_usd_fixed",
                     "pricing_model": "cpm",
-                    "rate": 10.0,
+                    # V3 shape: fixed pricing carries fixed_price. Was
+                    # "rate" + "is_fixed" citing adcp 2.4.0+ -- both replaced when
+                    # V3 made presence the discriminator, and both accepted only
+                    # because the SDK DTO allowed extras.
+                    "fixed_price": 10.0,
                     "currency": "USD",
-                    "is_fixed": True,  # Required in adcp 2.4.0+
                 }
             ],
             "delivery_measurement": {"provider": "Test Provider", "notes": "Test measurement methodology"},
+            "reporting_capabilities": default_reporting_capabilities(),
         }
 
         product = Product(**product_data)
@@ -518,12 +531,16 @@ class TestFieldAccessPatterns:
                 {
                     "pricing_option_id": "cpm_usd_fixed",
                     "pricing_model": "cpm",
-                    "rate": 10.0,
+                    # V3 shape: fixed pricing carries fixed_price. Was
+                    # "rate" + "is_fixed" citing adcp 2.4.0+ -- both replaced when
+                    # V3 made presence the discriminator, and both accepted only
+                    # because the SDK DTO allowed extras.
+                    "fixed_price": 10.0,
                     "currency": "USD",
-                    "is_fixed": True,  # Required in adcp 2.4.0+
                 }
             ],
             "delivery_measurement": {"provider": "Test Provider", "notes": "Test measurement methodology"},
+            "reporting_capabilities": default_reporting_capabilities(),
         }
 
         product = Product(**product_data)

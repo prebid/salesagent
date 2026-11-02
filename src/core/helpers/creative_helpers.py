@@ -8,18 +8,23 @@ SDK 5.7 type:ignore tracking (adcontextprotocol/adcp-client-python#913):
 """
 
 import logging
+import uuid
 from typing import TYPE_CHECKING, Any, TypedDict
 
 from adcp import FormatId as LibraryFormatId
-from pydantic import BaseModel
+from adcp.types import ValidationMode
+from pydantic import BaseModel, ValidationError
+
+from src.core.tenant_context import TenantContext
 
 if TYPE_CHECKING:
+    from adcp.types import AccountReference as LibraryAccountReference
+
     from src.core.database.models import Product as DBProduct
     from src.core.resolved_identity import ResolvedIdentity
-    from src.core.schemas import Creative, FormatId, PackageRequest, Product
-    from src.core.testing_context import TestingContext
+    from src.core.schemas import FormatId, PackageRequest, Product
 
-from src.core.schemas import Creative
+from src.core.errors.details import CreativeRejectionDetails
 
 logger = logging.getLogger(__name__)
 
@@ -215,187 +220,6 @@ def _validate_creative_assets(assets: Any) -> dict[str, dict[str, Any]] | None:
     return assets
 
 
-def _convert_creative_to_adapter_asset(creative: Creative, package_assignments: list[str]) -> dict[str, Any]:
-    """Convert AdCP v1 Creative object to format expected by ad server adapters.
-
-    Extracts data from the assets dict to build adapter-compatible format.
-    Supports parameterized format templates (AdCP 2.5) for dimensions.
-    """
-
-    # Base asset object with common fields
-    # Note: creative.format_id returns string via FormatId.__str__() (returns just the id field)
-    # creative.format is the actual FormatId object
-    format_str = str(creative.format_id)  # Convert FormatId to string ID
-
-    asset: dict[str, Any] = {
-        "creative_id": creative.creative_id,
-        "name": creative.name,
-        "format": format_str,  # Adapter expects string format ID
-        "package_assignments": package_assignments,
-    }
-
-    # Extract dimensions from FormatId parameters (AdCP 2.5 format templates)
-    # This is the primary source of truth for parameterized formats
-    format_id_obj = creative.format_id
-    if format_id_obj is not None:
-        if format_id_obj.width is not None:
-            asset["width"] = format_id_obj.width
-        if format_id_obj.height is not None:
-            asset["height"] = format_id_obj.height
-        if format_id_obj.duration_ms is not None:
-            # Convert to seconds for adapter compatibility
-            asset["duration"] = format_id_obj.duration_ms / 1000.0
-
-    # Extract data from assets dict (AdCP v1 spec)
-    assets_dict = creative.assets if isinstance(creative.assets, dict) else {}
-
-    # Determine format type from format_id (declarative, not heuristic)
-    # Format IDs follow pattern: {type}_{variant} (e.g., display_300x250, video_instream_15s, native_content_feed)
-    format_type = format_str.split("_")[0] if "_" in format_str else "display"  # Default to display
-
-    # Find primary media asset based on format type (declarative role mapping)
-    primary_asset = None
-    primary_role = None
-
-    # Declarative role mapping by format type
-    if format_type == "video":
-        # Video formats: Look for video asset first
-        for role in ["video_file", "video", "main", "creative"]:
-            if role in assets_dict:
-                primary_asset = assets_dict[role]
-                primary_role = role
-                break
-    elif format_type == "native":
-        # Native formats: Look for native content assets
-        for role in ["main", "creative", "content"]:
-            if role in assets_dict:
-                primary_asset = assets_dict[role]
-                primary_role = role
-                break
-    else:  # display (image, html5, javascript, vast)
-        # Display formats: Look for image/banner first, then code-based assets
-        for role in ["banner_image", "image", "main", "creative", "content"]:
-            if role in assets_dict:
-                primary_asset = assets_dict[role]
-                primary_role = role
-                break
-
-    # Fallback: If no asset found with expected roles, use first non-tracking asset
-    if not primary_asset and assets_dict:
-        for role, asset_data in assets_dict.items():
-            # Skip tracking pixels and clickthrough URLs
-            if isinstance(asset_data, dict) and asset_data.get("url_type") not in [
-                "tracker_pixel",
-                "tracker_script",
-                "tracker_redirect",
-                "clickthrough",
-            ]:
-                primary_role = role
-                primary_asset = asset_data
-                break
-
-    if primary_asset and isinstance(primary_asset, dict) and primary_role:
-        # Detect asset type from AdCP v1 spec structure (no asset_type field in spec)
-        # Detection based on presence of specific fields per asset schema
-
-        # Check for VAST first (role name hint)
-        if "vast" in primary_role.lower():
-            # VAST asset (has content XOR url per spec)
-            # Per spec: VAST must have EITHER content OR url, never both
-            if "content" in primary_asset:
-                asset["snippet"] = primary_asset["content"]
-                asset["snippet_type"] = "vast_xml"
-            elif "url" in primary_asset:
-                asset["snippet"] = primary_asset["url"]
-                asset["snippet_type"] = "vast_url"
-
-            # Extract VAST duration if present (duration_ms → seconds)
-            if "duration_ms" in primary_asset:
-                asset["duration"] = primary_asset["duration_ms"] / 1000.0
-
-        elif "content" in primary_asset and "url" not in primary_asset:
-            # HTML or JavaScript asset (has content, no url)
-            asset["snippet"] = primary_asset["content"]
-            # Detect if JavaScript based on role or module_type
-            if "javascript" in primary_role.lower() or "module_type" in primary_asset:
-                asset["snippet_type"] = "javascript"
-            else:
-                asset["snippet_type"] = "html"
-
-        elif "url" in primary_asset:
-            # Image or Video asset (has url, no content)
-            asset["media_url"] = primary_asset["url"]
-            asset["url"] = primary_asset["url"]  # For backward compatibility
-
-            # Extract dimensions (common to image and video)
-            if "width" in primary_asset:
-                asset["width"] = primary_asset["width"]
-            if "height" in primary_asset:
-                asset["height"] = primary_asset["height"]
-
-            # Extract video duration (duration_ms → seconds)
-            if "duration_ms" in primary_asset:
-                asset["duration"] = primary_asset["duration_ms"] / 1000.0
-
-    # Extract click URL from assets (URL asset with url_type="clickthrough")
-    for _role, asset_data in assets_dict.items():
-        if isinstance(asset_data, dict):
-            # Check for clickthrough URL (per AdCP spec: url_type="clickthrough")
-            if asset_data.get("url_type") == "clickthrough" and "url" in asset_data:
-                asset["click_url"] = asset_data["url"]
-                break
-
-    # If no url_type found, fall back to role name matching
-    if "click_url" not in asset:
-        for role in ["click_url", "clickthrough", "click", "landing_page"]:
-            if role in assets_dict:
-                click_asset = assets_dict[role]
-                if isinstance(click_asset, dict) and "url" in click_asset:
-                    asset["click_url"] = click_asset["url"]
-                    break
-
-    # Extract tracking URLs from assets (per AdCP spec: url_type field)
-    tracking_urls: dict[str, list[str] | str] = {}
-    for _role, asset_data in assets_dict.items():
-        if isinstance(asset_data, dict) and "url" in asset_data:
-            url_type = asset_data.get("url_type", "")
-            if url_type in ["tracker_pixel", "tracker_script"]:
-                impression_list = tracking_urls.setdefault("impression", [])
-                if isinstance(impression_list, list):
-                    impression_list.append(asset_data["url"])
-            elif url_type == "tracker_redirect":
-                click_list = tracking_urls.setdefault("click", [])
-                if isinstance(click_list, list):
-                    click_list.append(asset_data["url"])
-
-    # Role name fallback for impression tracker (same pattern as click_url)
-    if "impression" not in tracking_urls:
-        for role_name in ["impression_tracker", "tracker_pixel", "pixel"]:
-            if role_name in assets_dict:
-                tracker_asset = assets_dict[role_name]
-                if isinstance(tracker_asset, dict) and "url" in tracker_asset:
-                    impression_list = tracking_urls.setdefault("impression", [])
-                    if isinstance(impression_list, list):
-                        impression_list.append(tracker_asset["url"])
-                    break
-
-    # Role name fallback for click tracker
-    if "click" not in tracking_urls:
-        for role_name in ["click_tracker", "tracker_redirect", "redirect_tracker"]:
-            if role_name in assets_dict:
-                tracker_asset = assets_dict[role_name]
-                if isinstance(tracker_asset, dict) and "url" in tracker_asset:
-                    click_list = tracking_urls.setdefault("click", [])
-                    if isinstance(click_list, list):
-                        click_list.append(tracker_asset["url"])
-                    break
-
-    if tracking_urls:
-        asset["delivery_settings"] = {"tracking_urls": tracking_urls}
-
-    return asset
-
-
 def _detect_snippet_type(snippet: str) -> str:
     """Auto-detect snippet type from content for legacy support."""
     if snippet.startswith("<?xml") or ".xml" in snippet:
@@ -425,7 +249,13 @@ def validate_creative_format_against_product(
 
     Note:
         Packages have exactly one product, so this is a binary check (matches or doesn't).
-        Format IDs should already be normalized before calling this function.
+
+        Identity is asked of ``format_resolver``, never re-decided here. This
+        function used to carry a private ``normalize_url`` doing
+        ``str(url).rstrip("/")``, one of three such copies that disagreed with
+        each other about what "the same agent_url" means; the pinned
+        ``core/format-id.json`` requires the AdCP canonical form, which a trim
+        is not.
 
     Example:
         >>> from src.core.schemas import FormatId, Product
@@ -434,81 +264,43 @@ def validate_creative_format_against_product(
         >>> if not is_valid:
         ...     raise ValueError(error)
     """
-    # Extract format_ids from product
-    product_format_ids = product.format_ids or []
-    product_id = product.product_id
-    product_name = product.name
+    from src.core.format_resolver import format_display, format_identity, product_format_identities
 
-    # Products with no format restrictions accept all creatives
-    if not product_format_ids:
+    supported = product_format_identities(product.format_ids)
+
+    # Products with no usable format restrictions accept all creatives
+    if not supported:
         return True, None
 
-    # Extract creative's format_id components
-    creative_agent_url = creative_format_id.agent_url
-    creative_id = creative_format_id.id
-
-    if not creative_agent_url or not creative_id:
+    if not creative_format_id.agent_url or not creative_format_id.id:
         return False, "Creative format_id is missing agent_url or id"
 
-    # Helper to normalize URLs for comparison (strip trailing slashes)
-    # Pydantic AnyUrl adds trailing slash when converting to string, causing mismatches
-    def normalize_url(url_val: Any) -> str:
-        if not url_val:
-            return ""
-        return str(url_val).rstrip("/")
+    # STRICT on this side, deliberately: the creative's format_id is a validated model,
+    # not a row read back out of a column, so a failure here is a real defect and should
+    # surface rather than quietly read as "the product does not accept this format".
+    # The product side, which IS column data, uses the tolerant helper.
+    creative_identity = format_identity(creative_format_id)
+    if creative_identity in supported:
+        return True, None
 
-    # Simple equality check: does creative's format_id match any product format_id?
-    for product_format in product_format_ids:
-        # Handle both FormatId objects and dicts (database stores as dicts)
-        if isinstance(product_format, dict):
-            product_agent_url: str | None = product_format.get("agent_url")
-            product_fmt_id: str | None = product_format.get("id") or product_format.get("format_id")
-        elif isinstance(product_format, LibraryFormatId):
-            # Convert AnyUrl to string for consistent comparison
-            product_agent_url = str(product_format.agent_url) if product_format.agent_url else None
-            product_fmt_id = product_format.id
-        else:
-            # Skip invalid format entries
-            continue
-
-        if not product_agent_url or not product_fmt_id:
-            continue
-
-        # Format IDs match if both agent_url and id are equal (normalized to strip trailing slashes)
-        if normalize_url(creative_agent_url) == normalize_url(product_agent_url) and creative_id == product_fmt_id:
-            return True, None
-
-    # Build error message with supported formats
-    supported_formats = []
-    for fmt in product_format_ids:
-        # Handle both FormatId objects and dicts
-        if isinstance(fmt, dict):
-            agent_url: str | None = fmt.get("agent_url")
-            fmt_id: str | None = fmt.get("id") or fmt.get("format_id")
-        elif isinstance(fmt, LibraryFormatId):
-            # Convert AnyUrl to string for consistent handling
-            agent_url = str(fmt.agent_url) if fmt.agent_url else None
-            fmt_id = fmt.id
-        else:
-            continue
-
-        if agent_url and fmt_id:
-            # Use normalized URL in display to avoid double slashes
-            supported_formats.append(f"{normalize_url(agent_url)}/{fmt_id}")
-
-    creative_format_display = f"{normalize_url(creative_agent_url)}/{creative_id}"
     error_msg = (
-        f"Creative format '{creative_format_display}' does not match product '{product_name}' ({product_id}). "
-        f"Supported formats: {supported_formats}"
+        f"Creative format '{format_display(creative_identity)}' does not match "
+        f"product '{product.name}' ({product.product_id}). "
+        f"Supported formats: {[format_display(i) for i in sorted(supported)]}"
     )
-
     return False, error_msg
 
 
 def process_and_upload_package_creatives(
     packages: list["PackageRequest"],
-    context: "ResolvedIdentity | None" = None,
-    testing_ctx: "TestingContext | None" = None,
+    *,
+    identity: "ResolvedIdentity",
+    # The OUTER create_media_buy's account, because the nested sync is built as a real
+    # SyncCreativesRequest and these creatives belong to that account. No idempotency_key:
+    # this calls the creative-sync SERVICE, and idempotency is the controller's job.
+    account: "LibraryAccountReference | None" = None,
+    principal_id: str,
+    tenant: TenantContext,
 ) -> tuple[list["PackageRequest"], dict[str, list[str]]]:
     """Upload creatives from package.creatives arrays and return updated packages.
 
@@ -523,8 +315,10 @@ def process_and_upload_package_creatives(
 
     Args:
         packages: List of Package objects to process
-        context: FastMCP context (for principal_id extraction)
-        testing_ctx: Optional testing context for dry_run mode
+        identity: The caller the create controller already resolved
+        account: The outer create_media_buy's account, carried onto the nested sync request
+        principal_id: The already-resolved caller, passed to the creative-sync service
+        tenant: The already-resolved tenant, likewise
 
     Returns:
         Tuple of (updated_packages, uploaded_ids_by_product):
@@ -536,15 +330,16 @@ def process_and_upload_package_creatives(
 
     Example:
         >>> packages = [PackageRequest(product_id="p1", creatives=[creative1, creative2])]
-        >>> updated_pkgs, uploaded_ids = process_and_upload_package_creatives(packages, ctx)
+        >>> updated_pkgs, uploaded_ids = process_and_upload_package_creatives(packages, identity=identity, ...)
         >>> # updated_pkgs[0].creative_ids contains uploaded IDs
         >>> assert uploaded_ids["p1"] == ["c1", "c2"]
     """
     import logging
 
     # Lazy import to avoid circular dependency
-    from src.core.exceptions import AdCPAdapterError, AdCPCreativeRejectedError, AdCPError
-    from src.core.tools.creatives import _sync_creatives_impl
+    from src.core.exceptions import AdCPAdapterError, AdCPCreativeRejectedError, AdCPSalesAgentError
+    from src.core.schemas import SyncCreativesRequest
+    from src.core.tools.creatives import sync_creatives
 
     logger = logging.getLogger(__name__)
     uploaded_by_product: dict[str, list[str]] = {}
@@ -562,15 +357,38 @@ def process_and_upload_package_creatives(
         try:
             # Step 1: Upload creatives to database via sync_creatives
             # Phase 1a: Pass models directly (impl handles both models and dicts)
-            sync_response = _sync_creatives_impl(
+            # Built through the SAME builder the three transports use, rather than handed
+            # to _impl as loose fields. _sync_creatives_impl takes a request; an in-process
+            # caller that could not produce one was reaching into the tool instead of
+            # invoking it.
+            #
+            # No request_hash is passed: there is no transmission here to canonicalise, and
+            # that absence is what keeps the outer media buy's key out of the shared
+            # (agent, account, key) idempotency cache scope -- see _sync_creatives_impl.
+            # A pydantic ValidationError from this builder must NOT reach the
+            # `except Exception` below, which reclassifies it as AdCPAdapterError --
+            # "Service temporarily unavailable" -- telling a buyer who sent a malformed
+            # inline creative that the SERVER is broken and to retry, instead of which of
+            # their fields to fix. That is why the handler list below re-raises it.
+            sync_req = SyncCreativesRequest(
                 creatives=pkg.creatives,
+                account=account,
+                # ITS OWN key, not the outer request's. sync-creatives-request.json puts
+                # idempotency_key in /required so the model needs one, but this request is
+                # never sent by anyone and the SERVICE never reads it -- idempotency belongs
+                # to the controller, which ran once for the create the buyer actually sent.
+                # Borrowing the outer key here is what used to make this call look like a
+                # second buyer request wearing the same identifier.
+                idempotency_key=f"internal-creative-upload-{uuid.uuid4().hex}",
                 # AdCP 2.5: Full upsert semantics (no patch parameter)
                 assignments=None,  # Assign separately after creation
-                dry_run=testing_ctx.dry_run if testing_ctx else False,
-                validation_mode="strict",
+                dry_run=False,
+                validation_mode=ValidationMode.strict,
                 push_notification_config=None,
-                identity=context,  # ResolvedIdentity for principal_id extraction
             )
+            # The create controller resolved the caller before reaching here; no auth is
+            # re-run inside a service, which is the layering this extraction removed.
+            sync_response = sync_creatives(sync_req, identity=identity, principal_id=principal_id, tenant=tenant)
 
             # A failed sync result means the creative was REJECTED (e.g. missing
             # required URL / dimensions in strict validation). Surface it instead
@@ -584,12 +402,8 @@ def process_and_upload_package_creatives(
                 error_msg = "Creative validation failed:\n" + "\n".join(f"  • {m}" for m in detail_msgs)
                 logger.error(error_msg)
                 raise AdCPCreativeRejectedError(
-                    error_msg,
-                    suggestion=(
-                        "Fix the rejected creative(s) so each reference format has the required "
-                        "content URL and dimensions, then re-submit the create_media_buy request."
-                    ),
-                    details={"creative_errors": detail_msgs},
+                    # `creative_errors` was a synonym for the pin's `reasons`.
+                    details=CreativeRejectionDetails(reasons=detail_msgs),
                 )
 
             # Extract creative IDs from successfully synced creatives only.
@@ -619,13 +433,22 @@ def process_and_upload_package_creatives(
             # Track uploads for return value
             uploaded_by_product[product_id] = uploaded_ids
 
-        except AdCPError:
+        except (AdCPSalesAgentError, ValidationError):
+            # ValidationError travels with the typed errors, not with the adapter
+            # failures. It is the buyer's document failing the request SCHEMA, and the
+            # transport boundary turns it into INVALID_REQUEST carrying the field and the
+            # issues (adcp_error_for tests ValidationError before ValueError, deliberately).
+            # Reclassifying it below as AdCPAdapterError would tell the buyer the server is
+            # unavailable and to retry an unfixed request. This branch is what replaced the
+            # adcp_validation_boundary that used to wrap the builder call: the boundary
+            # produced the same envelope, one frame earlier, at the cost of a translation
+            # this layer has no business performing.
             raise
         except Exception as e:
             error_msg = f"Failed to upload creatives for package with product_id {product_id}: {str(e)}"
             logger.error(error_msg)
             # Re-raise as ToolError for consistent error handling
-            raise AdCPAdapterError(error_msg) from e
+            raise AdCPAdapterError() from e
 
     return updated_packages, uploaded_by_product
 
@@ -960,3 +783,37 @@ def extract_impression_tracker_url(creative_data: dict[str, Any], format_spec: A
                     break
 
     return tracker_url
+
+
+def asset_value_attr(asset: Any, *attr_names: str) -> str | None:
+    """Read a named attribute off one asset-slot value, whatever shape it arrived in.
+
+    The library wraps a repeatable slot in an ``Assets`` RootModel holding a
+    ``list[AssetVariant]``, each variant itself a RootModel proxying the concrete typed
+    asset; a single slot is the concrete asset; a stored row may still hold a plain dict.
+    The first truthy value among *attr_names* wins (for example ``"content", "text"``).
+    Shared by the sync pipeline and the creative-engine adapters, so it lives here rather
+    than inside a tool module.
+    """
+    if isinstance(asset, dict):
+        for attr in attr_names:
+            val = asset.get(attr)
+            if val:
+                return str(val)
+        return None
+
+    items = getattr(asset, "root", None)
+    if isinstance(items, list) and items:
+        first = items[0]
+        inner = getattr(first, "root", first)
+        for attr in attr_names:
+            val = getattr(inner, attr, None) or getattr(first, attr, None)
+            if val:
+                return str(val)
+        return None
+
+    for attr in attr_names:
+        val = getattr(asset, attr, None)
+        if val:
+            return str(val)
+    return None

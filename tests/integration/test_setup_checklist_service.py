@@ -17,13 +17,17 @@ from src.core.database.models import (
     Tenant,
     TenantAuthConfig,
 )
+from src.core.database.repositories.uow import SigningKeyUoW
+from src.core.signing.keys import provision_signing_key
 from src.services.setup_checklist_service import (
+    AdCPConfigurationError,
     SetupChecklistService,
-    SetupIncompleteError,
     get_incomplete_critical_tasks,
     validate_setup_complete,
 )
+from tests.factories.principal import plaintext_token_for
 from tests.helpers.adcp_factories import create_test_db_product
+from tests.helpers.signing import deployment_kek
 
 pytestmark = pytest.mark.requires_db
 
@@ -54,6 +58,9 @@ def setup_minimal_tenant(integration_db, test_tenant_id):
             tenant_id=test_tenant_id,
             name="Test Tenant",
             subdomain="test",
+            # Required (NOT NULL) and UNIQUE; derived from the tenant_id so sibling
+            # fixtures in this module stay distinct.
+            virtual_host=f"{test_tenant_id}.adcp.test",
             ad_server=None,  # Not configured
             created_at=now,
             updated_at=now,
@@ -102,6 +109,7 @@ def setup_complete_tenant(integration_db, test_tenant_id):
             tenant_id=test_tenant_id,
             name="Complete Tenant",
             subdomain="complete",
+            virtual_host=f"{test_tenant_id}.adcp.test",
             ad_server="google_ad_manager",
             human_review_required=True,
             auto_approve_format_ids=["display_300x250"],
@@ -155,11 +163,11 @@ def setup_complete_tenant(integration_db, test_tenant_id):
         db_session.add(product)
 
         # Add principal
-        principal = Principal(
+        principal = Principal.with_token(
+            "test_token",
             tenant_id=test_tenant_id,
             principal_id="principal_1",
             name="Test Advertiser",
-            access_token="test_token",
             platform_mappings={"google_ad_manager": {"advertiser_id": "12345"}},
         )
         db_session.add(principal)
@@ -302,6 +310,7 @@ class TestSetupChecklistService:
                 tenant_id=test_tenant_id,
                 name="Partial Tenant",
                 subdomain="partial",
+                virtual_host=f"{test_tenant_id}.adcp.test",
                 ad_server="mock",
                 created_at=now,
                 updated_at=now,
@@ -365,7 +374,7 @@ class TestSetupChecklistService:
                 assert "action_url" in step
                 assert "priority" in step
 
-    def test_bulk_setup_status_for_multiple_tenants(self, integration_db):
+    def test_bulk_setup_status_for_multiple_tenants(self, integration_db, monkeypatch):
         """Test bulk setup status calculation for multiple tenants efficiently."""
         from datetime import UTC, datetime
 
@@ -382,6 +391,7 @@ class TestSetupChecklistService:
                 tenant_id=tenant_ids[0],
                 name="Bulk Test Tenant 1",
                 subdomain="bulk1",
+                virtual_host=f"{tenant_ids[0]}.adcp.test",
                 ad_server=None,
                 created_at=now,
                 updated_at=now,
@@ -394,6 +404,7 @@ class TestSetupChecklistService:
                 tenant_id=tenant_ids[1],
                 name="Bulk Test Tenant 2",
                 subdomain="bulk2",
+                virtual_host=f"{tenant_ids[1]}.adcp.test",
                 ad_server="mock",
                 created_at=now,
                 updated_at=now,
@@ -423,6 +434,7 @@ class TestSetupChecklistService:
                 tenant_id=tenant_ids[2],
                 name="Bulk Test Tenant 3",
                 subdomain="bulk3",
+                virtual_host=f"{tenant_ids[2]}.adcp.test",
                 ad_server="mock",  # Mock adapter is accepted in test environments
                 created_at=now,
                 updated_at=now,
@@ -484,13 +496,12 @@ class TestSetupChecklistService:
                 tenant_id=tenant_ids[2],
                 principal_id="bulk_principal_3",
                 name="Test Principal",
-                access_token="test_token_bulk_3",
             )
-            principal3 = Principal(
+            principal3 = Principal.with_token(
+                plaintext_token_for(principal3_data["principal_id"]),
                 tenant_id=principal3_data["tenant_id"],
                 principal_id=principal3_data["principal_id"],
                 name=principal3_data["name"],
-                access_token=principal3_data["access_token"],
                 platform_mappings=(
                     json.loads(principal3_data["platform_mappings"])
                     if isinstance(principal3_data["platform_mappings"], str)
@@ -500,6 +511,18 @@ class TestSetupChecklistService:
             db_session.add(principal3)
 
             db_session.commit()
+
+        # A signing key, because the checklist now enumerates one (salesagent-7x8t)
+        # and tenant 3 is this test's "fully configured" tenant. Minted through
+        # production's ONE provisioning function, over the same unit of work the
+        # admin route and the ops script use, rather than assembled as ORM kwargs.
+        # This used to mint env: BECAUSE env: needed no deployment KEK; since
+        # salesagent-9misv the only mintable scheme is db:, so the KEK is now part
+        # of the setup. It comes from the shared helper every provisioning suite
+        # uses -- a second mechanism here is how one of them ends up naming a
+        # passphrase variable nothing sets.
+        with deployment_kek(monkeypatch), SigningKeyUoW(tenant_ids[2]) as uow:
+            provision_signing_key(uow.signing_keys, tenant_id=tenant_ids[2], alg="ed25519")
 
         # Call bulk setup status method
         statuses = SetupChecklistService.get_bulk_setup_status(tenant_ids)
@@ -614,39 +637,24 @@ class TestSetupValidation:
                 assert task["is_complete"] is False
 
     def test_validate_setup_complete_fails_for_incomplete(self, integration_db, setup_minimal_tenant, test_tenant_id):
-        """Test that validation fails for incomplete setup."""
-        with patch.dict(os.environ, {}, clear=True):
-            with pytest.raises(SetupIncompleteError) as exc_info:
-                validate_setup_complete(test_tenant_id)
+        """An incomplete tenant is refused with CONFIGURATION_ERROR.
 
-            # Check error details
-            error = exc_info.value
-            assert len(error.missing_tasks) > 0
-            assert "Complete required setup tasks" in error.message
+        ``test_setup_incomplete_error_details`` used to sit beside this and grade the same
+        raise, by reading raw checklist ROWS off an ``error.missing_tasks`` attribute (gone
+        with the SetupIncompleteError subclass) and checking for "key" / "name" /
+        "description" keys in them -- the dict shape of an internal service return, asserted
+        on a buyer-facing error. It also asserted inside an ``except`` block, so it passed
+        unchanged when nothing was raised at all.
+        """
+        with patch.dict(os.environ, {}, clear=True):
+            with pytest.raises(AdCPConfigurationError):
+                validate_setup_complete(test_tenant_id)
 
     def test_validate_setup_complete_passes_for_complete(self, integration_db, setup_complete_tenant, test_tenant_id):
         """Test that validation passes for complete setup."""
         with patch.dict(os.environ, {"GEMINI_API_KEY": "test_key"}):
             # Should not raise exception
             validate_setup_complete(test_tenant_id)
-
-    def test_setup_incomplete_error_details(self, integration_db, setup_minimal_tenant, test_tenant_id):
-        """Test that SetupIncompleteError provides useful details."""
-        with patch.dict(os.environ, {}, clear=True):
-            try:
-                validate_setup_complete(test_tenant_id)
-            except SetupIncompleteError as e:
-                # Check error structure
-                assert hasattr(e, "message")
-                assert hasattr(e, "missing_tasks")
-                assert isinstance(e.missing_tasks, list)
-                assert len(e.missing_tasks) > 0
-
-                # Check task structure
-                task = e.missing_tasks[0]
-                assert "key" in task
-                assert "name" in task
-                assert "description" in task
 
 
 class TestTaskDetails:
@@ -691,6 +699,7 @@ class TestTaskDetails:
                 tenant_id=test_tenant_id,
                 name="Test",
                 subdomain="test",
+                virtual_host=f"{test_tenant_id}.adcp.test",
                 ad_server="google_ad_manager",  # Real ad server so currency task appears
                 created_at=now,
                 updated_at=now,
@@ -736,6 +745,7 @@ class TestTaskDetails:
                 tenant_id=test_tenant_id,
                 name="Test",
                 subdomain="test_sso_opt",
+                virtual_host=f"{test_tenant_id}.adcp.test",
                 ad_server="mock",
                 created_at=now,
                 updated_at=now,
@@ -770,6 +780,7 @@ class TestTaskDetails:
                 tenant_id=test_tenant_id,
                 name="Multi-tenant Publisher",
                 subdomain="test_mtp",
+                virtual_host=f"{test_tenant_id}.adcp.test",
                 ad_server="mock",
                 created_at=now,
                 updated_at=now,
@@ -806,11 +817,11 @@ class TestTaskDetails:
             )
             db_session.add(product)
 
-            principal = Principal(
+            principal = Principal.with_token(
+                "test_token",
                 tenant_id=test_tenant_id,
                 principal_id="principal_1",
                 name="Test Advertiser",
-                access_token="test_token",
                 platform_mappings={"mock": {"advertiser_id": "12345"}},
             )
             db_session.add(principal)

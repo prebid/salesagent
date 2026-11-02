@@ -16,7 +16,7 @@ The connection itself is already refused: ``call_mcp_tool`` runs
 ``validate_url`` before its candidate loop. What this file grades is the half
 that is NOT closed — WHOSE error the refusal is reported as. The registry
 translates a seam refusal through ``raise_mapped_outbound_error``, whose
-documented arm is the OPERATOR one: an agent endpoint that is registered tenant
+documented branch is the OPERATOR one: an agent endpoint that is registered tenant
 configuration becomes ``CONFIGURATION_ERROR`` / terminal, "surface to a human
 at the seller — the buyer cannot resolve a seller-side deployment
 misconfiguration". That classification is correct for the registry's normal
@@ -28,7 +28,7 @@ Provenance, not module, decides the classification —
 ``src/core/helpers/outbound_error_mapping.py`` says so in its own docstring
 ("The opposite case — a buyer-supplied URL — keeps the seam's own
 AdCPBlockedUrlError (VALIDATION_ERROR) and names the offending field instead")
-— and this path is the buyer arm it names.
+— and this path is the buyer branch it names.
 
 Spec grounding — AdCP 3.1.1, the version this repo PINS (``adcp==6.6.0``,
 ``docs/adcp-spec-version.md``; prose via ``git -C <adcp-checkout> show
@@ -81,7 +81,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 # boundary inside ``_impl``, so every dispatch path must carry it. Same matrix
 # as the sibling sync error suites (test_creative_sync_transport.py,
 # test_webhook_url_ingest_refusal.py's sync leg).
-_ALL_TRANSPORTS = [Transport.IMPL, Transport.A2A, Transport.REST, Transport.MCP]
+_ALL_TRANSPORTS = [Transport.A2A, Transport.REST, Transport.MCP]
 
 # Buyer-supplied URLs the seam refuses before opening a connection: one for
 # scheme policy, one for address policy. Neither resolves DNS or touches the
@@ -144,7 +144,7 @@ def _assert_refused_per_item(result, creative_id: str) -> None:
 
     What is graded is the classification, because that is what was wrong: the
     refusal used to arrive as ``CONFIGURATION_ERROR``/terminal from the registry's
-    operator arm, and then as ``SERVICE_UNAVAILABLE`` with no recovery and no
+    operator branch, and then as ``SERVICE_UNAVAILABLE`` with no recovery and no
     field from ``_failed_sync_result``'s defaults. Both told the buyer a SELLER
     was at fault for a URL the buyer chose.
     """
@@ -176,7 +176,7 @@ class TestRefusedCreativeAgentUrlOnTheWire:
     """A buyer-supplied ``format_id.agent_url`` the seam refuses is a CORRECTABLE buyer error.
 
     Today the refusal surfaces as ``CONFIGURATION_ERROR`` / terminal with no
-    ``field`` (``raise_mapped_outbound_error``'s operator arm, reached via
+    ``field`` (``raise_mapped_outbound_error``'s operator branch, reached via
     ``CreativeAgentRegistry``), which tells the buyer a SELLER is misconfigured
     and that nothing they send can fix it — about a URL they chose. The honest
     grading is the seam's own ``VALIDATION_ERROR`` / correctable naming the

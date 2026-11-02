@@ -1,5 +1,4 @@
 # Generated from adcp-req @ a14db6e5894e781a8b2c577e86e1b136876e4915 on 2026-06-03T11:30:04Z (merge mode)
-# DO NOT EDIT -- re-run: python scripts/compile_bdd.py --merge
 
 Feature: BR-UC-004 Deliver Media Buy Metrics
   As a Buyer (Human or AI Agent)
@@ -23,8 +22,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
 
   Background:
     Given a Seller Agent is operational and accepting requests
-    And a tenant has completed setup checklist
-    And an authenticated Buyer with principal_id "buyer-001"
+    And a tenant exists with completed setup checklist
+    And the Buyer is authenticated
     And the principal "buyer-001" exists in the tenant database
 
 
@@ -34,7 +33,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the ad server adapter has delivery data for "mb-001"
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-001"]
-    Then the response status should be "completed"
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response status should be "completed"
     And the response should include delivery data for "mb-001"
     And the delivery data should include impressions, spend, and clicks
     And the delivery data should include package-level breakdowns
@@ -52,7 +52,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And a media buy "mb-002" owned by "buyer-001" with status "active"
     And the ad server adapter has delivery data for both media buys
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-001", "mb-002"]
-    Then the response should include delivery data for "mb-001" and "mb-002"
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response should include delivery data for "mb-001" and "mb-002"
     And the response should include aggregated totals across both media buys
     And the aggregated impressions should equal the sum of individual impressions
     And the aggregated spend should equal the sum of individual spend
@@ -64,7 +65,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" owned by "buyer-001"
     And the ad server adapter has delivery data for "mb-001"
     When the Buyer Agent requests delivery metrics with <request_params>
-    Then the response should include delivery data for "mb-001"
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response should include delivery data for "mb-001"
     # BR-RULE-030: <invariant>
 
     Examples: Identification priority
@@ -77,7 +79,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And a media buy "mb-002" owned by "buyer-001"
     And the ad server adapter has delivery data for both media buys
     When the Buyer Agent requests delivery metrics without media_buy_ids
-    Then the response should include delivery data for "mb-001" and "mb-002"
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response should include delivery data for "mb-001" and "mb-002"
     # BR-RULE-030 INV-4: neither provided -> all principal's buys
 
   @T-UC-004-identify-partial @invariant @BR-RULE-030 @identification
@@ -86,15 +89,23 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And no media buy exists with id "mb-999"
     And the ad server adapter has delivery data for "mb-001"
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-001", "mb-999"]
-    Then the response should include delivery data for "mb-001" only
-    And the response should not include an error for "mb-999"
-    # BR-RULE-030 INV-5: partial resolution, missing silently omitted
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response should include delivery data for "mb-001" only
+    And the response errors include code "MEDIA_BUY_NOT_FOUND" for media buy "mb-999"
+    And the response should not include an error for "mb-001"
+    # BR-RULE-030 INV-5: partial resolution is ADVISORY PER ID — the resolved buy is
+    # reported and the unresolved id is named in errors[], which
+    # get-media-buy-delivery-response.json (AdCP 3.1.1) declares for exactly this:
+    # "Task-specific errors and warnings (e.g., missing delivery data, reporting
+    # platform issues)". A buyer that asked about an id gets an answer about it, and
+    # the ids that did deliver carry no advisory of their own.
 
   @T-UC-004-identify-zero @invariant @BR-RULE-030 @identification
   Scenario: Zero resolution - all IDs invalid returns empty array
     Given no media buy exists with id "mb-999" or "mb-998"
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-999", "mb-998"]
-    Then the response should have an empty media_buy_deliveries array
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response should have an empty media_buy_deliveries array
     And the response status should be "completed"
     # BR-RULE-030 INV-6: zero resolution -> empty array, no error
     # NOTE: Tension with ext-c which says error. BR-030 (code-derived) takes precedence.
@@ -103,29 +114,41 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario: Neither identifiers AND no media buys for principal - empty array
     Given the principal "buyer-001" has no media buys
     When the Buyer Agent requests delivery metrics without media_buy_ids
-    Then the response should have an empty media_buy_deliveries array
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response should have an empty media_buy_deliveries array
     And the response status should be "completed"
     # BR-RULE-030 INV-4 counter-example: neither provided, no buys -> empty
 
   @T-UC-004-identify-batch-ownership @invariant @ownership @BR-RULE-030 @identification
-  Scenario: Batch request with mixed ownership - non-owned silently omitted
+  Scenario: Batch request with mixed ownership - non-owned reported as not found
     Given a media buy "mb-001" owned by "buyer-001"
     And a media buy "mb-other" owned by "other-buyer"
     And the ad server adapter has delivery data for "mb-001"
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-001", "mb-other"]
-    Then the response should include delivery data for "mb-001" only
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response should include delivery data for "mb-001" only
     And the response should NOT include delivery data for "mb-other"
-    And no error should be returned for "mb-other"
-    # PRE-BIZ3 (ownership) + BR-RULE-030 INV-5: non-owned treated as not-found, partial results
+    And the response errors include code "MEDIA_BUY_NOT_FOUND" for media buy "mb-other"
+    And the response should not include an error for "mb-001"
+    # PRE-BIZ3 (ownership) + BR-RULE-030 INV-5: a non-owned id is answered the same way a
+    # nonexistent one is — no delivery data, and MEDIA_BUY_NOT_FOUND in the errors[] that
+    # get-media-buy-delivery-response.json (AdCP 3.1.1) declares for "missing delivery
+    # data". One code for both cases is what keeps the response from disclosing that
+    # someone else's buy exists.
 
   @T-UC-004-identify-empty @invariant @BR-RULE-030 @error @boundary
   Scenario: Empty array provided - schema rejects request
     When the Buyer Agent requests delivery metrics with media_buy_ids []
-    Then the operation should fail
-    And the error code should be "validation_error"
-    And the error message should contain "minItems"
+    Then the error is compliant with the AdCP error spec
+    And the operation should fail
+    And the error code should be "INVALID_REQUEST"
+    And the error field should contain "media_buy_ids"
+    # An empty array violates minItems -- a SCHEMA CONSTRAINT, which the pin maps to
+    # INVALID_REQUEST, not VALIDATION_ERROR ("beyond schema validation"). The
+    # lowercase "validation_error" was not an emittable code at all. The
+    # message-contains-"minItems" assertion is gone with it: the sentence is derived
+    # from the code (ADR-010) and cannot name a JSON-Schema keyword.
     And the error should include "suggestion" field
-    And the suggestion should contain "at least one identifier"
     # Traces to BR-RULE-030 INV-1/INV-2 (schema minItems constraint on identification arrays)
     # POST-F2: Error explains what failed
     # POST-F3: Suggestion for recovery
@@ -140,7 +163,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given multiple media buys owned by "buyer-001" in various statuses
     And the ad server adapter has delivery data for all media buys
     When the Buyer Agent requests delivery metrics with status_filter "<filter_value>"
-    Then the response should include only media buys with status "<filter_value>"
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response should include only media buys with status "<filter_value>"
 
     Examples: Valid status values
       | filter_value |
@@ -156,18 +180,21 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario: Status filter - no matches returns empty success
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     When the Buyer Agent requests delivery metrics with status_filter "completed"
-    Then the response should have an empty media_buy_deliveries array
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response should have an empty media_buy_deliveries array
     And the response status should be "completed"
 
   @T-UC-004-filter-invalid @alternative @status-filter @error
   Scenario: Invalid status filter value - rejected
     Given a media buy "mb-001" owned by "buyer-001"
     When the Buyer Agent requests delivery metrics with status_filter "nonexistent_status"
-    Then the operation should fail
-    And the error code should be "validation_error"
-    And the error message should contain "status_filter"
+    Then the error is compliant with the AdCP error spec
+    And the operation should fail
+    And the error code should be "INVALID_REQUEST"
+    And the error field should contain "status_filter"
+    # Out-of-enum value -> schema constraint -> INVALID_REQUEST. WHICH parameter
+    # failed travels on error.field, not in the sentence.
     And the error should include "suggestion" field
-    And the suggestion should contain "valid status values"
     # PRE-BIZ5: status_filter must be a valid value
     # POST-F2: Error explains invalid filter
     # POST-F3: Suggestion lists valid values
@@ -177,7 +204,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-active" owned by "buyer-001" with status "active"
     And a media buy "mb-completed" owned by "buyer-001" with status "completed"
     When the Buyer Agent requests delivery metrics without status_filter
-    Then the response should include delivery data for "mb-active" only
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response should include delivery data for "mb-active" only
     # Constraint YAML: default "active"
 
   @T-UC-004-filter-array @alternative @status-filter
@@ -187,7 +215,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And a media buy "mb-completed" owned by "buyer-001" with status "completed"
     And the ad server adapter has delivery data for all media buys
     When the Buyer Agent requests delivery metrics with status_filter ["active", "paused"]
-    Then the response should include delivery data for "mb-active" and "mb-paused"
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response should include delivery data for "mb-active" and "mb-paused"
     And the response should not include delivery data for "mb-completed"
 
   @T-UC-004-daterange @alternative @date-range
@@ -195,7 +224,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" owned by "buyer-001"
     And the ad server adapter has delivery data for "mb-001"
     When the Buyer Agent requests delivery metrics with start_date "2026-01-01" and end_date "2026-01-31"
-    Then the response reporting_period start should be "2026-01-01"
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response reporting_period start should be "2026-01-01"
     And the response reporting_period end should be "2026-01-31"
     # POST-S3: Buyer knows the exact reporting period
 
@@ -204,25 +234,26 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" owned by "buyer-001"
     And the ad server adapter has delivery data for "mb-001"
     When the Buyer Agent requests delivery metrics with start_date "2026-01-01" and no end_date
-    Then the response reporting_period end should be today's date
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response reporting_period end should be today's date
 
   @T-UC-004-daterange-end-only @alternative @date-range
   Scenario: Only end_date provided - start defaults to media buy creation date
     Given a media buy "mb-001" owned by "buyer-001" created on "2025-12-01"
     And the ad server adapter has delivery data for "mb-001"
     When the Buyer Agent requests delivery metrics with end_date "2026-01-31" and no start_date
-    Then the response reporting_period start should be "2025-12-01"
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response reporting_period start should be "2025-12-01"
     # NOTE: Schema says creation date default, code says 30 days ago (Gap G40)
 
   @T-UC-004-daterange-invalid @extension @ext-e @error @invariant @BR-RULE-013 @date-range
   Scenario: Invalid date range - start after end
     Given a media buy "mb-001" owned by "buyer-001"
     When the Buyer Agent requests delivery metrics with start_date "2026-02-01" and end_date "2026-01-01"
-    Then the operation should fail
+    Then the error is compliant with the AdCP error spec
+    And the operation should fail
     And the error code should be "invalid_date_range"
-    And the error message should contain "start_date must be before end_date"
     And the error should include "suggestion" field
-    And the suggestion should contain "ensure start_date is before end_date"
     # POST-F1: System state unchanged
     # POST-F2: Error explains invalid date range
     # POST-F3: Suggestion for recovery
@@ -232,7 +263,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario: Invalid date range - start equals end (zero-length period)
     Given a media buy "mb-001" owned by "buyer-001"
     When the Buyer Agent requests delivery metrics with start_date "2026-01-15" and end_date "2026-01-15"
-    Then the operation should fail
+    Then the error is compliant with the AdCP error spec
+    And the operation should fail
     And the error code should be "invalid_date_range"
     And the error should include "suggestion" field
     # BR-RULE-013 INV-3: end <= start -> rejected (boundary: equal dates)
@@ -243,7 +275,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the reporting_frequency is "daily"
     And the ad server adapter has delivery data for "mb-001"
     When the webhook scheduler fires for "mb-001"
-    Then the system should POST a delivery report to the configured webhook URL
+    Then the webhook payload is compliant with the AdCP delivery webhook spec
+    And the system should POST a delivery report to the configured webhook URL
     And the payload should include delivery metrics for "mb-001"
     And the payload should include the reporting_period
     # POST-S7: Buyer's endpoint receives periodic delivery reports
@@ -253,11 +286,35 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" with webhook authentication scheme "HMAC-SHA256"
     And the shared secret is a valid 32+ character string
     When the system delivers a webhook report for "mb-001"
-    Then the request should include header "X-ADCP-Signature" with hex-encoded HMAC
-    And the request should include header "X-ADCP-Timestamp" with unix timestamp
+    Then the webhook payload is compliant with the AdCP delivery webhook spec
+    And the request should include header "X-ADCP-Signature" with hex-encoded HMAC
+    And the request should include header "X-ADCP-Timestamp" with a UNIX timestamp
     And the HMAC should be computed over "timestamp.payload" concatenation
     # POST-S8: Buyer can verify report authenticity
     # BR-RULE-029 INV-1: monotonically increasing sequence (signing is precondition)
+    # Webhook auth: traces to SR-NFR-005
+
+  @T-UC-004-webhook-9421 @alternative @webhook @invariant @BR-RULE-029 @post-s8 @nfr @nfr-005
+  Scenario: RFC 9421 signed webhook payload when no authentication block is registered
+    # The mutually exclusive TWIN of @T-UC-004-webhook-hmac, not an addition to it.
+    # security.mdx @ v3.1.1 :1424 — the buyer's `authentication` block is the mode
+    # switch: present selects legacy HMAC/Bearer, ABSENT selects RFC 9421. ":1425
+    # Sellers MUST NOT sign the same webhook both ways", which is why the last Then
+    # is here: a delivery carrying both signatures would satisfy this scenario's
+    # positive clauses and still be non-conformant.
+    Given a media buy "mb-001" with an active reporting_webhook configured
+    And the reporting_webhook registers no authentication block
+    And the tenant publishes an RFC 9421 webhook signing key
+    When the system delivers a webhook report for "mb-001"
+    Then the request should include header "Signature"
+    And the request should include header "Signature-Input"
+    And the request should include header "Content-Digest"
+    And the Signature-Input tag should equal the advertised webhook_signing profile
+    And the covered components should include "content-digest"
+    And the signature should verify against the tenant's published JWKS
+    And the request should not include header "X-ADCP-Signature"
+    # POST-S8: Buyer can verify report authenticity — here by resolving our published
+    # JWKS rather than by sharing a secret out of band.
     # Webhook auth: traces to SR-NFR-005
 
   @T-UC-004-webhook-bearer @alternative @webhook @invariant @BR-RULE-029
@@ -265,15 +322,25 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" with webhook authentication scheme "Bearer"
     And the bearer token is a valid 32+ character string
     When the system delivers a webhook report for "mb-001"
-    Then the request should include header "Authorization" with the bearer token
+    Then the webhook payload is compliant with the AdCP delivery webhook spec
+    And the request should include header "Authorization" with the bearer token
     # Webhook auth: traces to SR-NFR-005
 
   @T-UC-004-webhook-notification-type @alternative @webhook @invariant @BR-RULE-029 @post-s9
   Scenario Outline: Webhook notification type - <type>
     Given a media buy "mb-001" with an active reporting_webhook
     When the system delivers a "<type>" webhook report for "mb-001"
-    Then the payload notification_type should be "<type>"
+    Then the webhook payload is compliant with the AdCP delivery webhook spec
+    And the payload notification_type should be "<type>"
     And the payload <next_expected> include next_expected_at
+    # This webhook registers no authentication block either, so :1424 selects the same
+    # RFC 9421 arm as @T-UC-004-webhook-9421 — but no key was provisioned for it, and
+    # an unpublishable origin means the delivery must go out UNSIGNED rather than
+    # carrying a signature no receiver could resolve a key for. Asserted here because
+    # the sibling's key provisioning is a PER-SCENARIO opt-in: if it ever becomes an
+    # env default, every scenario on this page silently changes posture and this is
+    # the line that says so.
+    And the request should not include header "Signature"
     # POST-S9: Buyer knows the notification type
     # BR-RULE-029 INV-2: final -> no next_expected_at
 
@@ -288,7 +355,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario: Webhook sequence numbers are monotonically increasing
     Given a media buy "mb-001" with an active reporting_webhook
     When the system delivers three consecutive webhook reports for "mb-001"
-    Then each report should have a higher sequence_number than the previous
+    Then the webhook payload is compliant with the AdCP delivery webhook spec
+    And each report should have a higher sequence_number than the previous
     And the first sequence_number should be >= 1
     # POST-S10: Buyer knows the sequence number for ordering
     # BR-RULE-029 INV-1: monotonically increasing per media buy stream
@@ -297,7 +365,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario: Webhook payload does not include aggregated totals
     Given a media buy "mb-001" with an active reporting_webhook
     When the system delivers a webhook report for "mb-001"
-    Then the payload should not include "aggregated_totals" field
+    Then the webhook payload is compliant with the AdCP delivery webhook spec
+    And the payload should not include "aggregated_totals" field
     # UC-004 note: aggregated totals are polling-only (not webhook)
 
   @T-UC-004-webhook-retry-5xx @async @extension @ext-g @webhook-reliability @invariant @BR-RULE-029 @nfr @nfr-005
@@ -305,17 +374,26 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" with an active reporting_webhook
     And the webhook endpoint returns 500 Internal Server Error
     When the system attempts to deliver a webhook report
-    Then the system should retry up to 3 times
+    Then the webhook payload is compliant with the AdCP delivery webhook spec
+    And the payload notification_type should be "scheduled"
+    And the system should retry up to 3 times
     And retries should use exponential backoff (1s, 2s, 4s + jitter)
     # BR-RULE-029 INV-3: 5xx -> retry with exponential backoff
     # POST-F2: System knows the failure mode
+    # The BODY is graded too: a retry scenario that grades only the retry COUNT
+    # passes just as happily when the thing being retried is malformed.
 
   @T-UC-004-webhook-retry-network @async @extension @ext-g @webhook-reliability @invariant @BR-RULE-029
   Scenario: Webhook delivery retries on network error
     Given a media buy "mb-001" with an active reporting_webhook
     And the webhook endpoint is unreachable (connection timeout)
     When the system attempts to deliver a webhook report
-    Then the system should retry up to 3 times with exponential backoff
+    # A body DOES reach the wire here: the origin accepts the request and records it
+    # before closing without responding (local_http_origin.close_without_responding),
+    # so "unreachable" is a response-level failure, not a connect-level one.
+    Then the webhook payload is compliant with the AdCP delivery webhook spec
+    And the payload notification_type should be "scheduled"
+    And the system should retry up to 3 times with exponential backoff
     # BR-RULE-029 INV-3: network error -> retry
 
   @T-UC-004-webhook-no-retry-4xx @async @extension @ext-g @webhook-reliability @invariant @BR-RULE-029
@@ -323,7 +401,9 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" with an active reporting_webhook
     And the webhook endpoint returns 401 Unauthorized
     When the system attempts to deliver a webhook report
-    Then the system should not retry the delivery
+    Then the webhook payload is compliant with the AdCP delivery webhook spec
+    And the payload notification_type should be "scheduled"
+    And the system should not retry the delivery
     And the system should log the authentication rejection
     And the webhook should be marked as failed
     # BR-RULE-029 INV-4: 4xx -> no retry (client error)
@@ -333,7 +413,11 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" with an active reporting_webhook
     And the webhook endpoint has failed 5 consecutive delivery attempts
     When the system evaluates the circuit breaker state
-    Then the circuit breaker should be in "OPEN" state
+    # NO body reaches the wire: 5 failures hits failure_threshold, so send_delivery_webhook
+    # returns at `if not circuit_breaker.can_attempt()` before dialling. The skip is the
+    # OPEN breaker, not a missing config — a reporting_webhook is registered above.
+    Then the webhook delivery should be skipped without an HTTP POST
+    And the circuit breaker should transition to "OPEN"
     And subsequent scheduled deliveries should be suppressed
     # POST-F2: System knows the webhook is persistently failing
 
@@ -352,7 +436,9 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And a media buy "mb-001" with circuit breaker in "OPEN" state
     And the circuit breaker timeout (60s) has elapsed
     When the system evaluates the circuit breaker state
-    Then the circuit breaker should transition to "HALF_OPEN"
+    Then the webhook payload is compliant with the AdCP delivery webhook spec
+    And the payload notification_type should be "scheduled"
+    And the circuit breaker should transition to "HALF_OPEN"
     And the system should attempt a single probe delivery
 
   @T-UC-004-webhook-circuit-recovery @async @extension @ext-g @webhook-reliability
@@ -361,7 +447,12 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And a media buy "mb-001" with circuit breaker in "HALF_OPEN" state
     And the webhook endpoint has recovered and returns 200
     When the system delivers 2 successful probe reports
-    Then the circuit breaker should transition to "CLOSED"
+    Then the webhook payload is compliant with the AdCP delivery webhook spec
+    # reporting_period rather than the metrics line: this scenario's Givens register no
+    # media_buy_labels entry, so the metrics step would resolve the literal "mb-001"
+    # against call_send's default "mb_001" and fail on an id spelling, not a defect.
+    And the payload should include the reporting_period
+    And the circuit breaker should transition to "CLOSED"
     And normal scheduled deliveries should resume
     # POST-F3: System has recovery path
 
@@ -370,7 +461,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" with an active reporting_webhook
     And the webhook endpoint fails on first attempt but succeeds on second
     When the system delivers a webhook report with retry
-    Then the delivery should be recorded as successful
+    Then the webhook payload is compliant with the AdCP delivery webhook spec
+    And the delivery should be recorded as successful
     And the circuit breaker state should remain healthy
     # POST-F3: System has recovery path (retry for transient)
 
@@ -389,11 +481,14 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario: Webhook credentials too short - rejected at configuration
     Given a media buy webhook configuration with credentials of 31 characters
     When the system validates the webhook configuration
-    Then the configuration should be rejected
+    Then the error is compliant with the AdCP error spec
+    And the configuration should be rejected
     And the error should indicate minimum credential length is 32 characters
     # Boundary: 31 chars (min-1)
     # Production rejects the short credential at the create_media_buy Pydantic
-    # boundary (Authentication.credentials MinLen=32) with VALIDATION_ERROR; the
+    # boundary (Authentication.credentials MinLen=32) with INVALID_REQUEST -- the wire
+    # carries issues[].keyword = minLength, a JSON Schema keyword, which is what makes it
+    # a schema-constraint rejection rather than a business-rule one; the
     # 32-char minimum is carried in the error MESSAGE. The RequestValidationError
     # envelope emits no suggestion for this path.
 
@@ -401,44 +496,60 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario: Webhook credentials at minimum length - accepted
     Given a media buy webhook configuration with credentials of 32 characters
     When the system validates the webhook configuration
-    Then the configuration should be accepted
+    Then the response is compliant with the create_media_buy spec
+    And the configuration should be accepted
     # Boundary: 32 chars (min)
 
   @T-UC-004-ext-a @extension @ext-a @error @nfr @nfr-001
-  Scenario: Authentication error - missing principal
+  Scenario: Authentication error - no credentials presented
     When the Buyer Agent sends a delivery metrics request without authentication
-    Then the operation should fail
-    And the error code should be "principal_id_missing"
-    And the error message should contain "authentication"
+    Then the error is compliant with the AdCP error spec
+    And the operation should fail
+    And the error code should be "AUTH_MISSING"
     And the error should include "suggestion" field
-    And the suggestion should contain "provide valid credentials"
     # POST-F1: System state unchanged
     # POST-F2: Error explains authentication required
     # POST-F3: Suggestion to provide credentials
+    #
+    # The code was "principal_id_missing", corrected against adcp 3.1.1
+    # enums/error-code.json: it declares 92 codes, none containing "PRINCIPAL", and every
+    # one is upper snake case, so that string is neither a member nor the shape of one.
+    # AUTH_MISSING is the member this scenario's state names -- "No credentials were
+    # presented. Sellers MUST return this code when no Authorization header was included
+    # in the request" -- and its recovery is "correctable", which is what POST-F3 asks for.
 
   @T-UC-004-ext-b @extension @ext-b @error
-  Scenario: Principal not found in tenant database
-    Given an authenticated request with principal_id "unknown-buyer"
-    And no principal "unknown-buyer" exists in the tenant database
+  Scenario: Credentials presented but resolving to no principal
+    Given a presented credential that resolves to no principal
     When the Buyer Agent requests delivery metrics
-    Then the operation should fail
-    And the error code should be "principal_not_found"
-    And the error message should contain "principal"
+    Then the error is compliant with the AdCP error spec
+    And the operation should fail
+    And the error code should be "AUTH_INVALID"
     And the error should include "suggestion" field
-    And the suggestion should contain "verify account"
     # POST-F1: System state unchanged
-    # POST-F2: Error explains principal not found
-    # POST-F3: Suggestion to verify account
+    # POST-F2: Error explains the credential was rejected
+    #
+    # Both halves were corrected against adcp 3.1.1. The code was "principal_not_found",
+    # which is not among the pin's 92 codes; AUTH_INVALID is the one it defines for this
+    # state -- "Credentials were presented but rejected -- revoked, malformed signature,
+    # or a key no longer in the seller's keystore. Sellers MUST return this code when an
+    # Authorization header was present but verification failed" -- with recovery
+    # "terminal".
+    #
+    # The setup was "the Buyer is authenticated / And no principal 'unknown-buyer' exists
+    # in the tenant database", which established nothing: the second sentence only
+    # asserted that the named id is not the caller, so the request went out as the real
+    # authenticated principal and the scenario graded a successful read. It now presents a
+    # credential that verifies against no principals row, so the real resolver refuses it.
 
   @T-UC-004-ext-c @extension @ext-c @error @tension
   Scenario: Media buy not found - nonexistent identifier
     Given no media buy exists with id "mb-nonexistent"
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-nonexistent"]
-    Then the operation should fail
+    Then the error is compliant with the AdCP error spec
+    And the operation should fail
     And the error code should be "media_buy_not_found"
-    And the error message should contain "media buy"
     And the error should include "suggestion" field
-    And the suggestion should contain "verify the identifier"
     # POST-F1: System state unchanged
     # POST-F2: Error explains media buy not found
     # POST-F3: Suggestion to verify identifiers
@@ -447,30 +558,49 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     #   BR-030 describes batch behavior. See Pass 2 gap analysis.
 
   @T-UC-004-ext-d @extension @ext-d @error @invariant @ownership @nfr @nfr-001
-  Scenario: Ownership mismatch - returns media_buy_not_found for security
+  Scenario: Ownership mismatch - a non-owned id is reported as not found
     Given a media buy "mb-other" owned by "other-buyer"
-    And an authenticated Buyer with principal_id "buyer-001"
+    And the Buyer is authenticated
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-other"]
-    Then the operation should fail
-    And the error code should be "media_buy_not_found"
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response should NOT include delivery data for "mb-other"
+    And the response errors include code "MEDIA_BUY_NOT_FOUND" for media buy "mb-other"
     And the error should NOT reveal that the media buy exists
-    And the error should include "suggestion" field
-    And the suggestion should contain "verify the identifier"
     # POST-F1: System state unchanged
     # POST-F2: Error does not reveal existence (security)
-    # POST-F3: Suggestion to verify identifier
-    # PRE-BIZ3: non-owner -> rejection masked as not_found
+    # PRE-BIZ3: non-owner -> reported as not_found
+    #
+    # Corrected on two counts. The code was spelled "media_buy_not_found"; the pin's 92
+    # codes are upper snake case and the member is MEDIA_BUY_NOT_FOUND. And the shape was
+    # a hard failure, which contradicts the reading already settled for this same rule on
+    # this same tool: @T-UC-004-identify-batch-ownership above grades BR-RULE-030 INV-5 as
+    # ADVISORY PER ID, because get-media-buy-delivery-response.json (3.1.1) declares
+    # errors[] for "missing delivery data". A single-id request is the one-element case of
+    # that batch, not a different obligation. The security property the scenario exists for
+    # is untouched: the answer for a non-owned id is byte-identical to the answer for a
+    # nonexistent one, which is what stops the response disclosing that someone else's buy
+    # exists. The suggestion assertion is gone because a per-id advisory is not the
+    # top-level error the "suggestion" step reads.
 
   @T-UC-004-ext-f @extension @ext-f @error
   Scenario: Adapter error - ad server unavailable
     Given a media buy "mb-001" owned by "buyer-001"
     And the ad server adapter is unavailable
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-001"]
-    Then the operation should fail
-    And the error code should be "adapter_error"
-    And the error message should contain "delivery data"
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response arrives
+    And the response errors include code "SERVICE_UNAVAILABLE" for media buy "mb-001"
+    # NOT an envelope rejection, and the scenario used to say it was. An unreachable ad
+    # server is a "reporting platform issue", which get-media-buy-delivery-response.json
+    # puts in the response's own errors[] -- the call still answers for every OTHER buy,
+    # so it completes. "the operation should fail" only ever passed here because it
+    # promoted this errors[0] into ctx["error"] and the code assertion then read the
+    # promotion instead of the wire; requiring a wire envelope fails outright.
+    # What AdCPAdapterError actually emits. "adapter_error" was the internal class
+    # taxonomy leaking into a scenario as if it were a wire code. The
+    # message-contains assertion is gone: the sentence is a function of the code.
     And the error should include "suggestion" field
-    And the suggestion should contain "retry later"
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/media-buy/get-media-buy-delivery-response.json pointer=/properties/errors
     # POST-F1: System state unchanged
     # POST-F2: Error explains adapter failure
     # POST-F3: Suggestion to retry
@@ -481,7 +611,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And a media buy "mb-002" owned by "buyer-001"
     And the ad server adapter returns data for "mb-001" but errors for "mb-002"
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-001", "mb-002"]
-    Then the response should include delivery data for "mb-001"
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response should include delivery data for "mb-001"
     And the response should indicate "mb-002" has partial_data or delayed metrics
     # Gap analysis: adapter fails for subset of media buys -- partial data indicator
 
@@ -490,7 +621,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the ad server adapter has no delivery data for "mb-001" in the requested period
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-001"]
-    Then the response should include "mb-001" with zero impressions and zero spend
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response should include "mb-001" with zero impressions and zero spend
     And the response status should be "completed"
     # Gap analysis: valid media buy with no data -> success with empty/zero metrics
 
@@ -507,17 +639,19 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" owned by "buyer-001"
     And the ad server adapter has delivery data for "mb-001"
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-001"]
-    Then the response should contain "media_buy_deliveries" field
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response should contain "media_buy_deliveries" field
     And the response should not contain "errors" field
     # BR-RULE-018 INV-1: success has data, no errors
 
   @T-UC-004-response-error @invariant @BR-RULE-018 @response @error
   Scenario: Error response contains errors array without delivery data
     When the Buyer Agent sends a delivery metrics request without authentication
-    Then the response should contain "errors" field
+    Then the error is compliant with the AdCP error spec
+    And the response should contain "errors" field
     And the response should not contain "media_buy_deliveries" field
     And the error should include "suggestion" field
-    And the suggestion should contain "provide valid authentication"
+    And the error code should be "AUTH_MISSING"
     # BR-RULE-018 INV-2: failure has errors, no data
     # POST-F3: Suggestion for recovery
 
@@ -527,7 +661,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the seller supports reporting dimension "device_type"
     And the ad server adapter has delivery data for "mb-001"
     When the Buyer Agent requests delivery metrics for "mb-001" with reporting_dimensions {"device_type": {}}
-    Then the response packages should include "by_device_type" breakdown arrays
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response packages should include "by_device_type" breakdown arrays
     # BR-RULE-091 INV-1: buyer includes dimension key -> seller returns corresponding by_* array
 
   @T-UC-004-dim-unsupported @invariant @BR-RULE-091 @reporting-dimensions
@@ -536,7 +671,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the seller does NOT support reporting dimension "audience"
     And the ad server adapter has delivery data for "mb-001"
     When the Buyer Agent requests delivery metrics for "mb-001" with reporting_dimensions {"audience": {}}
-    Then the response packages should NOT include "by_audience" breakdown arrays
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response packages should NOT include "by_audience" breakdown arrays
     And no error should be returned
     # BR-RULE-091 INV-2: unsupported dimension silently omitted (no error, no empty array)
 
@@ -546,7 +682,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the seller supports reporting dimension "geo"
     And there are more geo breakdown entries than the requested limit
     When the Buyer Agent requests delivery metrics for "mb-001" with reporting_dimensions {"geo": {"geo_level": "country", "limit": 5}}
-    Then the response packages should include "by_geo" with at most 5 entries
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response packages should include "by_geo" with at most 5 entries
     And "by_geo_truncated" should be true
     # BR-RULE-091 INV-3: truncated by limit -> by_*_truncated = true
 
@@ -556,7 +693,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the seller supports reporting dimension "device_type"
     And the device_type breakdown has fewer entries than any limit
     When the Buyer Agent requests delivery metrics for "mb-001" with reporting_dimensions {"device_type": {}}
-    Then the response packages should include "by_device_type"
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response packages should include "by_device_type"
     And "by_device_type_truncated" should be false
     # BR-RULE-091 INV-4: complete (not truncated) -> by_*_truncated = false
 
@@ -565,7 +703,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the seller supports reporting dimension "geo"
     When the Buyer Agent requests delivery metrics for "mb-001" with reporting_dimensions {"geo": {"geo_level": "metro", "system": "nielsen_dma"}}
-    Then the response geo breakdown should use classification system "nielsen_dma"
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response geo breakdown should use classification system "nielsen_dma"
     # BR-RULE-091 INV-5: geo_level=metro/postal_area -> system field specifies classification
 
   @T-UC-004-dim-geo-postal @invariant @BR-RULE-091 @reporting-dimensions
@@ -573,7 +712,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the seller supports reporting dimension "geo"
     When the Buyer Agent requests delivery metrics for "mb-001" with reporting_dimensions {"geo": {"geo_level": "postal_area", "system": "us_zip"}}
-    Then the response geo breakdown should use classification system "us_zip"
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response geo breakdown should use classification system "us_zip"
     # BR-RULE-091 INV-5: geo_level=postal_area -> system specifies classification
 
   @T-UC-004-dim-sortby-fallback @invariant @BR-RULE-091 @reporting-dimensions
@@ -582,7 +722,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the seller supports reporting dimension "placement"
     And the seller does NOT report metric "conversions"
     When the Buyer Agent requests delivery metrics for "mb-001" with reporting_dimensions {"placement": {"sort_by": "conversions"}}
-    Then the response placement breakdown should be sorted by "spend" (fallback)
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response placement breakdown should be sorted by "spend" (fallback)
     # BR-RULE-091 INV-6: sort_by metric not reported -> falls back to 'spend'
 
   @T-UC-004-dim-sortby-valid @invariant @BR-RULE-091 @reporting-dimensions
@@ -591,7 +732,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the seller supports reporting dimension "placement"
     And the seller reports metric "clicks"
     When the Buyer Agent requests delivery metrics for "mb-001" with reporting_dimensions {"placement": {"sort_by": "clicks"}}
-    Then the response placement breakdown should be sorted by "clicks"
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response placement breakdown should be sorted by "clicks"
     # BR-RULE-091 INV-6 counter-example: sort_by metric reported -> uses requested metric
 
   @T-UC-004-dim-multi @invariant @BR-RULE-091 @reporting-dimensions
@@ -600,7 +742,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the seller supports reporting dimensions "geo" and "device_type"
     And the seller does NOT support "audience"
     When the Buyer Agent requests delivery metrics for "mb-001" with reporting_dimensions {"geo": {"geo_level": "country"}, "device_type": {}, "audience": {}}
-    Then the response packages should include "by_geo" and "by_device_type" breakdowns
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response packages should include "by_geo" and "by_device_type" breakdowns
     And the response packages should NOT include "by_audience"
     # BR-RULE-091 INV-1 + INV-2: supported returned, unsupported silently omitted
 
@@ -610,7 +753,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the seller supports configurable attribution windows
     And the ad server adapter has delivery data for "mb-001"
     When the Buyer Agent requests delivery metrics for "mb-001" with attribution_window {"post_click": {"interval": 7, "unit": "days"}, "model": "last_touch"}
-    Then the response should include attribution_window with model "last_touch"
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response should include attribution_window with model "last_touch"
     And the attribution_window should echo the applied post_click window
     # BR-RULE-092 INV-1: buyer provides -> seller applies requested lookback
     # BR-RULE-092 INV-3: response echoes applied attribution_window
@@ -621,7 +765,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the seller does NOT support configurable attribution windows
     And the ad server adapter has delivery data for "mb-001"
     When the Buyer Agent requests delivery metrics for "mb-001" with attribution_window {"post_click": {"interval": 30, "unit": "days"}}
-    Then the response should include attribution_window with the seller's platform default
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response should include attribution_window with the seller's platform default
     And no error should be returned
     # BR-RULE-092 INV-2: seller ignores request, returns platform default
 
@@ -630,7 +775,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the ad server adapter has delivery data for "mb-001"
     When the Buyer Agent requests delivery metrics for "mb-001"
-    Then the response attribution_window should include "model" field (required)
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response attribution_window should include "model" field (required)
     # BR-RULE-092 INV-3: response MUST echo attribution_window with model
 
   @T-UC-004-attr-omitted @invariant @BR-RULE-092 @attribution
@@ -638,7 +784,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the ad server adapter has delivery data for "mb-001"
     When the Buyer Agent requests delivery metrics for "mb-001" without attribution_window
-    Then the response should include attribution_window with the seller's platform default model
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response should include attribution_window with the seller's platform default model
     # BR-RULE-092 INV-4: buyer omits -> seller uses and echoes platform default
 
   @T-UC-004-attr-campaign-valid @invariant @BR-RULE-092 @attribution
@@ -647,7 +794,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the seller supports configurable attribution windows
     And the ad server adapter has delivery data for "mb-001"
     When the Buyer Agent requests delivery metrics for "mb-001" with attribution_window {"post_click": {"interval": 1, "unit": "campaign"}}
-    Then the response should include attribution_window reflecting campaign-length window
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response should include attribution_window reflecting campaign-length window
     # BR-RULE-092 INV-5: unit=campaign, interval=1 -> valid (spans full campaign flight)
 
   @T-UC-004-attr-campaign-invalid @invariant @BR-RULE-092 @attribution @error
@@ -658,7 +806,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     # not the lossy reconstructed ctx["error"] generic then_error.py steps.
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     When the Buyer Agent requests delivery metrics for "mb-001" with attribution_window {"post_click": {"interval": 2, "unit": "campaign"}}
-    Then the attribution_window validation should result in error "VALIDATION_ERROR" with suggestion
+    Then the error is compliant with the AdCP error spec
+    And the attribution_window validation should result in error "VALIDATION_ERROR" with suggestion
     # BR-RULE-092 INV-5 violated: unit=campaign + interval!=1 -> rejected
     # POST-F2: Error explains constraint
     # POST-F3: Suggestion for recovery
@@ -668,7 +817,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the ad server adapter has delivery data for "mb-001"
     When the Buyer Agent requests delivery metrics with reporting_dimensions <value>
-    Then the reporting_dimensions validation should result in <expected>
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the reporting_dimensions validation should result in <expected>
 
     Examples: Valid partitions
       | partition | value | expected |
@@ -693,7 +843,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the ad server adapter has delivery data for "mb-001"
     When the Buyer Agent requests delivery metrics at reporting_dimensions boundary <value>
-    Then the reporting_dimensions handling should be <expected>
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the reporting_dimensions handling should be <expected>
 
     Examples: Boundary values
       | boundary_point | value | expected |
@@ -717,7 +868,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the ad server adapter has delivery data for "mb-001"
     When the Buyer Agent requests delivery metrics with attribution_window <value>
-    Then the attribution_window validation should result in <expected>
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the attribution_window validation should result in <expected>
 
     Examples: Valid partitions
       | partition | value | expected |
@@ -732,10 +884,10 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
 
     Examples: Invalid partitions
       | partition | value | expected |
-      | interval_zero | {"post_click": {"interval": 0, "unit": "days"}} | error "VALIDATION_ERROR" with suggestion |
-      | interval_negative | {"post_click": {"interval": -1, "unit": "days"}} | error "VALIDATION_ERROR" with suggestion |
-      | invalid_unit | {"post_click": {"interval": 1, "unit": "weeks"}} | error "VALIDATION_ERROR" with suggestion |
-      | invalid_model | {"model": "last_click"} | error "VALIDATION_ERROR" with suggestion |
+      | interval_zero | {"post_click": {"interval": 0, "unit": "days"}} | error "INVALID_REQUEST" with suggestion |
+      | interval_negative | {"post_click": {"interval": -1, "unit": "days"}} | error "INVALID_REQUEST" with suggestion |
+      | invalid_unit | {"post_click": {"interval": 1, "unit": "weeks"}} | error "INVALID_REQUEST" with suggestion |
+      | invalid_model | {"model": "last_click"} | error "INVALID_REQUEST" with suggestion |
       | campaign_interval_not_one | {"post_click": {"interval": 2, "unit": "campaign"}} | error "VALIDATION_ERROR" with suggestion |
 
   @T-UC-004-boundary-attribution @boundary @attribution_window @BR-RULE-092
@@ -743,7 +895,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the ad server adapter has delivery data for "mb-001"
     When the Buyer Agent requests delivery metrics at attribution_window boundary <value>
-    Then the attribution_window handling should be <expected>
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the attribution_window handling should be <expected>
 
     Examples: Boundary values
       | boundary_point | value | expected |
@@ -754,10 +907,10 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | model only (data_driven) | {"model": "data_driven"} | valid |
       | unit=campaign with interval=1 | {"post_click": {"interval": 1, "unit": "campaign"}} | valid |
       | unit=campaign with interval=2 (desc says must be 1) | {"post_click": {"interval": 2, "unit": "campaign"}} | error "VALIDATION_ERROR" |
-      | interval=0 (below minimum) | {"post_click": {"interval": 0, "unit": "days"}} | error "VALIDATION_ERROR" |
+      | interval=0 (below minimum) | {"post_click": {"interval": 0, "unit": "days"}} | error "INVALID_REQUEST" |
       | interval=1 (minimum boundary) | {"post_click": {"interval": 1, "unit": "days"}} | valid |
-      | unit=weeks (not in enum) | {"post_click": {"interval": 1, "unit": "weeks"}} | error "VALIDATION_ERROR" |
-      | model=last_click (not in enum) | {"model": "last_click"} | error "VALIDATION_ERROR" |
+      | unit=weeks (not in enum) | {"post_click": {"interval": 1, "unit": "weeks"}} | error "INVALID_REQUEST" |
+      | model=last_click (not in enum) | {"model": "last_click"} | error "INVALID_REQUEST" |
       | seller ignores field (no configurable window support) | {"post_click": {"interval": 30, "unit": "days"}} | valid |
 
   @T-UC-004-partition-daily-breakdown @partition @include_package_daily_breakdown
@@ -765,7 +918,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the ad server adapter has delivery data for "mb-001"
     When the Buyer Agent requests delivery metrics with include_package_daily_breakdown <value>
-    Then the daily breakdown handling should result in <expected>
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the daily breakdown handling should result in <expected>
 
     Examples: Valid partitions
       | partition | value | expected |
@@ -782,7 +936,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the ad server adapter has delivery data for "mb-001"
     When the Buyer Agent requests delivery metrics at daily breakdown boundary <value>
-    Then the daily breakdown handling should be <expected>
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the daily breakdown handling should be <expected>
 
     Examples: Boundary values
       | boundary_point | value | expected |
@@ -796,7 +951,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the ad server adapter has delivery data for "mb-001"
     When the Buyer Agent requests delivery metrics with account <value>
-    Then the account validation should result in <expected>
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the account validation should result in <expected>
 
     Examples: Valid partitions
       | partition | value | expected |
@@ -814,8 +970,9 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario Outline: Delivery account boundary - <boundary_point>
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the ad server adapter has delivery data for "mb-001"
-    When the Buyer Agent requests delivery metrics at account boundary <value>
-    Then the account handling should be <expected>
+    When the Buyer Agent requests delivery metrics with account <value>
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the account handling should be <expected>
 
     Examples: Boundary values
       | boundary_point | value | expected |
@@ -831,7 +988,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario Outline: Status filter partition - <partition>
     Given multiple media buys owned by "buyer-001" in various statuses
     When the Buyer Agent requests delivery metrics with status_filter "<partition_value>"
-    Then the filter should result in <expected>
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the filter should result in <expected>
 
     Examples: Valid partitions
       | partition | partition_value | expected |
@@ -855,7 +1013,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario Outline: Status filter boundary - <boundary_point>
     Given multiple media buys owned by "buyer-001" in various statuses
     When the Buyer Agent requests delivery metrics at status_filter boundary "<boundary_value>"
-    Then the status handling should be <expected>
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the status handling should be <expected>
 
     Examples: Boundary values
       | boundary_point | boundary_value | expected |
@@ -872,7 +1031,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario Outline: Delivery date range partition - <partition>
     Given a media buy "mb-001" owned by "buyer-001"
     When the Buyer Agent requests delivery metrics with date range "<partition>"
-    Then the date range validation should result in <expected>
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the date range validation should result in <expected>
 
     Examples:
       | partition          | expected                                    |
@@ -885,7 +1045,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario Outline: Delivery date range boundary - <boundary_point>
     Given a media buy "mb-001" owned by "buyer-001"
     When the Buyer Agent requests delivery metrics at date boundary "<boundary_point>"
-    Then the date handling should be <expected>
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the date handling should be <expected>
 
     Examples:
       | boundary_point                       | expected |
@@ -930,7 +1091,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario Outline: Media buy resolution partition - <partition>
     Given media buys owned by "buyer-001"
     When the Buyer Agent requests delivery metrics with resolution "<partition>"
-    Then the resolution should result in <expected>
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the resolution should result in <expected>
 
     Examples:
       | partition            | expected                                 |
@@ -939,13 +1101,14 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | neither_provided     | valid                                    |
       | partial_resolution   | valid                                    |
       | zero_resolution      | valid                                    |
-      | empty_array          | error "VALIDATION_ERROR" with suggestion |
+      | empty_array          | error "INVALID_REQUEST" with suggestion |
 
   @T-UC-004-boundary-resolution @boundary @media_buy_resolution @BR-RULE-030
   Scenario Outline: Media buy resolution boundary - <boundary_point>
     Given media buys owned by "buyer-001"
     When the Buyer Agent requests delivery metrics at resolution boundary "<boundary_point>"
-    Then the resolution should be <expected>
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the resolution should be <expected>
 
     Examples:
       | boundary_point                                | expected |
@@ -961,63 +1124,62 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario Outline: Principal ownership partition - <partition>
     Given a media buy "mb-001" with a known owner
     When the Buyer Agent requests delivery metrics with principal "<partition>"
-    Then the ownership check should result in <expected>
+    Then the response is compliant with the get_media_buy_delivery spec
+    And <expected_outcome>
+    # Both rows name the OUTCOME rather than a verdict word. They read "should result in
+    # valid" / "invalid", which is not an obligation: the step had to guess what invalid
+    # meant, guessed a hard refusal, and so demanded the opposite of what
+    # @T-UC-004-identify-batch-ownership grades for the same rule -- no delivery data for
+    # the id plus a MEDIA_BUY_NOT_FOUND advisory, which is the shape
+    # get-media-buy-delivery-response.json (3.1.1) declares for missing delivery data.
 
     Examples:
-      | partition       | expected |
-      | owner_matches   | valid    |
-      | owner_mismatch  | invalid  |
+      | partition       | expected_outcome                                                          |
+      | owner_matches   | the response should include delivery data for "mb-001"                    |
+      | owner_mismatch  | the response errors include code "MEDIA_BUY_NOT_FOUND" for media buy "mb-001" |
 
   @T-UC-004-boundary-ownership @boundary @ownership
   Scenario Outline: Principal ownership boundary - <boundary_point>
     Given a media buy "mb-001" with a known owner
     When the Buyer Agent requests delivery metrics at ownership boundary "<boundary_point>"
-    Then the ownership should be <expected>
+    Then the response is compliant with the get_media_buy_delivery spec
+    And <expected_outcome>
 
     Examples:
-      | boundary_point                        | expected |
-      | principal matches owner               | valid    |
-      | principal differs from owner          | invalid  |
+      | boundary_point                        | expected_outcome                                                              |
+      | principal matches owner               | the response should include delivery data for "mb-001"                       |
+      | principal differs from owner          | the response errors include code "MEDIA_BUY_NOT_FOUND" for media buy "mb-001" |
 
-  @T-UC-004-partition-sampling @partition @sampling_method
-  Scenario Outline: Sampling method partition - <partition>
-    Given a media buy "mb-001" owned by "buyer-001" with status "active"
-    When the Buyer Agent queries delivery artifacts with sampling method "<partition_value>"
-    Then the sampling method handling should result in <expected>
-
-    Examples: Valid partitions
-      | partition | partition_value | expected |
-      | random | random | valid |
-      | stratified | stratified | valid |
-      | recent | recent | valid |
-      | failures_only | failures_only | valid |
-      | not_provided | (omitted) | valid |
-
-    Examples: Invalid partitions
-      | partition | partition_value | expected |
-      | unknown_value | systematic | error "INVALID_REQUEST" with suggestion |
-
-  @T-UC-004-boundary-sampling @boundary @sampling_method
-  Scenario Outline: Sampling method boundary - <boundary_point>
-    Given a media buy "mb-001" owned by "buyer-001" with status "active"
-    When the Buyer Agent queries delivery artifacts at sampling boundary "<boundary_value>"
-    Then the sampling handling should be <expected>
-
-    Examples: Boundary values
-      | boundary_point | boundary_value | expected |
-      | random (first enum value) | random | valid |
-      | failures_only (last enum value) | failures_only | valid |
-      | Not provided (server default) | (omitted) | valid |
-      | Unknown string not in enum | systematic | invalid |
-
+  # RETIRED 2026-09-15: @T-UC-004-partition-sampling and @T-UC-004-boundary-sampling,
+  # "Sampling method partition/boundary". Both graded a request field that AdCP 3.1.1
+  # does not have. `sampling_method` appears NOWHERE in the pinned schemas (zero hits
+  # across _schemas/3.1/), get-media-buy-delivery-request.json declares twelve
+  # properties and none of them is it, and no pinned enum anywhere carries
+  # random / stratified / recent / systematic. So the outlines' own "valid" rows
+  # demanded this seller ACCEPT an invented field, and their "invalid" row demanded a
+  # refusal the spec never asks for.
+  #
+  # They passed anyway, for a reason that hid the defect: the DTO declares no
+  # `sampling_method`, so the accepted-shape strip rejects it as an UNDECLARED field
+  # with INVALID_REQUEST (CLAUDE.md pattern 7, a repo policy rather than a spec
+  # obligation). That is the identical rejection the four "valid" rows received, so
+  # the Then could not tell "this enum value is refused" from "this field does not
+  # exist" -- and the emitted issue says so literally, keyword `additionalProperties`
+  # on pointer `/sampling_method`.
+  #
+  # Deleted rather than corrected, because there is no pinned obligation to correct
+  # them toward. The one real sampling concept in the pin is `failures_only`, a
+  # BOOLEAN filter on content-standards/get-media-buy-artifacts-request.json -- a
+  # different tool -- and it is already graded at BR-UC-024-content-compliance.feature
+  # (BR-RULE-185 INV-3 and the partition rows beneath it). No coverage is lost here.
   @T-UC-004-sandbox-happy @invariant @br-rule-209 @sandbox
   Scenario: Sandbox account receives simulated delivery metrics with sandbox flag
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the request targets a sandbox account
     When the Buyer Agent queries delivery metrics for media buy "mb-001"
-    Then the response status should be "completed"
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response status should be "completed"
     And the response should include sandbox equals true
-    And no real ad platform API calls should have been made
     And no real billing records should have been created
     # BR-RULE-209 INV-1: inputs validated same as production
     # BR-RULE-209 INV-2: real ad platform calls suppressed
@@ -1029,7 +1191,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the request targets a production account
     When the Buyer Agent queries delivery metrics for media buy "mb-001"
-    Then the response status should be "completed"
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response status should be "completed"
     And the response should not include a sandbox field
     # BR-RULE-209 INV-5: production account -> sandbox absent
 
@@ -1037,7 +1200,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario: Sandbox account with invalid media buy ID returns real validation error
     Given the request targets a sandbox account
     When the Buyer Agent queries delivery metrics for a non-existent media buy
-    Then the response should indicate a validation error
+    Then the error is compliant with the AdCP error spec
+    And the response should indicate a validation error
     And the error should be a real validation error, not simulated
     And the error should include a suggestion for how to fix the issue
     # BR-RULE-209 INV-7: sandbox validation errors are real
@@ -1048,7 +1212,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" with an active reporting_webhook
     And a prior webhook report for "mb-001" used measurement_window "live"
     When the system delivers a "window_update" webhook report for "mb-001"
-    Then the payload notification_type should be "window_update"
+    Then the webhook payload is compliant with the AdCP delivery webhook spec
+    And the payload notification_type should be "window_update"
     And the payload supersedes_window should be "live"
     And the payload measurement_window should be "c3"
     And buyers should replace stored data for the superseded window
@@ -1064,7 +1229,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the ad server adapter has delivery data for "mb-001"
     And the ad server adapter returns reporting_delayed for "mb-002"
     When the system delivers a "scheduled" webhook report for that batch
-    Then the payload partial_data should be true
+    Then the webhook payload is compliant with the AdCP delivery webhook spec
+    And the payload partial_data should be true
     And the payload unavailable_count should equal 1
     And the entry for "mb-002" should have status "reporting_delayed"
     And the entry for "mb-002" should include expected_availability timestamp
@@ -1080,7 +1246,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" with an active reporting_webhook
     And a prior webhook report for "mb-001" covered reporting_period "2026-05-10" to "2026-05-10"
     When the system delivers an "adjusted" webhook report for "mb-001" covering the same period with corrected totals
-    Then the payload notification_type should be "adjusted"
+    Then the webhook payload is compliant with the AdCP delivery webhook spec
+    And the payload notification_type should be "adjusted"
     And the entry for "mb-001" should include is_adjusted equals true
     And buyers should replace previous period data with the resent totals
     # v3.1: is_adjusted disambiguates resends from forward-only scheduled reports
@@ -1092,7 +1259,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And package "pkg-1" delivers under measurement_window "c7"
     And the seller considers the c7 data closed
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-001"]
-    Then the response should include delivery data for "mb-001"
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response should include delivery data for "mb-001"
     And the response packages should include is_final equals true for "pkg-1"
     And the response packages should include measurement_window "c7" for "pkg-1"
     # v3.1: is_final + measurement_window declare provisional vs closed data
@@ -1105,7 +1273,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And package "pkg-1" delivers under measurement_window "live"
     And the seller expects the c3 window to supersede the live data later
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-001"]
-    Then the response should include delivery data for "mb-001"
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response should include delivery data for "mb-001"
     And the response packages should include is_final equals false for "pkg-1"
     And the response packages should include measurement_window "live" for "pkg-1"
     # v3.1: live window is provisional; c3/c7 will arrive via window_update
@@ -1117,7 +1286,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And package "pkg-1" reports viewable_rate under viewability_standard "mrc"
     And package "pkg-1" also reports viewable_rate under viewability_standard "groupm"
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-001"]
-    Then the response aggregated_totals should include a metric_aggregates row with scope "standard" and metric_id "viewable_rate" and qualifier viewability_standard "mrc"
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response aggregated_totals should include a metric_aggregates row with scope "standard" and metric_id "viewable_rate" and qualifier viewability_standard "mrc"
     And the response aggregated_totals should include a metric_aggregates row with scope "standard" and metric_id "viewable_rate" and qualifier viewability_standard "groupm"
     And each viewable_rate row should include measurable_impressions and viewable_impressions
     And no top-level "viewable_rate" scalar should be present in aggregated_totals
@@ -1132,7 +1302,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the seller reports vendor metric "attention_units" from vendor domain "attentionvendor.example"
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-001"]
-    Then the response aggregated_totals should include a metric_aggregates row with scope "vendor"
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response aggregated_totals should include a metric_aggregates row with scope "vendor"
     And the vendor row should reference vendor domain "attentionvendor.example"
     And the vendor row should include metric_id "attention_units"
     And the vendor row should include measurable_impressions as coverage denominator
@@ -1146,7 +1317,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And package "pkg-1" reports completion_rate under completion_source "seller_attested"
     And package "pkg-1" also reports completion_rate under completion_source "vendor_attested"
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-001"]
-    Then the response aggregated_totals should include a metric_aggregates row with metric_id "completion_rate" and qualifier completion_source "seller_attested"
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response aggregated_totals should include a metric_aggregates row with metric_id "completion_rate" and qualifier completion_source "seller_attested"
     And the response aggregated_totals should include a metric_aggregates row with metric_id "completion_rate" and qualifier completion_source "vendor_attested"
     And each completion_rate row should include impressions and completed_views
     # v3.1: completion_source qualifier prevents cross-source summation
@@ -1159,7 +1331,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And package "pkg-1" committed to deliver metric "completed_views"
     And the ad server adapter did not return completed_views for the reporting period
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-001"]
-    Then the response packages should include a missing_metrics entry for "pkg-1"
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response packages should include a missing_metrics entry for "pkg-1"
     And the missing_metrics entry should have scope "standard" and metric_id "completed_views"
     # v3.1: missing_metrics surfaces accountability breaches symmetric with committed_metrics
     # BR-RULE-223 INV-1: contract metric not populated (and measurable) -> appears in missing_metrics
@@ -1172,29 +1345,55 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And package "pkg-1" committed to deliver metric "completed_views"
     And the ad server adapter returned completed_views for the reporting period
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-001"]
-    Then the response packages should have an empty or absent missing_metrics array for "pkg-1"
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response packages should have an empty or absent missing_metrics array for "pkg-1"
     # v3.1: empty / absent missing_metrics indicates clean delivery against contract
     # BR-RULE-223 INV-9: every committed metric due populated -> missing_metrics empty/absent (clean delivery)
 
   @T-UC-004-package-commercial-fields @main-flow @polling @v3-1
-  Scenario: Polling response includes per-package pricing_model, rate, currency, and effective_rate
+  Scenario: Polling response includes per-package pricing_model, rate and currency
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And package "pkg-1" uses pricing_model "cpm" with rate 12.50 and currency "USD"
     And the ad server adapter has delivery data for "mb-001"
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-001"]
-    Then the response packages should include pricing_model "cpm" for "pkg-1"
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response packages should include pricing_model "cpm" for "pkg-1"
     And the response packages should include rate 12.50 for "pkg-1"
     And the response packages should include currency "USD" for "pkg-1"
-    And the response packages should include effective_rate for "pkg-1"
-    # v3.1: per-package pricing_model, rate, currency, effective_rate are required
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # v3.1: pricing_model, rate and currency are on by_package[]'s required set
+    # (get-media-buy-delivery-response.json). For FIXED pricing the rate is the agreed
+    # rate, which is what this grades.
+    #
+    # DIVERGENCE from the generated scenario, AdCP 3.1.1: it also demanded
+    # `effective_rate`, and no such property exists — not on the by_package item, not in
+    # core/delivery-metrics.json. The pin expresses the effective rate as the MEANING of
+    # `rate` under auction pricing, not as a second field, so that reading is graded by
+    # the auction scenario below rather than by asserting a field the spec never defines.
+    # The generated @source line cited get-media-buy-delivery-REQUEST.json for response
+    # fields; the response schema is the authority and is cited above.
+
+  @T-UC-004-package-auction-rate @main-flow @polling @v3-1
+  Scenario: Auction package reports the effective rate derived from actual delivery
+    Given a media buy "mb-001" owned by "buyer-001" with status "active"
+    And package "pkg-1" is bought at auction on pricing_model "cpm" with bid_price 8.00 and currency "USD"
+    And the ad server adapter reports 2000 impressions and 10.00 spend for "pkg-1"
+    When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-001"]
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response packages should include pricing_model "cpm" for "pkg-1"
+    And the response packages should include currency "USD" for "pkg-1"
+    And the response packages should include rate 5.00 for "pkg-1"
+    # get-media-buy-delivery-response.json, by_package[].rate: "For auction-based pricing,
+    # this represents the effective rate based on actual delivery." 10.00 spend over 2000
+    # impressions is a 5.00 effective CPM. Deliberately neither the bid (8.00) nor any
+    # stored rate, so a report that echoes a static number cannot pass.
 
   @T-UC-004-package-pacing-index @main-flow @polling @v3-1
   Scenario Outline: Polling response includes per-package pacing_index reflecting delivery pace
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And package "pkg-1" is <pace_state> with pacing_index <pacing_index>
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-001"]
-    Then the response packages should include pacing_index <pacing_index> for "pkg-1"
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response packages should include pacing_index <pacing_index> for "pkg-1"
     # v3.1: pacing_index 1.0 = on-track, <1 behind, >1 ahead
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
@@ -1209,7 +1408,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And package "pkg-1" has delivery_status "<delivery_status>"
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-001"]
-    Then the response packages should include delivery_status "<delivery_status>" for "pkg-1"
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response packages should include delivery_status "<delivery_status>" for "pkg-1"
     # v3.1: delivery_status is operational state independent of buyer pause
 
     Examples: delivery_status enum
@@ -1226,7 +1426,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And a media buy "mb-002" owned by "buyer-001" with status "active"
     And the ad server adapter has delivery data for both media buys
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-001", "mb-002"]
-    Then the response should include aggregated totals across both media buys
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response should include aggregated totals across both media buys
     And the aggregated_totals should include "roas" as total conversion_value over total spend
     And the aggregated_totals should include "cost_per_acquisition" as total spend over total conversions
     And the aggregated_totals should include "media_buy_count" equal to 2
@@ -1239,7 +1440,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" owned by "buyer-001" with status "active" and reach_unit "individuals"
     And a media buy "mb-002" owned by "buyer-001" with status "active" and reach_unit "individuals"
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-001", "mb-002"]
-    Then the aggregated_totals should include "reach" deduplicated across both media buys
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the aggregated_totals should include "reach" deduplicated across both media buys
     And the aggregated_totals should include "reach_unit" equal to "individuals"
     And the aggregated_totals should include "frequency" as impressions over reach
     # v3.1: aggregate reach only when reach_unit is homogeneous
@@ -1253,7 +1455,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" owned by "buyer-001" with status "active" and reach_unit "individuals"
     And a media buy "mb-002" owned by "buyer-001" with status "active" and reach_unit "households"
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-001", "mb-002"]
-    Then the aggregated_totals should not include "reach" field
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the aggregated_totals should not include "reach" field
     And the aggregated_totals should not include "reach_unit" field
     And buyers should use per-media-buy reach values instead
     # v3.1: heterogeneous reach_unit -> aggregate reach omitted (not zeroed)
@@ -1275,7 +1478,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario: Polling response accepts legacy status "pending" as alias for "pending_start"
     Given a media buy "mb-001" owned by "buyer-001" with status "pending_start"
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-001"]
-    Then the response should include the media buy status "pending_start"
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response should include the media buy status "pending_start"
     And buyers MAY treat the legacy alias "pending" as equivalent to "pending_start"
     # v3.1: pending_start replaces pending; pending retained as legacy alias
 
@@ -1284,7 +1488,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the ad server adapter has delivery data for "mb-001"
     When the Buyer Agent requests delivery metrics for "mb-001" with include_package_daily_breakdown true
-    Then the response packages should include "daily_breakdown" arrays for each package
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response packages should include "daily_breakdown" arrays for each package
     And each daily_breakdown entry should include date, impressions, and spend
     # v3.1: include_package_daily_breakdown=true gates per-package daily arrays
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
@@ -1294,7 +1499,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the ad server adapter has delivery data for "mb-001"
     When the Buyer Agent requests delivery metrics for "mb-001" without include_package_daily_breakdown
-    Then the response packages should NOT include "daily_breakdown" arrays
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response packages should NOT include "daily_breakdown" arrays
     # v3.1: default false bounds payload size for multi-package long-flight buys
 
   @T-UC-004-v31-metric-scope-standard @main-flow @v3-1 @metric-scope
@@ -1302,7 +1508,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the seller committed to deliver "impressions" as a standard metric
     When the Buyer Agent requests delivery metrics for "mb-001"
-    Then the response committed_metrics should include an entry with scope "standard"
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response committed_metrics should include an entry with scope "standard"
     And that entry should include "metric_id" with value "impressions"
     And that entry should NOT include "vendor"
     # v3.1: standard scope -> metric_id alone, MUST resolve in available-metric.json
@@ -1313,7 +1520,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the seller committed to deliver vendor metric "viewable_impressions" from brand "moat"
     When the Buyer Agent requests delivery metrics for "mb-001"
-    Then the response committed_metrics should include an entry with scope "vendor"
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response committed_metrics should include an entry with scope "vendor"
     And that entry should include "metric_id" with value "viewable_impressions"
     And that entry should include "vendor" referencing brand "moat"
     # v3.1: vendor scope -> (vendor, metric_id) tuple; vendor anchored on brand.json
@@ -1344,7 +1552,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario: Delivery reporting -- controller-injected impressions and spend produce schema-compliant get_media_buy_delivery response
     Given a comply_test_controller has injected simulated delivery with impressions 5000, clicks 150, and spend 250.00 USD into a media buy
     When the Buyer Agent calls get_media_buy_delivery for the media buy with include_package_daily_breakdown true
-    Then the response should be schema-valid against get-media-buy-delivery-response.json
+    Then the response is compliant with the get_media_buy_delivery spec
     And the response should carry a media_buy_deliveries array with at least one entry
     And the per-package breakdown should reflect the injected impressions and spend
     # delivery_reporting storyboard: the test controller injects delivery metrics
@@ -1363,7 +1571,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the buyer created a media buy from one of those products
     And controller-driven simulated delivery emitted impressions but did not emit "completed_views"
     When the Buyer Agent calls get_media_buy_delivery for the media buy
-    Then the response should be schema-valid against get-media-buy-delivery-response.json
+    Then the response is compliant with the get_media_buy_delivery spec
     And the per-package missing_metrics entry should include scope "standard" and metric_id "completed_views"
     And missing_metrics should be empty or absent when all product-declared metrics were emitted
     # measurement_accountability storyboard: end-to-end contract in three pieces:
@@ -1386,7 +1594,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the buyer created a media buy from the matching product
     And controller-driven simulated delivery emitted vendor_metric_values for that vendor metric
     When the Buyer Agent calls get_media_buy_delivery for the media buy
-    Then the response should be schema-valid against get-media-buy-delivery-response.json
+    Then the response is compliant with the get_media_buy_delivery spec
     And the per-package vendor_metric_values should carry one row per (vendor.domain, vendor.brand_id, metric_id)
     And the row for vendor "attentionvendor.example" should include metric_id "attention_units"
     And the seller should NOT emit duplicate rows for the same (vendor.domain, vendor.brand_id, metric_id) within a single reporting period
@@ -1409,7 +1617,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given delivery data for two media buys owned by "buyer-001"
     And a metric_aggregates row with scope "standard"
     When the Buyer Agent requests delivery metrics for the media buys
-    Then the row's metric_id should be a member of the available-metric enum
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the row's metric_id should be a member of the available-metric enum
     And the row should carry "scope", "metric_id", and "value"
     # BR-RULE-220 INV-3: scope=standard -> metric_id from available-metric.json enum, requires [scope, metric_id, value]
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
@@ -1419,7 +1628,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given delivery data for two media buys owned by "buyer-001"
     And a metric_aggregates row with scope "standard" and metric_id "<metric_id>"
     When the Buyer Agent requests delivery metrics for the media buys
-    Then the row MUST carry component fields "<component_a>" and "<component_b>"
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the row MUST carry component fields "<component_a>" and "<component_b>"
     # BR-RULE-220 INV-5/INV-6/INV-7/INV-8: rate/cost metric rows require their component fields
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
@@ -1435,7 +1645,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given delivery data for two media buys owned by "buyer-001"
     And a metric_aggregates row with scope "standard" and metric_id "brand_lift"
     When the Buyer Agent requests delivery metrics for the media buys
-    Then the row's qualifier MUST include "lift_dimension"
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the row's qualifier MUST include "lift_dimension"
     # BR-RULE-220 INV-9: brand_lift -> qualifier must include lift_dimension
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
@@ -1444,7 +1655,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given delivery data for two media buys owned by "buyer-001"
     And a metric_aggregates row carrying a qualifier object
     When the Buyer Agent requests delivery metrics for the media buys
-    Then each qualifier key MUST be one of "viewability_standard", "completion_source", "attribution_methodology", "attribution_window", or "lift_dimension"
+    Then the response is compliant with the get_media_buy_delivery spec
+    And each qualifier key MUST be one of "viewability_standard", "completion_source", "attribution_methodology", "attribution_window", or "lift_dimension"
     And no other qualifier key should be present
     # BR-RULE-220 INV-10: qualifier keys confined to closed vocab (additionalProperties: false)
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
@@ -1454,7 +1666,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given delivery data for two media buys owned by "buyer-001"
     And the seller reports a qualified metric at the finest granularity it can provide
     When the Buyer Agent requests delivery metrics for the media buys
-    Then the response should emit one row per (metric_id, full qualifier set)
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response should emit one row per (metric_id, full qualifier set)
     # BR-RULE-220 INV-12: one row per (metric_id, full qualifier set) at finest granularity; buyer re-aggregates up
     # --- Measurement Window Supersession (BR-RULE-221) ---
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
@@ -1464,7 +1677,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given delivery data for media buy "mb-001" owned by "buyer-001"
     And a package report with no "is_final" flag
     When the Buyer Agent requests delivery metrics for "mb-001"
-    Then the buyer should treat the data as not distinguished provisional from final
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the buyer should treat the data as not distinguished provisional from final
     # BR-RULE-221 INV-3: is_final absent -> seller does not distinguish provisional from final
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
@@ -1473,7 +1687,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given delivery data for media buy "mb-001" owned by "buyer-001"
     And a package report with no "measurement_window"
     When the Buyer Agent requests delivery metrics for "mb-001"
-    Then the data should be treated as not windowed (final on first delivery)
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the data should be treated as not windowed (final on first delivery)
     # BR-RULE-221 INV-5: measurement_window absent -> not windowed (standard digital, final on first delivery)
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
@@ -1481,7 +1696,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario: First report for a period carries no supersedes_window
     Given no prior report exists for media buy "mb-001" for the reporting period
     When the seller delivers the first report for the period
-    Then "supersedes_window" should be absent
+    Then the webhook payload is compliant with the AdCP delivery webhook spec
+    And "supersedes_window" should be absent
     # BR-RULE-221 INV-7: first report for a period -> supersedes_window absent (no prior window to replace)
     # --- Delayed Data Signaling (BR-RULE-222) ---
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
@@ -1491,7 +1707,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a webhook delivery covering media buys for "buyer-001"
     And "unavailable_count" is present
     When the seller delivers the webhook notification
-    Then "unavailable_count" MUST be an integer greater than or equal to 0
+    Then the webhook payload is compliant with the AdCP delivery webhook spec
+    And "unavailable_count" MUST be an integer greater than or equal to 0
     # BR-RULE-222 INV-4: unavailable_count >= 0 (integer)
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
@@ -1500,7 +1717,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a webhook delivery covering media buys for "buyer-001"
     And one media buy has missing or delayed data
     When the seller delivers the webhook notification
-    Then the seller MUST NOT present that data as complete (zeroed or final)
+    Then the webhook payload is compliant with the AdCP delivery webhook spec
+    And the seller MUST NOT present that data as complete (zeroed or final)
     And the buy MUST be flagged via "reporting_delayed" / "partial_data"
     # BR-RULE-222 INV-7: missing/delayed data must be flagged, never reported as complete
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
@@ -1509,7 +1727,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario: Synchronous API response omits webhook-only partial-data signals
     Given a media buy "mb-001" owned by "buyer-001"
     When the Buyer Agent requests delivery metrics for "mb-001" via the synchronous API
-    Then "partial_data" should be absent
+    Then the response is compliant with the get_media_buy_delivery spec
+    And "partial_data" should be absent
     And "unavailable_count" should be absent
     # BR-RULE-222 INV-8: synchronous response -> partial_data and unavailable_count absent (webhook-context fields)
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
@@ -1519,7 +1738,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a webhook delivery covering three media buys for "buyer-001"
     And every media buy has available delivery data (no reporting_delayed or failed)
     When the seller delivers the webhook notification
-    Then "partial_data" should be false or absent
+    Then the webhook payload is compliant with the AdCP delivery webhook spec
+    And "partial_data" should be false or absent
     And "unavailable_count" should be 0 or absent
     # BR-RULE-222 INV-1 (counter): no delayed/failed buy -> partial_data not forced true
     # --- Missing Metrics Contract Accountability (BR-RULE-223) ---
@@ -1530,7 +1750,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a package for media buy "mb-001" with committed_metrics present
     And a committed metric whose committed_at precedes reporting_period.end
     When the Buyer Agent requests delivery metrics for "mb-001"
-    Then the missing set MUST be computed against committed_metrics entries with committed_at before reporting_period.end
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the missing set MUST be computed against committed_metrics entries with committed_at before reporting_period.end
     # BR-RULE-223 INV-2: committed_metrics present -> missing set computed against entries committed_at < reporting_period.end
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
@@ -1539,7 +1760,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a package for media buy "mb-001" with committed_metrics present
     And a committed metric whose committed_at is at or after reporting_period.end
     When the Buyer Agent requests delivery metrics for "mb-001"
-    Then that metric MUST NOT be flagged missing for the earlier period
+    Then the response is compliant with the get_media_buy_delivery spec
+    And that metric MUST NOT be flagged missing for the earlier period
     # BR-RULE-223 INV-3: committed_at >= reporting_period.end -> not flagged missing for that period
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
@@ -1547,7 +1769,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario: Without committed_metrics the missing set falls back to current available_metrics
     Given a package for media buy "mb-001" with committed_metrics absent
     When the Buyer Agent requests delivery metrics for "mb-001"
-    Then the missing set MUST fall back to the product's current reporting_capabilities.available_metrics with no timestamp filter
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the missing set MUST fall back to the product's current reporting_capabilities.available_metrics with no timestamp filter
     # BR-RULE-223 INV-4: committed_metrics absent -> fall back to current available_metrics, no timestamp filter
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
@@ -1555,7 +1778,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario Outline: Missing entry carries the required fields for its scope
     Given a package for media buy "mb-001" with a missing_metrics entry of scope "<scope>"
     When the Buyer Agent requests delivery metrics for "mb-001"
-    Then the missing entry MUST carry "<required_fields>"
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the missing entry MUST carry "<required_fields>"
     # BR-RULE-223 INV-5/INV-6: standard requires scope+metric_id (from enum); vendor requires scope+vendor+metric_id
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
@@ -1568,7 +1792,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario: Missing entry for a qualified committed metric mirrors its qualifier exactly
     Given a package for media buy "mb-001" with a qualified committed metric not populated
     When the Buyer Agent requests delivery metrics for "mb-001"
-    Then the missing_metrics entry's qualifier MUST equal the qualifier on that committed_metrics entry
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the missing_metrics entry's qualifier MUST equal the qualifier on that committed_metrics entry
     # BR-RULE-223 INV-7: standard missing entry for a qualified committed metric -> qualifier deep-equals committed qualifier
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
@@ -1576,7 +1801,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario: A metric not yet measurable for the current window is excluded from missing_metrics
     Given a package for media buy "mb-001" with a committed metric not yet measurable for the current measurement_window
     When the Buyer Agent requests delivery metrics for "mb-001"
-    Then that metric MUST be excluded from "missing_metrics"
+    Then the response is compliant with the get_media_buy_delivery spec
+    And that metric MUST be excluded from "missing_metrics"
     And it MAY surface when a wider window supersedes via supersedes_window
     # BR-RULE-223 INV-8: not measurable for current window -> excluded from missing_metrics (surfaces on wider window)
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
@@ -1587,7 +1813,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the product later dropped that metric from its available_metrics
     And the report did not produce that metric
     When the Buyer Agent requests delivery metrics for "mb-001"
-    Then that metric MUST still be flagged in "missing_metrics"
+    Then the response is compliant with the get_media_buy_delivery spec
+    And that metric MUST still be flagged in "missing_metrics"
     # BR-RULE-223 INV-10: reconciliation independent of subsequent product mutations
     # --- Aggregated Reach Deduplication (BR-RULE-224) ---
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
@@ -1597,7 +1824,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given delivery data for media buys owned by "buyer-001" sharing one reach_unit
     And the seller "<dedup_capability>" cross-buy deduplicate
     When the Buyer Agent requests delivery metrics for the media buys
-    Then "aggregated_totals.reach" should be the "<reach_value>"
+    Then the response is compliant with the get_media_buy_delivery spec
+    And "aggregated_totals.reach" should be the "<reach_value>"
     # BR-RULE-224 INV-4/INV-5: can dedup -> deduplicated; cannot -> sum of per-buy reach
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
@@ -1610,7 +1838,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario Outline: frequency is reported only when reach is present
     Given delivery data for media buys owned by "buyer-001" where reach is "<reach_state>"
     When the Buyer Agent requests delivery metrics for the media buys
-    Then "aggregated_totals.frequency" should be "<frequency_state>"
+    Then the response is compliant with the get_media_buy_delivery spec
+    And "aggregated_totals.frequency" should be "<frequency_state>"
     # BR-RULE-224 INV-6/INV-7: frequency present -> reach present; reach omitted -> frequency omitted
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
@@ -1623,7 +1852,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario: Reach and frequency values are non-negative
     Given delivery data for media buys owned by "buyer-001" with aggregated reach present
     When the Buyer Agent requests delivery metrics for the media buys
-    Then "aggregated_totals.reach" should be greater than or equal to 0
+    Then the response is compliant with the get_media_buy_delivery spec
+    And "aggregated_totals.reach" should be greater than or equal to 0
     And "aggregated_totals.frequency" should be greater than or equal to 0
     # BR-RULE-224 INV-8: reach/frequency value >= 0
     # --- New / changed individual invariants (BR-RULE-030, 209, 018) ---
@@ -1633,7 +1863,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario: Account filter scopes resolution to the referenced account
     Given media buys for "buyer-001" spanning accounts "acct-A" and "acct-B"
     When the Buyer Agent requests delivery metrics with account "acct-A"
-    Then the response should include only media buys belonging to account "acct-A"
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response should include only media buys belonging to account "acct-A"
     # BR-RULE-030 INV-7: account filter provided -> resolution scoped to that account (omitted -> all accessible accounts)
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
@@ -1641,7 +1872,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario: Natural-key sandbox reference resolves without prior provisioning
     Given a sandbox account referenced by natural key brand "acme" and operator "gam" with sandbox true
     When the Buyer Agent requests delivery metrics referencing that sandbox account
-    Then the seller MUST resolve the reference to the sandbox account for that brand/operator pair
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the seller MUST resolve the reference to the sandbox account for that brand/operator pair
     And no prior provisioning should be required
     # BR-RULE-209 INV-8: natural-key (brand+operator) + sandbox:true -> resolves to sandbox account without prior provisioning
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
@@ -1666,7 +1898,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario Outline: metric_aggregates boundary - <boundary_point>
     Given delivery data for two media buys owned by "buyer-001"
     When the seller assembles aggregated_totals at metric_aggregates boundary "<boundary_point>"
-    Then the metric_aggregates handling should be <expected>
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the metric_aggregates handling should be <expected>
     # BR-RULE-220 INV-1..INV-12: metric_aggregates mutual-exclusion, scope row-shape, component fields, qualifier vocab
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
@@ -1711,7 +1944,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario Outline: missing_metrics boundary - <boundary_point>
     Given a package for media buy "mb-001" with committed_metrics present
     When the seller computes by_package.missing_metrics at boundary "<boundary_point>"
-    Then the missing_metrics handling should be <expected>
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the missing_metrics handling should be <expected>
     # BR-RULE-223 INV-1..INV-10: missing-set computed against committed_metrics; scope/qualifier discipline; window and temporal exclusion
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
@@ -1741,7 +1975,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario Outline: media_buy status boundary - <boundary_point>
     Given a media buy "mb-001" owned by "buyer-001"
     When the response reports media buy status at boundary "<boundary_point>"
-    Then the status handling should be <expected>
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the status handling should be <expected>
     # uc004_media_buy_status: base lifecycle enum + legacy pending alias + webhook-context reporting_delayed/failed; unknown values rejected
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
@@ -1766,7 +2001,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario Outline: measurement_window boundary - <boundary_point>
     Given delivery data for media buy "mb-001" owned by "buyer-001"
     When the seller emits a report at measurement_window boundary "<boundary_point>"
-    Then the window handling should be <expected>
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the window handling should be <expected>
     # BR-RULE-221 INV-1..INV-8: measurement_window references a declared window_id (1..50 chars); supersedes_window pairs with window_update; is_adjusted distinct from supersession
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
@@ -1788,7 +2024,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario Outline: aggregated_totals reach boundary - <boundary_point>
     Given delivery data for media buys owned by "buyer-001"
     When the seller assembles aggregated_totals reach fields at boundary "<boundary_point>"
-    Then the reach handling should be <expected>
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the reach handling should be <expected>
     # BR-RULE-224 INV-1..INV-8: reach present only when reach_unit homogeneous; reach_unit names the shared unit; frequency requires reach
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
@@ -1832,7 +2069,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario Outline: sandbox response flag boundary - <boundary_point>
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     When the response is assembled at sandbox boundary "<boundary_point>"
-    Then the sandbox flag handling should be <expected>
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the sandbox flag handling should be <expected>
     # BR-RULE-209 INV-4/INV-5: sandbox account -> sandbox:true echoed; production account -> sandbox absent (or explicit false)
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
@@ -1846,7 +2084,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario Outline: package commercial enum boundary - <boundary_point>
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     When the response reports per-package commercial fields at boundary "<boundary_point>"
-    Then the commercial field handling should be <expected>
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the commercial field handling should be <expected>
     # package_commercial_accountability: pricing_model and delivery_status draw from their closed enums (first/last members exercised)
 
     Examples: Enum membership

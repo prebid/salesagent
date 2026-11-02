@@ -14,10 +14,10 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from src.core.config_loader import get_tenant_config
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Context, ObjectWorkflowMapping, WorkflowStep
 from src.core.schemas import MediaPackage
+from src.core.tenant_context import TenantContext
 from src.services.slack_notifier import SlackNotifier
 
 logger = logging.getLogger(__name__)
@@ -172,13 +172,8 @@ class BaseWorkflowManager:
             action_details: Details about the workflow step
         """
         try:
-            # get_tenant_config takes a config KEY, not a tenant id. Passing
-            # self.tenant_id returned None, and the .get("slack", {}) that followed
-            # raised AttributeError into the broad handler below — so this
-            # notification never fired, for any tenant, including the four GAM
-            # workflow callers that inherit this method. The column is a per-field
-            # tenant column (models.py:68), read by key like every other caller.
-            slack_webhook_url = get_tenant_config("slack_webhook_url")
+            tenant = TenantContext.load(self.tenant_id)
+            slack_webhook_url = tenant.slack_webhook_url if tenant else None
 
             if not slack_webhook_url:
                 self.log("[yellow]No Slack webhook configured - skipping notification[/yellow]")
@@ -220,15 +215,30 @@ class BaseWorkflowManager:
                 "ts": int(datetime.now(UTC).timestamp()),
             }
 
-            SlackNotifier(webhook_url=slack_webhook_url).send_message(
+            # This adapter does not dial out itself. SlackNotifier.send_message hands
+            # the payload to webhook_delivery.deliver_webhook_with_retry, which applies
+            # the SEND-time gate (reject_unsafe_outbound_webhook_url) before handing the
+            # single call to the egress seam — the gate this call site used to apply
+            # inline via deliver_json_to_allowed_destination. That gate matters here
+            # because the URL comes out of tenant config and was never judged at dial
+            # time; routing through the notifier keeps it, and adds the retry
+            # bookkeeping and delivery record the inline dial never had.
+            # max_retries=1 preserves the previous single-attempt behaviour.
+            delivered = SlackNotifier(webhook_url=slack_webhook_url).send_message(
                 text=notification["title"],
                 attachments=[attachment],
                 max_retries=1,
             )
 
-            self.log(f"Sent Slack notification for workflow step {step_id}")
-            if self.audit_logger:
-                self.audit_logger.log_success(f"Sent Slack notification for workflow step: {step_id}")
+            # send_message reports delivery as a bool — a refused URL or an exhausted
+            # retry budget returns False without raising. Claiming success (and writing
+            # a success audit record) on that return would be a quiet failure.
+            if delivered:
+                self.log(f"Sent Slack notification for workflow step {step_id}")
+                if self.audit_logger:
+                    self.audit_logger.log_success(f"Sent Slack notification for workflow step: {step_id}")
+            else:
+                self.log("[yellow]Slack notification was not delivered[/yellow]")
 
         except Exception as e:
             self.log(f"[yellow]Failed to send Slack notification: {str(e)}[/yellow]")

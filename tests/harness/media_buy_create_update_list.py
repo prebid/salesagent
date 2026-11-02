@@ -14,11 +14,12 @@ routes ``req=UpdateMediaBuyRequest`` to the update dispatch and falls through to
 create. Inheriting both linearizes to list -> update -> create, so a third copy of
 either discriminator would be duplication (CLAUDE.md DRY invariant).
 
-REST is intentionally NOT routed, for the same reason ``MediaBuyCreateListEnv``
-gives: get_media_buys has no REST route in the composite's UC (tests/bdd/conftest.py
-``_NO_REST_UC``), so the create/update/list REST bodies never all apply in one
-flow. Use the A2A and MCP wire transports, which stash the real
-``wire_response``.
+REST needs no routing logic here either, for the same reason: ``MediaBuyCreateListEnv``
+switches the endpoint, body builder and response parser for the list branch, and
+``MediaBuyDualEnv`` does the same for the update branch. The MRO below linearizes them in
+that order, so all three verbs reach their own route — which they must, now that
+``_NO_REST_UC_TAG_PREFIXES`` is empty and every UC-019 scenario is parametrized on
+rest and e2e_rest.
 
 GH #1941
 """

@@ -83,7 +83,7 @@ class TestNonIntegerDimensionValues:
             TenantFactory(tenant_id="test_tenant")
             env.set_registry_formats([])
             result = env.call_via(Transport.MCP, max_width="not_a_number")
-            assert_rejected(result, field="max_width", reason="valid integer")
+            assert_rejected(result, field="max_width", keyword="type")
 
     def test_formatted_error_identifies_dimension_field(self, integration_db):
         """Covers: UC-005-EXT-B-03 — error message identifies the dimension field.
@@ -160,13 +160,15 @@ class TestMultiFieldValidationErrors:
             ListCreativeFormatsRequest(
                 max_width="not_a_number",
                 min_height="also_invalid",
-                type="nonexistent_category",
+                wcag_level="nonexistent_level",
             )
 
         errors = exc_info.value.errors()
         # At least two distinct fields must be reported
         field_paths = {".".join(str(loc) for loc in e["loc"]) for e in errors}
-        invalid_fields_found = {p for p in field_paths if any(f in p for f in ("max_width", "min_height", "type"))}
+        invalid_fields_found = {
+            p for p in field_paths if any(f in p for f in ("max_width", "min_height", "wcag_level"))
+        }
         assert len(invalid_fields_found) >= 2, (
             f"Expected at least 2 distinct invalid fields, got: {invalid_fields_found}"
         )
@@ -201,7 +203,6 @@ class TestMultiFieldValidationErrors:
             ListCreativeFormatsRequest(
                 min_width="wide",
                 max_height="short",
-                type="invalid_type",
                 wcag_level="BOGUS",
             )
 
@@ -232,5 +233,5 @@ class TestMultiFieldValidationErrors:
                 max_width="not_a_number",
                 min_height="also_invalid",
             )
-            assert_rejected(result, field="max_width", reason="valid integer")
-            assert_rejected(result, field="min_height", reason="valid integer")
+            assert_rejected(result, field="max_width", keyword="type")
+            assert_rejected(result, field="min_height", keyword="type")

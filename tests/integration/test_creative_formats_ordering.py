@@ -19,7 +19,7 @@ AGENT_URL = "https://creative.adcontextprotocol.org"
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 # Sorting tests below dispatch unfiltered, so they exercise every transport.
-ALL_TRANSPORTS = [Transport.IMPL, Transport.A2A, Transport.MCP, Transport.REST]
+ALL_TRANSPORTS = [Transport.A2A, Transport.MCP, Transport.REST]
 
 
 def _fmt(

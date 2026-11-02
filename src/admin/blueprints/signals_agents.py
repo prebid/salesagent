@@ -211,8 +211,9 @@ def edit_signals_agent(tenant_id, agent_id):
                 return redirect(url_for("signals_agents.edit_signals_agent", tenant_id=tenant_id, agent_id=agent_id))
 
             # Validate the newly submitted URL — agent.agent_url is the form value set above.
-            # Returning here leaves the assignment uncommitted: get_db_session() closes
-            # without committing, so the rejected URL never reaches the row.
+            # Returning here leaves the assignment uncommitted: the session context
+            # manager closes without committing, so the rejected URL never reaches
+            # the row.
             if blocked := redirect_if_url_blocked(
                 agent.agent_url,
                 "Agent URL",

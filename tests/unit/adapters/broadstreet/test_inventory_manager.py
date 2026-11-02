@@ -1,10 +1,27 @@
-"""Unit tests for Broadstreet Inventory Manager."""
+"""Unit tests for Broadstreet Inventory Manager.
+
+Inventory is data the TEST states. The manager used to answer ``fetch_zones`` from a
+fixed list it invented whenever ``dry_run`` was set — "Top Banner" 728x90, "Sidebar"
+300x250, and two more — and fifteen tests here asserted those invented zones and the
+cache, filter, product-suggestion and interface results derived from them. That branch is
+gone, so the zones come from the vendor stand-in, and the assertions can name what the
+manager DID with them.
+"""
 
 import pytest
 
 from src.adapters.broadstreet.managers.inventory import (
     BroadstreetInventoryManager,
     ZoneInfo,
+)
+from tests.helpers.broadstreet_client import stub_broadstreet_client, zone_payload
+
+#: The zones the stand-in vendor serves. Two share a size so the size filter has
+#: something to select from and something to leave behind.
+NETWORK_ZONES = (
+    zone_payload("zone_1", "Top Banner", width=728, height=90),
+    zone_payload("zone_2", "Sidebar", width=300, height=250),
+    zone_payload("zone_3", "Footer Banner", width=728, height=90),
 )
 
 
@@ -59,46 +76,41 @@ class TestBroadstreetInventoryManager:
     """Tests for BroadstreetInventoryManager."""
 
     @pytest.fixture
-    def manager(self):
-        """Create an inventory manager in dry-run mode."""
+    def client(self):
+        """The stand-in vendor, serving NETWORK_ZONES."""
+        return stub_broadstreet_client(zones=NETWORK_ZONES)
+
+    @pytest.fixture
+    def manager(self, client):
+        """Create an inventory manager over the stand-in vendor."""
         return BroadstreetInventoryManager(
-            client=None,
+            client=client,
             network_id="net_123",
-            dry_run=True,
         )
 
-    def test_fetch_zones_dry_run(self, manager):
-        """Test fetching zones in dry-run mode."""
-        zones = manager.fetch_zones()
+    # ``test_fetch_zones_dry_run`` stood here, asserting that the fabricated "zone_1" and
+    # "zone_2" came back. Nothing replaced it: the mapping of a vendor zone payload onto
+    # ``ZoneInfo`` — including both ``id``/``Id`` casings — is graded by
+    # ``TestInventoryManagerWithMockedClient`` below, and the cold-cache fetch is graded by
+    # the two cache tests that follow. A third test of the same call would have been a
+    # fourth copy of one obligation.
 
-        assert len(zones) > 0
-        assert all(isinstance(z, ZoneInfo) for z in zones)
-
-        # Verify some expected zones
-        zone_ids = [z.zone_id for z in zones]
-        assert "zone_1" in zone_ids
-        assert "zone_2" in zone_ids
-
-    def test_fetch_zones_cached(self, manager):
-        """Test that zones are cached."""
-        # First fetch
+    def test_fetch_zones_cached(self, manager, client):
+        """A second fetch is served from the cache, not from Broadstreet."""
         zones1 = manager.fetch_zones()
-
-        # Second fetch should use cache
         zones2 = manager.fetch_zones()
 
         assert zones1 == zones2
-        assert len(manager._zone_cache) > 0
+        assert len(manager._zone_cache) == len(NETWORK_ZONES)
+        client.get_zones.assert_called_once_with()
 
-    def test_fetch_zones_refresh(self, manager):
-        """Test forcing refresh of zone cache."""
-        # First fetch
+    def test_fetch_zones_refresh(self, manager, client):
+        """``refresh=True`` goes back to Broadstreet even with a warm cache."""
         manager.fetch_zones()
-
-        # Force refresh
         zones = manager.fetch_zones(refresh=True)
 
-        assert len(zones) > 0
+        assert len(zones) == len(NETWORK_ZONES)
+        assert client.get_zones.call_count == 2
 
     def test_get_zone(self, manager):
         """Test getting zone by ID."""
@@ -112,52 +124,53 @@ class TestBroadstreetInventoryManager:
         zone = manager.get_zone("zone_unknown")
         assert zone is None
 
-    def test_get_zone_auto_fetch(self, manager):
-        """Test that get_zone auto-fetches if cache is empty."""
-        # Don't explicitly fetch first
+    def test_get_zone_auto_fetch(self, manager, client):
+        """get_zone fills an empty cache from Broadstreet rather than answering None."""
         zone = manager.get_zone("zone_1")
 
-        # Should have fetched automatically
+        client.get_zones.assert_called_once_with()
         assert zone is not None
-        assert len(manager._zone_cache) > 0
+        assert len(manager._zone_cache) == len(NETWORK_ZONES)
 
-    def test_validate_zone_ids(self, manager):
-        """Test validating zone IDs."""
-        valid, invalid = manager.validate_zone_ids(["zone_1", "zone_2", "zone_unknown"])
+    @pytest.mark.parametrize(
+        ("requested", "expected_valid", "expected_invalid"),
+        [
+            pytest.param(["zone_1", "zone_2", "zone_unknown"], ["zone_1", "zone_2"], ["zone_unknown"], id="mixed"),
+            pytest.param(["zone_1", "zone_2"], ["zone_1", "zone_2"], [], id="all-valid"),
+            pytest.param(["unknown_1", "unknown_2"], [], ["unknown_1", "unknown_2"], id="all-invalid"),
+        ],
+    )
+    def test_validate_zone_ids(self, manager, requested, expected_valid, expected_invalid):
+        """A product's configured zones are split into those the network has and those it does not.
 
-        assert "zone_1" in valid
-        assert "zone_2" in valid
-        assert "zone_unknown" in invalid
+        The three cases were three tests. The all-invalid one passed vacuously while the
+        manager had no zones at all — everything is invalid against an empty network —
+        so it only discriminates now that the cases share a stated inventory.
+        """
+        valid, invalid = manager.validate_zone_ids(requested)
 
-    def test_validate_zone_ids_all_valid(self, manager):
-        """Test validating all valid zone IDs."""
-        valid, invalid = manager.validate_zone_ids(["zone_1", "zone_2"])
+        assert valid == expected_valid
+        assert invalid == expected_invalid
 
-        assert len(valid) == 2
-        assert len(invalid) == 0
+    @pytest.mark.parametrize(
+        ("width", "height", "expected_zone_ids"),
+        [
+            pytest.param(728, 90, ["zone_1", "zone_3"], id="two-zones-share-the-size"),
+            pytest.param(300, 250, ["zone_2"], id="one-zone"),
+            pytest.param(999, 999, [], id="no-match"),
+        ],
+    )
+    def test_get_zones_by_size(self, manager, width, height, expected_zone_ids):
+        """The size filter selects the zones that accept a creative of that size.
 
-    def test_validate_zone_ids_all_invalid(self, manager):
-        """Test validating all invalid zone IDs."""
-        valid, invalid = manager.validate_zone_ids(["unknown_1", "unknown_2"])
-
-        assert len(valid) == 0
-        assert len(invalid) == 2
-
-    def test_get_zones_by_size(self, manager):
-        """Test getting zones by size."""
+        Asserting WHICH zones, not merely how many: a filter that returned the whole
+        network would satisfy a ``len(...) >= 1``.
+        """
         manager.fetch_zones()
 
-        # Get zones matching 728x90 (from simulated data)
-        zones = manager.get_zones_by_size(728, 90)
-        assert len(zones) >= 1
-        assert all(z.width == 728 and z.height == 90 for z in zones)
+        zones = manager.get_zones_by_size(width, height)
 
-    def test_get_zones_by_size_no_match(self, manager):
-        """Test getting zones with no matching size."""
-        manager.fetch_zones()
-
-        zones = manager.get_zones_by_size(999, 999)
-        assert len(zones) == 0
+        assert [zone.zone_id for zone in zones] == expected_zone_ids
 
     def test_build_inventory_response(self, manager):
         """Test building inventory response."""
@@ -169,8 +182,8 @@ class TestBroadstreetInventoryManager:
         assert "creative_specs" in response
         assert "properties" in response
 
-        # Check zones
-        assert len(response["zones"]) > 0
+        # Every zone the network serves is offered
+        assert len(response["zones"]) == len(NETWORK_ZONES)
 
         # Check properties
         assert response["properties"]["supports_webhooks"] is False
@@ -183,10 +196,18 @@ class TestBroadstreetInventoryManager:
         assert "text" in formats
 
     def test_sync_zones_to_products(self, manager):
-        """Test generating product suggestions from zones."""
+        """One product suggestion per creative SIZE, targeting every zone of that size.
+
+        The grouping is the whole point of the derivation, and it is what the old
+        ``len(suggestions) > 0`` could not show: the network's two 728x90 zones become a
+        single product that targets both, not one product each.
+        """
         suggestions = manager.sync_zones_to_products()
 
-        assert len(suggestions) > 0
+        assert [(s["name"], s["implementation_config"]["targeted_zone_ids"]) for s in suggestions] == [
+            ("Broadstreet 728x90 Display", ["zone_1", "zone_3"]),
+            ("Broadstreet 300x250 Display", ["zone_2"]),
+        ]
 
         for suggestion in suggestions:
             assert "name" in suggestion
@@ -196,7 +217,6 @@ class TestBroadstreetInventoryManager:
 
             # Check implementation config
             config = suggestion["implementation_config"]
-            assert "targeted_zone_ids" in config
             assert "creative_sizes" in config
             assert config["cost_type"] == "CPM"
             assert config["automation_mode"] == "automatic"
@@ -209,65 +229,54 @@ class TestBroadstreetInventoryManager:
         """Test clearing the zone cache."""
         # Fetch zones to populate cache
         manager.fetch_zones()
-        assert len(manager._zone_cache) > 0
+        assert len(manager._zone_cache) == len(NETWORK_ZONES)
 
         # Clear cache
         manager.clear_cache()
         assert len(manager._zone_cache) == 0
 
-    def test_fetch_zones_empty_when_no_client(self):
-        """Test that fetch returns empty when no client and not dry-run."""
-        manager = BroadstreetInventoryManager(
-            client=None,
-            network_id="net_123",
-            dry_run=False,  # Not dry run but no client
-        )
-
-        zones = manager.fetch_zones()
-        assert zones == []
-
 
 class TestBaseInventoryManagerInterface:
-    """Tests for BaseInventoryManager interface implementation."""
+    """Tests for BaseInventoryManager interface implementation.
+
+    ``discover_inventory``, ``validate_inventory_ids`` and ``suggest_products`` are
+    one-line ``return self.<concrete>(...)`` delegations, so the three tests that
+    exercised them separately graded the same one fact three times, each through the
+    concrete method its sibling above already grades. They are now the single routing
+    test below.
+
+    ``test_discover_inventory_refresh`` went with them: it asserted
+    ``len(items1) == len(items2)`` over a fixed network, which holds for any
+    implementation that returns the same zones twice — and held as ``0 == 0`` while the
+    manager had no zones at all. Refresh is graded on ``fetch_zones`` above, where the
+    assertion is that Broadstreet was asked a second time.
+    """
 
     @pytest.fixture
-    def manager(self):
-        """Create an inventory manager in dry-run mode."""
+    def client(self):
+        """The stand-in vendor, serving NETWORK_ZONES."""
+        return stub_broadstreet_client(zones=NETWORK_ZONES)
+
+    @pytest.fixture
+    def manager(self, client):
+        """Create an inventory manager over the stand-in vendor."""
         return BroadstreetInventoryManager(
-            client=None,
+            client=client,
             network_id="net_123",
-            dry_run=True,
         )
 
-    def test_discover_inventory(self, manager):
-        """Test discover_inventory abstract method."""
-        items = manager.discover_inventory()
+    def test_interface_methods_route_to_the_broadstreet_ones(self, manager):
+        """The three abstract methods the base class requires answer for zones.
 
-        assert len(items) > 0
-        assert all(isinstance(z, ZoneInfo) for z in items)
-
-    def test_discover_inventory_refresh(self, manager):
-        """Test discover_inventory with refresh."""
-        items1 = manager.discover_inventory()
-        items2 = manager.discover_inventory(refresh=True)
-
-        assert len(items1) == len(items2)
-
-    def test_validate_inventory_ids(self, manager):
-        """Test validate_inventory_ids abstract method."""
-        valid, invalid = manager.validate_inventory_ids(["zone_1", "zone_unknown"])
-
-        assert "zone_1" in valid
-        assert "zone_unknown" in invalid
-
-    def test_suggest_products(self, manager):
-        """Test suggest_products abstract method."""
-        suggestions = manager.suggest_products()
-
-        assert len(suggestions) > 0
-        for suggestion in suggestions:
-            assert "name" in suggestion
-            assert "implementation_config" in suggestion
+        What the base interface calls "inventory" is a Broadstreet zone, so each alias
+        must return what its zone-named counterpart returns — that routing is the only
+        thing these three add over the tests above.
+        """
+        assert manager.discover_inventory() == manager.fetch_zones()
+        assert manager.validate_inventory_ids(["zone_1", "zone_unknown"]) == manager.validate_zone_ids(
+            ["zone_1", "zone_unknown"]
+        )
+        assert manager.suggest_products() == manager.sync_zones_to_products()
 
     def test_extends_base_inventory_manager(self):
         """Test that BroadstreetInventoryManager extends BaseInventoryManager."""
@@ -313,7 +322,6 @@ class TestInventoryManagerWithMockedClient:
         manager = BroadstreetInventoryManager(
             client=mock_client,
             network_id="net_123",
-            dry_run=False,
         )
 
         zones = manager.fetch_zones()
@@ -334,7 +342,6 @@ class TestInventoryManagerWithMockedClient:
         manager = BroadstreetInventoryManager(
             client=mock_client,
             network_id="net_123",
-            dry_run=False,
         )
 
         zones = manager.fetch_zones()

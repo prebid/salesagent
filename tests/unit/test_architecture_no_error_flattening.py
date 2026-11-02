@@ -1,7 +1,7 @@
 """Guard: catch-all handlers must not flatten typed AdCPErrors.
 
 A broad ``except Exception:`` (or bare ``except:``) that raises a freshly
-constructed ``AdCP*Error`` re-wraps any typed ``AdCPError`` the ``try`` body
+constructed ``AdCP*Error`` re-wraps any typed ``AdCPSalesAgentError`` the ``try`` body
 raised, collapsing its precise wire code + recovery into a generic one. The
 buyer loses the specific contract — e.g. a deliberate ``AdCPValidationError``
 (``VALIDATION_ERROR`` / correctable) gets re-emitted as ``AdCPAdapterError``
@@ -11,14 +11,14 @@ Correct idiom — let typed errors propagate, wrap only the unexpected::
 
     try:
         ...
-    except AdCPError:
+    except AdCPSalesAgentError:
         raise
     except Exception as e:
         raise AdCPAdapterError(...) from e
 
-The inline variant ``except Exception as e: if isinstance(e, AdCPError): raise``
+The inline variant ``except Exception as e: if isinstance(e, AdCPSalesAgentError): raise``
 is ALSO a violation here: the protection is real but it must be a sibling
-``except AdCPError:`` handler so the idiom is uniform and machine-checkable.
+``except AdCPSalesAgentError:`` handler so the idiom is uniform and machine-checkable.
 
 Scope: ``src/core/`` and ``src/adapters/`` — the layers that emit AdCP wire
 errors. The shared ``_architecture_helpers.SCAN_DIRS`` (``[src/core/tools, src/adapters]``)
@@ -26,7 +26,7 @@ is deliberately NOT reused: it would miss ``src/core/helpers/`` (and the rest of
 ``src/core/``), where a live flatten bug was found.
 
 Allowlist is empty: every pre-existing flatten site was converted to the
-except-AdCPError-first idiom. A new catch-all-flatten fails the build.
+except-AdCPSalesAgentError-first idiom. A new catch-all-flatten fails the build.
 """
 
 from __future__ import annotations
@@ -57,15 +57,15 @@ def _is_broad_handler(handler: ast.ExceptHandler) -> bool:
 
 
 def _catches_adcp_base(handler: ast.ExceptHandler) -> bool:
-    """True if the handler catches the ``AdCPError`` base class (alone or in a tuple)."""
+    """True if the handler catches the ``AdCPSalesAgentError`` base class (alone or in a tuple)."""
     target = handler.type
     candidates: list[ast.expr] = (
         list(target.elts) if isinstance(target, ast.Tuple) else ([] if target is None else [target])
     )
     for node in candidates:
-        if isinstance(node, ast.Name) and node.id == "AdCPError":
+        if isinstance(node, ast.Name) and node.id == "AdCPSalesAgentError":
             return True
-        if isinstance(node, ast.Attribute) and node.attr == "AdCPError":
+        if isinstance(node, ast.Attribute) and node.attr == "AdCPSalesAgentError":
             return True
     return False
 
@@ -99,7 +99,7 @@ def _check_try(node: ast.Try) -> tuple[int, str] | None:
     raised = _raises_fresh_adcp_error(broad)
     if raised is None:
         return None
-    # Exempt when a PRECEDING sibling catches AdCPError and bare-re-raises (the correct idiom).
+    # Exempt when a PRECEDING sibling catches AdCPSalesAgentError and bare-re-raises (the correct idiom).
     if any(_catches_adcp_base(h) and _has_bare_reraise(h) for h in node.handlers[:broad_index]):
         return None
     return broad.lineno, raised
@@ -132,7 +132,7 @@ def _find_flatten_sites() -> list[tuple[str, str, int, str]]:
 
 
 def test_no_error_flattening():
-    """No broad handler re-wraps a typed AdCPError into a fresh AdCP*Error."""
+    """No broad handler re-wraps a typed AdCPSalesAgentError into a fresh AdCP*Error."""
     new_violations = [
         f"  {rel}:{lineno} in {func}() — except Exception → raise {cls}"
         for rel, func, lineno, cls in _find_flatten_sites()
@@ -140,8 +140,8 @@ def test_no_error_flattening():
     ]
     assert not new_violations, (
         f"Found {len(new_violations)} catch-all-flatten violation(s) in src/core + src/adapters.\n"
-        "A broad `except Exception` that raises a fresh AdCP*Error flattens any typed AdCPError "
-        "the try body raised. Add a preceding `except AdCPError: raise` sibling handler:\n\n"
+        "A broad `except Exception` that raises a fresh AdCP*Error flattens any typed AdCPSalesAgentError "
+        "the try body raised. Add a preceding `except AdCPSalesAgentError: raise` sibling handler:\n\n"
         + "\n".join(new_violations)
     )
 

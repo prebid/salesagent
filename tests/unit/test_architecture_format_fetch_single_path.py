@@ -5,7 +5,7 @@ three times with DIVERGENT error handling — one copy propagated typed
 AdCPErrors, one rewrapped them into AdCPAdapterError (a creative-agent 429
 became a terminal-looking creative failure), one had no handling at all. The
 fix collapsed them into ONE helper (``format_resolver.fetch_format_spec``)
-whose contract is: typed AdCPError propagates (recovery semantics preserved),
+whose contract is: typed AdCPSalesAgentError propagates (recovery semantics preserved),
 ``None`` means unknown format, untyped errors log to ``None``.
 
 This guard bans NEW direct ``<registry>.get_format(...)`` call sites outside

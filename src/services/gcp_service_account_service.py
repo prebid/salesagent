@@ -47,15 +47,16 @@ Authentication for This Service:
         - roles/iam.serviceAccountKeyAdmin (to create service account keys)
 """
 
+import json
 import logging
-import os
-import tempfile
 from typing import Any
 
 from google.cloud import iam_admin_v1
 from google.cloud.iam_admin_v1 import types
+from google.oauth2 import service_account
 from sqlalchemy import select
 
+from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AdapterConfig
 
@@ -71,57 +72,37 @@ class GCPServiceAccountService:
         Args:
             gcp_project_id: The GCP project ID where service accounts will be created
 
-        Note:
-            Authentication uses Application Default Credentials (ADC).
-            Set GOOGLE_APPLICATION_CREDENTIALS_JSON as a Fly secret or
-            GOOGLE_APPLICATION_CREDENTIALS as a file path.
+        The credential is HANDED to the client, not left in the environment. The
+        settings carry it as JSON or as a path, and ``service_account.Credentials``
+        builds from either -- the same two constructors the GAM auth path and the
+        background sync already use. With neither set, the client falls back to
+        Application Default Credentials on its own.
         """
         self.gcp_project_id = gcp_project_id
-        self._temp_creds_file = None
+        self.iam_client = iam_admin_v1.IAMClient(credentials=self._credentials())
 
-        # Setup credentials if provided via environment variable (common in cloud deployments)
-        self._setup_credentials()
+    @staticmethod
+    def _credentials() -> service_account.Credentials | None:
+        """The service-account credential the settings name, or ``None`` for ADC.
 
-        # Create IAM client (uses ADC)
-        self.iam_client = iam_admin_v1.IAMClient()
-
-    def _setup_credentials(self):
-        """Setup GCP credentials from environment if provided.
-
-        Handles GOOGLE_APPLICATION_CREDENTIALS_JSON secret for cloud deployments.
+        This used to write the JSON to a NamedTemporaryFile with ``delete=False``,
+        point ``GOOGLE_APPLICATION_CREDENTIALS`` at it, and rely on the client
+        rediscovering it through Application Default Credentials -- with a
+        ``cleanup()`` and a ``__del__`` to unlink the file afterwards. The comment
+        justifying it said the library "expects a file path", which is not true:
+        ``IAMClient`` takes ``credentials=``, and ``from_service_account_info``
+        takes the parsed dict. So the round trip wrote a private key to disk,
+        mutated process-wide state that nothing here reads back, and depended on a
+        destructor to clean up, in order to pass a value it could hand over
+        directly.
         """
-        creds_json = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON")
-        if creds_json:
-            # Write credentials to temp file for GCP client library
-            # This is needed because the client library expects a file path
-            with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json") as f:
-                f.write(creds_json)
-                self._temp_creds_file = f.name
-                os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = f.name
-            logger.info("GCP credentials loaded from GOOGLE_APPLICATION_CREDENTIALS_JSON")
-        elif os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
-            logger.info(f"Using GCP credentials from file: {os.environ['GOOGLE_APPLICATION_CREDENTIALS']}")
-        else:
-            logger.warning("No explicit GCP credentials provided - relying on Application Default Credentials")
-
-    def cleanup(self):
-        """Cleanup temporary credentials file.
-
-        Called automatically on object destruction, but can be called manually if needed.
-        """
-        if self._temp_creds_file:
-            try:
-                os.unlink(self._temp_creds_file)
-                logger.debug(f"Cleaned up temporary credentials file: {self._temp_creds_file}")
-                self._temp_creds_file = None
-            except FileNotFoundError:
-                pass
-            except Exception as e:
-                logger.warning(f"Failed to cleanup temp credentials file: {e}")
-
-    def __del__(self):
-        """Destructor: cleanup temporary credentials file."""
-        self.cleanup()
+        auth_settings = get_settings().auth
+        if creds_json := auth_settings.google_application_credentials_json:
+            return service_account.Credentials.from_service_account_info(json.loads(creds_json))
+        if creds_file := auth_settings.google_application_credentials:
+            return service_account.Credentials.from_service_account_file(creds_file)
+        logger.warning("No explicit GCP credentials provided - relying on Application Default Credentials")
+        return None
 
     def create_service_account_for_tenant(self, tenant_id: str, display_name: str | None = None) -> tuple[str, str]:
         """Create a service account for a tenant and store credentials.

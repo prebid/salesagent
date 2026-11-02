@@ -43,7 +43,7 @@ class CollectionListReferenceFactory(factory.Factory):
     """Factory for CollectionListReference.
 
     Re-exported from ``src.core.schemas`` (the underlying type is sourced from
-    ``adcp.types.generated_poc.core.collection_list_ref`` because adcp 4.3
+    ``adcp.types.generated_poc.core.collection_list_ref`` because the adcp SDK
     didn't surface it on the public ``adcp.types`` namespace, though the type
     is generated and used by TargetingOverlay). Shape mirrors
     PropertyListReference exactly.

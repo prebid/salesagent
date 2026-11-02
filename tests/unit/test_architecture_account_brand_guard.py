@@ -2,7 +2,7 @@
 
 PR1399 R3-F1. SDK 5.7's ``SyncAccountsRequest.accounts`` is
 ``list[Accounts | Accounts3]``; the ``Accounts3`` (account-reference /
-settings-update) arm makes ``brand`` optional, so a brandless entry parses with
+settings-update) branch makes ``brand`` optional, so a brandless entry parses with
 ``brand=None``. The pinned 3.1 spec (sync-accounts-request.json @ v3.1-04f59d2d5)
 marks every entry ``required: ["brand", "operator", "billing"]`` — a brandless
 entry MUST be a clean buyer-correctable 400, not an unguarded ``None.domain``

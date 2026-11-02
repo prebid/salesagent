@@ -15,7 +15,7 @@ What a failure means:
   accept a scheme no buyer may legally send, and the ``match`` in
   ``webhook_egress`` would need a branch for a spelling that is not on the wire;
 - a member REMOVED from the SDK enum that the pin still carries — a buyer can
-  send a legal scheme the seam cannot name, and it lands on the refusal arm.
+  send a legal scheme the seam cannot name, and it lands on the refusal branch.
 
 Either way the fix is upstream reconciliation (bump the pin, or report the SDK
 divergence), never editing this expectation to match whichever side moved. The

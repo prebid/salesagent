@@ -55,13 +55,11 @@ class TestBaseInventoryManager:
         return ConcreteInventoryManager(
             client=None,
             identifier="test_network",
-            dry_run=True,
         )
 
     def test_init(self, manager):
         """Test initialization."""
         assert manager.identifier == "test_network"
-        assert manager.dry_run is True
         assert manager.client is None
         assert manager._last_sync is None
 
@@ -142,7 +140,6 @@ class TestBaseInventoryManager:
         summary = manager.get_inventory_summary()
 
         assert summary["identifier"] == "test_network"
-        assert summary["dry_run"] is True
         assert summary["last_sync"] is None
         assert summary["cache_valid"] is False
 
@@ -164,7 +161,6 @@ class TestBaseInventoryManager:
         manager = ConcreteInventoryManager(
             client=None,
             identifier="test",
-            dry_run=True,
             log_func=capture_log,
         )
 
@@ -176,7 +172,6 @@ class TestBaseInventoryManager:
         manager = ConcreteInventoryManager(
             client=None,
             identifier="test",
-            dry_run=True,
             cache_timeout=timedelta(minutes=5),
         )
 

@@ -1,40 +1,44 @@
 #!/usr/bin/env python3
 """
-Initialize tenant management API key in production database.
+Initialize the tenant management API key in a database.
 
-This script creates a new tenant management API key if one doesn't exist,
-or retrieves the existing key if already initialized.
+The key is shown exactly once, here, when it is minted. The database keeps only
+sha256(key) and a 12-character display prefix, so a key already in place cannot be
+printed again — this script reports its prefix and refuses to rotate it unless asked.
 
 Usage:
-    uv run scripts/initialize_tenant_mgmt_api_key.py
+    uv run scripts/initialize_tenant_mgmt_api_key.py           # mint if none exists
+    uv run scripts/initialize_tenant_mgmt_api_key.py --rotate  # replace the existing key
 """
 
+import argparse
 import sys
 
-from src.admin.auth_helpers import get_api_key_from_config
-from src.admin.sync_api import initialize_tenant_management_api_key
+from src.admin.sync_api import mint_tenant_management_api_key, tenant_management_api_key_prefix
 
 
-def main():
-    print("🔑 Checking for existing tenant management API key...")
+def main(rotate: bool) -> str | None:
+    print("🔑 Checking for an existing tenant management API key...")
 
-    # Check if key already exists
-    existing_key = get_api_key_from_config("SYNC_API_KEY", "api_key")
+    existing_prefix = tenant_management_api_key_prefix()
 
-    if existing_key:
-        print(f"✅ API key already exists: {existing_key[:10]}...{existing_key[-4:]}")
-        print(f"\nFull key: {existing_key}")
-        return existing_key
+    if existing_prefix and not rotate:
+        print(f"✅ A key is already in place (starts with {existing_prefix}).")
+        print("\nIts plaintext is not stored and cannot be shown again.")
+        print("Re-run with --rotate to replace it. The old key stops working immediately.")
+        return None
 
-    print("⚠️  No API key found. Initializing new key...")
+    if existing_prefix:
+        print(f"♻️  Rotating the existing key (starts with {existing_prefix}).")
+    else:
+        print("⚠️  No API key found. Minting one...")
 
-    # Initialize new key
-    new_key = initialize_tenant_management_api_key()
+    new_key = mint_tenant_management_api_key()
 
-    print(f"✅ New API key created: {new_key[:10]}...{new_key[-4:]}")
+    print(f"✅ API key minted: {new_key[:12]}...{new_key[-4:]}")
     print(f"\nFull key: {new_key}")
     print("\n📋 Next steps:")
-    print("1. Save this key securely (it won't be shown again)")
+    print("1. Save this key securely — this is the only time it is shown")
     print("2. Export it for use with sync scripts:")
     print(f"   export TENANT_MGMT_API_KEY='{new_key}'")
     print("3. Run the AccuWeather sync diagnostic:")
@@ -44,8 +48,11 @@ def main():
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--rotate", action="store_true", help="replace an existing key")
+    args = parser.parse_args()
     try:
-        key = main()
+        main(args.rotate)
         sys.exit(0)
     except Exception as e:
         print(f"❌ Error: {e}", file=sys.stderr)

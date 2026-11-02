@@ -19,10 +19,11 @@ from adcp import (
     get_all_properties,
     get_all_tags,
 )
-from adcp.adagents import get_properties_by_agent, normalize_url
+from adcp.adagents import get_properties_by_agent
 from sqlalchemy import select
 from sqlalchemy.sql import Select
 
+from src.core.agent_identity import adagents_scoped_to_agent
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AuthorizedProperty, PropertyTag
 from src.services.adagents_error_messages import describe_adagents_error
@@ -71,24 +72,47 @@ def _make_stats(dry_run: bool) -> dict[str, Any]:
     }
 
 
-def _log_fetch_error(domain: str, error: Exception, stats: dict[str, Any]) -> None:
-    """Log a fetch error and append it to stats."""
-    if isinstance(error, AdagentsNotFoundError):
+def _record_fetch_error(stats: dict[str, Any], msg: str) -> None:
+    """Append one fetch failure to stats. The CALLER already knows which it was."""
+    stats["errors"].append(msg)
+
+
+async def _fetch_domain_data(domain: str, delay: float, stats: dict[str, Any]) -> tuple[str, dict | None]:
+    """Fetch adagents.json from a domain with rate limiting delay.
+
+    Each failure is classified HERE, by ``except``, and recorded before
+    returning. It used to catch ``Exception``, hand the exception back as
+    a value, and let a downstream helper rebuild the type with a
+    three-way ``isinstance`` ladder -- the type was known at this line
+    and thrown away (salesagent-rys3u.5).
+    """
+    try:
+        await asyncio.sleep(delay)
+        logger.info(f"Fetching adagents.json from {domain}")
+        # Sanctioned self-pinning dialer, deliberately outside the
+        # egress seam -- see src/core/security/outbound_http.py's
+        # module docstring.
+        adagents_data = await fetch_adagents(domain)
+        return (domain, adagents_data)
+    except AdagentsNotFoundError:
         msg = f"{domain}: adagents.json not found (404)"
-        stats["errors"].append(msg)
+        _record_fetch_error(stats, msg)
         logger.warning(f"\u26a0\ufe0f {msg}")
-    elif isinstance(error, AdagentsTimeoutError):
+    except AdagentsTimeoutError:
         msg = f"{domain}: Request timeout"
-        stats["errors"].append(msg)
+        _record_fetch_error(stats, msg)
         logger.warning(f"\u26a0\ufe0f {msg}")
-    elif isinstance(error, AdagentsValidationError):
-        logger.error(f"\u274c {domain}: Invalid adagents.json - {error}")
-        msg = f"{domain}: {describe_adagents_error(error)}"
-        stats["errors"].append(msg)
-    else:
-        msg = f"{domain}: {error!s}"
-        stats["errors"].append(msg)
-        logger.error(f"\u274c Error syncing {domain}: {error}", exc_info=True)
+    except AdagentsValidationError as e:
+        # The raw error can carry a resolved IP and an SSRF range classification,
+        # so only the log sees it; stats gets the fixed, non-disclosing text.
+        logger.error(f"\u274c {domain}: Invalid adagents.json - {e}")
+        msg = f"{domain}: {describe_adagents_error(e)}"
+        _record_fetch_error(stats, msg)
+    except Exception as e:
+        msg = f"{domain}: {e!s}"
+        _record_fetch_error(stats, msg)
+        logger.error(f"\u274c Error syncing {domain}: {e}", exc_info=True)
+    return (domain, None)
 
 
 def _extract_properties(
@@ -102,14 +126,14 @@ def _extract_properties(
     method based on whether an agent_url is provided.
     """
     all_properties_from_file = adagents_data.get("properties", [])
+    if agent_url:
+        adagents_data = adagents_scoped_to_agent(adagents_data, agent_url)
 
     # Check if the relevant agent has no property restrictions
     authorized_agents = adagents_data.get("authorized_agents", [])
     has_unrestricted_agent = False
     for agent in authorized_agents:
         if not isinstance(agent, dict):
-            continue
-        if agent_url and normalize_url(agent.get("url", "")) != normalize_url(agent_url):
             continue
         has_property_ids = bool(agent.get("property_ids"))
         has_property_tags = bool(agent.get("property_tags"))
@@ -235,27 +259,14 @@ class PropertyDiscoveryService:
 
             logger.info(f"Syncing properties from {len(publisher_domains)} publisher domains")
 
-            async def fetch_domain_data(domain: str, delay: float) -> tuple[str, dict | Exception]:
-                """Fetch adagents.json from a domain with rate limiting delay."""
-                try:
-                    await asyncio.sleep(delay)
-                    logger.info(f"Fetching adagents.json from {domain}")
-                    # Sanctioned self-pinning dialer, deliberately outside the
-                    # egress seam -- see src/core/security/outbound_http.py's
-                    # module docstring.
-                    adagents_data = await fetch_adagents(domain)
-                    return (domain, adagents_data)
-                except Exception as e:
-                    return (domain, e)
-
-            fetch_tasks = [fetch_domain_data(domain, i * 0.5) for i, domain in enumerate(publisher_domains)]
+            fetch_tasks = [_fetch_domain_data(domain, i * 0.5, stats) for i, domain in enumerate(publisher_domains)]
             fetch_results_raw = await asyncio.gather(*fetch_tasks, return_exceptions=False)
-            fetch_results_list = cast(list[tuple[str, dict[str, Any] | Exception]], list(fetch_results_raw))
+            fetch_results_list = cast(list[tuple[str, dict[str, Any] | None]], list(fetch_results_raw))
 
             for domain, result in fetch_results_list:  # type: ignore[assignment]
                 try:
-                    if isinstance(result, Exception):
-                        _log_fetch_error(domain, result, stats)
+                    if result is None:
+                        # Already classified, recorded and logged at the catch site.
                         continue
 
                     adagents_data: dict[str, Any] = result  # type: ignore[assignment]

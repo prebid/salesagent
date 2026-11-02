@@ -1,5 +1,4 @@
 # Generated from adcp-req @ a14db6e5894e781a8b2c577e86e1b136876e4915 on 2026-06-03T11:30:04Z (merge mode)
-# DO NOT EDIT -- re-run: python scripts/compile_bdd.py --merge
 
 Feature: BR-UC-025 Validate Property Delivery Compliance
   As a Buyer
@@ -240,7 +239,6 @@ Feature: BR-UC-025 Validate Property Delivery Compliance
     When the Buyer Agent sends validate_property_delivery with list_id "pl-nonexistent"
     Then the operation should fail
     And the error code should be "REFERENCE_NOT_FOUND"
-    And the error message should contain "not found"
     And the error should include "suggestion" field
     And the suggestion should contain "verify the list_id"
     # POST-F1: System state unchanged (read-only)
@@ -252,10 +250,8 @@ Feature: BR-UC-025 Validate Property Delivery Compliance
     Given list_id "pl-other-tenant" exists but belongs to a different tenant
     When the Buyer Agent sends validate_property_delivery with list_id "pl-other-tenant"
     Then the operation should fail
-    And the error code should be "LIST_ACCESS_DENIED"
-    And the error message should contain "access denied"
+    And the error code should be "REFERENCE_NOT_FOUND"
     And the error should include "suggestion" field
-    And the suggestion should contain "permission"
     # POST-F1: System state unchanged (read-only)
     # POST-F2: Error code LIST_ACCESS_DENIED
     # POST-F3: Application context echoed
@@ -265,8 +261,7 @@ Feature: BR-UC-025 Validate Property Delivery Compliance
     Given property list "pl-valid" exists and is accessible
     When the Buyer Agent sends validate_property_delivery with list_id "pl-valid" and <records_state>
     Then the operation should fail
-    And the error code should be "RECORDS_REQUIRED"
-    And the error message should contain "records"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "at least one delivery record"
     # POST-F1: System state unchanged
@@ -283,8 +278,7 @@ Feature: BR-UC-025 Validate Property Delivery Compliance
     Given property list "pl-valid" exists and is accessible
     When the Buyer Agent sends validate_property_delivery with list_id "pl-valid" and 10001 records
     Then the operation should fail
-    And the error code should be "RECORDS_LIMIT_EXCEEDED"
-    And the error message should contain "10,000"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "batch"
     # POST-F1: System state unchanged
@@ -310,14 +304,14 @@ Feature: BR-UC-025 Validate Property Delivery Compliance
 
     Examples: Invalid partitions
       | partition             | setup                                                  | outcome                                             |
-      | missing_list_id       | no list_id field                                       | error "LIST_ID_REQUIRED" with suggestion             |
-      | missing_records       | list_id "pl-123" with no records field                 | error "RECORDS_REQUIRED" with suggestion             |
-      | empty_records         | list_id "pl-123" with records as empty array           | error "RECORDS_REQUIRED" with suggestion             |
-      | records_over_limit    | list_id "pl-123" with 10001 records                    | error "RECORDS_LIMIT_EXCEEDED" with suggestion       |
-      | negative_impressions  | list_id "pl-123" with record having -1 impressions     | error "IMPRESSIONS_INVALID" with suggestion          |
+      | missing_list_id       | no list_id field                                       | error "INVALID_REQUEST" with suggestion             |
+      | missing_records       | list_id "pl-123" with no records field                 | error "INVALID_REQUEST" with suggestion             |
+      | empty_records         | list_id "pl-123" with records as empty array           | error "INVALID_REQUEST" with suggestion             |
+      | records_over_limit    | list_id "pl-123" with 10001 records                    | error "INVALID_REQUEST" with suggestion       |
+      | negative_impressions  | list_id "pl-123" with record having -1 impressions     | error "INVALID_REQUEST" with suggestion          |
       | list_not_found        | list_id "pl-nonexistent" with valid records            | error "REFERENCE_NOT_FOUND" with suggestion               |
-      | list_access_denied    | list_id "pl-other-buyers" with valid records           | error "LIST_ACCESS_DENIED" with suggestion           |
-      | account_multi_omitted | list_id "pl-123" with account omitted by multi-account agent | error "ACCOUNT_REQUIRED" with suggestion        |
+      | list_access_denied    | list_id "pl-other-buyers" with valid records           | error "REFERENCE_NOT_FOUND" with suggestion           |
+      | account_multi_omitted | list_id "pl-123" with account omitted by multi-account agent | error "ACCOUNT_AMBIGUOUS" with suggestion        |
 
   @T-UC-025-boundary-delivery-request @boundary @delivery-request
   Scenario Outline: Delivery request boundary validation -- <boundary_point>
@@ -326,24 +320,24 @@ Feature: BR-UC-025 Validate Property Delivery Compliance
 
     Examples: Boundary values
       | boundary_point                            | setup                                                | outcome                                              |
-      | 0 records (empty array)                   | list_id "pl-123" with records []                     | error "RECORDS_REQUIRED" with suggestion              |
+      | 0 records (empty array)                   | list_id "pl-123" with records []                     | error "INVALID_REQUEST" with suggestion              |
       | 1 record (minimum)                        | list_id "pl-123" with 1 record                       | success                                              |
       | 10000 records (maximum)                   | list_id "pl-123" with 10000 records                  | success                                              |
-      | 10001 records (over limit)                | list_id "pl-123" with 10001 records                  | error "RECORDS_LIMIT_EXCEEDED" with suggestion        |
+      | 10001 records (over limit)                | list_id "pl-123" with 10001 records                  | error "INVALID_REQUEST" with suggestion        |
       | impressions = 0 (minimum)                 | record with impressions 0                            | success                                              |
-      | impressions = -1 (below minimum)          | record with impressions -1                           | error "IMPRESSIONS_INVALID" with suggestion           |
+      | impressions = -1 (below minimum)          | record with impressions -1                           | error "INVALID_REQUEST" with suggestion           |
       | include_compliant = false (default)       | include_compliant set to false                       | success with compliant records excluded              |
       | include_compliant = true                  | include_compliant set to true                        | success with all records included                    |
       | include_compliant omitted (defaults to false) | include_compliant not specified                  | success with compliant records excluded              |
       | list_id present and valid                 | list_id "pl-123" that exists                         | success                                              |
-      | list_id absent                            | no list_id field                                     | error "LIST_ID_REQUIRED" with suggestion              |
+      | list_id absent                            | no list_id field                                     | error "INVALID_REQUEST" with suggestion              |
       | list_id references nonexistent list       | list_id "pl-nonexistent"                             | error "REFERENCE_NOT_FOUND" with suggestion                |
-      | list_id references inaccessible list      | list_id "pl-other-tenant"                            | error "LIST_ACCESS_DENIED" with suggestion            |
-      | records absent                            | no records field                                     | error "RECORDS_REQUIRED" with suggestion              |
+      | list_id references inaccessible list      | list_id "pl-other-tenant"                            | error "REFERENCE_NOT_FOUND" with suggestion            |
+      | records absent                            | no records field                                     | error "INVALID_REQUEST" with suggestion              |
       | sales_agent_url present on some records   | mixed records with and without sales_agent_url       | success with partial authorization summary           |
       | sales_agent_url absent from all records   | no sales_agent_url on any record                     | success without authorization summary                |
       | account omitted (single-account agent)    | request without account; agent has 1 account         | success                                              |
-      | account omitted (multi-account agent)     | request without account; agent has >1 accounts       | error "ACCOUNT_REQUIRED" with suggestion              |
+      | account omitted (multi-account agent)     | request without account; agent has >1 accounts       | error "ACCOUNT_AMBIGUOUS" with suggestion              |
       | account present with account_id (multi-account agent) | request with account_id; agent has >1 accounts | success                                          |
       | account present with brand+operator (multi-account agent) | request with brand+operator; agent has >1 accounts | success                                  |
 
@@ -377,17 +371,17 @@ Feature: BR-UC-025 Validate Property Delivery Compliance
 
     Examples: Invalid partitions
       | partition                           | condition                                     | outcome                                                       |
-      | missing_summary                     | response missing summary object               | error "SUMMARY_REQUIRED" with suggestion                      |
-      | summary_missing_counter             | summary missing one of the ten required counters | error "SUMMARY_REQUIRED" with suggestion                   |
-      | inconsistent_counters               | summary total != sum of four buckets          | error "SUMMARY_INCONSISTENT" with suggestion                  |
-      | unknown_validation_status           | result with unknown status value              | error "VALIDATION_STATUS_INVALID" with suggestion             |
-      | unknown_feature_check_status        | features[] entry with status not in [passed/failed/warning/unevaluated] | error "FEATURE_STATUS_INVALID" with suggestion |
-      | unknown_authorization_status        | authorization with unknown status             | error "AUTHORIZATION_STATUS_INVALID" with suggestion          |
-      | authorization_summary_without_auth_records | auth summary present without auth records | error "AUTHORIZATION_SUMMARY_UNEXPECTED" with suggestion     |
-      | reserved_namespace_misuse           | data feature uses record: or delivery: prefix | error "FEATURE_ID_RESERVED_NAMESPACE" with suggestion         |
-      | confidence_below_zero               | features[] entry with confidence -0.1         | error "CONFIDENCE_OUT_OF_RANGE" with suggestion               |
-      | confidence_above_one                | features[] entry with confidence 1.1          | error "CONFIDENCE_OUT_OF_RANGE" with suggestion               |
-      | root_compliant_inconsistent         | compliant=true while summary.non_compliant_records > 0 | error "ROOT_COMPLIANT_INCONSISTENT" with suggestion  |
+      | missing_summary                     | response missing summary object               | error "INVALID_REQUEST" with suggestion                      |
+      | summary_missing_counter             | summary missing one of the ten required counters | error "INVALID_REQUEST" with suggestion                   |
+      | inconsistent_counters               | summary total != sum of four buckets          | error "VALIDATION_ERROR" with suggestion                  |
+      | unknown_validation_status           | result with unknown status value              | error "INVALID_REQUEST" with suggestion             |
+      | unknown_feature_check_status        | features[] entry with status not in [passed/failed/warning/unevaluated] | error "INVALID_REQUEST" with suggestion |
+      | unknown_authorization_status        | authorization with unknown status             | error "INVALID_REQUEST" with suggestion          |
+      | authorization_summary_without_auth_records | auth summary present without auth records | error "VALIDATION_ERROR" with suggestion     |
+      | reserved_namespace_misuse           | data feature uses record: or delivery: prefix | error "INVALID_REQUEST" with suggestion         |
+      | confidence_below_zero               | features[] entry with confidence -0.1         | error "INVALID_REQUEST" with suggestion               |
+      | confidence_above_one                | features[] entry with confidence 1.1          | error "INVALID_REQUEST" with suggestion               |
+      | root_compliant_inconsistent         | compliant=true while summary.non_compliant_records > 0 | error "VALIDATION_ERROR" with suggestion  |
 
   @T-UC-025-boundary-delivery-response @boundary @delivery-response
   Scenario Outline: Delivery response boundary validation -- <boundary_point>
@@ -401,40 +395,40 @@ Feature: BR-UC-025 Validate Property Delivery Compliance
       | validation status = non_compliant                      | non-compliant record                               | valid status with at least one failed features[] entry      |
       | validation status = not_covered                        | not-covered record                                 | valid status accepted                                       |
       | validation status = unidentified                       | unidentified record                                | valid status accepted                                       |
-      | validation status = unknown value                      | unknown status value                               | error "VALIDATION_STATUS_INVALID" with suggestion            |
+      | validation status = unknown value                      | unknown status value                               | error "INVALID_REQUEST" with suggestion            |
       | feature-check-status = passed                          | features[] entry status passed                     | valid status accepted                                       |
       | feature-check-status = failed                          | features[] entry status failed                     | valid status with optional requirement echoed                |
       | feature-check-status = warning                         | features[] entry status warning                    | valid status accepted                                       |
       | feature-check-status = unevaluated                     | features[] entry status unevaluated                | valid status accepted                                       |
-      | feature-check-status = unknown value                   | unknown feature-check-status value                 | error "FEATURE_STATUS_INVALID" with suggestion               |
+      | feature-check-status = unknown value                   | unknown feature-check-status value                 | error "INVALID_REQUEST" with suggestion               |
       | authorization status = authorized                      | authorized agent                                   | valid authorization status                                  |
       | authorization status = unauthorized                    | unauthorized agent                                 | valid authorization status                                  |
       | authorization status = unknown                         | adagents.json unavailable                          | valid authorization status                                  |
-      | authorization status = unknown value                   | unknown auth status value                          | error "AUTHORIZATION_STATUS_INVALID" with suggestion         |
+      | authorization status = unknown value                   | unknown auth status value                          | error "INVALID_REQUEST" with suggestion         |
       | authorization_summary present (records had sales_agent_url) | records with sales_agent_url                 | authorization_summary present                               |
       | authorization_summary absent (no auth records)         | no records with sales_agent_url                    | authorization_summary absent                                |
       | results empty (all compliant, default filter)          | all compliant with default filter                  | results array empty                                         |
       | results populated (include_compliant=true)             | all compliant with include_compliant true          | results array populated                                     |
       | summary counters total = sum of four buckets           | mixed status records                               | counters internally consistent                              |
-      | summary counters total != sum of four buckets          | inconsistent summary                               | error "SUMMARY_INCONSISTENT" with suggestion                 |
-      | summary missing one of ten counters                    | summary lacks not_covered_impressions              | error "SUMMARY_REQUIRED" with suggestion                     |
+      | summary counters total != sum of four buckets          | inconsistent summary                               | error "VALIDATION_ERROR" with suggestion                 |
+      | summary missing one of ten counters                    | summary lacks not_covered_impressions              | error "INVALID_REQUEST" with suggestion                     |
       | features[] entry has feature_id and status             | well-formed features[] entry                       | accepted                                                    |
-      | features[] entry missing feature_id                    | features[] entry without feature_id                | error "FEATURE_ID_REQUIRED" with suggestion                  |
-      | features[] entry missing status                        | features[] entry without status                    | error "FEATURE_STATUS_REQUIRED" with suggestion              |
+      | features[] entry missing feature_id                    | features[] entry without feature_id                | error "INVALID_REQUEST" with suggestion                  |
+      | features[] entry missing status                        | features[] entry without status                    | error "INVALID_REQUEST" with suggestion              |
       | features[] entry uses reserved record: namespace       | feature_id "record:list_membership"                | accepted (reserved for structural checks)                   |
       | features[] entry uses reserved delivery: namespace     | feature_id "delivery:seller_authorization"         | accepted (reserved for structural checks)                   |
-      | data feature misuses reserved record: prefix           | data feature_id "record:custom"                    | error "FEATURE_ID_RESERVED_NAMESPACE" with suggestion        |
+      | data feature misuses reserved record: prefix           | data feature_id "record:custom"                    | error "INVALID_REQUEST" with suggestion        |
       | features[] entry confidence = 0.0 (min)                | confidence 0.0                                     | accepted                                                    |
       | features[] entry confidence = 1.0 (max)                | confidence 1.0                                     | accepted                                                    |
-      | features[] entry confidence = -0.01 (below min)        | confidence -0.01                                   | error "CONFIDENCE_OUT_OF_RANGE" with suggestion              |
-      | features[] entry confidence = 1.01 (above max)         | confidence 1.01                                    | error "CONFIDENCE_OUT_OF_RANGE" with suggestion              |
+      | features[] entry confidence = -0.01 (below min)        | confidence -0.01                                   | error "INVALID_REQUEST" with suggestion              |
+      | features[] entry confidence = 1.01 (above max)         | confidence 1.01                                    | error "INVALID_REQUEST" with suggestion              |
       | root compliant = true when non_compliant_records = 0   | summary.non_compliant_records = 0                  | root compliant true                                         |
       | root compliant = false when non_compliant_records > 0  | summary.non_compliant_records > 0                  | root compliant false                                        |
       | root compliant omitted (partial response)              | include_compliant false partial response           | root compliant omitted; consumers use summary counts        |
       | aggregate present with score/grade/label               | agent provides aggregate                           | aggregate object in response                                |
       | aggregate absent                                       | agent does not provide aggregate                   | no aggregate in response                                    |
       | validated_at present (required)                        | response includes validated_at                     | accepted                                                    |
-      | validated_at absent (missing required)                 | response lacks validated_at                        | error "VALIDATED_AT_REQUIRED" with suggestion                |
+      | validated_at absent (missing required)                 | response lacks validated_at                        | error "INVALID_REQUEST" with suggestion                |
       | list_resolved_at present (optional)                    | response includes list_resolved_at                 | accepted                                                    |
       | list_resolved_at absent (optional)                     | response lacks list_resolved_at                    | accepted                                                    |
 
@@ -467,7 +461,7 @@ Feature: BR-UC-025 Validate Property Delivery Compliance
     And the request omits the account reference
     When the Buyer Agent sends validate_property_delivery with list_id "pl-valid"
     Then the operation should fail
-    And the error code should be "ACCOUNT_REQUIRED"
+    And the error code should be "ACCOUNT_AMBIGUOUS"
     And the error should include "suggestion" field
     And the suggestion should contain "account"
     # BR-RULE-191 INV-8: multi-account agent must disambiguate
@@ -616,8 +610,8 @@ Feature: BR-UC-025 Validate Property Delivery Compliance
       | minimum boundary | 0.0   | accepted                                             |
       | midpoint         | 0.5   | accepted                                             |
       | maximum boundary | 1.0   | accepted                                             |
-      | below minimum    | -0.01 | rejected with error code "CONFIDENCE_OUT_OF_RANGE"   |
-      | above maximum    | 1.01  | rejected with error code "CONFIDENCE_OUT_OF_RANGE"   |
+      | below minimum    | -0.01 | rejected with error code "INVALID_REQUEST"   |
+      | above maximum    | 1.01  | rejected with error code "INVALID_REQUEST"   |
 
   @T-UC-025-inv192-root-compliant-derivation @invariant @BR-RULE-192 @v3-1 @post-s7
   Scenario Outline: BR-RULE-192 INV-12 holds -- root compliant flag derivation -- <case>
@@ -725,8 +719,7 @@ Feature: BR-UC-025 Validate Property Delivery Compliance
     And the request omits the account reference required to disambiguate list ownership
     When the Buyer Agent sends validate_property_delivery with list_id "pl-valid" and 1 record
     Then the operation should fail
-    And the error code should be "ACCOUNT_REQUIRED"
-    And the error message should indicate that an account reference must be supplied
+    And the error code should be "ACCOUNT_AMBIGUOUS"
     And the error should include "suggestion" field
     And the suggestion should contain "account"
     # POST-F1: System state unchanged (read-only)

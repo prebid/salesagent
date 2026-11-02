@@ -15,14 +15,15 @@ from babel import numbers as babel_numbers
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, session, url_for
 from sqlalchemy import func, select
 
+from src.admin.form_validation import sanitize_form_data, validate_form_data
 from src.admin.services import DashboardService
 from src.admin.utils import get_tenant_config_from_db, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
+from src.core.config import get_settings
 from src.core.config_loader import is_single_tenant_mode
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Principal, Tenant
-from src.core.domain_config import get_sales_agent_domain
-from src.core.validation import sanitize_form_data, validate_form_data
+from src.core.database.models import Tenant
+from src.core.database.repositories.principal import PrincipalRepository
 from src.services.setup_checklist_service import SetupChecklistService
 from src.services.slack_notifier import SlackNotifier
 
@@ -217,16 +218,13 @@ def tenant_settings(tenant_id, section=None):
             if adapter_config_obj and adapter_config_obj.adapter_type == "google_ad_manager":
                 oauth_configured = bool(adapter_config_obj.gam_refresh_token)
 
-            # Check if GAM OAuth environment variables are configured
-            gam_oauth_configured = bool(
-                os.environ.get("GAM_OAUTH_CLIENT_ID") and os.environ.get("GAM_OAUTH_CLIENT_SECRET")
-            )
+            # Check if GAM OAuth credentials are configured
+            gam_oauth_configured = get_settings().auth.gam_oauth_configured
 
             # Get advertiser data for the advertisers section
-            from src.core.database.models import GAMInventory, Principal
+            from src.core.database.models import GAMInventory
 
-            stmt = select(Principal).filter_by(tenant_id=tenant_id)
-            principals = db_session.scalars(stmt).all()
+            principals = PrincipalRepository(db_session, tenant_id).list_all()
             advertiser_count = len(principals)
             active_advertisers = len(principals)  # For now, assume all are active
 
@@ -286,8 +284,9 @@ def tenant_settings(tenant_id, section=None):
                 }
 
             # Get environment info for URL generation
-            is_production = os.environ.get("PRODUCTION") == "true"
-            mcp_port = int(os.environ.get("ADCP_SALES_PORT", 8080)) if not is_production else None
+            runtime = get_settings().runtime
+            is_production = runtime.is_production
+            mcp_port = runtime.adcp_sales_port if not is_production else None
 
             # JSON fields are automatically deserialized by JSONType
             # These are now guaranteed to be lists (or None) from the database
@@ -304,9 +303,8 @@ def tenant_settings(tenant_id, section=None):
             active_products = product_count  # All products are considered active
             draft_products = 0  # No draft status tracking
 
-            # Creative formats removed - table dropped in migration f2addf453200
-            # Formats are now fetched from creative agents via AdCP (not stored in DB)
-            # Template section also removed - no longer passed to template
+            # No creative-format count: formats are fetched from creative agents over AdCP,
+            # not stored in this database, so the template has no section to fill.
 
             # Get inventory counts
             from src.core.database.models import GAMInventory
@@ -353,7 +351,7 @@ def tenant_settings(tenant_id, section=None):
                 custom_targeting_values_count = 0
 
             # All services (MCP, A2A, Admin) run on the same unified port
-            admin_port = int(os.environ.get("ADCP_SALES_PORT", 8080)) if not is_production else None
+            admin_port = runtime.adcp_sales_port if not is_production else None
             a2a_port = admin_port
 
             # Get currency limits for this tenant
@@ -407,7 +405,6 @@ def tenant_settings(tenant_id, section=None):
                 admin_port=admin_port,
                 is_production=is_production,
                 script_name=script_name,
-                sales_agent_domain=get_sales_agent_domain(),
                 authorized_domains=authorized_domains,
                 authorized_emails=authorized_emails,
                 product_count=product_count,
@@ -482,14 +479,12 @@ def test_slack(tenant_id):
             if not tenant.slack_webhook_url:
                 return jsonify({"success": False, "error": "No Slack webhook configured"}), 400
 
-            # One Block Kit owner. This route used to assemble its own blocks and
-            # dial the raw egress seam, duplicating what slack_notifier already does
-            # — and skipping its retry/record bookkeeping in the process.
+            # One Block Kit owner: the route does not assemble its own blocks or dial the
+            # egress seam itself, because that duplicates slack_notifier and skips its
+            # retry/record bookkeeping.
             #
-            # max_retries=1 is preserved deliberately: a test notification that
-            # silently sends three times is worse than one that fails visibly. That
-            # decision predates this change and survives it; the notifier grew a
-            # passthrough rather than the route keeping its own dialer.
+            # max_retries=1 is deliberate: a test notification that silently sends three
+            # times is worse than one that fails visibly.
             sent = SlackNotifier(webhook_url=tenant.slack_webhook_url).send_message(
                 text=f"🎉 Test message from Prebid Sales Agent for {tenant.name}",
                 blocks=[
@@ -518,8 +513,7 @@ def test_slack(tenant_id):
             )
 
             if not sent:
-                # Same contract the OutboundError arm used to serve: 400 with an
-                # opaque message. Slack's own response body is a counterparty
+                # 400 with an opaque message. Slack's own response body is a counterparty
                 # response and is never echoed back to the operator.
                 return jsonify({"success": False, "error": "Slack webhook delivery failed"}), 400
 
@@ -635,8 +629,7 @@ def media_buys_list(tenant_id):
                 # Get principal name
                 principal = None
                 if media_buy.principal_id:
-                    stmt = select(Principal).filter_by(tenant_id=tenant_id, principal_id=media_buy.principal_id)
-                    principal = db_session.scalars(stmt).first()
+                    principal = PrincipalRepository(db_session, tenant_id).get(media_buy.principal_id)
 
                 # Get product names from packages
                 product_names = []

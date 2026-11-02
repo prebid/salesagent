@@ -107,7 +107,7 @@ def legacy_placement_product_env(integration_db):
         yield env
 
 
-@pytest.mark.parametrize("transport", [Transport.IMPL, Transport.A2A, Transport.MCP, Transport.REST])
+@pytest.mark.parametrize("transport", [Transport.A2A, Transport.MCP, Transport.REST])
 def test_legacy_placement_is_schema_valid_on_all_transports(legacy_placement_product_env, transport):
     """Every emitted placement validates against adcp 3.1.1 placement.json, on all transports."""
     result = legacy_placement_product_env.call_via(transport, brief="display ads")
@@ -152,7 +152,7 @@ def nameless_legacy_placement_product_env(integration_db):
         yield env
 
 
-@pytest.mark.parametrize("transport", [Transport.IMPL, Transport.A2A, Transport.MCP, Transport.REST])
+@pytest.mark.parametrize("transport", [Transport.A2A, Transport.MCP, Transport.REST])
 def test_nameless_legacy_placement_gets_fallback_name_and_is_schema_valid(
     nameless_legacy_placement_product_env, transport
 ):

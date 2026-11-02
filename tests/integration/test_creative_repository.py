@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 
+from src.core.credentials import hash_token
 from src.core.database.repositories.creative import (
     CreativeAssignmentRepository,
     CreativeListResult,
@@ -93,7 +94,14 @@ class TestCreativeRepoGetById:
             t1 = TenantFactory(tenant_id="t1")
             t2 = TenantFactory(tenant_id="t2")
             p1 = PrincipalFactory(tenant=t1, principal_id="p1")
-            PrincipalFactory(tenant=t2, principal_id="p1")
+            # Same principal_id in a second tenant IS the subject here. ``token_hash`` is
+            # globally unique and the factory derives it from the principal_id alone, so
+            # the twin needs a distinct token; no credential is presented in this module.
+            PrincipalFactory(
+                tenant=t2,
+                principal_id="p1",
+                token_hash=hash_token("tok_test_t2_p1"),
+            )
             CreativeFactory(tenant=t1, principal=p1, creative_id="c_t1")
 
             session = env.get_session()
@@ -162,20 +170,51 @@ class TestCreativeRepoGetByPrincipal:
         p2_ids = {c.creative_id for c in page2.creatives}
         assert p1_ids.isdisjoint(p2_ids)
 
-    def test_status_filter(self, integration_db):
-        """Covers: UC-006-CREATIVE-APPROVAL-WORKFLOW-01 — status filter narrows results."""
+    def test_statuses_filter(self, integration_db):
+        """Covers: UC-006-CREATIVE-APPROVAL-WORKFLOW-01 — the statuses filter narrows results.
+
+        ``statuses`` is a LIST, because AdCP 3.1.1 core/creative-filters.json declares an
+        array and no singular sibling; this used to pass a single ``status`` string, so a
+        two-status request could only ever have been answered with a one-status query.
+        """
         with _RepoEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             principal = PrincipalFactory(tenant=tenant, principal_id="p1")
             CreativeFactory(tenant=tenant, principal=principal, creative_id="c_approved", status="approved")
             CreativeFactory(tenant=tenant, principal=principal, creative_id="c_pending", status="pending_review")
+            CreativeFactory(tenant=tenant, principal=principal, creative_id="c_rejected", status="rejected")
 
             session = env.get_session()
             repo = CreativeRepository(session, "test_tenant")
-            result = repo.get_by_principal("p1", status="approved")
+            one = repo.get_by_principal("p1", statuses=["approved"])
+            two = repo.get_by_principal("p1", statuses=["approved", "rejected"])
 
-        assert result.total_count == 1
-        assert result.creatives[0].creative_id == "c_approved"
+        assert one.total_count == 1
+        assert one.creatives[0].creative_id == "c_approved"
+        assert two.total_count == 2
+        assert {creative.creative_id for creative in two.creatives} == {"c_approved", "c_rejected"}
+
+    def test_archived_excluded_unless_named(self, integration_db):
+        """An unfiltered read excludes archived creatives; naming the status returns them.
+
+        core/creative-filters.json, on the filter object: "By default, archived creatives
+        are excluded from results. To include archived creatives, explicitly filter by
+        status='archived' or include 'archived' in the statuses array."
+        """
+        with _RepoEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            CreativeFactory(tenant=tenant, principal=principal, creative_id="c_live", status="approved")
+            CreativeFactory(tenant=tenant, principal=principal, creative_id="c_archived", status="archived")
+
+            session = env.get_session()
+            repo = CreativeRepository(session, "test_tenant")
+            default_read = repo.get_by_principal("p1")
+            named = repo.get_by_principal("p1", statuses=["archived"])
+
+        assert [creative.creative_id for creative in default_read.creatives] == ["c_live"]
+        assert default_read.total_count == 1
+        assert [creative.creative_id for creative in named.creatives] == ["c_archived"]
 
 
 class TestCreativeRepoListByPrincipal:

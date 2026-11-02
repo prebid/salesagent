@@ -60,14 +60,28 @@ from tests.bdd.steps._outcome_helpers import (
     _require,
     error_envelope_or_none,
     payload_or_none,
-    wire_dict,
+    wire_entry,
+    wire_entry_errors,
 )
 from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.factories.webhook import PushNotificationConfigRequestFactory
 from tests.helpers.webhook_credential_refusal import SHORT_CREDENTIAL
 
 # The list_id is irrelevant to a refusal — the seam refuses before a connection
 # is opened, so the path is never built. Fixed so the request is well-formed.
 _LIST_ID = "test_list"
+
+# The one wire answer BOTH gates give a buyer-supplied URL they refuse, spelled
+# once so the cause-invariance Then and this module's prose cannot drift apart.
+# VALIDATION_ERROR rather than INVALID_REQUEST because the pinned enum splits
+# them on malformed-vs-value-refused and a schema-valid https URI turned away by
+# a deny-list is the second — the reasoning ``AdCPUrlNotAllowedError`` carries in
+# full, and which the module docstring above cites the pinned enum text for.
+# `correctable` is that code's pinned enumMetadata classification, and passing it
+# explicitly means a pin that reclassifies the code reddens here rather than
+# silently redefining what this scenario grades.
+_REFUSAL_CODE = "VALIDATION_ERROR"
+_REFUSAL_RECOVERY = "correctable"
 
 # A public URL that PASSES the registration SSRF gate running immediately before
 # the credential gate, so the only thing that can refuse a credential-half
@@ -215,7 +229,7 @@ def when_create_media_buy_with_push_url(ctx: dict, webhook_url: str) -> None:
 
     ctx["supplied_agent_url"] = webhook_url
     kwargs = harness_create_request_kwargs(ctx)
-    kwargs["push_notification_config"] = {"url": webhook_url}
+    kwargs["push_notification_config"] = PushNotificationConfigRequestFactory.payload(url=webhook_url)
     dispatch_request(ctx, **kwargs)
 
 
@@ -245,10 +259,9 @@ def _dispatch_create_registering(ctx: dict, authentication: dict) -> None:
     from tests.bdd.steps.generic.given_media_buy import harness_create_request_kwargs
 
     kwargs = harness_create_request_kwargs(ctx)
-    kwargs["push_notification_config"] = {
-        "url": _SAFE_WEBHOOK_URL,
-        "authentication": authentication,
-    }
+    kwargs["push_notification_config"] = PushNotificationConfigRequestFactory.payload(
+        url=_SAFE_WEBHOOK_URL, authentication=authentication
+    )
     dispatch_request(ctx, **kwargs)
 
 
@@ -314,13 +327,24 @@ def when_update_media_buy_hmac_without_credentials(ctx: dict) -> None:
     ``push_notification_config`` against the pinned model, so constructing the
     request WITH the invalid block would raise inside this step and grade the
     test's own pydantic call instead of production's refusal.
+
+    ``account`` and ``idempotency_key`` are supplied for that same reason, not as
+    padding: AdCP 3.1.1 ``media-buy/update-media-buy-request.json`` /required is
+    ``[idempotency_key, account, media_buy_id]``, so a request missing them is
+    refused as a MALFORMED DOCUMENT before the registration is ever inspected —
+    which would grade this step's own pydantic call instead of the egress refusal
+    under test. Same constants the uc003 update dispatch uses.
     """
     from src.core.schemas import UpdateMediaBuyRequest
 
     media_buy = _require(ctx, "existing_media_buy")
     dispatch_request(
         ctx,
-        req=UpdateMediaBuyRequest(media_buy_id=media_buy.media_buy_id),
+        req=UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
+            media_buy_id=media_buy.media_buy_id,
+        ),
         push_notification_config={
             "url": _SAFE_WEBHOOK_URL,
             "authentication": _HMAC_WITHOUT_CREDENTIALS,
@@ -338,107 +362,113 @@ def when_sync_creatives_hmac_without_credentials(ctx: dict) -> None:
 def when_sync_creatives_short_credentials(ctx: dict) -> None:
     """Dispatch sync_creatives with a secret one character under the pinned minimum.
 
-    The sync twin of the multi-scheme create above, and the second hole the same
-    untyped forward opens: ``sync_creatives_raw`` DECLARES
-    ``PushNotificationConfig | None`` but performs no coercion, so the buyer's
-    raw dict travels to ``_sync_creatives_impl`` and a secret the pin calls too
-    short is stored and later used to sign — a secret both ends must agree on,
-    accepted at a strength the spec says neither end may rely on.
+    The sync twin of the multi-scheme create above. The hole it grades was an untyped
+    forward: a wrapper DECLARED ``PushNotificationConfig | None`` and performed no coercion,
+    so the buyer's raw dict travelled to ``_sync_creatives_impl`` and a secret the pin calls
+    too short was stored and later used to sign — a secret both ends must agree on, accepted
+    at a strength the spec says neither end may rely on. Every transport validates into
+    ``SyncCreativesRequest`` now, so the coercion happens before dispatch.
     """
     _dispatch_sync_registering(ctx, _HMAC_WITH_SHORT_CREDENTIALS)
-
-
-@when("the buyer sends a request registering HMAC-SHA256 with no credentials in the protocol envelope")
-def when_a2a_message_send_hmac_without_credentials(ctx: dict) -> None:
-    """Dispatch an A2A message/send whose PROTOCOL envelope registers the webhook.
-
-    Not a tool parameter: ``on_message_send`` reads
-    ``params.configuration.task_push_notification_config`` before any skill
-    routing, so this registration is made by a buyer who has invoked no tool at
-    all. The harness carries it through
-    ``_run_a2a_handler(a2a_push_notification_config=...)``; the skill it rides
-    on (get_products) is incidental and is never reached when the registration
-    is refused.
-
-    The protobuf ``AuthenticationInfo`` is a SINGULAR free-form ``scheme`` with
-    no enum behind it, so ``credentials`` is simply the empty proto3 default —
-    which is precisely the state no sender can serve.
-    """
-    dispatch_request(
-        ctx,
-        brief="credential refusal test",
-        a2a_push_notification_config={
-            "url": _SAFE_WEBHOOK_URL,
-            "authentication": {"scheme": _HMAC_SCHEME},
-        },
-    )
-
-
-@when("the buyer sends a request registering HMAC-SHA256 with a 31-character secret in the protocol envelope")
-def when_a2a_message_send_short_credentials(ctx: dict) -> None:
-    """Dispatch an A2A message/send whose protocol envelope registers a SHORT secret.
-
-    The same surface as the step above, one character under the pinned
-    ``credentials`` ``minLength: 32``. This document used to be waved through --
-    re-validated with a padded secret, then the buyer's short one restored -- so
-    the registration was stored and refused only later, inside the sender. It is
-    refused at ingest now, and this step is what keeps it that way.
-
-    31 rather than a token like ``"x"``: a boundary value is refused by the
-    pinned minimum itself, where a 5-character secret would also satisfy a
-    hand-written "looks too short" rule that has nothing to do with the pin.
-    """
-    dispatch_request(
-        ctx,
-        brief="credential refusal test",
-        a2a_push_notification_config={
-            "url": _SAFE_WEBHOOK_URL,
-            "authentication": {"scheme": _HMAC_SCHEME, "credentials": _SHORT_SECRET},
-        },
-    )
 
 
 # ── Then steps ──────────────────────────────────────────────────────
 
 
-# NOTE: the request-level rejection Then for these scenarios does NOT live here.
-# Its sentence is now identical to the one already defined at
-# ``tests/bdd/steps/domain/uc_get_products_inventory.py`` (``the request is
-# rejected with VALIDATION_ERROR naming field "{field}"``), and every step module
-# in tests/bdd/conftest.py's ``pytest_plugins`` shares ONE global namespace — so
-# a second definition of that literal would be an ambiguous, first-wins binding
-# (exactly what ``test_guards_bdd_duplicate_step_literals`` forbids). The seam
-# scenarios above therefore bind the shared step, which asserts the identical
-# triple through the identical helper; its docstring carries the rationale that
-# used to live here.
+# NOTE: the request-level rejection Then for these scenarios does not live here, and no
+# longer lives in ``uc_get_products_inventory.py`` either — this note used to point there,
+# at ``the request is rejected with VALIDATION_ERROR naming field "{field}"``, and that
+# cross-reference had gone stale: the sentence occurs in no feature, so the step it named
+# bound nothing and has been deleted.
+#
+# The request-level refusals in local-egress-ssrf-refusal.feature were reworded into three
+# narrower sentences, and those are what grade them now: ``the response arrives``, ``the
+# response contains error code VALIDATION_ERROR`` and ``the response error field is
+# push_notification_config.url`` (or ``property_list.agent_url``), all in
+# ``generic/then_error.py``. The decomposition keeps the same obligations — ``correctable``
+# included, because ``then_response_error_code`` calls ``assert_wire_error`` without a
+# recovery and the helper DEFAULTS it from CODE_TABLE, so a refusal re-classified
+# transient still fails. What remains here is the per-ITEM sentence below, whose failure
+# lives inside a success envelope and so cannot share the request-level step.
+#
+# The one-global-namespace constraint that motivated the original arrangement is unchanged:
+# every module in tests/bdd/conftest.py's ``pytest_plugins`` shares one step registry, so a
+# second definition of a literal is an ambiguous first-wins binding, which
+# ``test_guards_bdd_duplicate_step_literals`` forbids.
 
 
-@then(parsers.parse('the refusal message on both envelope layers is exactly "{message}"'))
-def then_refusal_message_is_exactly(ctx: dict, message: str) -> None:
-    """Assert BOTH envelope layers carry exactly *message* — no more, no less.
+@then(
+    "the refusal is VALIDATION_ERROR / correctable on both envelope layers, "
+    "and its error object carries the code's own message"
+)
+def then_refusal_is_the_codes_own_message(ctx: dict) -> None:
+    """Assert the refusal carries nothing that distinguishes WHICH cause fired.
 
-    The expected text is a Gherkin literal on purpose, never imported from
-    production: importing it would make any message change agree with itself, and
-    a regression to ``f"{_BLOCKED_MESSAGE} (host {h})"`` would still satisfy a
-    substring check. Equality on both layers is what makes such a regression red.
+    THE OBLIGATION. An unresolvable host and a blocked reserved address must be
+    indistinguishable on the wire, or the refusal is a name-existence oracle —
+    AdCP 3.1.1 L1 spec point 6's second half. Every Examples row of both
+    scenarios that binds this step therefore expects the SAME answer.
 
-    Both the SEND-time scenarios and the INGEST scenario now pass one literal
-    for every Examples row: an unresolvable host and a blocked reserved
-    address must be indistinguishable on the wire, or the refusal is a
-    name-existence oracle — spec point 6's second half. The registration gate
-    used to vary its ``<reason>`` per cause (which CIDR, which resolved
-    address); that was the disclosure bug this scenario now pins closed, via
-    ``egress.policy._RESTRICTED_RANGE_MESSAGE``. Non-disclosure of the
-    buyer's OWN supplied host/address is still carried by
-    :func:`then_envelope_discloses_nothing`, not by sameness — the two Thens
-    check different things.
+    WHY IT IS NOT REDUNDANT with ``tests/unit/test_protocol_webhook_ssrf.py``,
+    which already grades code / recovery / field and host-absence for a blocked
+    URL: that test grades ONE refusal in isolation, so it structurally cannot
+    see a difference BETWEEN causes. Cause-invariance is a property of the SET,
+    and this Scenario Outline is where the set exists. Do not delete this step
+    as duplicated coverage.
+
+    WHY IT IS NOT COVERED by :func:`then_envelope_discloses_nothing` either.
+    That Then serializes the whole envelope and forbids the supplied host and
+    any IP address — so it catches ``f"{msg} (host ...)"``, but a per-cause
+    sentence naming NEITHER ("URL resolves to a restricted range." against "Host
+    does not resolve") sails straight through it while still telling a prober
+    which branch fired. The two Thens check genuinely different things.
+
+    WHAT REPLACED THE LITERAL, and why the structured form is stronger rather
+    than weaker. This step used to pin an authored sentence — "URL resolves to a
+    restricted range." — passed in from the Gherkin, on the reasoning that a
+    literal never imported from production cannot agree with itself. That
+    reasoning was sound; its premise stopped being true. This merge deleted
+    origin/main's authored ``_default_message`` (see ``src/core/exceptions.py``
+    at the ``AdCPBlockedUrlError`` alias: that message "is subsumed: the message
+    here is the code's own table sentence"), so the literal named a string that
+    exists nowhere in the tree and the scenario graded a sentence production
+    cannot emit. Under ADR-010 the buyer-facing message is a pure function of
+    the CODE through ``CODE_TABLE``, which means cause-invariance now follows
+    from code-invariance — and that is what is asserted here:
+
+    * ``assert_wire_error`` pins the code and recovery on BOTH envelope layers
+      (its two-layer invariant ``adcp_error.code == errors[0].code``, plus
+      canonicality against the pinned ``error-code.json`` and the pinned
+      recovery classification). That is the "both envelope layers" half of the
+      sentence, carried structurally rather than by comparing two strings this
+      step fetched for itself.
+    * The message is then pinned to CODE_TABLE's own sentence for that code.
+      This is not grading the table against itself: it grades that production
+      did not AUTHOR OVER the table, so a regression that appends a cause —
+      ``f"{msg} (host ...)"``, or a per-branch sentence — reddens on the first
+      Examples row that differs.
+
+    The message half is asserted on ``errors[0]`` only, and the Gherkin sentence
+    says so rather than claiming both layers. That is the protocol position
+    ``core/error.json`` defines the per-error members on, and the harness
+    deliberately publishes no ``adcp_error.message`` reader —
+    ``assert_envelope_shape`` documents the envelope-level message as permitted
+    to differ, since it carries the envelope's own summary. Promising both
+    layers while reading one would be the same defect in the other direction.
     """
-    envelope = _wire_error_envelope(ctx)
-    assert envelope["errors"][0]["message"] == message, (
-        f"errors[0].message={envelope['errors'][0]['message']!r}, expected exactly {message!r}"
-    )
-    assert envelope["adcp_error"]["message"] == message, (
-        f"adcp_error.message={envelope['adcp_error']['message']!r}, expected exactly {message!r}"
+    from src.core.errors.codes import CODE_TABLE
+
+    result = _require(ctx, "result", hint="the buyer's request was supposed to be refused")
+    result.assert_wire_error(_REFUSAL_CODE, recovery=_REFUSAL_RECOVERY)
+
+    error_object = result.wire_error_object()
+    assert error_object is not None, "assert_wire_error passed but no error object is reachable on the wire"
+    expected = CODE_TABLE[_REFUSAL_CODE].message
+    actual = error_object.get("message")
+    assert actual == expected, (
+        f"errors[0].message={actual!r}, expected {_REFUSAL_CODE}'s own table sentence {expected!r}. "
+        "A message that differs from the code's is authored text, and authored text is what lets a "
+        "prober tell one refusal cause from another (AdCP 3.1.1 L1 point 6)."
     )
 
 
@@ -479,23 +509,30 @@ def then_creative_rejected_per_item(ctx: dict, field: str) -> None:
     the destination (L1 point 6), so it is the only channel that can tell a
     buyer WHICH of up to 100 creatives to fix.
     """
-    # wire_dict, not require_payload: the buyer's own view of the response, so
-    # the assertion is graded at the level it CLAIMS to grade. require_payload
-    # hands back a dict on some transports and a typed model on others, which is
-    # why every read below used to re-decide the shape for itself -- six
-    # dict-vs-model ladders in one step, each a private opinion about what the
-    # harness happened to return.
-    response = wire_dict(ctx)
-    creatives = response["creatives"]
-    assert creatives, f"expected a per-creative result, got {response!r}"
-    entry = creatives[0]
+    # wire_entry / wire_entry_errors, not require_payload: the buyer's own view of
+    # the response, so the assertion is graded at the level it CLAIMS to grade.
+    # require_payload hands back a dict on some transports and a typed model on
+    # others, which is why every read below used to re-decide the shape for itself
+    # -- six dict-vs-model ladders in one step, each a private opinion about what
+    # the harness happened to return.
+    #
+    # And the per-entry ``errors[]`` array is located by ``wire_entry_errors``, the
+    # one GUARD-SANCTIONED reader for that region, rather than by indexing
+    # ``entry["errors"]`` here: a partial-failure row's error list is a PROTOCOL
+    # POSITION, and where the spec puts it is the harness's business. Hand-rolling
+    # it made this step a second answer to that question -- the exact shape
+    # ``test_architecture_bdd_wire_discipline`` forbids. Both readers resolve the
+    # SAME entry (``creatives[0]``), and each asserts the index is in range, so the
+    # "expected a per-creative result" guard is not lost by dropping the hand-rolled
+    # emptiness check.
+    entry = wire_entry(ctx, "creatives", index=0)
     # .get with a named assert, not a subscript: a missing key on the wire is a
     # real outcome (the seller omitted the field), and a bare KeyError two frames
     # up says nothing about which field the buyer did not get.
     action = entry.get("action")
     assert str(action) == "failed", f"a creative whose agent_url egress refused must not sync; action={action!r}"
 
-    errors = entry.get("errors")
+    errors = wire_entry_errors(ctx, "creatives", index=0)
     assert errors, f"a failed creative must carry an error; got {entry!r}"
     error = errors[0]
     for key in ("code", "recovery", "field"):
@@ -525,13 +562,9 @@ def then_refusal_is_the_credential_contract(ctx: dict) -> None:
     triple the preceding Then already pinned is deliberate: it comes from the
     same shared definition, so there is nothing for the two to disagree about.
 
-    The half this step adds, and the reason it is not decoration: the A2A
-    push-config surfaces funnel refusals through
-    ``_invalid_params_from_ssrf_error``, which manufactures
-    ``field="push_notification_config.url"`` plus the https/SSRF suggestion for
-    anything it does not recognize as an ``AdCPValidationError``. A credential
-    refusal that took that path would reach the buyer as "fix your URL" about a
-    URL that is fine. "It refused" is not enough; it has to refuse about the
+    The half this step adds, and the reason it is not decoration: a credential
+    refusal that reached the buyer as a URL refusal would say "fix your URL" about
+    a URL that is fine. "It refused" is not enough; it has to refuse about the
     right field, with the right advice.
     """
     from tests.helpers.webhook_credential_refusal import assert_credentials_refusal_envelope

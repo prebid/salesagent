@@ -1,0 +1,678 @@
+{
+ "catalog": {
+  "shapes": [
+   {
+    "name": "_RejectionFields (MODIFIES the committed ErrorProblem)",
+    "base": "BaseModel",
+    "fields": [
+     "rejected_value: str | None = None",
+     "accepted_values: list[str] | None = None",
+     "# model_config = ConfigDict(extra=get_pydantic_extra_mode())",
+     "# INVARIANT (docstring, enforced by review): the value the buyer supplied at `field`, rendered as a string. A structured reference (a FormatId, a datetime pair) NEVER lands here as a joined composite -- it gets a declared field or a declared item shape."
+    ],
+    "extra_mode": "get_pydantic_extra_mode()",
+    "pinned_source": "../adcp/dist/schemas/3.1.1/core/error.json (the `details` description: canonical rejection-set keys; neither required; both live at the details ROOT and, mirrored, on each item)",
+    "serves_error_classes": [
+     "(mixin -- reaches the wire through ErrorProblem and RejectionDetails)"
+    ]
+   },
+   {
+    "name": "ErrorProblem (MODIFIED -- src/core/errors/details.py:84)",
+    "base": "_RejectionFields",
+    "fields": [
+     "code: ErrorCodeT | None = None",
+     "subject_type: Literal[\"creative\",\"product\",\"package\",\"account\"] | None = None",
+     "subject_id: str | None = None",
+     "field: str | None = None",
+     "# DELETES its own copies of rejected_value/accepted_values (details.py:120-121) and inherits them",
+     "# INVARIANT (docstring): `field` is a pointer into the BUYER'S REQUEST PAYLOAD in bracket notation, produced by first_validation_error_field() (src/core/exceptions.py:1105). Never a seller-side column name -- an entity's stored state goes to rejected_value with subject_type/subject_id."
+    ],
+    "extra_mode": "get_pydantic_extra_mode()",
+    "pinned_source": "NONE (item shape; the rejection pair it inherits is pin-canonical)",
+    "serves_error_classes": [
+     "every class whose leaf descends from EntityProblemsDetails"
+    ]
+   },
+   {
+    "name": "ProblemsDetails (MODIFIED -- src/core/errors/details.py:210)",
+    "base": "ErrorDetails",
+    "fields": [
+     "problems: list[SerializeAsAny[ErrorProblem]] | None = None",
+     "# was list[ErrorProblem] | None; without SerializeAsAny a RangeProblem/FormatProblem/SchemaProblem/OverlapProblem passes to_wire() with its own fields silently dropped"
+    ],
+    "extra_mode": "get_pydantic_extra_mode()",
+    "pinned_source": "NONE",
+    "serves_error_classes": [
+     "every class whose leaf descends from EntityProblemsDetails"
+    ]
+   },
+   {
+    "name": "AdapterFailureDetails (MODIFIED -- src/core/errors/details.py:233)",
+    "base": "EntityProblemsDetails, UpstreamCallDetails",
+    "fields": [
+     "# was (EntityRefDetails, UpstreamCallDetails, ProblemsDetails) -- a fourth inline spelling of the entity+problems composition. Field-identical; verify with a to_wire() key-set test (only serialization ORDER moves)."
+    ],
+    "extra_mode": "get_pydantic_extra_mode()",
+    "pinned_source": "NONE",
+    "serves_error_classes": [
+     "AdCPAdapterError",
+     "AdCPRateLimitError",
+     "AdCPServiceUnavailableError",
+     "+ the five adapter taxonomy subclasses"
+    ]
+   },
+   {
+    "name": "RejectionDetails",
+    "base": "ErrorDetails, _RejectionFields",
+    "fields": [],
+    "extra_mode": "get_pydantic_extra_mode()",
+    "pinned_source": "../adcp/dist/schemas/3.1.1/core/error.json (details-root rejection pair)",
+    "serves_error_classes": [
+     "(composed into EntityRejectionDetails -- never a type parameter on its own)"
+    ]
+   },
+   {
+    "name": "EntityProblemsDetails",
+    "base": "EntityRefDetails, ProblemsDetails",
+    "fields": [
+     "# SHARED BASE ONLY. Never a type parameter -- making it AdCPConfigurationError's parameter would make 8 foreign shapes assignable at a config raise site with mypy silent."
+    ],
+    "extra_mode": "get_pydantic_extra_mode()",
+    "pinned_source": "NONE",
+    "serves_error_classes": [
+     "(base of ValidationDetails, CapabilityDetails, CreativeFaultDetails, AuthorizationFaultDetails, AccountSetupDetails, EntityRejectionDetails, AdapterFailureDetails)"
+    ]
+   },
+   {
+    "name": "EntityRejectionDetails",
+    "base": "EntityProblemsDetails, RejectionDetails",
+    "fields": [
+     "# The ONE name for entity + problems + rejection pair. Every family that needs it composes THIS, never (EntityProblemsDetails, RejectionDetails) again."
+    ],
+    "extra_mode": "get_pydantic_extra_mode()",
+    "pinned_source": "NONE (inherits the pin-canonical pair)",
+    "serves_error_classes": [
+     "AdCPGoneError (type parameter)",
+     "AdCPConflictError (type parameter; binds AdCPAccountAmbiguousError, AdCPIdempotencyConflictError, AdCPIdempotencyExpiredError)",
+     "AdCPBudgetExceededError (type parameter)",
+     "AdCPMediaBuyRejectedError (type parameter)"
+    ]
+   },
+   {
+    "name": "ValidationDetails",
+    "base": "EntityProblemsDetails",
+    "fields": [
+     "# 0 own fields. Does NOT carry the rejection pair: only the ~15 sites that reject a value against a closed set get it, via RejectionValidationDetails. That is what stops TypeMismatchDetails and TimeWindowDetails from having two accepted-set / two value channels."
+    ],
+    "extra_mode": "get_pydantic_extra_mode()",
+    "pinned_source": "NONE",
+    "serves_error_classes": [
+     "AdCPValidationError (type parameter)",
+     "AdCPInvalidRequestError (inherited parameter)"
+    ]
+   },
+   {
+    "name": "RejectionValidationDetails",
+    "base": "ValidationDetails, EntityRejectionDetails",
+    "fields": [
+     "# 0 own. ~15 sites: schema_helpers.py:121,128; creatives/listing.py:110,118; task_management.py:210; signals.py:296; google_ad_manager.py:1381 (rejected_value=str(budget), field=\"budget\" already first-class); media_buy_create.py:2217 (single offending instant -> rejected_value, NOT TimeWindowDetails)."
+    ],
+    "extra_mode": "get_pydantic_extra_mode()",
+    "pinned_source": "NONE",
+    "serves_error_classes": [
+     "AdCPValidationError",
+     "AdCPInvalidRequestError"
+    ]
+   },
+   {
+    "name": "PricingValidationDetails",
+    "base": "RejectionValidationDetails",
+    "fields": [
+     "pricing_model: PricingModel | None = None",
+     "currency: str | None = None",
+     "# bid_price, floor_price, package_budget, min_spend_per_package DELETED. media_buy_create.py:1490 -> rejected_value=str(package.bid_price) + problems=[RangeProblem(field=\"bid_price\", minimum=floor_price)] + field=\"bid_price\"; :1510 -> rejected_value=str(package_budget) + problems=[RangeProblem(field=\"packages[i].budget\", minimum=Decimal(str(min_spend_per_package)))] + field=\"packages[i].budget\"; :1471 (advisory floor, no bid submitted) -> problems=[RangeProblem(field=\"bid_price\", minimum=floor_price)] with rejected_value unset.",
+     "# :1457 keeps accepted_values=[synthesized option_id] -- verified at media_buy_create.py:1433 that the id is the literal matching key, not a label."
+    ],
+    "extra_mode": "get_pydantic_extra_mode()",
+    "pinned_source": "NONE (deliberately NOT budget-too-low.json -- see open_questions)",
+    "serves_error_classes": [
+     "AdCPValidationError"
+    ]
+   },
+   {
+    "name": "TypeMismatchDetails",
+    "base": "ValidationDetails",
+    "fields": [
+     "received_type: JsonTypeName | None = None",
+     "expected_types: list[JsonTypeName] | None = None",
+     "# alias: JsonTypeName = Literal[\"object\",\"array\",\"string\",\"number\",\"integer\",\"boolean\",\"null\"] -- keeps Python class names (a pinned transport-errors.mdx MUST-NOT) off the wire. Sites: media_buy_create.py:1577 (\"FormatId object\" today), :2205, schema_helpers.py:172. NO longer serves AdCPConfigurationError: capability_declarations.py:252 emits no details (internal_detail only)."
+    ],
+    "extra_mode": "get_pydantic_extra_mode()",
+    "pinned_source": "NONE",
+    "serves_error_classes": [
+     "AdCPValidationError"
+    ]
+   },
+   {
+    "name": "TimeWindowDetails",
+    "base": "ValidationDetails",
+    "fields": [
+     "start_time: datetime | None = None",
+     "end_time: datetime | None = None",
+     "# ONLY media_buy_create.py:2234, where TWO instants together exceed a scalar. The single-instant rejection at :2217 uses RejectionValidationDetails.rejected_value. This shape does not inherit the rejection pair, so the two channels cannot compete."
+    ],
+    "extra_mode": "get_pydantic_extra_mode()",
+    "pinned_source": "NONE",
+    "serves_error_classes": [
+     "AdCPInvalidRequestError"
+    ]
+   },
+   {
+    "name": "DuplicateProductDetails",
+    "base": "ValidationDetails",
+    "fields": [
+     "duplicate_product_ids: list[str] | None = None"
+    ],
+    "extra_mode": "get_pydantic_extra_mode()",
+    "pinned_source": "NONE",
+    "serves_error_classes": [
+     "AdCPValidationError"
+    ]
+   },
+   {
+    "name": "_UpdateActionFields",
+    "base": "BaseModel",
+    "fields": [
+     "attempted_update_action: UpdateActionT | None = None",
+     "supported_update_actions: list[UpdateActionT] | None = None",
+     "# alias: UpdateActionT = Literal[\"pause_media_buy\",\"resume_media_buy\",\"pause_package\",\"resume_package\",\"update_package_budget\",\"update_package_impressions\",\"activate_order\",\"submit_for_approval\",\"approve_order\",\"archive_order\"] -- verified src/adapters/constants.py:6-17. Deliberately NOT named `attempted_action`: that key is $ref'd to enums/media-buy-valid-action.json in the pin and these ten tokens intersect it ZERO times.",
+     "# model_config = ConfigDict(extra=get_pydantic_extra_mode())"
+    ],
+    "extra_mode": "get_pydantic_extra_mode()",
+    "pinned_source": "NONE (pinned key `attempted_action` deliberately NOT claimed -- see open_questions)",
+    "serves_error_classes": [
+     "(mixin -- composed into UpdateActionValidationDetails and UpdateActionCapabilityDetails)"
+    ]
+   },
+   {
+    "name": "UpdateActionValidationDetails",
+    "base": "ValidationDetails, _UpdateActionFields",
+    "fields": [
+     "# 0 own. src/adapters/broadstreet/adapter.py:704 and src/adapters/google_ad_manager.py:1474 (both already carry field=\"package_id\", so this is not a second field channel)."
+    ],
+    "extra_mode": "get_pydantic_extra_mode()",
+    "pinned_source": "NONE",
+    "serves_error_classes": [
+     "AdCPValidationError"
+    ]
+   },
+   {
+    "name": "UpdateActionCapabilityDetails",
+    "base": "CapabilityDetails, _UpdateActionFields",
+    "fields": [
+     "# 0 own. src/adapters/constants.py:42 and src/adapters/google_ad_manager.py:1599. rejected_value/accepted_values stay UNSET at both: the pin's canonical keys must not be filled with a vocabulary the pin does not know."
+    ],
+    "extra_mode": "get_pydantic_extra_mode()",
+    "pinned_source": "NONE",
+    "serves_error_classes": [
+     "AdCPCapabilityNotSupportedError"
+    ]
+   },
+   {
+    "name": "CapabilityDetails",
+    "base": "EntityProblemsDetails",
+    "fields": [
+     "unsupported_capability: CapabilityT | None = None",
+     "# alias: CapabilityT = Literal[\"account_filter\",\"audiences\",\"axe_exclude_segment\",\"axe_include_segment\",\"browser\",\"content_category\",\"currency\",\"device_type\",\"geo_city\",\"geo_metro_system\",\"geo_postal_areas\",\"geo_postal_areas_exclude\",\"keywords\",\"media_type\",\"natural_language_media_buy\",\"os\",\"placement_targeting\",\"pricing_model\",\"property_list\",\"update_action\"] -- names the SUBJECT only.",
+     "# \"media_type_multiple\" REMOVED: verified src/adapters/gam/managers/targeting.py:866-870 is a cardinality refusal on the SAME subject as :886-892, both under UNSUPPORTED_FEATURE, so the token was a parallel classification vocabulary. :868 now emits unsupported_capability=\"media_type\" + problems=[ErrorProblem(code=UNSUPPORTED_FEATURE, field=\"packages[].targeting_overlay.media_type_any_of\", rejected_value=mt) for mt in media_type_any_of].",
+     "# \"property_list\" ADDED for src/services/targeting_capabilities.py:247, the 12th spelling of the capability-name channel (details={\"feature\": \"property_list_filtering\"}) that the advisory lane had kept alive.",
+     "# Extends EntityProblemsDetails so \"which product\" uses the SAME key as the other three families: media_buy_update.py:1070 emits product_id=..., not a degenerate one-element problems list. CapabilityEntityDetails and CapabilityProblemsDetails are both unnecessary -- problems is inherited."
+    ],
+    "extra_mode": "get_pydantic_extra_mode()",
+    "pinned_source": "NONE",
+    "serves_error_classes": [
+     "AdCPCapabilityNotSupportedError (type parameter)"
+    ]
+   },
+   {
+    "name": "CapabilityRejectionDetails",
+    "base": "CapabilityDetails, EntityRejectionDetails",
+    "fields": [
+     "# 0 own. Composes the NAMED rejection composition rather than restating (CapabilityDetails, RejectionDetails)."
+    ],
+    "extra_mode": "get_pydantic_extra_mode()",
+    "pinned_source": "NONE (inherits the pin-canonical pair)",
+    "serves_error_classes": [
+     "AdCPCapabilityNotSupportedError"
+    ]
+   },
+   {
+    "name": "CreativeFaultDetails",
+    "base": "EntityProblemsDetails",
+    "fields": [
+     "# 0 own. THE type parameter for AdCPCreativeRejectedError, so the three FIXME(#1598) lookup-miss sites (media_buy_update.py:232, media_buy_create.py:386, :3770) are NOT offered policy_id/policy_url. They emit problems=[ErrorProblem(code=CREATIVE_NOT_FOUND, subject_type=\"creative\", subject_id=cid) for cid in sorted(missing_ids)].",
+     "# media_buy_update.py:240 (terminal-state creatives): problems=[ErrorProblem(subject_type=\"creative\", subject_id=c.creative_id, rejected_value=c.status)] -- the stored state goes to rejected_value, NOT to ErrorProblem.field, which is a request pointer."
+    ],
+    "extra_mode": "get_pydantic_extra_mode()",
+    "pinned_source": "NONE",
+    "serves_error_classes": [
+     "AdCPCreativeRejectedError (type parameter)"
+    ]
+   },
+   {
+    "name": "CreativeFormatDetails",
+    "base": "CreativeFaultDetails",
+    "fields": [
+     "accepted_formats: list[FormatRef] | None = None",
+     "# Replaces every slash-joined f\"{agent_url}/{format_id}\" composite. Verified adcp FormatId.agent_url is `format: uri` and contains \"/\" itself, so the composite is not machine-splittable and the pin's rejected_value/accepted_values (typed string / array-of-string) cannot carry a structured pair.",
+     "# INVARIANT: at these sites rejected_value stays UNSET; the rejected reference travels as FormatProblem.format.",
+     "# Sites: media_buy_update.py:276 (multi-creative), creatives/_assignments.py:237, media_buy_create.py:3827."
+    ],
+    "extra_mode": "get_pydantic_extra_mode()",
+    "pinned_source": "NONE",
+    "serves_error_classes": [
+     "AdCPCreativeRejectedError"
+    ]
+   },
+   {
+    "name": "CreativeRejectedPolicyDetails",
+    "base": "CreativeFaultDetails",
+    "fields": [
+     "policy_id: str | None = None",
+     "policy_url: str | None = None",
+     "# PARTIAL mirror, declared as such in the docstring and required in the PR description: the pin's third property `reasons` (array of free-text string) is NOT declared -- rule 3 forbids the slot, and problems[].code already classifies each rejection, so declaring reasons: list[ErrorCodeT] would be a second channel for one fact (rule 8). Legal: the pinned shape is RECOMMENDED, additionalProperties: true, no required fields."
+    ],
+    "extra_mode": "get_pydantic_extra_mode()",
+    "pinned_source": "PARTIAL MIRROR of ../adcp/dist/schemas/3.1.1/error-details/creative-rejected.json (2 of 3 properties; divergence documented)",
+    "serves_error_classes": [
+     "AdCPCreativeRejectedError"
+    ]
+   },
+   {
+    "name": "ConfigurationFaultDetails",
+    "base": "EntityRefDetails",
+    "fields": [
+     "# 0 own, and NO problems / NO rejection pair -- deliberately the narrowest leaf in the catalog. enums/error-code.json (CONFIGURATION_ERROR) and dist/docs/3.1.1/building/by-layer/L3/error-handling.mdx:853 both state: \"the code itself is the discriminator; no `error.details` shape is defined for this code (mirroring the minimal-disclosure precedent of AGENT_SUSPENDED / AGENT_BLOCKED)\" and \"error.message carries the diagnostic ... without leaking deployment internals to the buyer\".",
+     "# Carries ONLY the entity ids these sites already emit today: tenant_id (models.py:209,674,1396), product_id (media_buy_create.py:1404,1500), account_id (accounts.py:1254,1750).",
+     "# Everything the surveys wanted to ADD moves to internal_detail (the pattern already used at src/adapters/base.py:256 and capability_declarations.py:272): google_ad_manager.py:157 advertiser_id, :173 the credential-slot inventory [service_account_key_file|service_account_json|refresh_token], :449 the missing-config list; idempotency_policy.py:61,69 the replay-TTL bounds; media_buy_create.py:2057 missing setup tasks + the /tenant/<id>/setup-checklist URL; capability_declarations.py:146 unbacked/backed declarations, :252 received_type, :261 block+tracked_by, :272 the pydantic loc, :321 orphaned specialisms; ai/factory.py:154 provider.",
+     "# CONSEQUENTLY DROPPED from the catalog: SetupIncompleteDetails, DependencyProblem, RangeProblem-for-config, TypeMismatchDetails-at-capability_declarations.py:252."
+    ],
+    "extra_mode": "get_pydantic_extra_mode()",
+    "pinned_source": "NONE (the pin defines no details shape for this code -- that is the point)",
+    "serves_error_classes": [
+     "AdCPConfigurationError (type parameter)"
+    ]
+   },
+   {
+    "name": "AuthorizationFaultDetails",
+    "base": "EntityProblemsDetails",
+    "fields": [
+     "# 0 own. account_helpers.py:108 and media_buy_update.py:320 are byte-for-byte satisfied by the inherited EntityRefDetails fields (principal_id, account_id, media_buy_id); media_buy_create.py:1594 by agent_url + package_index/format_index.",
+     "# products.py:340: policy_result.restrictions is LLM-generated prose (src/services/policy_check_service.py:144, restrictions=analysis.restrictions) and MUST leave the buyer wire -- exactly what commit 9167b4a47 landed for. It goes to internal_detail; the classification travels as problems[].code."
+    ],
+    "extra_mode": "get_pydantic_extra_mode()",
+    "pinned_source": "NONE (deliberately NOT policy-violation.json: its `violated_rules` is a free-text array rule 3 forbids declaring)",
+    "serves_error_classes": [
+     "AdCPAuthorizationError (type parameter)",
+     "AdCPPolicyViolationError (inherited parameter)"
+    ]
+   },
+   {
+    "name": "AccountSetupDetails",
+    "base": "EntityProblemsDetails",
+    "fields": [
+     "setup_url: str | None = None",
+     "# account_helpers.py:84 today sends setup_instructions=\"Complete billing configuration before use.\" -- a whole sentence on the buyer wire. It emits account_id + setup_url; the sentence is a function of the code via CODE_TABLE.",
+     "# The pin's second property `setup_steps` (array of free-text string) is NOT declared (rule 3). Partial mirror, documented."
+    ],
+    "extra_mode": "get_pydantic_extra_mode()",
+    "pinned_source": "PARTIAL MIRROR of ../adcp/dist/schemas/3.1.1/error-details/account-setup-required.json (setup_url only)",
+    "serves_error_classes": [
+     "AdCPAccountSetupRequiredError (type parameter)"
+    ]
+   },
+   {
+    "name": "AmbiguousMatchDetails",
+    "base": "EntityRejectionDetails",
+    "fields": [
+     "match_count: int | None = None",
+     "# account_helpers.py:164; brand_domain and operator are ALREADY on EntityRefDetails (details.py:188-189) -- only the count is new."
+    ],
+    "extra_mode": "get_pydantic_extra_mode()",
+    "pinned_source": "NONE",
+    "serves_error_classes": [
+     "AdCPAccountAmbiguousError"
+    ]
+   },
+   {
+    "name": "FormatRef",
+    "base": "BaseModel",
+    "fields": [
+     "agent_url: str | None = None",
+     "format_id: str",
+     "# model_config = ConfigDict(extra=get_pydantic_extra_mode())",
+     "# The structured replacement for the slash-joined composite. One declaration serves both the rejected side (FormatProblem.format) and the accepted set (CreativeFormatDetails.accepted_formats)."
+    ],
+    "extra_mode": "get_pydantic_extra_mode()",
+    "pinned_source": "NONE (mirrors adcp FormatId's two identifying fields)",
+    "serves_error_classes": [
+     "(item shape -- AdCPCreativeRejectedError via FormatProblem and CreativeFormatDetails)"
+    ]
+   },
+   {
+    "name": "FormatProblem",
+    "base": "ErrorProblem",
+    "fields": [
+     "format: FormatRef | None = None",
+     "# Binds one creative (subject_type=\"creative\", subject_id=creative_id) to the format that was refused, without composing a string. Requires the SerializeAsAny change on ProblemsDetails.problems."
+    ],
+    "extra_mode": "get_pydantic_extra_mode()",
+    "pinned_source": "NONE",
+    "serves_error_classes": [
+     "AdCPCreativeRejectedError"
+    ]
+   },
+   {
+    "name": "RangeProblem",
+    "base": "ErrorProblem",
+    "fields": [
+     "minimum: Decimal | None = None",
+     "maximum: Decimal | None = None",
+     "# THE single channel for \"the bound the value violated\". Decimal so one shape carries money and integer counts, and JSON-mode serialization matches rejected_value's string form.",
+     "# Sites: media_buy_create.py:1490 (pricing floor), :1510 (min spend per package), :3503 and mock_ad_server.py:668 (impressions / budget ceilings), google_ad_manager.py:1409 (current_spend as the floor on a budget decrease).",
+     "# NO LONGER serves AdCPConfigurationError -- idempotency_policy.py:61,69 are seller replay-TTL internals and emit no details."
+    ],
+    "extra_mode": "get_pydantic_extra_mode()",
+    "pinned_source": "NONE",
+    "serves_error_classes": [
+     "AdCPValidationError",
+     "AdCPBudgetExceededError"
+    ]
+   },
+   {
+    "name": "SchemaProblem",
+    "base": "ErrorProblem",
+    "fields": [
+     "keyword: str | None = None",
+     "# INVARIANT (docstring): the validator's native error-type TOKEN (pydantic err[\"type\"]: \"missing\", \"string_type\", \"int_parsing\"), never a message. Declared because dropping it loses information the wire carries TODAY: build_validation_error_details (src/core/exceptions.py:1128) emits {loc, msg, type} and `type` is the pin's `keyword` axis -- \"so agents can pattern-match on rejection class without parsing message text\".",
+     "# `msg` is deliberately NOT carried forward: it is the pydantic sentence, i.e. the prose rule 3 removes.",
+     "# `pointer` is deliberately NOT declared: ErrorProblem.field is already the location channel (rule 8). Both the exception's first-class field= AND every problem's field= come from first_validation_error_field() -- the dot-joined \".\".join(err[\"loc\"]) proposed for capability_declarations.py:272 is deleted (it yields `specialisms.0`, neither JSONPath-lite nor RFC 6901, and duplicates an existing helper).",
+     "# Sites: src/core/exceptions.py:1187, src/core/validation_helpers.py:54."
+    ],
+    "extra_mode": "get_pydantic_extra_mode()",
+    "pinned_source": "PARTIAL -- core/error.json issues[].keyword (see open_questions on the top-level issues[] channel)",
+    "serves_error_classes": [
+     "AdCPValidationError"
+    ]
+   },
+   {
+    "name": "OverlapProblem",
+    "base": "ErrorProblem",
+    "fields": [
+     "include_field: str | None = None",
+     "exclude_field: str | None = None",
+     "overlapping_values: list[str] | None = None",
+     "geo_system: str | None = None",
+     "# collect_targeting_violations (src/services/targeting_capabilities.py:387) returns dict[str, object] with keys managed_only_dimensions / removed_dimensions / geo_overlaps, and is passed straight to details= at media_buy_create.py:2610 and media_buy_update.py:472. Under extra=\"forbid\" those two raise sites become HARD construction failures the moment AdCPValidationError is parameterized -- and silent key loss in production under \"ignore\".",
+     "# managed_only_dimensions / removed_dimensions -> plain ErrorProblem(code, field) per dimension; geo_overlaps -> OverlapProblem (include/exclude/values is not a rejected_value/accepted_values pair). collect_targeting_violations must be retyped to return ProblemsDetails, not dict[str, object]."
+    ],
+    "extra_mode": "get_pydantic_extra_mode()",
+    "pinned_source": "NONE",
+    "serves_error_classes": [
+     "AdCPInvalidRequestError"
+    ]
+   }
+  ],
+  "class_parameters": [
+   {
+    "error_class": "AdCPValidationError (src/core/exceptions.py:428; binds AdCPInvalidRequestError at :449)",
+    "shape": "ValidationDetails"
+   },
+   {
+    "error_class": "AdCPCapabilityNotSupportedError (src/core/exceptions.py:868)",
+    "shape": "CapabilityDetails"
+   },
+   {
+    "error_class": "AdCPConfigurationError (src/core/exceptions.py:653)",
+    "shape": "ConfigurationFaultDetails"
+   },
+   {
+    "error_class": "AdCPCreativeRejectedError (src/core/exceptions.py:932)",
+    "shape": "CreativeFaultDetails"
+   },
+   {
+    "error_class": "AdCPAuthorizationError (src/core/exceptions.py:500; binds AdCPPolicyViolationError at :515)",
+    "shape": "AuthorizationFaultDetails"
+   },
+   {
+    "error_class": "AdCPAccountSetupRequiredError (src/core/exceptions.py:561)",
+    "shape": "AccountSetupDetails"
+   },
+   {
+    "error_class": "AdCPConflictError (src/core/exceptions.py:593; binds AdCPAccountAmbiguousError at :607, AdCPIdempotencyConflictError at :891, AdCPIdempotencyExpiredError at :907)",
+    "shape": "EntityRejectionDetails (the ambiguous-match site raises the AmbiguousMatchDetails subclass)"
+   },
+   {
+    "error_class": "AdCPGoneError (src/core/exceptions.py:615)",
+    "shape": "EntityRejectionDetails (media_buy_update.py:392 current_status -> rejected_value; :405 disallowed_actions -> problems[] with rejected_value carrying the status)"
+   },
+   {
+    "error_class": "AdCPBudgetExceededError (src/core/exceptions.py:939)",
+    "shape": "EntityRejectionDetails (google_ad_manager.py:1409: requested_budget -> rejected_value, current_spend -> RangeProblem.minimum, package_id inherited)"
+   },
+   {
+    "error_class": "AdCPMediaBuyRejectedError (src/core/exceptions.py:1034)",
+    "shape": "EntityRejectionDetails (mock_ad_server.py:385,754 and admin/blueprints/operations.py:607: the prose rejection_reason moves to internal_detail; classification -> problems[].code)"
+   },
+   {
+    "error_class": "Error.of / AdCPErrorDetail.of (src/core/schemas/_base.py) -- the ADVISORY lane, 10 live dict sites the surveys never scanned",
+    "shape": "details: ErrorDetails | None (signature change). EntityRefDetails serves 6 verbatim (media_buy_delivery.py:231,362,553 media_buy_id; creatives/listing.py:394 creative_id; media_buy_list.py:249 package_id+media_buy_id); capabilities.py:141 and targeting_capabilities.py:247 -> CapabilityDetails; accounts.py:1204 and media_buy_list.py:249 re-express their `reason` token as ErrorProblem.code (callers route on details.reason today -- the parallel reason enum rule 3 forbids). GateFailure.details and AdCPErrorDetail's source.details typed ErrorDetails so accounts.py:642 and creatives/_processing.py:151 cannot reintroduce a dict."
+   },
+   {
+    "error_class": "_details_to_wire (src/core/exceptions.py:103) and the AdCPAdapterError injected-dict escape hatch",
+    "shape": "Narrow the signature from `ErrorDetails | Mapping[str, Any] | None` to `ErrorDetails | None` once the last site converts, and give src/adapters/mock_ad_server.py:352 a typed AdapterFailureDetails built from declared test_behavior fields instead of `details = test_behavior.get(\"error_details\")` (an Any-typed dict that today defeats an ALREADY-parameterized class). Add a structural guard rejecting a dict/Any literal at any `details=` keyword."
+   }
+  ],
+  "site_count": 142,
+  "shared_shape_wins": "\"Nine collapses. The four class parameters became twelve (the four surveyed plus eight the surveys never looked at), and 142 sites land on ~26 shapes of which 12 declare ZERO own fields; the widest shape has 4.\\n\\n(1) THE ROOT REJECTION PAIR, NOW DECLARED EXACTLY ONCE IN THE WHOLE TREE. Survey 1 proposed RejectionDetails{rejected_value, accepted_values}; survey 2 re-declared the identical pair inside CapabilityRejectionDetails; and the committed ErrorProblem (src/core/errors/details.py:120-121) had ALREADY declared it a third time. One `_RejectionFields` mixin now owns it, ErrorProblem inherits it (dropping its copies), RejectionDetails inherits it, and the root-level and per-item keys are incapable of drifting apart in name or type -- the entire premise of the pin's two-level rejection shape. This is the drift the surveys measured (3 spellings of the accepted set, 6+ of the rejected value) landing on two names, declared once.\\n\\n(2) EntityRef+Problems, PROPOSED FOUR TIMES, NOW A BASE THAT IS NEVER A LEAF. Survey 1's ValidationDetails base, survey 3's ConfigurationFaultDetails, survey 4's CreativeRejectedDetails base AND the committed AdapterFailureDetails(EntityRefDetails, UpstreamCallDetails, ProblemsDetails) were one composition under four spellings. EntityProblemsDetails owns it and AdapterFailureDetails is re-based onto it. Critically it is a BASE ONLY: making it AdCPConfigurationError's parameter (the original catalog's choice) made eight validation/creative shapes assignable at a configuration raise site with mypy silent -- the hole survey 3 rejected its own option (b) for. Every family gets its own zero-field leaf instead, so each parameter still discriminates.\\n\\n(3) ENTITY+PROBLEMS+REJECTION IS ONE NAME, COMPOSED FOUR WAYS. EntityRejectionDetails is declared once and reached by composition -- RejectionValidationDetails(ValidationDetails, EntityRejectionDetails), CapabilityRejectionDetails(CapabilityDetails, EntityRejectionDetails), AmbiguousMatchDetails -- and used directly as the shared parameter of AdCPGoneError / AdCPConflictError / AdCPBudgetExceededError / AdCPMediaBuyRejectedError. No shape ever restates (EntityProblemsDetails, RejectionDetails).\\n\\n(4) THE REJECTION PAIR LEFT THE VALIDATION ROOT, WHICH KILLED THREE DOUBLE CHANNELS AT ONCE. With ValidationDetails carrying it, TypeMismatchDetails had `expected_types` AND an inherited `accepted_values`; TimeWindowDetails had `start_time` AND an inherited `rejected_value`; PricingValidationDetails had four money fields AND an inherited `rejected_value`. Only the ~15 sites that genuinely reject a value against a closed set now get the pair, via one leaf.\\n\\n(5) ONE VALUE/BOUND VOCABULARY FOR MONEY, COUNTS AND SECONDS. The catalog previously spelled \\\"a number against its bound\\\" three ways: PricingValidationDetails{bid_price, floor_price, package_budget, min_spend_per_package} at media_buy_create.py:1490/1510, RangeProblem{minimum,maximum} at the mock adapter's ceilings, and rejected_value=str(budget) at google_ad_manager.py:1381. Now the value ALWAYS goes to rejected_value and the bound ALWAYS to RangeProblem -- pricing floor, min spend, impressions ceiling, budget ceiling and the current-spend floor at google_ad_manager.py:1409 use one construction. PricingValidationDetails drops from 6 own fields to 2.\\n\\n(6) THE SLASH-JOINED FORMAT COMPOSITE IS GONE. media_buy_update.py:276, creatives/_assignments.py:237 and media_buy_create.py:3827 all built f\\\"{agent_url}/{format_id}\\\", and the original catalog moved that discarded structure INTO rejected_value/accepted_values -- relocating the f-string instead of removing it, and duplicating agent_url/format_id which EntityRefDetails already declares. One FormatRef{agent_url, format_id} now serves both the rejected side (FormatProblem.format) and the accepted set (CreativeFormatDetails.accepted_formats).\\n\\n(7) ONE FIELD-POINTER GRAMMAR, ONE REFERENT. first_validation_error_field() (src/core/exceptions.py:1105) is the only producer of a field path anywhere in the catalog; the hand-rolled \\\".\\\".join(err[\\\"loc\\\"]) proposed for capability_declarations.py:272 (yielding `specialisms.0`) is deleted. ErrorProblem.field is documented as a request-payload pointer in bracket notation and nothing else, so media_buy_update.py:240's stored creative status moves to rejected_value.\\n\\n(8) THE PROBLEM-LIST SYNONYMS, NOW UNIFORM ACROSS TWELVE CLASSES RATHER THAN FOUR. validation_errors / config_errors / adapter_errors / creative_errors / violations / features / requested / the eleven *_any_of keys / the computed f\\\"unbacked_{field}\\\" keys / rejection_reasons all reach the wire as problems[]. Two pairs that were literally one list under two key names become one construction: adapter.validate_media_buy_request() (mock_ad_server.py:668 vs media_buy_create.py:3503) and the three _validate_targeting copies (kevel.py:238, triton_digital.py:165, google_ad_manager.py:582).\\n\\n(9) THE CAPABILITY-NAME CHANNEL ACTUALLY CLOSES. The original catalog claimed 11 spellings collapsed to one while leaving a 12th alive (targeting_capabilities.py:247 details={\\\"feature\\\": ...}, invisible because it is in the advisory Error.of lane no survey scanned) and while minting a 13th classification token (\\\"media_type_multiple\\\") inside the enum meant to name subjects. Covering the advisory lane and deleting that token makes the claim true, and it costs no new shape: CapabilityDetails now extends EntityProblemsDetails, so media_buy_update.py:1070 emits product_id like the other three families instead of a degenerate one-element problems list, and CapabilityProblemsDetails/CapabilityEntityDetails both disappear.\\n\\nNo shape declares field, retry_after or context. Every base is ErrorDetails, ErrorProblem, BaseModel (mixins/items), or a shape in this catalog / already committed in details.py.\"",
+  "open_questions": [
+   "REJECTED FINDING (pin-conformance #6): re-pointing the three FIXME(#1598) sites (media_buy_update.py:232, media_buy_create.py:386, :3770) from AdCPCreativeRejectedError to AdCPCreativeNotFoundError (src/core/exceptions.py:801). The lens is right that the pinned CREATIVE_NOT_FOUND enumDescription carries a uniformity MUST and right that rule 2 makes the exception class the sole authority on the code. But CLAUDE.md's spec-grounding gate makes the spec prose AND the conformance storyboard step BOTH authoritative, and the in-source comments record that BR-UC-003 ext-i grades CREATIVE_REJECTED at these cells. That is a spec-vs-storyboard conflict already tracked as #1598; a details-shape catalog cannot settle it, and recoding would fail a graded cell. What the finding DID change: AdCPCreativeRejectedError is parameterized on CreativeFaultDetails (0 fields), so the pinned policy_id/policy_url mirror is no longer offered on a lookup miss. #1598 still decides these three sites' final class.",
+   "REJECTED FINDING (pin-conformance #5, the rename half): renaming min_spend_per_package to the pin's minimum_budget. `minimum_budget` is a property of error-details/budget-too-low.json, which governs BUDGET_TOO_LOW; media_buy_create.py:1510 emits VALIDATION_ERROR. Adopting a pinned shape's key under a code the pin does not associate it with is exactly the mis-grounding the SAME lens rejects for attempted_action, so importing the key would have made the defect symmetrical rather than fixing it. The finding's load-bearing half (three spellings of one bound) IS applied: the field is deleted and the bound travels as RangeProblem.minimum.",
+   "REJECTED FINDING (pin-conformance #7, the declare-reasons option): declaring `reasons: list[ErrorCodeT]` on CreativeRejectedPolicyDetails. problems[].code already classifies each rejection, so a second closed-vocabulary list of one fact breaks rule 8. Took the lens's alternative: the shape is labelled a PARTIAL mirror in its docstring and its pinned_source, and the divergence goes in the PR description. A buyer reading only the pinned `reasons` key gets nothing -- an owned divergence, not an oversight. Same treatment for account-setup-required.setup_steps.",
+   "REJECTED IN PART (pin-conformance #2): routing the Pydantic-validation sites onto a `details.issues` mirror of core/error.json's issues[]. The pinned item REQUIRES `message` (human-readable prose) alongside pointer and keyword, and rule 3 forbids declaring that slot -- a mirror missing a required property is a worse claim than not mirroring. Implementing the top-level `issues[]` field is a protocol-behavior change (a new first-class wire field) needing the gate. ACCEPTED the load-bearing part: `keyword` must not be silently dropped (it is on the wire TODAY as validation_errors[].type), so SchemaProblem declares it and ErrorProblem.field carries the location in the one existing grammar. STILL OPEN: implementing top-level issues[] with the MUST that `field` derive from issues[0].pointer, and whether pydantic's native err[\"type\"] tokens should be mapped to the pin's JSON Schema keyword vocabulary or emitted natively (the pin says use the validator's native name and do not invent values -- pydantic's names are native but are not JSON Schema keywords).",
+   "REJECTED FINDING (coverage #2, one clause): putting AdCPBudgetExceededError's money fields on PricingValidationDetails. That shape is a leaf of the validation family and is not assignable at a budget-exceeded raise site; sharing it would require making a validation shape the parameter of a second error class and would reopen the base-as-leaf hole. google_ad_manager.py:1409 uses EntityRejectionDetails instead: requested_budget -> rejected_value, current_spend -> RangeProblem.minimum, package_id inherited.",
+   "REJECTED FINDING (dry-and-cohesion #7, the alternative branch it names): declaring RangeProblem's four fields on ErrorProblem itself. Rejected on rule 7, as the lens itself argues. The question is CLOSED in favour of polymorphism: ProblemsDetails.problems becomes list[SerializeAsAny[ErrorProblem]] | None, and a to_wire() test asserting RangeProblem(minimum/maximum), FormatProblem(format), SchemaProblem(keyword) and OverlapProblem all survive serialization with their own fields present is a PREREQUISITE before any site converts. The failure mode is a warning in CI and silent field loss in production under extra=\"ignore\".",
+   "The catalog leaves CONFIGURATION_ERROR carrying only the entity ids its sites emit TODAY (tenant_id, product_id, account_id) and moves every deployment internal to internal_detail. The pin is stronger: enums/error-code.json and error-handling.mdx:853 say no error.details shape is defined for this code at all. Removing details entirely is a wire change needing the spec gate; leaving it is status quo. An owner must pick. (Settled by the same evidence: the original catalog's open question 4 gets a definite NO -- media_buy_create.py:2057 stays CONFIGURATION_ERROR, because the pin explicitly separates ACCOUNT_SETUP_REQUIRED, \"buyer-side onboarding incomplete\", from CONFIGURATION_ERROR, \"seller-side deployment incomplete\", and that site validates the SELLER's own setup checklist. SetupIncompleteDetails therefore leaves the catalog rather than being reconciled against that pin.)",
+   "UPDATE_ACTIONS tokens (src/adapters/constants.py:6-17) intersect the pinned enums/media-buy-valid-action.json in ZERO members. The catalog therefore does NOT claim the pinned key name (`attempted_update_action`, not `attempted_action`) and leaves rejected_value/accepted_values UNSET at constants.py:42 and google_ad_manager.py:1599. Translating the ten seller-internal actions to pinned enum members at the boundary -- which would let the field be typed with the pinned enum and let the accepted set use the pin's canonical key -- is a protocol-behavior change requiring the gate. Related and also unresolved: whether constants.py:42 / google_ad_manager.py:1599 should emit ACTION_NOT_ALLOWED, whose pinned shape REQUIRES attempted_action plus a `reason` from a second closed vocabulary outside CODE_TABLE.",
+   "Whether media_buy_create.py:1510 (package_budget < min_spend_per_package -- verbatim the pin's \"budget is below the seller's minimum\") and the mock adapter's budget floor should raise AdCPBudgetTooLowError (src/core/exceptions.py:861, _code = BUDGET_TOO_LOW, already raised at media_buy_create.py:2179) instead of AdCPValidationError. If they move, budget-too-low.json (minimum_budget + currency) becomes the correct mirror for those sites. Code decision, spec gate.",
+   "account_helpers.py:84 drops the sentence \"Complete billing configuration before use.\" from details. The in-source comment says BR-UC-002 ext-s grades BOTH the top-level suggestion (POST-F3) and \"a details payload carrying the setup instructions\" (POST-F2). Confirm what that cell actually asserts on before the sentence goes: if it asserts on a specific key, the storyboard needs reconciling rather than the payload being silently emptied.",
+   "mock_ad_server.py:385/:754 and admin/blueprints/operations.py:607 put `rejection_reason` -- prose from mock HITL config -- on the buyer wire today, and the in-source docstring calls that deliberate (\"the buyer needs to know WHY the seller declined\"). The catalog moves it to internal_detail per rule 3. Verify no BDD cell grades the key first; if one does, the classification must be re-expressed as problems[].code before the prose is removed.",
+   "targeting.py:868 (more than one media_type on a GAM line item) is a CARDINALITY refusal, and the 92-member pinned ErrorCode enum has no code for \"too many\" (verified: nothing in src/core/errors/codes.py either). The catalog distinguishes it by SHAPE (one problem per requested media type) rather than by minting an enum token, which leaves it indistinguishable from the unknown-media-type refusal by code alone. Recording a code for it (candidates upstream: ITEM_VALIDATION_FAILED, UNSUPPORTED_GRANULARITY) is ungraded and needs the gate.",
+   "gam/managers/creatives.py:732 leaves accepted_values UNSET (URL SCHEMES are not values the `url` field accepts; a classifier retrying with an accepted_value would send url=\"http\"). That makes it wire-identical to the absent-url refusal at :708, which survey 4 wanted to distinguish by whether accepted_values happens to be populated -- a data field used as a classifier, which rule 3 assigns to `code`. If absent-vs-malformed must be distinguishable on the wire, that is a code decision under the gate, not a shape decision.",
+   "RESIDUAL, pre-existing, not introduced here: EntityRefDetails is both a shared base and the committed type parameter of ~10 error classes (AdCPAuthenticationError, the not-found family, AdCPAccountSuspendedError, ...), so ProductRefDetails and every EntityProblemsDetails descendant are assignable at those raise sites. This catalog stops the pattern spreading (EntityProblemsDetails is base-only; each new family gets its own zero-field leaf) but does not repair the committed classes. Whether they get their own leaves is a follow-up.",
+   "Two committed shapes are edited here -- ErrorProblem (loses its own rejection pair to the mixin) and AdapterFailureDetails (re-based onto EntityProblemsDetails, which moves serialization ORDER but not the key set). Both need a to_wire() key-set test proving the emitted envelope is unchanged, landed before the shapes move."
+  ]
+ },
+ "verdicts": [
+  {
+   "lens": "coverage",
+   "violations": [
+    {
+     "what": "The 10 advisory-lane sites that pass `details` are absent from the catalog entirely: no shape, no class_parameter, no open question. My AST scan found 12 `.of()` calls in src/, of which 10 pass details -- 8 dict literals (media_buy_delivery.py:231 {media_buy_id}, :362 {media_buy_id}, :553 {media_buy_id}, accounts.py:1204 {reason}, media_buy_list.py:249 {reason, package_id, media_buy_id}, capabilities.py:141 {unresolved_section}, creatives/listing.py:394 {creative_id}, targeting_capabilities.py:247 {feature}) and 2 pass-throughs (accounts.py:642 `details=f.details` from GateFailure, creatives/_processing.py:151 `details=source.details`). The signature is still `Error.of(cls, code, *, field=None, details: dict[str, Any] | None = None, retry_after=None)` in src/core/schemas/_base.py, so nothing forces a class here.",
+     "where": "src/core/tools/media_buy_delivery.py:231,362,553; src/core/tools/accounts.py:642,1204; src/core/tools/media_buy_list.py:249; src/core/tools/capabilities.py:141; src/core/tools/creatives/listing.py:394; src/core/tools/creatives/_processing.py:151; src/services/targeting_capabilities.py:247; signature at src/core/schemas/_base.py (Error.of)",
+     "why_it_breaks_a_rule": "Rule 1 -- \"An error's `details` is a DECLARED pydantic class instance, never a dict.\" Ten live sites keep it a dict. Rule 3 is broken twice more inside them: media_buy_list.py:249 and accounts.py:1204 carry a `reason` key (\"targeting_rehydration_failed\", \"settings_update_never_provisions\") whose in-source comment says callers ROUTE on `details.reason` -- exactly the \"parallel reason enum\" rule 3 forbids, and it survives untouched because the catalog never looks at this lane.",
+     "fix": "Extend the catalog to the advisory lane: change `Error.of`/`AdCPErrorDetail.of` to accept `ErrorDetails` (already the same `_details_to_wire` path), map the eight dict literals onto committed shapes (EntityRefDetails serves six of them verbatim: media_buy_id x3, creative_id, package_id+media_buy_id), and re-express the two `reason` tokens as `ErrorProblem.code` values per rule 3. Type GateFailure.details and AdCPErrorDetail's `source.details` as ErrorDetails so the two pass-throughs cannot reintroduce a dict."
+    },
+    {
+     "what": "13 dict-literal `details` sites across 8 exception classes are never assigned a shape, and all 8 classes still declare bare `AdCPError` (unparameterized) at src/core/exceptions.py:500, 515, 561, 593, 607, 615, 939, 1034. Sites: account_helpers.py:84 AdCPAccountSetupRequiredError {setup_instructions, account_id}; account_helpers.py:108 AdCPAuthorizationError {principal_id, account_id}; account_helpers.py:164 AdCPAccountAmbiguousError {match_count, brand_domain, operator}; media_buy_create.py:1594 AdCPAuthorizationError {**where, agent_url}; media_buy_update.py:320 AdCPAuthorizationError {principal_id, media_buy_id}; media_buy_update.py:392 AdCPGoneError {current_status}; media_buy_update.py:405 AdCPGoneError {disallowed_actions, current_status}; task_management.py:221 AdCPConflictError {task_id, status}; google_ad_manager.py:1409 AdCPBudgetExceededError {requested_budget, current_spend, package_id, budget}; mock_ad_server.py:754 and :385 plus admin/blueprints/operations.py:607 AdCPMediaBuyRejectedError {rejection_reason}; products.py:340 AdCPPolicyViolationError {restrictions}.",
+     "where": "src/core/helpers/account_helpers.py:84,108,164; src/core/tools/media_buy_create.py:1594; src/core/tools/media_buy_update.py:320,392,405; src/core/tools/task_management.py:221; src/adapters/google_ad_manager.py:1409; src/adapters/mock_ad_server.py:385,754; src/admin/blueprints/operations.py:607; src/core/tools/products.py:340",
+     "why_it_breaks_a_rule": "Rule 1 -- these 13 stay dicts under a catalog that claims the migration's design. Rule 2 compounds it: sharing is PREFERRED over copying, and three of the AdCPAuthorizationError dicts are byte-for-byte satisfied by the already-committed EntityRefDetails (it declares principal_id, account_id, media_buy_id, agent_url, package_index, format_index at src/core/errors/details.py:163-190), so the cheapest coverage in the whole migration was left out while the catalog minted 15 new shapes.",
+     "fix": "Add these 8 classes to `class_parameters`. Three need no new shape: `AdCPAuthorizationError(AdCPError[EntityRefDetails])` covers all three of its sites as-is. AdCPGoneError and AdCPConflictError need one narrow shape carrying `current_status`/`status` -- reuse RejectionDetails.rejected_value for the status and ErrorProblem for the action list. AdCPAccountAmbiguousError needs `match_count: int` declared on top of EntityRefDetails. AdCPBudgetExceededError's money fields belong on PricingValidationDetails, which already declares package_budget."
+    },
+    {
+     "what": "Two AdCPInvalidRequestError sites pass the return value of `collect_targeting_violations()` -- declared `dict[str, object]` at src/services/targeting_capabilities.py:387 with keys `managed_only_dimensions`, `removed_dimensions`, and `geo_overlaps` (itself a nested {include, exclude, values, system} mapping). The catalog binds AdCPInvalidRequestError to ValidationDetails (\"inherited parameter\"), and no shape in the catalog declares any of those three keys. Both surveys missed these because their AST filter matched only callee names containing \"ValidationError\"; \"AdCPInvalidRequestError\" does not.",
+     "where": "src/core/tools/media_buy_create.py:2610 and src/core/tools/media_buy_update.py:472 (details=violations / details=overlay_violations); helper at src/services/targeting_capabilities.py:387",
+     "why_it_breaks_a_rule": "Rule 1 (still a dict) and rule 5 -- extra=get_pydantic_extra_mode() is `forbid` in dev/CI, so the moment AdCPValidationError is parameterized on ValidationDetails these two raise sites become hard construction failures in every test run, and silently drop all three keys in production under `ignore`. Rule 5 also states \"an extra a site wants becomes a DECLARED field\"; these three were never declared. The catalog's site_count of 116 is therefore short by at least 2.",
+     "fix": "Add the two sites to the catalog and declare their facts: `managed_only_dimensions` / `removed_dimensions` become ErrorProblem items on ProblemsDetails (code + field per dimension), and `geo_overlaps` needs a declared ErrorProblem subclass (e.g. `OverlapProblem{include, exclude, overlapping_values, system}`) since include/exclude/values is not a rejected_value/accepted_values pair. Change `collect_targeting_violations` to return that shape rather than `dict[str, object]`, exactly as the surveys already require of the other four helpers."
+    },
+    {
+     "what": "Three free-text `details` keys survive on the buyer wire purely because their classes are outside the catalog. account_helpers.py:84 sends `setup_instructions=\"Complete billing configuration before use.\"` (a whole sentence, with an in-source comment saying BR-UC-002 ext-s grades that payload). mock_ad_server.py:754/:385 and operations.py:607 send `rejection_reason`, prose from mock hitl config. products.py:340 sends `restrictions`, which is `list[str] | None` populated from an LLM at src/services/policy_check_service.py:144 (`restrictions=analysis.restrictions` from check_policy_compliance) -- model-generated prose going straight onto the wire.",
+     "where": "src/core/helpers/account_helpers.py:84; src/adapters/mock_ad_server.py:385,754; src/admin/blueprints/operations.py:607; src/core/tools/products.py:340 (source: src/services/policy_check_service.py:36,144)",
+     "why_it_breaks_a_rule": "Rule 3 -- \"NO FREE-TEXT FIELD on any shape ... there is no `reason: str` slot for an f-string to move into.\" These are the f-string slots, still open, on the buyer wire. The products.py:340 case is worse than a naming defect: it is third-party model text, the exact class of leak commit 9167b4a47 (\"keep third-party exception text off the buyer-facing wire\") was landed to stop.",
+     "fix": "Bring these three classes into the catalog with declared shapes and route the prose to internal_detail. AdCPAccountSetupRequiredError has a PINNED shape available (dist/schemas/3.1.1/error-details/account-setup-required.json: setup_url, setup_steps) which open_question #4 already discusses for a different site -- use it here, where the class actually raises. `rejection_reason` and `restrictions` become ErrorProblem items classified by code from CODE_TABLE."
+    },
+    {
+     "what": "The catalog's shared_shape_wins claims the capability-name channel is collapsed onto one field (\"the capability-name channel had 11 spellings ... After this: one optional capability field\"). A 12th spelling survives at targeting_capabilities.py:247: `details={\"feature\": \"property_list_filtering\"}`, and \"property_list_filtering\" is not a member of the catalog's 20-member CapabilityT Literal. Adjacent to it, the SAME file's validate_property_targeting_allowed path IS in the catalog (survey row targeting_capabilities.py:316 -> ValidationDetails/problems), so one file expresses the same fact two ways, one covered and one not.",
+     "where": "src/services/targeting_capabilities.py:247 (uncovered) vs src/services/targeting_capabilities.py:316 (covered, ValidationDetails)",
+     "why_it_breaks_a_rule": "Rule 8 -- one channel per fact -- and rule 2, since the fact `unsupported_capability` names is already declared on CapabilityDetails and this site copies it under a different key instead of sharing the shape. It also falsifies a load-bearing completeness claim in the catalog's own shared_shape_wins narrative.",
+     "fix": "Cover the advisory lane (see violation 1) and route this site through CapabilityDetails with a CapabilityT member for property-list targeting -- or reuse the existing `placement_targeting`-style member set -- so the 12th spelling is a typecheck failure rather than a live wire key."
+    },
+    {
+     "what": "src/adapters/mock_ad_server.py:352 raises `AdCPAdapterError(details=details or None)` where `details = test_behavior.get(\"error_details\")` and `_read_test_behavior() -> dict` (line 303, bare `dict`, so values are Any). AdCPAdapterError is ALREADY parameterized as AdCPError[AdapterFailureDetails], yet an arbitrary externally-supplied dict flows in with no type error, because Any defeats the parameter. `_details_to_wire` at src/core/exceptions.py:103 still accepts `ErrorDetails | Mapping[str, Any] | None`, so the dict lane is fully alive at runtime. The catalog neither covers this site nor flags the escape hatch.",
+     "where": "src/adapters/mock_ad_server.py:303,352; signature at src/core/exceptions.py:103 (_details_to_wire)",
+     "why_it_breaks_a_rule": "Rule 1 -- a dict reaching `details` on an already-migrated class proves the type parameter is not the enforcement the design claims, so parameterizing the remaining four classes will not by itself deliver rule 1. Also rule 5: whatever keys the injected `error_details` carries are undeclared extras, silently kept in production.",
+     "fix": "Narrow `_details_to_wire` to `ErrorDetails | None` once the migration lands (a structural guard rejecting a Dict/Any literal at any `details=` keyword would catch the whole class), and give this fault-injection site a declared AdapterFailureDetails built from typed test_behavior fields rather than an opaque dict."
+    }
+   ],
+   "verdict": "CHANGES_REQUIRED"
+  },
+  {
+   "lens": "dry-and-cohesion (rules 6 and 7)",
+   "violations": [
+    {
+     "what": "RejectionDetails re-declares a field list that already exists verbatim on ErrorProblem. src/core/errors/details.py:120-121 already declares `rejected_value: str | None = None` and `accepted_values: list[str] | None = None` on ErrorProblem; the catalog's RejectionDetails declares the identical two names with identical types and identical defaults. This is a copied field list, not a composition. Corroborating evidence that the catalog itself does not treat these as own fields: the summary's own-field census reads \"0,0,0,6,2,1,1,2,1,1,0,0,2,2,2\" whose first entry is RejectionDetails = 0, while the shape as specified declares 2.",
+     "where": "catalog shape RejectionDetails vs src/core/errors/details.py:114-121 (ErrorProblem)",
+     "why_it_breaks_a_rule": "Rule 6 (composition over redeclaration): \"If a shape needs another shape's fields, inherit -- never copy a field list. Duplicated field lists are a DEFECT here\" and CLAUDE.md's DRY invariant (\"If you write a block of logic that is structurally similar to an existing block (same pattern, different variables), you MUST extract a shared helper\"; \"NEVER cite 'avoid over-engineering' ... to justify leaving duplicated logic in place\"). The catalog's justification -- ErrorProblem is a BaseModel not an ErrorDetails, and also declares `field` -- explains why ErrorProblem cannot be the parent; it does not license a second declaration, because a shared parent is available to both.",
+     "fix": "Extract the pair once as a mixin and inherit it in both places, in src/core/errors/details.py: `class _RejectionFields(BaseModel): model_config = ConfigDict(extra=get_pydantic_extra_mode()); rejected_value: str | None = None; accepted_values: list[str] | None = None`, then `class ErrorProblem(_RejectionFields)` (dropping its two copies) and `class RejectionDetails(ErrorDetails, _RejectionFields)`. Both already derive from BaseModel with the same ConfigDict, so the MRO is clean and RangeProblem/DependencyProblem inherit the pair unchanged. One declaration then guarantees the root-level and per-item keys cannot drift in name or type -- which is the entire premise of the pin's two-level rejection shape."
+    },
+    {
+     "what": "PricingValidationDetails' four money fields answer a question another shape in the SAME catalog already answers. Verified at src/core/tools/media_buy_create.py:1488-1495 the rejection is `bid_decimal < floor_price` (a value against a minimum) and at :1508-1516 it is `package_budget < min_spend_per_package` (a value against a minimum). RangeProblem is proposed in this same catalog as `ErrorProblem + minimum/maximum: Decimal`, explicitly \"so one shape carries both integer seconds and money\", for the structurally identical rejections at src/core/idempotency_policy.py:58-70 (a value against min/max). So `bid_price`/`floor_price` and `package_budget`/`min_spend_per_package` are a second, root-level channel for the fact RangeProblem carries per item. The shape also answers two questions at once: \"which pricing option\" (pricing_model, currency) and \"a number against its bound\" (the other four) -- only 1457 uses the first axis alone, 1490 and 1510 use only the second, so no site needs all six.",
+     "where": "catalog shape PricingValidationDetails (6 own fields) vs catalog shape RangeProblem; sites src/core/tools/media_buy_create.py:1471, :1490, :1510 and src/core/idempotency_policy.py:61,:69",
+     "why_it_breaks_a_rule": "Rule 6 (a shape must not restate what another shape carries) and rule 7 (\"A base shape with cohesive SUBCLASSES is available and preferred over one wide class ... AVOID a 30-field god-object\") -- PricingValidationDetails is the catalog's widest shape at 6 own fields and ~26 transitive fields, and four of the six exist only because the value/bound pair was spelled a second time instead of reused. It also breaks rule 8's one-channel-per-fact principle by giving \"a number and the bound it violated\" two homes depending on which error class raised.",
+     "fix": "Shrink PricingValidationDetails to the pricing-option axis only -- `pricing_model: PricingModel | None`, `currency: str | None` (2 own fields) -- and carry every bound through the existing per-item channel: media_buy_create.py:1490 becomes `problems=[RangeProblem(code=..., field=\"bid_price\", rejected_value=str(package.bid_price), minimum=floor_price)]`, :1510 becomes `problems=[RangeProblem(code=..., field=\"packages[i].budget\", rejected_value=str(package_budget), minimum=Decimal(str(selected_option.min_spend_per_package)))]`, and :1471 (advisory floor, no submitted bid) becomes `problems=[RangeProblem(field=\"bid_price\", minimum=floor_price)]`. One value/bound vocabulary then serves pricing, idempotency config, and the mock adapter's impressions/budget ceilings."
+    },
+    {
+     "what": "TypeMismatchDetails carries two channels for \"what would have been accepted\": its own `expected_types: list[JsonTypeName]` plus `accepted_values: list[str]` inherited through ValidationDetails -> RejectionDetails. The same instance therefore offers two list-of-accepted-things slots whose distinction is a convention no type enforces, and the catalog's own site plan at media_buy_create.py:1577 already populates `rejected_value` and `expected_types` side by side. The next site that writes accepted_values=[\"object\"] is exactly the drift this migration exists to remove, and nothing rejects it.",
+     "where": "catalog shapes TypeMismatchDetails and ValidationDetails (ValidationDetails = EntityProblemsDetails, RejectionDetails); site src/core/tools/media_buy_create.py:1577 and src/core/schema_helpers.py:172",
+     "why_it_breaks_a_rule": "Rule 7 (cohesive subclasses over one wide class -- here the wideness is inherited: every one of the ~15 validation sites that has nothing to do with a rejection set is handed the rejection pair, and every type-mismatch site is handed a redundant one) and rule 8 (one channel per fact). Folding RejectionDetails into the family root is what forces the collision; only 15 of the ~37 validation sites need the pair.",
+     "fix": "Stop making the rejection pair part of the family root. Declare `class ValidationDetails(EntityProblemsDetails)` (still 0 own fields, still the type parameter for AdCPValidationError/AdCPInvalidRequestError) and add one cohesive subclass `class RejectionValidationDetails(ValidationDetails, RejectionDetails)` for the ~15 sites that reject a value against a closed set (schema_helpers.py:121/128, listing.py:110/118, task_management.py:210, signals.py:296, gam:1381, ...). TypeMismatchDetails, TimeWindowDetails, DuplicateProductDetails, ActionRequestDetails and the slimmed PricingValidationDetails then extend ValidationDetails and expose exactly one accepted-set channel each. Assignability is unaffected -- all remain ValidationDetails subclasses."
+    },
+    {
+     "what": "EntityProblemsDetails is used simultaneously as the family base and as the concrete type parameter of AdCPConfigurationError (verified unparameterized today at src/core/exceptions.py:653). Because ValidationDetails, PricingValidationDetails, TypeMismatchDetails, ActionRequestDetails, DuplicateProductDetails, TimeWindowDetails and CreativeRejectedDetails all descend from it, every one of them is assignable at a configuration raise site -- the catalog states this outcome plainly (\"ValidationDetails IS an EntityProblemsDetails, so every validation subclass is assignable at a configuration raise site\"). A config site can therefore pass PricingValidationDetails (six money fields) or CreativeRejectedDetails (policy_id/policy_url) and mypy is silent. Survey 3 identified this exact hole as the reason to reject its own option (b) (\"mypy then accepts ANY shape for this one error class -- which is the guard the type parameter exists to provide\"), and the collapse re-opens it for 8 of the 15 shapes.",
+     "where": "catalog class_parameters entry \"AdCPConfigurationError (src/core/exceptions.py:653) -> EntityProblemsDetails\"; cross-family site cited by the catalog at src/core/schemas/capability_declarations.py:252",
+     "why_it_breaks_a_rule": "Rule 7's premise is that a parameterized base plus cohesive subclasses buys per-site precision at no cost; that only holds if the parameter is a leaf of its own family. Making one class both the shared base and one family's leaf converts the parameter from a guard into a near-no-op, which is the opposite of the narrowing rule 1 and rule 7 are for. Under rule 6 the correct answer is another zero-field composition, which the design already sanctions (AdapterFailureDetails declares none).",
+     "fix": "Keep EntityProblemsDetails as the shared base only, and give the configuration family its own zero-field leaf: `class ConfigurationFaultDetails(EntityProblemsDetails): pass`, with AdCPConfigurationError parameterized on it (survey 3's recommended option (a)). For the single site that legitimately needs type-mismatch facts under a configuration code (capability_declarations.py:252), extract the two fields as a mixin -- `class _TypeMismatchFields(BaseModel): received_type / expected_types` -- and compose it into both leaves (`TypeMismatchDetails(ValidationDetails, _TypeMismatchFields)` and `ConfigTypeMismatchDetails(ConfigurationFaultDetails, _TypeMismatchFields)`) rather than reaching a validation shape across into another error family. Zero fields are copied and both parameters stay discriminating."
+    },
+    {
+     "what": "The already-committed AdapterFailureDetails re-spells the EntityRefDetails+ProblemsDetails composition inline, which is precisely the composition the catalog is naming EntityProblemsDetails. The catalog's win #2 claims to have unified three names for that pair (survey 1's ValidationDetails base, survey 3's ConfigurationFaultDetails, survey 4's CreativeRejectedDetails base) but leaves a fourth instance of the same composition standing at details.py:233, so after the migration the tree contains two independent spellings of \"entity ref plus problems\".",
+     "where": "src/core/errors/details.py:233 `class AdapterFailureDetails(EntityRefDetails, UpstreamCallDetails, ProblemsDetails)` vs the catalog's new EntityProblemsDetails",
+     "why_it_breaks_a_rule": "Rule 6: once a name exists for a composition, other shapes needing it must inherit it rather than restate its base list -- and CLAUDE.md's DRY invariant treats \"same pattern, different variables\" as a defect regardless of whether the duplicated tokens are statements or base classes. Leaving it also means a future change to the pair (e.g. the SerializeAsAny fix on `problems`) has two sites to keep in step.",
+     "fix": "Redeclare as `class AdapterFailureDetails(EntityProblemsDetails, UpstreamCallDetails)` in src/core/errors/details.py:233 -- an MRO-equivalent, field-identical change that makes the new name the single home for the pair, and update its docstring's \"all three axes\" sentence to say two composed axes (entity+problems, upstream). Verify with a to_wire() test that the emitted key set is unchanged."
+    },
+    {
+     "what": "Deleting CapabilityEntityDetails leaves one fact with two wire homes. At src/core/tools/media_buy_update.py:1068-1071 the details are literally `{\"product_id\": product_id}`, and the catalog routes that product id through `problems=[ErrorProblem(subject_type=\"product\", subject_id=product_id)]` -- a one-element problems list carrying no code, no field and no rejected value, used purely to smuggle an entity id. Every other family in the catalog carries the same fact in EntityRefDetails.product_id (CreativeRejectedDetails at media_buy_create.py:3827 and _assignments.py:237, and the configuration sites at media_buy_create.py:1404/:1500). So \"which product\" lands at details.product_id under three error classes and at details.problems[0].subject_id under a fourth.",
+     "where": "catalog shared_shape_wins item (3) \"CapabilityEntityDetails DROPPED\"; site src/core/tools/media_buy_update.py:1070",
+     "why_it_breaks_a_rule": "Rule 8's one-channel-per-fact principle applied across the catalog, and rule 6: the fix for \"this family also needs the entity axis\" is composition, not re-encoding the entity as a degenerate problem item. The catalog invokes the sibling-invention concern to justify the deletion, but rule 7 explicitly states per-site precision through subclasses \"costs nothing\", and the cheaper fix needs no new class at all.",
+     "fix": "Compose the entity axis into the capability base instead of inventing or deleting a sibling: `class CapabilityDetails(EntityRefDetails)` with its single `unsupported_capability` field. CapabilityRejectionDetails and CapabilityProblemsDetails inherit it unchanged, the capability family stays at three shapes, CapabilityEntityDetails stays deleted, and media_buy_update.py:1070 emits `CapabilityDetails(unsupported_capability=\"placement_targeting\", product_id=product_id)` -- the same key the other three families use."
+    },
+    {
+     "what": "RangeProblem and DependencyProblem are specified while the mechanism that makes them serializable is left undecided (open question 1). One of the two resolutions the catalog offers -- \"declare the four fields on ErrorProblem itself (10 own fields, no polymorphism)\" -- is not admissible under this design, so the question is not actually open two ways: it would put three unrelated questions on one item shape (which value was rejected against a closed set; a numeric min/max bound; a cross-field dependency on another field's value), and would hand all ~116 sites four slots that only 3 of them use.",
+     "where": "catalog open_questions[0]; src/core/errors/details.py:219 `problems: list[ErrorProblem] | None = None`",
+     "why_it_breaks_a_rule": "Rule 7 (a base plus cohesive subclasses is preferred over one wide class; avoid the god-object) rules out the widen-ErrorProblem branch, and rule 6 rules out any variant that copies the four fields onto sibling shapes instead of subclassing. Leaving the choice open leaves two of the catalog's fifteen shapes contingent on a decision that, taken the other way, deletes them.",
+     "fix": "Close the question in favour of polymorphism before any site is converted: change details.py:219 to `problems: list[SerializeAsAny[ErrorProblem]] | None = None` (importing SerializeAsAny from pydantic), keep RangeProblem and DependencyProblem as ErrorProblem subclasses, and add a to_wire() test asserting that a RangeProblem(minimum=..., maximum=...) and a DependencyProblem(requires_field=..., requires_value=...) inside ProblemsDetails both survive serialization with their own fields present -- the failure mode is silent field loss under extra=\"ignore\" in production. Record in the PR that the widen-ErrorProblem alternative was rejected on rule 7."
+    }
+   ],
+   "verdict": "CHANGES_REQUIRED"
+  },
+  {
+   "lens": "no-prose (adversarial): refute the catalog on rule 3 (no free-text field / no parallel reason enum) and rule 8 (no fact duplicated across channels). Verified against src/core/errors/details.py, src/core/errors/codes.py, src/core/exceptions.py (AdCPError first-class = error_code, status_code, details, field, retry_after, context, internal_detail), the 92-member adcp ErrorCode enum, adcp FormatId's JSON schema, and every raise site cited below. Two catalog claims I tried to break and could NOT: SetupIncompleteDetails.incomplete_setup_tasks does hold stable tokens (SetupTask.key exists and to_dict() emits it at src/services/setup_checklist_service.py:64-72, values like \"ad_server_connected\"), and ActionRequestDetails.attempted_action does hold tokens (UPDATE_ACTIONS keys, src/adapters/constants.py:6-17; the sites at broadstreet/adapter.py:704 and google_ad_manager.py:1474 pass field=\"package_id\", so attempted_action is not a second field channel). The synthesized pricing option_id in accepted_values at media_buy_create.py:1457 also survives: media_buy_create.py:1433 shows it is the literal matching key, not a label.",
+   "violations": [
+    {
+     "what": "rejected_value / accepted_values are populated with an interpolated f-string that flattens a structured FormatId into an undeclared slash-joined composite: `f\"{agent_url}/{format_id}\"`.",
+     "where": "Catalog proposals for src/core/tools/media_buy_update.py:276 (rejected_value=f\"{c.agent_url}/{c.format}\", accepted_values=sorted(f\"{u}/{fid}\" ...)); src/core/tools/creatives/_assignments.py:237 (rejected_value=creative_format_display, which is built at _assignments.py:218-224 as exactly that f-string); src/core/tools/media_buy_create.py:3827 (rejected_value=f\"{creative.agent_url}/{creative.format}\"). Shape: RejectionDetails.rejected_value / ErrorProblem.accepted_values, reached via CreativeRejectedDetails.",
+     "why_it_breaks_a_rule": "Rule 3 \u2014 the hunt target is precisely \"a field typed str that would in practice hold an interpolated f-string\". These sites move the discarded structure of an f-string into a declared str field instead of removing it, so the drift relocates rather than dies. Also rule 8: agent_url and format_id are ALREADY declared, separately, on EntityRefDetails (src/core/errors/details.py:181,187), which CreativeRejectedDetails inherits \u2014 at the two single-creative sites (_assignments.py:237, media_buy_create.py:3827) the composite is a second, undeclared channel for two facts that already have one each. The composite is also not machine-splittable: adcp FormatId.agent_url is `format: uri` (verified in FormatId.model_json_schema()) and contains \"/\" itself, and its description requires canonicalization before two format ids may be compared \u2014 so a buyer cannot recover either half.",
+     "fix": "At the single-creative sites set the declared fields (creative_id, agent_url, format_id) and leave rejected_value unset. For the multi-creative sites, either add `agent_url` + `format_id` to ErrorProblem (one declaration, no grammar) or emit one problem per creative carrying subject_id plus the format id in rejected_value and the agent in the details-root agent_url when the whole request uses one agent. No shape may receive a slash-joined FormatId."
+    },
+    {
+     "what": "CapabilityT contains a classification token, not a subject: \"media_type_multiple\". It is the same subject as \"media_type\" with a different failure mode.",
+     "where": "Catalog shape CapabilityDetails, CapabilityT alias; populated at src/adapters/gam/managers/targeting.py:866-870 (verified: the guard is `if len(targeting_overlay.media_type_any_of) > 1`) versus src/adapters/gam/managers/targeting.py:886-892 (`media_type not in media_type_map`).",
+     "why_it_breaks_a_rule": "Rule 3, second clause \u2014 \"Classification uses `code: ErrorCodeT` drawn from the existing 100-code CODE_TABLE vocabulary \u2014 never a parallel `reason` enum.\" The catalog's own annotation asserts CapabilityT \"names the SUBJECT, not the classification (the code does that)\", and for this member that assertion is false: the subject is media_type in both cases, and the survey itself calls :868 \"a cardinality refusal\". Both sites carry the same code (UNSUPPORTED_FEATURE), so the only thing distinguishing them on the wire is a token in a closed enum \u2014 a parallel classification vocabulary. I confirmed CODE_TABLE offers no cardinality code (92 pinned ErrorCode members enumerated; nothing for \"too many\"), which is why the catalog reached for the enum instead \u2014 that is a code gap to declare, not a subject member to mint.",
+     "fix": "Emit unsupported_capability=\"media_type\" at both sites and drop \"media_type_multiple\" from CapabilityT. Distinguish the cardinality refusal by shape, not by subject: CapabilityProblemsDetails with one problem per requested media type (which the survey wrongly writes off as \"no single value is rejectable\" \u2014 the set IS the rejected fact). If the cardinality case must be separately classifiable by code, that is a spec-grounding-gate decision (candidate: ITEM_VALIDATION_FAILED / UNSUPPORTED_GRANULARITY), recorded as ungraded until settled."
+    },
+    {
+     "what": "A rejected money amount has two competing channels inside one shape family, and the catalog uses both \u2014 typed root fields (bid_price, package_budget) at some sites, the inherited rejected_value at others.",
+     "where": "PricingValidationDetails (bid_price, package_budget, floor_price, min_spend_per_package) vs the inherited RejectionDetails.rejected_value. Sites: src/core/tools/media_buy_create.py:1490 (catalog: bid_price=Decimal(...), rejected_value unset; verified the site also passes no field=) and :1510 (package_budget=...), against src/adapters/google_ad_manager.py:1381 (catalog: rejected_value=str(budget); verified field=\"budget\" already on the exception).",
+     "why_it_breaks_a_rule": "Rule 8 \u2014 one channel per fact. \"The money amount the buyer supplied at the field named by `field`, which was rejected\" is one fact with two legal spellings in the same shape tree, and the catalog demonstrates the drift by spelling it both ways in the same error class (AdCPValidationError). That is exactly the failure the epic measured (\"6+ spellings of the rejected value\") reintroduced at the type level, where mypy cannot see it. The same defect covers the bound: floor_price / min_spend_per_package duplicate RangeProblem.minimum, and the catalog routes the mock adapter's budget ceiling at media_buy_create.py:3503 to RangeProblem.maximum while routing the pricing floor at :1490 to floor_price \u2014 one fact, two shapes.",
+     "fix": "Pick one channel and state it in the shape docstring as an invariant: the value the buyer supplied at `field` goes to rejected_value (str, pin-canonical); the constraint it violated goes to minimum/maximum on the problem. Then delete bid_price and package_budget from PricingValidationDetails, and express floor_price / min_spend_per_package as RangeProblem(minimum=...) so the ceiling and the floor use one shape. Keep only pricing_model and currency as genuinely non-rejection context, and add the missing field= at :1490 and :1510."
+    },
+    {
+     "what": "TimeWindowDetails gives the offending instant a second spelling alongside the rejected_value it inherits, at a site that rejects exactly one value.",
+     "where": "Catalog shape TimeWindowDetails(ValidationDetails); site src/core/tools/media_buy_create.py:2217 (verified: `field=\"start_time\"`, `details={\"start_time\": str(computed_start_time)}`).",
+     "why_it_breaks_a_rule": "Rule 8 \u2014 TimeWindowDetails inherits RejectionDetails through ValidationDetails, so at :2217 the same fact (\"the instant supplied at field=start_time, rejected\") is expressible as either `start_time=` or `rejected_value=`. Nothing in the catalog forbids the second, so the next start-time rejection can legally pick the other key \u2014 the drift the declared class was supposed to make impossible. The catalog applies the opposite rule elsewhere and says so: at listing.py:110/118 and task_management.py:210 it explicitly moves a single offending value out of a semantically-named key into rejected_value.",
+     "fix": "Use rejected_value at :2217 (a datetime rendered by the same to_wire(mode=\"json\") path) and keep TimeWindowDetails for :2234 only, where two instants genuinely exceed a scalar. Or keep the typed fields and add an explicit invariant to the docstring: for an instant, the typed field is the only channel and rejected_value MUST stay unset \u2014 enforced by a model_validator, not prose."
+    },
+    {
+     "what": "One field-pointer fact gets two grammars: the canonical bracket-notation builder, and a hand-rolled dotted join. ErrorProblem.field is additionally loaded with two different referents.",
+     "where": "Catalog proposal for src/core/schemas/capability_declarations.py:272 \u2014 `field=\".\".join(str(part) for part in err[\"loc\"])` \u2014 against src/core/exceptions.py:1187 / src/core/validation_helpers.py:54, which use the existing builder `first_validation_error_field` (src/core/exceptions.py:1107). Second referent clash: src/core/tools/media_buy_create.py:497 (problem field=f\"packages[{idx}].creative_ids\", a request pointer) vs src/core/tools/media_buy_update.py:240 (problem field=\"status\", a stored creative state the buyer never sent \u2014 verified at media_buy_update.py:242, `c.status` off the DB row).",
+     "why_it_breaks_a_rule": "Rule 8 \u2014 one channel per fact, and `field` is a first-class fact whose grammar is already fixed. src/core/exceptions.py:1110-1114 states the rule explicitly: list indices render as `[i]` \"so boundary-derived paths such as `packages[0].budget` align with the `packages[].budget` field strings raised by the implementation layer.\" The catalog's dotted join yields `specialisms.0`, which does not align, and duplicates a helper that already exists (CLAUDE.md DRY invariant: duplicated logic is a defect). The second clash makes `field` mean \"pointer into the buyer's request\" at one site and \"name of a column on a seller-side row\" at another, so no buyer can parse the slot.",
+     "fix": "Reuse the existing pointer builder for every Pydantic-loc site, including capability_declarations.py:272 (export it if the import direction is wrong \u2014 do not re-derive it). State in ErrorProblem's docstring that `field` is a request-payload pointer in bracket notation and nothing else; for an entity-state problem such as media_buy_update.py:240, carry the state in rejected_value with subject_type/subject_id and leave `field` unset, or name the request pointer that referenced the creative."
+    },
+    {
+     "what": "accepted_values is populated with URL schemes \u2014 values the named field cannot hold \u2014 and absent-vs-malformed is left to be classified by whether that key is populated.",
+     "where": "Catalog proposal for src/adapters/gam/managers/creatives.py:732: `problems=[ErrorProblem(code=VALIDATION_ERROR, accepted_values=[\"http\", \"https\"])]` with the site's existing `field=\"url\"` (verified: the guard is `url.startswith((\"http://\", \"https://\"))`). Contrasted by the catalog with creatives.py:708, where the same code and field carry no accepted_values.",
+     "why_it_breaks_a_rule": "Rule 4 defines rejected_value/accepted_values as the pin's canonical rejection-SET keys \u2014 the values accepted AT the field. \"http\" and \"https\" are not values `url` accepts; a buyer classifier that retries with an accepted_value sends url=\"http\". That is the same category error the catalog itself refuses for bounds (survey 3: encoding [3600, 604800] as accepted_values=[\"3600-604800\"] \"would put a range grammar inside a string \u2014 the exact drift the epic removes\"). It also breaks rule 3's classification clause: survey 4 states the absent-vs-malformed distinction \"survives as a shape difference \u2014 this site publishes accepted_values and :708 publishes none\", which makes the presence of a data field the classifier, where rule 3 requires `code`.",
+     "fix": "Leave accepted_values unset at creatives.py:732; VALIDATION_ERROR on field=\"url\" already says it, and rejected_value stays unset for the stated reason (the value may be binary asset data). If absent must be distinguishable from malformed on the wire, settle it as a code decision under the CLAUDE.md spec-grounding gate \u2014 never by whether an optional field happens to be populated."
+    }
+   ],
+   "verdict": "CHANGES_REQUIRED"
+  },
+  {
+   "lens": "pin-conformance vs ../adcp/dist/schemas/3.1.1/error-details/*.json + core/error.json + enums/error-code.json + enums/media-buy-valid-action.json + enums/action-not-allowed-reason.json + docs/3.1.1/building/by-layer/L3/error-handling.mdx (all read in full, not via the summaries). Clean on three hunt items: (a) no clamped shape is modelled permissively \u2014 agent-permission-denied.json and billing-not-permitted-for-agent.json are the only additionalProperties:false files and neither is in the catalog; (b) the committed VersionUnsupportedDetails correctly models the pin's one required field (supported_versions) as required and core/version-envelope.json has no required fields; (c) RejectionDetails' placement claim is accurate \u2014 core/error.json's `details` description does put rejected_value/accepted_values at the details ROOT with neither required. Everything below is a genuine divergence I could confirm against file text.",
+   "violations": [
+    {
+     "what": "The catalog invents a rich `details` shape for CONFIGURATION_ERROR, a code the pin explicitly leaves shapeless under a minimal-disclosure clamp \u2014 and fills it with seller deployment internals. `AdCPConfigurationError._code = ErrorCode.CONFIGURATION_ERROR` (src/core/exceptions.py:666, confirmed), and the pin is normative twice over: enums/error-code.json enumDescription for CONFIGURATION_ERROR says \"The code itself is the discriminator; no `error.details` shape is defined for this code (mirroring the minimal-disclosure precedent of `AGENT_SUSPENDED` / `AGENT_BLOCKED`). Sellers SHOULD populate `error.message` with operator-actionable detail\"; docs/3.1.1/building/by-layer/L3/error-handling.mdx:853 repeats it \u2014 \"`CONFIGURATION_ERROR` carries no `error.details` shape (the minimal-disclosure precedent ... applies). `error.message` carries the diagnostic ... without leaking deployment internals to the buyer.\" The catalog does the opposite: it makes EntityProblemsDetails the type parameter for this code and routes ~19 sites through it, plus SetupIncompleteDetails, RangeProblem, DependencyProblem and TypeMismatchDetails. The payloads are exactly the internals the prose names: `ErrorProblem(rejected_value=str(advertiser_id))` publishes the seller's configured GAM advertiser id (google_ad_manager.py:157); `accepted_values=[\"service_account_key_file\",\"service_account_json\",\"refresh_token\"]` publishes the seller's credential-slot inventory (google_ad_manager.py:173); RangeProblem publishes the seller's internal replay-TTL bounds (idempotency_policy.py:61,69); SetupIncompleteDetails publishes the seller's outstanding setup-task keys (media_buy_create.py:2057); DependencyProblem/ErrorProblem publish the seller's unbacked protocol and block declarations (capability_declarations.py:146,261,321). The catalog also silently REVERSES the one survey decision that was pin-correct: survey 3 proposed `NONE (details unset)` at capability_declarations.py:252, and collapse (4) overrides it to emit TypeMismatchDetails. Open question 4 further inverts the pin's own distinction \u2014 the pin separates ACCOUNT_SETUP_REQUIRED (\"buyer-side onboarding incomplete\") from CONFIGURATION_ERROR (\"seller-side deployment incomplete\"), so a tenant that has not finished ITS setup checklist is correctly CONFIGURATION_ERROR, which means SetupIncompleteDetails must not exist at all rather than being reconciled against account-setup-required.json.",
+     "where": "catalog `class_parameters` entry \"AdCPConfigurationError (src/core/exceptions.py:653) \u2192 EntityProblemsDetails\"; shapes SetupIncompleteDetails, RangeProblem, DependencyProblem, TypeMismatchDetails (serves_error_classes lists AdCPConfigurationError); sites src/adapters/google_ad_manager.py:157,173,449, src/core/idempotency_policy.py:61,69, src/core/tools/media_buy_create.py:2057, src/core/schemas/capability_declarations.py:146,252,261,272,321",
+     "why_it_breaks_a_rule": "Rules 1 and 2: an error class declares its shape as `AdCPError[SomeDetails]` and the EXCEPTION CLASS owns the code \u2014 so the shape a class is parameterized on is emitted under that class's code, unconditionally. Binding any details shape to a class whose code the pin declares shapeless makes rule 1's declaration itself non-conformant, and no per-site choice can undo it. It also breaks rule 3's own justification chain: the pin routes this diagnostic to `error.message`, i.e. the design's sanctioned free-text-free destination for this code is the message + internal_detail, not a declared shape.",
+     "fix": "Leave `AdCPConfigurationError` un-parameterized (or parameterize it on a shape that is never populated) and drop SetupIncompleteDetails, RangeProblem-for-config, DependencyProblem and the TypeMismatchDetails-at-252 mapping from the catalog. Each of the ~19 config sites keeps its first-class `field=` (which the surveys correctly add) and moves its diagnostic to `internal_detail` / the operator-facing `error.message`, per error-handling.mdx:853. If any of those facts is judged genuinely buyer-actionable, that is a protocol-behavior change and needs the CLAUDE.md spec-grounding gate \u2014 spec section + storyboard step cited before code \u2014 not an entry in this catalog."
+    },
+    {
+     "what": "`ProblemsDetails.problems` / `ErrorProblem` is used as the multi-item validation channel where the pin canonicalizes `issues[]`, and the migration drops a pinned REQUIRED field of that structure. core/error.json declares a top-level `issues` array whose items require `pointer` (RFC 6901), `message` AND `keyword` (\"Schema keyword that rejected the payload ... so agents can pattern-match on rejection class without parsing message text\"), describes its \"Primary use\" as VALIDATION_ERROR multi-field rejections, and states the ONLY sanctioned `details` spelling for it: \"Sellers MAY mirror `issues[]` here as `details.issues` for backward compatibility ... new consumers SHOULD prefer the top-level `issues` field.\" error-handling.mdx:136-139 repeats it and adds a MUST: when `issues` is present, `field` MUST be set from `issues[0].pointer` translated to JSONPath-lite. `grep -rn \"issues\" src/` returns nothing outside unrelated prose \u2014 the channel is unimplemented \u2014 and the catalog routes precisely the schema-validation sites into `details.problems`, a seller-specific key, while survey 1 records the loss verbatim: \"ErrorProblem has no slot for the pin's issues[].keyword\". This is the same class of defect the catalog itself indicts (five spellings of one list) applied one level up: `problems` is a sixth spelling of a concept the pin already named.",
+     "where": "catalog shapes ValidationDetails / EntityProblemsDetails (via committed ProblemsDetails, src/core/errors/details.py:219) applied at src/core/exceptions.py:1187, src/core/validation_helpers.py:54, src/core/schemas/capability_declarations.py:272",
+     "why_it_breaks_a_rule": "Rule 4: the canonical-key rule the catalog invokes for `rejected_value`/`accepted_values` comes from the same `details` description that canonicalizes this list as `issues` (and `details.issues` when mirrored). Applying rule 4 to one pair of keys from that paragraph while substituting a seller-specific name for the structure named in the paragraph above it is selective grounding, and rule 3's \"classification uses `code`\" cannot excuse discarding `keyword`, which classifies the SCHEMA rejection, not the error.",
+     "fix": "For the schema-validation sites, emit the pinned channel: populate top-level `issues[]` with `pointer` (RFC 6901), `message`, `keyword` from the Pydantic error's `type`, and set the exception's `field` from `issues[0].pointer` translated to JSONPath-lite per the MUST. Either add `issues` as a first-class AdCPError field (then rule 8 forbids duplicating it into any shape) or, at minimum, name the details key `issues` rather than `problems` and carry `pointer`/`keyword` on the item. Do not land these three sites on `problems` while the pinned channel is unimplemented."
+    },
+    {
+     "where": "catalog proposed_kwargs at src/core/schemas/capability_declarations.py:272 (`field=\".\".join(str(part) for part in err[\"loc\"])`) vs src/core/exceptions.py:1187 / src/core/validation_helpers.py:54 (`field=jsonpath_lite(e[\"loc\"])`)",
+     "what": "Two pointer formats for one channel, one of them conformant to neither pinned format. The pin defines exactly two spellings for a field path: JSONPath-lite on `error.field` (\"e.g., 'packages[0].targeting'\", core/error.json) and RFC 6901 on `issues[].pointer` (\"e.g., '/packages/0/targeting/geo_countries/2'\"), with an explicit note that the two differ and MUST be translated when crossed. A dot-joined Pydantic `loc` yields `packages.0.targeting` \u2014 neither. The catalog's own headline claims these Pydantic sites \"collapse to one construction\"; they do not.",
+     "why_it_breaks_a_rule": "Rule 4: `ErrorProblem.field` is a pinned-vocabulary slot, and a field renamed or reformatted away from the pin's spelling is exactly what the declared-class migration exists to stop. It also breaks the catalog's own DRY claim (CLAUDE.md DRY invariant) by shipping two builders for one fact.",
+     "fix": "Use one helper for every Pydantic `loc` \u2192 path conversion, emitting RFC 6901 on `issues[].pointer` and JSONPath-lite on `field`, and delete the dot-join at capability_declarations.py:272."
+    },
+    {
+     "what": "`ActionRequestDetails.attempted_action` adopts a pinned key name with a value domain that has ZERO intersection with the pinned enum, and types it `str` where the pin types it as a closed enum ref. error-details/action-not-allowed.json declares `attempted_action` as `$ref: /schemas/3.1.1/enums/media-buy-valid-action.json`, and required alongside `reason`. That enum's members are `pause`, `resume`, `cancel`, `extend_flight`, `increase_budget`, `update_creative_assignments`, \u2026 I read src/adapters/constants.py:6-17: UPDATE_ACTIONS keys are `pause_media_buy`, `resume_media_buy`, `pause_package`, `resume_package`, `update_package_budget`, `update_package_impressions`, `activate_order`, `submit_for_approval`, `approve_order`, `archive_order` \u2014 not one of which is a member. The same seller-internal vocabulary is then poured into the PIN'S OWN canonical keys: `rejected_value=action` and `accepted_values=sorted(REQUIRED_UPDATE_ACTIONS)` at src/adapters/constants.py:42 and google_ad_manager.py:1599. A buyer classifier keyed on `details.attempted_action` (documented as a media-buy-valid-action value) reads `pause_package` and fails to match; `accepted_values` is defined by the pin as \"the closed set the seller would have accepted at this field\", and the pinned closed set for an update action is that enum. The catalog knows this \u2014 open question 2 states the tokens \"do not intersect the pinned vocabulary\" \u2014 and demotes it to an open question while still shipping the field name and the kwargs.",
+     "where": "catalog shape ActionRequestDetails (`attempted_action: str | None`), applied at src/adapters/broadstreet/adapter.py:704 and src/adapters/google_ad_manager.py:1474; CapabilityRejectionDetails kwargs at src/adapters/constants.py:42 and src/adapters/google_ad_manager.py:1599",
+     "why_it_breaks_a_rule": "Rule 4: when a key is the pin's, the pin's spelling AND its declared type come together \u2014 adopting `attempted_action` while widening it from a pinned enum ref to free `str` is a rename in the one direction the rule cannot detect, and putting non-enum tokens into `rejected_value`/`accepted_values` is precisely 'a canonical key filled by a seller-specific variant'. Rule 3 is also mis-applied in the catalog's stated justification: the pin's `reason` is a CLOSED registered enum (enums/action-not-allowed-reason.json: wrong_status, not_supported_on_product, not_supported_on_buy, mode_mismatch), not the free text the rule bars.",
+     "fix": "Either (a) rename the field off the pin \u2014 e.g. `attempted_update_action` \u2014 so the pinned key is not claimed by a non-pinned vocabulary, and leave `rejected_value`/`accepted_values` unset at constants.py:42 / google_ad_manager.py:1599 until the tokens are translated; or (b) translate UPDATE_ACTIONS keys to media-buy-valid-action members at the boundary, type `attempted_action` with that enum, and take the translation through the spec-grounding gate. Resolve before the shape lands; do not ship the pinned key name over an untranslated vocabulary."
+    },
+    {
+     "what": "A pinned shape's canonical key is replaced by a seller-specific variant for the very condition the pin names. error-details/budget-too-low.json declares `minimum_budget` (\"Seller's minimum budget for this product\") + `currency` (\"ISO 4217 currency code\"), and enums/error-code.json describes BUDGET_TOO_LOW as \"Budget is below the seller's minimum.\" I read src/core/tools/media_buy_create.py:1504-1517: the guard is `package_budget < selected_option.min_spend_per_package` \u2014 verbatim that condition \u2014 yet the catalog preserves the seller key `min_spend_per_package` as a declared field on PricingValidationDetails while spelling its sibling `currency` the pin's way, so half the pinned pair is adopted and half is not. The same fact is spelled a third way as `RangeProblem.minimum` for the mock adapter's budget floor. `AdCPBudgetTooLowError` with `_code = ErrorCode.BUDGET_TOO_LOW` already exists (src/core/exceptions.py:861-865) and is already raised (media_buy_create.py:2179), so the pinned code and class are both available and the catalog neither uses them here nor flags the mismatch anywhere in its six collapses or six open questions.",
+     "where": "catalog shape PricingValidationDetails field `min_spend_per_package: Decimal | None` applied at src/core/tools/media_buy_create.py:1510; RangeProblem applied at src/adapters/mock_ad_server.py:668 and src/core/tools/media_buy_create.py:3503 for the budget ceiling/floor",
+     "why_it_breaks_a_rule": "Rule 4: `minimum_budget`/`currency` is the pinned spelling for 'the seller's minimum budget and its denomination', and `min_spend_per_package` / `minimum` are seller-specific variants of it \u2014 the exact drift the epic removes. Rule 2 compounds it: because the shape names no code, only the exception class can put this on the pin's footing, and the catalog leaves it on AdCPValidationError.",
+     "fix": "Rename the field to the pin's `minimum_budget` and reuse the already-declared `currency`; then decide, through the spec-grounding gate, whether media_buy_create.py:1510 and the mock adapter's budget floor should raise `AdCPBudgetTooLowError` (BUDGET_TOO_LOW) rather than VALIDATION_ERROR, and record the citation. Do not carry three spellings of one bound into the migration."
+    },
+    {
+     "what": "CreativeRejectedDetails \u2014 and with it the wire code CREATIVE_REJECTED \u2014 is bound to three sites whose condition the pin governs with a MUST on a different code. enums/error-code.json, CREATIVE_NOT_FOUND: \"Referenced creative does not exist in the agent's creative library. \u2026 Sellers MUST return this code uniformly for any creative_id not owned by the calling account \u2014 never distinguish 'exists in another tenant' from 'does not exist', which would enable cross-tenant enumeration.\" I confirmed `AdCPCreativeRejectedError._code = ErrorCode.CREATIVE_REJECTED` (src/core/exceptions.py:936) and that a correctly-coded class already exists \u2014 `_code = ErrorCode.CREATIVE_NOT_FOUND` at src/core/exceptions.py:814. The three sites are exactly the not-owned case (they resolve `missing_ids` under the caller's principal) and already carry `# FIXME(#1598)` comments admitting the tension (media_buy_update.py:229, media_buy_create.py:382, :3767). The catalog keeps them on the rejected class, buries CREATIVE_NOT_FOUND in `problems[].code`, and \u2014 because the shape it binds is the mirror of error-details/creative-rejected.json \u2014 drags `policy_id`/`policy_url` (\"Identifier for the violated policy\") onto a lookup miss. A buyer reading `error.code` gets CREATIVE_REJECTED for a creative that simply is not theirs, which is the shape the pin's MUST closes.",
+     "where": "catalog `class_parameters` entry \"AdCPCreativeRejectedError (src/core/exceptions.py:932) \u2192 CreativeRejectedDetails\" applied at src/core/tools/media_buy_update.py:232, src/core/tools/media_buy_create.py:386 and :3770 (catalog open question 6)",
+     "why_it_breaks_a_rule": "Rule 2: a detail shape names no code, so the exception class is the SOLE authority on what code these sites emit \u2014 which means the class binding must be pin-correct before any shape is attached to it, and `problems[].code` cannot repair a wrong `error.code`. Leaving it as an open question is not available under rule 2's division of authority.",
+     "fix": "Re-point the three not-found sites at the existing CREATIVE_NOT_FOUND class (src/core/exceptions.py:814) and give them an entity/problems shape rather than the creative-rejected mirror, so `policy_id`/`policy_url` are not offered on a lookup miss. That settles #1598 in the direction the pinned MUST requires; cite the enumDescription in the PR per the spec-grounding gate."
+    },
+    {
+     "what": "CreativeRejectedDetails is filed as a pinned shape but does not mirror its pinned file field-for-field, and substitutes a non-pinned key for the pinned one. The catalog gives it `pinned_source: creative-rejected.json`, which places it under the contract stated in src/core/errors/details.py's own pinned-shapes header: \"Each mirrors its file under the pinned schema bundle at dist/schemas/3.1.1/error-details/, field for field, plus any extra the pin permits and a call site actually needs.\" The file declares three properties \u2014 `policy_id`, `policy_url`, `reasons` (array of string, \"Specific reasons the creative was rejected\") \u2014 with `additionalProperties: true` and nothing required. The catalog declares two and emits `problems` in place of the third. Nothing here is schema-INVALID (reasons is optional, extras are permitted), but a buyer reading only the pinned key gets an empty rejection, and the catalog's own text concedes this needs \"an explicit owner decision\" (open question 5) while the shape ships as pin-mirroring regardless.",
+     "where": "catalog shape CreativeRejectedDetails, `pinned_source: ../adcp/dist/schemas/3.1.1/error-details/creative-rejected.json`; contract asserted at src/core/errors/details.py:126-131",
+     "why_it_breaks_a_rule": "Rule 4 (canonical keys keep the pin's names) read together with the pinned-shapes contract the design already committed in details.py: a shape declared as a pin mirror may ADD keys the pin permits, but replacing a pinned key with a seller-specific one is the substitution rule 4 exists to prevent. Rule 3 explains why `reasons` cannot be declared as prose; it does not license dropping the key silently.",
+     "fix": "Resolve open question 5 before the shape lands, not after. Either declare `reasons: list[ErrorCodeT] | None` (closed vocabulary, so rule 3 is satisfied) alongside `problems`, or state the divergence in the shape's docstring and the PR description as details.py's pinned-shapes header requires, and drop the `pinned_source` claim to 'partial mirror' so the next reader is not told this is field-for-field."
+    }
+   ],
+   "verdict": "CHANGES_REQUIRED"
+  }
+ ]
+}

@@ -41,12 +41,11 @@ coercion) that happens to live in this file.
 
 from __future__ import annotations
 
-import os
-from typing import Any
 from urllib.parse import urlparse
 
-from adcp.types import ContextObject, TaskType
+from adcp.types import TaskType
 
+from src.core.config import get_settings
 from src.core.exceptions import AdCPBlockedUrlError
 from src.core.security.egress.policy import EgressPolicy
 
@@ -55,19 +54,14 @@ from src.core.security.egress.policy import EgressPolicy
 # enum and would otherwise reject the payload as schema-invalid.
 WEBHOOK_TASK_TYPE_FALLBACK = "update_media_buy"
 
-WEBHOOK_SSRF_SUGGESTION = (
-    "Provide a public https webhook URL that does not target private, loopback, "
-    "link-local, CGNAT, multicast, or cloud-metadata hosts."
-)
-
 # Log fallback when sanitize_webhook_url_for_log cannot parse scheme/host —
 # never fall back to the raw buyer URL (credentials / query).
 UNPARSEABLE_WEBHOOK_URL_FOR_LOG = "<unparseable-url>"
 
 
 def _adcp_testing() -> bool:
-    """True when ADCP_TESTING allows localhost/HTTP for capture servers."""
-    return os.environ.get("ADCP_TESTING") == "true"
+    """True when a buyer webhook may target localhost over plain HTTP (a capture server)."""
+    return get_settings().loopback_webhooks_allowed
 
 
 def validate_webhook_task_type(task_type: str, fallback: str = WEBHOOK_TASK_TYPE_FALLBACK) -> str:
@@ -96,19 +90,6 @@ def validate_webhook_task_type(task_type: str, fallback: str = WEBHOOK_TASK_TYPE
     except ValueError:
         return fallback
     return task_type
-
-
-def webhook_ssrf_suggestion() -> str:
-    """Buyer-facing suggestion for registration/outbound SSRF rejections.
-
-    Always the strict https wording (salesagent-e6h0): there is no posture
-    left in which a plain-http webhook URL is ever admissible, so there is no
-    second wording to select between. It used to key on
-    :meth:`WebhookURLValidator._require_https`, which selected between this and
-    a now-deleted "http(s)" wording depending on the (now also deleted)
-    outbound scheme hatch.
-    """
-    return WEBHOOK_SSRF_SUGGESTION
 
 
 # Every character ``str.splitlines()`` treats as a line boundary. ``urlsplit``
@@ -151,7 +132,6 @@ def reject_unsafe_webhook_registration_url(
     url: str | None,
     *,
     field: str,
-    context: ContextObject | dict[str, Any] | None = None,
 ) -> None:
     """Raise AdCPBlockedUrlError when ``url`` fails the registration SSRF gate.
 
@@ -169,11 +149,18 @@ def reject_unsafe_webhook_registration_url(
     # already receives on the error.
     is_valid, _ = WebhookURLValidator.validate_webhook_url_registration(str(url))
     if not is_valid:
-        raise AdCPBlockedUrlError(
-            field=field,
-            suggestion=webhook_ssrf_suggestion(),
-            context=context,
-        )
+        # Nothing about the refused host reaches the buyer — the spec's Security
+        # Considerations forbid disclosing "internal service names, hostnames, or IP
+        # addresses". That property is now enforced at the SOURCE rather than here:
+        # every cause EgressPolicy.check_registration computes is a FIXED label, and
+        # the only place the URL itself appears is that method's operator log line,
+        # through webhook_url_for_log. So the discarded message above is a constant,
+        # not a host-naming string, and there is nothing left to route to
+        # internal_detail — passing it would log a fixed sentence twice.
+        #
+        # No suggestion= either: it is a read-only property off CODE_TABLE keyed by
+        # the error code, never a per-raise-site or per-class override (ADR-010).
+        raise AdCPBlockedUrlError(field=field)
 
 
 class WebhookURLValidator:
@@ -202,7 +189,7 @@ class WebhookURLValidator:
         byte-identically.
 
         When ``ADCP_TESTING=true``, localhost/loopback are allowed for
-        capture servers — graded on both arms in
+        capture servers — graded on both branches in
         ``tests/unit/test_webhook_security.py::TestLocalhostAllowanceUnderTestingMode``.
         """
         try:

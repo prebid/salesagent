@@ -54,6 +54,10 @@ _ASSET_CLASS_MAP = {
     "html": HtmlFormatAsset,
 }
 
+# The asset-type vocabulary this factory can build, for steps that need to check
+# a claimed asset type is real rather than build one. Derived, not restated.
+ASSET_TYPES = frozenset(_ASSET_CLASS_MAP)
+
 
 def make_asset(asset_type: str, asset_id: str | None = None) -> ImageFormatAsset:
     """Create a typed asset object from an asset type string.
@@ -198,6 +202,39 @@ def pick_reference_formats(predicate: Callable[[Format], bool], min_count: int =
             "minting a synthetic one."
         )
     return matches
+
+
+def _category_of(fmt: Format) -> str | None:
+    """The catalog category a reference format is served under, as a plain string."""
+    value = getattr(fmt, "type", None)
+    return None if value is None else str(getattr(value, "value", value))
+
+
+def _uses_asset_type(fmt: Format, asset_type: str) -> bool:
+    return any(
+        str(getattr(getattr(a, "asset_type", None), "value", getattr(a, "asset_type", None))) == asset_type
+        for a in fmt.assets or []
+    )
+
+
+def pick_reference_format(category: str, *, without_asset_type: str | None = None) -> Format:
+    """The first reference format served under *category*, in catalog order.
+
+    A scenario that says "a display format" wants a REAL one -- served by the in-process
+    fixture and the live e2e stack alike -- not a minted ``fmt_N`` that the live stack can
+    never realize and that carries no assets to grade. Catalog order makes the choice
+    deterministic across runs and transports.
+
+    ``without_asset_type`` skips formats carrying that asset type; it exists for
+    ``pixel_tracker``, which the pinned 3.1.1 ``core/format.json`` assets union does not
+    admit (adcp#7338) although the reference agent serves it, so a scenario whose Then
+    validates the response against the pin can still pick a format the pin accepts.
+    """
+    return pick_reference_formats(
+        lambda f: (
+            _category_of(f) == category and (without_asset_type is None or not _uses_asset_type(f, without_asset_type))
+        )
+    )[0]
 
 
 # ── Factories ────────────────────────────────────────────────────────

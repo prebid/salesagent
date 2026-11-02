@@ -22,6 +22,7 @@ from types import MappingProxyType
 
 from pydantic import JsonValue
 
+from src.core.errors.details import ConfigurationDetails
 from src.core.exceptions import AdCPConfigurationError
 from src.core.security.outbound_http import OutboundResult, QueryParams, send
 
@@ -94,15 +95,16 @@ class VendorHttpClient:
         It is deliberately not an ``OutboundError``: every adapter catches that
         family and translates it into a vendor failure status, which would
         report a defect in our own code as the vendor being down.
+
+        The clashing keys are the structured fact, so they go in
+        ``ConfigurationDetails.rejected_value``. Buyer-facing text is a function
+        of the code (ADR-010) and is not authored here.
         """
         if not per_call:
             return dict(self.params)
         clash = sorted(self.params.keys() & per_call.keys())
         if clash:
-            raise AdCPConfigurationError(
-                f"query parameter(s) {clash} are set on this VendorHttpClient and passed again "
-                "per call; the client-level value is a dial coordinate and must not be shadowed."
-            )
+            raise AdCPConfigurationError(details=ConfigurationDetails(rejected_value=clash))
         return {**self.params, **per_call}
 
 
@@ -111,9 +113,16 @@ def require_vendor(client: VendorHttpClient | None, *, vendor: str) -> VendorHtt
 
     The one place "no client" becomes an ``AdCPConfigurationError`` — every
     adapter with a ``VendorHttpClient | None`` calls this instead of writing
-    its own ``if self._vendor is None: raise ...``, so the message and the
-    exception class cannot drift per adapter.
+    its own ``if self._vendor is None: raise ...``, so the typed details and
+    the exception class cannot drift per adapter.
+
+    The vendor name is the structured fact and goes in
+    ``ConfigurationDetails.provider``, the same slot every other named-provider
+    misconfiguration uses. Naming a third-party vendor in buyer-facing text is
+    exactly what AdCP 3.1.1 ``transport-errors.mdx`` § Security Considerations
+    forbids, and buyer-facing text is a function of the code anyway (ADR-010),
+    so there is nothing to author.
     """
     if client is None:
-        raise AdCPConfigurationError(f"{vendor} credentials are not configured; cannot dial the vendor API.")
+        raise AdCPConfigurationError(details=ConfigurationDetails(provider=vendor))
     return client

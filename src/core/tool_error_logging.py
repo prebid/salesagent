@@ -1,168 +1,68 @@
-"""Centralized error logging for MCP tools.
+"""Boundary error recording, and the carrier MCP raises a failure through.
 
-This module provides a decorator that wraps MCP tools to automatically log errors
-to the activity feed and audit logs, giving tenants visibility into failures.
+``record_boundary_error`` is what every transport's failure passes through on the way to the
+server-side sinks: the stdlib log, the activity feed and the audit log. ``AdCPToolError`` is
+MCP's wire marker for a failure -- the response body, raised as the ``ToolError`` FastMCP
+renders as ``isError=True``.
 """
 
-import functools
-import inspect
+from __future__ import annotations
+
 import json
 import logging
-from collections.abc import Callable
-from typing import Any, NoReturn, cast, get_args
+from typing import TYPE_CHECKING, Any
 
-from fastapi.responses import JSONResponse
 from fastmcp.exceptions import ToolError
-from fastmcp.server import Context as FastMCPContext
 
-from src.core.exceptions import (
-    ERROR_CODE_MAPPING,
-    AdCPError,
-    RecoveryHint,
-    build_two_layer_error_envelope,
-    normalize_to_adcp_error,
-)
-from src.core.tool_context import ToolContext
+from src.core.errors.codes import Recovery
+from src.core.exceptions import AdCPSalesAgentError
+
+if TYPE_CHECKING:
+    from src.core.resolved_identity import PublicIdentity
 
 logger = logging.getLogger(__name__)
 
-_CONTEXT_LIKE_TYPES: tuple[type, ...] = (FastMCPContext, ToolContext)
-
 
 class AdCPToolError(ToolError):
-    """MCP boundary ToolError carrying a two-layer AdCP error envelope.
+    """MCP's wire marker for a failure: the response body, raised.
 
-    FastMCP serializes ``raise <ToolError>`` as
-    ``CallToolResult(isError=True, content=[TextContent(text=str(error))])``.
-    With a single ``str`` arg, ``str(self)`` returns the JSON-encoded envelope
-    verbatim, so storyboard runners can ``JSON.parse(content[0].text)`` and
-    read both ``adcp_error.code`` and ``errors[0].code``.
-
-    The envelope is also exposed as ``self.envelope`` so audit logging,
-    activity feed, and REST fallback code can read it without re-parsing.
-
-    ``status_code`` mirrors the source ``AdCPError.status_code`` so REST
-    routes catching this exception emit the right HTTP status. Defaults to
-    500 for compatibility with paths that don't supply a typed source (the
-    plain ToolError fallback in ``_handle_tool_error``).
+    FastMCP renders ``raise <ToolError>`` as
+    ``CallToolResult(isError=True, content=[TextContent(text=str(error))])``, so ``str(self)``
+    is the JSON-encoded body and a buyer parses ``content[0].text`` to read either
+    ``adcp_error.code`` or ``errors[0].code``. The body is also exposed as ``self.envelope``
+    for a reader that already holds the exception.
     """
 
-    def __init__(self, envelope: dict[str, Any], *, status_code: int = 500):
-        # ``status_code`` is keyword-only so a missing positional arg cannot
-        # silently default to 500, misclassifying a 4xx as 5xx. Callers must
-        # opt in explicitly when not supplying a typed source AdCPError.
+    def __init__(self, envelope: dict[str, Any]):
         self.envelope = envelope
-        self.status_code = status_code
         super().__init__()
 
     def __str__(self) -> str:
         return json.dumps(self.envelope)
 
 
-def _extract_tenant_and_principal(context: Any) -> tuple[str | None, str | None]:
-    """Extract tenant_id and principal_id from context.
+def extract_error_info(error: Exception) -> tuple[str, str, Recovery | None]:
+    """The (code, message, recovery) an exception carries, for the server-side record.
 
-    Handles both FastMCP Context and ToolContext.
-
-    Args:
-        context: The context object (FastMCP Context or ToolContext)
-
-    Returns:
-        Tuple of (tenant_id, principal_id), either may be None
-    """
-    tenant_id = None
-    principal_id = None
-
-    # Try ToolContext first (has direct attributes)
-    if hasattr(context, "tenant_id"):
-        tenant_id = context.tenant_id
-    if hasattr(context, "principal_id"):
-        principal_id = context.principal_id
-
-    # If we have tenant_id, we're done
-    if tenant_id:
-        return tenant_id, principal_id
-
-    # Try to extract from FastMCP Context
-    if isinstance(context, FastMCPContext):
-        try:
-            from src.core.transport_helpers import resolve_identity_from_context
-
-            identity = resolve_identity_from_context(context, require_valid_token=False, protocol="mcp")
-            if identity:
-                if identity.tenant_id:
-                    tenant_id = identity.tenant_id
-                if identity.principal_id:
-                    principal_id = identity.principal_id
-        except Exception:
-            logger.debug("Could not extract identity for error logging", exc_info=True)
-
-    return tenant_id, principal_id
-
-
-def extract_error_info(error: Exception) -> tuple[str, str, RecoveryHint | None]:
-    """Extract error code, message, and recovery hint from an exception.
-
-    For AdCPToolError, reads directly from the carried two-layer envelope.
-    For AdCPError, uses the exception's error_code, message, and recovery attributes.
-    For plain ToolError, attempts to parse structured (code, message, recovery) format
-    for backward compatibility with code that raises ToolError directly.
-
-    Args:
-        error: The exception to extract info from
-
-    Returns:
-        Tuple of (error_code, error_message, recovery) where recovery may be None
+    An ``AdCPToolError`` carries them in its body; an ``AdCPSalesAgentError`` derives them from
+    its code; anything else is recorded under its type name.
     """
     if isinstance(error, AdCPToolError):
         first = error.envelope["errors"][0]
         return first["code"], first.get("message", ""), _coerce_recovery(first.get("recovery"))
-    if isinstance(error, AdCPError):
+    if isinstance(error, AdCPSalesAgentError):
         return error.error_code, error.message, error.recovery
-    elif isinstance(error, ToolError):
-        # Plain ToolError raised by other code paths — preserve legacy parsing.
-        # ToolError may be constructed as ToolError("CODE", "message", "recovery")
-        # or ToolError("CODE", "message") or ToolError("message")
-        if error.args:
-            first_arg = str(error.args[0])
-            is_error_code = (
-                len(first_arg) <= 50
-                and first_arg.isupper()
-                and " " not in first_arg
-                and first_arg.replace("_", "").isalnum()
-            )
-            if is_error_code and len(error.args) > 1:
-                # Structured format: ToolError("CODE", "message") or ("CODE", "message", "recovery")
-                recovery: RecoveryHint | None = None
-                if len(error.args) > 2:
-                    recovery = _coerce_recovery(str(error.args[2]))
-                return first_arg, str(error.args[1]), recovery
-            else:
-                # Single-arg format: ToolError("message")
-                return "TOOL_ERROR", str(error), None
-        return "TOOL_ERROR", str(error), None
-    else:
-        return type(error).__name__, str(error), None
+    return type(error).__name__, str(error), None
 
 
-# Valid recovery values — sourced from the RecoveryHint Literal so a future
-# extension of the Literal doesn't silently drop values in this validator.
-_VALID_RECOVERY_VALUES: frozenset[str] = frozenset(get_args(RecoveryHint))
-
-
-def _coerce_recovery(value: object) -> RecoveryHint | None:
-    """Validate that ``value`` is a valid ``RecoveryHint`` literal, else ``None``.
-
-    The envelope's ``recovery`` field is typed ``str | None`` on the wire,
-    but ``extract_error_info`` advertises ``RecoveryHint | None``. Without
-    membership validation the legacy ToolError path passes any string
-    through (silently bypassing the type contract), and the envelope branch
-    returns whatever the wire payload carries unchanged. Coerce both paths
-    through this helper so downstream consumers can trust the declared type.
-    """
-    if value in _VALID_RECOVERY_VALUES:
-        return cast(RecoveryHint, value)
-    return None
+def _coerce_recovery(value: object) -> Recovery | None:
+    """``value`` as a ``Recovery`` when it is one of the three wire strings, else ``None``."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return Recovery(value)
+    except ValueError:
+        return None
 
 
 def record_boundary_error(
@@ -170,53 +70,68 @@ def record_boundary_error(
     operation: str,
     error: Exception,
     *,
-    tenant_id: str | None = None,
-    principal_id: str | None = None,
+    identity: PublicIdentity | None = None,
 ) -> None:
     """Record an error at a transport boundary uniformly across MCP/A2A/REST.
 
-    Single source of truth for "what observability happens when a transport
-    boundary sees an error". All three boundaries delegate here so log
-    severity, activity-feed publishing, and audit logging stay in lockstep.
-
     Args:
-        transport: ``"mcp"``, ``"a2a"``, or ``"rest"`` — controls the audit
-            logger's source string and adapter_id.
-        operation: Tool/skill/route name (e.g. ``"create_media_buy"`` or
-            ``"POST /v1/buy"``).
+        transport: ``"mcp"``, ``"a2a"``, or ``"rest"`` -- the audit logger's source string.
+        operation: Tool/skill/route name.
         error: The exception that fired at the boundary.
-        tenant_id: Tenant ID if resolvable at the boundary. When None,
-            activity-feed + audit-log are skipped (the WARNING/ERROR log
-            line still captures the error).
-        principal_id: Principal ID if resolvable. Falls back to
-            ``"anonymous"`` for downstream sinks.
+        identity: The resolved caller, when the boundary had one. Without it the activity
+            feed and audit log are skipped; the log line still captures the error.
 
     Behavior:
-        1. stdlib logger: WARNING for typed ``AdCPError`` (expected,
-           buyer-correctable error path), ERROR with ``exc_info=True`` for
-           untyped fallthrough so on-call sees the traceback.
-        2. ``activity_feed.log_error`` (when ``tenant_id`` present) so the
-           operator UI surfaces the error in real time.
-        3. ``get_audit_logger(transport.upper(), tenant_id).log_operation``
-           (when ``tenant_id`` present) for the persistent record.
+        1. stdlib logger: WARNING for a typed ``AdCPSalesAgentError`` (the buyer-correctable
+           path), ERROR with ``exc_info=True`` for an untyped exception so on-call sees the
+           traceback.
+        2. ``activity_feed.log_error`` (when ``tenant_id`` present), so the operator UI
+           surfaces the error in real time.
+        3. ``get_audit_logger(transport.upper(), tenant_id).log_operation`` (when
+           ``tenant_id`` present), the persistent record.
 
-    All sinks are defensively wrapped — observability failures cannot
-    replace the buyer's original error. Sink failures log at WARNING (not
-    DEBUG) so a quiet outage in audit infrastructure is still findable
-    when on-call goes looking.
+    Every sink is wrapped: an observability failure cannot replace the buyer's original
+    error. Sink failures log at WARNING so a quiet outage in audit infrastructure is findable.
     """
     error_code, error_message, _recovery = extract_error_info(error)
-    is_typed = isinstance(error, AdCPError)
     transport_upper = transport.upper()
+    tenant_id = identity.tenant_id if identity is not None else None
+    principal_id = identity.principal_id if identity is not None else None
 
-    if is_typed:
+    if isinstance(error, AdCPSalesAgentError):
+        # A typed error is the buyer-correctable path, so WARNING. This is the ONE
+        # record of what broke underneath: the traceback is attached when the error
+        # carries a cause, either raised ``from`` it (``__cause__``) or handed to
+        # ``internal_detail`` without ``from`` (``with_retry`` re-raised a mapped
+        # error bare), and ``exc_info`` on the error prints its ``__cause__`` or
+        # ``__context__`` chain, so the caught exception is in the record either way.
+        # Nothing logs ``internal_detail`` separately: ``adcp_error_for`` used to write
+        # it a second time at ERROR, and one cause was two tracebacks
+        # (salesagent-3cs7o.24). Without a cause of either kind there is nothing a
+        # traceback adds.
+        #
+        # ``field`` and ``details`` are named because ``message`` alone cannot say
+        # WHICH refusal this was. Post-ADR-010 the message is a read-only property over
+        # CODE_TABLE -- a function of the CODE, not of the raise site -- so every one of
+        # ``create_media_buy``'s twenty-odd AdCPValidationError sites logs the identical
+        # sentence, and a conformance failure reading "Request contains invalid field
+        # values" names nothing anyone can act on (measured: four media_buy storyboard
+        # checks failing indistinguishably, salesagent-basxl). The two values that DO
+        # vary are already wire-bound -- ``field`` is the error's field pointer and
+        # ``details`` its typed details payload -- so this adds no exposure, only the
+        # ability to tell one refusal from another. ONE site, so every tool and every
+        # transport gets it; instrumenting raise sites would be the same log twenty
+        # times.
         logger.warning(
-            "%s boundary translating %s to envelope: %s - %s (operation=%s)",
+            "%s boundary translating %s to envelope: %s - %s (operation=%s field=%s details=%s)",
             transport_upper,
             type(error).__name__,
             error_code,
             error_message,
             operation,
+            error.field,
+            error.details,
+            exc_info=error if (error.__cause__ is not None or error.internal_detail is not None) else None,
         )
     else:
         logger.error(
@@ -229,7 +144,6 @@ def record_boundary_error(
         )
 
     if not tenant_id:
-        # No tenant context — activity feed and audit log require tenant scoping.
         return
 
     try:
@@ -258,203 +172,3 @@ def record_boundary_error(
         )
     except Exception as e:
         logger.warning("Failed to log %s error to audit log: %s", transport_upper, e)
-
-
-def _log_tool_error(tool_name: str, error: Exception, tenant_id: str | None, principal_id: str | None) -> None:
-    """Backwards-compatible MCP wrapper for record_boundary_error.
-
-    Existing MCP-specific call sites delegate here; new code should call
-    ``record_boundary_error("mcp", ...)`` directly.
-    """
-    record_boundary_error("mcp", tool_name, error, tenant_id=tenant_id, principal_id=principal_id)
-
-
-def _translate_to_tool_error(error: Exception) -> NoReturn:
-    """Translate typed exceptions to AdCPToolError at the MCP boundary.
-
-    AdCPError → AdCPToolError carrying a two-layer envelope built by
-    ``build_two_layer_error_envelope()``. ValueError and PermissionError are
-    wrapped in synthetic AdCPValidationError / AdCPAuthorizationError so they
-    produce the same envelope shape. Already-translated AdCPToolError and
-    plain ToolError pass through.
-
-    This function always raises — it never returns. Uses ``raise error`` (not
-    bare ``raise``) on the passthrough branches so the function works even if
-    the caller is not inside an active ``except`` block.
-    """
-    if isinstance(error, ToolError):
-        # Includes AdCPToolError — already in wire shape.
-        raise error
-    # Normalize untyped exceptions (ValueError, PermissionError) to typed
-    # AdCPError via the shared normalize_to_adcp_error() helper — same
-    # mapping the A2A and REST boundaries apply. The result is always an
-    # AdCPError; the wrap-vs-passthrough branches produce byte-identical
-    # AdCPToolError values, so the function unconditionally builds the
-    # envelope and chains the original exception for traceback fidelity.
-    typed = normalize_to_adcp_error(error)
-    raise AdCPToolError(build_two_layer_error_envelope(typed), status_code=typed.status_code) from error
-
-
-def _handle_tool_exception(tool_func: Callable, error: Exception, args: tuple, kwargs: dict) -> NoReturn:
-    """Shared exception path for both sync and async ``with_error_logging`` wrappers.
-
-    Extracts tenant/principal from a Context found in positional or keyword args,
-    logs the error to activity feed + audit log, then translates to AdCPToolError
-    at the MCP boundary. Always raises — never returns.
-    """
-    # Use explicit isinstance instead of ``hasattr(arg, "tenant_id")`` —
-    # the broader hasattr check matched any Pydantic model that happens to
-    # declare a ``tenant_id`` field, leading the helper to treat request
-    # bodies as Contexts. Only the actual transport-context types should
-    # qualify.
-    context = None
-    for arg in args:
-        if isinstance(arg, _CONTEXT_LIKE_TYPES):
-            context = arg
-            break
-    if context is None:
-        for v in kwargs.values():
-            if isinstance(v, _CONTEXT_LIKE_TYPES):
-                context = v
-                break
-
-    tenant_id, principal_id = _extract_tenant_and_principal(context) if context else (None, None)
-    _log_tool_error(tool_func.__name__, error, tenant_id, principal_id)
-    _translate_to_tool_error(error)
-
-
-def with_error_logging(tool_func: Callable) -> Callable:
-    """Decorator to add centralized error logging to an MCP tool.
-
-    This wrapper catches exceptions from tool calls and logs them to:
-    - Activity feed (for real-time tenant visibility)
-    - Audit log (for persistent records)
-
-    The error is then re-raised so MCP handles it normally.
-
-    Usage:
-        mcp.tool()(with_error_logging(my_tool))
-
-    Args:
-        tool_func: The tool function to wrap
-
-    Returns:
-        Wrapped function with error logging
-    """
-    is_async = inspect.iscoroutinefunction(tool_func)
-
-    if is_async:
-
-        @functools.wraps(tool_func)
-        async def async_wrapper(*args, **kwargs) -> Any:
-            try:
-                return await tool_func(*args, **kwargs)
-            except Exception as e:
-                _handle_tool_exception(tool_func, e, args, kwargs)
-
-        return async_wrapper
-
-    @functools.wraps(tool_func)
-    def sync_wrapper(*args, **kwargs) -> Any:
-        try:
-            return tool_func(*args, **kwargs)
-        except Exception as e:
-            _handle_tool_exception(tool_func, e, args, kwargs)
-
-    return sync_wrapper
-
-
-# ---------------------------------------------------------------------------
-# REST boundary handler: ToolError -> two-layer envelope JSONResponse.
-# Lives here (alongside AdCPToolError and extract_error_info) rather than in
-# src/routes/api_v1.py so the REST module doesn't import an MCP-boundary type.
-# ---------------------------------------------------------------------------
-
-
-def _build_error_code_to_status() -> dict[str, int]:
-    """Derive the wire-code → HTTP status map from ``AdCPError`` subclasses.
-
-    Walks every concrete subclass of ``AdCPError`` and reads its
-    class-level ``error_code`` + ``status_code`` declarations, then
-    propagates each declaration to its wire-translated equivalents via
-    ``ERROR_CODE_MAPPING``. Eliminates the drift potential of a
-    hand-maintained table — previously the table declared
-    ``AUTH_REQUIRED → 401`` while ``AdCPAuthorizationError`` (same wire
-    code) carried ``status_code = 403``; a plain-ToolError raise from
-    authorization code surfaced as 401 instead of 403. Same pattern for
-    ``SERVICE_UNAVAILABLE`` (table said 503, adapter class said 502).
-    The class attribute is the source of truth.
-
-    When a wire code is shared by multiple subclasses (e.g.,
-    ``AUTH_REQUIRED`` from both ``AdCPAuthenticationError`` 401 and
-    ``AdCPAuthorizationError`` 403), the **highest** status code wins —
-    the more restrictive one is the spec-aligned answer when the table
-    is used for a plain-ToolError fallback that has no carried context.
-    """
-    # INVALID_REQUEST is AdCP's "generic 4xx bucket" wire code that does not
-    # correspond to any specific typed subclass — it's the translation target
-    # for several upstream codes. Anchor it to HTTP 400 (the conventional
-    # bad-request status) so propagation from differently-statused upstream
-    # codes (e.g., NOT_FOUND=404 -> INVALID_REQUEST) doesn't accidentally
-    # promote it to 404.
-    table: dict[str, int] = {"INVALID_REQUEST": 400}
-    _GENERIC_CATCHALLS = {"INVALID_REQUEST"}
-
-    # iter_concrete_subclasses() is the single source of truth for the subclass
-    # walk — shared with the error-code compliance tests. Class-level identity
-    # lives on the _default_* ClassVar slots; error_code/status_code are instance
-    # attrs set in __init__, so read the _default_* slots off the class object.
-    for cls in AdCPError.iter_concrete_subclasses():
-        code = getattr(cls, "_default_error_code", None)
-        status = getattr(cls, "_default_status_code", None)
-        if not code or not status:
-            continue
-        # Index the raw class code so plain-ToolError("CODE") fallbacks resolve.
-        existing = table.get(code)
-        if existing is None or status > existing:
-            table[code] = status
-        # Also index the wire-translated code so the same status applies after
-        # ``translate_error_code()`` rewrites it at the boundary. Skip generic
-        # catchall targets like INVALID_REQUEST — they have a fixed status
-        # independent of which specific upstream code triggered them.
-        wire_code = ERROR_CODE_MAPPING.get(code)
-        if wire_code and wire_code not in _GENERIC_CATCHALLS:
-            existing_wire = table.get(wire_code)
-            if existing_wire is None or status > existing_wire:
-                table[wire_code] = status
-    return table
-
-
-# Plain ``ToolError("CODE", "message")`` legacy paths don't carry the typed
-# AdCPError that owns ``status_code``. Derived from class declarations at
-# import time so the table cannot drift from the source of truth.
-_ERROR_CODE_TO_STATUS: dict[str, int] = _build_error_code_to_status()
-
-
-def handle_tool_error(e: ToolError) -> JSONResponse:
-    """Convert MCP ToolError to the spec-compliant two-layer envelope body.
-
-    Routes that catch ``ToolError`` defensively land here. If the exception
-    is the typed ``AdCPToolError`` raised by the MCP boundary translator, its
-    envelope and status_code are forwarded unchanged so 4xx errors don't get
-    mislabeled as 5xx. Plain ``ToolError`` (raised by other paths) is rebuilt
-    into an envelope via a synthetic ``AdCPError``; its HTTP status is
-    resolved from ``_ERROR_CODE_TO_STATUS`` for known wire codes and falls
-    through to 500 only when the code is unrecognized.
-    """
-    if isinstance(e, AdCPToolError):
-        # Defensive copy: the envelope dict is owned by the AdCPToolError instance,
-        # which may be referenced elsewhere (audit log, retry buffer). Returning
-        # the dict by reference lets FastAPI's JSON serializer mutate it indirectly,
-        # so we copy to preserve the envelope-builder's immutability contract.
-        return JSONResponse(status_code=e.status_code, content=dict(e.envelope))
-
-    # ``recovery`` from extract_error_info is for the LOGGING consumers; the
-    # synthetic's own wire recovery derives from the code it is given.
-    error_code, error_message, _recovery = extract_error_info(e)
-    synthetic = AdCPError.synthesize(
-        error_message,
-        error_code=error_code,
-        status_code=_ERROR_CODE_TO_STATUS.get(error_code, 500),
-    )
-    return JSONResponse(status_code=synthetic.status_code, content=build_two_layer_error_envelope(synthetic))

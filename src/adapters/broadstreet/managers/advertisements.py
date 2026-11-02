@@ -21,6 +21,7 @@ from typing import Any
 
 from src.adapters.broadstreet.client import BroadstreetClient
 from src.adapters.broadstreet.config_schema import BROADSTREET_TEMPLATES, get_template_info
+from src.core.exceptions import AdCPConfigurationError
 
 logger = logging.getLogger(__name__)
 
@@ -84,20 +85,17 @@ class BroadstreetAdvertisementManager:
         self,
         client: BroadstreetClient | None,
         advertiser_id: str,
-        dry_run: bool = False,
         log_func: Callable[[str], None] | None = None,
     ):
         """Initialize the advertisement manager.
 
         Args:
-            client: Broadstreet API client (None for dry-run mode)
+            client: Broadstreet API client
             advertiser_id: Broadstreet advertiser ID
-            dry_run: Whether to simulate operations
             log_func: Optional logging function
         """
         self.client = client
         self.advertiser_id = advertiser_id
-        self.dry_run = dry_run
         self.log = log_func or (lambda msg: logger.info(msg))
 
         # Track advertisements by media buy
@@ -363,40 +361,24 @@ class BroadstreetAdvertisementManager:
 
         self.log(f"Creating {ad_type} advertisement: {name}")
 
-        if self.dry_run:
-            self.log(f"  Creative ID: {creative_id}")
-            self.log(f"  Type: {ad_type}")
-            if ad_type == "html":
-                html_len = len(params.get("html", ""))
-                self.log(f"  HTML length: {html_len} chars")
-            elif ad_type == "static":
-                self.log(f"  Image URL: {params.get('image', 'N/A')}")
-            elif ad_type == "text":
-                text = params.get("default_text", "")[:50]
-                self.log(f"  Text: {text}...")
+        if not self.client:
+            raise AdCPConfigurationError()
 
-            # Mock Broadstreet ID
-            broadstreet_id = f"bs_ad_{creative_id}"
+        try:
+            result = self.client.create_advertisement(
+                advertiser_id=self.advertiser_id,
+                name=name,
+                ad_type=ad_type,
+                params=params,
+            )
+            broadstreet_id = str(result.get("id", result.get("Id", "")))
             status = "approved"
-        else:
-            if not self.client:
-                raise RuntimeError("Client not available")
-
-            try:
-                result = self.client.create_advertisement(
-                    advertiser_id=self.advertiser_id,
-                    name=name,
-                    ad_type=ad_type,
-                    params=params,
-                )
-                broadstreet_id = str(result.get("id", result.get("Id", "")))
-                status = "approved"
-                self.log(f"Created advertisement {broadstreet_id}")
-            except Exception as e:
-                logger.error(f"Error creating advertisement: {e}", exc_info=True)
-                self.log(f"Error creating advertisement: {e}")
-                broadstreet_id = None
-                status = "failed"
+            self.log(f"Created advertisement {broadstreet_id}")
+        except Exception as e:
+            logger.error(f"Error creating advertisement: {e}", exc_info=True)
+            self.log(f"Error creating advertisement: {e}")
+            broadstreet_id = None
+            status = "failed"
 
         # Track the advertisement
         info = AdvertisementInfo(
@@ -449,49 +431,40 @@ class BroadstreetAdvertisementManager:
         self.log(f"  Template: {template_info['name']} ({template_type})")
         self.log(f"  API Source Type: {api_source_type}")
 
-        if self.dry_run:
-            self.log(f"  Creative ID: {creative_id}")
-            self.log(f"  Source params: {list(source_params.keys())}")
+        if not self.client:
+            raise AdCPConfigurationError()
 
-            # Mock Broadstreet ID
-            broadstreet_id = f"bs_template_{creative_id}"
+        try:
+            # Step 1: Create base HTML ad
+            self.log("  Step 1: Creating base HTML ad...")
+            result = self.client.create_advertisement(
+                advertiser_id=self.advertiser_id,
+                name=name,
+                ad_type="html",
+                params={},  # Empty - source will provide content
+            )
+            broadstreet_id = str(result.get("id", result.get("Id", "")))
+            self.log(f"  Created base ad: {broadstreet_id}")
+
+            # Step 2: Set source with template
+            self.log(f"  Step 2: Setting source to {api_source_type}...")
+            self.client.set_advertisement_source(
+                advertiser_id=self.advertiser_id,
+                advertisement_id=broadstreet_id,
+                source_type=api_source_type,
+                params=source_params,
+            )
+            self.log("  Template source set successfully")
+
             status = "approved"
             ad_type = f"template:{template_type}"
-        else:
-            if not self.client:
-                raise RuntimeError("Client not available")
 
-            try:
-                # Step 1: Create base HTML ad
-                self.log("  Step 1: Creating base HTML ad...")
-                result = self.client.create_advertisement(
-                    advertiser_id=self.advertiser_id,
-                    name=name,
-                    ad_type="html",
-                    params={},  # Empty - source will provide content
-                )
-                broadstreet_id = str(result.get("id", result.get("Id", "")))
-                self.log(f"  Created base ad: {broadstreet_id}")
-
-                # Step 2: Set source with template
-                self.log(f"  Step 2: Setting source to {api_source_type}...")
-                self.client.set_advertisement_source(
-                    advertiser_id=self.advertiser_id,
-                    advertisement_id=broadstreet_id,
-                    source_type=api_source_type,
-                    params=source_params,
-                )
-                self.log("  Template source set successfully")
-
-                status = "approved"
-                ad_type = f"template:{template_type}"
-
-            except Exception as e:
-                logger.error(f"Error creating template advertisement: {e}", exc_info=True)
-                self.log(f"Error creating template advertisement: {e}")
-                broadstreet_id = None
-                status = "failed"
-                ad_type = f"template:{template_type}"
+        except Exception as e:
+            logger.error(f"Error creating template advertisement: {e}", exc_info=True)
+            self.log(f"Error creating template advertisement: {e}")
+            broadstreet_id = None
+            status = "failed"
+            ad_type = f"template:{template_type}"
 
         # Track the advertisement
         info = AdvertisementInfo(
@@ -587,10 +560,6 @@ class BroadstreetAdvertisementManager:
             self.log(f"[yellow]Advertisement {creative_id} has no Broadstreet ID[/yellow]")
             return False
 
-        if self.dry_run:
-            self.log(f"Would update advertisement {creative_id}: {updates}")
-            return True
-
         if self.client:
             try:
                 self.client.update_advertisement(
@@ -626,9 +595,7 @@ class BroadstreetAdvertisementManager:
             self.log(f"[yellow]Advertisement {creative_id} has no Broadstreet ID[/yellow]")
             return False
 
-        if self.dry_run:
-            self.log(f"Would delete advertisement {creative_id}")
-        elif self.client:
+        if self.client:
             try:
                 self.client.delete_advertisement(
                     advertiser_id=self.advertiser_id,
@@ -667,17 +634,6 @@ class BroadstreetAdvertisementManager:
         info = self.get_advertisement(media_buy_id, creative_id)
         if not info or not info.broadstreet_id:
             return []
-
-        if self.dry_run:
-            # Return simulated data
-            return [
-                {
-                    "date": start_date or "2024-01-01",
-                    "impressions": 1000,
-                    "clicks": 10,
-                    "ctr": 1.0,
-                }
-            ]
 
         if self.client:
             try:

@@ -11,15 +11,11 @@ from collections.abc import Callable
 from functools import wraps
 from typing import TypeVar
 
+from src.core.exceptions import AdCPServiceUnavailableError
+
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
-
-
-class TimeoutError(Exception):
-    """Raised when operation times out."""
-
-    pass
 
 
 def timeout(seconds: int = 300):
@@ -35,7 +31,11 @@ def timeout(seconds: int = 300):
         Decorated function with timeout
 
     Raises:
-        TimeoutError: If function doesn't complete within timeout
+        AdCPServiceUnavailableError: If the function doesn't complete in time.
+            AdCP 3.1.1 transport-errors.mdx Rule 1 names this translation: "A
+            database connection timeout becomes SERVICE_UNAVAILABLE." A hung
+            ad-server call gets the same code, and both are transient, so the
+            buyer's instruction -- retry with backoff -- is correct for either.
 
     Example:
         @timeout(seconds=60)
@@ -56,12 +56,12 @@ def timeout(seconds: int = 300):
                     result = future.result(timeout=seconds)
                     return result
 
-                except concurrent.futures.TimeoutError:
+                except concurrent.futures.TimeoutError as e:
                     # Log timeout for debugging
                     logger.error(
                         f"Operation {func.__name__} timed out after {seconds}s. This usually means the API is hanging."
                     )
-                    raise TimeoutError(f"{func.__name__} timed out after {seconds} seconds")
+                    raise AdCPServiceUnavailableError(internal_detail=e) from e
 
         return wrapper
 

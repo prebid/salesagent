@@ -8,7 +8,6 @@
 """
 
 import logging
-import os
 from datetime import UTC, datetime
 from typing import Any
 
@@ -18,14 +17,19 @@ from sqlalchemy import select
 
 from src.admin.utils import require_auth, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
+from src.admin.utils.operator_errors import safe_error_message
 from src.admin.utils.url_policy import redirect_if_url_blocked
+from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
+from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant
+from src.core.database.repositories import TenantLookupRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.core.security.outbound_http import OutboundError
 from src.services.ai.config import uses_legacy_gemini_api_key
 from src.services.approximated_client import (
     DomainNotOwned,
+    OwnedDomain,
     get_dns_token,
     get_domain_status,
     register_domain,
@@ -123,12 +127,13 @@ def validate_policy_list(
 @require_auth(admin_only=True)
 def tenant_management_settings():
     """Tenant management settings page."""
-    # GAM OAuth credentials are now configured via environment variables
-    gam_client_id = os.environ.get("GAM_OAUTH_CLIENT_ID", "")
-    gam_client_secret = os.environ.get("GAM_OAUTH_CLIENT_SECRET", "")
+    # GAM OAuth credentials are configured at startup, in the settings
+    gam_auth = get_settings().auth
+    gam_client_id = gam_auth.gam_oauth_client_id
+    gam_client_secret = gam_auth.gam_oauth_client_secret
 
     # Check if credentials are configured
-    gam_configured = bool(gam_client_id and gam_client_secret)
+    gam_configured = gam_auth.gam_oauth_configured
 
     # Show status of environment configuration
     config_items = {
@@ -187,27 +192,48 @@ def update_general(tenant_id):
             if "virtual_host" in request.form:
                 virtual_host = request.form.get("virtual_host", "").strip()
                 if virtual_host:
-                    # Basic validation for virtual host format
-                    # Check for invalid patterns first
-                    if ".." in virtual_host or virtual_host.startswith(".") or virtual_host.endswith("."):
-                        flash("Virtual host cannot contain consecutive dots or start/end with dots", "error")
+                    # ONE definition of the shape, shared with the ORM validator. The rule
+                    # spelled out here refused the ':' in 'host:8443' -- a form that cannot
+                    # save what the column legitimately holds, so a tenant served on a
+                    # non-default port could not be renamed.
+                    from src.core.http_utils import validate_virtual_host
+
+                    try:
+                        virtual_host = validate_virtual_host(virtual_host)
+                    except ValueError as exc:
+                        flash(str(exc), "error")
                         return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="general"))
 
-                    # Then check allowed characters
-                    if not virtual_host.replace("-", "").replace(".", "").replace("_", "").isalnum():
-                        flash(
-                            "Virtual host must contain only alphanumeric characters, dots, hyphens, and underscores",
-                            "error",
-                        )
-                        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="general"))
+                    # Check if virtual host is already in use by another tenant.
+                    # The predicate depends on the winner's identity, so the race
+                    # branch re-runs it rather than repeating a canned message.
+                    def taken_by_another_tenant():
+                        existing_tenant = TenantLookupRepository(db_session).find_by_virtual_host(virtual_host)
+                        if existing_tenant and existing_tenant.tenant_id != tenant_id:
+                            flash("This virtual host is already in use by another tenant", "error")
+                            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="general"))
+                        return None
 
-                    # Check if virtual host is already in use by another tenant
-                    existing_tenant = db_session.scalars(select(Tenant).filter_by(virtual_host=virtual_host)).first()
-                    if existing_tenant and existing_tenant.tenant_id != tenant_id:
-                        flash("This virtual host is already in use by another tenant", "error")
-                        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="general"))
+                    def claim_virtual_host():
+                        tenant.virtual_host = virtual_host
 
-                tenant.virtual_host = virtual_host or None
+                    # On conflict this returns before the trailing commit, so the
+                    # other form fields dirtied above are never written — exactly
+                    # what the pre-check branch has always done.
+                    conflict = resolve_or_write(
+                        db_session,
+                        conflict=taken_by_another_tenant,
+                        write=claim_virtual_host,
+                        constraint="ux_tenants_virtual_host_name",
+                    )
+                    if conflict is not None:
+                        return conflict
+                else:
+                    # An empty submission is refused rather than CLEARING the host, which
+                    # would leave an existing tenant unreachable by any Host. A tenant can
+                    # be MOVED, never un-addressed.
+                    flash("Virtual host is required — it is the address this tenant is served at", "error")
+                    return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="general"))
 
             # Update currency limits
             from decimal import Decimal, InvalidOperation
@@ -281,16 +307,6 @@ def update_general(tenant_id):
                     )
                     db_session.add(limit)
 
-            if "enable_axe_signals" in request.form:
-                tenant.enable_axe_signals = request.form.get("enable_axe_signals") == "on"
-            else:
-                tenant.enable_axe_signals = False
-
-            if "human_review_required" in request.form:
-                tenant.human_review_required = request.form.get("human_review_required") == "on"
-            else:
-                tenant.human_review_required = False
-
             tenant.updated_at = datetime.now(UTC)
             db_session.commit()
 
@@ -298,7 +314,7 @@ def update_general(tenant_id):
 
     except Exception as e:
         logger.error(f"Error updating general settings: {e}", exc_info=True)
-        flash(f"Error updating settings: {str(e)}", "error")
+        flash(f"Error updating settings: {safe_error_message(e)}", "error")
 
     return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="general"))
 
@@ -460,12 +476,9 @@ def update_adapter(tenant_id):
                 adapter_config_obj.gam_manual_approval_required = manual_approval
             elif new_adapter == "mock":
                 if request.is_json:
-                    dry_run = request.json.get("mock_dry_run", False)
                     manual_approval = request.json.get("mock_manual_approval", False)
                 else:
-                    dry_run = request.form.get("mock_dry_run") == "on"
                     manual_approval = request.form.get("mock_manual_approval") == "on"
-                adapter_config_obj.mock_dry_run = dry_run
                 adapter_config_obj.mock_manual_approval_required = manual_approval
 
             # Update the tenant
@@ -484,9 +497,9 @@ def update_adapter(tenant_id):
         logger.error(f"Error updating adapter: {e}", exc_info=True)
 
         if request.is_json:
-            return jsonify({"success": False, "error": str(e)}), 400
+            return jsonify({"success": False, "error": safe_error_message(e)}), 400
 
-        flash(f"Error updating adapter: {str(e)}", "error")
+        flash(f"Error updating adapter: {safe_error_message(e)}", "error")
         return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="adapter"))
 
 
@@ -529,7 +542,7 @@ def update_slack(tenant_id):
 
     except Exception as e:
         logger.error(f"Error updating Slack settings: {e}", exc_info=True)
-        flash(f"Error updating Slack settings: {str(e)}", "error")
+        flash(f"Error updating Slack settings: {safe_error_message(e)}", "error")
 
     return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="integrations"))
 
@@ -596,7 +609,7 @@ def update_ai(tenant_id):
 
     except Exception as e:
         logger.error(f"Error updating AI settings: {e}", exc_info=True)
-        flash(f"Error updating AI settings: {str(e)}", "error")
+        flash(f"Error updating AI settings: {safe_error_message(e)}", "error")
 
     return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="integrations"))
 
@@ -740,7 +753,7 @@ def test_logfire_connection(tenant_id):
         return jsonify({"success": False, "error": "Logfire package not installed"}), 400
     except Exception as e:
         logger.error(f"Logfire test connection failed: {e}", exc_info=True)
-        return jsonify({"success": False, "error": str(e)}), 400
+        return jsonify({"success": False, "error": safe_error_message(e)}), 400
 
 
 @settings_bp.route("/ai/models", methods=["GET"])
@@ -1248,10 +1261,33 @@ def update_business_rules(tenant_id):
         logger.error(f"Error updating business rules: {e}", exc_info=True)
 
         if request.is_json:
-            return jsonify({"success": False, "error": str(e)}), 500
+            return jsonify({"success": False, "error": safe_error_message(e)}), 500
 
-        flash(f"Error updating business rules: {str(e)}", "error")
+        flash(f"Error updating business rules: {safe_error_message(e)}", "error")
         return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="business-rules"))
+
+
+def _resolve_owned_domain(tenant_id: str, domain: str | None) -> OwnedDomain | None:
+    """Prove the tenant owns *domain*, or report that the tenant is missing.
+
+    One owner for the ownership rule, so no Approximated handler can be written
+    without it. The status and unregister routes share it from here;
+    register_approximated_domain still proves it inline (see the comment there)
+    because its raw ``select()`` is a live no-raw-select allowlist row.
+
+    ``tenant.virtual_host`` is read INSIDE the session block on purpose -- a
+    detached instance would raise at the read rather than refuse.
+
+    Returns ``None`` when the tenant row does not exist, so each route renders
+    its own 404 rather than have one imposed here; raises ``DomainNotOwned``
+    when the tenant exists but does not own the domain, which the routes
+    already answer with 400.
+    """
+    with get_db_session() as db_session:
+        tenant = TenantConfigRepository(db_session, tenant_id).get_tenant()
+        if not tenant:
+            return None
+        return tenant_owns_domain(tenant, domain)
 
 
 @settings_bp.route("/approximated-domain-status", methods=["POST"])
@@ -1264,18 +1300,13 @@ def check_approximated_domain_status(tenant_id):
         if not domain:
             return jsonify({"success": False, "error": "Domain required"}), 400
 
-        approximated_api_key = os.getenv("APPROXIMATED_API_KEY")
+        approximated_api_key = get_settings().integrations.approximated_api_key
         if not approximated_api_key:
             return jsonify({"success": False, "error": "Approximated not configured"}), 500
 
-        # Inside the session block: tenant_owns_domain reads tenant.virtual_host,
-        # and a detached instance would raise here rather than refusing.
-        with get_db_session() as db_session:
-            tenant = TenantConfigRepository(db_session, tenant_id).get_tenant()
-            if not tenant:
-                return jsonify({"success": False, "error": "Tenant not found"}), 404
-
-            owned = tenant_owns_domain(tenant, domain)
+        owned = _resolve_owned_domain(tenant_id, domain)
+        if owned is None:
+            return jsonify({"success": False, "error": "Tenant not found"}), 404
 
         # Check domain registration status via the Approximated service. A
         # not-registered domain is a meaningful result the service already
@@ -1308,7 +1339,7 @@ def check_approximated_domain_status(tenant_id):
 
     except Exception as e:
         logger.error(f"Error checking domain status: {e}", exc_info=True)
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"success": False, "error": safe_error_message(e)}), 500
 
 
 @settings_bp.route("/approximated-register-domain", methods=["POST"])
@@ -1322,7 +1353,7 @@ def register_approximated_domain(tenant_id):
         if not domain:
             return jsonify({"success": False, "error": "Domain required"}), 400
 
-        approximated_api_key = os.getenv("APPROXIMATED_API_KEY")
+        approximated_api_key = get_settings().integrations.approximated_api_key
         if not approximated_api_key:
             return jsonify({"success": False, "error": "Approximated not configured"}), 500
 
@@ -1331,14 +1362,14 @@ def register_approximated_domain(tenant_id):
             if not tenant:
                 return jsonify({"success": False, "error": "Tenant not found"}), 404
 
-            # The ownership rule used to be written HERE, inside this one handler,
-            # which is precisely why the two sibling routes never had it. It now
-            # lives in front of the operation, and the operation will not accept
-            # anything else.
+            # Ownership is proved here rather than via _resolve_owned_domain only
+            # because this handler's raw select() is a live row in the
+            # no-raw-select allowlist; folding it into the helper is a separate,
+            # owned change. The RULE is the same one the helper applies.
             owned = tenant_owns_domain(tenant, domain)
 
-        # Get backend target address from environment
-        backend_url = os.getenv("APPROXIMATED_BACKEND_URL", "adcp-sales-agent.fly.dev")
+        # Get backend target address from the settings
+        backend_url = get_settings().integrations.approximated_backend_url
 
         # Register the domain via the Approximated service. Already-registered
         # is a meaningful result the service already translated from the
@@ -1361,7 +1392,7 @@ def register_approximated_domain(tenant_id):
 
     except Exception as e:
         logger.error(f"Error registering domain: {e}", exc_info=True)
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"success": False, "error": safe_error_message(e)}), 500
 
 
 @settings_bp.route("/approximated-unregister-domain", methods=["POST"])
@@ -1375,16 +1406,13 @@ def unregister_approximated_domain(tenant_id):
         if not domain:
             return jsonify({"success": False, "error": "Domain required"}), 400
 
-        approximated_api_key = os.getenv("APPROXIMATED_API_KEY")
+        approximated_api_key = get_settings().integrations.approximated_api_key
         if not approximated_api_key:
             return jsonify({"success": False, "error": "Approximated not configured"}), 500
 
-        with get_db_session() as db_session:
-            tenant = TenantConfigRepository(db_session, tenant_id).get_tenant()
-            if not tenant:
-                return jsonify({"success": False, "error": "Tenant not found"}), 404
-
-            owned = tenant_owns_domain(tenant, domain)
+        owned = _resolve_owned_domain(tenant_id, domain)
+        if owned is None:
+            return jsonify({"success": False, "error": "Tenant not found"}), 404
 
         # Unregister the domain via the Approximated service.
         # Already-unregistered is a meaningful result the service already
@@ -1407,7 +1435,7 @@ def unregister_approximated_domain(tenant_id):
 
     except Exception as e:
         logger.error(f"Error unregistering domain: {e}", exc_info=True)
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"success": False, "error": safe_error_message(e)}), 500
 
 
 @settings_bp.route("/approximated-token", methods=["POST"])
@@ -1416,14 +1444,13 @@ def get_approximated_token(tenant_id):
     """Generate an Approximated DNS widget token and get DNS target."""
     try:
         # Get API key from environment
-        approximated_api_key = os.getenv("APPROXIMATED_API_KEY")
+        approximated_api_key = get_settings().integrations.approximated_api_key
         if not approximated_api_key:
             logger.error("APPROXIMATED_API_KEY not configured in environment")
             return jsonify({"success": False, "error": "DNS widget not configured on server"}), 500
 
-        # Get the Approximated proxy IP from environment
-        # This is the IP address of your Approximated proxy cluster
-        approximated_proxy_ip = os.getenv("APPROXIMATED_PROXY_IP", "37.16.24.200")
+        # The IP address of your Approximated proxy cluster
+        approximated_proxy_ip = get_settings().integrations.approximated_proxy_ip
 
         with get_db_session() as db_session:
             tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
@@ -1445,4 +1472,4 @@ def get_approximated_token(tenant_id):
 
     except Exception as e:
         logger.error(f"Error generating Approximated token: {e}", exc_info=True)
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"success": False, "error": safe_error_message(e)}), 500

@@ -20,7 +20,8 @@ def _future(days: int = 1) -> datetime:
 def _make_create_request(**overrides: Any) -> CreateMediaBuyRequest:
     """Build a minimal valid CreateMediaBuyRequest.
 
-    idempotency_key is required by adcp 4.3 and drives real replay/conflict
+    idempotency_key is required by AdCP 3.1.1 (create-media-buy-request.json /required)
+    and drives real replay/conflict
     behavior against the persistent integration DB, so a per-call-unique key is
     injected by default. Callers may override it (e.g. to deliberately reuse a
     key) via the ``idempotency_key`` kwarg.
@@ -30,6 +31,7 @@ def _make_create_request(**overrides: Any) -> CreateMediaBuyRequest:
         "start_time": _future(1),
         "end_time": _future(8),
         "idempotency_key": f"int-key-{uuid.uuid4().hex}",
+        "account": {"account_id": "acct_test"},
         "packages": [
             {
                 "product_id": "guaranteed_display",
@@ -59,6 +61,73 @@ def _single_creative_request(creative_id: str, **overrides: Any) -> CreateMediaB
             }
         ],
         **overrides,
+    )
+
+
+def assert_created(response: Any) -> None:
+    """Assert *response* is the SUCCESS branch of create-media-buy-response.json's oneOf.
+
+    On fields that EXIST. ``not hasattr(response, "errors")`` stood at each of these call
+    sites and could not tell the branches apart: ``CreateMediaBuyResult`` declares no
+    ``errors`` field at all, so the check was True for every object it could be handed,
+    including an error one.
+
+    Skips rather than fails when the creative agent this environment reaches is down --
+    external availability is not what a pricing test grades.
+    """
+    import pytest
+
+    from tests.helpers.external_service import is_external_service_response_error
+
+    if is_external_service_response_error(response):
+        pytest.skip(f"External creative agent unavailable: {response.adcp_error}")
+
+    assert response.adcp_error is None, f"create_media_buy failed: {response.adcp_error}"
+    assert response.status == "completed", f"expected a completed create, got {response.status!r}"
+    assert response.media_buy_id is not None
+
+
+def make_media_buy_identity(principal_id: str, tenant_id: str, **tenant_overrides: Any) -> Any:
+    """The caller ``_create_media_buy_impl`` / ``_update_media_buy_impl`` take.
+
+    Principal, tenant and the ACCOUNT. ``create-media-buy-request.json`` and
+    ``update-media-buy-request.json`` both list ``account`` in /required, so both
+    implementations are annotated ``AccountIdentity`` and read
+    ``identity.account.account_id`` directly. A plain ``ResolvedIdentity`` leaves that
+    None, which surfaces as ``AttributeError: 'NoneType' object has no attribute
+    'account_id'`` -- swallowed by the create path's catch-all and re-raised as
+    ``AdCPAdapterError``, so the wrong identity TYPE reads as "the ad server is down".
+
+    The account is ``DEFAULT_TEST_ACCOUNT_ID``, which is what
+    ``create_test_media_buy_request`` and ``_make_create_request`` name in the payload;
+    the fixture still has to seed the ROW and the access grant
+    (``seed_default_account``), because the boundary resolves the reference for real.
+
+    The tenant is LOADED FROM ITS ROW by default -- ``TenantContext.load``, which is what
+    the resolver calls -- so the fixture's own columns govern, as they do in production. A
+    hand-built ``tenant={"tenant_id": ...}`` instead takes every other field from
+    TenantContext's defaults, and ``human_review_required`` defaults to True there: the
+    create then answers ``submitted`` however the seeded row is configured. Pass
+    ``tenant=`` explicitly only to state something the row does not.
+    """
+    from src.core.schemas.account import Account
+    from src.core.tenant_context import TenantContext
+    from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID
+    from tests.factories.principal import PrincipalFactory
+
+    if "tenant" not in tenant_overrides:
+        loaded = TenantContext.load(tenant_id)
+        if loaded is None:
+            raise ValueError(f"Tenant {tenant_id} not found: seed it before building an identity for it")
+        tenant_overrides["tenant"] = loaded
+
+    return PrincipalFactory.make_account_identity(
+        PrincipalFactory.make_identity(
+            principal_id=principal_id,
+            tenant_id=tenant_id,
+            **tenant_overrides,
+        ),
+        Account(account_id=DEFAULT_TEST_ACCOUNT_ID, name="Test Account", status="active"),
     )
 
 

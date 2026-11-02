@@ -25,7 +25,7 @@ class TestInventoryAdapterRestrictions:
         )
 
         # Create mock adapter
-        adapter = MockAdServer(config={}, principal=principal, dry_run=False, tenant_id="test_tenant")
+        adapter = MockAdServer(config={}, principal=principal, tenant_id="test_tenant")
 
         # Get available inventory
         import asyncio
@@ -64,7 +64,7 @@ class TestInventoryAdapterRestrictions:
             name="Test Advertiser",
             platform_mappings={},
         )
-        adapter = MockAdServer(config={}, principal=principal, dry_run=False, tenant_id="test_tenant")
+        adapter = MockAdServer(config={}, principal=principal, tenant_id="test_tenant")
 
         start_time = datetime.now(UTC) + timedelta(days=1)
         end_time = start_time + timedelta(days=7)
@@ -80,13 +80,18 @@ class TestInventoryAdapterRestrictions:
             targeting_overlay=None,  # No targeting at all — Run of Site
         )
 
-        # Mock the request — _validate_media_buy_request only calls get_total_budget()
-        mock_request = MagicMock()
-        mock_request.get_total_budget.return_value = 5000.0
+        # The CARRIER the seam takes, not a MagicMock: validation reads
+        # ``request.total_budget`` -- one already-summed Decimal -- and a mock attribute
+        # stood in for that number until it was compared.
+        from decimal import Decimal
+
+        from src.adapters.base import AdapterCreateRequest
+
+        request = AdapterCreateRequest(total_budget=Decimal("5000"))
 
         # validate_media_buy_request should return no errors — inventory validation is skipped
         errors = adapter.validate_media_buy_request(
-            request=mock_request,
+            request=request,
             packages=[package],
             start_time=start_time,
             end_time=end_time,

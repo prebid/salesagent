@@ -19,7 +19,7 @@ our control.
 
 import pytest
 
-from src.a2a_server.adcp_a2a_server import create_agent_card
+from src.a2a_server.adcp_a2a_server import _derived_skills
 from tests.helpers.adcp_schema_validator import AdCPSchemaValidator
 
 
@@ -55,26 +55,17 @@ class TestA2AProtocolCompliance:
     # Real schema conformance is covered by tests/unit/test_adcp_contract.py against
     # the pinned adcp library version. See PR #1186 notes.
 
-    # Skills this agent ships for which the pinned index has no task at all.
-    # Shrink-only: when the spec adds a schema for one of these, remove it
-    # here — never add an entry. A newly-added skill with no schema is a real
-    # failure, not something to allowlist.
-    _KNOWN_MISSING_SCHEMA_SKILLS = frozenset(
-        {
-            "approve_creative",
-            "get_media_buy_status",
-            "optimize_media_buy",
-            "list_authorized_properties",
-            "update_performance_index",
-        }
-    )
+    # Advertised skills with no task in the pinned index. Shrink-only, except by decision:
+    # AdCP defines no complete-task at any version and we advertise it anyway.
+    # FIXME(#1942): tracked there; #1833 decides whether the task belongs here at all.
+    _KNOWN_MISSING_SCHEMA_SKILLS: frozenset[str] = frozenset({"complete_task"})
 
     @pytest.mark.asyncio
     async def test_all_adcp_skills_have_schemas(self):
         """
         Every skill this agent advertises resolves to a pinned request AND response schema.
 
-        The roster comes from ``create_agent_card().skills`` — production's own
+        The roster comes from ``_derived_skills()`` — production's own
         and only skill declaration — so a skill added there is graded the same
         day with no test edit. The previous version iterated a hand-maintained
         test-side map, which had already gone stale in both directions: it
@@ -91,7 +82,7 @@ class TestA2AProtocolCompliance:
             missing_schemas = []
             newly_resolved = []
 
-            for skill in sorted(s.id for s in create_agent_card().skills):
+            for skill in sorted(s.id for s in _derived_skills()):
                 task_name = skill.replace("_", "-")
                 refs = {
                     direction: await validator._find_schema_ref_for_task(task_name, direction)

@@ -7,8 +7,7 @@
  * - data-active-adapter: Active adapter name
  * - data-a2a-port: A2A server port
  * - data-is-production: Production environment flag
- * - data-virtual-host: Virtual host for production
- * - data-subdomain: Subdomain for production
+ * - data-virtual-host: the host this tenant is served at
  */
 
 // Get configuration from data attributes
@@ -27,11 +26,24 @@ const config = (function() {
         a2aPort: configEl.dataset.a2aPort || '8091',
         mcpPort: configEl.dataset.mcpPort || '8080',
         isProduction: configEl.dataset.isProduction === 'true',
-        virtualHost: configEl.dataset.virtualHost || '',
-        subdomain: configEl.dataset.subdomain || '',
-        salesAgentDomain: configEl.dataset.salesAgentDomain || 'sales-agent.example.com'
+        virtualHost: configEl.dataset.virtualHost || ''
     };
 })();
+
+// The one place a client-facing origin is built. A tenant is served at the host it
+// declares (virtual_host) and nowhere else — the second origin derived from a
+// subdomain of SALES_AGENT_DOMAIN went with the subdomain strategy
+//. In production with no declared host there IS no URL to hand
+// out, so this returns null and the caller says so rather than naming a host nothing
+// serves.
+function agentOrigin(devPort) {
+    if (!config.isProduction) {
+        return `http://localhost:${devPort}`;
+    }
+    return config.virtualHost ? `https://${config.virtualHost}` : null;
+}
+
+const NO_DOMAIN_HINT = 'Configure this agent\'s domain in Settings before sharing a URL.';
 
 // Navigation
 document.querySelectorAll('.settings-nav-item').forEach(item => {
@@ -1037,13 +1049,11 @@ function checkTokenStatus() {
 
 // Generate A2A registration code
 function generateA2ACode() {
-    const agentUri = config.isProduction
-        ? `https://${config.virtualHost}`
-        : `http://localhost:${config.a2aPort}`;
-
-    const agentUriAlt = config.isProduction
-        ? `https://${config.subdomain}.${config.salesAgentDomain}`
-        : `http://localhost:${config.a2aPort}`;
+    const agentUri = agentOrigin(config.a2aPort);
+    if (!agentUri) {
+        document.getElementById('a2a-code-output').textContent = NO_DOMAIN_HINT;
+        return;
+    }
 
     const code = `
 # A2A Registration Code
@@ -1060,43 +1070,30 @@ function generateA2ACode() {
 }
 
 // Toggle token visibility between truncated and full
-function toggleTokenVisibility(button) {
-    const tokenDisplay = button.parentElement.querySelector('.token-display');
-    const isShowingFull = tokenDisplay.textContent === tokenDisplay.dataset.full;
-
-    if (isShowingFull) {
-        tokenDisplay.textContent = tokenDisplay.dataset.truncated;
-        button.textContent = '👁';
-        button.title = 'Show full token';
-    } else {
-        tokenDisplay.textContent = tokenDisplay.dataset.full;
-        button.textContent = '👁‍🗨';
-        button.title = 'Hide full token';
-    }
-}
-
-// Copy access token to clipboard
-function copyAccessToken(token) {
+// The server keeps only a hash of a token, so a token is shown once: at creation, and
+// here at rotation. Rotating replaces it; the old one stops resolving on the server.
+function rotateToken(principalId, principalName) {
     const button = event.target.closest('button');
-    if (!button) {
-        alert('Failed to copy to clipboard');
+    if (!confirm(`Rotate the API token for "${principalName}"? The current token stops working immediately.`)) {
         return;
     }
-
-    const originalText = button.textContent;
-
-    navigator.clipboard.writeText(token).then(() => {
-        button.textContent = '✓';
-        button.classList.add('btn-success');
-        button.classList.remove('btn-outline-secondary');
-
-        setTimeout(() => {
-            button.textContent = originalText;
-            button.classList.remove('btn-success');
-            button.classList.add('btn-outline-secondary');
-        }, 2000);
+    fetch(`${config.scriptName}/tenant/${config.tenantId}/principal/${principalId}/rotate-token`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+    }).then(response => response.json()).then(data => {
+        if (!data.success) {
+            alert('Failed to rotate token: ' + (data.error || 'unknown error'));
+            return;
+        }
+        const tokenDisplay = button.parentElement.querySelector('.token-display');
+        if (tokenDisplay) {
+            tokenDisplay.textContent = data.token_prefix + '…';
+        }
+        // Shown once. prompt() gives the operator a selectable field to copy from.
+        prompt(`New API token for "${principalName}". Copy it now; it will not be shown again.`, data.token);
     }).catch(err => {
-        alert('Failed to copy to clipboard: ' + err.message);
+        alert('Failed to rotate token: ' + err.message);
     });
 }
 
@@ -1357,7 +1354,11 @@ function selectGAMAdapter() {
 }
 
 // Copy A2A configuration to clipboard
-function copyA2AConfig(principalId, principalName, accessToken) {
+// The token is not on this page (the server keeps only its hash), so the config carries a
+// placeholder the operator replaces with the token shown at creation or rotation.
+const TOKEN_PLACEHOLDER = '<token shown at creation or rotation>';
+
+function copyA2AConfig(principalId, principalName) {
     // Capture the button element before async operations
     const button = event.target.closest('button');
     if (!button) {
@@ -1365,20 +1366,11 @@ function copyA2AConfig(principalId, principalName, accessToken) {
         return;
     }
 
-    // Determine the A2A server URL (without /a2a suffix)
-    let a2aUrl;
-    if (config.isProduction) {
-        // Production: Use subdomain or virtual host
-        if (config.subdomain) {
-            a2aUrl = `https://${config.subdomain}.${config.salesAgentDomain}`;
-        } else if (config.virtualHost) {
-            a2aUrl = `https://${config.virtualHost}`;
-        } else {
-            a2aUrl = `https://${config.salesAgentDomain}`;
-        }
-    } else {
-        // Development: Use localhost with configured port
-        a2aUrl = `http://localhost:${config.a2aPort}`;
+    // The A2A server URL (without /a2a suffix)
+    const a2aUrl = agentOrigin(config.a2aPort);
+    if (!a2aUrl) {
+        alert(NO_DOMAIN_HINT);
+        return;
     }
 
     // Create the A2A configuration JSON with name field
@@ -1389,7 +1381,7 @@ function copyA2AConfig(principalId, principalName, accessToken) {
         version: "1.0",
         auth: {
             type: "bearer",
-            token: accessToken
+            token: TOKEN_PLACEHOLDER
         }
     };
 
@@ -1414,7 +1406,7 @@ function copyA2AConfig(principalId, principalName, accessToken) {
 }
 
 // Copy MCP configuration to clipboard
-function copyMCPConfig(principalId, principalName, accessToken) {
+function copyMCPConfig(principalId, principalName) {
     // Capture the button element before async operations
     const button = event.target.closest('button');
     if (!button) {
@@ -1422,21 +1414,13 @@ function copyMCPConfig(principalId, principalName, accessToken) {
         return;
     }
 
-    // Determine the MCP server URL
-    let mcpUrl;
-    if (config.isProduction) {
-        // Production: Use subdomain or virtual host
-        if (config.subdomain) {
-            mcpUrl = `https://${config.subdomain}.${config.salesAgentDomain}/mcp`;
-        } else if (config.virtualHost) {
-            mcpUrl = `https://${config.virtualHost}/mcp`;
-        } else {
-            mcpUrl = `https://${config.salesAgentDomain}/mcp`;
-        }
-    } else {
-        // Development: Use localhost with configured MCP port
-        mcpUrl = `http://localhost:${config.mcpPort}/mcp`;
+    // The MCP server URL
+    const mcpOrigin = agentOrigin(config.mcpPort);
+    if (!mcpOrigin) {
+        alert(NO_DOMAIN_HINT);
+        return;
     }
+    const mcpUrl = `${mcpOrigin}/mcp`;
 
     // Create the MCP configuration JSON with name field
     const mcpConfig = {
@@ -1446,7 +1430,7 @@ function copyMCPConfig(principalId, principalName, accessToken) {
         version: "1.0",
         auth: {
             type: "bearer",
-            token: accessToken
+            token: TOKEN_PLACEHOLDER
         }
     };
 

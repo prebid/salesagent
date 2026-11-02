@@ -30,8 +30,8 @@ ENV_FILE=".test-stack.env"
 # Emits FOUR ports: postgres, the plaintext proxy, the TLS listener
 # (salesagent-tgzb), and webhook-capture's plain-HTTP readback control-plane
 # (salesagent-amht.3). Both the TLS port and the webhook-capture port are
-# allocated the same way as the other two rather than pinned, because several
-# stacks run concurrently on one box.
+# allocated the same way as the other two rather than pinned (to 8443 / 8080),
+# because several stacks run concurrently on one box.
 find_ports() {
     uv run python -c "
 import os, socket
@@ -110,11 +110,26 @@ cmd_up() {
     export GEMINI_API_KEY="${GEMINI_API_KEY:-test_key}"
     export ENCRYPTION_KEY="${ENCRYPTION_KEY:-PEg0SNGQyvzi4Nft-ForSzK8AGXyhRtql1MgoUsfUHk=}"  # TEST ONLY — never use in production
 
+    # The storyboard agent's signed-requests test-kit configuration, so the
+    # `adcp-server-storyboard` service definition can interpolate it. Sourced before
+    # `dc up` because these are settings the SERVER PROCESS reads at boot.
+    source scripts/dev/storyboard-signing-env.sh
+
     # The tls-proxy service bind-mounts .test-tls/; without the material the
     # mount materialises an empty directory and nginx refuses to start. Idempotent
     # — a current certificate is left exactly as it is, so concurrent stacks
     # already serving it are undisturbed.
     scripts/dev/ensure-test-tls.sh
+
+    # Allocate this stack's network slice the same way its ports are allocated
+    # (salesagent-mp53.9). The e2e network is pinned to a NON-PRIVATE range so
+    # the server reaches its webhook receiver at an address production's SSRF
+    # gate accepts unpatched; a fixed value means the second concurrent stack
+    # fails with "Pool overlaps with other one on this address space".
+    if [ -z "${E2E_NETWORK_SUBNET:-}" ]; then
+        eval "export $(scripts/dev/alloc-e2e-subnet.sh)"
+        echo "  e2e network slice: $E2E_NETWORK_SUBNET"
+    fi
 
     # Bounded retry on port-collision: a sibling worktree can still grab a
     # probed port in the TOCTOU window before `docker up` publishes it.

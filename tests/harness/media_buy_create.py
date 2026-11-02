@@ -11,17 +11,14 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock
 
+from src.adapters.base import AdapterCreateResult, ResponsePackage
 from src.core.schemas import CreateMediaBuyRequest
-from src.core.schemas._base import (
-    CreateMediaBuyError,
-    CreateMediaBuyResult,
-    CreateMediaBuySubmitted,
-    CreateMediaBuySuccess,
-)
-from tests.harness._base import IntegrationEnv
+from src.core.schemas._base import CreateMediaBuyResult
+from tests.factories.mint import mint
+from tests.harness._base import IntegrationEnv, json_safe
 from tests.harness.egress import EgressHatchMixin
 from tests.harness.transport import DeliverResult
 
@@ -34,20 +31,11 @@ from tests.harness.transport import DeliverResult
 # tests/harness/.
 OMIT_IDEMPOTENCY_KEY: Any = object()
 
-
-def _ensure_idempotency_key(kwargs: dict[str, Any]) -> dict[str, Any]:
-    """Default a per-call-unique idempotency_key unless the test controls it.
-
-    ``idempotency_key`` is REQUIRED on ``CreateMediaBuyRequest``; most tests don't
-    care, so the harness supplies a fresh spec-shaped key per call — unique because
-    a reused key would replay the original response (or raise IDEMPOTENCY_CONFLICT)
-    instead of creating a new buy. Pass ``OMIT_IDEMPOTENCY_KEY`` to send no key.
-    """
-    if kwargs.get("idempotency_key") is OMIT_IDEMPOTENCY_KEY:
-        kwargs.pop("idempotency_key")
-    else:
-        kwargs.setdefault("idempotency_key", f"test-key-{uuid.uuid4().hex}")
-    return kwargs
+# The sibling sentinel for ``account``, which create-media-buy-request.json also lists in
+# /required. A scenario that means to send NO account cannot signal that by omitting the
+# kwarg -- omission is what every scenario that simply does not care about accounts also
+# looks like, and those get the seeded default. Same shape, same reason, as the key above.
+OMIT_ACCOUNT: Any = object()
 
 
 def _restore_creative_ids(req: CreateMediaBuyRequest, flat: dict[str, Any]) -> None:
@@ -83,7 +71,6 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         "audit": "src.core.tools.media_buy_create.get_audit_logger",
         "slack": "src.core.tools.media_buy_create.get_slack_notifier",
         "context_mgr": "src.core.tools.media_buy_create.get_context_manager",
-        "setup_check": "src.core.tools.media_buy_create.validate_setup_complete",
         "format_spec": "src.core.tools.media_buy_create._get_format_spec_sync",
     }
     REST_ENDPOINT = "/api/v1/media-buys"
@@ -95,8 +82,8 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         # underscore in the id (e.g. the "test_tenant" default) fails the
         # AdCP publisher_domain pattern when products resolve property_tags.
         suffix = uuid.uuid4().hex[:10]
-        kwargs.setdefault("tenant_id", f"mbcreate{suffix}")
-        kwargs.setdefault("principal_id", f"agent{suffix}")
+        kwargs.setdefault("tenant_id", mint(f"mbcreate{suffix}"))
+        kwargs.setdefault("principal_id", mint(f"agent{suffix}"))
         super().__init__(**kwargs)
 
     def setup_media_buy_data(self) -> tuple:
@@ -108,7 +95,6 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
 
         Returns (tenant, principal, product, pricing_option).
         """
-        from tests.factories import AuthorizedPropertyFactory
 
         # Seed the tenant as auto-approve (human_review_required=False). The
         # in-process transports never hit the tenant approval gate because this
@@ -122,13 +108,51 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         # explicitly via the "tenant requires manual approval" Given (which
         # commits the change to the shared DB).
         tenant, principal = self.setup_default_data(human_review_required=False)
-        # Satisfy the create_media_buy setup-checklist "Authorized Properties"
-        # gate. In-process transports skip it via the testing context, but the
-        # live e2e_rest server enforces it (validate_setup_complete), so a
-        # fully-set-up tenant needs at least one authorized property.
-        AuthorizedPropertyFactory(tenant=tenant)
+        # And the ACCOUNT, with this principal's access to it. Both
+        # create-media-buy-request.json and update-media-buy-request.json list ``account``
+        # in /required, and the boundary RESOLVES the reference now rather than accepting
+        # and dropping it -- so a scenario using this chain and sending the default account
+        # got PERMISSION_DENIED out of resolve_account before reaching what it grades.
+        # Here and not in setup_default_data: seeding an account for EVERY tenant made
+        # UC-011's account-listing scenarios wrong ("0 accounts visible" saw one).
+        self.setup_default_account()
         product, pricing_option = self.setup_product_chain(tenant)
         return tenant, principal, product, pricing_option
+
+    def setup_default_data(self, **tenant_kwargs: Any) -> tuple[Any, Any]:
+        """The base seed, plus the rows the create_media_buy setup-checklist gate grades.
+
+        Here rather than in ``setup_media_buy_data``, because that is not the path the callers
+        share: BDD reaches this env through it, the integration suite calls
+        ``setup_default_data`` and ``setup_product_chain`` directly. Here rather than in the
+        base, because ``validate_setup_complete`` has one production caller -- seeding an
+        AuthorizedProperty for every tenant would break UC-013's property counts the way
+        seeding an account for every tenant broke UC-011's.
+
+        Everything is CREATE-ONLY. ``call_impl`` re-enters this method (through
+        ``setup_default_account``), so an assignment on every call silently reverts whatever a
+        test set up: flipping ``auth_setup_mode`` to make a tenant incomplete was undone
+        between the flip and the dispatch. The factories are no help either -- neither checks
+        for an existing row, and ``tenant_auth_configs`` is UNIQUE on ``tenant_id``.
+        """
+        from sqlalchemy import select
+
+        from src.core.database.models import AuthorizedProperty, Tenant, TenantAuthConfig
+        from tests.factories import AuthorizedPropertyFactory, TenantAuthConfigFactory
+
+        creating = self._session.scalars(select(Tenant).filter_by(tenant_id=self._tenant_id)).first() is None
+        tenant, principal = super().setup_default_data(**tenant_kwargs)
+
+        if self._session.scalars(select(AuthorizedProperty).filter_by(tenant_id=tenant.tenant_id)).first() is None:
+            AuthorizedPropertyFactory(tenant=tenant)
+        if self._session.scalars(select(TenantAuthConfig).filter_by(tenant_id=tenant.tenant_id)).first() is None:
+            TenantAuthConfigFactory(tenant=tenant, oidc_enabled=True)
+        if creating:
+            # The column's server_default is "true", which leaves sso_configuration incomplete.
+            tenant.auth_setup_mode = False
+
+        self._commit_factory_data()
+        return tenant, principal
 
     def setup_product_chain(
         self,
@@ -249,42 +273,34 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
 
     def _configure_mocks(self) -> None:
         """Set up happy-path defaults for external mocks."""
-        # Adapter: mock create_media_buy — returns response matching the request packages.
-        # The side_effect dynamically generates package_ids from the request.
+        # Adapter: mock create_media_buy — the side_effect returns one response
+        # package per package the tool handed it, echoing each package_id.
         mock_adapter = MagicMock()
 
-        def _adapter_create_response(*args: Any, **kwargs: Any) -> Any:
-            """Generate adapter response with package_ids matching request packages."""
-            from src.core.schemas._base import CreateMediaBuySuccess
+        def _adapter_create_response(*args: Any, **kwargs: Any) -> AdapterCreateResult:
+            """Stand in for an ad server's ``create_media_buy`` return.
 
-            # Determine package count from request
-            req_obj = kwargs.get("request") or (args[0] if args else None)
-            pkg_count = 0
-            if req_obj and hasattr(req_obj, "packages") and req_obj.packages:
-                pkg_count = len(req_obj.packages)
-            # Also check the 'packages' kwarg (MediaPackage list)
-            pkgs_arg = kwargs.get("packages")
-            if pkgs_arg:
-                pkg_count = max(pkg_count, len(pkgs_arg))
-            if pkg_count == 0:
-                pkg_count = 1
+            The carrier type is the adapter contract, not a wire model: an adapter
+            has no row to read ``confirmed_at`` / ``revision`` from, and
+            ``AdapterCreateResult`` simply does not declare them, so the fake cannot
+            speak for fields it is not entitled to. It carries exactly what the tool
+            reads off an adapter — ``media_buy_id``, and each package's
+            ``package_id`` and ``paused``.
 
-            media_buy_id = f"mb_{uuid.uuid4().hex[:8]}"
-            # adapter_ack, not a bare construction: this stands in for an ad-server
-            # adapter's return, and an adapter has no row to read confirmed_at/revision
-            # from. Using the same factory production adapters use keeps the fake
-            # honest about which envelope fields it is entitled to speak for.
-            return CreateMediaBuySuccess.carrier(
-                media_buy_id=media_buy_id,
-                packages=[
-                    {
-                        "package_id": f"pkg_{uuid.uuid4().hex[:8]}",
-                        "product_id": f"prod_{i}",
-                        "budget": 5000.0,
-                        "status": "active",
-                    }
-                    for i in range(pkg_count)
-                ],
+            The seller has already minted a ``package_id`` per requested package by
+            the time the adapter is called, and every real adapter echoes it back
+            through ``AdServerAdapter._build_package_responses``. So this echoes it
+            too, one response package per requested package, which is what keeps
+            the tool's positional ``req.packages[i] -> response.packages[i]`` walk
+            lined up.
+            """
+            # The tool calls adapter.create_media_buy(request, packages, ...)
+            # positionally, so the MediaPackage list arrives as args[1].
+            media_packages = kwargs.get("packages") or (args[1] if len(args) > 1 else None) or []
+
+            return AdapterCreateResult(
+                media_buy_id=mint(f"mb_{uuid.uuid4().hex[:8]}"),
+                packages=[ResponsePackage(package_id=pkg.package_id, paused=False) for pkg in media_packages],
             )
 
         mock_adapter.create_media_buy.side_effect = _adapter_create_response
@@ -314,7 +330,6 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         self.mock["context_mgr"].return_value = self._build_mock_context_manager(tool_name="create_media_buy")
 
         # Setup checklist: pass by default
-        self.mock["setup_check"].return_value = None
 
         # Format spec: mock _get_format_spec_sync to avoid asyncio.run() inside
         # running event loop. Returns a valid format keyed by format_id. Tests
@@ -346,21 +361,77 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
 
         self.mock["format_spec"].side_effect = _format_spec_side_effect
 
+    def _ensure_required_request_fields(self, kwargs: dict[str, Any]) -> dict[str, Any]:
+        """Default the two fields create-media-buy-request.json lists in /required.
+
+        ``idempotency_key`` gets a fresh spec-shaped key per call — unique because a reused
+        key would replay the original response (or raise IDEMPOTENCY_CONFLICT) instead of
+        creating a new buy. Pass ``OMIT_IDEMPOTENCY_KEY`` to send none.
+
+        ``account`` gets the tenant's SEEDED account, not a literal: the create wrappers
+        resolve the reference at the transport boundary, so a fabricated id would come back
+        as ACCOUNT_NOT_FOUND and every scenario that is not about accounts would fail on
+        account resolution instead of reaching what it grades. A scenario that IS about
+        accounts sets its own ``account``, and one that means to send none passes
+        ``OMIT_ACCOUNT``. Was a free ``_ensure_idempotency_key`` function; it needs ``self``
+        now because seeding the account needs the env's session.
+        """
+        if kwargs.get("idempotency_key") is OMIT_IDEMPOTENCY_KEY:
+            kwargs.pop("idempotency_key")
+        else:
+            kwargs.setdefault("idempotency_key", mint(f"test-key-{uuid.uuid4().hex}"))
+
+        if kwargs.get("account") is OMIT_ACCOUNT:
+            kwargs.pop("account")
+        elif kwargs.get("account") is None:
+            kwargs["account"] = {"account_id": self._default_account_id()}
+        else:
+            # An account was NAMED -- by a step, or by create_test_media_buy_request_dict,
+            # which writes the literal DEFAULT_TEST_ACCOUNT_ID. Present is not the same as
+            # resolvable: the transport boundary looks the reference up, so the row still
+            # has to exist or the dispatch answers ACCOUNT_NOT_FOUND instead of whatever the
+            # test is about. Seeding only the suite's own default is what keeps a test that
+            # names a MISSING account still missing it.
+            self._seed_named_account_ref(kwargs["account"])
+        return kwargs
+
+    def _default_account_id(self) -> str:
+        """The seeded account's id, or a literal when there is no DB bound.
+
+        A contract test building a body outside ``with env:`` has nothing to seed against
+        and nothing that will resolve the reference, so a literal gives the body its
+        required SHAPE, which is all such a caller is asking for.
+        """
+        if self._session is None:
+            return "acct_unbound"
+        return self.setup_default_account().account_id
+
     def call_impl(self, **kwargs: Any) -> CreateMediaBuyResult:
-        """Call _create_media_buy_impl with real DB."""
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-        from src.core.transport_helpers import enrich_identity_with_account
+        """Dispatch create_media_buy at the shared boundary, with a real DB.
+
+        IMPL means "the production path minus the wire", and for this tool that path starts
+        at ``invoke_tool``: nothing calls ``_create_media_buy_impl`` in process, so its only
+        real callers are transports and they all enter here. Account resolution and the
+        idempotency probe therefore run, exactly as they do for a buyer.
+
+        Contrast ``CreativeSyncEnv.call_impl``, which stays a direct implementation call
+        because production genuinely has an in-process caller there -- this tool's own inline
+        creative upload.
+        """
+        from src.core.resolved_identity import TransportProtocol
+        from src.core.tools._boundary import invoke_tool
 
         self._commit_factory_data()
-        identity = kwargs.pop("identity", self.identity)
+        credential = kwargs.pop("credential", self.credential())
 
         # Build request from kwargs if not provided directly
         req = kwargs.pop("req", None)
         if req is None:
-            req = CreateMediaBuyRequest(**_ensure_idempotency_key(kwargs))
+            req = CreateMediaBuyRequest(**self._ensure_required_request_fields(kwargs))
+        else:
+            self._seed_named_account(req)
 
-        identity = enrich_identity_with_account(identity, req.account)
-        return asyncio.run(_create_media_buy_impl(req=req, identity=identity))
+        return asyncio.run(invoke_tool("create_media_buy", req, credential, TransportProtocol.MCP))
 
     def _flatten_request(self, kwargs: dict[str, Any]) -> dict[str, Any]:
         """Convert a ``req=`` kwarg into the flat parameter dict the wrappers take.
@@ -370,8 +441,13 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         ``creative_ids`` (stripped by ``exclude=True`` on model_dump).
         """
         req = kwargs.pop("req", None)
+        if req is not None:
+            self._seed_named_account(req)
         if req is None:
-            return _ensure_idempotency_key(kwargs)
+            # NOT json_safe'd: the MCP/A2A wrappers take TYPED parameters, so a raw bag
+            # goes to them as-is. Only the REST body needs JSON, and build_rest_body
+            # normalizes there.
+            return self._ensure_required_request_fields(kwargs)
         flat = req.model_dump(mode="json", exclude_none=True)
         # Keep ``account``: the create_media_buy wrappers declare it and resolve it
         # at the transport boundary (998ad1be2). Stripping it here regresses
@@ -384,7 +460,7 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         """Dispatch create_media_buy through the real A2A ``on_message_send`` pipeline.
 
         Delegates to the base ``_run_a2a_handler`` (drives ``on_message_send`` →
-        skill routing → ``_serialize_for_a2a`` → Task/Artifact DataPart, strips
+        skill routing → ``serve`` → ``to_wire`` → Task/Artifact DataPart, strips
         the A2A-envelope protocol fields, unwraps A2AError), reconstructing the
         ``CreateMediaBuyResult`` via ``parse_rest_response`` — the
         success|error union needs the ``media_buy_id`` discriminator plus the
@@ -409,40 +485,27 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Build REST request body from kwargs."""
-        kwargs.pop("identity", None)
         req = kwargs.pop("req", None)
         if req is not None:
+            self._seed_named_account(req)
             body = req.model_dump(mode="json", exclude_none=True)
             # Preserve creative_ids — exclude=True strips them from model_dump
             _restore_creative_ids(req, body)
             return body
-        return _ensure_idempotency_key(kwargs)
+        # The RAW path: normalize to JSON. A step dispatching a raw bag (so a
+        # schema-invalid payload actually reaches the transport) may hand us typed objects
+        # it built for setup; a REST body cannot carry them.
+        return json_safe(self._ensure_required_request_fields(kwargs))
 
     def parse_rest_response(self, data: dict[str, Any]) -> CreateMediaBuyResult:
-        """Parse a flattened create_media_buy wire body back into a CreateMediaBuyResult.
+        """Rebuild a create_media_buy wire body as the branch the buyer received.
 
-        ``CreateMediaBuyResult`` serializes flat: the response fields plus a
-        top-level protocol ``status`` and, on a cached idempotency replay, the
-        spec's top-level ``replayed: true`` marker — both are popped back onto
-        the wrapper so wire tests can assert ``result.payload.replayed``. The
-        CreateMediaBuySuccess|CreateMediaBuyError|CreateMediaBuySubmitted union
-        mirrors the production A2A discrimination (adcp_a2a_server.py): submitted
-        first (status="submitted" + task_id, no media_buy_id — a submitted
-        envelope must not reconstruct as Success/Error), then ``media_buy_id``
-        (present only on success) — not ``errors``, since a *successful* buy may
-        also carry non-fatal advisory ``errors``. An error body has ``errors``
-        and no ``media_buy_id``, so it reconstructs as a CreateMediaBuyError.
+        ``CreateMediaBuyResult.revive`` is the same discrimination production runs when it
+        reads a cached idempotency replay out of the store, so a test asserting on the
+        reconstructed branch is asserting on production's own resolution rather than on a
+        copy of it that can disagree.
         """
-        status = data.pop("status", "completed")
-        replayed = data.pop("replayed", False)
-        response: CreateMediaBuySuccess | CreateMediaBuyError | CreateMediaBuySubmitted
-        if status == "submitted":
-            response = CreateMediaBuySubmitted(status=status, **data)
-        elif data.get("media_buy_id") is not None:
-            response = CreateMediaBuySuccess.carrier(**data)
-        else:
-            response = CreateMediaBuyError(**data)
-        return CreateMediaBuyResult(response=response, status=status, replayed=replayed)
+        return cast("CreateMediaBuyResult", CreateMediaBuyResult.revive(data))
 
 
 class RealFormatResolverMediaBuyCreateEnv(MediaBuyCreateEnv):

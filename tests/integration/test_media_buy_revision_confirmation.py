@@ -38,7 +38,7 @@ from decimal import Decimal
 
 import pytest
 
-from src.core.database.models import MediaBuy, is_media_buy_seller_confirmed
+from src.core.database.models import MediaBuy, PersistedMediaBuyStatus, is_media_buy_seller_confirmed
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.exceptions import AdCPPersistedStateError
 from src.core.schemas import CreateMediaBuyRequest
@@ -120,6 +120,7 @@ def _assert_stamped_between(
 
 def _make_request(idempotency_key: str) -> CreateMediaBuyRequest:
     return CreateMediaBuyRequest(
+        account={"account_id": "acct_test"},
         brand={"domain": "testbrand.com"},
         packages=[{"product_id": "prod_1", "budget": 5000.0, "pricing_option_id": "po_1"}],
         start_time=(datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=1)).isoformat(),
@@ -400,6 +401,12 @@ class TestConfirmedAtStamp:
         The code and recovery are asserted here, not just the exception type, because
         the type without them is the half that was already right.
 
+        The subject of the refusal is read from ``details``, not from ``str(exc)``: the
+        buyer-facing message is a function of the code (``CODE_TABLE``), so no raise
+        site authors it and asserting on its text would grade the table rather than
+        this door. The values the operator needs — which row, which value was refused,
+        which set was legal — are exactly what ``ConfigurationDetails`` carries.
+
         Both halves are asserted because each catches what the other cannot: that the
         write is refused, and that the row is untouched by the attempt.
         """
@@ -411,12 +418,13 @@ class TestConfirmedAtStamp:
 
         assert refusal.value.error_code == "CONFIGURATION_ERROR"
         assert refusal.value.recovery == "terminal"
-        assert _UNRECOGNISED_STATUS in str(refusal.value)
+        assert refusal.value.field == "status"
+        assert refusal.value.details.rejected_value == _UNRECOGNISED_STATUS
         # The refusal names the ROW, not just the offending value. An operator reading
         # this in a log has no other way to find which buy carries the defect, and the
         # wrapper this door used to route through could not carry the id at all — its
         # signature had no parameter for it.
-        assert media_buy.media_buy_id in str(refusal.value)
+        assert refusal.value.details.media_buy_id == media_buy.media_buy_id
 
         after = _reread(repo, media_buy.media_buy_id)
         assert after.status == before.status, f"the refused write still moved the status to {after.status!r}"
@@ -443,10 +451,20 @@ class TestConfirmedAtStamp:
         share one coercion (``PersistedMediaBuyStatus.parse``) precisely so a caller
         cannot get a terminal CONFIGURATION_ERROR from one path and a correctable
         VALIDATION_ERROR from another for the identical defect.
+
+        "The SAME refusal" is read off the code and the typed details rather than off
+        the message. This assertion used to be a ``match=`` on the sentence "not a
+        member of the media_buys.status vocabulary", which the raise site can no
+        longer author — buyer-facing text is a function of the code. The three things
+        that sentence conveyed are asserted directly instead: which column
+        (``field``), which value was refused (``details.rejected_value``), and which
+        member set was legal (``details.accepted_values``). A different
+        ``AdCPPersistedStateError`` — the revision door, say — fails all three, so the
+        discrimination the ``match=`` provided is kept rather than traded away.
         """
         repo, media_buy = repo_env
 
-        with pytest.raises(AdCPPersistedStateError, match="not a member of the media_buys.status vocabulary"):
+        with pytest.raises(AdCPPersistedStateError) as refusal:
             if door == "update_fields":
                 repo.update_fields(media_buy.media_buy_id, status=_UNRECOGNISED_STATUS)
             elif door == "create_from_request":
@@ -472,6 +490,12 @@ class TestConfirmedAtStamp:
                         status=_UNRECOGNISED_STATUS,
                     )
                 )
+
+        assert refusal.value.error_code == "CONFIGURATION_ERROR"
+        assert refusal.value.recovery == "terminal"
+        assert refusal.value.field == "status"
+        assert refusal.value.details.rejected_value == _UNRECOGNISED_STATUS
+        assert refusal.value.details.accepted_values == sorted(m.value for m in PersistedMediaBuyStatus)
 
     def test_a_status_already_in_the_column_is_read_defensively(self, repo_env):
         """The stamp predicate still tolerates an unknown value it merely READS.

@@ -62,7 +62,7 @@ class JSONType(TypeDecorator):
         self._is_list = is_list
         super().__init__(*args, **kwargs)
 
-    def process_bind_param(self, value: Any, dialect: Dialect) -> dict | list | None:
+    def process_bind_param(self, value: Any, dialect: Dialect) -> dict | list | BaseModel | None:
         """Serialize value for database storage.
 
         Accepts Pydantic models, dicts, and lists. Pydantic models are
@@ -74,12 +74,14 @@ class JSONType(TypeDecorator):
         # Accept dict, list, and Pydantic BaseModel instances.
         # The engine's _pydantic_json_serializer (pydantic_core.to_json) handles
         # BaseModel serialization correctly — no need to model_dump() here.
+        # Anything else is a caller bug (typically json.dumps pre-serialization);
+        # the old {}-coercion turned that type error into silent data loss.
         if not isinstance(value, dict | list | BaseModel):
-            logger.warning(
-                f"JSONType received non-JSON type: {type(value).__name__}. "
-                f"Converting to empty dict to prevent data corruption."
+            raise TypeError(
+                f"JSONType column received {type(value).__name__}: {repr(value)[:100]}. "
+                f"JSONType columns take dicts/lists/Pydantic models directly — "
+                f"never pre-serialize with json.dumps."
             )
-            value = {}
 
         return value
 

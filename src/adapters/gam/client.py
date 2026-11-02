@@ -10,6 +10,8 @@ from typing import Any
 
 from googleads import ad_manager
 
+from src.core.exceptions import AdCPConfigurationError
+
 from .auth import GAMAuthManager
 from .utils.health_check import GAMHealthChecker, HealthCheckResult, HealthStatus
 
@@ -57,7 +59,7 @@ class GAMClientManager:
             Exception: If client creation fails
         """
         if not self.network_code:
-            raise ValueError("Network code is required for GAM client initialization")
+            raise AdCPConfigurationError()
 
         try:
             # Get credentials from auth manager
@@ -118,11 +120,8 @@ class GAMClientManager:
         self._client = None
         logger.info("GAM client reset - will re-initialize on next access")
 
-    def get_health_checker(self, dry_run: bool = False) -> GAMHealthChecker:
+    def get_health_checker(self) -> GAMHealthChecker:
         """Get or create the health checker.
-
-        Args:
-            dry_run: Whether to run in dry-run mode
 
         Returns:
             GAMHealthChecker instance
@@ -130,7 +129,7 @@ class GAMClientManager:
         if self._health_checker is None:
             # Merge network_code into config for health checker's own client init
             health_config = {**self.config, "network_code": self.network_code}
-            self._health_checker = GAMHealthChecker(health_config, dry_run=dry_run)
+            self._health_checker = GAMHealthChecker(health_config)
         return self._health_checker
 
     def check_health(

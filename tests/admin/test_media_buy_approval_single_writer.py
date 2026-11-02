@@ -92,7 +92,7 @@ class TestOnePostAdapterWriter:
         )
 
     def test_adapter_failure_leaves_the_buy_unconfirmed(self, client, factory_session):
-        """The failure arm inherits a commitment the seller never made.
+        """The failure branch inherits a commitment the seller never made.
 
         ``operations.approve_media_buy`` writes the flight-window status and commits
         BEFORE calling the adapter (``operations.py:433``). ``scheduled`` is a
@@ -118,7 +118,7 @@ class TestOnePostAdapterWriter:
         assert after.confirmed_at is None, (
             f"the adapter never created the order, yet confirmed_at is stamped {after.confirmed_at!r}. "
             f"The route committed the flight-window status before calling the adapter, and "
-            f"confirmed_at is write-once — so the failure arm inherits a seller commitment that "
+            f"confirmed_at is write-once — so the failure branch inherits a seller commitment that "
             f"was never made"
         )
 

@@ -17,6 +17,7 @@ from adcp.webhooks import GeneratedTaskStatus
 from src.core.database.repositories.creative import CreativeRepository
 from src.core.exceptions import AdCPValidationError
 from src.core.schemas.creative import SyncCreativeResult, SyncCreativesResponse
+from src.core.validation_helpers import run_async_in_sync_context
 from src.core.webhooks.delivery import WebhookTaskContext
 from src.core.webhooks.registration import accept_push_notification_config
 from src.services.protocol_webhook_service import get_protocol_webhook_service
@@ -38,7 +39,7 @@ def discover_creative_formats_from_url(url):
 
 from flask import Blueprint, jsonify, redirect, render_template, request, url_for
 
-from src.admin.utils import echo_context, require_tenant_access
+from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.repositories.uow import AdminCreativeUoW
 from src.core.tools.media_buy_create import execute_approved_media_buy, push_creative_to_existing_buy
@@ -88,40 +89,31 @@ async def _deliver_sync_creatives_webhook(
     principal_id: str | None,
     # `Any`, not `str | None`: this is the ORM row's attribute, read before the
     # UoW closed, and the repository hands it back untyped. Narrowing it here
-    # would invent a type the extraction did not have and trip the
-    # check-untyped-defs ratchet (#1611) on a pure code move.
+    # would invent a type the caller does not have and trip the
+    # check-untyped-defs ratchet (#1611).
     step_context_id: Any,
 ) -> bool:
     """Build the protocol-shaped payload and push it to the buyer.
 
     This is the second half of :func:`_call_webhook_for_creative_status`, split out
-    so that function stays under the ADR-009 complexity ratchet (#1610). The split
-    is on the boundary the original code already documented: everything here runs
-    AFTER the UoW closes, which is why it takes the step's attributes as plain
-    values rather than the ORM row (a detached row would raise on attribute access).
+    so that function stays under the ADR-009 complexity ratchet (#1610). The split is on
+    the UoW boundary: everything here runs AFTER the UoW closes, which is why it takes the
+    step's attributes as plain values rather than the ORM row (a detached row would raise on
+    attribute access).
 
     Returns:
         True if the buyer's endpoint took the notification, False if the send failed.
     """
     service = get_protocol_webhook_service()
     try:
-        # Determine protocol type from workflow step request_data
-        protocol = step_request_data.get("protocol", "mcp")  # Default to MCP for backward compatibility
-
-        # Create appropriate webhook payload based on protocol
-        # Convert result to dict for webhook payload functions
-        result_dict = complete_result.model_dump(mode="json")
-
-        # The dialect fork used to live here, and the metadata was a hand-built
-        # dict carrying task_type alone. Both are now notify()'s job: it selects
-        # the builder from `protocol` once, and it takes a typed context whose
-        # fields have to be named.
+        # The payload is not built here: notify() builds the one envelope, and it takes a
+        # typed context whose fields have to be named.
         #
-        # tenant_id and principal_id are the two that used to go missing. Both were
-        # in scope all along -- the caller raises without tenant_id, and the
-        # creative row carries principal_id -- but neither reached the dict, so
-        # records_delivery_log was False and every admin-originated delivery wrote
-        # no webhook_delivery_log row and said nothing about it (#1802).
+        # tenant_id and principal_id are the two a hand-built metadata dict drops. Both are
+        # in scope -- the caller raises without tenant_id, and the creative row carries
+        # principal_id -- and without them records_delivery_log is False, so an
+        # admin-originated delivery writes no webhook_delivery_log row and says nothing
+        # about it.
         await service.notify(
             push_notification_config,
             task=WebhookTaskContext(
@@ -134,9 +126,7 @@ async def _deliver_sync_creatives_webhook(
                 notification_type=None,
             ),
             status=GeneratedTaskStatus.completed,
-            result=result_dict,
-            protocol=protocol,
-            context_id=step_context_id or "",
+            result=complete_result,
         )
 
         logger.info(
@@ -221,11 +211,7 @@ async def _call_webhook_for_creative_status(
                 for c in all_creatives
             ]
 
-            # Echo the buyer's request context (shared helper, also used by the
-            # media-buy approve webhook in blueprints/operations.py).
-            context_obj = echo_context(step.request_data)
-
-            complete_result = SyncCreativesResponse(creatives=creatives, dry_run=False, context=context_obj)
+            complete_result = SyncCreativesResponse(creatives=creatives, dry_run=False)
 
             # The push-notification config is not stored when the creative is
             # created, so the target comes from the step's request data. It is built
@@ -277,7 +263,7 @@ async def _call_webhook_for_creative_status(
             # Read INSIDE the UoW, like every other attribute here: the row is
             # detached once the session closes. This is the identifier that never
             # reached the delivery, which is why admin-originated sends wrote no
-            # webhook_delivery_log row (#1802).
+            # webhook_delivery_log row (salesagent-pldmk.39).
             step_principal_id = next((c.principal_id for c in all_creatives if c.principal_id), None)
 
         # --- Session closed here; webhook delivery is outside the transaction ---
@@ -405,11 +391,10 @@ def list_creatives(tenant_id, **kwargs):
     return redirect(url_for("creatives.review_creatives", tenant_id=tenant_id))
 
 
-@creatives_bp.route("/add/ai", methods=["GET"])
-@require_tenant_access()
-def add_ai(tenant_id, **kwargs):
-    """Show AI-assisted creative format discovery form."""
-    return render_template("creative_format_ai.html", tenant_id=tenant_id)
+# There is no AI creative-format page: creative_format_ai.html was never written, so a route
+# rendering it can only raise TemplateNotFound. The `analyze` endpoint below — the AI backend
+# such a page would post to — works and is left in place; whether the feature gets a front
+# end is a product decision rather than a cleanup.
 
 
 @creatives_bp.route("/analyze", methods=["POST"])
@@ -805,7 +790,7 @@ def reject_creative(tenant_id, creative_id, **kwargs):
         return jsonify({"error": str(e)}), 500
 
 
-async def _ai_review_creative_async(
+def _ai_review_creative(
     creative_id: str,
     tenant_id: str,
     webhook_url: str | None = None,
@@ -914,7 +899,14 @@ async def _ai_review_creative_async(
                 logger.warning(f"[AI Review Async] Failed to send Slack notification: {slack_e}")
 
         if should_call_webhook:
-            asyncio.run(_call_webhook_for_creative_status(creative_id=creative_id, tenant_id=tenant_id))
+            # run_async_in_sync_context, not asyncio.run: the sanctioned bridge
+            # (disease-scan row 2). It takes a COROUTINE OBJECT and raises
+            # TypeError on a coroutine FUNCTION, so it cannot silently no-op the
+            # way submit() did. asyncio.run would also work now that this
+            # function is a plain def on a pool worker with no running loop, but
+            # that correctness would be incidental -- it was the live landmine
+            # while the caller was async (#1972).
+            run_async_in_sync_context(_call_webhook_for_creative_status(creative_id=creative_id, tenant_id=tenant_id))
             logger.info(f"[AI Review Async] Webhook called for {creative_id}")
 
     except Exception as e:

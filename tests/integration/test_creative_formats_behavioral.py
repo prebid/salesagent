@@ -1,10 +1,6 @@
 """Integration tests: list_creative_formats filtering, sort, auth.
 
 Behavioral tests using CreativeFormatsEnv + real PostgreSQL + factory_boy.
-Replaces mock-heavy unit tests from test_creative.py and
-test_creative_formats_behavioral.py with provable assertions.
-
-Covers:
 """
 
 from __future__ import annotations
@@ -19,10 +15,9 @@ from adcp.types import (
 )
 from adcp.types.generated_poc.core.format import Dimensions, Renders  # TODO: no stable alias in adcp.types
 
-from src.core.exceptions import AdCPAuthenticationError
 from src.core.schemas import Format, FormatId, ListCreativeFormatsRequest
 from tests.factories import TenantFactory
-from tests.harness import CreativeFormatsEnv, make_identity
+from tests.harness import CreativeFormatsEnv
 
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
 
@@ -46,23 +41,12 @@ def _make_format(
     )
 
 
-_make_identity = make_identity  # Canonical version from tests.harness
-
-
-# ---------------------------------------------------------------------------
-# Auth Tests — Covers: UC-005-EXT-A-01
-# ---------------------------------------------------------------------------
-
-
-class TestFormatsAuth:
-    """list_creative_formats requires tenant in identity."""
-
-    def test_no_tenant_raises_auth_error(self, integration_db):
-        """Covers: UC-005-EXT-A-01 — tenant=None → AdCPAuthenticationError."""
-        identity = _make_identity(principal_id="p1", tenant=None)
-        with CreativeFormatsEnv() as env:
-            with pytest.raises(AdCPAuthenticationError, match="tenant"):
-                env.call_impl(identity=identity)
+# There is no tenant-less identity to test this tool with: both identity types declare
+# `tenant` required, because a request naming no seller this deployment serves is refused
+# CONFIGURATION_ERROR by the resolver before any identity is built. UC-005-EXT-A-01's "no
+# tenant resolves -> error" obligation is graded where that refusal happens -- at the
+# boundary, on the wire, with no resolvable host (BR-UC-010 @T-UC-010-ext-a and
+# local-tenant-identification-routes.feature).
 
 
 # ---------------------------------------------------------------------------

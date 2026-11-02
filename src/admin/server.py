@@ -74,16 +74,22 @@ def main():
 
     # Import the app factory
     from src.admin.app import create_app
+    from src.core.config import load_settings
+
+    # The composition root for the standalone admin server: the environment is read
+    # here, once, and create_app receives the object.
+    settings = load_settings()
+    runtime = settings.runtime
 
     # Create the Flask app
-    app = create_app()
+    app = create_app(settings=settings)
 
-    # Get configuration from environment
-    port = int(os.environ.get("ADCP_SALES_PORT", 8080))
-    debug = os.environ.get("FLASK_DEBUG", "0") == "1"
-    server_type = os.environ.get("ADMIN_SERVER_TYPE", "waitress").lower()
+    port = runtime.adcp_sales_port
+    debug = runtime.flask_debug
+    server_type = runtime.admin_server_type.lower()
 
-    # Force production settings for security
+    # Force production settings for security. These are Werkzeug's own flags, read by
+    # Werkzeug, not by this application: the one legitimate environment write here.
     if not debug:
         os.environ.pop("WERKZEUG_SERVER_FD", None)
         os.environ["FLASK_ENV"] = "production"

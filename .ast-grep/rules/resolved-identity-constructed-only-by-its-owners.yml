@@ -1,0 +1,47 @@
+# ResolvedIdentity has two constructors: the resolver and the test factory.
+#
+# WHY A RULE AND NOT A GUARD TEST. This replaces two AST-scanning pytest guards
+# (a zero cap over A2A test files and a per-file cap dict over the rest of tests/). A
+# cap dict is a declaration that drifts; a rule over the whole tree has nothing to keep
+# current.
+#
+# WHY AST-GREP AND NOT RUFF. Ruff's TID251 bans the NAME: it fires on
+# `from src.core.resolved_identity import ResolvedIdentity` wherever it appears,
+# including under `if TYPE_CHECKING:` (probed on ruff 0.15.14). Forty-odd modules import
+# the class for annotations and must keep doing so, so the ban has to fall on the CALL,
+# which is a structural fact ruff cannot express. Same reasoning as the credential-header
+# rule beside this one.
+#
+# The two owners are excluded by path, never by a suppression comment: an inline
+# `ResolvedIdentity(...)` anywhere else is a second source of identity defaults, which is
+# the drift the factory exists to prevent.
+id: resolved-identity-constructed-only-by-its-owners
+language: Python
+severity: error
+message: >-
+  ResolvedIdentity, AccountIdentity and PublicIdentity are constructed in two places:
+  src/core/resolved_identity (production: _resolve_identity and identity_of) and
+  tests.factories.principal.PrincipalFactory (tests: make_identity, make_account_identity and
+  make_public_identity). Call the factory; an inline construction is a second source of
+  identity defaults.
+files:
+  - "src/**/*.py"
+  - "tests/**/*.py"
+  - "scripts/**/*.py"
+ignores:
+  - "src/core/resolved_identity.py"
+  - "tests/factories/principal.py"
+rule:
+  any:
+    - pattern: ResolvedIdentity($$$ARGS)
+    - pattern: $MOD.ResolvedIdentity($$$ARGS)
+    - pattern: ResolvedIdentity.model_validate($$$ARGS)
+    - pattern: ResolvedIdentity.model_construct($$$ARGS)
+    - pattern: PublicIdentity($$$ARGS)
+    - pattern: $MOD.PublicIdentity($$$ARGS)
+    - pattern: PublicIdentity.model_validate($$$ARGS)
+    - pattern: PublicIdentity.model_construct($$$ARGS)
+    - pattern: AccountIdentity($$$ARGS)
+    - pattern: $MOD.AccountIdentity($$$ARGS)
+    - pattern: AccountIdentity.model_validate($$$ARGS)
+    - pattern: AccountIdentity.model_construct($$$ARGS)

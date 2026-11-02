@@ -9,7 +9,7 @@ Data tests: "Does it show the right data?" (content validation)
 
 import pytest
 
-from src.core.database.models import PricingOption
+from tests.factories.principal import plaintext_token_for
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -32,6 +32,7 @@ class TestProductsDataValidation:
         Bug caught: https://github.com/your-org/repo/issues/XXX
         """
         from src.core.database.database_session import get_db_session
+        from tests.factories import PricingOptionFactory
         from tests.integration.conftest import create_test_product_with_pricing
 
         tenant_id = test_tenant_with_data["tenant_id"]
@@ -57,9 +58,12 @@ class TestProductsDataValidation:
 
             # Add 2 more pricing options (total of 3)
             for i in range(1, 3):
-                pricing = PricingOption(
+                pricing = PricingOptionFactory.build(
                     tenant_id=tenant_id,
                     product_id=product.product_id,
+                    # Three cpm/USD/fixed options on one product share a derived id and
+                    # collide on uq_pricing_options_option_id; the test needs them distinct.
+                    pricing_option_id=f"cpm_usd_fixed_{i}",
                     pricing_model="cpm",
                     rate=10.0 + i,
                     currency="USD",
@@ -211,11 +215,11 @@ class TestPrincipalsDataValidation:
         # Create 3 principals to test list display
         with get_db_session() as db_session:
             for i in range(3):
-                principal = Principal(
+                principal = Principal.with_token(
+                    plaintext_token_for(f"test_principal_dup_check_{i}"),
                     tenant_id=tenant_id,
                     principal_id=f"test_principal_dup_check_{i}",
                     name=f"Test Advertiser {i}",
-                    access_token=f"test_token_{i}",
                     platform_mappings={"mock": {"id": f"test_advertiser_{i}"}},
                 )
                 db_session.add(principal)
@@ -439,11 +443,11 @@ class TestDashboardDataValidation:
 
         # Create principal first
         with get_db_session() as db_session:
-            principal = Principal(
+            principal = Principal.with_token(
+                plaintext_token_for("test_principal_dashboard"),
                 tenant_id=tenant_id,
                 principal_id="test_principal_dashboard",
                 name="Test Advertiser",
-                access_token="test_token_dashboard",
                 platform_mappings={"mock": {"id": "test"}},
             )
             db_session.add(principal)
@@ -498,11 +502,11 @@ class TestMediaBuysDataValidation:
 
         # Create principal first
         with get_db_session() as db_session:
-            principal = Principal(
+            principal = Principal.with_token(
+                plaintext_token_for("test_principal_mb"),
                 tenant_id=tenant_id,
                 principal_id="test_principal_mb",
                 name="Test Advertiser",
-                access_token="test_token_mb",
                 platform_mappings={"mock": {"id": "test"}},
             )
             db_session.add(principal)
@@ -556,11 +560,11 @@ class TestMediaBuysDataValidation:
 
         # Create principal
         with get_db_session() as db_session:
-            principal = Principal(
+            principal = Principal.with_token(
+                plaintext_token_for("test_principal_status"),
                 tenant_id=tenant_id,
                 principal_id="test_principal_status",
                 name="Test Advertiser",
-                access_token="test_token_status",
                 platform_mappings={"mock": {"id": "test"}},
             )
             db_session.add(principal)
@@ -613,11 +617,11 @@ class TestWorkflowsDataValidation:
         # Create principal and context
         with get_db_session() as db_session:
             # Create principal
-            principal = Principal(
+            principal = Principal.with_token(
+                plaintext_token_for("test_principal_workflow"),
                 tenant_id=tenant_id,
                 principal_id="test_principal_workflow",
                 name="Test Advertiser",
-                access_token="test_token_workflow",
                 platform_mappings={"mock": {"id": "test"}},
             )
             db_session.add(principal)

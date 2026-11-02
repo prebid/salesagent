@@ -10,7 +10,8 @@ import warnings
 from datetime import UTC, datetime
 from typing import Any
 
-from tests.factories.creative_asset import build_assets, image_spec
+from tests.factories.creative_asset import build_assets, image_spec, url_spec
+from tests.factories.webhook import PushNotificationConfigRequestFactory, ReportingWebhookRequestFactory
 
 
 def generate_buyer_ref(prefix: str = "test") -> str:
@@ -43,6 +44,13 @@ def parse_tool_result(result: Any) -> dict[str, Any]:
         f"Unable to parse tool result: {type(result).__name__} has no structured_content field. "
         f"Expected ToolResult with structured_content."
     )
+
+
+#: The account seeded for the demo tenant by init_db() beside "ci-test-principal".
+#: `account` is REQUIRED on sync-creatives-request.json and create-media-buy-request.json,
+#: so a builder that omits it produces a request every transport refuses with
+#: INVALID_REQUEST before any behavior under test runs.
+CI_TEST_ACCOUNT: dict[str, Any] = {"account_id": "ci-test-account"}
 
 
 def build_adcp_media_buy_request(
@@ -102,6 +110,8 @@ def build_adcp_media_buy_request(
     # Note: ALL budgets are plain numbers per spec (currency from pricing_option_id)
     # Per AdCP spec: Package requires product_id (singular) and pricing_option_id
     request: dict[str, Any] = {
+        # Required on create-media-buy-request.json, same as on sync-creatives.
+        "account": CI_TEST_ACCOUNT,
         "brand": brand,  # AdCP 3.6.0: BrandReference with domain
         "packages": [
             {
@@ -128,14 +138,11 @@ def build_adcp_media_buy_request(
         # AdCP-compliant ReportingWebhook authentication requires:
         # - credentials: string with minLength 32 (shared secret or bearer token)
         # - schemes: array of authentication schemes ["Bearer" or "HMAC-SHA256"]
-        request["reporting_webhook"] = {
-            "url": webhook_url,
-            "reporting_frequency": reporting_frequency,
-            "authentication": {
-                "credentials": "test-webhook-bearer-token-at-least-32-chars-long",
-                "schemes": ["Bearer"],
-            },
-        }
+        request["reporting_webhook"] = ReportingWebhookRequestFactory.payload(
+            url=webhook_url,
+            reporting_frequency=reporting_frequency,
+            authentication={"credentials": "test-webhook-bearer-token-at-least-32-chars-long", "schemes": ["Bearer"]},
+        )
 
     if context:
         request["context"] = context
@@ -143,11 +150,11 @@ def build_adcp_media_buy_request(
     return request
 
 
-def build_sync_creatives_request(
+def build_sync_creatives_payload(
     creatives: list[dict[str, Any]],
     dry_run: bool = False,
     webhook_url: str | None = None,
-    assignments: dict[str, list[str]] | None = None,
+    assignments: list[dict[str, Any]] | None = None,
     creative_ids: list[str] | None = None,
     delete_missing: bool = False,
     validation_mode: str = "strict",
@@ -180,10 +187,14 @@ def build_sync_creatives_request(
         )
 
     request: dict[str, Any] = {
+        "account": CI_TEST_ACCOUNT,
         "creatives": creatives,
         "dry_run": dry_run,
         "validation_mode": validation_mode,
         "delete_missing": delete_missing,
+        # sync-creatives-request.json /required lists idempotency_key. Unique per call --
+        # a reused key replays the original response instead of performing the sync.
+        "idempotency_key": f"e2e-sync-{uuid.uuid4().hex}",
     }
 
     if assignments:
@@ -196,7 +207,7 @@ def build_sync_creatives_request(
         # AdCP push_notification_config: omitting `authentication` selects the
         # default RFC 9421 webhook-signing profile. The legacy {schemes,
         # credentials} block is only needed when opting into Bearer/HMAC.
-        request["push_notification_config"] = {"url": webhook_url}
+        request["push_notification_config"] = PushNotificationConfigRequestFactory.payload(url=webhook_url)
 
     return request
 
@@ -233,13 +244,19 @@ def build_creative(
         "creative_id": creative_id,
         "format_id": format_id,
         "name": name,
-        "content_uri": asset_url,  # Required top-level URL field per AdCP spec
         "assets": assets,
         "status": status,
     }
 
     if click_through_url:
-        creative["click_through_url"] = click_through_url
+        # 3.1 carries the click destination as a url ASSET, not a top-level key.
+        # core/asset-group-vocabulary.json names `landing_page_url` canonical and lists
+        # click_through_url only as a legacy alias; core/creative-asset.json declares
+        # neither it nor content_uri as properties.
+        creative["assets"] = build_assets(
+            image_spec("primary", url=asset_url, width=300, height=250),
+            url_spec("landing_page_url", url=click_through_url),
+        )
 
     return creative
 
@@ -247,37 +264,39 @@ def build_creative(
 def build_update_media_buy_request(
     media_buy_id: str,
     active: bool | None = None,
-    budget: dict[str, Any] | None = None,
     packages: list[dict[str, Any]] | None = None,
     webhook_url: str | None = None,
+    context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Build a valid AdCP update_media_buy request.
 
-    Args:
-        media_buy_id: Media buy ID to update (required)
-        active: Optional active status update
-        budget: Optional budget update
-        packages: Optional package updates
-        webhook_url: Optional webhook for async notifications
-
-    Returns:
-        Valid AdCP UpdateMediaBuyRequest dict
+    NOTE: there is no top-level ``budget``. update-media-buy-request.json declares
+    no such property -- budgets live on the package entries -- so sending one is
+    rejected outright under the dev extra="forbid" mode. The parameter used to exist
+    here and was removed with the field itself.
     """
-    request: dict[str, Any] = {"media_buy_id": media_buy_id}
+    request: dict[str, Any] = {
+        "media_buy_id": media_buy_id,
+        # Required on update-media-buy-request.json too.
+        "account": CI_TEST_ACCOUNT,
+        # update-media-buy-request.json /required lists idempotency_key. Unique per call --
+        # a reused key replays the original response instead of applying the update.
+        "idempotency_key": f"e2e-update-{uuid.uuid4().hex}",
+    }
 
     # Add optional fields
     if active is not None:
         request["active"] = active
-    if budget is not None:
-        request["budget"] = budget
     if packages is not None:
         request["packages"] = packages
     if webhook_url:
         # AdCP push_notification_config: omitting `authentication` selects the
         # default RFC 9421 webhook-signing profile. The legacy {schemes,
         # credentials} block is only needed when opting into Bearer/HMAC.
-        request["push_notification_config"] = {"url": webhook_url}
+        request["push_notification_config"] = PushNotificationConfigRequestFactory.payload(url=webhook_url)
+    if context is not None:
+        request["context"] = context
 
     return request
 
@@ -300,47 +319,6 @@ def get_test_date_range(days_from_now: int = 1, duration_days: int = 30) -> tupl
     end = start + timedelta(days=duration_days)
 
     return (start.isoformat(), end.isoformat())
-
-
-def build_a2a_message_send(
-    *,
-    text: str | None = None,
-    skill: str | None = None,
-    parameters: dict[str, Any] | None = None,
-    context_id: str | None = None,
-    push_notification_config: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Build an A2A JSON-RPC ``message/send`` envelope (GH #1423 consolidation).
-
-    Single home for the envelope previously copy-pasted across the a2a e2e
-    files. Exactly one of ``text`` (natural-language part) or ``skill``
-    (explicit-skill data part, with ``parameters``) must be given. ``context_id``
-    defaults to a fresh uuid; ``push_notification_config`` (webhook tests) is
-    placed under ``params.configuration.pushNotificationConfig``.
-    """
-    if (text is None) == (skill is None):
-        raise ValueError("build_a2a_message_send: provide exactly one of text= or skill=")
-    part: dict[str, Any]
-    if text is not None:
-        part = {"kind": "text", "text": text}
-    else:
-        part = {"kind": "data", "data": {"skill": skill, "parameters": parameters or {}}}
-    params: dict[str, Any] = {
-        "message": {
-            "messageId": str(uuid.uuid4()),
-            "contextId": context_id or str(uuid.uuid4()),
-            "role": "user",  # Required by A2A spec
-            "parts": [part],
-        }
-    }
-    if push_notification_config is not None:
-        params["configuration"] = {"pushNotificationConfig": push_notification_config}
-    return {
-        "jsonrpc": "2.0",
-        "id": str(uuid.uuid4()),
-        "method": "message/send",
-        "params": params,
-    }
 
 
 def build_default_campaign_request(

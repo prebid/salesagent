@@ -6,13 +6,13 @@ Uses AccountRepository via AccountUoW for all data access.
 """
 
 import logging
-import uuid
 
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
 
 from src.admin.utils.audit_decorator import log_admin_action
 from src.admin.utils.helpers import require_tenant_access
-from src.core.database.models import Account
+from src.core.billing_policy import BILLING_PARTY_VALUES
+from src.core.database.repositories.account import AccountRepository
 from src.core.database.repositories.uow import AccountUoW
 
 logger = logging.getLogger(__name__)
@@ -58,6 +58,7 @@ def create_account(tenant_id):
             "create_account.html",
             tenant_id=tenant_id,
             edit_mode=False,
+            billing_options=BILLING_PARTY_VALUES,
         )
 
     # POST — process form
@@ -73,24 +74,41 @@ def create_account(tenant_id):
         flash("Account name is required.", "error")
         return redirect(request.url)
 
-    account_id = f"acc_{uuid.uuid4().hex[:12]}"
-    brand = {"domain": brand_domain} if brand_domain else None
-    if brand and brand_id:
-        brand["brand_id"] = brand_id
-
-    with AccountUoW(tenant_id) as uow:
-        new_account = Account(
-            tenant_id=tenant_id,
-            account_id=account_id,
-            name=name,
-            status="active",
-            brand=brand,
-            operator=operator or None,
-            billing=billing,
-            payment_terms=payment_terms,
-            sandbox=sandbox or None,
-        )
-        uow.accounts.create(new_account)
+    # Identity and row assembly BOTH belong to the repository: this form used to
+    # mint its own account_id and hand-build the Account, so the admin surface
+    # and sync_accounts were two independent definitions of what an account row
+    # is. The gate divergence below is deliberate and documented; the row shape
+    # is not.
+    try:
+        with AccountUoW(tenant_id) as uow:
+            new_account = AccountRepository.build_row(
+                tenant_id=tenant_id,
+                account_id=AccountRepository.mint_account_id(),
+                name=name,
+                status="active",
+                brand_domain=brand_domain,
+                brand_id=brand_id,
+                operator=operator or "",
+                principal_id=None,
+                created_fields={
+                    "billing": billing,
+                    "payment_terms": payment_terms,
+                    "sandbox": sandbox or None,
+                },
+            )
+            uow.accounts.create(new_account)
+    except ValueError as exc:
+        # The repository refuses a create whose natural key is already occupied
+        # (salesagent-0njj). Surfaced as a form error rather than a 500: this is
+        # an operator mistake with an obvious remedy — edit the existing account.
+        #
+        # `operator_message` rather than str(exc): NaturalKeyConflict is now an
+        # AdCPConflictError too, so str() returns CODE_TABLE's buyer-facing sentence
+        # ("Revision conflict - refetch and retry"), which tells an OPERATOR nothing
+        # about which account to edit. This is an operator surface, not the buyer
+        # wire, so the specific text is appropriate here and only here.
+        flash(getattr(exc, "operator_message", None) or str(exc), "error")
+        return redirect(request.url)
 
     flash(f"Account '{name}' created successfully.", "success")
     return redirect(url_for("accounts.list_accounts", tenant_id=tenant_id))
@@ -135,18 +153,29 @@ def edit_account(tenant_id, account_id):
                 tenant_id=tenant_id,
                 account=account,
                 edit_mode=True,
+                billing_options=BILLING_PARTY_VALUES,
             )
 
-        # POST — update mutable fields
+        # POST — update mutable fields.
+        #
+        # `operator` and `sandbox` are deliberately ABSENT: they are natural-key
+        # components (AccountRepository.get_by_natural_key), so editing them
+        # re-keys the account and the buyer's next sync_accounts call provisions a
+        # duplicate instead of matching (salesagent-8sfr). The repository refuses
+        # them outright; leaving them here would only turn that into a 500.
+        #
+        # `billing` IS editable, and that is a deliberate authority difference
+        # rather than an oversight. AdCP forbids mutating it on the settings-update
+        # WIRE path (sync-accounts-request.json
+        # #/properties/accounts/items/oneOf/1/allOf/2, enforced in
+        # _sync_accounts_impl), but that binds the BUYER. This is the seller's own
+        # operator surface acting on its own account, which the buyer-facing
+        # restriction does not govern.
         updates = {}
-        for field in ("name", "operator", "billing", "payment_terms", "rate_card"):
+        for field in ("name", "billing", "payment_terms", "rate_card"):
             value = request.form.get(field, "").strip()
             if value:
                 updates[field] = value
-
-        sandbox = request.form.get("sandbox") == "on"
-        if sandbox != (account.sandbox or False):
-            updates["sandbox"] = sandbox or None
 
         if updates:
             uow.accounts.update_fields(account_id, **updates)

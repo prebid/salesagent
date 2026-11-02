@@ -11,10 +11,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy.orm import Session as SASession
 
 from src.adapters.mock_ad_server import MockAdServer
-from src.core.database.database_session import get_engine
 from src.core.database.repositories import DeliverySimulationConfigRepository
 from src.core.schemas import Principal
 from src.core.schemas.delivery import (
@@ -38,35 +36,16 @@ def _seeded_response(media_buy_id: str, impressions: int = 5000) -> AdapterGetMe
     )
 
 
-@pytest.fixture
-def bound_session(integration_db):
-    """A session bound to the test DB with all factories registered to it."""
-    from tests.factories import ALL_FACTORIES
-
-    engine = get_engine()
-    session = SASession(bind=engine)
-    previous = [f._meta.sqlalchemy_session for f in ALL_FACTORIES]
-    for f in ALL_FACTORIES:
-        f._meta.sqlalchemy_session = session
-    try:
-        yield session
-    finally:
-        for f, prev in zip(ALL_FACTORIES, previous, strict=True):
-            f._meta.sqlalchemy_session = prev
-        session.rollback()
-        session.close()
-
-
 class TestRepository:
-    def test_upsert_then_get_roundtrips_payload(self, bound_session):
+    def test_upsert_then_get_roundtrips_payload(self, bound_factory_session):
         from tests.factories import TenantFactory
 
         tenant = TenantFactory()
-        repo = DeliverySimulationConfigRepository(bound_session, tenant.tenant_id)
+        repo = DeliverySimulationConfigRepository(bound_factory_session, tenant.tenant_id)
 
         payload = _seeded_response("mb_repo").model_dump(mode="json")
         repo.upsert("mb_repo", payload)
-        bound_session.commit()
+        bound_factory_session.commit()
 
         row = repo.get("mb_repo")
         assert row is not None
@@ -74,38 +53,40 @@ class TestRepository:
         assert row.media_buy_id == "mb_repo"
         assert row.response_payload == payload
 
-    def test_upsert_updates_existing_row(self, bound_session):
+    def test_upsert_updates_existing_row(self, bound_factory_session):
         from tests.factories import TenantFactory
 
         tenant = TenantFactory()
-        repo = DeliverySimulationConfigRepository(bound_session, tenant.tenant_id)
+        repo = DeliverySimulationConfigRepository(bound_factory_session, tenant.tenant_id)
 
         first = repo.upsert("mb_update", _seeded_response("mb_update", impressions=1000).model_dump(mode="json"))
-        bound_session.commit()
+        bound_factory_session.commit()
         second = repo.upsert("mb_update", _seeded_response("mb_update", impressions=9000).model_dump(mode="json"))
-        bound_session.commit()
+        bound_factory_session.commit()
 
         # Same PK -> same row mutated, not a second insert.
         assert first is second
         assert repo.get("mb_update").response_payload["totals"]["impressions"] == 9000
 
-    def test_tenant_isolation(self, bound_session):
+    def test_tenant_isolation(self, bound_factory_session):
         """A row for tenant A is invisible to a repo scoped to tenant B."""
         from tests.factories import TenantFactory
 
         tenant_a = TenantFactory()
         tenant_b = TenantFactory()
-        DeliverySimulationConfigRepository(bound_session, tenant_a.tenant_id).upsert(
+        DeliverySimulationConfigRepository(bound_factory_session, tenant_a.tenant_id).upsert(
             "mb_shared", _seeded_response("mb_shared").model_dump(mode="json")
         )
-        bound_session.commit()
+        bound_factory_session.commit()
 
-        assert DeliverySimulationConfigRepository(bound_session, tenant_a.tenant_id).get("mb_shared") is not None
-        assert DeliverySimulationConfigRepository(bound_session, tenant_b.tenant_id).get("mb_shared") is None
+        assert (
+            DeliverySimulationConfigRepository(bound_factory_session, tenant_a.tenant_id).get("mb_shared") is not None
+        )
+        assert DeliverySimulationConfigRepository(bound_factory_session, tenant_b.tenant_id).get("mb_shared") is None
 
 
 class TestFactory:
-    def test_factory_writes_row_consumable_by_repository(self, bound_session):
+    def test_factory_writes_row_consumable_by_repository(self, bound_factory_session):
         from tests.factories import DeliverySimulationConfigFactory, TenantFactory
 
         tenant = TenantFactory()
@@ -115,15 +96,15 @@ class TestFactory:
             media_buy_id="mb_factory",
             response_payload=payload,
         )
-        bound_session.commit()
+        bound_factory_session.commit()
 
-        row = DeliverySimulationConfigRepository(bound_session, tenant.tenant_id).get("mb_factory")
+        row = DeliverySimulationConfigRepository(bound_factory_session, tenant.tenant_id).get("mb_factory")
         assert row is not None
         assert row.response_payload["totals"]["impressions"] == 7777
 
 
 class TestAdapterReadsSeededRow:
-    def test_adapter_returns_seeded_response(self, bound_session):
+    def test_adapter_returns_seeded_response(self, bound_factory_session):
         """MockAdServer.get_media_buy_delivery returns the seeded row verbatim."""
         from tests.factories import DeliverySimulationConfigFactory, TenantFactory
 
@@ -134,7 +115,7 @@ class TestAdapterReadsSeededRow:
             media_buy_id="mb_adapter",
             response_payload=seeded.model_dump(mode="json"),
         )
-        bound_session.commit()
+        bound_factory_session.commit()
 
         principal = Principal(principal_id="p_int", name="Int Principal", platform_mappings={})
         adapter = MockAdServer(config={}, principal=principal, tenant_id=tenant.tenant_id)
@@ -153,12 +134,12 @@ class TestAdapterReadsSeededRow:
         assert result.by_package[0].impressions == 12345
         assert result.currency == "USD"
 
-    def test_adapter_falls_through_when_no_row(self, bound_session):
+    def test_adapter_falls_through_when_no_row(self, bound_factory_session):
         """No seeded row -> existing fallback path (empty by_package)."""
         from tests.factories import TenantFactory
 
         tenant = TenantFactory()
-        bound_session.commit()
+        bound_factory_session.commit()
 
         principal = Principal(principal_id="p_int2", name="Int Principal 2", platform_mappings={})
         adapter = MockAdServer(config={}, principal=principal, tenant_id=tenant.tenant_id)

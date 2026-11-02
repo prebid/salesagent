@@ -10,7 +10,9 @@ Covers:
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
+from src.core.exceptions import first_validation_error_field
 from tests.factories.creative_asset import build_assets, image_spec
 from tests.harness import (
     CreativeFormatsEnv,
@@ -19,6 +21,7 @@ from tests.harness import (
     Transport,
     assert_envelope,
 )
+from tests.helpers.creative_test_helpers import sync_creatives_request
 
 DEFAULT_AGENT_URL = "https://creative.test.example.com"
 
@@ -26,26 +29,36 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
 # ---------------------------------------------------------------------------
-# : Missing format_id rejected through sync impl
+# : Missing format_id refused when the sync REQUEST is built
 # Obligation: UC-006-EXT-E-01
 # ---------------------------------------------------------------------------
 
 
-class TestMissingFormatIdRejectedThroughImpl:
-    """Missing format_id is caught by _sync_creatives_impl as a failed creative."""
+class TestMissingFormatIdRejectedAtTheRequestBoundary:
+    """Missing format_id is refused when the sync request is BUILT."""
 
-    def test_missing_format_id_produces_failed_result(self, integration_db):
-        """Covers: UC-006-EXT-E-01 — creative without format_id fails through impl.
+    def test_missing_format_id_is_refused_naming_format_id(self, integration_db):
+        """Covers: UC-006-EXT-E-01 — a creative that identifies no format is rejected.
 
-        Unlike the unit test which just checks Pydantic schema construction,
-        this exercises the full _sync_creatives_impl code path: dict normalization,
-        CreativeAsset parsing, validation, and result assembly.
+        This asserted a per-creative ``action="failed"`` coming out of
+        ``_sync_creatives_impl``. Every caller -- all three transports and both in-process
+        media-buy uploads -- builds a SyncCreativesRequest before ``_impl`` runs, so the
+        request boundary refuses the omission and the per-creative branch never runs. No
+        transport could deliver the payload the old assertion described.
+
+        The obligation reads "naming it", meaning format_id. That over-specifies the pin:
+        core/creative-asset.json identifies a creative by format_id OR by format_kind, so
+        omitting format_id breaks the oneOf rather than a required-field rule, and neither
+        field is individually at fault. The buyer is owed the item and the keyword, which
+        is what the assertion below grades.
         """
-        with CreativeSyncEnv() as env:
-            env.setup_default_data()
-
-            # Pass a creative dict missing format_id entirely
-            response = env.call_impl(
+        # Graded on the pydantic rejection and the FIELD PATH production derives from it.
+        # This used to open adcp_validation_boundary itself to reproduce what the transports
+        # did; they no longer do, so the wrapper simulated a frame that is gone. The typed
+        # error and its code are produced at the transport boundary and graded there
+        # (tests/unit/test_validation_error_at_the_boundary.py).
+        with pytest.raises(ValidationError) as exc_info:
+            sync_creatives_request(
                 creatives=[
                     {
                         "creative_id": "c_no_format",
@@ -56,18 +69,21 @@ class TestMissingFormatIdRejectedThroughImpl:
                 ],
             )
 
-        # The impl catches the ValidationError from CreativeAsset parsing
-        # and produces a failed result instead of raising
-        assert len(response.creatives) == 1
-        result = response.creatives[0]
-        assert result.creative_id == "c_no_format"
-        assert result.action == "failed"
-        assert result.errors is not None
-        assert len(result.errors) > 0
-        error_msgs = [e.message if hasattr(e, "message") else str(e) for e in result.errors]
-        assert any("format_id" in msg.lower() for msg in error_msgs), (
-            f"Expected error about format_id, got: {error_msgs}"
-        )
+        # WHICH field was rejected is graded on the structured `field` pointer, not on the
+        # sentence — the sentence is a CODE_TABLE function of the code and cannot name it.
+        # The CODE this becomes is INVALID_REQUEST and is graded once, on the wire, in
+        # tests/unit/test_validation_error_at_the_boundary.py; asserting it off the pydantic
+        # exception here is not possible (it carries no code) and would not grade the wire.
+        #
+        # THE ITEM, not "format_id". core/creative-asset.json identifies a creative by
+        # format_id OR format_kind, so omitting format_id is a oneOf failure, and
+        # core/error.json puts a oneOf's RFC 6901 pointer at the object -- no single field is
+        # at fault when both branches are legal. Asserting "format_id" demands that the seller
+        # name a field the buyer was never required to send. The obligation's "naming it" is
+        # over-specified against the pin; what the buyer is owed, and gets, is the item plus
+        # the keyword that says which rule it broke.
+        assert first_validation_error_field(exc_info.value) == "creatives[0]"
+        assert exc_info.value.errors()[0]["type"] == "oneOf"
 
 
 # ---------------------------------------------------------------------------
@@ -197,7 +213,14 @@ class TestSyncCreativesRESTRoute:
                         "creative_id": "c_rest_sync_test",
                         "name": "REST Sync Test Creative",
                         "format_id": {"id": "display_300x250", "agent_url": DEFAULT_AGENT_URL},
-                        "media_url": "https://example.com/image.png",
+                        # `assets` is the AdCP 3.1.1 spelling; `media_url` is not a Creative
+                        # field in the pinned schema and never was one this route implemented.
+                        # It reached _impl only because the hand-written REST body typed
+                        # creatives as list[dict[str, Any]], so any key passed the boundary
+                        # untouched. The body is derived from the DTO now, and MCP has always
+                        # announced a typed Creative array, so both transports reject it in
+                        # dev/CI (extra="forbid"); production would ignore it (extra="ignore").
+                        "assets": build_assets(image_spec("image", url="https://example.com/image.png")),
                     }
                 ],
             )

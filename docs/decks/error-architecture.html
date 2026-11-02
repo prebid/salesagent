@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Error architecture — one way to raise, one way to assert</title>
+<style>
+:root{
+  --bg:#fbfaf8; --fg:#1c1b19; --muted:#6b6660; --rule:#e2ded8; --card:#fff;
+  --accent:#8a3324; --good:#2f6b45; --bad:#a03328; --code-bg:#f4f1ec;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){
+  --bg:#16151a; --fg:#e9e6e1; --muted:#98928a; --rule:#2e2c33; --card:#1d1c22;
+  --accent:#e08a6a; --good:#7fc79a; --bad:#e2796a; --code-bg:#232128;
+}}
+:root[data-theme=dark]{
+  --bg:#16151a; --fg:#e9e6e1; --muted:#98928a; --rule:#2e2c33; --card:#1d1c22;
+  --accent:#e08a6a; --good:#7fc79a; --bad:#e2796a; --code-bg:#232128;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+  font:16px/1.6 ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+.wrap{max-width:60rem;margin:0 auto;padding:0 1.5rem}
+section{min-height:100vh;display:flex;flex-direction:column;justify-content:center;
+  padding:4rem 0;border-bottom:1px solid var(--rule)}
+section:last-child{border-bottom:0}
+h1{font-size:clamp(2rem,5vw,3.2rem);line-height:1.1;margin:0 0 1rem;letter-spacing:-.02em}
+h2{font-size:clamp(1.4rem,3.4vw,2.1rem);line-height:1.15;margin:0 0 1.4rem;letter-spacing:-.015em}
+h3{font-size:1.05rem;margin:2rem 0 .6rem;color:var(--accent);
+  text-transform:uppercase;letter-spacing:.08em;font-weight:650}
+p{margin:0 0 1rem;max-width:52rem}
+.lede{font-size:1.2rem;color:var(--muted);max-width:46rem}
+.kicker{font-size:.8rem;text-transform:uppercase;letter-spacing:.14em;
+  color:var(--muted);margin-bottom:1rem;font-weight:650}
+pre{background:var(--code-bg);border:1px solid var(--rule);border-radius:8px;
+  padding:1rem 1.1rem;overflow-x:auto;font-size:.85rem;line-height:1.55;margin:0 0 1rem;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  background:var(--code-bg);padding:.1em .35em;border-radius:4px;font-size:.9em}
+pre code{background:none;padding:0;font-size:inherit}
+.del{color:var(--bad)} .add{color:var(--good)} .cm{color:var(--muted)}
+table{border-collapse:collapse;width:100%;margin:0 0 1rem;font-size:.92rem;display:block;overflow-x:auto}
+th,td{text-align:left;padding:.55rem .8rem;border-bottom:1px solid var(--rule);vertical-align:top}
+th{font-weight:650;color:var(--muted);font-size:.8rem;text-transform:uppercase;letter-spacing:.06em}
+td.num{text-align:right;font-variant-numeric:tabular-nums;font-family:ui-monospace,monospace}
+.grid{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));margin:1rem 0}
+.card{background:var(--card);border:1px solid var(--rule);border-radius:10px;padding:1.1rem 1.2rem}
+.card .n{font-size:2.1rem;font-weight:680;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.card .l{font-size:.85rem;color:var(--muted);margin-top:.2rem}
+.two{display:grid;gap:1.2rem;grid-template-columns:1fr 1fr}
+@media(max-width:52rem){.two{grid-template-columns:1fr}}
+.note{border-left:3px solid var(--accent);padding:.3rem 0 .3rem 1rem;color:var(--muted);margin:1.2rem 0}
+.warn{border-left:3px solid var(--bad);padding:.7rem 0 .7rem 1rem;margin:1.2rem 0}
+ul{margin:0 0 1rem;padding-left:1.2rem} li{margin-bottom:.5rem;max-width:52rem}
+.rule-list{list-style:none;padding:0;counter-reset:r}
+.rule-list li{counter-increment:r;padding-left:2.4rem;position:relative;margin-bottom:1rem}
+.rule-list li::before{content:counter(r);position:absolute;left:0;top:.1rem;
+  width:1.6rem;height:1.6rem;border-radius:50%;background:var(--accent);color:var(--bg);
+  display:grid;place-items:center;font-size:.8rem;font-weight:700}
+.nav{position:fixed;top:0;left:0;right:0;height:3px;background:transparent;z-index:9}
+.nav i{display:block;height:100%;background:var(--accent);width:0}
+footer{padding:3rem 0;color:var(--muted);font-size:.85rem}
+@media print{section{min-height:auto;page-break-after:always;padding:1.5rem 0}.nav{display:none}}
+</style></head><body>
+<div class="nav"><i id="pg"></i></div>
+<div class="wrap">
+
+<section>
+  <div class="kicker">Internal engineering brief · Prebid Sales Agent</div>
+  <h1>One way to raise an error.<br>One way to assert it.</h1>
+  <p class="lede">We deleted the ability to write a buyer-facing error message. This is what replaced it, why, and how you use it.</p>
+  <div class="grid" style="margin-top:2.5rem">
+    <div class="card"><div class="n">315 → 1</div><div class="l">places that can author buyer-facing error text</div></div>
+    <div class="card"><div class="n">100</div><div class="l">codes in one table — 92 loaded from the SDK wheel, 8 ours</div></div>
+    <div class="card"><div class="n">−6,557</div><div class="l">net lines across 370 files</div></div>
+  </div>
+</section>
+
+<section>
+  <div class="kicker">The problem</div>
+  <h2>Every raise site was writing a published document</h2>
+  <p><code>adcp_error_for()</code> returns any <code>AdCPError</code> unchanged. So the string you typed at the raise site <em>was</em> the wire. Not a log line — the document the buyer receives.</p>
+  <table>
+    <tr><th>What we had</th><th class="num">Count</th></tr>
+    <tr><td>Places that could author a buyer-facing message</td><td class="num">315</td></tr>
+    <tr><td>Places that could decide an error code</td><td class="num">~65</td></tr>
+    <tr><td>Exception subclasses declaring <code>_default_message</code></td><td class="num">0 of 42</td></tr>
+    <tr><td>Subclasses declaring <code>_default_suggestion</code></td><td class="num">2 of 42</td></tr>
+    <tr><td>Subclasses hand-copying <code>_default_recovery</code> out of the spec file</td><td class="num">36 of 42</td></tr>
+    <tr><td>Raise sites interpolating a caught exception onto the wire</td><td class="num">25</td></tr>
+  </table>
+  <div class="note">The last two rows together are the whole story: someone opened <code>error-code.json</code>, copied <strong>one of its three fields</strong> per class, left <code>message</code> and <code>suggestion</code> sitting in the same JSON object, and then wrote a 150-line guard to check the copy hadn't drifted from the file it came from.</div>
+  <p>From any single class, copying <code>recovery</code> is correct. From any single raise site, writing a message is correct. It is only wrong at 42 and at 315.</p>
+</section>
+
+<section>
+  <div class="kicker">What the spec actually says</div>
+  <h2>The code is an open label. The recovery is the closed contract.</h2>
+  <p>From <code>core/error.json</code>, AdCP 3.1.1 — verbatim:</p>
+  <pre><code>"The error-code vocabulary is <strong>open</strong>: error.code is wire-typed string
+ (not a closed enum), the standard codes published in enums/error-code.json
+ are <strong>documentary</strong>, and senders MAY emit codes outside that set.
+ Receivers MUST decode unknown codes — <strong>read error.recovery</strong> for the
+ recovery classification."</code></pre>
+  <p>Two consequences we had backwards:</p>
+  <ul>
+    <li>Our platform-specific codes were <strong>legal all along</strong>. <code>ERROR_CODE_MAPPING</code> (42 entries) and <code>to_wire_error_code</code> were collapsing them onto spec codes — discarding information the spec asks senders to keep.</li>
+    <li><code>recovery</code> is the field receivers branch on, it is closed to three values, and the schema says implementations <strong>must not</strong> override it. It should never have been a per-class hand-copy.</li>
+  </ul>
+</section>
+
+<section>
+  <div class="kicker">The solution</div>
+  <h2>One table. The class declares a code and nothing else.</h2>
+  <div class="two">
+    <div>
+      <h3>src/core/errors/codes.py</h3>
+      <pre><code>Recovery      correctable | transient | terminal
+AppErrorCode  our 8 platform codes
+ErrorCodeT    = ErrorCode | AppErrorCode
+CodeEntry     recovery, suggestion, message, status
+CODE_TABLE    100 entries</code></pre>
+      <p style="font-size:.9rem;color:var(--muted)">The 92 spec entries are <strong>loaded from the installed wheel at import</strong>, not transcribed. A loaded table cannot drift, so there is nothing for a guard to verify. Only the 8 platform entries are hand-written, in the same fields. <code>status</code> is the exception: the pin fixes the 4xx/5xx band per code but not the number, so the numbers are authored here — keyed by code, never by class.</p>
+    </div>
+    <div>
+      <h3>The exception</h3>
+      <pre><code>class AdCPValidationError(AdCPError):
+    _code = ErrorCode.VALIDATION_ERROR</code></pre>
+      <p style="font-size:.9rem;color:var(--muted)">That is the entire subclass. <code>message</code>, <code>suggestion</code>, <code>recovery</code> and the HTTP <code>status_code</code> resolve from the table by code. The status was the last per-class knob, and it was removed once a subclass was found re-coding itself to INVALID_REQUEST while keeping its parent's 404. <code>_code</code> is a <code>ClassVar</code>, never a constructor parameter, so no instance can change its own code.</p>
+      <h3>Vendor names left the wire</h3>
+      <p style="font-size:.9rem;color:var(--muted)"><code>GAM_UPDATE_FAILED</code> → <code>AD_SERVER_UPDATE_FAILED</code>. The buyer must not learn which ad server we run.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="kicker">How you raise now</div>
+  <h2>You cannot write the sentence. You supply the facts.</h2>
+  <pre><code><span class="cm"># before — the f-string IS the buyer-facing document</span>
+<span class="del">raise AdCPValidationError(
+    f"Per AdCP spec, format_ids must be FormatId objects with {{agent_url, id}}. "
+    f"Received {fmt_id!r} in {where}."
+)</span>
+
+<span class="cm"># after — code carries the sentence; you carry the data</span>
+<span class="add">raise AdCPValidationError(
+    field=field,
+    details={**where, "received": fmt_id, "expected": "FormatId object"},
+)</span></code></pre>
+  <h3>Where a caught exception goes</h3>
+  <pre><code><span class="add">raise AdCPValidationError(field=field, details=dict(where), internal_detail=e) from e</span>
+<span class="cm"># internal_detail reaches the SERVER LOG only. It never reaches the buyer.</span></code></pre>
+  <div class="note">There is no <code>message=</code>, no <code>suggestion=</code>, no <code>recovery=</code> parameter. Not discouraged — <strong>absent</strong>. A raise site that wants to say something has <code>field</code>, <code>details</code>, and <code>internal_detail</code>.</div>
+</section>
+
+<section>
+  <div class="kicker">How you raise — worked examples</div>
+  <h2>Five shapes that cover almost everything</h2>
+
+  <h3>1 · The buyer sent something invalid</h3>
+  <pre><code>raise AdCPValidationError(field="packages[0].budget")
+<span class="cm"># field is the error.json pointer naming WHICH request field was rejected.
+# message, suggestion and recovery all resolve from VALIDATION_ERROR's table entry.</span></code></pre>
+
+  <h3>2 · …and you want to say what you expected</h3>
+  <pre><code>raise AdCPValidationError(
+    field=field,
+    details={"received": fmt_id, "expected": "FormatId object"},
+)</code></pre>
+
+  <h3>3 · A referenced entity does not exist — use a declared shape</h3>
+  <pre><code>raise AdCPReferenceNotFoundError(
+    field="package_ids[2]",
+    details=ProductRefDetails(missing_product_ids=["prod_9", "prod_11"]),
+)
+<span class="cm"># ProductRefDetails extends EntityRefDetails, so account_id / media_buy_id /
+# package_id / product_id are available on it too — you cannot invent a fifth key.</span></code></pre>
+
+  <h3>4 · A third party failed — the raw text goes to the log, never the buyer</h3>
+  <pre><code>except httpx.HTTPError as e:
+    raise AdCPServiceUnavailableError(
+        details=UpstreamCallDetails(agent_name=agent.name, status_code=resp.status_code),
+        internal_detail=e,          <span class="cm"># server log only</span>
+    ) from e
+<span class="cm"># Note what is absent: no f-string, no str(e), no hostname. The URL of a
+# seller-configured agent is not the buyer's business.</span></code></pre>
+
+  <h3>5 · A batch where some items failed</h3>
+  <pre><code>raise AdCPBulkUpdateError(details=ProblemsDetails(problems=[
+    ErrorProblem(code=ErrorCode.CREATIVE_NOT_FOUND,
+                 subject_type="creative", subject_id="cr_7", field="creative_ids[0]"),
+    ErrorProblem(code=AppErrorCode.AD_SERVER_CREATE_FAILED,
+                 subject_type="package", subject_id="pkg_2"),
+]))
+<span class="cm"># subject_type is a Literal, so "creatives" or "Creative" will not compile.</span></code></pre>
+
+  <div class="note">The class you raise decides the code. The code decides the message, the suggestion and the recovery. You decide the <em>facts</em>: <code>field</code>, <code>details</code>, <code>internal_detail</code>.</div>
+</section>
+
+<section>
+  <div class="kicker">The part that has been a struggle</div>
+  <h2>Where each thing you pass actually lands</h2>
+  <p>Asserting from BDD is hard when you cannot see the mapping. Here is the whole chain for example 3 above.</p>
+
+  <pre><code><span class="cm">// what reaches the wire</span>
+{
+  "adcp_error": {                     <span class="cm">// envelope layer</span>
+    "code": "REFERENCE_NOT_FOUND",    <span class="cm">// from the CLASS's _code, verbatim</span>
+    "message": "...",                 <span class="cm">// from CODE_TABLE[code].message</span>
+    "suggestion": "...",              <span class="cm">// from CODE_TABLE[code].suggestion</span>
+    "recovery": "correctable",        <span class="cm">// from CODE_TABLE[code].recovery</span>
+    "field": "package_ids[2]",        <span class="cm">// your field=</span>
+    "details": {"missing_product_ids": ["prod_9","prod_11"]}   <span class="cm">// details.to_wire()</span>
+  },
+  "errors": [ { ...the same object... } ],   <span class="cm">// payload layer</span>
+  "context": { ... }                         <span class="cm">// only when exc.context is set</span>
+}</code></pre>
+
+  <table>
+    <tr><th>You pass</th><th>Lands at</th><th>Assert with</th></tr>
+    <tr><td>the class you raise</td><td><code>code</code>, both layers, verbatim</td><td>first positional arg</td></tr>
+    <tr><td><em>nothing</em> — derived</td><td><code>message</code>, <code>suggestion</code>, <code>recovery</code></td><td><code>recovery=</code> (defaults from the table), <code>require_suggestion=True</code></td></tr>
+    <tr><td><code>field=</code></td><td><code>errors[0].field</code></td><td><code>field=</code></td></tr>
+    <tr><td><code>details=</code></td><td><code>errors[0].details</code></td><td><code>details=</code> — <strong>subset check</strong></td></tr>
+    <tr><td><code>retry_after=</code></td><td><code>errors[0].retry_after</code></td><td><code>retry_after=</code></td></tr>
+    <tr><td><code>internal_detail=</code></td><td><strong>the server log. Nowhere on the wire.</strong></td><td>— (not assertable, by design)</td></tr>
+  </table>
+
+  <pre><code><span class="cm"># the whole assertion, in a Then step</span>
+result.assert_wire_error(
+    "REFERENCE_NOT_FOUND",
+    field="package_ids[2]",
+    details={"missing_product_ids": ["prod_9", "prod_11"]},
+)</code></pre>
+
+  <h3>Four things that used to bite</h3>
+  <ul>
+    <li><strong>The error appears twice.</strong> <code>adcp_error</code> at envelope level and <code>errors[0]</code> at payload level. <code>assert_wire_error</code> reads the normalized envelope, so you never choose — and <code>require_suggestion</code> checks <em>both</em> layers.</li>
+    <li><strong><code>to_dict()</code> is a different shape.</strong> It emits <code>error_code</code>; the wire emits <code>code</code>. <code>to_dict()</code> is for audit logging, not the wire. If you are asserting against <code>error_code</code>, you are asserting the wrong artifact.</li>
+    <li><strong>You do not pass <code>recovery</code>.</strong> It defaults to the pinned table value, so the assertion is non-vacuous without per-scenario duplication. Passing a wrong one fails — that is the point.</li>
+    <li><strong>An unemittable code fails loudly.</strong> <code>assert_wire_error</code> checks <code>CODE_TABLE</code> first: <em>"…is not an emittable error code, so no raise site can put it on the wire. Reconcile the feature to a code production can emit."</em> A feature file demanding an invented code now says so, instead of silently xfailing.</li>
+  </ul>
+  <div class="note"><strong>Never hand-roll envelope parsing in a step.</strong> <code>assert_wire_error</code> is transport-independent — the same call holds on <code>mcp</code>, <code>a2a</code>, <code>rest</code> and <code>e2e_rest</code>, because the dispatcher normalizes the envelope per transport before you see it.</div>
+</section>
+
+<section>
+  <div class="kicker">What happened to details</div>
+  <h2><code>details</code> is a declared class, not a dict</h2>
+  <p><code>src/core/errors/details.py</code> — the shapes are typed, and they compose:</p>
+  <pre><code>ErrorDetails                 <span class="cm">base</span>
+├── VersionUnsupportedDetails  supported_versions, supported_majors, build_version…
+├── EntityRefDetails           account_id, media_buy_id, package_id, product_id
+│   └── ProductRefDetails      + missing_product_ids
+├── UpstreamCallDetails        agent_name, url, status, status_code
+├── ProblemsDetails            problems: list[ErrorProblem]
+└── AdapterFailureDetails      = EntityRef + UpstreamCall + Problems
+
+ErrorProblem   code, subject_type: Literal["creative"|"product"|"package"|"account"],
+               subject_id, field</code></pre>
+  <p>A per-entity failure inside a batch is an <code>ErrorProblem</code> with a typed <code>subject_type</code> — not a free-form string a caller has to parse. Adapter failures compose three shapes rather than inventing a fourth dict.</p>
+</section>
+
+<section>
+  <div class="kicker">How you assert — BDD</div>
+  <h2>Assert the response the code returned. Never a reconstruction.</h2>
+  <pre><code><span class="cm"># one helper, on the result you already hold</span>
+result.assert_wire_error(
+    "VALIDATION_ERROR",
+    recovery="correctable",       <span class="cm"># optional</span>
+    field="packages[0].budget",   <span class="cm"># optional</span>
+    details={"expected": "FormatId object"},
+    require_suggestion=True,
+)</code></pre>
+  <h3>What we deleted, and why it matters to you</h3>
+  <ul>
+    <li><strong><code>_CODE_TO_CLASS</code> is gone.</strong> Tests no longer rebuild an exception from a wire payload and assert on the rebuild. The reconstruction was lossy — it could pass while the real envelope was wrong.</li>
+    <li><strong>The <code>IMPL</code> pseudo-transport is gone.</strong> It had no wire, so any assertion routed through it was grading nothing. Every scenario now runs a real transport.</li>
+    <li><strong>406 "message should contain …" steps are gone.</strong> They asserted a copy of <code>CODE_TABLE</code>'s own sentence — a test that can only fail if you edit the table. Assert the <em>code</em> and the <em>field pointer</em>; the sentence is derived.</li>
+  </ul>
+  <p>Transports a scenario runs against: <code>mcp</code>, <code>a2a</code>, <code>rest</code>, <code>e2e_rest</code>.</p>
+  <div class="note">Rule of thumb: if your assertion would still pass when the buyer received a different code, it is not grading the error.</div>
+</section>
+
+<section>
+  <div class="kicker">DTOs — what follows</div>
+  <h2>The same move, applied to the payload</h2>
+  <p>Typed <code>details</code> is one instance of a larger change: shapes on the wire are declared, not assembled. Also landed:</p>
+  <ul>
+    <li>Pricing-option models are owned locally so non-spec fields stay off the wire.</li>
+    <li><code>get_media_buys</code> got the REST route 61 scenarios were waiting for.</li>
+    <li>An absent <code>adcp_version</code> now means the pinned version, not v2.</li>
+    <li>An invented error code is unaddable anywhere — not merely where tests happen to look.</li>
+  </ul>
+  <div class="warn"><strong>Two things still moving — do not present this as finished.</strong>
+  <ul style="margin:.6rem 0 0">
+    <li><code>salesagent-2cco1</code> (open, P1): we cannot control <code>extra</code> on SDK <code>RootModel</code>s, so non-spec fields can still reach the wire through them.</li>
+    <li><code>salesagent-rys3u.2</code> (in progress): <strong>48 of 156</strong> <code>details=</code> arguments are declared classes; <strong>104 are still dict literals</strong>. <code>_details_to_wire()</code> keeps a <code>Mapping</code> branch as scaffolding until the last one converts.</li>
+  </ul></div>
+</section>
+
+<section>
+  <div class="kicker">Results</div>
+  <h2>What it cost and what came out</h2>
+  <div class="grid">
+    <div class="card"><div class="n">315 → 1</div><div class="l">message-authorship points in <code>src/</code></div></div>
+    <div class="card"><div class="n">143 → 132</div><div class="l">structural guard files</div></div>
+    <div class="card"><div class="n">26 / 26</div><div class="l">epic steps complete</div></div>
+  </div>
+  <table>
+    <tr><th>Deleted</th><th class="num">Lines</th></tr>
+    <tr><td><code>test_architecture_error_message_provenance.py</code> — a 1,116-line AST scanner built to detect what a signature now forbids</td><td class="num">1,116</td></tr>
+    <tr><td><code>test_error_boundary_translation.py</code></td><td class="num">1,114</td></tr>
+    <tr><td><code>test_a2a_error_responses.py</code></td><td class="num">1,092</td></tr>
+    <tr><td><code>test_adcp_exceptions.py</code></td><td class="num">946</td></tr>
+    <tr><td><code>test_error_format_consistency.py</code></td><td class="num">882</td></tr>
+    <tr><td>…plus 10 more guards and the suggestion/recovery conformance oracles</td><td class="num"></td></tr>
+  </table>
+  <p>Those unit tests all asserted on <strong>authored error text</strong>. Once the text is derived from a table, there is nothing left at unit level to assert — the only honest grading is the wire.</p>
+</section>
+
+<section>
+  <div class="kicker">The rules</div>
+  <h2>What to do differently on Monday</h2>
+  <ol class="rule-list">
+    <li><strong>Raise, then stop.</strong> <code>raise AdCPValidationError(field=…, details=…)</code>. The transport boundary owns the envelope. Do not catch and re-raise to add prose.</li>
+    <li><strong>Third-party text goes to <code>internal_detail=</code>.</strong> Never into anything buyer-facing. It is logged server-side for you.</li>
+    <li><strong>Need a new error? Add a class.</strong> The class is how you raise it — that has not changed. What changed is what the class declares: a code, and nothing else. If the code is a spec code it is already in the table. A platform code additionally needs an <code>AppErrorCode</code> member and its <code>CodeEntry</code> — one cannot exist without the other.</li>
+    <li><strong><code>recovery</code> lives in the table, keyed by the code your class declares</strong> — not on the class and not at the raise site. It is a read-only property. If a case needs a different recovery, it needs a different code; the vocabulary is open, so that is cheap.</li>
+    <li><strong>Assert the code and the field pointer.</strong> Not the sentence. A test that asserts derived prose can only fail when you edit the table.</li>
+    <li><strong>Grade on the wire, across transports.</strong> If it did not go through <code>mcp</code>, <code>a2a</code>, <code>rest</code> or <code>e2e_rest</code>, it is not graded.</li>
+    <li><strong>Reach for a declared details class</strong> before adding a dict key. The shapes compose.</li>
+  </ol>
+</section>
+
+<footer class="wrap">
+  Sources: <code>src/core/errors/{codes,details}.py</code> · <code>src/core/exceptions.py</code> ·
+  <code>tests/harness/transport.py</code> · epic <code>salesagent-3dawm</code> (26/26).
+  Spec: AdCP 3.1.1 via <code>adcp==6.6.0</code>, <code>core/error.json</code> and <code>enums/error-code.json</code>.
+  Measured 2026-08-25.
+</footer>
+</div>
+<script>
+const pg=document.getElementById('pg');
+addEventListener('scroll',()=>{const h=document.body.scrollHeight-innerHeight;
+  pg.style.width=(h>0?(scrollY/h*100):0)+'%';},{passive:true});
+const secs=[...document.querySelectorAll('section')];
+addEventListener('keydown',e=>{
+  if(!['ArrowDown','ArrowRight','PageDown',' ','ArrowUp','ArrowLeft','PageUp'].includes(e.key))return;
+  e.preventDefault();
+  const fwd=['ArrowDown','ArrowRight','PageDown',' '].includes(e.key);
+  const cur=secs.findIndex(s=>s.getBoundingClientRect().top>-innerHeight/2);
+  const i=Math.max(0,Math.min(secs.length-1,(cur<0?secs.length-1:cur)+(fwd?1:-1)));
+  secs[i].scrollIntoView({behavior:'smooth'});
+});
+</script>
+</body></html>

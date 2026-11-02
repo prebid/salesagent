@@ -2,27 +2,17 @@ import logging
 from typing import Any
 
 from fastmcp import FastMCP
-from fastmcp.server.context import Context
+from fastmcp.tools.tool import Tool, ToolResult
 from rich.console import Console
-from sqlalchemy import select
 
 from src.adapters.mock_creative_engine import MockCreativeEngine
-from src.core.exceptions import AdCPAuthenticationError
-from src.core.transport_helpers import resolve_identity_from_context
 
 logger = logging.getLogger(__name__)
 
 # Database models
 
 # Other imports
-from src.core.config_loader import (
-    get_current_tenant,
-    load_config,
-    set_current_tenant,
-)
 from src.core.database.database import init_db
-from src.core.database.database_session import get_db_session
-from src.core.database.models import Product as ModelProduct
 from src.core.database.models import (
     WorkflowStep,
 )
@@ -58,21 +48,6 @@ Task = WorkflowStep
 # NOTE: Database initialization moved to startup script to avoid import-time failures
 # The run_all_services.py script handles database initialization before starting the MCP server
 
-# Try to load config, but use defaults if no tenant context available
-try:
-    config = load_config()
-except (RuntimeError, Exception) as e:
-    # Use minimal config for test environments or when DB is unavailable
-    # This handles both "No tenant context set" and database connection errors
-    if "No tenant context" in str(e) or "connection" in str(e).lower() or "operational" in str(e).lower():
-        config = {
-            "creative_engine": {},
-            "dry_run": False,
-            "adapters": {"mock": {"enabled": True}},
-            "ad_server": {"adapter": "mock", "enabled": True},
-        }
-    else:
-        raise
 
 from contextlib import asynccontextmanager
 
@@ -91,9 +66,9 @@ def _background_schedulers_enabled() -> bool:
     webhooks, so an accidental disable is logged at WARNING (below) to make it
     visible in production logs.
     """
-    import os
+    from src.core.config import get_settings
 
-    return os.getenv("ADCP_RUN_BACKGROUND_SCHEDULERS", "true").lower() != "false"
+    return get_settings().runtime.adcp_run_background_schedulers
 
 
 # Lifespan context manager for FastMCP startup/shutdown
@@ -165,14 +140,10 @@ mcp = FastMCP(
     lifespan=lifespan_context,
 )
 
-# Centralized identity resolution — runs before every tool call.
-# Tools read identity via ctx.get_state('identity') instead of calling
-# resolve_identity_from_context() directly.
-from src.core.mcp_auth_middleware import MCPAuthMiddleware
-from src.core.mcp_compat_middleware import RequestCompatMiddleware
-
-mcp.add_middleware(MCPAuthMiddleware())
-mcp.add_middleware(RequestCompatMiddleware())
+# (Deleted) MCPAuthMiddleware resolved an identity before every tool call and stashed it on
+# FastMCP context state for RegistryTool.run to read. The boundary resolves now, from the
+# credential the tool hands it, so this was pure double resolution -- measured at 2x
+# resolve_identity per MCP request while it stood.
 
 # Initialize creative engine with minimal config (will be tenant-specific later)
 creative_engine_config: dict[str, Any] = {}
@@ -199,24 +170,8 @@ from src.core.context_manager import ContextManager
 
 context_mgr = ContextManager()
 
-# --- Adapter Configuration ---
-# Get adapter from config, fallback to mock
-SELECTED_ADAPTER = ((config.get("ad_server", {}).get("adapter") or "mock") if config else "mock").lower()
-AVAILABLE_ADAPTERS = ["mock", "gam", "kevel", "triton", "triton_digital"]
-
 # --- In-Memory State (already initialized above, just adding context_map) ---
 context_map: dict[str, str] = {}  # Maps context_id to media_buy_id
-
-# --- Dry Run Mode ---
-DRY_RUN_MODE = config.get("dry_run", False)
-if DRY_RUN_MODE:
-    console.print("[bold yellow]🏃 DRY RUN MODE ENABLED - Adapter calls will be logged[/bold yellow]")
-
-# Display selected adapter
-if SELECTED_ADAPTER not in AVAILABLE_ADAPTERS:
-    console.print(f"[bold red]❌ Invalid adapter '{SELECTED_ADAPTER}'. Using 'mock' instead.[/bold red]")
-    SELECTED_ADAPTER = "mock"
-console.print(f"[bold cyan]🔌 Using adapter: {SELECTED_ADAPTER.upper()}[/bold cyan]")
 
 
 # --- Creative Conversion Helper ---
@@ -248,33 +203,6 @@ console.print(f"[bold cyan]🔌 Using adapter: {SELECTED_ADAPTER.upper()}[/bold 
 # Dry run logs are now handled by the adapters themselves
 
 
-def get_product_catalog(tenant_id: str | None = None) -> list[Product]:
-    """Get products for the current tenant.
-
-    Uses shared convert_product_model_to_schema() to ensure consistent
-    conversion logic across all product catalog providers.
-    """
-    from sqlalchemy.orm import selectinload
-
-    from src.core.product_conversion import convert_product_model_to_schema
-
-    if tenant_id is None:
-        tenant = get_current_tenant()
-        tenant_id = tenant["tenant_id"]
-
-    with get_db_session() as session:
-        stmt = select(ModelProduct).filter_by(tenant_id=tenant_id).options(selectinload(ModelProduct.pricing_options))
-        products = session.scalars(stmt).all()
-
-        loaded_products = []
-        for product in products:
-            loaded_products.append(convert_product_model_to_schema(product))
-
-    # convert_product_model_to_schema returns LibraryProduct,
-    # which our Product extends - safe cast at runtime
-    return loaded_products
-
-
 # Creative macro support is now simplified to a single creative_macro string
 # that AEE can provide as a third type of provided_signal.
 # Ad servers like GAM can inject this string into creatives.
@@ -286,24 +214,6 @@ if __name__ == "__main__":
 # Always add health check endpoint
 
 # --- Strategy and Simulation Control ---
-from src.core.strategy import StrategyManager
-
-
-def get_strategy_manager(context: Context | None) -> StrategyManager:
-    """Get strategy manager for current context."""
-    identity = resolve_identity_from_context(context, require_valid_token=True, protocol="mcp")
-
-    if not identity or not identity.tenant_id:
-        raise AdCPAuthenticationError("No tenant configuration found")
-
-    if identity.tenant and isinstance(identity.tenant, dict):
-        set_current_tenant(identity.tenant)
-    else:
-        tenant_config = get_current_tenant()
-        if not tenant_config:
-            raise AdCPAuthenticationError("No tenant configuration found")
-
-    return StrategyManager(tenant_id=identity.tenant_id, principal_id=identity.principal_id)
 
 
 # Health/debug routes moved to src/routes/health.py (FastAPI migration).
@@ -317,50 +227,202 @@ def get_strategy_manager(context: Context | None) -> StrategyManager:
 # get agent-facing descriptions and annotations (readOnlyHint, destructiveHint,
 # idempotentHint). Non-matching tools keep their existing docstrings.
 from adcp.server.mcp_tools import ADCP_TOOL_DEFINITIONS
+from adcp.types.generated_poc.core.version_envelope import AdcpVersionEnvelope
+
+# Request DTOs named explicitly for tools that do not reach one through a builder. The
+# advertised shape is "DTO fields INTERSECT the implementation's arguments", so the DTO is
+# not optional -- _register_tool refuses a tool without one.
 from mcp.types import ToolAnnotations
 
-from src.core.tool_error_logging import with_error_logging
-from src.core.tools.accounts import list_accounts, sync_accounts
-from src.core.tools.capabilities import get_adcp_capabilities
-from src.core.tools.creative_formats import list_creative_formats
-from src.core.tools.creatives import list_creatives, sync_creatives
-from src.core.tools.media_buy_create import create_media_buy
-from src.core.tools.media_buy_delivery import get_media_buy_delivery
-from src.core.tools.media_buy_list import get_media_buys
-from src.core.tools.media_buy_update import update_media_buy
-from src.core.tools.performance import update_performance_index
-from src.core.tools.products import get_products
-from src.core.tools.properties import list_authorized_properties
-from src.core.tools.task_management import complete_task, get_task, list_tasks
+from src.core.resolved_identity import TransportProtocol
+from src.core.schemas._base import AdcpResponse
+from src.core.signing.capture import HttpExchange, captured_exchange
+from src.core.tools._announced_shape import sdk_grounding
+from src.core.tools._boundary import _response_model_for
+from src.core.tools.registry import TOOLS
 
 _sdk_tool_defs = {td["name"]: td for td in ADCP_TOOL_DEFINITIONS}
 
 
-def _register_tool(fn: Any) -> None:
-    """Register an MCP tool with SDK description and annotations when available."""
-    tool_name = fn.__name__
+#: The scope gate that used to live here is gone: the derivation now applies to EVERY tool,
+#: and _register_tool refuses to register one whose DTO cannot be resolved, so there is no
+#: unlisted-tool state left for a gate to describe.
+#:
+#: It documented two defects that widening the scope would cause. Both have been settled
+#: rather than avoided, which is why the gate could go:
+#:   * update_media_buy.budget widened from number to Budget|number by adopting the DTO type,
+#:     while _build_update_request still did float(budget) -- the advertised payload 500'd.
+#:     The builder now takes the object it advertises; graded by
+#:     TestAdvertisedTypesAreAccepted, which constructs the advertised type and calls the real
+#:     builder. That test exists because the name-dimension rule could not see a TYPE widening.
+#:   * some object-typed parameters carry their description on the referenced $def rather than
+#:     inline. Cosmetic, tracked separately; it never affected what buyers may send.
+
+
+def _register_tool(tool_name: str, spec: Any) -> None:
+    """Register an MCP tool with SDK description, annotations and ADVERTISED SHAPE.
+
+    The request DTO is RESOLVED FROM THE REGISTRY ROW. There is no parameter to pass one
+    explicitly: the escape hatch that allowed it is gone, so "registered with a hand-supplied
+    DTO" is not a state this function can produce.
+
+    It existed for list_tasks, whose pre-3.1.1 vocabulary intersected the SDK model at
+    ``context`` alone. Rebasing that tool onto the spec shape left the parameter with zero
+    users, and a zero-user escape hatch is one refactor away from being used again -- so it
+    is deleted rather than documented as discouraged. A tool that cannot name its request
+    DTO still cannot be registered; it just has exactly one way to name it now.
+
+    RESOLVABLE IS NOT ENOUGH, so there is a second refusal. A DTO authored FROM the
+    wrapper's signature satisfies the intersection by construction and grades nothing -- the
+    tool would advertise whatever we wrote, derived from itself. For a tool THE PINNED SDK
+    DEFINES, the DTO must therefore inherit the SDK's own request model. The condition is
+    derived, not a list: ``sdk_def`` is the same lookup that supplies the description above,
+    so a tool the SDK does not define carries no obligation it cannot meet, and gains one
+    automatically the day it is renamed onto its spec operation. The four tools in that
+    state today cannot be registered at all: this refusal runs at import, so the tree
+    cannot start carrying an ungrounded spec tool.
+    """
     sdk_def = _sdk_tool_defs.get(tool_name)
-    kwargs: dict[str, Any] = {}
-    if sdk_def:
-        kwargs["description"] = sdk_def["description"]
-        if sdk_def.get("annotations"):
-            kwargs["annotations"] = ToolAnnotations(**sdk_def["annotations"])
-    mcp.tool(**kwargs)(with_error_logging(fn))
+    model = spec.dto
+    if model is not None and not issubclass(model, AdcpVersionEnvelope):
+        raise RuntimeError(
+            f"{tool_name} cannot be registered: {model.__name__} does not descend from "
+            f"adcp's AdcpVersionEnvelope. Every request DTO reaches adcp_version and "
+            f"adcp_major_version through it, so a model that does not is not a request in "
+            f"this protocol -- and in practice it means the DTO came from a PARALLEL "
+            f"HIERARCHY rather than from the SDK. That has happened: complete_task once had "
+            f"two hand-written models, CompleteTaskRequest and CompleteTaskRequestLocal, "
+            f"neither a subclass of the other, both descending from SalesAgentBaseModel, "
+            f"differing by three required fields (salesagent-fdkub). Extend the SDK type for "
+            f"this tool, or -- where the SDK ships none -- AdcpVersionEnvelope itself.\n\n"
+            f"This check is UNGATED on purpose. The SDK-grounding refusal below fires only "
+            f"when the SDK defines the tool, which exempts precisely the tools most likely "
+            f"to grow a parallel model."
+        )
+    response_model = _response_model_for(spec.impl)
+    if response_model is not None and not issubclass(response_model, AdcpResponse):
+        raise RuntimeError(
+            f"{tool_name} cannot be registered: {response_model.__name__} does not descend from "
+            f"AdcpResponse, the base carrying the two envelopes every pinned response schema "
+            f"composes at its root (version-envelope and protocol-envelope). The boundary "
+            f"assigns adcp_version and replayed on every response and calls revive() on every "
+            f"replay; a model without the base has nowhere to put them.\n\n"
+            f"A response model that cannot hold an envelope field fails SILENTLY, which is why "
+            f"this is a refusal and not a check: AdCPBaseModel serializes with "
+            f"exclude_none=True, so the field is absent from the wire rather than null.\n\n"
+            f"Add AdcpResponse to the response model's bases, AFTER its SDK type -- base order "
+            f"decides which class's field definitions win, and the SDK type must keep its own "
+            f"(a oneOf branch's const status among them)."
+        )
+    if sdk_def is not None and model is not None and sdk_grounding(model) is None:
+        raise RuntimeError(
+            f"{tool_name} cannot be registered: {model.__name__} does not inherit the SDK's "
+            f"request model. The pinned AdCP version defines this tool, so its vocabulary is "
+            f"the spec's, not ours -- and a DTO written from the wrapper's own signature "
+            f"makes the announced shape tautological, advertising whatever we happened to "
+            f"write. Extend the SDK's "
+            f"request model for this tool -- most likely "
+            f"adcp.types.{tool_name.title().replace('_', '')}Request, though the SDK is the "
+            f"authority on the spelling -- per the Library* alias convention (critical "
+            f"pattern #1), instead of redeclaring its fields."
+        )
+    mcp.add_tool(
+        RegistryTool(
+            name=tool_name,
+            parameters=model.model_json_schema(),
+            description=sdk_def["description"] if sdk_def else None,
+            annotations=ToolAnnotations(**sdk_def["annotations"]) if sdk_def and sdk_def.get("annotations") else None,
+        )
+    )
 
 
-_register_tool(list_accounts)
-_register_tool(sync_accounts)
-_register_tool(get_adcp_capabilities)
-_register_tool(get_products)
-_register_tool(list_creative_formats)
-_register_tool(sync_creatives)
-_register_tool(list_creatives)
-_register_tool(list_authorized_properties)
-_register_tool(create_media_buy)
-_register_tool(update_media_buy)
-_register_tool(get_media_buy_delivery)
-_register_tool(get_media_buys)
-_register_tool(update_performance_index)
-_register_tool(list_tasks)
-_register_tool(get_task)
-_register_tool(complete_task)
+def _mcp_exchange() -> HttpExchange | None:
+    """The captured HTTP message for the MCP request in flight, or None outside one.
+
+    FastMCP exposes the headers (``get_http_headers``) and the Starlette ``Request``
+    (``get_http_request``), but NOT the raw body: by the time a tool runs, the streamable-HTTP
+    transport has already read the JSON-RPC message off the ASGI receive channel itself,
+    without going through that ``Request`` object — so ``await request.body()`` inside a tool
+    would call an exhausted channel rather than return a cache. Checked, because the design
+    note asked for it to be; the answer is that MCP needs the capture middleware and the other
+    two transports could in principle have got by without it.
+
+    What the middleware leaves behind is reachable from here, and that is the whole reason it
+    writes to ``scope["state"]``: ``app.mount("/mcp", mcp_app)`` is a Starlette ``Mount``,
+    which MUTATES the one scope dict rather than copying it, so the dict FastMCP hands back is
+    the dict the middleware wrote to.
+
+    ``RuntimeError`` is the SDK's own signal for "no active HTTP request" — an in-process
+    invocation, or a Docket worker replaying snapshotted headers — and is caught rather than
+    pre-tested because there is no non-raising predicate for it. The answer is None, which is
+    a request presenting no signature, which is what it is.
+    """
+    from fastmcp.server.dependencies import get_http_request
+
+    try:
+        request = get_http_request()
+    except RuntimeError:
+        return None
+    return captured_exchange(request.scope)
+
+
+# MCP registration is DERIVED from the registry: TOOLS decides which tools exist, and this
+# module only registers them. There is no list here to keep in step -- adding a row is
+# sufficient to register a tool, which is what makes TOOLS the single declaration rather than
+# a fourth one.
+#
+# The wrapper is resolved from the row rather than imported by name: it lives in the same
+# module as the row's ``impl``, so ``TOOLS`` supplies the address and this file needs no
+# sixteen imports whose only purpose was to be passed to the call below. A name that does not
+# resolve is a defect in the row, not an optional registration.
+class RegistryTool(Tool):
+    """One registry row, served over MCP.
+
+    ``run`` hands the buyer's argument object to ``serve``, the same entry REST and A2A use,
+    so the one validation and the accepted-shape strip on ``BuyerRequest`` decide what reaches
+    an implementation here too.
+
+    A ``Tool`` subclass rather than a function, because FastMCP validates a FUNCTION tool
+    against a TypeAdapter built from its annotations (``FunctionTool.run`` ->
+    ``get_cached_typeadapter``). With the DTO's fields as parameters, that adapter reached
+    the SDK's nested models first and refused or coerced the payload before any of our code
+    ran -- so the strip was a no-op on MCP, dev rejection came from pydantic and production
+    tolerance from a retry in the compat middleware. Two programs for one policy.
+
+    ``parameters`` is the DTO's own JSON Schema, so the advertised shape is the model rather
+    than a signature reconstructed from it.
+    """
+
+    async def run(self, arguments: dict[str, Any]) -> ToolResult:
+        from fastmcp.server.dependencies import get_http_headers
+
+        from src.core.exceptions import AdcpFailure
+        from src.core.tool_error_logging import AdCPToolError
+        from src.core.tools._boundary import failure_response, serve
+        from src.core.tools._mcp import mcp_result
+        from src.core.tools._wire import to_wire
+
+        try:
+            # The request headers, not an identity: the boundary resolves the caller. Outside
+            # an HTTP request ``get_http_headers`` returns ``{}``, a request presenting
+            # nothing, which the resolver answers AUTH_MISSING on a protected tool.
+            headers = get_http_headers(include_all=True)
+            return mcp_result(await serve(self.name, arguments, headers, TransportProtocol.MCP, _mcp_exchange()))
+        except AdcpFailure as failure:
+            response = failure.response
+        except Exception as exc:
+            # Raised OUTSIDE ``serve`` -- reading the headers, rendering the result -- so no
+            # caller was resolved and the record is unscoped. A tool's own failure never
+            # reaches here. What makes that true is upstream of the boundary: ``failure_response``
+            # runs inside the boundary's own ``except Exception``, so anything it raises lands
+            # HERE, identity-less and echo-less. A dict ``details`` with no ``to_wire`` did,
+            # once, through the one raise site that had dropped the detail type parameter.
+            response = failure_response(TransportProtocol.MCP, self.name, exc)
+        # MCP's wire failure marker is a raised ToolError, and that marker is all this
+        # transport adds: the BODY is the response the boundary built, serialized by the same
+        # function the success path uses.
+        raise AdCPToolError(to_wire(response))
+
+
+for _tool_name, _spec in TOOLS.items():
+    _register_tool(_tool_name, _spec)

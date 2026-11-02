@@ -22,6 +22,7 @@ from tests.helpers.adcp_factories import create_test_package_request
 def test_schema_adcp_format() -> None:
     """AdCP schema validates create-media-buy requests per spec."""
     request = CreateMediaBuyRequest(
+        account={"account_id": "acct_test"},
         brand={"domain": "testbrand.com"},
         po_number="PO-V24-67890",
         packages=[

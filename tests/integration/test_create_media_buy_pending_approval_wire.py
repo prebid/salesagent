@@ -63,12 +63,12 @@ def _assert_submitted_shape(envelope: dict) -> None:
             f"submitted (pending-approval) create must not carry {confirmation_field!r}, "
             f"got {envelope.get(confirmation_field)!r} — the buy is NOT confirmed yet"
         )
-    # Wrapper-owned replay marker: omitted when False on EVERY variant (fresh
-    # submitted must match fresh success — PR #1567 round-3). The replay sibling
-    # test asserts the True case.
-    assert "replayed" not in envelope, (
-        f"fresh submitted create leaked replayed={envelope.get('replayed')!r} — "
-        "the marker is omitted when False (uniform with fresh Success)"
+    # A fresh create is not a replay. `replayed` is a declared ProtocolEnvelope field,
+    # so the assertion is on its VALUE, not its absence — the sibling at the bottom of
+    # this file already reads it that way for the True case.
+    assert not envelope.get("replayed"), (
+        f"fresh submitted create reports replayed={envelope.get('replayed')!r} — "
+        "only a retry that replays a cached response may set it"
     )
 
 

@@ -60,8 +60,7 @@ def assert_rejected(
     *,
     code: str | None = None,
     field: str | None = None,
-    reason: str | None = None,
-    message_contains: str | None = None,
+    keyword: str | None = None,
 ) -> None:
     """Assert the request was rejected, checking WHAT field and WHY.
 
@@ -71,36 +70,64 @@ def assert_rejected(
     Args:
         result: TransportResult from env.call_via()
         code: Expected error code (e.g., "VALIDATION_ERROR").
-        field: Expected field name (e.g., "max_width", "agent_url").
-        reason: Expected error reason (e.g., "Field required",
-            "Input should be a valid integer"). This distinguishes
-            "field missing" from "field has wrong type" on the same field.
-        message_contains: Additional substring that must appear in the error.
+        field: Expected field name (e.g., "max_width", "agent_url"). Matched against the
+            typed ``field`` pointer and the ``issues[].pointer`` paths — the STRUCTURED
+            carriers, never the sentence.
+        keyword: Expected JSON Schema keyword (e.g. "required", "type", "minLength").
+            Replaces ``validation_type``, which took a PYDANTIC token: the wire now
+            carries the pin's ``issues[].keyword`` vocabulary, so asserting a pydantic
+            token would assert something no longer emitted. Still distinguishes "field
+            missing" (``required``) from "field has the wrong type" (``type``) on the
+            same field without reading prose. Note the vocabulary is coarser by design:
+            ``int_parsing`` and ``string_type`` both surface as ``type``, because JSON
+            Schema draws that line in one place.
+
+    The former ``reason`` and ``message_contains`` parameters are GONE. Both pinned the
+    buyer-facing sentence, which is a function of the error CODE through CODE_TABLE — so
+    asserting the code and the sentence together checked the table against itself. Passing
+    either is now a TypeError rather than a convention violation.
     """
     assert result.is_error, f"Expected rejection but got success: {result.payload}"
 
+    # Read the WIRE error object, falling back to the exception only when there is no
+    # envelope -- i.e. a request that failed before reaching a transport. This used to
+    # read getattr(error, "error_code"/"field"/"details") off result.error, which
+    # worked only because the harness rebuilt a production exception from wire bytes;
+    # with that gone (salesagent-3dawm.15) result.error is the raw transport failure
+    # and those attributes do not exist on it.
     error = result.error
-    error_str = str(error)
+    wire = result.wire_error_object()
+    if wire is not None:
+        details = wire.get("details") or {}
+        error_code = wire.get("code")
+        field_pointer = wire.get("field") or ""
+    else:
+        details = getattr(error, "details", None) or {}
+        error_code = getattr(error, "error_code", None) or getattr(error, "code", None)
+        field_pointer = getattr(error, "field", "") or ""
+    # issues[] is the pin's channel for field-level rejections (core/error.json:
+    # "`field` (singular) cannot carry the full pointer map"). It replaced a
+    # hand-rolled details.validation_errors[] carrying loc/msg/type.
+    if wire is not None:
+        entries = wire.get("issues") or []
+    else:
+        entries = [issue.to_wire() for issue in getattr(error, "issues", None) or []]
 
     if code is not None:
-        error_code = getattr(error, "error_code", None)
-        assert error_code == code or code in error_str, (
-            f"Expected error code '{code}', got {error_code!r}. Full error: {error_str[:200]}"
-        )
+        assert error_code == code, f"Expected error code {code!r}, got {error_code!r}"
 
     if field is not None:
-        details = getattr(error, "details", None) or {}
-        details_str = str(details)
-        assert field in error_str or field in details_str, (
-            f"Expected field '{field}' in error. Error: {error_str[:200]}"
+        carriers = [str(field_pointer)]
+        for entry in entries:
+            # The pointer is one string, not a loc tuple; its tokens are the carriers.
+            carriers.extend(tok for tok in str(entry.get("pointer", "")).split("/") if tok)
+        assert any(field == carrier or field in carrier for carrier in carriers), (
+            f"Expected field {field!r} among the structured carriers {carriers!r}"
         )
 
-    if reason is not None:
-        assert reason in error_str, f"Expected reason '{reason}' in error. Got: {error_str[:200]}"
-
-    if message_contains is not None:
-        message = getattr(error, "message", error_str)
-        assert message_contains in str(message), f"Expected '{message_contains}' in message. Got: {str(message)[:200]}"
+    if keyword is not None:
+        keywords = [str(entry.get("keyword", "")) for entry in entries]
+        assert keyword in keywords, f"Expected issues[].keyword {keyword!r} among {keywords!r}"
 
 
 def assert_payload_field(

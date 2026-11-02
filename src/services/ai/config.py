@@ -1,8 +1,8 @@
 """Configuration models for Pydantic AI service."""
 
-import os
-
 from pydantic import BaseModel, Field
+
+from src.core.config import get_settings
 
 
 class ModelSettings(BaseModel):
@@ -54,21 +54,22 @@ class TenantAIConfig(BaseModel):
 
 
 def get_platform_defaults() -> dict:
-    """Get platform-level AI configuration from environment variables.
+    """Get platform-level AI configuration from the startup settings.
 
     Returns:
         dict with platform default settings
     """
+    integrations = get_settings().integrations
     return {
-        "provider": os.getenv("PYDANTIC_AI_PROVIDER", "gemini"),
-        "model": os.getenv("PYDANTIC_AI_MODEL", "gemini-2.0-flash"),
-        "api_key": _get_provider_api_key(os.getenv("PYDANTIC_AI_PROVIDER", "gemini")),
-        "logfire_token": os.getenv("LOGFIRE_TOKEN"),
+        "provider": integrations.pydantic_ai_provider,
+        "model": integrations.pydantic_ai_model,
+        "api_key": _get_provider_api_key(integrations.pydantic_ai_provider),
+        "logfire_token": integrations.logfire_token,
     }
 
 
 def _get_provider_api_key(provider: str) -> str | None:
-    """Get the API key for a specific provider from environment.
+    """Get the API key for a specific provider from the startup settings.
 
     Args:
         provider: The provider name (gemini, openai, anthropic, etc.)
@@ -76,18 +77,7 @@ def _get_provider_api_key(provider: str) -> str | None:
     Returns:
         API key if found, None otherwise
     """
-    provider = canonicalize_google_provider(provider)
-    provider_env_vars = {
-        "google": "GEMINI_API_KEY",
-        "openai": "OPENAI_API_KEY",
-        "anthropic": "ANTHROPIC_API_KEY",
-        "groq": "GROQ_API_KEY",
-        "bedrock": "AWS_ACCESS_KEY_ID",  # Bedrock uses AWS credentials
-    }
-    env_var = provider_env_vars.get(provider)
-    if env_var:
-        return os.getenv(env_var)
-    return None
+    return get_settings().integrations.provider_api_key(canonicalize_google_provider(provider))
 
 
 def build_model_string(provider: str, model: str) -> str:

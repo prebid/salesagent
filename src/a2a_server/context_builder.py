@@ -1,58 +1,40 @@
-"""A2A CallContextBuilder that bridges UnifiedAuthMiddleware to SDK ServerCallContext.
+"""Carry the captured HTTP message onto the A2A call context, beside the headers.
 
-Reads AuthContext from request.state (set by UnifiedAuthMiddleware via scope["state"])
-and populates ServerCallContext.state["auth_context"] for use by handler methods.
+The a2a-sdk hands a handler a :class:`ServerCallContext`, not a request, and its default
+builder puts ``dict(request.headers)`` on ``state["headers"]`` — which is everything
+``on_message_send`` needed until an RFC 9421 signature became a credential the boundary
+reads. A signature covers ``@method``, ``@target-uri`` and the exact body bytes as well as
+the headers, so one more value has to travel the same road.
+
+It is a SUBCLASS of the SDK's own builder, not a reimplementation: the user, the auth scope
+and the requested-extensions parse are the SDK's business and copying them here would be
+three things to keep in step with an SDK bump. This adds one key.
+
+``request.scope`` and not ``await request.body()``: the A2A routes are appended directly to
+the FastAPI route table rather than mounted as a sub-application, so ``scope["state"]`` —
+where :class:`~src.core.signing.capture.SignedExchangeCapture` left the capture — is visible
+here. ``build`` is synchronous, so awaiting a body was never an option anyway.
 """
 
 from __future__ import annotations
 
-import logging
-
 from a2a.server.context import ServerCallContext
-from a2a.server.routes.common import ServerCallContextBuilder
+from a2a.server.routes.common import DefaultServerCallContextBuilder
 from starlette.requests import Request
 
-from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
+from src.core.signing.capture import captured_exchange
 
-logger = logging.getLogger(__name__)
+#: The key the capture is carried under on ``ServerCallContext.state``.
+EXCHANGE_STATE_KEY = "adcp_signed_exchange"
 
 
-class AdCPCallContextBuilder(ServerCallContextBuilder):
-    """Builds ServerCallContext from request.state.auth_context.
-
-    UnifiedAuthMiddleware sets scope["state"]["auth_context"] which backs
-    request.state.auth_context in Starlette. This builder reads it and
-    places it into ServerCallContext.state for handler methods.
-    """
+class AdCPCallContextBuilder(DefaultServerCallContextBuilder):
+    """The SDK's context, plus the captured HTTP message this request arrived as."""
 
     def build(self, request: Request) -> ServerCallContext:
-        """Build ServerCallContext from a Starlette Request.
-
-        Args:
-            request: The incoming Starlette Request object.
-
-        Returns:
-            ServerCallContext with auth_context in state.
-        """
-        auth_ctx: AuthContext | None = getattr(getattr(request, "state", None), AUTH_CONTEXT_STATE_KEY, None)
-        if auth_ctx is None:
-            auth_ctx = AuthContext.unauthenticated()
-
-        state: dict = {AUTH_CONTEXT_STATE_KEY: auth_ctx}
-
-        # Also populate headers for SDK extensions that may inspect them
-        headers = getattr(request, "headers", None)
-        if headers is not None:
-            state["headers"] = dict(headers)
-
-        # Handle SDK extension headers
-        from a2a.extensions.common import HTTP_EXTENSION_HEADER, get_requested_extensions
-
-        requested_extensions: set[str] = set()
-        if headers is not None and hasattr(headers, "getlist"):
-            requested_extensions = get_requested_extensions(headers.getlist(HTTP_EXTENSION_HEADER))
-
-        return ServerCallContext(
-            state=state,
-            requested_extensions=requested_extensions,
-        )
+        context = super().build(request)
+        # ``None`` when nothing captured one — a non-AdCP path, or a test client that drives
+        # the handler without the middleware. The handler passes it through and the verifier
+        # reads it as "this request presented no signature", which is what it is.
+        context.state[EXCHANGE_STATE_KEY] = captured_exchange(request.scope)
+        return context

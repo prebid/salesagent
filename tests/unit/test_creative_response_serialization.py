@@ -18,13 +18,8 @@ from adcp.types import CreativeAction
 
 from src.core.schemas import (
     CreateCreativeResponse,
-    Creative,
     CreativeApprovalStatus,
     GetCreativesResponse,
-    ListCreativeFormatsResponse,
-    ListCreativesResponse,
-    Pagination,
-    QuerySummary,
     SyncCreativeResult,
     SyncCreativesResponse,
 )
@@ -67,7 +62,7 @@ def test_get_creatives_response_excludes_internal_fields():
 
 
 def test_creative_optional_fields_still_included():
-    """Test model_dump_internal() returns internal fields when present."""
+    """A public optional field is on the wire; an internal field is on the model only."""
     creative = make_test_creative(
         creative_id="test_with_optional",
         name="Test Creative",
@@ -85,26 +80,26 @@ def test_creative_optional_fields_still_included():
     # Internal fields still excluded
     assert "principal_id" not in creative_data, "Internal field principal_id should be excluded"
 
-    # Internal fields accessible via model_dump_internal()
-    internal_data = creative.model_dump_internal()
-    assert "principal_id" in internal_data
-    assert internal_data["principal_id"] == "principal_123"
+    # A Field(exclude=True) field EXISTS on the model — the attribute is what existing
+    # means, and there is no second dump shape to read it out of (CLAUDE.md pattern 4).
+    assert creative.principal_id == "principal_123"
 
 
 @pytest.mark.parametrize("null_field", ["alt_text", "provenance"])
 def test_creative_model_dump_omits_null_fields_inside_assets(null_field):
     """An unset optional field on a stored asset is OMITTED, never dumped as null.
 
-    ``Creative.assets`` is an untyped ``dict[str, Any]`` (the DB stores arbitrary
-    asset shapes), so Pydantic's ``exclude_none=True`` default never sees inside
-    it — a ``None`` on a stored asset would survive as a literal wire ``null``.
-    AdCP 3.1 types these asset fields without accepting ``null``, so that fails
-    schema validation. ``Creative.model_dump()`` runs ``strip_none_deep`` over
-    ``assets`` to prevent it.
+    AdCP 3.1 types these asset fields without accepting ``null``, so a literal wire
+    ``null`` fails schema validation. What prevents it is that ``Creative.assets`` is
+    INHERITED as the library's typed asset map — it used to be redeclared
+    ``dict[str, Any]``, which Pydantic's ``exclude_none=True`` default cannot see inside,
+    and a ``strip_none_deep`` pass over the dict patched the output back. The redeclaration
+    and the strip are both gone (``src/core/schemas/creative.py``): the row-to-model read
+    validates the stored document into the typed map, so ``exclude_none`` reaches the
+    asset's own fields.
 
-    Mutation check: delete the ``strip_none_deep`` call in
-    ``src/core/schemas/creative.py`` -> this goes red with the key present and
-    valued ``None``. The wire-level oracle is
+    Mutation check: redeclare ``assets: dict[str, Any]`` on ``Creative`` -> this goes red
+    with the key present and valued ``None``. The wire-level oracle is
     ``tests/integration/test_list_creatives_a2a_wire_shape.py::test_a2a_wire_omits_null_asset_fields``.
     """
     creative = make_test_creative(
@@ -112,14 +107,17 @@ def test_creative_model_dump_omits_null_fields_inside_assets(null_field):
         assets=build_assets(image_spec("banner").with_fields(**{null_field: None})),
     )
 
-    banner = creative.model_dump()["assets"]["banner"]
+    # ``mode="json"`` because the claim is about the SERIALIZED shape: the typed asset
+    # holds ``url`` as a pydantic ``AnyUrl``, and only the JSON dump is the wire form the
+    # pinned asset schema grades.
+    banner = creative.model_dump(mode="json")["assets"]["banner"]
 
     assert_omits_paths(
         banner,
         [null_field],
         context=f"model_dump() assets.banner (a null here is invalid against the pinned AdCP asset schema; {banner!r})",
     )
-    # Negative control: stripping must not eat the asset's real fields.
+    # Negative control: the omission must not eat the asset's real fields.
     assert banner["asset_type"] == "image"
     assert banner["url"] == "https://example.com/banner.png"
 
@@ -128,30 +126,45 @@ def test_creative_model_dump_omits_null_fields_inside_assets(null_field):
 
 
 def test_sync_creative_result_excludes_internal_fields():
-    """model_dump() excludes status and review_feedback (internal-only)."""
+    """model_dump() excludes internal_status and review_feedback; the spec status is derived."""
     result = SyncCreativeResult(
         creative_id="c_1",
         action=CreativeAction.created,
         internal_status="pending_review",
         review_feedback="Looks good",
     )
-    dumped = result.model_dump()
+    dumped = result.model_dump(mode="json")
     assert dumped["creative_id"] == "c_1"
-    assert "status" not in dumped
+    # The pinned per-creative ``status`` is the row's review state (creative-status enum).
+    assert dumped["status"] == "pending_review"
     assert "internal_status" not in dumped
     assert "review_feedback" not in dumped
+    # The other half of the split: both fields EXIST on the model. The attribute is what
+    # existing means — there is no second dump shape (CLAUDE.md pattern 4).
+    assert result.internal_status == "pending_review"
+    assert result.review_feedback == "Looks good"
 
 
-def test_sync_creative_result_excludes_empty_lists():
-    """model_dump() omits changes, errors, warnings when empty."""
-    result = SyncCreativeResult(
-        creative_id="c_2",
-        action=CreativeAction.updated,
-        changes=[],
-        errors=[],
-        warnings=[],
-    )
+def test_sync_creative_result_omits_unset_optional_arrays():
+    """model_dump() omits changes, errors and warnings when the tool populated none of them.
+
+    Pinned ``creative/sync-creatives-response.json``, the per-creative item: ``required``
+    is ``["creative_id", "action"]``, so all three arrays are OPTIONAL and their absence is
+    spec-valid. The item's one conditional obligation is on a different field — ``status``
+    "MUST be omitted when action is failed or deleted" — and the schema carries that as an
+    ``if/then``; ``changes``/``errors``/``warnings`` carry no such clause. This seller
+    spells the absence as ``None`` (the parent's default, see ``SyncCreativeResult``), and
+    ``exclude_none`` omits it on model_dump, model_dump_json and structured_content alike.
+
+    This case used to pass ``changes=[]``/``errors=[]``/``warnings=[]`` and demand the
+    empty lists be stripped. Nothing in the pin asks for that, and stripping a field by its
+    VALUE would need the per-class "last word" wire hook CLAUDE.md pattern #4 deleted — a
+    field that must not reach the wire is ``Field(exclude=True)`` at its declaration, which
+    is unconditional.
+    """
+    result = SyncCreativeResult(creative_id="c_2", action=CreativeAction.updated)
     dumped = result.model_dump()
+    assert dumped["creative_id"] == "c_2"
     assert "changes" not in dumped
     assert "errors" not in dumped
     assert "warnings" not in dumped
@@ -168,82 +181,19 @@ def test_sync_creative_result_keeps_populated_lists():
     dumped = result.model_dump()
     assert dumped["changes"] == ["name"]
     assert dumped["warnings"] == ["provenance missing"]
-    assert "errors" not in dumped  # still empty → omitted
+    assert "errors" not in dumped  # unset → None → omitted by exclude_none
 
 
-def test_sync_creative_result_model_dump_internal():
-    """model_dump_internal() drops user-passed exclude but Field(exclude=True) still applies.
-
-    The method ensures no additional user excludes are applied. Internal fields
-    with exclude=True on the Field are still excluded by Pydantic.
-    """
-    result = SyncCreativeResult(
-        creative_id="c_4",
-        action=CreativeAction.created,
-        changes=["name"],
-        internal_status="approved",
-        review_feedback="Auto-approved",
-    )
-    internal = result.model_dump_internal()
-    # model_dump_internal drops user exclude param, but Field(exclude=True) persists
-    assert internal["creative_id"] == "c_4"
-    # changes/errors/warnings are NOT excluded by Field definition, so they appear
-    assert internal["changes"] == ["name"]
+# REMOVED: test_sync_creative_result_model_dump_internal. Its whole subject was the
+# ``model_dump_internal`` seat, which is gone (CLAUDE.md pattern 4 — a per-class second dump
+# path is a shape that exists on one path and not the others). Everything it asserted is
+# graded above: creative_id and changes on the wire by
+# test_sync_creative_result_excludes_internal_fields and
+# test_sync_creative_result_keeps_populated_lists, and the internal half of the split by the
+# two attribute assertions added to the former.
 
 
 # ── SyncCreativesResponse __str__ ────────────────────────────────────────
-
-
-def test_sync_creatives_response_str_created():
-    """__str__ summarizes created/updated/failed counts."""
-    response = SyncCreativesResponse(  # type: ignore[call-arg]
-        creatives=[
-            SyncCreativeResult(creative_id="c_1", action=CreativeAction.created),
-            SyncCreativeResult(creative_id="c_2", action=CreativeAction.created),
-            SyncCreativeResult(creative_id="c_3", action=CreativeAction.updated),
-        ],
-    )
-    msg = str(response)
-    assert "2 created" in msg
-    assert "1 updated" in msg
-
-
-def test_sync_creatives_response_str_no_changes():
-    """__str__ reports 'no changes' when no creatives."""
-    response = SyncCreativesResponse(creatives=[])  # type: ignore[call-arg]
-    assert "no changes" in str(response)
-
-
-def test_sync_creatives_response_str_with_deleted():
-    """__str__ includes deleted count."""
-    response = SyncCreativesResponse(  # type: ignore[call-arg]
-        creatives=[
-            SyncCreativeResult(creative_id="c_1", action=CreativeAction.deleted),
-        ],
-    )
-    assert "1 deleted" in str(response)
-
-
-def test_sync_creatives_response_str_failed():
-    """__str__ includes failed count."""
-    response = SyncCreativesResponse(  # type: ignore[call-arg]
-        creatives=[
-            SyncCreativeResult(creative_id="c_1", action=CreativeAction.failed),
-        ],
-    )
-    assert "1 failed" in str(response)
-
-
-def test_sync_creatives_response_str_dry_run():
-    """__str__ appends '(dry run)' when dry_run=True."""
-    response = SyncCreativesResponse(  # type: ignore[call-arg]
-        creatives=[
-            SyncCreativeResult(creative_id="c_1", action=CreativeAction.created),
-        ],
-        dry_run=True,
-    )
-    msg = str(response)
-    assert "(dry run)" in msg
 
 
 def test_sync_creatives_response_properties_success():
@@ -264,87 +214,7 @@ def test_sync_creatives_response_properties_success():
 # ── ListCreativeFormatsResponse __str__ ──────────────────────────────────
 
 
-def test_list_creative_formats_response_str_zero():
-    """__str__ with no formats."""
-    response = ListCreativeFormatsResponse(formats=[])
-    assert str(response) == "No creative formats are currently supported."
-
-
-def test_list_creative_formats_response_str_one():
-    """__str__ with exactly one format."""
-    from src.core.schemas import Format, FormatId
-
-    fmt = Format(
-        format_id=FormatId(agent_url="https://example.com", id="f1"),
-        name="Banner",
-        is_standard=True,
-    )
-    response = ListCreativeFormatsResponse(formats=[fmt])
-    assert str(response) == "Found 1 creative format."
-
-
-def test_list_creative_formats_response_str_many():
-    """__str__ with multiple formats."""
-    from src.core.schemas import Format, FormatId
-
-    fmts = [
-        Format(format_id=FormatId(agent_url="https://example.com", id=f"f{i}"), name=f"F{i}", is_standard=True)
-        for i in range(3)
-    ]
-    response = ListCreativeFormatsResponse(formats=fmts)
-    assert str(response) == "Found 3 creative formats."
-
-
 # ── ListCreativesResponse __str__ ────────────────────────────────────────
 
 
-def test_list_creatives_response_str_all_shown():
-    """__str__ when all results shown (returned == total_matching)."""
-    response = ListCreativesResponse(
-        creatives=[],
-        query_summary=QuerySummary(returned=5, total_matching=5),
-        pagination=Pagination(has_more=False, total_count=5),
-    )
-    assert str(response) == "Found 5 creatives."
-
-
-def test_list_creatives_response_str_paginated():
-    """__str__ when showing a page (returned < total_matching)."""
-    response = ListCreativesResponse(
-        creatives=[],
-        query_summary=QuerySummary(returned=10, total_matching=50),
-        pagination=Pagination(has_more=True, total_count=50),
-    )
-    assert str(response) == "Showing 10 of 50 creatives."
-
-
-def test_list_creatives_response_str_singular():
-    """__str__ handles singular correctly."""
-    response = ListCreativesResponse(
-        creatives=[],
-        query_summary=QuerySummary(returned=1, total_matching=1),
-        pagination=Pagination(has_more=False, total_count=1),
-    )
-    assert str(response) == "Found 1 creative."
-
-
 # ── CreateCreativeResponse __str__ and nested serialization ──────────────
-
-
-def test_create_creative_response_str():
-    """__str__ returns human-readable message."""
-    creative = Creative(
-        creative_id="test_str",
-        variants=[],
-        name="Test",
-        format={"agent_url": "https://example.com", "id": "f1"},
-        assets={},
-    )
-    response = CreateCreativeResponse(
-        creative=creative,
-        status=CreativeApprovalStatus(creative_id="test_str", status="approved", detail="OK"),
-        suggested_adaptations=[],
-    )
-    msg = str(response)
-    assert "test_str" in msg
-    assert "approved" in msg

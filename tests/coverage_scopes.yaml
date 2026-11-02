@@ -70,7 +70,6 @@ scopes:
       - tests/integration/test_creative_formats_behavioral.py
       - tests/integration/test_creative_list_behavioral.py
       - tests/integration/test_creative_repository.py
-      - tests/integration/test_creative_sync_behavioral.py
       - tests/integration/test_creative_sync_processing.py
       - tests/integration/test_creative_sync_transport.py
       - tests/integration/test_list_creatives_auth.py
@@ -88,7 +87,6 @@ scopes:
     tests:
       - tests/unit/test_media_buy.py
       - tests/unit/test_media_buy_create_helpers.py
-      - tests/unit/test_media_buy_tenant_context.py
       - tests/integration/test_media_buy_v3.py
       - tests/integration/test_media_buy_readiness.py
       - tests/integration/test_media_buy_repository.py
@@ -100,7 +98,6 @@ scopes:
     description: "Product catalog, validation, property filtering"
     sources:
       - src/core/tools/products.py
-      - src/core/tools/properties.py
     tests:
       - tests/unit/test_product_adcp36_fields_missing.py
       - tests/unit/test_product_channels_enum.py

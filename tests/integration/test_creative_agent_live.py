@@ -1,5 +1,23 @@
 """Integration tests against a CONTROLLED reference creative agent.
 
+WHAT IS LEFT HERE, AND WHY IT IS NOT BDD. Three invariants of an OUTBOUND call to a
+creative agent: that a trailing slash on ``agent_url`` reaches the same agent, that the
+agent tolerates both wire forms of the ``format_id`` identity, and that URL variants
+share one cache entry. None is buyer-visible, so no scenario can reach them, and the
+creative agent is the one thing the harness may legitimately stand in for — a system we
+do not own. ``tests/CLAUDE.md`` § Which kind of test is the rule.
+
+WHAT WAS REMOVED, so it does not come back. Eight tests asserted the reference agent's
+CATALOG CONTENTS — that ``display_image`` is present and shaped a certain way, that
+``display_html`` / ``display_js`` / ``video_standard`` / ``video_vast`` exist, that the
+agent returns at least ten formats. Those graded a third party's data rather than this
+seller, which is precisely the drift the guard below exists to refuse; the public agent
+dropped four of those very formats. Two more asserted that ``format_id`` carries
+``{agent_url, id}`` with the fields populated, which BDD already grades on all four
+transports (``tests/bdd/steps/domain/uc005_format_id_shape.py`` and its roundtrip and
+third-party siblings) — and graded it by existence (``is not None``), which BDD
+authoring rule 4 refuses.
+
 These tests require a deterministic, pinned creative agent — they must NEVER
 silently fall back to the live public agent (https://creative.adcontextprotocol.org),
 whose catalog drifts (it dropped display_image/html/js/video_standard), which
@@ -87,85 +105,6 @@ def registry():
         creative_agent_registry_module._registry = previous_registry
 
 
-class TestCreativeAgentLiveConnection:
-    """Test live connection to creative agent."""
-
-    @pytest.mark.asyncio
-    async def test_can_fetch_formats_from_creative_agent(self, registry):
-        """Verify we can fetch formats from the live creative agent."""
-        formats = await registry.list_all_formats(tenant_id=None)
-
-        assert len(formats) > 0, "Should return at least one format"
-        # Creative agent has ~49 formats as of this writing
-        assert len(formats) >= 10, f"Expected many formats, got {len(formats)}"
-
-    @pytest.mark.asyncio
-    async def test_formats_have_required_fields(self, registry):
-        """Verify returned formats have all required fields."""
-        formats = await registry.list_all_formats(tenant_id=None)
-
-        for fmt in formats[:5]:  # Check first 5
-            assert fmt.format_id is not None, "format_id required"
-            assert fmt.format_id.id is not None, "format_id.id required"
-            assert fmt.format_id.agent_url is not None, "format_id.agent_url required"
-            assert fmt.name is not None, "name required"
-
-
-class TestDisplayImageFormat:
-    """Test the display_image parameterized format specifically."""
-
-    @pytest.mark.asyncio
-    async def test_display_image_format_exists(self, registry):
-        """Verify display_image format is returned by creative agent."""
-        formats = await registry.list_all_formats(tenant_id=None)
-
-        format_ids = [fmt.format_id.id for fmt in formats]
-        assert "display_image" in format_ids, f"display_image not found in formats. Available: {format_ids[:20]}..."
-
-    @pytest.mark.asyncio
-    async def test_display_image_has_expected_structure(self, registry):
-        """Verify display_image has required fields (format_id, name)."""
-        formats = await registry.list_all_formats(tenant_id=None)
-
-        display_image = next((fmt for fmt in formats if fmt.format_id.id == "display_image"), None)
-        assert display_image is not None, "display_image format not found"
-
-        # Verify required fields are populated
-        assert display_image.format_id is not None
-        assert display_image.name is not None
-
-    @pytest.mark.asyncio
-    async def test_can_get_display_image_by_id(self, registry):
-        """Verify we can look up display_image format directly."""
-        fmt = await registry.get_format(CREATIVE_AGENT_URL, "display_image")
-
-        assert fmt is not None, "get_format should return display_image"
-        assert fmt.format_id.id == "display_image"
-
-    @pytest.mark.asyncio
-    async def test_all_parameterized_display_formats_exist(self, registry):
-        """Verify all parameterized display formats from UI exist."""
-        formats = await registry.list_all_formats(tenant_id=None)
-        format_ids = {fmt.format_id.id for fmt in formats}
-
-        # These are the formats the UI's FORMAT_TEMPLATES expects
-        expected_formats = ["display_image", "display_html", "display_js"]
-
-        missing = [f for f in expected_formats if f not in format_ids]
-        assert not missing, f"Missing expected formats: {missing}"
-
-    @pytest.mark.asyncio
-    async def test_video_parameterized_formats_exist(self, registry):
-        """Verify parameterized video formats exist."""
-        formats = await registry.list_all_formats(tenant_id=None)
-        format_ids = {fmt.format_id.id for fmt in formats}
-
-        expected_formats = ["video_standard", "video_vast"]
-
-        missing = [f for f in expected_formats if f not in format_ids]
-        assert not missing, f"Missing expected video formats: {missing}"
-
-
 class TestURLNormalization:
     """Test URL handling with trailing slashes."""
 
@@ -204,23 +143,6 @@ class TestURLNormalization:
         """Get specific format using URL with trailing slash."""
         fmt = await registry.get_format(CREATIVE_AGENT_URL_WITH_SLASH, "display_image")
         assert fmt is not None, "Should find display_image with trailing slash"
-
-    @pytest.mark.asyncio
-    async def test_agent_url_in_format_response(self, registry):
-        """Check what agent_url the creative agent returns in format_id."""
-        formats = await registry.list_all_formats(tenant_id=None)
-
-        # Find any format and check its agent_url
-        fmt = formats[0]
-        agent_url = str(fmt.format_id.agent_url)
-
-        # Document what the creative agent actually returns
-        print(f"Creative agent returns agent_url: '{agent_url}'")
-        print(f"Has trailing slash: {agent_url.endswith('/')}")
-
-        # This test documents the behavior - the creative agent returns URLs with trailing slash
-        # Use CREATIVE_AGENT_URL so it works with both live and containerized agents
-        assert agent_url.startswith(CREATIVE_AGENT_URL.rstrip("/"))
 
 
 class TestPreviewCreativeIdentityForm:
@@ -377,7 +299,3 @@ class TestFormatResolverIntegration:
                 tenant_id=None,
                 product_id=None,
             )
-
-        error_msg = str(exc_info.value)
-        assert "Unknown format_id" in error_msg
-        assert "nonexistent_format_xyz" in error_msg

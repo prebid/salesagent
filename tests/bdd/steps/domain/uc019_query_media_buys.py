@@ -8,13 +8,22 @@ Then steps assert on GetMediaBuysResponse fields.
 
 from __future__ import annotations
 
-from datetime import date, datetime
+import json
+import re
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
 from src.core.schemas._base import GetMediaBuysRequest
-from tests.bdd.steps._outcome_helpers import payload_or_none, require_payload, wire_dict, wire_field
+from tests.bdd.steps._outcome_helpers import (
+    WIRE_MISSING,
+    payload_or_none,
+    require_payload,
+    wire_dict,
+    wire_field,
+    wire_lookup,
+)
 from tests.bdd.steps.generic._create_request import build_create_request_kwargs
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.then_error import _wire_code, _wire_error_object, _wire_suggestion
@@ -39,7 +48,12 @@ def _generate_unique_id(label: str) -> str:
     """
     import uuid
 
-    return f"{label}-{uuid.uuid4().hex[:8]}"
+    from tests.factories.mint import mint
+
+    # A PINNED prefix with a GENERATED suffix ("mb-001-7a693ba8"): the one shape no
+    # value-shaped normalization rule classifies correctly, which is why the mint
+    # site records it instead (tests/factories/mint.py).
+    return mint(f"{label}-{uuid.uuid4().hex[:8]}")
 
 
 def _register_media_buy(ctx: dict, label: str, media_buy: Any) -> None:
@@ -156,6 +170,72 @@ def given_principal_owns_media_buy_with_dates(ctx: dict, principal_id: str, mb_i
     _register_media_buy(ctx, mb_id, mb)
 
 
+_DAY_OFFSETS = {"today": 0}
+
+
+def _day_offset(phrase: str) -> int:
+    """Parse a flight-window edge stated RELATIVE to the day the test runs.
+
+    Accepts ``today``, ``in N days`` and ``N days ago`` (``day`` singular too).
+    Returns the signed number of days from today.
+
+    Relative, because the alternative does not survive the transport it matters on.
+    Stating an absolute date obliges the scenario to pin the clock, and the only
+    lever available for that is ``unittest.mock.patch`` on a production module --
+    which reaches production ONLY while production shares this process. Over
+    e2e_rest it does not: the server runs in its own container against the real
+    clock, so the patch is inert and the seeded window is judged against whatever
+    day the suite happens to run. The named boundary is then never exercised, and
+    the row passes or fails on the calendar. Expressing the edge as an offset needs
+    no clock control at all, so ONE scenario grades the same boundary identically on
+    a2a, mcp, rest and e2e_rest -- which is what BDD rule 1 (transport-independent by
+    construction, tests/CLAUDE.md) asks for.
+    """
+    text = phrase.strip()
+    if text in _DAY_OFFSETS:
+        return _DAY_OFFSETS[text]
+    ago = re.fullmatch(r"(\d+)\s+days?\s+ago", text)
+    if ago:
+        return -int(ago.group(1))
+    ahead = re.fullmatch(r"in\s+(\d+)\s+days?", text)
+    if ahead:
+        return int(ahead.group(1))
+    raise ValueError(f"unrecognized relative day {phrase!r}; expected 'today', 'in N days' or 'N days ago'")
+
+
+@given(
+    parsers.parse(
+        'the principal "{principal_id}" owns media buy "{mb_id}" '
+        "whose flight window starts {start_offset} and ends {end_offset}"
+    )
+)
+def given_principal_owns_media_buy_relative_window(
+    ctx: dict, principal_id: str, mb_id: str, start_offset: str, end_offset: str
+) -> None:
+    """Seed a persisted-``active`` buy whose flight window is placed relative to today.
+
+    The persisted status is the generic serving state, so production refines it
+    against the window (``resolve_canonical_status``, src/core/tools/_media_buy_status.py:
+    ``reference_date < start`` is pending_start, ``> end`` is completed, otherwise
+    active). Placing the window relative to the real clock is what lets that
+    refinement be graded over a real HTTP transport.
+    """
+    _register_principal(ctx, principal_id)
+    env = ctx["env"]
+    today = datetime.now(UTC).date()
+    real_id = _generate_unique_id(mb_id)
+    mb = MediaBuyFactory(
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        media_buy_id=real_id,
+        status="active",
+        start_date=today + timedelta(days=_day_offset(start_offset)),
+        end_date=today + timedelta(days=_day_offset(end_offset)),
+    )
+    env._commit_factory_data()
+    _register_media_buy(ctx, mb_id, mb)
+
+
 @given(parsers.parse('today is "{today_str}"'))
 def given_today_is(ctx: dict, today_str: str) -> None:
     """Override 'today' for status computation.
@@ -169,7 +249,12 @@ def given_today_is(ctx: dict, today_str: str) -> None:
     from unittest.mock import patch
 
     parsed = date.fromisoformat(today_str)
-    ctx["mock_today"] = today_str
+
+    # ``ctx["mock_today"]`` used to be written here and read by the two seeding Givens,
+    # which anchored their flight windows on it. Both now anchor on the REAL clock so
+    # their scenarios grade identically on a server running in its own container, which
+    # left this key with no reader. A ctx key nothing reads is a claim that cannot be
+    # wrong, so it is deleted rather than kept for symmetry.
 
     # Build a datetime that corresponds to the target date
     fake_now = datetime(parsed.year, parsed.month, parsed.day, 12, 0, 0, tzinfo=UTC)
@@ -314,45 +399,6 @@ def given_principal_owns_multiple(ctx: dict, principal_id: str, mb1: str, mb2: s
     env._commit_factory_data()
 
 
-@given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with an active package "{pkg_id}"'))
-def given_principal_owns_with_package(ctx: dict, principal_id: str, mb_id: str, pkg_id: str) -> None:
-    """Create a media buy with an active package, verifying principal_id consistency."""
-    # Verify the stated principal_id matches the ctx principal
-    _register_principal(ctx, principal_id)
-    env = ctx["env"]
-    real_id = _generate_unique_id(mb_id)
-    mb = MediaBuyFactory(
-        tenant=ctx["tenant"],
-        principal=ctx["principal"],
-        media_buy_id=real_id,
-        status="active",
-    )
-    MediaPackageFactory(
-        media_buy=mb,
-        package_id=pkg_id,
-        package_config={
-            "package_id": pkg_id,
-            "product_id": "guaranteed_display",
-            "budget": 5000.0,
-            "status": "active",
-        },
-    )
-    env._commit_factory_data()
-    _register_media_buy(ctx, mb_id, mb)
-    ctx.setdefault("seeded_packages", {})[pkg_id] = mb
-
-
-@given(parsers.parse('the principal "{principal_id}" owns no media buys'))
-def given_principal_owns_none(ctx: dict, principal_id: str) -> None:
-    """No media buys exist for this principal (default state).
-
-    Validates that the principal_id matches the ctx principal (like other
-    principal-scoped Given steps).
-    """
-    _register_principal(ctx, principal_id)
-    ctx.setdefault("seeded_media_buys", {})
-
-
 @given(
     parsers.parse(
         'the principal "{principal_id}" owns media buy "{mb_id}" with start_date "{start}" '
@@ -418,8 +464,14 @@ def given_principal_owns_various_statuses(ctx: dict, principal_id: str) -> None:
     env = ctx["env"]
     # Create one in each status by using dates relative to 'today'
     # Pre-flight → pending_start, In-flight → active, Post-flight → completed
-    today = date.fromisoformat(ctx.get("mock_today", "2026-03-15"))
-    from datetime import timedelta
+    # The REAL clock, never ctx["mock_today"]. Every window below is already stated as
+    # an offset from this anchor, so anchoring on today makes the seed correct without
+    # anyone pinning a clock -- and pinning one was the defect: the patch installed by
+    # `today is "..."` reaches production only in-process, so over e2e_rest the server
+    # judged a window built around a fixed 2026-03-15 against the real date and every
+    # buy collapsed to "completed". Anchoring here means the three buys hold their
+    # intended statuses on a2a, mcp, rest and e2e_rest alike.
+    today = datetime.now(UTC).date()
 
     status_dates = {
         "mb-pending": (today + timedelta(days=10), today + timedelta(days=30)),
@@ -445,8 +497,14 @@ def given_principal_owns_active_and_completed(ctx: dict, principal_id: str, mb1:
     """Create one active and one completed media buy (INV-151-1)."""
     _register_principal(ctx, principal_id)
     env = ctx["env"]
-    today = date.fromisoformat(ctx.get("mock_today", "2026-03-15"))
-    from datetime import timedelta
+    # The REAL clock, never ctx["mock_today"]. Every window below is already stated as
+    # an offset from this anchor, so anchoring on today makes the seed correct without
+    # anyone pinning a clock -- and pinning one was the defect: the patch installed by
+    # `today is "..."` reaches production only in-process, so over e2e_rest the server
+    # judged a window built around a fixed 2026-03-15 against the real date and every
+    # buy collapsed to "completed". Anchoring here means the three buys hold their
+    # intended statuses on a2a, mcp, rest and e2e_rest alike.
+    today = datetime.now(UTC).date()
 
     # Active: today is within flight dates
     real_id1 = _generate_unique_id(mb1)
@@ -647,30 +705,23 @@ def given_no_creative_exists(ctx: dict, creative_id: str) -> None:
     )
 
 
-@given(parsers.parse('package "{pkg_id}" has a creative assignment referencing creative_id "{creative_id}"'))
-def given_package_creative_ref_nonexistent(ctx: dict, pkg_id: str, creative_id: str) -> None:
-    """Record creative assignment referencing a potentially nonexistent creative.
-
-    FIXME: No CreativeAssignmentFactory — cannot seed real DB records.
-    """
-    import pytest
-
-    pytest.xfail(
-        f"SPEC-PRODUCTION GAP: No CreativeAssignmentFactory — cannot seed creative assignment "
-        f"for '{creative_id}' on package '{pkg_id}'. "
-        f"FIXME: Create factory to seed real DB records."
-    )
-
-
 @given(parsers.parse('no snapshot data is available for package "{pkg_id}"'))
 def given_no_snapshot_for_package(ctx: dict, pkg_id: str) -> None:
     """Establish that no snapshot data exists for a package.
 
-    The default state in the harness is no snapshot data — the adapter mock
-    (when present) returns no data unless explicitly configured. Record the
-    expectation in ctx so Then steps can verify the correct unavailable_reason.
+    Absence is the harness default — the adapter mock returns no data unless a
+    Given configures some. The falsifiable half is the other direction: a
+    scenario that configured snapshot data for this package and then declares it
+    unavailable is grading the opposite of what it says. The ctx set this
+    replaced was written for "Then steps to verify the unavailable_reason" and
+    no Then ever read it.
     """
-    ctx.setdefault("snapshot_unavailable_packages", set()).add(pkg_id)
+    configured = ctx.get("adapter_snapshot_data", {})
+    seeded_for_pkg = [mb_id for mb_id, pkgs in configured.items() if pkg_id in pkgs]
+    assert not seeded_for_pkg, (
+        f"Step claims no snapshot data is available for package {pkg_id!r}, but a "
+        f"prior Given configured snapshot data for it under media buy(s) {seeded_for_pkg}."
+    )
 
 
 @given("the ad platform adapter supports realtime reporting")
@@ -681,7 +732,6 @@ def given_adapter_supports_reporting(ctx: dict) -> None:
     configuration, this step should also set up mock reporting endpoints that
     return test data (impressions, spend, etc.).
     """
-    ctx["adapter_supports_reporting"] = True
     env = ctx["env"]
     assert "adapter" in env.mock, (
         "Step claims 'the ad platform adapter supports realtime reporting' "
@@ -694,7 +744,6 @@ def given_adapter_supports_reporting(ctx: dict) -> None:
 @given("the ad platform adapter does not support realtime reporting")
 def given_adapter_no_reporting(ctx: dict) -> None:
     """Configure the adapter to NOT support realtime reporting."""
-    ctx["adapter_supports_reporting"] = False
     env = ctx["env"]
     assert "adapter" in env.mock, (
         "Step claims 'the ad platform adapter does not support realtime reporting' "
@@ -721,7 +770,6 @@ def given_adapter_reporting_with_data(ctx: dict) -> None:
     whose get_packages_snapshot returns realistic snapshot data keyed by the
     packages created in earlier Given steps.
     """
-    ctx["adapter_supports_reporting"] = True
 
     snapshot_data: dict[str, dict] = {}
     seeded = ctx.get("seeded_media_buys", {})
@@ -748,7 +796,6 @@ def given_adapter_reporting_no_data(ctx: dict, pkg_id: str) -> None:
     snapshot dict for the media buy owning ``pkg_id``, so the package has no
     snapshot data available.
     """
-    ctx["adapter_supports_reporting"] = True
 
     # Build snapshot_data with the target package's media buy present but
     # with NO entry for the specific pkg_id — simulating "no data for X".
@@ -772,33 +819,6 @@ def given_adapter_reporting_no_data(ctx: dict, pkg_id: str) -> None:
     _patch_adapter_with_snapshot(ctx, snapshot_data)
 
 
-@given(parsers.parse("the adapter supports realtime reporting and data for all pkgs"))
-def given_adapter_reporting_all_data(ctx: dict) -> None:
-    """Adapter supports reporting with snapshot data for every seeded package.
-
-    Builds snapshot entries for all packages across all seeded media buys,
-    so every package has data available when include_snapshot is requested.
-    """
-    ctx["adapter_supports_reporting"] = True
-
-    snapshot_data: dict[str, dict] = {}
-    seeded = ctx.get("seeded_media_buys", {})
-    env = ctx["env"]
-
-    for _label, mb_obj in seeded.items():
-        real_id = mb_obj.media_buy_id
-        if env._session is not None:
-            from sqlalchemy import select
-
-            from src.core.database.models import MediaPackage as DBMediaPackage
-
-            pkgs = env._session.scalars(select(DBMediaPackage).filter_by(media_buy_id=real_id)).all()
-            for pkg in pkgs:
-                snapshot_data.setdefault(real_id, {})[pkg.package_id] = _make_test_snapshot()
-
-    _patch_adapter_with_snapshot(ctx, snapshot_data)
-
-
 @given(parsers.parse("the adapter supports reporting, data for {pkg1} but not {pkg2}"))
 def given_adapter_reporting_mixed(ctx: dict, pkg1: str, pkg2: str) -> None:
     """Adapter supports reporting with mixed per-package snapshot availability.
@@ -806,7 +826,6 @@ def given_adapter_reporting_mixed(ctx: dict, pkg1: str, pkg2: str) -> None:
     Configures adapter mock so ``pkg1`` has snapshot data and ``pkg2`` does not.
     The snapshot dict includes an entry for pkg1 but omits pkg2.
     """
-    ctx["adapter_supports_reporting"] = True
 
     snapshot_data: dict[str, dict] = {}
     seeded = ctx.get("seeded_media_buys", {})
@@ -845,8 +864,6 @@ def given_adapter_no_realtime(ctx: dict) -> None:
     which has no EXTERNAL_PATCHES.
     """
     from unittest.mock import MagicMock, patch
-
-    ctx["adapter_supports_reporting"] = False
 
     adapter_mock = MagicMock()
     adapter_mock.capabilities.supports_realtime_reporting = False
@@ -926,7 +943,6 @@ def given_principal_owns_single_mb(ctx: dict, principal_id: str, mb_id: str) -> 
     )
     env._commit_factory_data()
     _register_media_buy(ctx, mb_id, mb)
-    ctx.setdefault("principals", {})[principal_id] = principal
 
 
 @given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}"'))
@@ -961,155 +977,28 @@ def given_principal_owns_mb_simple(ctx: dict, principal_id: str, mb_id: str) -> 
 # then_status_handles_missing_date are removed with them.
 
 
-def _seed_account_for_principal(ctx: dict, *, sandbox: bool) -> None:
-    """Seed a real Account (sandbox or production) reachable by the scenario principal.
-
-    get_media_buys carries no account parameter on the request (production
-    rejects account filtering with ACCOUNT_FILTER_NOT_SUPPORTED and instructs
-    "the seller infers the account from the auth token"), so "the request
-    targets a <kind> account" means: the account the identity resolves to has
-    that sandbox flag. Seeding the Account + AgentAccountAccess rows makes the
-    premise real at the data layer — a future sandbox short-circuit keyed off
-    the principal's account (BR-RULE-209) is then actually exercised, instead
-    of the Given being an inert ctx flag (6szx graduation inspection).
-    """
-    from tests.factories.account import AccountFactory, AgentAccountAccessFactory
-
-    env = ctx["env"]
-    account = AccountFactory(tenant=ctx["tenant"], sandbox=sandbox)
-    AgentAccountAccessFactory(tenant=ctx["tenant"], principal=ctx["principal"], account=account)
-    env._commit_factory_data()
-    ctx["sandbox"] = sandbox
-    ctx["account"] = account
-
-
-@given(parsers.parse("the request targets a sandbox account"))
-def given_sandbox_account(ctx: dict) -> None:
-    """Seed a sandbox account for the principal (the token infers the account)."""
-    _seed_account_for_principal(ctx, sandbox=True)
-
-
-@given(parsers.parse("the request targets a production account"))
-def given_production_account(ctx: dict) -> None:
-    """Seed a production (non-sandbox) account for the principal."""
-    _seed_account_for_principal(ctx, sandbox=False)
-
-
-@given("an authenticated identity with no principal_id")
-def given_identity_no_principal(ctx: dict) -> None:
-    """Simulate an identity resolved but with no principal_id.
-
-    The buyer has valid tenant context (e.g., token resolved) but lacks a
-    principal_id — simulating an expired/revoked token or incomplete auth.
-    Sets has_auth=True so the When step sends a real identity, but with
-    principal_id=None so _impl can detect the missing principal and return
-    an appropriate error response.
-    """
-    from tests.factories.principal import PrincipalFactory
-
-    env = ctx["env"]
-    identity = PrincipalFactory.make_identity(
-        principal_id=None,
-        tenant_id=env._tenant_id,
-    )
-    ctx.setdefault("query_kwargs", {})["identity"] = identity
-
-
-@given(parsers.parse("an authenticated identity with principal_id null"))
-@given(parsers.parse('an authenticated identity with principal_id ""'))
-def given_identity_principal_id_null_or_empty(ctx: dict) -> None:
-    """Simulate an identity with principal_id as null or empty string.
-
-    Both null and empty string are treated as "missing principal_id" by
-    production code. We set principal_id=None for both — the distinction
-    is in the Gherkin readability, not the implementation.
-    """
-    from tests.factories.principal import PrincipalFactory
-
-    env = ctx["env"]
-    identity = PrincipalFactory.make_identity(
-        principal_id=None,
-        tenant_id=env._tenant_id,
-    )
-    ctx.setdefault("query_kwargs", {})["identity"] = identity
-
-
-@given(parsers.parse('the principal "{principal_id}" does not exist in the tenant database'))
-def given_principal_not_in_tenant_db(ctx: dict, principal_id: str) -> None:
-    """Ensure the specified principal does not exist in the tenant database.
-
-    For integration env: delete the principal if it exists. The env already
-    created a default principal, but the scenario has set up a different
-    principal_id (e.g., "buyer-unknown") that should NOT be in the database.
-    """
-    from sqlalchemy import delete, select
-
-    from src.core.database.models import Principal
-
-    env = ctx["env"]
-    tenant = ctx.get("tenant")
-    assert tenant is not None, "No tenant in ctx"
-    if env._session is not None:
-        existing = env._session.scalars(
-            select(Principal).filter_by(principal_id=principal_id, tenant_id=tenant.tenant_id)
-        ).first()
-        if existing:
-            env._session.execute(
-                delete(Principal).where(
-                    Principal.principal_id == principal_id,
-                    Principal.tenant_id == tenant.tenant_id,
-                )
-            )
-            env._session.commit()
-
-
-@given(parsers.parse('an authenticated principal "{principal_id}" not in registry'))
-def given_principal_not_in_registry(ctx: dict, principal_id: str) -> None:
-    """Simulate an authenticated principal whose ID is not in the tenant database.
-
-    Sets up an identity with the given principal_id, but ensures no matching
-    Principal row exists in the DB. The _impl function should detect this
-    and return a "principal_not_found" error.
-    """
-    from sqlalchemy import delete, select
-
-    from src.core.database.models import Principal
-    from tests.factories.principal import PrincipalFactory
-
-    env = ctx["env"]
-    tenant = ctx.get("tenant")
-    assert tenant is not None, "No tenant in ctx"
-
-    # Build identity with the unregistered principal_id
-    identity = PrincipalFactory.make_identity(
-        principal_id=principal_id,
-        tenant_id=env._tenant_id,
-    )
-    ctx.setdefault("query_kwargs", {})["identity"] = identity
-
-    # Ensure the principal does NOT exist in DB
-    if env._session is not None:
-        existing = env._session.scalars(
-            select(Principal).filter_by(principal_id=principal_id, tenant_id=tenant.tenant_id)
-        ).first()
-        if existing:
-            env._session.execute(
-                delete(Principal).where(
-                    Principal.principal_id == principal_id,
-                    Principal.tenant_id == tenant.tenant_id,
-                )
-            )
-            env._session.commit()
-
-
-@given("no authentication context")
-def given_no_auth_context(ctx: dict) -> None:
-    """Simulate a request with no authentication at all.
-
-    Sets has_auth=False so the When step sends identity=None, triggering
-    an AUTH_REQUIRED error from _impl.
-    """
-    ctx["has_auth"] = False
+# REMOVED with the scenarios they served: three Givens that INJECTED an identity into
+# the request kwargs instead of presenting a credential.
+#
+# `an authenticated identity with no principal_id` and `an authenticated principal "<id>"
+# not in registry` both built a PrincipalFactory.make_identity and put it in
+# ctx["query_kwargs"]["identity"], which is the simulated-identity path removed with the
+# IMPL transport: the resolver never ran, so the scenario graded a boundary decision the
+# boundary had not made. Their feature rows are gone for spec reasons recorded in
+# BR-UC-019-query-media-buys.feature (ext-b, ext-c and two boundary rows). The state they
+# described is graded by the principal scoping boundary outline, which presents a real
+# token that verifies against no principal and lets the resolver answer AUTH_INVALID.
+#
+# `the principal "<id>" does not exist in the tenant database` deleted the row the other
+# two depended on; no feature sentence matches it (UC-003's `... does not exist in the
+# database` is a different sentence bound in that use case's steps).
+#
+# `no authentication context` is now bound by the generic
+# steps/generic/given_auth.py::given_buyer_no_auth alongside its three sibling spellings.
+# The copy here set ctx["has_auth"] = False and nothing else, which stopped working the
+# moment the dispatcher began keying off ctx["credential"]: the flag was read by no step
+# in this use case, so the request went out carrying the env's OWN valid credential and
+# the row asserting AUTH_MISSING was served a successful empty result.
 
 
 @given(parsers.parse('snapshot data is available for package "{pkg_id}"'))
@@ -1156,16 +1045,28 @@ def given_snapshot_available(ctx: dict, pkg_id: str) -> None:
 
 
 def _dispatch_query(ctx: dict, **extra_kwargs: Any) -> None:
-    """Build and dispatch a get_media_buys request."""
+    """Build and dispatch a get_media_buys request, presenting whatever the Given set.
+
+    A credential Given writes ``ctx["credential"]`` — a headers dict from
+    ``env.credential(...)`` — and ``dispatch_request`` presents it in place of the env's
+    own, for every use case. UC-002, UC-006, UC-010 and the context-echo steps each used
+    to read that key here instead, four copies of one three-line override; the read now
+    lives in the dispatcher, so a When cannot omit it.
+
+    What this replaced passed ``identity=None`` for the token-less row, which injected an
+    absent identity instead of presenting an absent credential. That is the shape
+    tests/CLAUDE.md removed with the IMPL transport: a scenario asserts AdCP WIRE
+    conformance, so a refusal has to come from the real resolver answering a real request,
+    not from handing the boundary a None. Both auth rows now present headers and the
+    resolver decides: nothing on the tenant is AUTH_MISSING, a token that verifies against
+    no principal is AUTH_INVALID.
+    """
     if ctx.get("error") is not None:
         return
     query_kwargs = ctx.get("query_kwargs", {})
     query_kwargs.update(extra_kwargs)
 
-    if ctx.get("has_auth") is False:
-        dispatch_request(ctx, identity=None, **query_kwargs)
-    else:
-        dispatch_request(ctx, **query_kwargs)
+    dispatch_request(ctx, **query_kwargs)
 
 
 @when("the Buyer Agent sends a get_media_buys request with include_snapshot true")
@@ -1202,8 +1103,19 @@ def when_query_no_filter_with_ids(ctx: dict, ids: str) -> None:
 
 @when("the Buyer Agent sends a get_media_buys request without authentication")
 def when_query_no_auth(ctx: dict) -> None:
-    """Send get_media_buys without authentication."""
-    ctx["has_auth"] = False
+    """Send get_media_buys presenting whatever credential the Given established.
+
+    The sentence names a property of the REQUEST, and the request's credential is set by
+    the scenario's Given (`the Buyer has no authentication credentials`, which presents
+    the env's tenant with no token). This step used to also write
+    ``ctx["has_auth"] = False``; no step in this use case read that flag, so it recorded
+    an intent nothing acted on while the dispatcher decided from ``ctx["credential"]``.
+    """
+    assert "credential" in ctx, (
+        "this When says the request carries no authentication, but no Given established a "
+        "credential to present — without one the dispatcher sends the env's OWN valid "
+        "credential and the scenario grades an authenticated request"
+    )
     _dispatch_query(ctx)
 
 
@@ -1267,10 +1179,31 @@ def when_query_invalid_params(ctx: dict) -> None:
     _dispatch_query(ctx, media_buy_ids="not-a-list")
 
 
+@given("the Buyer has access to an account")
+def given_buyer_has_an_account(ctx: dict) -> None:
+    """Seed an account this principal may act on, and remember the reference.
+
+    Through the shared harness capability, so the row and the principal's grant on it are
+    created the one way every env creates them. Without it the account a request names does
+    not resolve, and a scenario about an UNSUPPORTED filter is answered by ACCOUNT_NOT_FOUND.
+
+    Stored as the WIRE shape, not the typed model: the REST leg serializes this bag to JSON,
+    where an ``AccountReference`` is not encodable. The dict is what a buyer sends on every
+    transport anyway, and production validates it into the model at the boundary.
+    """
+    ctx["account_reference"] = {"account_id": ctx["env"].setup_default_account().account_id}
+
+
 @when(parsers.parse('the Buyer Agent sends a get_media_buys request with account_id "{account_id}"'))
 def when_query_with_account(ctx: dict, account_id: str) -> None:
     """Send get_media_buys with account_id filter (ext-e)."""
     _dispatch_query(ctx, account={"account_id": account_id})
+
+
+@when("the Buyer Agent sends a get_media_buys request with that account_id")
+def when_query_with_the_seeded_account(ctx: dict) -> None:
+    """Send get_media_buys filtered by the account the Given seeded."""
+    _dispatch_query(ctx, account=ctx["account_reference"])
 
 
 @when(parsers.parse("the Buyer Agent sends a get_media_buys request with invalid status filter"))
@@ -1285,26 +1218,31 @@ def when_query_invalid_status_filter(ctx: dict) -> None:
 
 
 def _assert_flight_dates_present(pkg: Any) -> None:
-    """Assert flight date fields are present on a package.
+    """Assert the package carries its flight window.
 
-    Step text claims 'flight dates' — check start_date/end_date or
-    start_time/end_time (naming varies by schema version).
+    The pinned 3.1 ``core/package.json`` names these fields ``start_time`` and
+    ``end_time``. It does NOT declare ``start_date``/``end_date`` at all, so the
+    old "naming varies by schema version" alternative accepted a spelling the pin
+    has no concept of — a package answering with those would have satisfied a
+    check for fields the buyer's own schema would reject.
+
+    The fields are optional in the pin (``required`` is ``["package_id"]``), so this
+    is not a spec MUST; it is this seller echoing the flight window the buyer
+    supplied in the Given. Where production does not, the scenario is parked in
+    the ledger, not excused here: the xfail that stood in this function was keyed
+    on the outcome, so it could not fail in the one direction that matters.
     """
-    import pytest
 
     def _has(field: str) -> bool:
         if isinstance(pkg, dict):
             return field in pkg and pkg[field] is not None
         return getattr(pkg, field, None) is not None
 
-    has_dates = _has("start_date") and _has("end_date")
-    has_times = _has("start_time") and _has("end_time")
-    if not has_dates and not has_times:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: Package missing flight date fields "
-            "(start_date/end_date or start_time/end_time). Step claims "
-            "'flight dates' are included in package details."
-        )
+    missing = [f for f in ("start_time", "end_time") if not _has(f)]
+    assert not missing, (
+        f"package details must carry the flight window the buyer supplied; "
+        f"missing {missing} (pinned 3.1 core/package.json names them start_time/end_time)"
+    )
 
 
 def _get_media_buys(ctx: dict) -> list:
@@ -1340,7 +1278,6 @@ def then_response_includes_mb_with_status(ctx: dict, mb_id: str, status: str) ->
 )
 def then_package_details(ctx: dict) -> None:
     """Assert each media buy has package-level details including all claimed fields."""
-    import pytest
 
     buys = _get_media_buys(ctx)
     assert buys, "No media buys in response to check"
@@ -1372,19 +1309,21 @@ def then_package_details(ctx: dict) -> None:
                 )
             # Flight dates: step text explicitly claims these are present
             _assert_flight_dates_present(pkg)
-            # paused must be a boolean, not absent — collect gaps across ALL packages
+            # ``paused`` is declared in the pinned 3.1 core/package.json as
+            # {"type": "boolean", "default": false}. A DEFAULT means a parsed package can
+            # never legitimately carry None: absence resolves to False. So None is not a
+            # "field not present" gap to be excused, it is the local model failing to apply
+            # the pin's default, and that is worth failing on.
             if pkg.paused is None:
                 paused_gaps.append(f"package {pkg.package_id} in {mb_id}")
             else:
                 assert isinstance(pkg.paused, bool), f"Expected paused to be bool, got {type(pkg.paused)}"
     assert total_packages_checked > 0, "No packages checked despite media buys being present"
-    if paused_gaps:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: paused field not present on {len(paused_gaps)} of "
-            f"{total_packages_checked} package(s): {', '.join(paused_gaps)}. "
-            f"All other fields (budget, bid_price, product_id, flight dates) verified. "
-            f"FIXME"
-        )
+    assert not paused_gaps, (
+        f"paused is None on {len(paused_gaps)} of {total_packages_checked} package(s): "
+        f"{', '.join(paused_gaps)}. The pin declares it boolean with default false, so a "
+        f"parsed package resolves absence to False and never to None."
+    )
 
 
 @then("each package should include creative approval state when creatives are assigned")
@@ -1499,19 +1438,6 @@ def then_response_includes_one(ctx: dict, mb_id: str) -> None:
     assert real_id in ids, f"Expected '{mb_id}' (real_id={real_id}) in response, got {ids}"
 
 
-@then(parsers.parse('the response package "{pkg_id}" should include a snapshot'))
-def then_package_has_snapshot(ctx: dict, pkg_id: str) -> None:
-    """Assert package includes snapshot data."""
-    buys = _get_media_buys(ctx)
-    for buy in buys:
-        for pkg in getattr(buy, "packages", []) or []:
-            if getattr(pkg, "package_id", None) == pkg_id:
-                snapshot = getattr(pkg, "snapshot", None)
-                assert snapshot is not None, f"Expected snapshot on package '{pkg_id}'"
-                return
-    raise AssertionError(f"Package '{pkg_id}' not found in response")
-
-
 @then("the snapshot should include as_of, staleness_seconds, impressions, and spend")
 def then_snapshot_fields(ctx: dict) -> None:
     """Assert snapshot has all 4 claimed fields: as_of, staleness_seconds, impressions, spend.
@@ -1575,14 +1501,15 @@ def then_fail_with_code(ctx: dict, code: str) -> None:
             f"errors[0].code={payload_error.get('code')!r}"
         )
         return
-    error = ctx.get("error")
-    assert error is not None, "Expected an error but none found"
-    from src.core.exceptions import AdCPError
-
-    if isinstance(error, AdCPError):
-        assert error.error_code == code, f"Expected error code '{code}', got '{error.error_code}'"
-    else:
-        raise AssertionError(f"Expected AdCPError with code '{code}', got {type(error).__name__}: {error}")
+    result = ctx.get("result")
+    raise AssertionError(
+        f"Expected the wire to carry error code {code!r}, but no wire error envelope was captured. "
+        "This used to fall through to a reconstructed exception, which meant a scenario that "
+        "produced NO wire bytes still passed (salesagent-3dawm.18). "
+        f"transport={ctx.get('transport')!r} "
+        f"dispatch_error={type(ctx.get('error')).__name__}:{ctx.get('error')!r} "
+        f"result.error={type(getattr(result, 'error', None)).__name__}:{getattr(result, 'error', None)!r}"
+    )
 
 
 def _pinned_recovery(code: str) -> str | None:
@@ -1636,17 +1563,6 @@ def then_request_refused_for_media_buy(ctx: dict, media_buy_id: str, code: str) 
     )
 
 
-@then("the error message should indicate that identity is required")
-def then_error_identity_required(ctx: dict) -> None:
-    """Assert error mentions identity/authentication."""
-    error = ctx.get("error")
-    assert error is not None, "Expected an error"
-    msg = str(error).lower()
-    assert any(kw in msg for kw in ("identity", "auth", "principal", "credential")), (
-        f"Expected identity-related error message, got: {error}"
-    )
-
-
 def _assert_error_recovery(ctx: dict, expected: str) -> None:
     """Assert the error's recovery classification — wire-first, typed fallback.
 
@@ -1660,18 +1576,61 @@ def _assert_error_recovery(ctx: dict, expected: str) -> None:
             f"Expected wire recovery='{expected}', got {wire.get('recovery')!r} on wire code {wire.get('code')!r}"
         )
         return
+    raise AssertionError(
+        f"Expected the wire to carry recovery={expected!r}, but no wire error envelope was captured "
+        "(salesagent-3dawm.18: the reconstructed fallback is gone -- recovery is a graded wire field)."
+    )
+
+
+# ── Unbound, and KEPT: obligations whose scenario was reworded or never written ──
+#
+# No feature binds the four steps below — checked by literal grep and by matching each
+# pattern against all 49534 sentences rendered from every feature's Examples through
+# pytest-bdd's own FeatureParser. They are kept anyway, because "nothing binds it" is not
+# evidence of deadness: each reads ctx state that live steps still write and asserts a real
+# obligation, so deleting them would destroy the only record that the obligation was
+# identified.
+#
+# The two empty-media_buys steps are the clearest case. @T-UC-019-boundary-principal DOES
+# carry the obligation, in three Examples rows, but the outcome column was reworded to
+# `empty media_buys with soft error code "AUTH_MISSING" message "..."` — which matches no
+# step definition, here or anywhere. Those three rows are additionally xfailed on transport
+# grounds ("principal_id=null/empty/ghost is unreachable — a valid token always resolves to
+# a real principal"), a DELIBERATE gap, so the rows are not silently dormant. If that gate is
+# ever lifted, these two are the implementations to re-point at the reworded sentence.
+#
+# `then_error_contains` and `then_error_invalid_status` grade the error MESSAGE by substring.
+# That is the wrong oracle to re-bind as written — CODE_TABLE derives the sentence from the
+# code, so a code assertion carries the same obligation without pinning one seller's wording
+# — but the obligation `then_error_invalid_status` names (the rejection identifies WHICH
+# value was invalid) is real and belongs on `errors[0].field` or `details`.
+#
+# `the error should include a "recovery" field indicating terminal failure` was deleted
+# rather than kept: it is a genuine duplicate. The bound refusal step derives the expected
+# recovery from `_pinned_recovery(code)`, so the terminal classification is already graded
+# from the pin wherever a terminal code is asserted — strictly stronger than restating it.
+
+
+@then(parsers.parse('the error message should contain "{fragment}"'))
+def then_error_contains(ctx: dict, fragment: str) -> None:
+    """Assert error message contains a specific fragment."""
     error = ctx.get("error")
     assert error is not None, "Expected an error"
-    from src.core.exceptions import AdCPError
-
-    assert isinstance(error, AdCPError), f"Expected AdCPError with recovery field, got {type(error).__name__}: {error}"
-    assert error.recovery == expected, f"Expected {expected} recovery, got '{error.recovery}'"
+    msg = str(error).lower()
+    assert fragment.lower() in msg, f"Expected '{fragment}' in error: {error}"
 
 
-@then(parsers.parse('the error should include a "recovery" field indicating terminal failure'))
-def then_error_recovery_terminal(ctx: dict) -> None:
-    """Assert error has terminal recovery classification."""
-    _assert_error_recovery(ctx, "terminal")
+@then(parsers.parse('the error message should indicate "{text}" is not a valid MediaBuyStatus'))
+def then_error_invalid_status(ctx: dict, text: str) -> None:
+    """Assert error mentions the invalid status value."""
+    error = ctx.get("error")
+    assert error is not None, "Expected an error"
+    msg = str(error).lower()
+    # Step text requires BOTH: mention of the invalid value AND that it's about status
+    assert text.lower() in msg, f"Expected invalid value '{text}' to appear in error message, got: {error}"
+    assert "status" in msg, (
+        f"Expected 'status' to appear in error message (indicating this is a status validation error), got: {error}"
+    )
 
 
 def _current_suggestion(ctx: dict) -> str:
@@ -1684,39 +1643,13 @@ def _current_suggestion(ctx: dict) -> str:
     missing or empty — never a silent escape.
     """
     suggestion = _wire_suggestion(ctx)
-    if suggestion is None:
-        error = ctx.get("error")
-        assert error is not None, "Expected an error"
-        from src.core.exceptions import AdCPError
-
-        assert isinstance(error, AdCPError), (
-            f"Expected AdCPError with suggestion field, got {type(error).__name__}: {error}"
-        )
-        # STRICT error.json conformance: top-level attribute only (#1417).
-        suggestion = error.suggestion
+    assert suggestion is not None, (
+        "Expected a top-level suggestion on the wire, but no wire error envelope was captured (salesagent-3dawm.18)."
+    )
     assert isinstance(suggestion, str) and suggestion.strip(), (
         f"Expected non-empty top-level suggestion string, got {suggestion!r}"
     )
     return suggestion
-
-
-def _assert_suggestion_contains_any(ctx: dict, options: list[str]) -> None:
-    """Assert the buyer-facing suggestion contains at least one of the options."""
-    suggestion = _current_suggestion(ctx)
-    lowered = suggestion.lower()
-    assert any(t.lower() in lowered for t in options), f"Expected one of {options!r} in suggestion: {suggestion}"
-
-
-@then(parsers.parse('the suggestion should contain "{text1}" or "{text2}"'))
-def then_suggestion_contains_either(ctx: dict, text1: str, text2: str) -> None:
-    """Assert suggestion contains one of the specified texts."""
-    _assert_suggestion_contains_any(ctx, [text1, text2])
-
-
-@then(parsers.parse('the suggestion should contain "{text1}" or "{text2}" or "{text3}"'))
-def then_suggestion_contains_any_of_three(ctx: dict, text1: str, text2: str, text3: str) -> None:
-    """Assert suggestion contains one of three specified texts."""
-    _assert_suggestion_contains_any(ctx, [text1, text2, text3])
 
 
 @then(parsers.parse('the media buy "{mb_id}" should have status "{expected_status}"'))
@@ -1742,21 +1675,34 @@ def then_error_field_validation(ctx: dict) -> None:
     specific field names or paths (media_buy_ids, status_filter, buyer_refs, etc.),
     not just generic words like "type" or "expected" that appear in any error.
     """
-    # Require actual field names from GetMediaBuysRequest schema.
+    # Require actual field names from the GetMediaBuysRequest schema, read from the
+    # STRUCTURED carriers only: the `field` pointer and the projected pydantic entries in
+    # details.validation_errors[].loc. The buyer-facing message is excluded deliberately —
+    # it is a function of the code through CODE_TABLE and can never name a request field,
+    # so including it in the search text made the assertion satisfiable by wording rather
+    # than by the field-level detail the step name promises.
     field_names = ("media_buy_ids", "status_filter", "buyer_refs", "account_id")
     wire = _wire_error_object(ctx)
     if wire is not None:
-        # Wire-first: the buyer-facing message and the structured ``field``
-        # selector must reference an actual request schema field.
-        text = f"{wire.get('message', '')} {wire.get('field', '')}".lower()
-        source = f"wire error object {wire!r}"
+        field_value = wire.get("field")
+        details = wire.get("details") or {}
+        source: object = wire
     else:
+        # No envelope captured on this transport. Fall back to the TYPED error's structured
+        # attributes — never to str(error), which reads the CODE_TABLE sentence and can
+        # never contain a field name.
         error = ctx.get("error")
         assert error is not None, "Expected a validation error"
-        text = str(error).lower()
-        source = f"error message {error}"
+        field_value = getattr(error, "field", None)
+        details = getattr(error, "details", None) or {}
+        source = error
+    carriers = [str(field_value or "")]
+    for entry in details.get("validation_errors") or []:
+        carriers.extend(str(part) for part in (entry.get("loc") or []))
+    text = " ".join(carriers).lower()
     assert any(field_name in text for field_name in field_names), (
-        f"Expected field-level validation details (containing actual field names like {field_names}) in {source}"
+        f"Expected field-level validation details naming one of {field_names}; "
+        f"the structured carriers held {carriers!r}: {source!r}"
     )
 
 
@@ -1780,15 +1726,6 @@ def then_error_has_suggestion(ctx: dict) -> None:
     _current_suggestion(ctx)
 
 
-@then(parsers.parse('the error message should contain "{fragment}"'))
-def then_error_contains(ctx: dict, fragment: str) -> None:
-    """Assert error message contains a specific fragment."""
-    error = ctx.get("error")
-    assert error is not None, "Expected an error"
-    msg = str(error).lower()
-    assert fragment.lower() in msg, f"Expected '{fragment}' in error: {error}"
-
-
 @then(parsers.parse('the response errors array should include error code "{code}"'))
 def then_response_errors_include(ctx: dict, code: str) -> None:
     """Assert response.errors contains the specified error code."""
@@ -1809,27 +1746,23 @@ def then_errors_name_omitted_media_buy(ctx: dict, mb_id: str) -> None:
     The id matters more than the code here. An advisory saying a row was dropped
     without saying WHICH row cannot be reconciled against — the buyer has no way to
     tell whether the buy they wanted is broken or simply does not exist.
+
+    The whole advisory OBJECT is searched, not its ``message`` alone, and that is the
+    obligation rather than a loosening of it: ``Error`` derives
+    ``message``/``suggestion``/``recovery`` from ``CODE_TABLE`` and DISCARDS anything a
+    call site passes for them, so an id can only reach the buyer as data — in
+    ``details``. A message-only read graded a slot production is structurally unable to
+    put the id in, and would have gone on passing an advisory that named no row at all
+    once the code table answered "Configuration error" for every one of them. Same
+    wire-first, whole-object shape as ``then_request_refused_for_media_buy``.
     """
     real_id = _resolve_media_buy_id(ctx, mb_id)
-    document = wire_dict(ctx)
-    errors = document.get("errors") or []
-    messages = [e.get("message", "") if isinstance(e, dict) else getattr(e, "message", "") for e in errors]
-    assert any(real_id in message for message in messages), (
-        f"expected an advisory naming the omitted media buy {real_id!r}; "
-        f"the response carried {len(errors)} advisory/advisories: {messages}"
-    )
-
-
-@then(parsers.parse('the error message should indicate "{text}" is not a valid MediaBuyStatus'))
-def then_error_invalid_status(ctx: dict, text: str) -> None:
-    """Assert error mentions the invalid status value."""
-    error = ctx.get("error")
-    assert error is not None, "Expected an error"
-    msg = str(error).lower()
-    # Step text requires BOTH: mention of the invalid value AND that it's about status
-    assert text.lower() in msg, f"Expected invalid value '{text}' to appear in error message, got: {error}"
-    assert "status" in msg, (
-        f"Expected 'status' to appear in error message (indicating this is a status validation error), got: {error}"
+    errors = _wire_advisories(ctx)
+    haystacks = [json.dumps(advisory, default=str) for advisory in errors]
+    assert any(real_id in haystack for haystack in haystacks), (
+        f"expected an advisory naming the omitted media buy {real_id!r} — in `details`, since "
+        f"`message` is derived from the code table and cannot carry it; the response carried "
+        f"{len(errors)} advisory/advisories: {haystacks}"
     )
 
 
@@ -1905,38 +1838,6 @@ def then_rejection_reason_absent(ctx: dict) -> None:
                 actual_reason = getattr(approval, "rejection_reason", None)
                 assert actual_reason is None, f"Expected rejection_reason to be absent, got '{actual_reason}'"
     assert checked > 0, "No approval entries found in response — cannot verify rejection_reason absence"
-
-
-@then(parsers.parse("rejection_reason should not be present in the approval entry"))
-def then_rejection_reason_not_present(ctx: dict) -> None:
-    """Assert rejection_reason is not present on ANY approval entry."""
-
-    buys = _get_media_buys(ctx)
-    checked = 0
-    for buy in buys:
-        for pkg in getattr(buy, "packages", []) or []:
-            approvals = getattr(pkg, "creative_approvals", None) or []
-            for approval in approvals:
-                checked += 1
-                actual_reason = getattr(approval, "rejection_reason", None)
-                assert actual_reason is None, f"Expected rejection_reason to not be present, got '{actual_reason}'"
-    assert checked > 0, "No approval entries found in response — cannot verify rejection_reason absence"
-
-
-@then(parsers.parse("rejection_reason should be null or absent"))
-def then_rejection_reason_null_or_absent(ctx: dict) -> None:
-    """Assert rejection_reason is null or absent on ALL approval entries."""
-
-    buys = _get_media_buys(ctx)
-    checked = 0
-    for buy in buys:
-        for pkg in getattr(buy, "packages", []) or []:
-            approvals = getattr(pkg, "creative_approvals", None) or []
-            for approval in approvals:
-                checked += 1
-                actual_reason = getattr(approval, "rejection_reason", None)
-                assert actual_reason is None, f"Expected rejection_reason to be null or absent, got '{actual_reason}'"
-    assert checked > 0, "No approval entries found in response — cannot verify rejection_reason null/absent"
 
 
 @then(parsers.parse('the creative approvals for package "{pkg_id}" should not include an entry for "{creative_id}"'))
@@ -2227,66 +2128,32 @@ def then_no_sandbox_field(ctx: dict) -> None:
     )
 
 
-@then("the response should indicate a validation error")
-def then_validation_error(ctx: dict) -> None:
-    """Assert response indicates a validation error — wire-first.
-
-    On a wire transport the buyer-facing code must be exactly VALIDATION_ERROR
-    (the pinned error-code enum's canonical request-validation code). No-wire
-    fallback: either a raised exception with validation-related keywords, or
-    response.errors containing validation-related content.
-    """
-    wire_code = _wire_code(ctx)
-    if wire_code is not None:
-        assert wire_code == "VALIDATION_ERROR", f"Expected wire code VALIDATION_ERROR, got {wire_code!r}"
-        return
-
-    error = ctx.get("error")
-    if error:
-        # Verify it's actually a validation error, not just any error
-        msg = str(error).lower()
-        assert any(kw in msg for kw in ("validation", "invalid", "required", "type", "field")), (
-            f"Expected a validation error, but error doesn't indicate validation: {error}"
-        )
-        return
-    resp = payload_or_none(ctx)
-    if resp:
-        errors = getattr(resp, "errors", None)
-        if errors:
-            # Verify at least one error relates to validation
-            error_strs = [str(e).lower() for e in errors]
-            has_validation_keyword = any(
-                any(kw in s for kw in ("validation", "invalid", "required", "type", "field")) for s in error_strs
-            )
-            assert has_validation_keyword, f"Response has errors but none indicate validation: {errors}"
-            return
-    raise AssertionError(
-        "Expected validation error: neither error raised nor response.errors contains validation content"
-    )
-
-
 @then("the error should be a real validation error, not simulated")
 def then_real_validation_error(ctx: dict) -> None:
     """Assert error is a real validation error (not simulated sandbox response).
 
-    Wire-first: a "real" validation error is an actual wire REJECTION — a
-    two-layer error envelope carrying VALIDATION_ERROR with correctable
-    recovery (BR-RULE-209 INV-7: sandbox inputs are validated like production;
-    a simulated sandbox response would come back as a success payload instead).
+    Wire-first: a "real" validation error is an actual wire REJECTION — a two-layer
+    error envelope rather than a success payload (BR-RULE-209 INV-7: sandbox inputs are
+    validated like production; a SIMULATED sandbox response would come back as a success
+    payload instead). That contrast — rejection vs. success payload — is the whole of
+    INV-7, and it is what this step grades.
+
+    It asserts NO code. It used to assert VALIDATION_ERROR, which made it a second,
+    hidden code claim that could contradict the one its own scenario states: the
+    sandbox scenario sends an out-of-enum status_filter, which is INVALID_REQUEST under
+    the pinned split ("violates schema constraints" vs "beyond schema validation"), and
+    this step failed it while the scenario's own `the error code should be "..."` step
+    passed. Which code is owed belongs in the scenario, where a reader can see it.
     No-wire fallback: the typed production exception.
     """
     result = ctx.get("result")
     if result is not None and result.wire_error_envelope is not None:
-        result.assert_wire_error("VALIDATION_ERROR")
         return
 
-    error = ctx.get("error")
-    assert error is not None, "Expected a real validation error but no error was raised"
-    from src.core.exceptions import AdCPError
-
-    # A "real" validation error is an actual exception (not a response-embedded simulated one)
-    assert isinstance(error, (AdCPError, ValueError, TypeError)), (
-        f"Expected a real validation error (AdCPError/ValueError/TypeError), got {type(error).__name__}: {error}"
+    raise AssertionError(
+        "Expected a real wire REJECTION carrying VALIDATION_ERROR, but no wire error envelope was "
+        "captured. The old fallback accepted any AdCPSalesAgentError/ValueError/TypeError, so a scenario that "
+        "never reached the wire passed on the strength of an exception type (salesagent-3dawm.18)."
     )
 
 
@@ -2376,26 +2243,32 @@ def then_any_status_returned(ctx: dict) -> None:
         )
 
 
-@then(parsers.parse('the response should include an empty media_buys array with error "{code}"'))
-def then_empty_with_error(ctx: dict, code: str) -> None:
-    """Assert empty media_buys with specific error code in response."""
-    buys = _get_media_buys(ctx)
-    assert len(buys) == 0, f"Expected empty media_buys, got {len(buys)}"
-    resp = require_payload(ctx)
-    errors = getattr(resp, "errors", None) or []
-    codes = [e.get("code") if isinstance(e, dict) else getattr(e, "code", None) for e in errors]
-    assert code in codes, f"Expected error '{code}' in errors, got {codes}"
+@then(parsers.parse('hard error code "{code}" raised before any DB access'))
+def then_hard_refusal_before_db(ctx: dict, code: str) -> None:
+    """A refusal, not an empty success, and no payload behind it.
 
+    "Hard" is the distinction the row exists to grade. A refusal carries the code on the
+    envelope and NO success payload; the shape this replaced asserted an empty
+    ``media_buys`` array beside a "soft" error, which is a success document wearing an
+    error, and 3.1.1 gives both codes on this row's two cases a recovery that forbids
+    reading it that way: ``AUTH_INVALID`` is ``terminal`` ("do NOT auto-retry"),
+    ``AUTH_MISSING`` is ``correctable`` ("provide credentials via the auth header and
+    retry"). Neither says "here are zero results".
 
-@then(parsers.parse('empty media_buys with error "{code}"'))
-def then_empty_buys_with_error(ctx: dict, code: str) -> None:
-    """Assert empty media_buys with error (boundary table shorthand)."""
-    buys = _get_media_buys(ctx)
-    assert len(buys) == 0, f"Expected empty, got {len(buys)}"
-    resp = require_payload(ctx)
-    errors = getattr(resp, "errors", None) or []
-    codes = [e.get("code") if isinstance(e, dict) else getattr(e, "code", None) for e in errors]
-    assert code in codes, f"Expected '{code}' in response errors, got {codes}"
+    "Before any DB access" is graded structurally rather than by watching queries: the
+    envelope carries no payload at all, which is only true when the resolver refused
+    before the implementation ran. ``get_media_buys`` declares ``ResolvedIdentity``
+    (src/core/tools/media_buy_list.py:147), on which the principal is not optional, so a
+    caller the resolver cannot resolve never reaches the tool and no query is issued.
+
+    ``assert_wire_error`` defaults ``recovery`` from the pinned error-code table, so the
+    recovery half is asserted against the pin rather than restated here.
+    """
+    ctx["result"].assert_wire_error(code)
+    envelope = ctx["result"].error_envelope()
+    assert "media_buys" not in envelope, (
+        f"a hard refusal carries no result payload, but the envelope holds media_buys: {envelope.get('media_buys')!r}"
+    )
 
 
 @then(parsers.parse('error "{code}" with suggestion'))
@@ -2405,18 +2278,13 @@ def then_error_code_with_suggestion(ctx: dict, code: str) -> None:
     Step text: 'error "{code}" with suggestion'. Asserts both error code AND
     presence of suggestion in details dict.
     """
-    error = ctx.get("error")
-    assert error is not None, "Expected an error"
-    from src.core.exceptions import AdCPError
-
-    assert isinstance(error, AdCPError), f"Expected AdCPError with code '{code}', got {type(error).__name__}: {error}"
-    assert error.error_code == code, f"Expected error code '{code}', got '{error.error_code}'"
-    # STRICT error.json conformance: suggestion is a top-level error attribute,
-    # never read from the free-form details dict (#1417).
-    suggestion = error.suggestion
-    assert isinstance(suggestion, str) and suggestion.strip(), (
-        f"Expected non-empty top-level suggestion string for error code '{code}', got {suggestion!r}"
-    )
+    # One call on the sanctioned surface. require_suggestion enforces the STRICT
+    # error.json position -- a suggestion buried in the free-form details dict does
+    # not satisfy it (#1417). This step had NO wire path at all before
+    # salesagent-3dawm.18: it read code and suggestion straight off a reconstructed
+    # exception, which re-derives both from the code and so could only agree with
+    # itself.
+    ctx["result"].assert_wire_error(code, require_suggestion=True)
 
 
 @then(parsers.parse("no snapshot or snapshot_unavailable_reason on any package"))
@@ -2870,7 +2738,7 @@ def _is_wire_integer(value: Any) -> bool:
     load-bearing here: A2A frames its DataPart as a protobuf ``Struct``, whose only
     numeric kind is ``number_value`` (a double), so an integer field arrives as
     ``1.0`` on A2A and ``1`` on MCP. Asserting ``isinstance(int)`` would fail the
-    a2a arm of every revision scenario over a framing detail while letting a real
+    a2a branch of every revision scenario over a framing detail while letting a real
     fractional revision through on MCP; this rejects ``1.5`` and ``"1"`` on both.
     """
     return isinstance(value, (int, float)) and not isinstance(value, bool) and float(value).is_integer()
@@ -3187,38 +3055,108 @@ def _package_row(ctx: dict, pkg_id: str) -> Any:
 #: A value the pinned model accepts for each blob key the read path resolves. Used to
 #: give every scenario row valid siblings, so "degrades that field ALONE" has something
 #: to be false about.
+#: ``targeting_overlay`` carries the PINNED v3 geo spelling: core/targeting.json declares
+#: ``geo_countries`` (array of ISO 3166-1 alpha-2), and the flat ``geo_country_any_of`` this
+#: entry used to hold does not exist in 3.1.1 at all. Targeting states that it reshapes
+#: nothing on the way in (src/core/schemas/_base.py:1697), so the flat spelling raised
+#: extra_forbidden while REHYDRATING the sibling — which the boundary reported to the buyer
+#: as INVALID_REQUEST and failed the whole listing, the exact outcome these rows forbid.
+#: The key is the modern one for the same reason: a sibling has to be a value the pinned
+#: model accepts, and the legacy ``targeting`` key is consulted only when the modern key is
+#: absent (INV-8), so seeding the legacy key made every row depend on a fallback path.
 _VALID_BLOB_SIBLINGS = {
     "product_id": "guaranteed_display",
     "start_time": "2026-03-01T00:00:00Z",
     "end_time": "2026-03-31T00:00:00Z",
     "paused": False,
-    "targeting": {"geo_country_any_of": ["US"]},
+    "targeting_overlay": {"geo_countries": ["US"]},
 }
 
 
+def _set_package_config(
+    ctx: dict,
+    pkg_id: str,
+    updates: dict[str, Any],
+    *,
+    defaults: dict[str, Any] | None = None,
+    drop: tuple[str, ...] = (),
+) -> None:
+    """Rewrite keys of one package's untyped ``package_config`` column and commit.
+
+    The ONE write path for that column, shared by every Given that seeds a persisted
+    blob value: ``drop`` removes keys (a key's ABSENCE is a state a scenario states,
+    and it is what INV-8's fallback turns on), ``defaults`` fills keys the row does not
+    already carry, and ``updates`` wins over both.
+    """
+    row = _package_row(ctx, pkg_id)
+    config = dict(row.package_config or {})
+    for key in drop:
+        config.pop(key, None)
+    for key, value in (defaults or {}).items():
+        config.setdefault(key, value)
+    config.update(updates)
+    row.package_config = config
+    ctx["env"]._session.commit()
+
+
 @given(parsers.parse('package "{pkg_id}" package_config key {field} holds the legacy JSON value {legacy_json}'))
+# Same write, said of a value the pinned model ACCEPTS. The isolation scenarios
+# (INV-5/INV-6) need a sibling package whose targeting_overlay survives, and calling
+# that seed a "legacy" value would be false — while giving it a second step body would
+# duplicate this one for a difference that is only in the sentence.
+@given(parsers.parse('package "{pkg_id}" package_config key {field} holds the JSON value {legacy_json}'))
 def given_package_config_legacy_value(ctx: dict, pkg_id: str, field: str, legacy_json: str) -> None:
-    """Write ONE legacy-invalid value into the package's untyped package_config column.
+    """Write ONE value into the package's untyped package_config column.
 
     The value is spelled as JSON in the Examples table so the seed carries the real
     persisted TYPE (``123`` is an int, ``"maybe"`` is a str) rather than the string
     Gherkin would otherwise hand over — a str ``"123"`` would satisfy the pinned
     ``product_id`` type and grade nothing.
     """
-    import json
-
-    row = _package_row(ctx, pkg_id)
-    config = dict(row.package_config or {})
     # Seed every OTHER blob key with a value the pinned model accepts, so the row has
     # siblings that must survive. Without them "degrades that field alone" is not
     # gradeable on rows whose seed carries no other blob value: an implementation that
     # degrades everything has nothing else to destroy, so it looks correct. Measured --
     # with these siblings absent, such an implementation passed the two product_id rows.
-    for key, valid in _VALID_BLOB_SIBLINGS.items():
-        config.setdefault(key, valid)
-    config[field] = json.loads(legacy_json)
-    row.package_config = config
-    ctx["env"]._session.commit()
+    _set_package_config(ctx, pkg_id, {field: json.loads(legacy_json)}, defaults=_VALID_BLOB_SIBLINGS)
+
+
+@given(
+    parsers.parse(
+        'package "{pkg_id}" package_config has no targeting_overlay key but has legacy targeting {legacy_json}'
+    )
+)
+def given_package_config_legacy_targeting_only(ctx: dict, pkg_id: str, legacy_json: str) -> None:
+    """Persist the PRE-RENAME key only: ``targeting`` written, ``targeting_overlay`` absent.
+
+    Both halves are the point. The read path is
+    ``pkg_config.get("targeting_overlay") or pkg_config.get("targeting")``
+    (src/core/tools/media_buy_list.py:274), so the fallback is reachable only while the
+    modern key is absent — and ``_VALID_BLOB_SIBLINGS`` carries a ``targeting_overlay``
+    entry, which is exactly why this Given does not go through the sibling-seeding step:
+    that default would supply the modern key and grade the wrong branch.
+    """
+    _set_package_config(ctx, pkg_id, {"targeting": json.loads(legacy_json)}, drop=("targeting_overlay",))
+
+
+@given(
+    parsers.parse(
+        'package "{pkg_id}" package_config has legacy targeting {legacy_json} and targeting_overlay {modern_json}'
+    )
+)
+def given_package_config_both_targeting_keys(ctx: dict, pkg_id: str, legacy_json: str, modern_json: str) -> None:
+    """Persist BOTH keys, with different values, so which one is read is observable.
+
+    The other half of INV-8's "only": a read path that consulted ``targeting``
+    unconditionally, or preferred it, is indistinguishable from the correct one while
+    the modern key is absent. Distinct country lists are what make the two orders
+    tell apart on the wire.
+    """
+    _set_package_config(
+        ctx,
+        pkg_id,
+        {"targeting": json.loads(legacy_json), "targeting_overlay": json.loads(modern_json)},
+    )
 
 
 @given(parsers.parse('media buy "{mb_id}" raw_request key {field} holds the legacy JSON value {legacy_json}'))
@@ -3254,10 +3192,18 @@ def then_media_buy_wire_field_degraded(ctx: dict, mb_id: str, field: str) -> Non
     )
 )
 def then_raw_request_advisory_code_and_recovery(ctx: dict, mb_id: str, field: str, code: str, recovery: str) -> None:
-    """Both halves, off the wire, and exactly one advisory in the whole document.
+    """Every half the sentence names, off the wire, and exactly one advisory in the document.
 
     The document-wide count is what grades "alone" here, for the same reason it does on
     the package rows: without it an implementation that degrades every blob value passes.
+
+    ``mb_id`` is graded too, which it was not: the sentence says "for media buy X" and the
+    step only substring-matched the FIELD half, so an advisory naming a different media buy
+    satisfied it. Production emits the pointer as
+    ``media_buys[<media_buy_id>].<field>`` (media_buy_list.py's ``field_path`` for the
+    raw_request blob rule), so both halves are on the wire and both are asserted. Membership
+    rather than exact-template equality: the identity is what the scenario names, and the
+    pointer's spelling is production's to change.
     """
     advisories = _wire_advisories(ctx)
 
@@ -3266,8 +3212,12 @@ def then_raw_request_advisory_code_and_recovery(ctx: dict, mb_id: str, field: st
         f"{field!r} must degrade that field ALONE — got {len(advisories)}: {advisories!r}"
     )
     advisory = advisories[0]
-    assert field in str(advisory.get("field", "")), (
-        f"expected the advisory to name field {field!r}; got {advisory.get('field')!r}"
+    pointer = str(advisory.get("field", ""))
+    assert field in pointer, f"expected the advisory to name field {field!r}; got {advisory.get('field')!r}"
+    assert mb_id in pointer, (
+        f"expected the advisory pointer to name media buy {mb_id!r} — the sentence grades the "
+        f"advisory raised FOR that buy, and one naming another buy is a different defect; "
+        f"got {advisory.get('field')!r}"
     )
     assert advisory.get("code") == code, (
         f"expected advisory code {code!r} for a defect in the seller's own store, got {advisory.get('code')!r}"
@@ -3313,9 +3263,12 @@ def _wire_advisories(ctx: dict) -> list[dict]:
     advisories live INSIDE a successful response, so ``wire_error_envelope`` is
     empty for them and the typed payload would show already-coerced values.
     ``errors`` is dropped by ``exclude_none`` when the listing is clean, so an
-    absent key means "no advisories".
+    absent key means "no advisories" — the TRI-STATE case ``wire_lookup`` exists
+    for. Where the channel sits in the document is the harness's business, so the
+    key is resolved there rather than dug out of the body here.
     """
-    return list(wire_dict(ctx).get("errors") or [])
+    advisories = wire_lookup(ctx, "errors")
+    return [] if advisories is WIRE_MISSING or advisories is None else list(advisories)
 
 
 @then(parsers.parse('the response should include media buy "{mb_id}" with package "{pkg_id}"'))
@@ -3344,6 +3297,35 @@ def then_package_wire_field_degraded(ctx: dict, pkg_id: str, field: str) -> None
     assert package.get(field) is None, (
         f"expected the legacy-invalid {field!r} to render empty on package {pkg_id!r}; "
         f"got {package.get(field)!r} — a value derived from a cell the pinned type rejects"
+    )
+
+
+@then(parsers.parse('the package "{pkg_id}" targeting_overlay should carry geo_countries {countries}'))
+def then_package_targeting_overlay_geo_countries(ctx: dict, pkg_id: str, countries: str) -> None:
+    """Assert the package's rehydrated overlay reached the buyer carrying these countries.
+
+    ``geo_countries``, not ``geo``: pinned ``core/targeting.json`` declares no flat
+    ``geo`` field, and ``Targeting`` reshapes nothing on the way in, so the value under
+    test is the one the pinned model accepts.
+
+    Read off the WIRE rather than the typed payload. The overlay is the one blob value
+    resolved before the constructor, so the typed object would show an already-coerced
+    ``Targeting`` while the buyer's question is whether the countries survived
+    rehydration, projection and ``exclude_none`` — and on the isolation scenarios this
+    is the assertion that catches a fail-soft that degrades the SIBLING too, which a
+    null-check on the corrupt package cannot see.
+    """
+    expected = json.loads(countries)
+    package = _wire_package(ctx, pkg_id)
+    overlay = package.get("targeting_overlay")
+
+    assert isinstance(overlay, dict), (
+        f"expected package {pkg_id!r} to carry a rehydrated targeting_overlay object on the wire; "
+        f"got {overlay!r} — a sibling's valid overlay must survive another package's corrupt one"
+    )
+    assert overlay.get("geo_countries") == expected, (
+        f"expected targeting_overlay.geo_countries {expected!r} on package {pkg_id!r}; "
+        f"got {overlay.get('geo_countries')!r} from overlay {overlay!r}"
     )
 
 

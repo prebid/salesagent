@@ -35,7 +35,7 @@ class TestDecryptionFailureRaises:
             tenant._gemini_api_key = "not-valid-fernet-token"
             env._session.commit()
 
-            with pytest.raises(AdCPConfigurationError, match="decrypt"):
+            with pytest.raises(AdCPConfigurationError):
                 _ = tenant.gemini_api_key
 
     def test_adapter_config_gam_json_raises_on_corrupt_data(self, integration_db):
@@ -50,7 +50,7 @@ class TestDecryptionFailureRaises:
             env._session.add(config)
             env._session.commit()
 
-            with pytest.raises(AdCPConfigurationError, match="decrypt"):
+            with pytest.raises(AdCPConfigurationError):
                 _ = config.gam_service_account_json
 
     def test_oidc_secret_raises_on_corrupt_data(self, integration_db):
@@ -67,5 +67,5 @@ class TestDecryptionFailureRaises:
             env._session.add(auth_config)
             env._session.commit()
 
-            with pytest.raises(AdCPConfigurationError, match="decrypt"):
+            with pytest.raises(AdCPConfigurationError):
                 _ = auth_config.oidc_client_secret

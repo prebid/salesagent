@@ -44,15 +44,17 @@ def validate_startup_requirements() -> None:
     This is useful for health checks and lightweight validation.
     """
     try:
-        from src.core.config import get_config
+        from src.core.config import load_settings
 
-        # Just check that config can be loaded
-        get_config()
+        # The composition root for a server started through run_server.py: the environment
+        # is read here, once, and a bad value fails here.
+        load_settings()
 
         # Note: SUPER_ADMIN_EMAILS is no longer required at startup.
         # Per-tenant OIDC with Setup Mode is the default authentication flow.
-        # New tenants start with auth_setup_mode=true, allowing test credentials
-        # to log in and configure SSO via the Admin UI.
+        # New tenants start with auth_setup_mode=true, so a super admin can administer
+        # one before it has configured its own SSO. The password login this used to
+        # name is gone (#2253): a session comes from Google, or not at all.
 
         logger.info("Startup requirements validation passed")
 

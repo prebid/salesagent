@@ -41,15 +41,16 @@ import logging
 from dataclasses import dataclass
 from typing import Any, TypedDict
 
-from adcp.types import ContextObject, PushNotificationConfig
-from adcp.types.generated_poc.core.push_notification_config import Authentication
-from adcp.types.generated_poc.core.push_notification_config import (
-    Authentication as LibraryAuthentication,
-)
 from pydantic import ValidationError
 
+from src.core.errors.details import ValidationDetails
 from src.core.exceptions import AdCPValidationError
 from src.core.schema_helpers import require_push_notification_config, to_push_notification_config
+
+# The push-config spelling of the block, as a narrowing subtype of the one Authentication
+# concept (src/core/schemas/notification.py): this module builds and validates PUSH
+# registrations, whose pin requires credentials, so it names the subtype.
+from src.core.schemas.notification import PushAuthentication, PushNotificationConfig
 from src.core.webhook_validator import reject_unsafe_webhook_registration_url, webhook_url_for_log
 
 logger = logging.getLogger(__name__)
@@ -68,6 +69,8 @@ class WebhookConfigColumns(TypedDict):
     url: str
     authentication_type: str | None
     authentication_token: str | None
+    operation_id: str | None
+    token: str | None
 
 
 def _construct_stored_config(document: dict[str, Any]) -> PushNotificationConfig:
@@ -87,7 +90,7 @@ def _construct_stored_config(document: dict[str, Any]) -> PushNotificationConfig
     fields = dict(document)
     auth_block = fields.get("authentication")
     if isinstance(auth_block, dict):
-        fields["authentication"] = Authentication.model_construct(**auth_block)
+        fields["authentication"] = PushAuthentication.model_construct(**auth_block)
     return PushNotificationConfig.model_construct(**fields)
 
 
@@ -217,7 +220,6 @@ class ValidatedWebhookRegistration:
         stashed: object,
         *,
         field_prefix: str = "push_notification_config",
-        context: ContextObject | dict[str, Any] | None = None,
     ) -> ValidatedWebhookRegistration:
         """Rehydrate a STORED registration — deliberately NOT a fresh ingest.
 
@@ -250,28 +252,25 @@ class ValidatedWebhookRegistration:
         """
         document = stashed
         if not isinstance(document, dict):
+            # Buyer-facing text is a function of the code (ADR-010): the one
+            # structured fact — what the stash actually held -- goes to the typed
+            # details. `field` still names the buyer-correctable target, which is
+            # what the refusal is graded on.
             raise AdCPValidationError(
-                f"Invalid {field_prefix}: stored registration is not an object.",
                 field=field_prefix,
-                suggestion="Re-register the webhook; the stored configuration is unreadable.",
-                context=context,
+                details=ValidationDetails(received_type=type(stashed).__name__),
             )
 
         url = str(document.get("url") or "").strip()
         if not url:
-            raise AdCPValidationError(
-                f"Invalid {field_prefix}.url: stored registration has no URL.",
-                field=f"{field_prefix}.url",
-                suggestion="Re-register the webhook with a URL.",
-                context=context,
-            )
+            raise AdCPValidationError(field=f"{field_prefix}.url")
 
         # The authentication block IS validated here, through the SAME type the
         # seam constructs, even though the rest of the stored document is not.
         # Deleting the resolved-auth field removed the type-level guarantee that a
         # held value is deliverable, so this gate is what replaces it — the two
         # changes are one requirement and neither is safe without the other.
-        # Using LibraryAuthentication rather than a hand-written re-check keeps
+        # Using PushAuthentication rather than a hand-written re-check keeps
         # ingest, the seam and rehydration from holding three definitions of what
         # a valid block is.
         auth_block = document.get("authentication")
@@ -282,7 +281,7 @@ class ValidatedWebhookRegistration:
                 # building from the raw document would discard the case-folding and
                 # leave `hmac-sha256` in a value whose whole job is to be the one
                 # answer to "what was registered".
-                validated = LibraryAuthentication.model_validate(auth_block)
+                validated = PushAuthentication.model_validate(auth_block)
             except ValidationError as exc:
                 # Name the SPECIFIC sub-field pydantic objected to, not just the
                 # block: "…authentication.credentials" tells the owner what to fix,
@@ -293,18 +292,19 @@ class ValidatedWebhookRegistration:
                 sub = ".".join(str(part) for part in first if isinstance(part, str | int))
                 field = f"{field_prefix}.authentication" + (f".{sub}" if sub else "")
                 # NAME THE SCHEME. With no outcome record and no migration for the
-                # rows this affects, this message is the only surface the refusal
-                # has, and an operator has to be able to tell WHICH registrations
-                # stopped delivering — "2 problems" is not enumerable.
+                # rows this affects, an operator still has to be able to tell WHICH
+                # registrations stopped delivering — "2 problems" is not enumerable.
+                # The name no longer rides the buyer-facing message, which is now the
+                # code's own table sentence: the scheme is a value the buyer supplied
+                # and had refused, so it goes to the pin's canonical rejection key
+                # (`details.rejected_value`), and pydantic's own error is the cause,
+                # logged with its traceback and never serialized.
                 stored_schemes = auth_block.get("schemes") if isinstance(auth_block, dict) else None
-                named = ", ".join(repr(str(entry)) for entry in stored_schemes) if stored_schemes else "no scheme"
+                named_schemes = [str(entry) for entry in stored_schemes] if stored_schemes else []
                 raise AdCPValidationError(
-                    f"Invalid {field}: the stored registration ({named}) cannot be delivered as "
-                    f"written. Its owner must re-register with a supported scheme and a "
-                    f"conforming credential.",
                     field=field,
-                    suggestion="Re-register the webhook with a supported authentication block.",
-                    context=context,
+                    details=ValidationDetails(rejected_value=named_schemes or None),
+                    internal_detail=exc,
                 ) from exc
             document = {**document, "authentication": validated.model_dump(mode="json")}
 
@@ -326,6 +326,8 @@ class ValidatedWebhookRegistration:
             url=self.url,
             authentication_type=self.authentication_type,
             authentication_token=self.authentication_token,
+            operation_id=self.operation_id,
+            token=self.token,
         )
 
     def to_stash(self) -> dict[str, Any]:
@@ -365,7 +367,6 @@ def _accept(
     *,
     config: PushNotificationConfig,
     field_prefix: str,
-    context: ContextObject | dict[str, Any] | None,
 ) -> ValidatedWebhookRegistration:
     """Run both preconditions, then build the value. The ONE gate body.
 
@@ -376,7 +377,7 @@ def _accept(
     and that a credential refusal is not mislabelled as a URL refusal.
     """
     url = str(config.url) if config.url is not None else None
-    reject_unsafe_webhook_registration_url(url, field=f"{field_prefix}.url", context=context)
+    reject_unsafe_webhook_registration_url(url, field=f"{field_prefix}.url")
 
     # No credential check here any more, and its absence is the DELETION of dead
     # code rather than of a safeguard. The config reaching this function has
@@ -399,7 +400,6 @@ def accept_push_notification_primitives(
     *,
     token: str | None = None,
     field_prefix: str = "push_notification_config",
-    context: ContextObject | dict[str, Any] | None = None,
 ) -> ValidatedWebhookRegistration:
     """Accept a registration already destructured into primitives.
 
@@ -420,7 +420,7 @@ def accept_push_notification_primitives(
     routes; this path refuses to create more of them, and the seam refuses to
     deliver the ones that exist.
     """
-    reject_unsafe_webhook_registration_url(url, field=f"{field_prefix}.url", context=context)
+    reject_unsafe_webhook_registration_url(url, field=f"{field_prefix}.url")
 
     authentication: dict[str, Any] | None = None
     if scheme is not None or credentials is not None:
@@ -436,7 +436,6 @@ def accept_push_notification_primitives(
             field_prefix=field_prefix,
         ),
         field_prefix=field_prefix,
-        context=context,
     )
 
 
@@ -450,7 +449,7 @@ def _coerce_primitives_to_config(
     Uses the same funnel the transport wrappers use, so this path cannot drift
     into its own validation dialect, and a refusal names the same field path.
 
-    EVERY rule applies, including ``credentials`` ``minLength: 32``. An arm here
+    EVERY rule applies, including ``credentials`` ``minLength: 32``. An branch here
     used to exempt exactly that one, on the premise that an A2A
     ``params.configuration`` value is a transport-layer parameter outside
     request-body validation. The pinned schema draws no such distinction --
@@ -472,7 +471,6 @@ def accept_push_notification_config(
     config: dict[str, Any] | PushNotificationConfig | None,
     *,
     field_prefix: str = "push_notification_config",
-    context: ContextObject | dict[str, Any] | None = None,
 ) -> ValidatedWebhookRegistration:
     """Accept a config-shaped registration, normalizing model-or-dict ONCE.
 
@@ -496,9 +494,7 @@ def accept_push_notification_config(
     coerced = to_push_notification_config(config, field_prefix=field_prefix)
     if coerced is None:
         raise AdCPValidationError(
-            f"Invalid {field_prefix}: expected a push notification config object.",
             field=field_prefix,
-            suggestion="Supply a push_notification_config object with a url.",
-            context=context,
+            details=ValidationDetails(received_type=type(config).__name__),
         )
-    return _accept(config=coerced, field_prefix=field_prefix, context=context)
+    return _accept(config=coerced, field_prefix=field_prefix)

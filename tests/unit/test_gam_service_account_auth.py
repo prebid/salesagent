@@ -7,6 +7,7 @@ import pytest
 
 from src.adapters.gam import build_gam_config_from_adapter
 from src.adapters.gam.auth import GAMAuthManager
+from src.core.exceptions import AdCPConfigurationError
 
 
 def test_gam_auth_manager_accepts_service_account_json():
@@ -45,7 +46,7 @@ def test_gam_auth_manager_accepts_oauth():
 def test_gam_auth_manager_requires_auth_method():
     """Test that GAMAuthManager requires at least one auth method."""
     config = {}
-    with pytest.raises(ValueError, match="GAM config requires either"):
+    with pytest.raises(AdCPConfigurationError):
         GAMAuthManager(config)
 
 
@@ -54,7 +55,7 @@ def test_service_account_json_invalid_format():
     config = {"service_account_json": "not valid json"}
     auth_manager = GAMAuthManager(config)
 
-    with pytest.raises(ValueError, match="Invalid service account JSON"):
+    with pytest.raises(AdCPConfigurationError):
         auth_manager.get_credentials()
 
 

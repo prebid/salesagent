@@ -1,0 +1,382 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Request architecture — one shape in, one table for the refusal</title>
+<style>
+
+:root{
+  --bg:#fbfaf8; --fg:#1c1b19; --muted:#6b6660; --rule:#e2ded8; --card:#fff;
+  --accent:#8a3324; --good:#2f6b45; --bad:#a03328; --code-bg:#f4f1ec;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){
+  --bg:#16151a; --fg:#e9e6e1; --muted:#98928a; --rule:#2e2c33; --card:#1d1c22;
+  --accent:#e08a6a; --good:#7fc79a; --bad:#e2796a; --code-bg:#232128;
+}}
+:root[data-theme=dark]{
+  --bg:#16151a; --fg:#e9e6e1; --muted:#98928a; --rule:#2e2c33; --card:#1d1c22;
+  --accent:#e08a6a; --good:#7fc79a; --bad:#e2796a; --code-bg:#232128;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+  font:16px/1.6 ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+.wrap{max-width:60rem;margin:0 auto;padding:0 1.5rem}
+section{min-height:100vh;display:flex;flex-direction:column;justify-content:center;
+  padding:4rem 0;border-bottom:1px solid var(--rule)}
+section:last-child{border-bottom:0}
+h1{font-size:clamp(2rem,5vw,3.2rem);line-height:1.1;margin:0 0 1rem;letter-spacing:-.02em}
+h2{font-size:clamp(1.4rem,3.4vw,2.1rem);line-height:1.15;margin:0 0 1.4rem;letter-spacing:-.015em}
+h3{font-size:1.05rem;margin:2rem 0 .6rem;color:var(--accent);
+  text-transform:uppercase;letter-spacing:.08em;font-weight:650}
+p{margin:0 0 1rem;max-width:52rem}
+.lede{font-size:1.2rem;color:var(--muted);max-width:46rem}
+.kicker{font-size:.8rem;text-transform:uppercase;letter-spacing:.14em;
+  color:var(--muted);margin-bottom:1rem;font-weight:650}
+pre{background:var(--code-bg);border:1px solid var(--rule);border-radius:8px;
+  padding:1rem 1.1rem;overflow-x:auto;font-size:.85rem;line-height:1.55;margin:0 0 1rem;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  background:var(--code-bg);padding:.1em .35em;border-radius:4px;font-size:.9em}
+pre code{background:none;padding:0;font-size:inherit}
+.del{color:var(--bad)} .add{color:var(--good)} .cm{color:var(--muted)}
+table{border-collapse:collapse;width:100%;margin:0 0 1rem;font-size:.92rem;display:block;overflow-x:auto}
+th,td{text-align:left;padding:.55rem .8rem;border-bottom:1px solid var(--rule);vertical-align:top}
+th{font-weight:650;color:var(--muted);font-size:.8rem;text-transform:uppercase;letter-spacing:.06em}
+td.num{text-align:right;font-variant-numeric:tabular-nums;font-family:ui-monospace,monospace}
+.grid{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));margin:1rem 0}
+.card{background:var(--card);border:1px solid var(--rule);border-radius:10px;padding:1.1rem 1.2rem}
+.card .n{font-size:2.1rem;font-weight:680;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.card .l{font-size:.85rem;color:var(--muted);margin-top:.2rem}
+.two{display:grid;gap:1.2rem;grid-template-columns:1fr 1fr}
+@media(max-width:52rem){.two{grid-template-columns:1fr}}
+.note{border-left:3px solid var(--accent);padding:.3rem 0 .3rem 1rem;color:var(--muted);margin:1.2rem 0}
+.warn{border-left:3px solid var(--bad);padding:.7rem 0 .7rem 1rem;margin:1.2rem 0}
+ul{margin:0 0 1rem;padding-left:1.2rem} li{margin-bottom:.5rem;max-width:52rem}
+.rule-list{list-style:none;padding:0;counter-reset:r}
+.rule-list li{counter-increment:r;padding-left:2.4rem;position:relative;margin-bottom:1rem}
+.rule-list li::before{content:counter(r);position:absolute;left:0;top:.1rem;
+  width:1.6rem;height:1.6rem;border-radius:50%;background:var(--accent);color:var(--bg);
+  display:grid;place-items:center;font-size:.8rem;font-weight:700}
+.nav{position:fixed;top:0;left:0;right:0;height:3px;background:transparent;z-index:9}
+.nav i{display:block;height:100%;background:var(--accent);width:0}
+footer{padding:3rem 0;color:var(--muted);font-size:.85rem}
+@media print{section{min-height:auto;page-break-after:always;padding:1.5rem 0}.nav{display:none}}
+</style></head><body>
+<div class="nav"><i id="pg"></i></div>
+<div class="wrap">
+
+<section>
+  <div class="kicker">Internal engineering brief · Prebid Sales Agent · part two</div>
+  <h1>One shape for the request.<br>One table for the refusal.</h1>
+  <p class="lede">Last time we deleted the ability to write a buyer-facing error message. This time we deleted the ability to hand-write a tool&rsquo;s request shape — on all three transports.</p>
+
+  <table style="margin-top:2rem">
+    <thead><tr><th style="width:5.5rem">Transport</th><th>Before — three hand-written opinions</th><th>Now — one derived shape</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>MCP</strong></td>
+        <td>Shape published from the wrapper&rsquo;s hand-typed signature. <code>protocols: list[str]</code> where the DTO says a typed enum; <code>ext: dict</code> where it says <code>ExtensionObject</code>. Five tools silently kept an underived shape — registration fell back without a word.</td>
+        <td><strong>15 / 16</strong> derive from the builder. A tool that cannot name its DTO <strong>cannot register at all</strong>.</td>
+      </tr>
+      <tr>
+        <td><strong>A2A</strong></td>
+        <td>Keys plucked from the payload by hand — <code>update_media_buy</code> reimplemented 5 of ~10 fields. Six skills advertised that appear in <em>no</em> 3.1 schema. Two real capabilities published under names in no spec version.</td>
+        <td>Surface is <strong>spec-only</strong>: 6 phantom skills, 5 dispatch entries and 3 card advertisements deleted. The renames are scheduled.</td>
+      </tr>
+      <tr>
+        <td><strong>REST</strong></td>
+        <td>All <strong>13</strong> bodies hand-written, re-listing fields the DTO already declares. <code>get_products</code> bypassed the shared seam entirely. A required <code>idempotency_key</code> dropped before anything read it.</td>
+        <td><strong>13 / 13</strong> generated from the DTO. Hand-written bodies <strong>5 &rarr; 0</strong>; departures declared and graded.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="grid" style="margin-top:1.6rem">
+    <div class="card"><div class="n">10 &rarr; 0</div><div class="l">tool modules carrying a hand-maintained refusal map</div></div>
+    <div class="card"><div class="n">3 of 4</div><div class="l">architecture guards <em>deleted</em> — their violation is now unrepresentable</div></div>
+    <div class="card"><div class="n">1</div><div class="l">error code for a schema violation — the same one on every transport</div></div>
+  </div>
+</section>
+
+<section>
+  <div class="kicker">The problem</div>
+  <h2>One tool had four independent opinions about its own request</h2>
+  <p>Every AdCP tool is reachable three ways, and each transport had written down the request shape by hand. The SDK ships a request DTO for that tool. Nothing connected the four.</p>
+  <table>
+    <thead><tr><th>Where</th><th>How the shape was decided</th><th>Drifts from the spec?</th></tr></thead>
+    <tbody>
+      <tr><td>MCP</td><td>the Python signature of the wrapper — flat parameters, hand-typed</td><td>freely</td></tr>
+      <tr><td>A2A</td><td>keys plucked out of a skill payload by hand</td><td>freely</td></tr>
+      <tr><td>REST</td><td>a hand-written <code>*Body</code> model listing fields again</td><td>freely</td></tr>
+      <tr><td>the SDK</td><td><strong>the actual spec-derived DTO</strong></td><td>it <em>is</em> the spec</td></tr>
+    </tbody>
+  </table>
+  <p>So the shape a buyer reads out of our published schema, and the shape a buyer reads out of the AdCP spec, were two different documents maintained by two different processes. One of those processes was &ldquo;somebody remembers.&rdquo;</p>
+  <p>The invariant all of this exists to protect is one sentence: <strong>a body-semantic field must be honored or refused — never silently dropped.</strong> Decided per transport, at each wrapper&rsquo;s argument binder, a field one transport bound and another did not was accepted on the wire and discarded before the tool. The buyer was told it applied.</p>
+  <div class="warn">
+    <p style="margin:0 0 .6rem"><strong>What that actually cost — three real ones.</strong></p>
+    <p style="margin:0 0 .5rem"><code>get_adcp_capabilities</code> advertised <code>protocols: list[str]</code> where the DTO declares a typed enum, and <code>ext: dict</code> where the DTO declares <code>ExtensionObject</code>. Two different contracts, and <em>nothing failed</em> — no test, no guard, no type error.</p>
+    <p style="margin:0 0 .5rem"><code>list_creative_formats</code> refused <code>pagination</code> in its hand-written map <strong>while fully implementing cursor pagination.</strong> The refusal ran first. A working feature was turned off by a stale list.</p>
+    <p style="margin:0"><code>update_media_buy</code> published <code>targeting_overlay</code> and <code>creatives</code> to buyers. Neither is in the pinned 3.1.1 request schema, <code>_impl</code> honors only the per-package overlay, and no caller ever passed them. Advertised, accepted, read by nothing.</p>
+  </div>
+</section>
+
+<section>
+  <div class="kicker">The second problem</div>
+  <h2>We had built machinery to <em>police</em> the drift instead of removing it</h2>
+  <p>Because the four shapes could disagree, we grew apparatus to detect when they did. A field the tool didn&rsquo;t implement yet had to be listed as unsupported, so a buyer sending it got a refusal instead of silence. That list was hand-maintained, per tool.</p>
+  <pre><code><span class="cm"># the shape of the old world</span>
+<span class="del">_UNSUPPORTED_GET_PRODUCTS_FIELDS = {...}</span>          <span class="cm"># × 10 tool modules, hand-written</span>
+<span class="del">refuse_unsupported_fields(req, tool=..., unsupported=...)</span>  <span class="cm"># called per tool, by hand</span>
+<span class="del">merge_spec_request(flat_kwargs, spec_model)</span>        <span class="cm"># reconcile two shapes at runtime</span>
+<span class="del">UNDISPOSED_LEDGER = {...}</span>                         <span class="cm"># fields nobody had decided about yet</span>
+<span class="del">tests/harness/spec_field_consumption.py</span>           <span class="cm"># a static analyzer to grade the above</span>
+<span class="del">test_architecture_spec_field_disposition.py</span>       <span class="cm"># + 2 sibling guards</span></code></pre>
+  <p>Every one of those is a mechanism for <strong>noticing</strong> that two hand-written things disagree. None of them makes the disagreement impossible. A guard that lists violations records the disease; it does not cure it — and each new tool added a row to every list.</p>
+  <p>And the checkers were themselves checkable only by mutation. Two examples, each found by deliberately breaking the code to see whether the guard noticed:</p>
+  <ul>
+    <li>A refusal map counted as present when the <em>dict</em> existed — so <strong>deleting the <code>refuse_unsupported_fields</code> call left 27 guards green.</strong> The map was decorative and the guard graded the decoration.</li>
+    <li>A parameter counted as handled when the <em>signature</em> declared it. Crediting the signature is exactly how <code>targeting_overlay</code> and <code>creatives</code> stayed invisible while being read by nothing.</li>
+  </ul>
+  <div class="note">This is the pattern worth naming, because it recurs everywhere: when two artifacts can drift, the instinct is to add a checker. But a checker is a third artifact that can also be wrong — and now nobody is checking <em>it.</em> The cure is to <em>derive one from the other</em> so there is only one artifact and the checker can be deleted.</div>
+</section>
+
+<section>
+  <div class="kicker">The rule</div>
+  <h2>Announced = the DTO&rsquo;s fields <span style="color:var(--accent)">&cap;</span> the implementation&rsquo;s arguments</h2>
+  <p>One sentence, and everything else in this deck falls out of it. Both halves carry weight:</p>
+  <ul>
+    <li><strong>A DTO field the tool does not accept is not announced.</strong> We never advertise a parameter the implementation would ignore — and there is no hand-maintained list of &ldquo;unimplemented&rdquo; fields to fall out of date. <em>Absence from the signature is the statement.</em> To expose a new spec field you make the tool accept it, and the announcement follows.</li>
+    <li><strong>A parameter the DTO declares takes the DTO&rsquo;s type.</strong> This is the half that cannot drift: bump the SDK pin and every advertised type moves with it, on every transport, in one commit.</li>
+  </ul>
+  <p>And the corollary that retires legacy names for free: a parameter the DTO does <em>not</em> declare is dropped from the announcement. FastMCP never passes what it does not advertise, so a flat legacy name like <code>list_creatives(status=...)</code> stops working without anyone maintaining a list of retired names.</p>
+  <pre><code><span class="cm"># src/core/schema_helpers.py — the whole mechanism, twice</span>
+accepted_kwargs(impl)                 <span class="cm"># what the implementation will take</span>
+select_request_fields(model, src, ok) <span class="cm"># forward exactly that, nothing else</span></code></pre>
+  <p>The request DTO is the vocabulary. There is no plumbing denylist: a key the DTO does not declare is simply not forwarded. No allowlist, no ledger, nothing to keep in sync.</p>
+</section>
+
+<section>
+  <div class="kicker">The template</div>
+  <h2>wrapper &rarr; builder &rarr; DTO &rarr; impl</h2>
+  <p>Four steps, and every tool on every transport follows the same four. The <strong>builder</strong> is the new piece — the single seam each transport constructs the typed request through.</p>
+  <pre><code><span class="cm"># src/core/tools/accounts.py</span>
+def build_list_accounts_request(
+    *,
+    account: LibraryAccountReference | None = None,
+    status: AccountStatus | None = None,
+    pagination: PaginationRequest | None = None,
+    ...
+) -&gt; <span class="add">ListAccountsRequest</span>:               <span class="cm"># ← the return annotation IS the declaration</span>
+    """The single seam every transport constructs the typed request through,
+    so a future request field lands here once instead of in wrapper lockstep."""</code></pre>
+  <p>That return annotation is load-bearing. <code>request_model_for</code> reads it to find the DTO, which is how a tool&rsquo;s advertised shape gets derived without anyone naming the model twice.</p>
+  <div class="note"><strong>One hour lost, recorded so you don&rsquo;t lose it too:</strong> a string forward-ref with the import inside the function resolves to nothing. The bytecode scan finds the builder fine — it is the <em>annotation</em> that fails to resolve, and from the outside the two failures look identical. Builder return types must be importable at module scope.</div>
+</section>
+
+<section>
+  <div class="kicker">The enforcement</div>
+  <h2>A tool that cannot name its request DTO cannot be registered</h2>
+  <p>This is the difference between the old world and the new one. We did not add a guard that lists tools with an underived shape. We made the underived state <em>unreachable.</em></p>
+  <pre><code>def _register_tool(fn, dto=None):
+    ...
+    if not apply_dto_announced_shape(registered, fn, dto):
+        <span class="add">raise RuntimeError(</span>
+            f"{tool_name} cannot be registered: no request DTO. Its advertised "
+            f"shape is 'DTO fields INTERSECT the implementation's arguments', so "
+            f"without a DTO there is nothing to derive from and the tool would "
+            f"publish a hand-written shape that can drift from the spec. Give it "
+            f"a build_*_request builder, or pass the model explicitly."
+        )</code></pre>
+  <p>It used to fall back silently: the derivation returned <code>False</code> and registration proceeded with the hand-written signature. Five tools quietly kept an underived shape and <em>nothing said so.</em></p>
+  <div class="note">The cost is real and it is the point: adding a tool now forces the DTO decision up front, at the moment you have the context to make it — instead of six months later, in a schema diff, in front of a buyer.</div>
+</section>
+
+<section>
+  <div class="kicker">Three transports, one derivation</div>
+  <h2>Announcement and acceptance cannot drift, because they are computed from the same two artifacts</h2>
+  <div class="two">
+    <div>
+      <h3>What the buyer is told</h3>
+      <pre><code><span class="cm"># MCP</span>
+apply_dto_announced_shape(fn, dto)</code></pre>
+      <p>The published <code>inputSchema</code>, derived.</p>
+    </div>
+    <div>
+      <h3>What we actually take</h3>
+      <pre><code><span class="cm"># REST</span>
+derived_body_model_for(tool)</code></pre>
+      <p>The request body, derived from the same pair &mdash; and the pair itself is now read off the tool, so neither side names it.</p>
+    </div>
+  </div>
+  <p>Same intersection, computed twice from the same two inputs, so the answers are equal by construction rather than by inspection. There is no test asserting &ldquo;the schema matches the body&rdquo; because there is no way to author a difference.</p>
+  <pre><code><span class="cm"># src/core/tools/_announced_shape.py</span>
+def request_seam_for(tool) -&gt; tuple[type[BaseModel], Callable]:
+    """The (DTO, builder) pair a tool constructs its request through."""
+
+<span class="cm"># src/routes/_derived_body.py</span>
+def derived_body_model_for(tool, *, extra_fields=None) -&gt; type[BaseModel]:
+    """A request body carrying exactly ``DTO fields INTERSECT builder parameters``,
+    with BOTH read off the tool. REST and A2A used to write the pair out per call
+    site &mdash; 25 hand-written pairs restating what one lookup answers."""</code></pre>
+</section>
+
+<section>
+  <div class="kicker">The output half</div>
+  <h2>Return the model. Never the dict.</h2>
+  <p>The input story has a mirror on the way out, and it is shorter because it is already enforced. An <code>_impl</code> returns a typed model and never calls <code>.model_dump()</code> — serialization is the transport&rsquo;s job, because only the transport knows what the wire looks like.</p>
+  <pre><code><span class="del">- return result.model_dump()          </span><span class="cm"># impl decides the wire shape → four wire shapes</span>
+<span class="add">+ return GetProductsResult(...)       </span><span class="cm"># impl decides the FACTS; transport renders them</span></code></pre>
+  <p>The moment an <code>_impl</code> hands back a dict, three things become possible again: the transports serialize it differently, the type checker stops seeing the contract, and a field can be dropped without anything noticing. All three have happened here.</p>
+  <div class="note">One wrinkle worth knowing: Pydantic serializes a nested child by its declared (library) type, so a parent whose children are local subclasses opts into <code>NestedModelSerializerMixin</code>, the one serializer seat, to re-dump them by instance. That is Pattern #4 in <code>CLAUDE.md</code>; no model overrides <code>model_dump()</code>.</div>
+</section>
+
+<section>
+  <div class="kicker">Errors, part one — which code</div>
+  <h2>The spec already decided. We were answering three ways.</h2>
+  <p>A malformed request has exactly one correct code, and <code>enums/error-code.json</code> is explicit about where the line falls:</p>
+  <table>
+    <thead><tr><th>Code</th><th>The pin&rsquo;s own words</th><th>So: raised when</th></tr></thead>
+    <tbody>
+      <tr><td><code>INVALID_REQUEST</code></td><td>&ldquo;malformed, missing required fields, or violates <strong>schema constraints</strong>&rdquo;</td><td>a Pydantic <code>ValidationError</code> — by construction always this</td></tr>
+      <tr><td><code>VALIDATION_ERROR</code></td><td>&ldquo;invalid field values or violates business rules <strong>beyond schema validation</strong>&rdquo;</td><td>our own logic raising — an unknown format, an unsupported pricing model</td></tr>
+    </tbody>
+  </table>
+  <p>REST already answered <code>INVALID_REQUEST</code>. MCP and A2A answered <code>VALIDATION_ERROR</code> for the identical failure. The same buyer sending the same bad field got a different classification depending on how they connected.</p>
+  <div class="warn">
+    <p style="margin:0 0 .6rem"><strong>Why this took a while to land, and the general lesson.</strong> Two generated feature files graded an out-of-enum value with <em>different</em> codes, so any consistent mapping would break one of them. Checking the upstream source rather than the generated copies showed the contradiction is <strong>upstream, and broader</strong>: <code>enum</code> appears near <code>INVALID_REQUEST</code> in three storyboards and near <code>VALIDATION_ERROR</code> in two others.</p>
+    <p style="margin:0">&ldquo;Match upstream&rdquo; was therefore <em>not an available answer</em> — upstream disagrees with itself. The pinned error-code enum is the tiebreaker. When a generated artifact and the spec prose conflict, go read the prose.</p>
+  </div>
+</section>
+
+<section>
+  <div class="kicker">Errors, part two — what the refusal carries</div>
+  <h2>Facts in fields. Not four sentences in a string.</h2>
+  <p>Five different key names — <code>validation_errors</code>, <code>creative_errors</code>, <code>config_errors</code>, <code>adapter_errors</code>, <code>violations</code> — all held <code>list[str]</code>, and every string was built by interpolating structured facts into an f-string and throwing the structure away.</p>
+  <pre><code><span class="del">f"Adapter does not support '{pricing_model}' pricing. "
+f"Supported pricing models: {sorted_supported}. "
+f"The requested pricing model ('{pricing_model}') is not available. "
+f"Please choose a product with compatible pricing."</span></code></pre>
+  <p>Four authored sentences on the buyer&rsquo;s wire. The last is a <em>suggestion</em> — the field we made a function of the code last quarter, so it was a second and divergent copy of what <code>CODE_TABLE</code> already says. The supported set was a string joined on <code>", "</code> that a buyer had to split. And with three packages, nothing said which one was refused.</p>
+  <pre><code>class ErrorProblem(BaseModel):
+    code: ErrorCodeT | None                <span class="cm"># the SAME vocabulary as the carrying error</span>
+    subject_type: Literal["creative", "product", "package", "account"] | None
+    subject_id: str | None                 <span class="cm"># WHICH package</span>
+    field: str | None                      <span class="cm"># packages[0].pricing_option_id</span>
+    rejected_value: str | None             <span class="cm"># the pin's canonical rejection keys</span>
+    accepted_values: list[str] | None      <span class="cm"># an ARRAY, not a joined string</span></code></pre>
+  <div class="note"><strong>There is no free-text field, deliberately.</strong> A declared class stops field-name drift but not prose inside a declared field — a <code>reason: str</code> slot would just relocate the f-string one level down. And <code>code</code> classifies the problem with the same vocabulary as the error carrying it, rather than a parallel <code>reason</code> enum: one code table for one job, and the buyer renders each problem from <code>CODE_TABLE</code> exactly as they render the error itself.</div>
+</section>
+
+<section>
+  <div class="kicker">How any of this is graded</div>
+  <h2>Through the wire, on four transports, from one scenario</h2>
+  <p>The rule that keeps this honest, and it is a hard stop:</p>
+  <div class="warn"><p style="margin:0">If you find yourself writing a new internal guard or unit test to check something <em>about how a tool uses an SDK class</em> — stop. That is the disease this work exists to remove. Behavior is graded through BDD scenario execution only.</p></div>
+  <p>A scenario is written once and runs on <code>mcp</code>, <code>a2a</code>, <code>rest</code> and <code>e2e_rest</code>. The assertion is on the envelope the transport actually built, never on a reconstruction:</p>
+  <pre><code><span class="add">assert_envelope_shape(result.wire_error_envelope, "INVALID_REQUEST", recovery="correctable")</span>
+<span class="del">assert isinstance(exc, AdCPValidationError)   </span><span class="cm"># a reconstruction — can pass vacuously</span></code></pre>
+  <p>And the negative assertion that makes the prose deletion permanent — it scans the <em>whole</em> envelope, not one field, because the claim is not &ldquo;this key is clean&rdquo; but &ldquo;the adapter layer has no way to put a sentence on the wire at all&rdquo;:</p>
+  <pre><code>rendered = str(result.wire_error_envelope)
+for authored in ("Please choose a product with compatible pricing",
+                 "Adapter does not support", "is not available"):
+    assert authored not in rendered</code></pre>
+</section>
+
+<section>
+  <div class="kicker">The same disease, one level up</div>
+  <h2>A tool nobody can find is a tool that does not exist</h2>
+  <p>Deriving shapes from the DTO forced us to ask, for every tool, &ldquo;which spec tool <em>is</em> this?&rdquo; That question had never been asked out loud. Asking it found capabilities we had fully implemented and made undiscoverable by naming them ourselves.</p>
+  <p>A buyer finds a tool by its name. A name that appears in no version of the spec is, from outside, an absence.</p>
+  <table>
+    <thead><tr><th>We publish</th><th>The spec calls it</th><th>Status</th><th>What it actually takes</th></tr></thead>
+    <tbody>
+      <tr><td><code>get_task</code></td><td><code>tasks/get</code> · <code>get_task_status</code></td><td>in 3.1, both namespaces</td><td><strong>close to a rename</strong> — same required <code>task_id</code>; we also gain three optional fields we already could serve</td></tr>
+      <tr><td><code>update_performance_index</code></td><td><code>provide_performance_feedback</code></td><td>in <strong>2.5, 3.0 and 3.1</strong></td><td>rename <em>and</em> reshape — the spec takes one scalar reading per call with a required measurement period; we take a list of per-product indices</td></tr>
+      <tr><td><code>list_authorized_properties</code></td><td><code>list_property_lists</code> · <code>get_property_list</code></td><td>2.5 name; the capability lives on in 3.1 under two</td><td>a rename onto real spec operations — one old tool maps to two new ones</td></tr>
+      <tr><td><code>list_tasks</code></td><td><code>tasks/list</code> <em>and</em> <code>list_tasks</code></td><td>genuinely overloaded upstream</td><td>a namespace question — this is why it is the last tool off the escape hatch</td></tr>
+    </tbody>
+  </table>
+  <div class="warn">
+    <p style="margin:0 0 .6rem"><strong>The one worth stopping on.</strong> A shipped docstring on <code>build_get_task_request</code> states that <code>get_task</code> &ldquo;appears in neither the pinned 3.1 schema tree nor <code>ADCP_TOOL_DEFINITIONS</code> — so a local DTO is its <em>final shape</em>, not a placeholder waiting for an SDK type.&rdquo;</p>
+    <p style="margin:0">The 3.1 tree files it under <code>tasks-get</code> and <code>get-task-status</code>. The lookup that returned &ldquo;absent&rdquo; had searched for <strong>our</strong> name. A negative result became a written architectural conclusion — <em>this shape is final</em> — which closed off three optional spec fields the tool could already have served.</p>
+  </div>
+  <h3>And the inverse: tools we published that the spec never defined</h3>
+  <p>On A2A, <strong>tool == skill == RPC route</strong> — so a skill the pinned schema does not define has no business on the surface. Six had none anywhere in 3.1: <code>approve_creative</code>, <code>assign_creative</code>, <code>create_creative</code>, <code>get_media_buy_status</code>, <code>optimize_media_buy</code>, <code>get_creatives</code>. Deleted, with their 5 dispatch entries and 3 agent-card advertisements. The A2A surface is spec-only now.</p>
+  <div class="note"><strong>Absence is not evidence when you searched for your own name.</strong> Every &ldquo;the spec doesn&rsquo;t have this&rdquo; in a comment or a ticket is only as good as the string that was grepped — and our own vocabulary is the one string guaranteed not to appear in someone else&rsquo;s document.</div>
+</section>
+
+<section>
+  <div class="kicker">The payoff</div>
+  <h2>Every body we derived surfaced a bug that was already shipping</h2>
+  <p>This is the argument for doing it, and it is not theoretical. Deriving a shape does not just prevent future drift — it <em>reveals the drift already there</em>, because the derived shape and the hand-written one disagree out loud instead of silently.</p>
+
+  <h3>A required field the buyer sent, discarded before anything looked at it</h3>
+  <p><code>SyncCreativesBody</code> carried <code>idempotency_key</code>, and <code>sync-creatives-request.json</code> lists it in <code>/required</code> — but the REST route omitted it from the call. MCP and A2A both forwarded it, <strong>which is exactly why no cross-transport test caught the difference.</strong> A malformed key was rejected on two transports and silently accepted on the third: the same request answered two ways depending only on how it arrived.</p>
+
+  <h3>Two code paths for one concept, one of them fixed years ago</h3>
+  <p>The error pointer carried FastAPI&rsquo;s location prefix — <code>/body/idempotency_key</code> where the pin wants <code>/idempotency_key</code>. The <code>field</code> key had stripped that <em>for years</em>. <code>issues[]</code> never did. Same fact, two renderings, and only one of them had received the fix. Stripped once now, so both read the same document.</p>
+
+  <h3>A test list that was a third copy of the roster</h3>
+  <p>The A2A contract test hand-listed the skills, so deleting six from the dispatch map and the agent card left it stale — <strong>a copy does not know it is out of date.</strong> It reads the agent card now, which is the artifact a buyer actually sees. Deriving it paid on the first run: the hand-copied list had been <em>missing <code>list_accounts</code> and <code>sync_accounts</code> entirely</em>, so their auth contract had never been graded. Grading them showed the two legitimately differ — <code>list_accounts</code> permits an unauthenticated call and returns an empty list; <code>sync_accounts</code> writes, and rejects one.</p>
+
+  <h3>A payload that outlived the field it names</h3>
+  <p>A test still sent <code>"budget": 15000.0</code> under the comment <em>&ldquo;Float per AdCP spec, not Budget object&rdquo;</em>. True of 2.x — which is precisely why it survived. 3.1.1 defines no top-level <code>budget</code> at all, so the request was refused before reaching the assertions and surfaced as a <code>KeyError</code> on an unrelated key.</p>
+
+  <div class="note">Read the last one twice. The comment was not wrong when it was written, and that is what made it durable. A statement about the spec with no version attached becomes false silently, on someone else&rsquo;s release schedule — and the code around it keeps passing until something forces the question.</div>
+</section>
+
+<section>
+  <div class="kicker">Where we actually are</div>
+  <h2>Most of the way, and the remainder is named</h2>
+  <table>
+    <thead><tr><th>Surface</th><th>Derived</th><th>Remaining</th><th>What&rsquo;s blocking it</th></tr></thead>
+    <tbody>
+      <tr><td>MCP tools</td><td class="num"><strong>15 / 16</strong></td><td><code>list_tasks</code></td><td>the spec carries <code>tasks/list</code> <em>and</em> <code>list_tasks</code> — a namespace decision, not a rename</td></tr>
+      <tr><td>REST bodies</td><td class="num"><strong>13 / 13</strong></td><td>none — hand-written bodies 5 &rarr; 0</td><td>done; departures (<code>extra_fields</code>, <code>path_fields</code>) are declared and graded</td></tr>
+      <tr><td>A2A surface</td><td class="num"><strong>spec-only</strong></td><td>6 handlers still hand-parse</td><td>6 non-spec skills deleted; the remaining handlers reimplement fields the builder already knows</td></tr>
+      <tr><td>Refusal maps / ledgers / analyzer</td><td class="num"><strong>all gone</strong></td><td>—</td><td>—</td></tr>
+      <tr><td>Architecture guards policing drift</td><td class="num"><strong>3 of 4 deleted</strong></td><td><code>rest_body_completeness</code></td><td>now retirable — its last four subjects are derived</td></tr>
+    </tbody>
+  </table>
+  <p>The A2A row is the one with a live buyer consequence rather than a tidiness one: a handler that plucks keys by hand forwards <em>only the fields whoever wrote it remembered.</em> <code>update_media_buy</code>&rsquo;s handler reimplements five of roughly ten. The other five are accepted, announced, documented — and silently dropped.</p>
+  <div class="note">Note what the last row means. Three guards were deleted <em>as a result</em> of the fix, not abandoned. The fourth is scheduled to follow. A guard whose violation has become unrepresentable is dead weight, and keeping it costs a run on every commit forever.</div>
+</section>
+
+<section>
+  <div class="kicker">Monday</div>
+  <h2>What to do differently</h2>
+  <ol class="rule-list">
+    <li><strong>Adding a tool? Name the request DTO first.</strong> Write <code>build_&lt;tool&gt;_request</code> returning the SDK type, with the return annotation importable at module scope. Registration refuses anything else, so this is not advice — it is the only path.</li>
+    <li><strong>Never write a request shape twice.</strong> If you are typing field names into a REST <code>Body</code> or a signature, and the SDK ships a DTO for that tool, you are creating the drift this whole deck is about. <code>derived_body_model_for(tool)</code> on REST, <code>select_request_fields_for(tool, bag)</code> on A2A &mdash; name the TOOL, never its DTO and builder.</li>
+    <li><strong>Exposing a new spec field = making the impl accept it.</strong> There is no second place to update. No ledger, no unsupported map, no announcement to edit.</li>
+    <li><strong>Before writing &ldquo;the spec doesn&rsquo;t have this&rdquo; — grep the spec&rsquo;s vocabulary, not ours.</strong> Search the schema tree by <em>capability</em> (<code>task</code>, <code>performance</code>, <code>propert</code>), not by our tool name. A tool published under a name that is in no spec version is undiscoverable, and that is a compliance defect, not a cosmetic one.</li>
+    <li><strong>Never write a claim about &ldquo;the spec&rdquo; without a version.</strong> <em>&ldquo;Float per AdCP spec, not Budget object&rdquo;</em> was true when written and false by 3.1.1 — and nothing failed until a derivation forced the question. Cite the version, or do not write the comment.</li>
+    <li><strong>Schema violation is <code>INVALID_REQUEST</code>. Business rule is <code>VALIDATION_ERROR</code>.</strong> If a Pydantic model raised it, it is the first one. Always. On every transport.</li>
+    <li><strong>Put facts in <code>ErrorProblem</code>, never in a sentence.</strong> If you are reaching for an f-string to describe a rejection, the fields you are interpolating are the fields the buyer wanted. Ship those.</li>
+    <li><strong>Grade it with a BDD scenario on the wire envelope.</strong> Not a unit test about how a tool uses an SDK class. If the behavior is not observable through BDD, it is an integration test — and nothing else.</li>
+    <li><strong>When two artifacts can drift, do not add a checker.</strong> Derive one from the other and delete the checker. Three guards died that way this month; that is the shape of a real fix.</li>
+  </ol>
+</section>
+
+<footer>
+  Prebid Sales Agent · request &amp; response architecture. Sequel to <em>&ldquo;One way to raise an error.&rdquo;</em><br>
+  Spec: AdCP 3.1.1 via <code>adcp==6.6.0</code> — <code>enums/error-code.json</code>, <code>core/error.json</code>, <code>list-accounts-request.json</code>.<br>
+  Mechanism: <code>src/core/tools/_announced_shape.py</code>, <code>src/core/schema_helpers.py</code>, <code>src/routes/_derived_body.py</code>, <code>_register_tool</code> in <code>src/core/main.py</code>.<br>
+  Measured at <code>7e52496f7</code>, 2026-09-01.
+</footer>
+</div>
+<script>
+const pg=document.getElementById('pg');
+addEventListener('scroll',()=>{const h=document.body.scrollHeight-innerHeight;
+  pg.style.width=(h>0?(scrollY/h*100):0)+'%';},{passive:true});
+const secs=[...document.querySelectorAll('section')];
+addEventListener('keydown',e=>{
+  if(!['ArrowDown','ArrowRight','PageDown',' ','ArrowUp','ArrowLeft','PageUp'].includes(e.key))return;
+  e.preventDefault();
+  const fwd=['ArrowDown','ArrowRight','PageDown',' '].includes(e.key);
+  const cur=secs.findIndex(s=>s.getBoundingClientRect().top>-innerHeight/2);
+  const i=Math.max(0,Math.min(secs.length-1,(cur<0?secs.length-1:cur)+(fwd?1:-1)));
+  secs[i].scrollIntoView({behavior:'smooth'});
+});
+</script>
+</body></html>

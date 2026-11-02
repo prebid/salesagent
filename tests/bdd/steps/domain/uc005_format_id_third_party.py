@@ -80,7 +80,17 @@ def then_no_fabricated_local_entry(ctx: dict) -> None:
 
     # Falsifiable core: the seller's own same-id format must NOT be substituted for
     # the foreign reference. id-only matching would surface it here.
-    seller_local = (SELLER_AGENT_URL, ctx["third_party_format_id"].id)
+    #
+    # Both sides go through format_id_identity. They must, and a raw tuple here was a
+    # silent hole: that helper CANONICALIZES the agent_url (core/format-id.json makes
+    # canonicalization a MUST for anyone comparing two format-id values), so
+    # ``https://creative.adcontextprotocol.org`` becomes
+    # ``https://creative.adcontextprotocol.org/``. A hand-built tuple carrying the
+    # un-canonicalized constant therefore could not equal any member of ``returned``,
+    # whatever the seller returned, and this assertion — the ONE that discriminates
+    # (agent_url, id) matching from id-only matching — passed unconditionally. An
+    # id-only filter regression would have gone green on every transport.
+    seller_local = format_id_identity(FormatId(agent_url=SELLER_AGENT_URL, id=ctx["third_party_format_id"].id))
     assert seller_local not in returned, (
         f"seller substituted its own format {seller_local} for the third-party reference "
         f"{third_party}; the federation filter must match on (agent_url, id), not id alone"

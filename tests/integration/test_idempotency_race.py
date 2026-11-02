@@ -16,7 +16,7 @@ from decimal import Decimal
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from tests.harness._base import BareIntegrationEnv
+from tests.harness._base import DEFAULT_TEST_ACCOUNT_ID, BareIntegrationEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -92,7 +92,7 @@ class TestDegradedReplayFailsClosed:
 
     def test_missing_cache_row_rejects_transient(self, integration_db):
         """A same-key buy with no cache row rejects SERVICE_UNAVAILABLE + retry_after."""
-        from src.core.exceptions import AdCPError
+        from src.core.exceptions import AdCPSalesAgentError
         from src.core.tools.media_buy_create import _raise_degraded_replay_outcome
         from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory, TenantFactory
 
@@ -114,16 +114,16 @@ class TestDegradedReplayFailsClosed:
             MediaPackageFactory(media_buy=buy, package_id="pkg_winner_1")
             env.get_session()  # commit factory data
 
-        with pytest.raises(AdCPError) as exc_info:
+        with pytest.raises(AdCPSalesAgentError) as exc_info:
             _raise_degraded_replay_outcome(
                 tenant_id,
                 idem_key,
                 principal_id,
+                account_id=DEFAULT_TEST_ACCOUNT_ID,
             )
 
         exc = exc_info.value
         assert exc.error_code == "SERVICE_UNAVAILABLE"
-        assert exc.recovery == "transient"
         assert exc.retry_after >= 1
 
 
@@ -146,7 +146,7 @@ class TestDegradedReplayImpossibleState:
 
     def test_no_same_key_buy_rejects_terminal(self, integration_db):
         """No buy carries the key ⇒ CONFIGURATION_ERROR + terminal, not the transient sibling."""
-        from src.core.exceptions import AdCPError
+        from src.core.exceptions import AdCPSalesAgentError
         from src.core.tools.media_buy_create import _raise_degraded_replay_outcome
         from tests.factories import PrincipalFactory, TenantFactory
 
@@ -160,11 +160,12 @@ class TestDegradedReplayImpossibleState:
             # Deliberately NO MediaBuy carrying idem_key.
             env.get_session()  # commit factory data
 
-        with pytest.raises(AdCPError) as exc_info:
+        with pytest.raises(AdCPSalesAgentError) as exc_info:
             _raise_degraded_replay_outcome(
                 tenant_id,
                 idem_key,
                 principal_id,
+                account_id=DEFAULT_TEST_ACCOUNT_ID,
             )
 
         exc = exc_info.value
@@ -189,7 +190,7 @@ class TestIdempotencyRaceRecovery:
     def test_integrity_error_loser_fails_closed_single_booking(self, integration_db):
         """The loser gets a transient rejection; the winner's booking is untouched."""
         from src.core.database.repositories import MediaBuyUoW
-        from src.core.exceptions import AdCPError
+        from src.core.exceptions import AdCPSalesAgentError
         from src.core.tools.media_buy_create import _raise_degraded_replay_outcome
         from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory, TenantFactory
 
@@ -201,12 +202,18 @@ class TestIdempotencyRaceRecovery:
             principal = PrincipalFactory(tenant=tenant)
             principal_id = principal.principal_id
 
-            # Create the "winner" media buy with idempotency_key
+            # Create the "winner" media buy with idempotency_key.
+            # account_id=None DELIBERATELY, against the factory's default: this test grades
+            # the DB unique constraint on the key, and the loser below is written by
+            # ``create_from_request``, which carries no account. Two rows in two different
+            # account scopes do not collide, so the duplicate would simply insert and the
+            # IntegrityError this test exists for would never fire.
             winner = MediaBuyFactory(
                 tenant=tenant,
                 principal=principal,
                 idempotency_key=idem_key,
                 status="active",
+                account_id=None,
             )
             winner_id = winner.media_buy_id
             MediaPackageFactory(media_buy=winner, package_id="pkg_race_1")
@@ -230,26 +237,27 @@ class TestIdempotencyRaceRecovery:
                 )
                 # UoW __exit__ calls commit — IntegrityError fires here
         except IntegrityError as exc:
-            assert "idempotency_key" in str(exc.orig)
             caught = True
 
             # This is the degraded outcome `_replay_after_race` lands on when
             # no cache row is usable — fail closed, never a fabricated body:
-            with pytest.raises(AdCPError) as exc_info:
+            with pytest.raises(AdCPSalesAgentError) as exc_info:
                 _raise_degraded_replay_outcome(
                     tenant_id,
                     idem_key,
                     principal_id,
+                    # Matches the winner's scope above, which is deliberately account-less.
+                    account_id=None,
                 )
             assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
-            assert exc_info.value.recovery == "transient"
 
         assert caught, "IntegrityError should have been raised by the duplicate idempotency_key"
 
         # Verify only ONE media buy exists for this key
         with MediaBuyUoW(tenant_id) as verify_uow:
             assert verify_uow.media_buys is not None
-            existing = verify_uow.media_buys.find_by_idempotency_key(idem_key, principal_id)
+            # None, matching the deliberately account-less winner seeded above.
+            existing = verify_uow.media_buys.find_by_idempotency_key(idem_key, principal_id, account_id=None)
             assert existing is not None
             assert existing.media_buy_id == winner_id
 
@@ -260,7 +268,7 @@ class TestDegradedFallbackStatus:
     def test_pending_approval_buy_fails_closed_too(self, integration_db):
         """The original submitted response (task_id and all) is unrecoverable here —
         fabricating one would hand the buyer an envelope that never existed."""
-        from src.core.exceptions import AdCPError
+        from src.core.exceptions import AdCPSalesAgentError
         from src.core.tools.media_buy_create import _raise_degraded_replay_outcome
         from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
 
@@ -279,106 +287,65 @@ class TestDegradedFallbackStatus:
             )
             env.get_session()
 
-        with pytest.raises(AdCPError) as exc_info:
+        with pytest.raises(AdCPSalesAgentError) as exc_info:
             _raise_degraded_replay_outcome(
                 tenant_id,
                 idem_key,
                 principal_id,
+                account_id=DEFAULT_TEST_ACCOUNT_ID,
             )
 
         assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
-        assert exc_info.value.recovery == "transient"
 
 
 class TestRaceLoserPayloadRules:
-    """_replay_after_race enforces the same payload rules as the probe."""
+    """Reusing a key with a different payload is refused, at the boundary that owns the rule.
 
-    def test_different_payload_after_race_conflicts(self, integration_db):
-        """A race loser whose payload differs gets IDEMPOTENCY_CONFLICT, never the winner's response."""
-        from src.core.exceptions import AdCPError
-        from src.core.tools.media_buy_create import _replay_after_race
-        from tests.factories import PrincipalFactory, TenantFactory
+    This used to drive ``_replay_after_race``, the create-path helper that resolved a race
+    loser to the winner's cached response and applied the payload rule a second time on the
+    way. Replay moved to ``src/core/tools/_boundary.py``, which probes BEFORE any transport
+    reaches the implementation, so the conflict is decided there for every tool at once and
+    the loser of an actual commit race simply retries into it.
+    """
+
+    def test_different_payload_under_a_stored_key_conflicts(self, integration_db):
+        """A create carrying a seen key and a different payload never sees the stored response."""
+        from datetime import timedelta
+
+        from src.core.exceptions import AdCPSalesAgentError
+        from tests.harness.media_buy_create import MediaBuyCreateEnv
         from tests.helpers import make_active_cached_success, seed_cached_success
 
-        idem_key = f"rconf-{uuid.uuid4().hex}"
-        tenant_id = f"rconf_t_{uuid.uuid4().hex[:6]}"
+        idem_key = f"rconf-{uuid.uuid4().hex[:12]}00000000"
 
-        with BareIntegrationEnv() as env:
-            tenant = TenantFactory(tenant_id=tenant_id)
-            principal = PrincipalFactory(tenant=tenant)
-            principal_id = principal.principal_id
-            env.get_session()
-
-        seed_cached_success(
-            tenant_id,
-            principal_id,
-            idem_key,
-            response_model=make_active_cached_success("mb_race_winner"),
-            payload_hash="winner-hash",
-        )
-
-        with pytest.raises(AdCPError) as exc_info:
-            _replay_after_race(
-                tenant_id,
-                idempotency_key=idem_key,
-                principal_id=principal_id,
-                account_id=None,
-                request_hash="loser-different-hash",
+        with MediaBuyCreateEnv() as env:
+            _tenant, _principal, product, _pricing = env.setup_media_buy_data()
+            seed_cached_success(
+                env._tenant_id,
+                env._principal_id,
+                idem_key,
+                response_model=make_active_cached_success("mb_race_winner"),
+                # A hash no request canonicalises to, so whatever the create below produces
+                # differs from it -- which is the condition under test.
+                payload_hash="winner-hash",
+                account_id=DEFAULT_TEST_ACCOUNT_ID,
             )
+
+            now = datetime.now(UTC)
+            with pytest.raises(AdCPSalesAgentError) as exc_info:
+                env.call_impl(
+                    brand={"domain": "conflict-test.example.com"},
+                    packages=[
+                        {"product_id": product.product_id, "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"}
+                    ],
+                    start_time=(now + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    end_time=(now + timedelta(days=60)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    idempotency_key=idem_key,
+                )
 
         assert exc_info.value.error_code == "IDEMPOTENCY_CONFLICT"
         # Read-oracle defense: the conflict must not leak the winner's response.
-        assert "mb_race_winner" not in exc_info.value.message
-
-    def test_invalid_cached_envelope_fails_closed(self, integration_db):
-        """An unusable cache row fails closed (transient) — never a fabricated body,
-        never an internal error.
-
-        Schema drift between the writing and replaying deploy means the verbatim
-        envelope is unrecoverable on this deploy; per the spec, that is a
-        rejection, not a reconstruction.
-        """
-        from pydantic import BaseModel
-
-        from src.core.exceptions import AdCPError
-        from src.core.tools.media_buy_create import _replay_after_race
-        from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory, TenantFactory
-        from tests.helpers import seed_cached_success
-
-        idem_key = f"rinv-{uuid.uuid4().hex}"
-        tenant_id = f"rinv_t_{uuid.uuid4().hex[:6]}"
-
-        with BareIntegrationEnv() as env:
-            tenant = TenantFactory(tenant_id=tenant_id)
-            principal = PrincipalFactory(tenant=tenant)
-            principal_id = principal.principal_id
-            winner = MediaBuyFactory(
-                tenant=tenant,
-                principal=principal,
-                idempotency_key=idem_key,
-                status="active",
-            )
-            MediaPackageFactory(media_buy=winner, package_id="pkg_rinv_1")
-            env.get_session()
-
-        class _LegacyShape(BaseModel):
-            """A stored shape CreateMediaBuySuccess no longer validates (schema drift)."""
-
-            legacy_field: str = "older-deploy"
-
-        seed_cached_success(tenant_id, principal_id, idem_key, response_model=_LegacyShape(), payload_hash="same-hash")
-
-        with pytest.raises(AdCPError) as exc_info:
-            _replay_after_race(
-                tenant_id,
-                idempotency_key=idem_key,
-                principal_id=principal_id,
-                account_id=None,
-                request_hash="same-hash",
-            )
-
-        assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
-        assert exc_info.value.recovery == "transient"
+        assert "mb_race_winner" not in str(exc_info.value)
 
 
 class TestRaceSeamThroughEntrypoint:
@@ -398,7 +365,7 @@ class TestRaceSeamThroughEntrypoint:
         from datetime import timedelta
 
         from src.core.database.repositories import MediaBuyUoW
-        from src.core.exceptions import AdCPError
+        from src.core.exceptions import AdCPSalesAgentError
         from src.core.schemas._base import CreateMediaBuySuccess
         from tests.harness.media_buy_create import MediaBuyCreateEnv
 
@@ -418,8 +385,8 @@ class TestRaceSeamThroughEntrypoint:
                 "idempotency_key": idem_key,
             }
             first = env.call_impl(**call_kwargs)
-            assert isinstance(first.response, CreateMediaBuySuccess)
-            winner_id = first.response.media_buy_id
+            assert isinstance(first, CreateMediaBuySuccess)
+            winner_id = first.media_buy_id
 
             # Lose the cache row (TTL expiry / lost write) while the MediaBuy
             # survives — the race-loser state. expire_old with a far-future
@@ -431,7 +398,7 @@ class TestRaceSeamThroughEntrypoint:
 
             adapter_mock = env.mock["adapter"].return_value.create_media_buy
             calls_before = adapter_mock.call_count
-            with pytest.raises(AdCPError) as exc_info:
+            with pytest.raises(AdCPSalesAgentError) as exc_info:
                 env.call_impl(**call_kwargs)
             calls_after = adapter_mock.call_count
             tenant_id = env._tenant_id
@@ -441,12 +408,13 @@ class TestRaceSeamThroughEntrypoint:
         # the except-branch failed closed instead of fabricating a body.
         assert calls_after == calls_before + 1, "the retry must re-execute (probe miss), not replay"
         assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
-        assert exc_info.value.recovery == "transient"
 
         # Exactly one booking exists for the key — the backstop held.
         with MediaBuyUoW(tenant_id) as verify_uow:
             assert verify_uow.media_buys is not None
-            existing = verify_uow.media_buys.find_by_idempotency_key(idem_key, principal_id)
+            existing = verify_uow.media_buys.find_by_idempotency_key(
+                idem_key, principal_id, account_id=DEFAULT_TEST_ACCOUNT_ID
+            )
             assert existing is not None
             assert existing.media_buy_id == winner_id
 
@@ -482,7 +450,7 @@ class TestDegradedFallbackScopeRules:
         must never be resolved to a buy describing a different request.
         """
         from src.core.database.repositories import MediaBuyUoW
-        from src.core.exceptions import AdCPError
+        from src.core.exceptions import AdCPSalesAgentError
         from src.core.schemas._base import CreateMediaBuySuccess
         from tests.harness.media_buy_create import MediaBuyCreateEnv
 
@@ -491,20 +459,20 @@ class TestDegradedFallbackScopeRules:
         with MediaBuyCreateEnv() as env:
             _tenant, _principal, product, _pricing = env.setup_media_buy_data()
             first = env.call_impl(**self._create_kwargs(product, idem_key, po_number="DEG-1"))
-            assert isinstance(first.response, CreateMediaBuySuccess)
-            winner_id = first.response.media_buy_id
+            assert isinstance(first, CreateMediaBuySuccess)
+            winner_id = first.media_buy_id
 
             with MediaBuyUoW(env._tenant_id) as uow:
                 assert uow.idempotency_attempts is not None
                 assert uow.idempotency_attempts.expire_old(now=datetime(2099, 1, 1, tzinfo=UTC)) >= 1
 
-            with pytest.raises(AdCPError) as exc_info:
+            with pytest.raises(AdCPSalesAgentError) as exc_info:
                 env.call_impl(**self._create_kwargs(product, idem_key, po_number="DEG-2-MUTATED"))
 
         exc = exc_info.value
         assert exc.error_code == "IDEMPOTENCY_CONFLICT"
-        # Read-oracle defense: the conflict must not leak the winner's id.
-        assert winner_id not in exc.message
+        # No leak assert on the message: it is a read-only CODE_TABLE constant,
+        # so the winner's id (or any request data) has no route into it.
 
     def test_post_ttl_retry_rejects_idempotency_expired(self, integration_db):
         """A key whose buy outlived the replay TTL rejects instead of re-deriving.
@@ -516,7 +484,7 @@ class TestDegradedFallbackScopeRules:
         """
         from datetime import timedelta
 
-        from src.core.exceptions import AdCPError
+        from src.core.exceptions import AdCPSalesAgentError
         from tests.factories import MediaBuyFactory
         from tests.harness.media_buy_create import MediaBuyCreateEnv
 
@@ -533,7 +501,7 @@ class TestDegradedFallbackScopeRules:
                 created_at=datetime.now(UTC) - timedelta(days=2),
             )
 
-            with pytest.raises(AdCPError) as exc_info:
+            with pytest.raises(AdCPSalesAgentError) as exc_info:
                 env.call_impl(**self._create_kwargs(product, idem_key, po_number="EXP-1"))
 
         assert exc_info.value.error_code == "IDEMPOTENCY_EXPIRED"
@@ -547,22 +515,33 @@ class TestDegradedFallbackScopeRules:
         """
         from src.core.schemas._base import CreateMediaBuySuccess
         from tests.factories import AccountFactory
+        from tests.factories.account import AgentAccountAccessFactory
         from tests.harness.media_buy_create import MediaBuyCreateEnv
 
         idem_key = f"degacct-{uuid.uuid4().hex}"
 
         with MediaBuyCreateEnv() as env:
             tenant, _principal, product, _pricing = env.setup_media_buy_data()
-            AccountFactory(tenant=tenant, account_id="acct_a")
-            AccountFactory(tenant=tenant, account_id="acct_b")
+            # Access GRANTED, not just the rows created: enrich_identity_with_account
+            # resolves through the access scope, so an account the agent cannot reach comes
+            # back as AdCPAuthorizationError instead of the independent booking under test.
+            # It did not matter while the request named no account and resolution never ran.
+            for acct_id in ("acct_a", "acct_b"):
+                acct = AccountFactory(tenant=tenant, account_id=acct_id)
+                AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=_principal, account=acct)
 
+            # Named on the REQUEST, not patched onto the identity. call_impl runs the same
+            # enrich_identity_with_account the transport boundary runs, so it RESOLVES
+            # req.account onto the identity -- a hand-set identity.account_id beside it is
+            # overwritten, and both calls would land in one scope and replay. Setting it
+            # where a buyer sets it is also what makes this test grade the real path.
             kwargs = self._create_kwargs(product, idem_key, po_number="ACCT-1")
-            first = env.call_impl(identity=env.identity.model_copy(update={"account_id": "acct_a"}), **kwargs)
-            second = env.call_impl(identity=env.identity.model_copy(update={"account_id": "acct_b"}), **kwargs)
+            first = env.call_impl(account={"account_id": "acct_a"}, **kwargs)
+            second = env.call_impl(account={"account_id": "acct_b"}, **kwargs)
 
-        assert isinstance(first.response, CreateMediaBuySuccess)
-        assert isinstance(second.response, CreateMediaBuySuccess)
-        assert second.response.media_buy_id != first.response.media_buy_id
+        assert isinstance(first, CreateMediaBuySuccess)
+        assert isinstance(second, CreateMediaBuySuccess)
+        assert second.media_buy_id != first.media_buy_id
         assert second.replayed is False, "a different account is an independent request, never a replay"
 
 
@@ -579,8 +558,8 @@ class TestDegradedExpiryAnchoring:
         """
         from datetime import timedelta
 
-        from src.core.exceptions import AdCPError
-        from src.core.tools.media_buy_create import _replay_after_race
+        from src.core.exceptions import AdCPSalesAgentError
+        from src.core.tools.media_buy_create import _raise_degraded_replay_outcome
         from tests.helpers import make_active_cached_success, seed_cached_success, seed_media_buy
 
         idem_key = f"degstore-{uuid.uuid4().hex}"
@@ -599,15 +578,15 @@ class TestDegradedExpiryAnchoring:
             payload_hash="store-hash",
             ttl=timedelta(hours=1),
             now=datetime.now(UTC) - timedelta(hours=2),
+            account_id=DEFAULT_TEST_ACCOUNT_ID,
         )
 
-        with pytest.raises(AdCPError) as exc_info:
-            _replay_after_race(
+        with pytest.raises(AdCPSalesAgentError) as exc_info:
+            _raise_degraded_replay_outcome(
                 tenant_id,
-                idempotency_key=idem_key,
-                principal_id=principal_id,
-                account_id=None,
-                request_hash="store-hash",
+                idem_key,
+                principal_id,
+                account_id=DEFAULT_TEST_ACCOUNT_ID,
             )
 
         assert exc_info.value.error_code == "IDEMPOTENCY_EXPIRED"

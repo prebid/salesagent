@@ -17,8 +17,10 @@ from adcp.types import CreativeAsset, FormatId
 from adcp.types.generated_poc.brand import Brand  # TODO: no stable alias in adcp.types
 
 # Import Package and PackageRequest from our schemas (they extend adcp library)
+from src.core.product_conversion import default_reporting_capabilities
 from src.core.schemas import Package, PackageRequest, url
 from src.core.schemas.product import Product
+from tests.factories import PricingOptionFactory
 from tests.factories.creative_asset import build_assets, image_spec
 
 
@@ -94,6 +96,10 @@ def create_test_product(
     if pricing_options is None:
         pricing_options = [create_test_cpm_pricing_option()]
 
+    # reporting_capabilities is required by the pin and inherited as required; the edge
+    # default is the one production supplies for a row that stores NULL.
+    kwargs.setdefault("reporting_capabilities", default_reporting_capabilities())
+
     return Product(
         product_id=product_id,
         name=name,
@@ -125,6 +131,7 @@ def create_minimal_product(**overrides) -> Product:
         "delivery_type": "guaranteed",
         "pricing_options": [create_test_cpm_pricing_option()],
         "delivery_measurement": {"provider": "test", "notes": "Test"},
+        "reporting_capabilities": default_reporting_capabilities(),
     }
     defaults.update(overrides)
     return Product(**defaults)
@@ -539,16 +546,18 @@ def create_test_cpm_pricing_option(
     is_fixed: bool = True,
     **kwargs,
 ) -> dict[str, Any]:
-    """Create a test CPM fixed rate pricing option (discriminated union).
+    """Create a test CPM pricing option dict (V3 discriminated-union shape).
 
-    This creates a proper AdCP 2.4.0+ CpmFixedRatePricingOption discriminated union.
-    As of adcp 2.4.0, is_fixed is a required field per AdCP spec.
+    V3 discriminates fixed vs auction by field presence: fixed pricing carries
+    fixed_price, auction pricing carries floor_price. The rate/is_fixed
+    parameter names are kept for the many existing call sites; they select
+    which V3 field the rate lands in.
 
     Args:
         pricing_option_id: Unique identifier for this pricing option
         currency: Currency code (3-letter ISO)
         rate: CPM rate in the specified currency
-        is_fixed: Whether this is fixed rate (True) or auction (False). Defaults to True.
+        is_fixed: True -> rate becomes fixed_price; False -> rate becomes floor_price.
         **kwargs: Additional optional fields (min_spend_per_package, etc.)
 
     Returns:
@@ -557,14 +566,17 @@ def create_test_cpm_pricing_option(
     Example:
         pricing = create_test_cpm_pricing_option(rate=15.0, currency="EUR")
     """
-    return {
+    # V3 shape: fixed pricing carries fixed_price, auction pricing carries
+    # floor_price — never the pre-V3 "rate" / "is_fixed" keys, which the local
+    # pricing members (extra="forbid" outside production) reject as drift.
+    option: dict[str, Any] = {
         "pricing_option_id": pricing_option_id,
         "pricing_model": "cpm",
         "currency": currency,
-        "rate": rate,
-        "is_fixed": is_fixed,
-        **kwargs,
     }
+    option["fixed_price" if is_fixed else "floor_price"] = rate
+    option.update(kwargs)
+    return option
 
 
 def create_test_pricing_option(pricing_model: str = "cpm", currency: str = "USD", **kwargs) -> dict[str, Any]:
@@ -674,6 +686,10 @@ def create_test_media_buy_request_dict(
         # Required by AdCP 3.0.1 — unique per call (a reused key would replay the
         # original response instead of creating a new buy). Override via kwargs.
         "idempotency_key": f"test-key-{uuid.uuid4().hex}",
+        # Required by create-media-buy-request.json /required, like the key above it. A test
+        # about accounts overrides this; a test about anything else should not have to name
+        # it, which is the whole point of the factory carrying it.
+        "account": {"account_id": "acct_test"},
     }
 
     # Handle targeting_overlay specially (goes in all packages, not top-level)
@@ -686,6 +702,34 @@ def create_test_media_buy_request_dict(
     request.update(kwargs)
 
     return request
+
+
+def create_test_media_buy_request(*, packages: list[Any], start_time: Any, end_time: Any, **overrides: Any) -> Any:
+    """The TYPED sibling of ``create_test_media_buy_request_dict``.
+
+    Same purpose, different consumer: the dict serves tests that need a wire body, this
+    serves the ones that need the model. What it exists to stop being repeated is the
+    spec-required scaffolding -- ``account``, ``brand`` and a per-call-unique
+    ``idempotency_key`` -- which a caller has to state on every construction and which is
+    identical everywhere it is not the subject. The pricing/GAM integration files were
+    carrying three verbatim copies of it.
+
+    Any of the three can be overridden by a test that IS about one of them.
+    """
+    from src.core.schemas import CreateMediaBuyRequest
+
+    fields: dict[str, Any] = {
+        "account": {"account_id": "acct_test"},
+        "brand": {"domain": "testbrand.com"},
+        # Unique per call: a reused key replays the original response instead of creating a
+        # new buy, which silently turns a second construction into the first one's answer.
+        "idempotency_key": f"int-key-{uuid.uuid4().hex}",
+        "packages": packages,
+        "start_time": start_time,
+        "end_time": end_time,
+    }
+    fields.update(overrides)
+    return CreateMediaBuyRequest(**fields)
 
 
 def valid_reporting_webhook(url: str) -> dict[str, Any]:
@@ -924,13 +968,11 @@ def create_test_db_product_with_pricing(
     """
     from decimal import Decimal
 
-    from src.core.database.models import PricingOption
-
     # Create product
     product = create_test_db_product(tenant_id=tenant_id, product_id=product_id, **product_kwargs)
 
     # Create pricing option
-    pricing = PricingOption(
+    pricing = PricingOptionFactory.build(
         tenant_id=tenant_id,
         product_id=product_id,
         pricing_model=pricing_model,

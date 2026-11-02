@@ -28,8 +28,8 @@ structurally.
 from __future__ import annotations
 
 import argparse
+import ast
 import json
-import os
 import re
 import sys
 import textwrap
@@ -41,6 +41,8 @@ from typing import Any
 
 import adcp
 import yaml
+
+from src.core.config import ToolingSettings
 
 
 class StoryboardAuditError(Exception):
@@ -87,6 +89,7 @@ def pinned_version(repo: Path) -> str:
     return version
 
 
+#: The variable behind ``ToolingSettings.adcp_home``; named here for the tests that set it.
 ADCP_HOME_ENV_VAR = "ADCP_HOME"
 ADCP_REPO = "adcontextprotocol/adcp"
 # Where `gh release download <tag> --repo adcontextprotocol/adcp` + `tar -xzf`
@@ -113,9 +116,9 @@ def adcp_home(repo: Path | None = None, version: str | None = None) -> Path:
     Six structural guards hardcoded (3) and gated on it, so 23 guards were dead
     in every CI run — they pass whenever they can actually resolve a tree.
     """
-    override = os.environ.get(ADCP_HOME_ENV_VAR)
+    override = ToolingSettings().adcp_home  # ADCP_HOME_ENV_VAR
     if override:
-        return Path(override)
+        return override
     if repo is not None:
         resolved = version or pinned_version(repo)
         bundle = repo / BUNDLE_PARENT / f"adcp-{resolved}"
@@ -142,21 +145,80 @@ def dist_root(adcp: Path, version: str) -> Path:
     return adcp / "dist" / "compliance" / version
 
 
-_SPECIALISM_RE = re.compile(r"AdcpSpecialism\.(\w+)")
-_PROTOCOL_RE = re.compile(r"SupportedProtocol\.(\w+)")
+#: The module that DECLARES what this agent unconditionally advertises, and the two
+#: names in it that carry the declaration. Read by AST, not by a whole-file regex for
+#: ``AdcpSpecialism.(\w+)``: that regex read every MENTION of the enum, so it would
+#: also harvest ``_BACKED_SPECIALISMS`` — the specialisms a TENANT may claim
+#: (``signal-owned``), which we do not advertise — and put storyboards on-path that
+#: nothing grades us on.
+_DECLARATION_MODULE = ("src", "core", "schemas", "capability_declarations.py")
+_DECLARATION_NAMES = {"specialisms": "DEFAULT_SPECIALISMS", "protocols": "DEFAULT_SUPPORTED_PROTOCOLS"}
+
+
+def _declared_enum_members(tree: ast.Module, name: str, where: Path) -> set[str]:
+    """The enum member names in the module-level list assigned to *name*.
+
+    Every unrecognised shape raises, and that loudness is the point: "the name is
+    gone", "the list is now built by a comprehension" and "the list is empty" must
+    not be indistinguishable from "this agent declares nothing". This reader used to
+    scan ``src/core/tools/capabilities.py`` for a bare enum-attribute regex, and when
+    the declaration MOVED to its own module the scan silently returned an empty set —
+    which reads as "we declare no specialisms", quietly taking every
+    ``specialisms/`` storyboard OFF-PATH while production went on advertising
+    ``sales-non-guaranteed`` on the wire. OFF-PATH storyboards leave the published
+    check index, so the graded surface shrinks and every conformance number quoted
+    against it silently improves.
+    """
+    for node in tree.body:
+        target = node.target if isinstance(node, ast.AnnAssign) else None
+        if target is None and isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+        if not (isinstance(target, ast.Name) and target.id == name):
+            continue
+        value = node.value
+        if not isinstance(value, ast.List) or not all(isinstance(e, ast.Attribute) for e in value.elts):
+            raise StoryboardAuditError(
+                f"{where}: {name} is no longer a list of `Enum.member` references "
+                f"(found {ast.dump(value) if value else 'no value'}). Teach "
+                "declared_capabilities() the new shape rather than letting it report "
+                "an empty declaration."
+            )
+        if not value.elts:
+            raise StoryboardAuditError(
+                f"{where}: {name} is declared empty. If this deployment really advertises "
+                "nothing here, say so at the call site — an empty declaration sends every "
+                "gated storyboard OFF-PATH and out of the published check index."
+            )
+        return {e.attr for e in value.elts if isinstance(e, ast.Attribute)}
+    raise StoryboardAuditError(f"{where}: no module-level {name} to read the declaration from")
 
 
 def declared_capabilities(repo: Path) -> dict[str, set[str]]:
-    """Our declared specialisms + protocols, read from src/core/tools/capabilities.py.
+    """Our declared specialisms + protocols, read from their declaration module.
+
+    ``DEFAULT_SPECIALISMS`` / ``DEFAULT_SUPPORTED_PROTOCOLS`` in
+    ``src/core/schemas/capability_declarations.py`` are what every tenant advertises
+    unconditionally, so they are what applicability is graded against.
 
     Normalized hyphenated (``sales-non-guaranteed``), matching the majority
     convention (2 of the 3 pre-migration readers) — the path segments this
     is compared against are hyphenated in the pinned tree.
+
+    Raises :class:`StoryboardAuditError` rather than returning an empty set when the
+    declaration cannot be read at all: see :func:`_declared_enum_members`.
     """
-    text = (repo / "src" / "core" / "tools" / "capabilities.py").read_text(encoding="utf-8")
+    where = repo.joinpath(*_DECLARATION_MODULE)
+    try:
+        source = where.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise StoryboardAuditError(
+            f"cannot read production's capability declaration at {where}: {exc}. "
+            "The storyboard gate classifier has no declared set to grade against."
+        ) from exc
+    tree = ast.parse(source, filename=str(where))
     return {
-        "specialisms": {s.replace("_", "-") for s in _SPECIALISM_RE.findall(text)},
-        "protocols": {p.replace("_", "-") for p in _PROTOCOL_RE.findall(text)},
+        key: {m.replace("_", "-") for m in _declared_enum_members(tree, name, where)}
+        for key, name in _DECLARATION_NAMES.items()
     }
 
 
@@ -529,6 +591,47 @@ def graded_steps_by_task(text: str) -> list[tuple[str, str, str | None]]:
     left to :func:`checks_by_owner`, so the two never double-count the same
     step: at 3.1.1, 8 assertion-task steps carry ``check:`` lines and 19 do not.
     """
+    return [
+        (owner, task, phase_id)
+        for _step_id, owner, task, phase_id in _steps_without_checks(text)
+        if _is_assertion_task(task)
+    ]
+
+
+def tool_steps_without_checks(text: str) -> list[tuple[str, str]]:
+    """Steps invoking a real AdCP TOOL with no ``check:`` line — ``(step_id, task)``.
+
+    The third family, and the sibling of :func:`graded_steps_by_task`: same
+    traversal, complementary half of the same filter. A step declaring
+    ``task: list_creative_formats`` and no checks is still run by the
+    ``@adcp/sdk`` runner, which reports pass or fail on the INVOCATION — the
+    tool either answered or it did not. The index, keyed on ``check:`` lines,
+    produces no record for such a step, so a genuine failure of one had nowhere
+    to be ledgered.
+
+    Measured: ``media_buy_seller/creative_reception::list_formats`` failed on
+    both protocols in a real run and was refused by the orphan-row check in
+    :mod:`scripts.audit.storyboard_check_index`, which knew only two no-check
+    families. The step is declared by the 3.1.1 pin
+    (``domains/media-buy/scenarios/creative_reception.yaml``, section
+    ``discover_accepted_formats``) and carries zero ``check:`` lines, so both
+    the runner and the ledger were right and the join universe was short.
+
+    OWNER is the step itself, unlike the assertion family: a tool step names no
+    ``triggered_by``, and the runner reports the step's own id.
+    """
+    return [
+        (step_id, task) for step_id, _owner, task, _phase in _steps_without_checks(text) if not _is_assertion_task(task)
+    ]
+
+
+def _steps_without_checks(text: str) -> list[tuple[str, str, str, str | None]]:
+    """``(step_id, owner_id, task, phase_id)`` per step declaring a task and no check.
+
+    One traversal for both no-check families. Owner is ``triggered_by`` when the
+    step names one — matching how the runner attributes a webhook failure — and
+    the step itself otherwise.
+    """
     windows: list[tuple[int, int, str]] = []
     for phase_id in phases(text):
         window = _phase_window(text, phase_id)
@@ -537,12 +640,12 @@ def graded_steps_by_task(text: str) -> list[tuple[str, str, str | None]]:
             windows.append((offset, offset + len(body), phase_id))
 
     steps = list(_STEP_ID_RE.finditer(text))
-    graded: list[tuple[str, str, str | None]] = []
+    found: list[tuple[str, str, str, str | None]] = []
     for index, match in enumerate(steps):
         end = steps[index + 1].start() if index + 1 < len(steps) else len(text)
         block = text[match.end() : end]
         task_match = _STEP_TASK_RE.search(block)
-        if task_match is None or not _is_assertion_task(task_match.group(1)):
+        if task_match is None:
             continue
         if _CHECK_LINE_RE.search(block):
             continue
@@ -550,8 +653,8 @@ def graded_steps_by_task(text: str) -> list[tuple[str, str, str | None]]:
         owner = triggered_by.group(1) if triggered_by else match.group(1)
         enclosing = [w for w in windows if w[0] <= match.start() < w[1]]
         enclosing.sort(key=lambda w: w[1] - w[0])
-        graded.append((owner, task_match.group(1), enclosing[0][2] if enclosing else None))
-    return graded
+        found.append((match.group(1), owner, task_match.group(1), enclosing[0][2] if enclosing else None))
+    return found
 
 
 def check_inventory(text: str) -> dict[str, int]:
@@ -636,10 +739,18 @@ def tag_literal(tag: str = STORYBOARD_TAG) -> str:
 
 
 #: Environment variable naming where the BDD liveness artifact is written, and
-#: the default filename when it is unset. Read by the pytest plugin that WRITES
-#: the artifact and by the audit join that READS it — hence shared.
+#: the default filename when it is unset. Set by the pytest plugin that WRITES
+#: the artifact; the audit join READS it as ``ToolingSettings.bdd_liveness_artifact``.
 ARTIFACT_ENV_VAR = "BDD_LIVENESS_ARTIFACT"
 DEFAULT_ARTIFACT_PATH = "bdd_scenario_liveness.json"
+
+#: What the storyboard conformance session COLLECTED, at (protocol, track, storyboard,
+#: step) grain. Named here rather than in either end so the job that writes it and the
+#: index that reads it cannot drift to different paths -- the same reason the liveness
+#: artifact's name lives here. Consumed by
+#: ``storyboard_check_index._exercised_storyboards``; written by
+#: ``tests/storyboard/collected.py``.
+COLLECTED_ARTIFACT_PATH = "storyboard_collected.json"
 
 #: Identity tag -> use-case number. Byte-identical copies previously sat in
 #: tests/bdd/conftest.py and scripts/audit/scenario_liveness_join.py, each with
@@ -961,19 +1072,17 @@ def run_cli(
     build_fn: Callable[..., dict[str, Any]],
     render_fn: Callable[[dict[str, Any]], str],
     jsonl_fn: Callable[[dict[str, Any]], list[dict[str, Any]]] | None = None,
-    *,
-    configure_args: Callable[[argparse.ArgumentParser], None] | None = None,
-    build_args: Callable[[argparse.Namespace], tuple[Any, ...]] | None = None,
 ) -> int:
-    """Standard CLI: parse args, ``build_fn(*build_args(args))``, print, catch.
+    """Standard CLI: parse args, ``build_fn(repo, adcp)``, print, catch.
 
-    Default shape (``configure_args``/``build_args`` both ``None``) is
-    ``--repo/--adcp/--markdown[/--jsonl]``, ``build_fn(repo, adcp)`` — every
-    ``storyboard_*.py`` sibling but ``storyboard_reconciliation`` uses this
-    default. A consumer whose ``build_fn`` takes different arguments (e.g.
-    ``storyboard_reconciliation.build(proposals, expected)``) supplies both
-    hooks instead of hand-rolling its own argparse + print + error-handling
-    boilerplate — the duplicate ``main()`` this module exists to close.
+    One shape, for every caller: ``--repo/--adcp/--markdown[/--jsonl]``. The
+    ``configure_args``/``build_args`` hooks that used to make the argument set
+    pluggable had exactly one user, ``storyboard_reconciliation``, which took a
+    required ``--proposals`` directory the repository does not carry; deleting that
+    script (salesagent-b341x.24) left the hooks with no caller, and a pluggable seam
+    nothing plugs into is a second shape waiting to be reintroduced. An audit script's
+    subject is the repo plus the pinned bundle — guarded by
+    ``tests/unit/test_architecture_audit_scripts_have_a_subject.py``.
 
     ``--jsonl`` emits one JSON object per line. A consumer that offers it is
     declaring that the JSONL is its SOURCE OF TRUTH and the markdown a
@@ -991,16 +1100,13 @@ def run_cli(
     and repeats the same catch.
     """
     parser = argparse.ArgumentParser(description=description)
-    if configure_args is None:
-        parser.add_argument("--repo", type=Path, default=Path.cwd())
-        # Resolved AFTER parsing, from --repo, so it goes through adcp_home():
-        # $ADCP_HOME, then the in-repo release bundle, then a personal clone.
-        # Defaulting to the clone here made the published regeneration command
-        # fail on any machine that has the bundle and no clone — which is every
-        # CI runner and every contributor.
-        parser.add_argument("--adcp", type=Path, default=None)
-    else:
-        configure_args(parser)
+    parser.add_argument("--repo", type=Path, default=Path.cwd())
+    # Resolved AFTER parsing, from --repo, so it goes through adcp_home():
+    # $ADCP_HOME, then the in-repo release bundle, then a personal clone.
+    # Defaulting to the clone here made the published regeneration command
+    # fail on any machine that has the bundle and no clone — which is every
+    # CI runner and every contributor.
+    parser.add_argument("--adcp", type=Path, default=None)
     parser.add_argument("--markdown", action="store_true")
     if jsonl_fn is not None:
         parser.add_argument("--jsonl", action="store_true")
@@ -1009,10 +1115,9 @@ def run_cli(
         # Inside the try: adcp_home() consults pinned_version(), which reads the
         # installed SDK and raises the typed error on pin drift. Resolving out
         # here would traceback instead of the documented "error: ..." exit 1.
-        if getattr(args, "adcp", None) is None and hasattr(args, "repo"):
+        if args.adcp is None:
             args.adcp = adcp_home(args.repo)
-        call_args = build_args(args) if build_args is not None else (args.repo.resolve(), args.adcp.resolve())
-        result = build_fn(*call_args)
+        result = build_fn(args.repo.resolve(), args.adcp.resolve())
     except StoryboardAuditError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

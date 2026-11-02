@@ -1,15 +1,21 @@
 """The outbound escape hatch, spelled in exactly one place.
 
-``src/core/security/outbound_http.py`` reads an environment variable to decide
-whether the seam's default posture — no private/reserved destination addresses
-— may be relaxed for a test that needs a loopback origin. Three test surfaces
-need to set it: the seam's own suite (``set_flags``), the webhook-delivery envs
-that run a real local origin (``LocalOriginMixin``), and the BDD env that
-grades a refusal (``RealResolverProductEnv``).
+This is the ENVIRONMENT spelling of the private-range hatch, for the surfaces that hand
+the variable to something that will read it through the settings loader: the
+webhook-delivery envs that run a real local origin (``LocalOriginMixin``) and the unit
+suite that patches ``os.environ`` wholesale (``test_protocol_webhook_ssrf``).
 
-Three spellings of the same value is three places to get it wrong — so the
-name, and the ``"true"``/``"false"`` literal the repo's ``== "true"``
-convention reads, live here and nowhere else.
+**A test running in this process should not use it.** ``src/core/security/outbound_http.py``
+reads no environment variable — it reads
+``get_settings().limits.adcp_outbound_allow_private``, and that object is built once and
+cached, so a ``setenv`` reaches the seam only while nothing has read the settings yet. The
+in-process way to state the hatch is
+``tests.helpers.settings_injection.inject_limits(monkeypatch, adcp_outbound_allow_private=...)``,
+which is what ``set_flags`` (the seam suite, and the ~15 files that reach it through
+``tests/integration/property_list_helpers``) now does.
+
+One spelling of the variable is still one place to get it wrong — so the name, and the
+``"true"``/``"false"`` literal the loader's parsing reads, live here and nowhere else.
 
 The value is ALWAYS written, including the off case: a hatch left unset is a
 hatch decided by whatever exported it into the shell, which is how a refusal

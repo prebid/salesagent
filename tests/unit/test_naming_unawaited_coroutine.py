@@ -12,9 +12,12 @@ return_value instead, which AsyncMock wraps in a proper awaitable coroutine.
 
 import asyncio
 from datetime import datetime
+from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+from src.adapters.base import AdapterCreateRequest
 
 
 class TestNamingAsyncContext:
@@ -28,12 +31,12 @@ class TestNamingAsyncContext:
         loop = asyncio.get_running_loop()
         assert loop is not None, "Test must run inside an async event loop"
 
-        request = MagicMock()
-        request.brand = MagicMock()
-        request.brand.domain = "testbrand.com"
-        request.brand.campaign_objectives = None
-        request.get_total_budget.return_value = 5000.0
-        request.packages = [MagicMock(currency="USD", product_id="prod_1")]
+        # The real carrier, not a mock of it: generate_auto_name is called by adapters
+        # with an AdapterCreateRequest, and a MagicMock stand-in makes the budget
+        # comparison below raise into the broad fallback instead of exercising the AI
+        # path this test is about.
+        request = AdapterCreateRequest(brand={"domain": "testbrand.com"}, total_budget=Decimal("5000.00"))
+        packages = [MagicMock(product_id="prod_1")]
 
         start_time = datetime(2025, 6, 1)
         end_time = datetime(2025, 6, 30)
@@ -55,7 +58,7 @@ class TestNamingAsyncContext:
         ):
             result = generate_auto_name(
                 request=request,
-                packages=request.packages,
+                packages=packages,
                 start_time=start_time,
                 end_time=end_time,
                 tenant_ai_config={"provider": "gemini", "api_key": "fake-key"},
@@ -70,12 +73,12 @@ class TestNamingAsyncContext:
         """generate_auto_name should also work from pure sync context."""
         from src.core.utils.naming import generate_auto_name
 
-        request = MagicMock()
-        request.brand = MagicMock()
-        request.brand.domain = "testbrand.com"
-        request.brand.campaign_objectives = None
-        request.get_total_budget.return_value = 5000.0
-        request.packages = [MagicMock(currency="USD", product_id="prod_1")]
+        # The real carrier, not a mock of it: generate_auto_name is called by adapters
+        # with an AdapterCreateRequest, and a MagicMock stand-in makes the budget
+        # comparison below raise into the broad fallback instead of exercising the AI
+        # path this test is about.
+        request = AdapterCreateRequest(brand={"domain": "testbrand.com"}, total_budget=Decimal("5000.00"))
+        packages = [MagicMock(product_id="prod_1")]
 
         start_time = datetime(2025, 6, 1)
         end_time = datetime(2025, 6, 30)
@@ -97,7 +100,7 @@ class TestNamingAsyncContext:
         ):
             result = generate_auto_name(
                 request=request,
-                packages=request.packages,
+                packages=packages,
                 start_time=start_time,
                 end_time=end_time,
                 tenant_ai_config={"provider": "gemini", "api_key": "fake-key"},

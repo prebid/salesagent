@@ -4,6 +4,7 @@ import logging
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
+from typing import Any
 from uuid import uuid4
 
 from adcp.types import BrandReference
@@ -11,6 +12,9 @@ from adcp.types.generated_poc.core.account import (
     CreditLimit,
     GovernanceAgent,
     Setup,
+)  # TODO: no stable alias in adcp.types
+from adcp.types.generated_poc.core.business_entity import (
+    BusinessEntity,
 )  # TODO: no stable alias in adcp.types
 from sqlalchemy import (
     DECIMAL,
@@ -24,17 +28,31 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
     text,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import DeclarativeBase, Mapped, backref, mapped_column, relationship, validates
 from sqlalchemy.sql import func
 
+from src.core.billing_policy import BILLING_PARTY_VALUES
+from src.core.credentials import hash_token, mint_token, token_prefix
 from src.core.database.json_type import JSONType
+from src.core.errors.details import ConfigurationDetails
 from src.core.exceptions import AdCPConfigurationError, AdCPPersistedStateError
 from src.core.json_validators import JSONValidatorMixin
+
+# The ONE NotificationConfig, whose authentication block is the one Authentication class
+# (src/core/schemas/notification.py): a stored row reads back as the same type the request
+# chain carries, so nothing downstream holds two spellings of the block.
+from src.core.schemas.notification import NotificationConfig
+from src.core.signing.algorithms import (
+    REQUEST_SIGNING,
+    signing_alg_check_clause,
+    signing_purpose_check_clause,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +69,11 @@ class Tenant(Base, JSONValidatorMixin):
     tenant_id: Mapped[str] = mapped_column(String(50), primary_key=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     subdomain: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
-    virtual_host: Mapped[str | None] = mapped_column(Text, nullable=True)
+    virtual_host: Mapped[str] = mapped_column(Text, nullable=False)
+    #: ``virtual_host`` with its port removed, derived by ``hostname_of`` and stored so the
+    #: unique key below is a PLAIN COLUMN. Maintained by ``_fold_virtual_host``; never
+    #: assigned directly.
+    virtual_host_name: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
@@ -69,13 +91,19 @@ class Tenant(Base, JSONValidatorMixin):
     slack_webhook_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     slack_audit_webhook_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     hitl_webhook_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    admin_token: Mapped[str | None] = mapped_column(String(100), nullable=True)
     # List of format ID strings (just the id part, not full FormatId objects)
     # Validated at database level via CHECK constraint (see migration: rename_formats_to_format_ids)
     auto_approve_format_ids: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
     human_review_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     policy_settings: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
     supported_billing: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)  # BR-RULE-059
+    # Default FALSE: a seller advertises sandbox support by configuring it, never
+    # by the absence of configuration. A true-by-default column made every
+    # unconfigured tenant declare account.sandbox support it had not opted into,
+    # and made the sync_accounts provisioning gate admit sandbox entries for it.
+    account_sandbox: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )  # #1592 C2/A2
     account_approval_mode: Mapped[str | None] = mapped_column(
         String(50), nullable=True
     )  # BR-RULE-060: auto|credit_review|legal_review
@@ -92,6 +120,21 @@ class Tenant(Base, JSONValidatorMixin):
         JSONType,
         nullable=True,
         comment="Advertising policy configuration with prohibited categories, tactics, and advertisers",
+    )
+
+    # Per-tenant AdCP capability declarations (#1592 T1a).
+    # STRICT policy: this store may carry only blocks the implementation BACKS --
+    # business facts the capabilities response echoes (trusted_match surfaces,
+    # measurement catalog, adapter-backed creative_specs, legacy axe_integrations).
+    # It deliberately has NO field for a behavioral posture we do not implement
+    # (request_signing / webhook_signing / identity signing / webhook or offline
+    # report delivery): declaring one would promise the buyer behavior production
+    # lacks. Those blocks land with RFC 9421 signing (#1291).
+    # NULL means "nothing declared" and reproduces the pre-#1592 wire exactly.
+    capability_declarations: Mapped[dict | None] = mapped_column(
+        JSONType,
+        nullable=True,
+        comment="Implementation-backed AdCP capability declaration blocks (#1592); NULL = nothing declared",
     )
 
     # Pydantic AI configuration for multi-model support
@@ -132,7 +175,19 @@ class Tenant(Base, JSONValidatorMixin):
 
     # Relationships
     products = relationship("Product", back_populates="tenant", cascade="all, delete-orphan")
-    principals = relationship("Principal", back_populates="tenant", cascade="all, delete-orphan")
+    # No `principals` collection. It has no reader, and a relationship traversal is the
+    # one way to reach Principal rows without importing the class — which is what the
+    # TID251 ban on `src.core.database.models.Principal` outside the four repository
+    # modules exists to prevent. Deleting a tenant still deletes its principals: the
+    # DATABASE does it, because alembic revision 390461e816ea sets the
+    # principals.tenant_id foreign key to ON DELETE CASCADE. That revision is the
+    # guarantee, not the `ondelete="CASCADE"` on the mapped column — a declared ondelete
+    # does not alter a constraint an earlier migration already created, so the schema
+    # keeps whatever the creating revision wrote until a revision alters it. The
+    # hard-delete path in src/admin/tenant_management_api.py also deletes principals
+    # explicitly through PrincipalRepository.delete_all; that is belt-and-braces, not the
+    # guarantee.
+    # Principal.tenant survives: the other direction yields a tenant, not a principal.
     users = relationship("User", back_populates="tenant", cascade="all, delete-orphan")
     accounts = relationship("Account", back_populates="tenant", cascade="all, delete-orphan")
     media_buys = relationship("MediaBuy", back_populates="tenant", cascade="all, delete-orphan", overlaps="media_buys")
@@ -165,11 +220,60 @@ class Tenant(Base, JSONValidatorMixin):
 
     __table_args__ = (
         Index("idx_subdomain", "subdomain"),
-        Index("ix_tenants_virtual_host", "virtual_host", unique=True),
+        # UNIQUE on the host's NAME, port aside, because that is the key routing resolves
+        # by: the same tenant answers at `host` and at `host:8443`
+        # (@T-TENANTID-host-with-port). A unique index on the RAW column admitted `host` and
+        # `host:8443` as two rows, and then BOTH matched `Host: host` while `.first()` chose
+        # between them with no ORDER BY. Indexing the expression the lookup compares makes
+        # that pair unrepresentable and the comparison sargable, which is the same fix.
+        Index("ux_tenants_virtual_host_name", "virtual_host_name", unique=True),
     )
 
     # JSON validators are inherited from JSONValidatorMixin
     # No need for duplicate validators here
+
+    @validates("virtual_host")
+    def _fold_virtual_host(self, _key: str, value: str | None) -> str:
+        """``virtual_host`` is PRESENT and ALL LOWERCASE, whatever the assignment was handed.
+
+        A tenant declares the host it is served at, always. There are exactly two ways to
+        name a tenant (#2191) — ``Host`` against this column, and the ``x-adcp-tenant``
+        literal id — so a tenant holding no host is not merely unpublishable, it is
+        UNREACHABLE by ``Host`` at all, addressable only through a header no proxy sends.
+        The alternative is a reader inventing a host on the tenant's behalf, which puts a
+        string nothing on the network serves onto that tenant's agent card (#1845).
+
+        Two mechanisms, and each catches what the other cannot. This hook fires on every
+        ASSIGNMENT — construction with the keyword, and the later ``tenant.virtual_host = x``
+        the settings form does — so a path that names the field gets an immediate ValueError
+        rather than a constraint violation at flush, and it is the only thing that can refuse
+        a blank string, since SQL has no opinion about ``"   "``. A path that omits the field
+        ENTIRELY never assigns, so no validator can see it; ``nullable=False`` is what refuses
+        that one, at flush. Neither alone makes a host-less tenant unrepresentable.
+
+        A ``Host`` names a DNS name and DNS is case-insensitive (RFC 7230 §5.4), so
+        ``Probe-Case.Example.test`` and ``probe-case.example.test`` are one host — but the
+        column is ``Text`` and SQL comparison is not case-folding, so storing the first
+        and being asked for the second is a miss. Such a row is invisible to every reader
+        that answers "which tenant serves this request", leaving the tenant reachable only
+        through the ``x-adcp-tenant`` literal-id path (#2191).
+
+        Normalising HERE rather than at each assignment is what makes the mismatch
+        unrepresentable: the admin settings form, the storyboard seed script and anything
+        added later all write through this hook, so there is no second spelling to keep in
+        step. The routing lookups in ``TenantLookupRepository`` fold the column as well,
+        which is what resolves a row that was stored mixed-case before this hook existed.
+        """
+        from src.core.http_utils import hostname_of, validate_virtual_host
+
+        try:
+            host = validate_virtual_host(value)
+        except ValueError as exc:
+            raise ValueError(f"tenant {self.tenant_id!r}: {exc}") from exc
+        # The hostname is derived here, by stdlib, and stored, so the unique key below is a
+        # plain column and nothing takes a URL apart in SQL.
+        self.virtual_host_name = hostname_of(host)
+        return host
 
     @property
     def gemini_api_key(self) -> str | None:
@@ -181,7 +285,7 @@ class Tenant(Base, JSONValidatorMixin):
         try:
             return decrypt_api_key(self._gemini_api_key)
         except ValueError as exc:
-            raise AdCPConfigurationError(f"Failed to decrypt Gemini API key for tenant {self.tenant_id}") from exc
+            raise AdCPConfigurationError(details=ConfigurationDetails(tenant_id=self.tenant_id)) from exc
 
     @gemini_api_key.setter
     def gemini_api_key(self, value: str | None) -> None:
@@ -195,9 +299,45 @@ class Tenant(Base, JSONValidatorMixin):
         self._gemini_api_key = encrypt_api_key(value)
 
     @property
-    def primary_domain(self) -> str | None:
-        """Get primary domain for this tenant (virtual_host or subdomain-based)."""
-        return self.virtual_host or (f"{self.subdomain}.example.com" if self.subdomain else None)
+    def agent_url(self) -> str:
+        """Where this tenant's agent is reachable: its canonical ORIGIN, scheme included.
+
+        The ONE accessor. A caller that wants an agent URL reads this name, so "put a scheme
+        in front of a host" has no spelling left anywhere — a hardcoded ``https://`` has
+        nothing to concatenate from, because nobody reaches for the column (#1845). The
+        derivation stays in :func:`src.core.agent_identity.canonical_agent_url`, which this
+        delegates to: one place computes, one name reads.
+
+        Always a string, and never a fallback: ``virtual_host`` is mandatory, so a tenant
+        always has a URL. A caller wanting one for a tenant it does not hold is a different
+        bug than a missing default here.
+        """
+        from src.core.agent_identity import canonical_agent_url
+
+        return canonical_agent_url(self)
+
+    @property
+    def primary_domain(self) -> str:
+        """The publisher domain this tenant is known by — a HOSTNAME, never an origin.
+
+        ``virtual_host`` stores the origin the tenant is served at, port included, because
+        the agent card publishes that string and a card naming the wrong port sends every
+        client to a closed one. A publisher domain is a different part of the same fact:
+        AdCP constrains ``publisher_properties[].publisher_domain`` to a pattern admitting
+        no colon, so the port comes off here. Feeding an origin in fails every product of
+        such a tenant and answers INTERNAL_ERROR for the whole catalogue.
+
+        It is the ONE derivation of this value, so no caller can feed the colon through.
+
+        Always a string, because ``virtual_host`` is mandatory. Neither a fabricated domain
+        nor a ``None`` belongs here: a made-up host reaches buyers as the publisher's own
+        (#1845), and a ``None`` only moves the invention into every caller. A tenant declares
+        the host it is served at, so the domain it is known by follows from it and no caller
+        has anything to decide.
+        """
+        from src.core.http_utils import hostname_of
+
+        return hostname_of(self.virtual_host)
 
     @property
     def is_gam_tenant(self) -> bool:
@@ -220,9 +360,8 @@ class Tenant(Base, JSONValidatorMixin):
         return False
 
 
-# CreativeFormat model removed - table dropped in migration f2addf453200 (Oct 13, 2025)
-# Creative formats are now fetched from creative agents via AdCP protocol
-# Historical note: Previously stored format definitions locally, now use AdCP list_creative_formats
+# There is no CreativeFormat model and no formats table: creative formats are fetched from
+# creative agents over AdCP (list_creative_formats), never stored locally.
 
 
 class Product(Base, JSONValidatorMixin):
@@ -385,34 +524,58 @@ class Product(Base, JSONValidatorMixin):
         # Convert product's authorization to AdCP publisher_properties format
         if self.properties:
             return ensure_selection_type(self.properties)
-        elif self.property_ids:
+
+        if self.property_ids:
             # AdCP 2.0.0 by_id variant
-            # Get publisher_domain from tenant (use subdomain or virtual_host)
-            if hasattr(self, "tenant") and self.tenant:
-                publisher_domain = self.tenant.virtual_host or f"{self.tenant.subdomain}.example.com"
-            else:
-                publisher_domain = "unknown"
             return [
-                {"publisher_domain": publisher_domain, "property_ids": self.property_ids, "selection_type": "by_id"}
+                {
+                    "publisher_domain": self.publisher_domain,
+                    "property_ids": self.property_ids,
+                    "selection_type": "by_id",
+                }
             ]
-        elif self.property_tags:
+        if self.property_tags:
             # AdCP 2.0.0 by_tag variant
-            # Get publisher_domain from tenant (use subdomain or virtual_host)
-            if hasattr(self, "tenant") and self.tenant:
-                publisher_domain = self.tenant.virtual_host or f"{self.tenant.subdomain}.example.com"
-            else:
-                publisher_domain = "unknown"
             return [
-                {"publisher_domain": publisher_domain, "property_tags": self.property_tags, "selection_type": "by_tag"}
+                {
+                    "publisher_domain": self.publisher_domain,
+                    "property_tags": self.property_tags,
+                    "selection_type": "by_tag",
+                }
             ]
 
         # Default: Use "all" variant (all properties from this publisher)
         # This ensures products always have publisher_properties as required by AdCP spec
-        if hasattr(self, "tenant") and self.tenant:
-            publisher_domain = self.tenant.virtual_host or f"{self.tenant.subdomain}.example.com"
-        else:
-            publisher_domain = "unknown"
-        return [{"publisher_domain": publisher_domain, "selection_type": "all"}]
+        return [{"publisher_domain": self.publisher_domain, "selection_type": "all"}]
+
+    @property
+    def publisher_domain(self) -> str:
+        """The domain this product's inventory is published under.
+
+        A DOMAIN, with no port. A tenant's ``virtual_host`` is the HOST it is served at and
+        may carry one (an e2e or staging front rarely sits on 443), but every consumer of
+        this value reads it as a bare domain: the pinned ``publisher_properties`` schema
+        fixes a domain pattern that a colon fails, and a verifier resolves the publisher's
+        adagents.json at ``https://<publisher_domain>/.well-known/adagents.json``, where a
+        port is not part of the name either. Measured: a tenant served at
+        ``storyboard.adcp.test:8443`` emitted that whole string, which knocked out the
+        matching member of the ``publisher_properties`` union and made ``get_products``
+        answer ``INTERNAL_ERROR`` for the entire catalogue — a 500-class answer to a
+        well-formed request, three frames from anything naming the port.
+
+        The projection is ``Tenant.primary_domain``'s and is not repeated here: one name
+        drops the port, and this one names the publisher a PRODUCT is sold by. All three
+        ``effective_properties`` variants read this, so a fix cannot land on one of them and
+        leave the others emitting the unusable value.
+
+        ``"unknown"`` covers exactly one case, an UNLOADED ``self.tenant`` — a different
+        question from the tenant having no domain, which cannot arise because
+        ``virtual_host`` is mandatory. What this never does is FABRICATE a domain: a
+        made-up host on a reserved TLD reaches a buyer as the publisher's own (#1845).
+        """
+        if not getattr(self, "tenant", None):
+            return "unknown"
+        return self.tenant.primary_domain
 
     @property
     def effective_property_tags(self) -> list[str] | None:
@@ -473,6 +636,7 @@ class PricingOption(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     tenant_id: Mapped[str] = mapped_column(String(50), nullable=False)
     product_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    pricing_option_id: Mapped[str] = mapped_column(String(100), nullable=False)
     pricing_model: Mapped[str] = mapped_column(String(20), nullable=False)
     rate: Mapped[Decimal | None] = mapped_column(DECIMAL(10, 2), nullable=True)
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
@@ -491,7 +655,71 @@ class PricingOption(Base):
             ondelete="CASCADE",
         ),
         Index("idx_pricing_options_product", "tenant_id", "product_id"),
+        UniqueConstraint(
+            "tenant_id",
+            "product_id",
+            "pricing_option_id",
+            name="uq_pricing_options_option_id",
+        ),
     )
+
+    @staticmethod
+    def default_option_id(pricing_model: str, currency: str, is_fixed: bool) -> str:
+        """The id assigned to a row whose writer supplies none.
+
+        ``{model}_{currency}_{fixed|auction}``, lowercase. This is a DEFAULT for a new
+        row, not a derivation: once written, the column is what every reader reads, and a
+        publisher is free to give an option any id it likes.
+
+        CPA is the one model whose suffix ignores *is_fixed*. It always prices off
+        ``fixed_price`` (``pricing-options/cpa-option.json`` puts it in ``required``), so
+        an ``auction`` suffix would name a shape the option cannot take.
+        """
+        model = pricing_model.lower()
+        suffix = "fixed" if (is_fixed or model == "cpa") else "auction"
+        return f"{model}_{currency.lower()}_{suffix}"
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        pricing_model: str,
+        tenant_id: str | None = None,
+        product_id: str | None = None,
+        currency: str,
+        is_fixed: bool,
+        rate: Decimal | None = None,
+        pricing_option_id: str | None = None,
+        price_guidance: dict | None = None,
+        parameters: dict | None = None,
+        min_spend_per_package: Decimal | None = None,
+    ) -> "PricingOption":
+        """A row for *product_id*, defaulting ``pricing_option_id`` when the writer has none.
+
+        ``tenant_id``/``product_id`` are optional because a writer can build the row before
+        the product exists — the admin create form parses its pricing options out of the
+        submitted form, then stamps both ids once the product row has been flushed. The
+        columns stay NOT NULL, so a row that reaches the database without them is refused
+        there rather than accepted quietly.
+
+        Every writer goes through here so that no row can reach the database without the
+        identifier the spec requires. ``pricing-options/*.json`` puts ``pricing_option_id``
+        in ``required`` for all nine models, and ``media-buy/package-request.json`` marks
+        it ``x-entity: product_pricing_option`` — a reference to a stored entity, which is
+        what makes storing it rather than recomputing it the correct shape.
+        """
+        return cls(
+            tenant_id=tenant_id,
+            product_id=product_id,
+            pricing_option_id=pricing_option_id or cls.default_option_id(pricing_model, currency, is_fixed),
+            pricing_model=pricing_model,
+            rate=rate,
+            currency=currency,
+            is_fixed=is_fixed,
+            price_guidance=price_guidance,
+            parameters=parameters,
+            min_spend_per_package=min_spend_per_package,
+        )
 
 
 class CurrencyLimit(Base):
@@ -545,14 +773,35 @@ class Principal(Base, JSONValidatorMixin):
     principal_id: Mapped[str] = mapped_column(String(50), primary_key=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     platform_mappings: Mapped[dict] = mapped_column(JSONType, nullable=False)
-    access_token: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    #: sha256 of the token, never the token (src/core/credentials.py). Unique across tenants
+    #: so a lookup by hash is an index hit; the resolver still scopes it by tenant.
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    #: The displayable head of the token, so an operator can tell tokens apart.
+    token_prefix: Mapped[str] = mapped_column(String(16), nullable=False)
+    # RFC 9421 (#1291 B1): the counterparty's own AdCP agent URL, from onboarding.
+    # This is the ONLY legitimate source for it — security.mdx @ v3.1.1 §"agent_url
+    # derivation" forbids taking the signer's agent URL from a header, a body field or any
+    # other self-assertion, because that would let the signer choose which brand.json (and
+    # therefore which key set) it is verified against. NULL means we cannot resolve a key
+    # for this counterparty, not that it is trusted.
+    #
+    # Indexed and unique PER TENANT because the resolver reads it in BOTH directions: from
+    # a bearer-resolved principal to its keys, and — when a signature verified with no
+    # bearer at all — from the verified signer's agent_url back to the principal it
+    # establishes (``_resolve_identity`` step 6). A second principal claiming one agent_url
+    # would make that second lookup ambiguous, which is a silent authentication defect.
+    agent_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
 
-    # Relationships
-    tenant = relationship("Tenant", back_populates="principals")
+    # Relationships. `tenant` has no back_populates: Tenant declares no `principals`
+    # collection to pair with. This direction stays —
+    # it yields a TENANT row from a principal, which is not the traversal the ban on
+    # importing this class is about, and every ORM factory in tests/factories builds its
+    # parent row through exactly this attribute.
+    tenant = relationship("Tenant", overlaps="principals")
     media_buys = relationship("MediaBuy", back_populates="principal", overlaps="media_buys")
     strategies = relationship("Strategy", back_populates="principal", overlaps="strategies")
     push_notification_configs = relationship(
@@ -563,8 +812,34 @@ class Principal(Base, JSONValidatorMixin):
 
     __table_args__ = (
         Index("idx_principals_tenant", "tenant_id"),
-        Index("idx_principals_token", "access_token"),
+        Index("idx_principals_token_hash", "token_hash"),
+        UniqueConstraint("tenant_id", "agent_url", name="uq_principals_tenant_agent_url"),
     )
+
+    @classmethod
+    def issue(cls, **fields: Any) -> "tuple[Principal, str]":
+        """A new principal with a freshly minted token, and the token itself.
+
+        The ONE way a principal gets a credential. The plaintext is returned to the caller
+        for showing once and is stored nowhere; the row carries its hash and prefix.
+        """
+        token = mint_token()
+        return cls.with_token(token, **fields), token
+
+    @classmethod
+    def with_token(cls, token: str, **fields: Any) -> "Principal":
+        """A new principal whose token is *token*: for seeds and CI fixtures whose token is
+        documented in advance. The row still stores only the hash."""
+        return cls(token_hash=hash_token(token), token_prefix=token_prefix(token), **fields)
+
+    def rotate_token(self) -> str:
+        """Replace this principal's token; returns the new plaintext, to be shown once.
+
+        The old token stops resolving the moment the row is committed."""
+        token = mint_token()
+        self.token_hash = hash_token(token)
+        self.token_prefix = token_prefix(token)
+        return token
 
     def get_adapter_id(self, adapter_name: str) -> str | None:
         """Get the adapter-specific ID for this principal.
@@ -646,7 +921,7 @@ class TenantAuthConfig(Base):
         try:
             return decrypt_api_key(self.oidc_client_secret_encrypted)
         except ValueError as exc:
-            raise AdCPConfigurationError(f"Failed to decrypt OIDC client secret for tenant {self.tenant_id}") from exc
+            raise AdCPConfigurationError(details=ConfigurationDetails(tenant_id=self.tenant_id)) from exc
 
     @oidc_client_secret.setter
     def oidc_client_secret(self, value: str | None) -> None:
@@ -670,7 +945,12 @@ class Creative(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     agent_url: Mapped[str] = mapped_column(String(500), nullable=False)
     format: Mapped[str] = mapped_column(String(100), nullable=False)
-    status: Mapped[str] = mapped_column(String(50), nullable=False, default="pending")
+    # AdCP CreativeStatus member: the buyer-facing reader (list_creatives) parses this
+    # column through the closed spec enum, so a non-member default (this was "pending")
+    # makes every row written with the field omitted unreadable. No CHECK constraint or
+    # PG enum backs it — the spec enum widens over time and DDL would turn a spec bump
+    # into a boot-blocking migration.
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="pending_review")
 
     # Data field stores creative content and metadata as JSON
     data: Mapped[dict] = mapped_column(JSONType, nullable=False, default=dict)
@@ -828,6 +1108,23 @@ class Account(Base):
     governance_agents: Mapped[list[GovernanceAgent] | None] = mapped_column(
         JSONType(model=GovernanceAgent, is_list=True), nullable=True
     )
+    # Account-level notification subscribers (#1592 T2). Whole-array declarative
+    # replace (maxItems 16, always read and written entire), so a column rather
+    # than a table: there is no cross-account query and no per-entry lifecycle.
+    # NULL and [] are DIFFERENT states the wire must distinguish -- NULL means
+    # "never configured" (the field is omitted from the echo) and [] means
+    # "explicitly cleared" (the echo carries an empty array). JSONType uses
+    # JSONB(none_as_null=True), so that distinction survives the round trip; do
+    # not collapse it with a falsy check.
+    notification_configs: Mapped[list[NotificationConfig] | None] = mapped_column(
+        JSONType(model=NotificationConfig, is_list=True), nullable=True
+    )
+    # Legal/billing entity, permitted in BOTH sync_accounts entry modes and
+    # echoed back on the response ("echoed from the request ... Bank details are
+    # omitted (write-only)"). Whole-object declarative replace, so a column
+    # rather than a table. `bank` IS persisted (the seller needs it to bill) and
+    # stripped only on the way out -- see _scrub_business_entity.
+    billing_entity: Mapped[BusinessEntity | None] = mapped_column(JSONType(model=BusinessEntity), nullable=True)
     sandbox: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
     ext: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
 
@@ -850,7 +1147,7 @@ class Account(Base):
             name="ck_accounts_status",
         ),
         CheckConstraint(
-            "billing IS NULL OR billing IN ('operator', 'agent')",
+            "billing IS NULL OR billing IN ({})".format(", ".join(repr(v) for v in BILLING_PARTY_VALUES)),
             name="ck_accounts_billing",
         ),
         CheckConstraint(
@@ -864,6 +1161,42 @@ class Account(Base):
         Index("idx_accounts_tenant", "tenant_id"),
         Index("idx_accounts_status", "status"),
         Index("idx_accounts_operator", "operator"),
+        # The natural key is IDENTITY, not a search convenience: every resolver
+        # reads this tuple (get_by_natural_key resolves a buyer's sync_accounts
+        # entry, list_by_natural_key detects ambiguity). salesagent-8sfr made the
+        # components immutable so an account cannot be re-keyed; without this
+        # index a second CREATE could still land on an occupied key, and then
+        # get_by_natural_key().first() answers non-deterministically while
+        # list_by_natural_key reports the key unresolvable. The repository's
+        # collision check is the good error message; this index is the invariant,
+        # and the only thing that closes the check-then-insert race.
+        #
+        # Two different NULL mechanics, each doing its own job:
+        # - COALESCE(sandbox, false) because NULL and false are the SAME key to
+        #   get_by_natural_key ("sandbox IS NULL OR sandbox = false"); NULLS NOT
+        #   DISTINCT would not merge them, since it equates NULLs to each other,
+        #   never to a non-NULL value.
+        # - NULLS NOT DISTINCT so a NULL `operator` or a NULL brand_id still
+        #   enforces uniqueness on the rest of the tuple, matching the sibling
+        #   idx_media_buys_idempotency_key / idx_idempotency_attempts_lookup.
+        #
+        # PARTIAL on brand.domain for the same reason that sibling is partial on
+        # idempotency_key: an account with no brand domain has no natural key at
+        # all. The admin form permits one (brand is None when the field is blank)
+        # and no resolver can ever reach it — every lookup supplies a domain — so
+        # constraining keyless rows would forbid a legitimate shape while
+        # preventing no ambiguity.
+        Index(
+            "uq_accounts_natural_key",
+            "tenant_id",
+            "operator",
+            text("(brand ->> 'domain')"),
+            text("(brand ->> 'brand_id')"),
+            text("COALESCE(sandbox, false)"),
+            unique=True,
+            postgresql_nulls_not_distinct=True,
+            postgresql_where=text("(brand ->> 'domain') IS NOT NULL"),
+        ),
     )
 
 
@@ -900,7 +1233,7 @@ class AgentAccountAccess(Base):
 # carries no commitment instant for these — on get_media_buys it is serialized as
 # PRESENT-AND-NULL, because the pinned item schema types it {"type": ["string",
 # "null"]} AND lists it in `required`. "Absent" is only true of the create
-# response's not-yet-committed arms, which omit the field entirely.
+# response's not-yet-committed branches, which omit the field entirely.
 #
 # This is the SINGLE source of truth for "seller committed", consulted by both the
 # create path and the repository's write-once confirmation stamp
@@ -967,11 +1300,16 @@ class PersistedMediaBuyStatus(StrEnum):
         """
         member = cls.parse_or_none(raw)
         if member is None:
-            subject = f"media buy {media_buy_id!r} " if media_buy_id else ""
+            # The buy, the column and the legal member set travel as typed details,
+            # not as an authored message: buyer-facing text is a function of the code
+            # (``AdCPSalesAgentError.message``), so the raise site names the subject
+            # instead of writing the sentence.
             raise AdCPPersistedStateError(
-                f"{subject}carries persisted status {raw!r}, which is not a member of "
-                f"the media_buys.status vocabulary; expected one of "
-                f"{sorted(m.value for m in cls)}",
+                details=ConfigurationDetails(
+                    media_buy_id=media_buy_id,
+                    rejected_value=raw,
+                    accepted_values=sorted(m.value for m in cls),
+                ),
                 field="status",
             )
         return member
@@ -1076,10 +1414,10 @@ class MediaBuy(Base):
 
         A row built with ``confirmed_at`` already set never passed
         ``_stamp_confirmation_if_needed``, and one built with a chosen ``revision``
-        never took part in the concurrency protocol the token exists for. Both were
-        previously reachable and only *detected*, by an AST fixture that had to know
-        every spelling of a constructor call; a spelling it did not know was a silent
-        hole, and ``MediaBuy(**kwargs)`` was one, because a double-star call carries a
+        never took part in the concurrency protocol the token exists for. Neither can be
+        caught by *detecting* the shape instead: an AST fixture has to know every spelling
+        of a constructor call, and a spelling it does not know is a silent hole.
+        ``MediaBuy(**kwargs)`` is one of those, because a double-star call carries a
         single keyword whose ``arg`` is ``None``.
 
         Raising here removes the shape instead of recognising it, so no spelling has to
@@ -1157,6 +1495,12 @@ class MediaBuy(Base):
 
     # Relationships
     tenant = relationship("Tenant", back_populates="media_buys", overlaps="media_buys")
+    #: ADMIN-ONLY READ. One reader: src/admin/services/dashboard_service.py, which needs
+    #: the advertiser's display name and joinedloads this through MediaBuyRepository. A
+    #: tool must not traverse it — a tool reads `identity.principal`, and reaching a
+    #: Principal row off a media buy is the traversal the TID251 ban on the ORM class
+    #: cannot see. This relationship exists only because the admin UI genuinely reads it;
+    #: ``Tenant`` declares no ``principals`` relationship for the same reason.
     principal = relationship(
         "Principal",
         foreign_keys=[tenant_id, principal_id],
@@ -1425,9 +1769,6 @@ class AdapterConfig(Base):
     )
     adapter_type: Mapped[str] = mapped_column(String(50), nullable=False)
 
-    # Mock adapter
-    mock_dry_run: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
-
     # Google Ad Manager
     gam_network_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
     gam_refresh_token: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -1529,9 +1870,7 @@ class AdapterConfig(Base):
         try:
             return decrypt_api_key(self._gam_service_account_json)
         except ValueError as exc:
-            raise AdCPConfigurationError(
-                f"Failed to decrypt GAM service account JSON for tenant {self.tenant_id}"
-            ) from exc
+            raise AdCPConfigurationError(details=ConfigurationDetails(tenant_id=self.tenant_id)) from exc
 
     @gam_service_account_json.setter
     def gam_service_account_json(self, value: str | None) -> None:
@@ -2300,10 +2639,12 @@ class PushNotificationConfig(Base, JSONValidatorMixin):
     authentication_token: Mapped[str | None] = mapped_column(Text, nullable=True)
     validation_token: Mapped[str | None] = mapped_column(Text, nullable=True)
     webhook_secret: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    # Which protocol the buyer registered over. NULL means a row written before
-    # this column existed; readers fall back to MCP, which is what every sender
-    # did unconditionally before (salesagent-pldmk.39).
-    protocol: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # The two values core/push-notification-config.json says the seller MUST echo
+    # VERBATIM into every webhook payload built against this registration. Stored
+    # because the sender that echoes them runs long after the request that carried
+    # them, and the spec forbids recovering operation_id from the URL.
+    operation_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    token: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
@@ -2488,3 +2829,142 @@ class WebhookDeliveryLog(Base):
         Index("idx_webhook_log_status", "status"),
         Index("idx_webhook_log_created_at", "created_at"),
     )
+
+
+class SigningKey(Base):
+    """An RFC 9421 signing key this tenant owns (#1291 A2, salesagent-z6nr.8).
+
+    Each tenant is a distinct seller identity with its own brand domain, so key
+    material is per-tenant. One row binds a unique ``kid`` to BOTH halves of the
+    key — the public JWK we publish and the encrypted private half — so the key we
+    sign with and the key we publish cannot silently disagree.
+
+    ``private_key_pem_encrypted`` is where the private half lives, and the only
+    place it ever lives: the PKCS#8 ``BEGIN ENCRYPTED PRIVATE KEY`` PEM exactly as
+    ``adcp.signing.generate_signing_keypair(passphrase=...)`` returned it,
+    encrypted under the deployment KEK (``SigningSettings.key_passphrase_env``).
+    No envelope format and no encryption code of ours sits between the two — the
+    ciphertext IS the PEM. The column is NOT NULL: a row that exists has material,
+    so a published key with no signable private half is unrepresentable rather
+    than merely unusual. Provisioning refuses outright when no KEK is configured,
+    so the column can never hold plaintext.
+
+    ``not_before`` / ``not_after`` are OURS, not the spec's — the published
+    ``agent-signing-key`` schema carries only ``revoked_at`` plus JWK members.
+    The window governs which key we SIGN with; PUBLICATION is governed by
+    ``revoked_at`` plus that schema's grace period. A publisher filtering the
+    JWKS by ``not_after`` would un-publish a key while signatures made under it
+    are still inside their verification window — the exact gap rotation overlap
+    exists to prevent.
+
+    ``not_after IS NULL`` means open-ended (+infinity). The current key is always
+    open-ended, so that is the common case, not an edge case.
+
+    N rows per ``(tenant, purpose)`` distinguished by ``kid`` serve BOTH rotation
+    overlap and the webhook blast-radius isolation security.mdx describes
+    ("isolation comes from the kid"). One mechanism, not two.
+    """
+
+    __tablename__ = "signing_keys"
+
+    id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    kid: Mapped[str] = mapped_column(String(255), nullable=False)
+    alg: Mapped[str] = mapped_column(String(50), nullable=False)
+    purpose: Mapped[str] = mapped_column(String(50), nullable=False, default=REQUEST_SIGNING)
+    public_jwk: Mapped[dict] = mapped_column(JSONType, nullable=False)
+    private_key_pem_encrypted: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    not_before: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    not_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    # Relationships
+    # passive_deletes=True defers to the database's ON DELETE CASCADE below.
+    # Without it, deleting a Tenant through the ORM makes SQLAlchemy load the
+    # children and NULL their tenant_id instead — which the NOT NULL column
+    # rejects, so an ORM tenant delete fails outright once the tenant owns a key.
+    tenant = relationship("Tenant", backref=backref("signing_keys", passive_deletes=True))
+
+    __table_args__ = (
+        ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
+        # security.mdx: "Unique within the JWKS. MUST NOT collide with any other
+        # entry's kid regardless of adcp_use." One JWKS is published per tenant.
+        UniqueConstraint("tenant_id", "kid", name="uq_signing_keys_tenant_kid"),
+        # Both CHECK bodies are TAKEN WHOLE from src.core.signing.algorithms, never
+        # composed here (#1521, salesagent-n78j0.3). Asking for the clause rather than
+        # for the value-set is what removes the choice of column name, operator and
+        # rendering from this call site — the freedom that let this constraint and the
+        # one in migration e7a2c40b91d5 be assembled independently. Pinned by
+        # tests/unit/test_signing_alg_parity.py.
+        CheckConstraint(
+            signing_alg_check_clause(),
+            name="ck_signing_keys_alg",
+        ),
+        CheckConstraint(
+            signing_purpose_check_clause(),
+            name="ck_signing_keys_purpose",
+        ),
+        Index("idx_signing_keys_tenant_purpose_active", "tenant_id", "purpose", "not_after"),
+    )
+
+    def __repr__(self):
+        return (
+            f"<SigningKey("
+            f"id='{self.id}', "
+            f"tenant_id='{self.tenant_id}', "
+            f"kid='{self.kid}', "
+            f"alg='{self.alg}', "
+            f"purpose='{self.purpose}', "
+            f"not_before={self.not_before}, "
+            f"not_after={self.not_after}, "
+            f"revoked_at={self.revoked_at}"
+            f")>"
+        )
+
+
+class ReplayNonce(Base):
+    """One live claim on an RFC 9421 ``(keyid, nonce)`` pair (#1291 A4).
+
+    A replay CACHE, not a permanent nonce ledger: every read filters ``expires_at > now()``,
+    so a dead row is indistinguishable from an absent one and the table is safe to sweep at
+    any time.
+
+    Schema translated from the DDL the SDK ships at ``adcp/signing/pg/replay_store.sql``,
+    table name included, so that file stays a valid reference for this table and a future
+    swap to the SDK's ``PgReplayStore`` needs no migration.
+
+    ``Text(collation="C")`` on both identifiers is security, not style: the SDK's SQL header
+    records that under some locales ``"Key-A"`` and ``"key-a"`` compare equal, which would
+    let an attacker collapse distinct kids or nonces into a single slot and replay against
+    it. ``"C"`` is byte-for-byte comparison.
+
+    **No ``tenant_id``, no FK — a decision, not an oversight.** The RFC 9421 signature base
+    covers ``@authority`` as a MANDATORY component (AdCP 3.1.1;
+    ``test-vectors/request-signing/negative/006-missing-covered-component.json`` is
+    literally "Covered components missing @authority"), so a nonce captured against tenant
+    A's virtual host cannot verify against tenant B's — cross-tenant replay dies at verifier
+    step 10, before this table is ever consulted. The consequence is that the store is
+    deployment-wide: it cannot use ``BaseUoW`` (which is ``(tenant_id)``-scoped) and its
+    reaper is deployment-wide too.
+    """
+
+    __tablename__ = "adcp_replay"
+
+    keyid: Mapped[str] = mapped_column(Text(collation="C"), primary_key=True)
+    nonce: Mapped[str] = mapped_column(Text(collation="C"), primary_key=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        # Sweep support (the SDK's index, same name).
+        Index("adcp_replay_expires_idx", "expires_at"),
+        # at_capacity's predicate. A partial index on now() is impossible (not IMMUTABLE),
+        # so the composite carries the whole predicate.
+        Index("adcp_replay_keyid_expires_idx", "keyid", "expires_at"),
+    )
+
+    def __repr__(self):
+        return f"<ReplayNonce(keyid='{self.keyid}', nonce='{self.nonce}', expires_at={self.expires_at})>"

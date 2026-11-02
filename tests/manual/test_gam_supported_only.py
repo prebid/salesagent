@@ -53,11 +53,11 @@ class SupportedTargetingTester:
             "implementation_config": {"targeted_ad_unit_ids": [self.test_config["test_ad_units"]["root_ad_unit_id"]]},
         }
 
+        # The schema Principal declares principal_id, name and platform_mappings, and
+        # nothing else: no credential, and no tenant (the identity carries the tenant).
         self.principal = Principal(
-            tenant_id="test_tenant",
             principal_id="test_principal",
             name="Supported Targeting Test",
-            access_token="test_token",
             platform_mappings={
                 "google_ad_manager": {"advertiser_id": self.advertiser_id, "advertiser_name": "Test Advertiser"}
             },
@@ -91,7 +91,6 @@ class SupportedTargetingTester:
             network_code=self.network_code,
             advertiser_id=self.advertiser_id,
             trafficker_id=self.trafficker_id,
-            dry_run=False,
             tenant_id="test",
         )
 
@@ -105,6 +104,7 @@ class SupportedTargetingTester:
         )
 
         request = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             po_number="GEO_SUPPORTED",
             total_budget=1.00,
@@ -130,7 +130,6 @@ class SupportedTargetingTester:
             network_code=self.network_code,
             advertiser_id=self.advertiser_id,
             trafficker_id=self.trafficker_id,
-            dry_run=False,
             tenant_id="test",
         )
 
@@ -168,6 +167,7 @@ class SupportedTargetingTester:
             raise ValueError("No custom targeting keys configured in test config")
 
         request = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             po_number="AEE_AXE_SIGNALS",
             total_budget=2.00,
@@ -189,7 +189,6 @@ class SupportedTargetingTester:
             network_code=self.network_code,
             advertiser_id=self.advertiser_id,
             trafficker_id=self.trafficker_id,
-            dry_run=False,
             tenant_id="test",
         )
 
@@ -221,6 +220,7 @@ class SupportedTargetingTester:
             key_value_pairs["axex"] = values[1] if len(values) > 1 else values[0]
 
         request = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             po_number="GEO_AEE_COMBINED",
             total_budget=3.00,
@@ -246,7 +246,6 @@ class SupportedTargetingTester:
             network_code=self.network_code,
             advertiser_id=self.advertiser_id,
             trafficker_id=self.trafficker_id,
-            dry_run=False,
             tenant_id="test",
         )
 
@@ -260,6 +259,7 @@ class SupportedTargetingTester:
         )
 
         request = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             po_number="DEVICE_MUST_FAIL",
             total_budget=1.00,
@@ -284,7 +284,6 @@ class SupportedTargetingTester:
             network_code=self.network_code,
             advertiser_id=self.advertiser_id,
             trafficker_id=self.trafficker_id,
-            dry_run=False,
             tenant_id="test",
         )
 
@@ -298,6 +297,7 @@ class SupportedTargetingTester:
         )
 
         request = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             po_number="OS_MUST_FAIL",
             total_budget=1.00,
@@ -322,7 +322,6 @@ class SupportedTargetingTester:
             network_code=self.network_code,
             advertiser_id=self.advertiser_id,
             trafficker_id=self.trafficker_id,
-            dry_run=False,
             tenant_id="test",
         )
 
@@ -336,6 +335,7 @@ class SupportedTargetingTester:
         )
 
         request = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             po_number="KEYWORD_MUST_FAIL",
             total_budget=1.00,

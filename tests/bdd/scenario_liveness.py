@@ -20,17 +20,19 @@ each record carries the three facts the parent finding names:
   unbound step named, instead of silently stopping at the first failure the
   way a live run's exception would.
 * ``harness_wired`` — a best-effort signal for THIS module only, derived from
-  the same auto-xfail reason text conftest.py already produces verbatim (e.g.
-  ``"No harness wired for {uc}"``, ``"UC-004 harness not yet wired for type:
-  ..."``). ``None`` when the scenario's steps aren't bound at all (the
-  question is unreached: a step that doesn't even parse never gets to the
-  harness-selection branch). ``scripts/audit/scenario_liveness_join.py``
-  does not trust this field — it replaces it with a
+  the MEASURED ``steps_executed`` fact rather than from any reason text: True
+  once a step body of the run began executing, False for a run that never got
+  one (every blanket xfail route aborts in fixture setup), and ``None`` only
+  while no observation has been folded in at all. A partly-dormant scenario
+  therefore reads True — ``StepDefinitionNotFoundError`` is raised at the FIRST
+  unmatched step, so the Background and any earlier steps have already run, and
+  ``steps_bound``/``unbound_steps`` are what report the dormancy.
+  ``scripts/audit/scenario_liveness_join.py`` does not trust this field — it replaces it with a
   proper data lookup against the declarative ``ENV_ROUTES`` registry (no
   reason-text matching), which is why this module's own ``harness_wired`` is
   documented as best-effort rather than promoted further here: any UC not yet
   a row in ``ENV_ROUTES`` should read as not-wired downstream, not as
-  whatever this reason-text heuristic happens to guess.
+  whatever a step body having run happens to imply.
 * ``ledgered`` — True when the observation's reason falls into neither of the
   above two buckets (an explicit, curated ``xfail`` marker for a known
   production/spec gap), or the scenario's e2e_rest nodeid appears in
@@ -52,10 +54,8 @@ itself, not inferred from the file's absence.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -66,12 +66,14 @@ from pytest_bdd.scenario import get_step_function
 
 from scripts.audit import storyboard_spec
 from scripts.ci import shard_split
+from tests._collection_manifest import read_artifacts, relative_target, required_dir, scope_fingerprint, write_artifact
+from tests.harness.transport import BDD_IN_PROCESS_TRANSPORTS
 from tests.helpers.ledger import load_ledger_nodeids
 from tests.helpers.marker_names import derive_marker_names
 
 if TYPE_CHECKING:
     from _pytest.fixtures import FixtureRequest
-    from pytest_bdd.parser import Feature, Scenario
+    from pytest_bdd.parser import Feature, Scenario, Step
 
 # IMPORTED, not re-declared. The previous comment here forbade this
 # import "so this pytest plugin has no import-time dependency on the audit CLI
@@ -100,6 +102,13 @@ class Observation:
     outcome: str  # "passed" | "failed" | "xfailed"
     reason: str | None
     reason_category: str  # "live" | "no_steps_bound" | "harness_not_wired" | "ledgered"
+    #: MEASURED: at least one step body of this (scenario, transport) run began
+    #: executing. Recorded by ``pytest_bdd_before_step_call``, which pytest-bdd
+    #: fires immediately before it calls a step function — so a run aborted in
+    #: fixture setup (which is where every blanket xfail route lives) records
+    #: False, whatever its reason string says. This is the structural fact
+    #: ``harness_wired`` is derived from; the reason string is metadata.
+    steps_executed: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -108,6 +117,7 @@ class Observation:
             "outcome": self.outcome,
             "reason": self.reason,
             "reason_category": self.reason_category,
+            "steps_executed": self.steps_executed,
         }
 
 
@@ -143,12 +153,45 @@ class ScenarioLiveness:
                 self.unbound_steps.append(text)
 
     def record_observation(self, obs: Observation) -> None:
+        """Fold one (scenario, transport) outcome in.
+
+        ``harness_wired`` is derived from ``obs.steps_executed`` — a fact the run
+        recorded — and never from the reason text. The reason only ever selects
+        BETWEEN the not-wired verdicts; it cannot produce a wired one.
+
+        This is the fix for the defect the ``_classify_reason`` docstring
+        describes from the other side. "ledgered" is that function's RESIDUAL
+        bucket: every reason matching neither literal prefix nor both harness
+        tokens lands there, and "ledgered" used to set ``harness_wired=True``.
+        Two blanket routes that abort a scenario inside fixture setup name
+        reasons that land in it: ``uc010-not-wired``, whose message says "wiring"
+        where the token is "wired", and ``uc006-unclassified``, which contains
+        neither token. Fed to the old logic both produce a WIRED verdict for a
+        scenario that executed nothing.
+
+        Scope, measured rather than assumed: neither reason appears in
+        ``test-results/bdd_scenario_liveness.json`` as it stands, because both
+        rows are catch-alls currently shadowed by more specific ones. So this
+        removes a mechanism, not present inflation — the count does not move
+        today. It is still the fix, because under-matching inflates coverage and
+        the next rewording or newly-reachable catch-all would do it silently. A
+        step either ran or it did not, and no wording changes that.
+        """
         self.observations.append(obs)
         if obs.reason_category == "ledgered" or obs.nodeid in _LEDGERED_NODEIDS:
             self.ledgered = True
-        if obs.reason_category == "harness_not_wired":
+        # The verdict is AND over observations of one measured fact, so no reason
+        # string appears in it at all. The former ``harness_not_wired`` text branch
+        # is not merely unnecessary but unreachable as a separate case: that reason
+        # is raised by ``_harness_env``'s catch-all during FIXTURE setup, where no
+        # step can have run, so ``steps_executed`` is already False wherever it
+        # fires. Keeping the branch would leave the verdict sensitive to wording in
+        # exactly one corner, which is the defect with a smaller blast area rather
+        # than a fixed one.
+        if not obs.steps_executed:
+            # False dominates the cross-shard merge too, which is the safe direction.
             self.harness_wired = False
-        elif obs.reason_category in ("live", "ledgered") and self.harness_wired is not False:
+        elif self.harness_wired is not False:
             self.harness_wired = True
 
     def to_dict(self) -> dict[str, Any]:
@@ -178,6 +221,10 @@ _SHARDS: dict[str, dict[str, Any]] = {}
 #: its records. A worker in the first set and not the second lost its scenarios.
 _WORKERS_SEEN: set[str] = set()
 _WORKERS_REPORTED: set[str] = set()
+#: Node ids whose run got at least one step body executed. Written by
+#: ``pytest_bdd_before_step_call``; read once when the observation is built.
+#: A set of ids rather than a counter: the question is whether ANY step ran.
+_STEPS_RAN: set[str] = set()
 
 
 def _scenario_identifier(scenario: Scenario, feature: Feature) -> str | None:
@@ -208,6 +255,22 @@ def _classify_reason(reason: str | None) -> str:
     if "harness" in lowered and "wired" in lowered:
         return "harness_not_wired"
     return "ledgered"
+
+
+def _classify_exception(excinfo: Any) -> str | None:
+    """The category implied by the EXCEPTION, or None when there is nothing typed to read.
+
+    ``StepDefinitionNotFoundError`` and ``NotImplementedError`` are the two
+    auto-xfail causes conftest converts, and the exception class says so without
+    anyone having to preserve a sentence. Returning None (rather than guessing)
+    keeps marker-based and explicit ``pytest.xfail()`` reasons on the prose path,
+    where the reason genuinely is the only signal.
+    """
+    if excinfo is None:
+        return None
+    if excinfo.errisinstance(StepDefinitionNotFoundError) or excinfo.errisinstance(NotImplementedError):
+        return "no_steps_bound"
+    return None
 
 
 def _transport_name(item: pytest.Item) -> str:
@@ -250,6 +313,23 @@ def pytest_bdd_before_scenario(request: FixtureRequest, feature: Feature, scenar
     request.node.stash[_SCENARIO_ID_KEY] = scenario_id
 
 
+def pytest_bdd_before_step_call(request: FixtureRequest, step: Step) -> None:
+    """Record that a step body of this run is about to execute.
+
+    pytest-bdd fires this hook immediately before calling a step function, with
+    the step's arguments already resolved. Reaching it means the scenario got
+    past collection, past every fixture, and into its own logic — which is the
+    only thing that distinguishes a scenario that GRADED something from one that
+    was xfailed out of existence in fixture setup.
+
+    ``pytest_bdd_before_step`` (without ``_call``) would fire slightly earlier,
+    before the step's own setup. This hook is the stricter of the two, and the
+    stricter one is correct here: the claim being recorded is that production
+    logic ran.
+    """
+    _STEPS_RAN.add(request.node.nodeid)
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo) -> Any:
     """Record this item's outcome against the scenario ``pytest_bdd_before_scenario`` stashed.
@@ -284,7 +364,21 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo) -> Any:
         elif call.excinfo.errisinstance(NotImplementedError):
             reason = f"Not implemented: {call.excinfo.value}"
 
-    category = _classify_reason(reason)
+    # CLASSIFY ON THE TYPED CAUSE, fall back to prose only when there is no exception
+    # to read (marker-based and explicit ``pytest.xfail()``). The reason string stays
+    # whatever conftest wrote, because it is the HUMAN channel; it is no longer the
+    # machine one.
+    #
+    # This module used to derive the category from that prose whenever conftest had
+    # already set ``wasxfail`` -- which made a REWORDING of conftest's message able to
+    # silently reclassify a scenario. It did: a dormancy message that stopped starting
+    # with "Step definition not found:" fell through to "ledgered", and "ledgered"
+    # sets ``harness_wired=True``, so two genuinely unbound UC-006 scenarios were
+    # reported as harness-wired. Anchoring the prefix match protected against
+    # over-matching but not against UNDER-matching, and under-matching is the
+    # direction that inflates measured coverage.
+    typed = _classify_exception(call.excinfo)
+    category = typed if typed is not None else _classify_reason(reason)
     outcome_name = "passed" if report.passed else ("xfailed" if reason is not None else "failed")
     record.record_observation(
         Observation(
@@ -293,6 +387,7 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo) -> Any:
             outcome=outcome_name,
             reason=reason,
             reason_category=category,
+            steps_executed=item.nodeid in _STEPS_RAN,
         )
     )
 
@@ -386,7 +481,8 @@ def pytest_testnodedown(node: Any, error: Any) -> None:
         _WORKERS_REPORTED.add(worker_id)
 
 
-IN_PROCESS_TRANSPORTS = frozenset({"mcp", "a2a", "rest"})
+#: The transport names an observation records for the in-process transports.
+_IN_PROCESS_NAMES = frozenset(t.value for t in BDD_IN_PROCESS_TRANSPORTS)
 
 #: Per-session artifact files live beside the merged one. Two shards are two
 #: SEPARATE pytest sessions, so both wrote the single merged path and the last
@@ -402,19 +498,6 @@ _SESSIONS_DIRNAME = "liveness-sessions"
 SESSIONS_ENV_VAR = "BDD_LIVENESS_SESSIONS"
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-
-
-def _relative_target(config: pytest.Config) -> list[str]:
-    """The invocation paths, relative to rootdir, normalized and sorted."""
-    rootdir = Path(str(config.rootdir)).resolve()
-    targets = []
-    for arg in config.args:
-        path = Path(str(arg).split("::", 1)[0])
-        try:
-            targets.append(path.resolve().relative_to(rootdir).as_posix().rstrip("/") or ".")
-        except ValueError:
-            targets.append(str(arg))
-    return sorted(set(targets))
 
 
 def _write_sessions_dir() -> Path:
@@ -438,21 +521,18 @@ def sessions_dir() -> Path:
     Mirrors `tests/_collection_manifest.manifest_dir()`, which refuses the same
     way for the same reason.
     """
-    override = os.environ.get(SESSIONS_ENV_VAR)
-    if not override:
-        raise IncompleteLivenessRun(
-            f"{SESSIONS_ENV_VAR} is unset, so there is no way to tell THIS run's "
-            "liveness sessions from any other run's. run_all_tests.sh and "
-            "run_all_tests_host.sh export it per run; docker-compose.e2e.yml "
-            "forwards it into the test container."
-        )
-    return Path(override)
+    return required_dir(
+        SESSIONS_ENV_VAR,
+        IncompleteLivenessRun,
+        "there is no way to tell THIS run's liveness sessions from any other run's. "
+        "run_all_tests.sh and run_all_tests_host.sh export it per run; "
+        "docker-compose.e2e.yml forwards it into the test container.",
+    )
 
 
 def _session_filename(scope: dict[str, Any]) -> str:
     """A name no two concurrent sessions can share, derived from the scope."""
-    key = json.dumps([scope["target"], scope["selection"], scope["markers"]], sort_keys=True)
-    return f"{hashlib.sha256(key.encode('utf-8')).hexdigest()[:12]}.json"
+    return f"{scope_fingerprint(scope['target'], scope['selection'], scope['markers'])}.json"
 
 
 def _run_scope(session: pytest.Session) -> dict[str, Any]:
@@ -480,7 +560,7 @@ def _run_scope(session: pytest.Session) -> dict[str, Any]:
         # file list. Without this a shard's artifact is indistinguishable from a
         # whole-suite one, which is exactly how the published file came to
         # describe 9 of 21 modules while claiming to measure the suite.
-        "target": _relative_target(config),
+        "target": relative_target(config),
         "selection": getattr(config.option, "keyword", "") or "",
         "markers": getattr(config.option, "markexpr", "") or "",
         "deselected": len(getattr(session, "deselected", ()) or ()),
@@ -525,9 +605,8 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
     # empty file — so the next artifact regeneration silently reports liveness
     # as 0 for every check.
     #
-    # This is not hypothetical. tests/collection/test_architecture_env_route_agreement.py
-    # shells out to `pytest tests/bdd --collect-only` to derive its marker sets,
-    # which means `make quality` destroyed the liveness artifact on every run and
+    # This is not hypothetical. A guard that shelled out to `pytest tests/bdd
+    # --collect-only` to derive its marker sets meant `make quality` destroyed the liveness artifact on every run and
     # the published "graded by a LIVE scenario" figure could not be reproduced by
     # anyone who had run the unit suite since their last BDD run.
     if getattr(config.option, "collectonly", False):
@@ -542,39 +621,8 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
     # ALSO write a per-session copy, so a second session cannot silently replace
     # this measurement with its own. The merged path is kept as-is because other
     # consumers read it by name; the directory is what `load_run` folds.
-    sessions = _write_sessions_dir()
-    _write(artifact_path(), body)
-    _write(sessions / _session_filename(artifact["run"]), body)
-
-
-def _write(path: Path, body: str) -> None:
-    """Write one artifact file, reporting a write failure instead of raising.
-
-    A diagnostic never changes the outcome of the thing it measures. Both the
-    mkdir and the write raise on an unwritable parent, on a path occupied by a
-    regular file, and on a full disk; an exception out of `pytest_sessionfinish`
-    is an unhandled error, so a suite whose scenarios all passed exits nonzero
-    with no summary line. This plugin is registered for EVERY bdd session
-    (tests/bdd/conftest.py), which makes that the ordinary case rather than a
-    corner.
-
-    Losing the artifact is not silent, and that is why swallowing the write is
-    safe here: every consumer fails CLOSED on a missing or empty artifact --
-    `scripts/audit/scenario_liveness_join.load_artifact` refuses an empty file,
-    and `load_run` raises `IncompleteLivenessRun` when the session files do not
-    add up to the suite. The absence is detected where it is read, so it does
-    not also need to fail the run that produced it.
-
-    OSError, not Exception: PermissionError, FileExistsError, IsADirectoryError
-    and ENOSPC are all subclasses of it, while a defect in the artifact dict
-    stays loud instead of being hidden by the guard that tolerates a read-only
-    disk.
-    """
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(body, encoding="utf-8")
-    except OSError as exc:
-        print(f"[scenario-liveness] could not write the artifact to {path}: {exc}", file=sys.stderr)
+    write_artifact(artifact_path(), body)
+    write_artifact(_write_sessions_dir() / _session_filename(artifact["run"]), body)
 
 
 class IncompleteLivenessRun(RuntimeError):
@@ -604,7 +652,7 @@ def _project_in_process(record: dict[str, Any]) -> dict[str, Any]:
     on every transport.
     """
     replay = ScenarioLiveness(scenario_id=record["scenario_id"], feature=record.get("feature", ""))
-    kept = [o for o in record["observations"] if o.get("transport") in IN_PROCESS_TRANSPORTS]
+    kept = [o for o in record["observations"] if o.get("transport") in _IN_PROCESS_NAMES]
     for obs in kept:
         replay.record_observation(
             Observation(
@@ -613,6 +661,7 @@ def _project_in_process(record: dict[str, Any]) -> dict[str, Any]:
                 outcome=obs["outcome"],
                 reason=obs.get("reason", ""),
                 reason_category=obs["reason_category"],
+                steps_executed=obs.get("steps_executed", False),
             )
         )
     projected = dict(record)
@@ -637,11 +686,9 @@ def load_run(directory: str | Path) -> dict[str, Any]:
     check would accept it, and its in-process projection is empty for every
     scenario at once.
     """
-    directory = Path(directory)
     merged: dict[str, dict[str, Any]] = {}
     covered: set[str] = set()
-    for path in sorted(directory.glob("*.json")):
-        payload = json.loads(path.read_text(encoding="utf-8"))
+    for path, payload in read_artifacts(directory):
         scope = payload.get("run", {})
         if scope.get("selection") or scope.get("markers"):
             continue
@@ -657,23 +704,10 @@ def load_run(directory: str | Path) -> dict[str, Any]:
             existing = merged.get(record["scenario_id"])
             merged[record["scenario_id"]] = record if existing is None else _merge_record(existing, record)
 
-    expected = {Path(f).as_posix() for f in shard_split.list_suite_files("bdd", repo_root=_REPO_ROOT)}
-    if not _covers(covered, expected):
+    if not shard_split.targets_cover_suite("bdd", covered, repo_root=_REPO_ROOT):
         raise IncompleteLivenessRun(
             f"the liveness sessions in {directory} cover {sorted(covered) or 'nothing'}, "
-            f"which does not account for the {len(expected)} BDD modules. A partial "
-            "measurement cannot be graded as the suite."
+            "which does not account for every BDD module. A partial measurement cannot "
+            "be graded as the suite."
         )
     return {"scenarios": {k: _project_in_process(v) for k, v in merged.items()}}
-
-
-def _covers(targets: set[str], expected: set[str]) -> bool:
-    """True when the union of session targets accounts for every BDD module.
-
-    Two shapes reach here. A session invoked on the DIRECTORY (`pytest tests/bdd`)
-    names one target that is a prefix of every module. Sharded sessions each name
-    their own files, and must union to the whole set.
-    """
-    if not targets:
-        return False
-    return all(any(module == t or module.startswith(f"{t}/") for t in targets) for module in expected)

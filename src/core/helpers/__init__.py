@@ -4,7 +4,6 @@ This package contains modular helper functions extracted from main.py for better
 - adapter_helpers: Adapter instance creation and configuration
 - creative_helpers: Creative format parsing and asset conversion
 - activity_helpers: Tool activity logging and tracking
-- context_helpers: Context extraction for authentication and tenant setup
 - enum_helpers: Re-exported from src.core.enum_helpers (zero project imports, safe from circular deps)
 """
 
@@ -18,7 +17,6 @@ from src.core.helpers.creative_helpers import (
     MEDIA_ASSET_TYPES,
     FormatInfo,
     FormatParameters,
-    _convert_creative_to_adapter_asset,
     _detect_snippet_type,
     _extract_format_info,
     _extract_format_namespace,
@@ -38,7 +36,6 @@ __all__ = [
     "_extract_format_namespace",
     "_normalize_format_value",
     "_validate_creative_assets",
-    "_convert_creative_to_adapter_asset",
     "_detect_snippet_type",
     "validate_creative_format_against_product",
     "FormatInfo",

@@ -245,10 +245,10 @@ def classify_failure(entry: TestEntry, strict_tags: set[str]) -> tuple[str, str,
     # ── Production accepts what spec expects to reject ───────────────
     # Covers: "Expected error X but operation succeeded"
     #         "Expected invalid X result but operation succeeded"
-    #         "Expected AdCPError for X, got success"
+    #         "Expected AdCPSalesAgentError for X, got success"
     if "operation succeeded" in error and ("Expected" in error or "expected" in error):
         return "XFAIL_IT", "PROD_BEHAVIOR", error
-    if "Expected AdCPError" in error:
+    if "Expected AdCPSalesAgentError" in error:
         return "XFAIL_IT", "PROD_BEHAVIOR", error
 
     # ── Spec/production mismatch with explicit "expected X but got Y" ─

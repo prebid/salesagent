@@ -17,8 +17,13 @@ in fact pinning the fabrication.
 
 The rule is therefore about the DEFAULT, not about any call site: with no default,
 omission is a construction error and every producer must say where its value came
-from. A construction that legitimately is not the buyer-facing envelope says so by
-name — ``CreateMediaBuySuccess.carrier()``.
+from.
+
+There is no longer a second constructor for the not-quite-envelope case.
+``CreateMediaBuySuccess.carrier()`` was it, and it is deleted (commit ecfdd7771): an
+adapter returns ``src.adapters.base.AdapterCreateResult`` / ``AdapterUpdateResult``, so
+every construction of a wire model IS the buyer's envelope and passes the row's values
+through ``sync_success``. A test that wants one states literal values and says why.
 """
 
 from __future__ import annotations
@@ -97,9 +102,9 @@ def test_no_response_side_defaults_for_repository_owned_fields() -> None:
         violations=violations,
         fix_hint=(
             "Delete the default and pass the persisted row's value at every "
-            "buyer-facing construction site. A construction that is NOT the buyer's "
-            "envelope (an adapter's return, a test fixture) uses "
-            "CreateMediaBuySuccess.carrier()."
+            "buyer-facing construction site (sync_success). A construction that is NOT "
+            "the buyer's envelope is an adapter's return, and that is a different type: "
+            "src.adapters.base.AdapterCreateResult / AdapterUpdateResult."
         ),
         docs_link="docs/development/structural-guards.md",
     )

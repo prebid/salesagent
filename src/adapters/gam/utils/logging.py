@@ -380,13 +380,6 @@ def _store_audit_log(context: GAMLogContext):
 # Utility functions for common logging patterns
 
 
-def log_dry_run(operation: str, details: dict[str, Any]):
-    """Log dry-run operations consistently."""
-    logger.info(
-        f"[DRY RUN] Would execute: {operation}", extra={"dry_run": True, "operation": operation, "details": details}
-    )
-
-
 def log_validation_error(field: str, value: Any, reason: str):
     """Log validation errors consistently."""
     logger.error(

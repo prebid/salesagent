@@ -9,7 +9,7 @@ Full-featured adapter for Broadstreet Ads supporting:
 """
 
 from .adapter import BroadstreetAdapter
-from .client import BroadstreetAPIError, BroadstreetClient
+from .client import BroadstreetClient
 from .config_schema import (
     BROADSTREET_TEMPLATES,
     BroadstreetImplementationConfig,
@@ -24,7 +24,6 @@ from .schemas import BroadstreetConnectionConfig, BroadstreetProductConfig
 __all__ = [
     "BROADSTREET_TEMPLATES",
     "BroadstreetAdapter",
-    "BroadstreetAPIError",
     "BroadstreetClient",
     "BroadstreetConnectionConfig",
     "BroadstreetImplementationConfig",

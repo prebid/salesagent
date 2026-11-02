@@ -148,7 +148,22 @@ class TestConceptIdsFilterValidation:
 
     @pytest.mark.parametrize("transport", _ALL_WIRE)
     def test_empty_concept_ids_emits_validation_envelope(self, integration_db, transport):
-        """Wire transports surface the two-layer VALIDATION_ERROR envelope with a suggestion."""
+        """Wire transports surface the two-layer envelope with a suggestion.
+
+        creative-filters.json declares ``concept_ids: {minItems: 1}``, so an empty array
+        violates a SCHEMA CONSTRAINT -- which pinned 3.1.1 assigns to INVALID_REQUEST
+        ("violates schema constraints"), not VALIDATION_ERROR ("beyond schema validation").
+
+        The code is now the SAME on every transport. It was not: REST reached the
+        spec-correct code because its body is derived from the DTO, while MCP and A2A
+        raised from coerce_creative_filters before any schema check and answered
+        VALIDATION_ERROR. This test carried a per-transport expectation to keep that
+        divergence visible. It is gone -- adcp_error_for now maps a pydantic
+        ValidationError to AdCPInvalidRequestError, so the schema layer is attributed the
+        same way whichever transport the request arrived on -- so the expectation is
+        uniform again. Keep it uniform: a per-transport code here means one buyer gets a
+        different answer than another for the identical request.
+        """
         with CreativeListEnv() as env:
             _seed_authenticated_principal(env)
 
@@ -156,11 +171,11 @@ class TestConceptIdsFilterValidation:
 
             envelope = result.wire_error_envelope
             assert envelope is not None, f"{transport}: no wire error envelope captured"
-            assert_envelope_shape(envelope, "VALIDATION_ERROR", recovery="correctable")
+            assert_envelope_shape(envelope, "INVALID_REQUEST", recovery="correctable")
             # POST-F3: the buyer is told how to recover. wire_error_envelope is always
             # a dict here (the AdCPToolError accessor lives in assert_envelope_shape).
             assert envelope["errors"][0].get("suggestion"), (
-                f"{transport}: VALIDATION_ERROR envelope must carry a recovery suggestion: {envelope['errors'][0]}"
+                f"{transport}: the error envelope must carry a recovery suggestion: {envelope['errors'][0]}"
             )
 
 
@@ -338,7 +353,7 @@ class TestMalformedAssetsBlobCoerced:
     blob, so a stored non-dict (a list/string written by the same out-of-band producer)
     would fail the entire listing with a 400 ``VALIDATION_ERROR`` during response
     construction. Reverting the
-    ``_coerce_blob_dict`` call at the ``assets=`` site back to the raw ``assets_dict``
+    ``_coerce_blob_assets`` call at the ``assets=`` site back to the raw ``assets_dict``
     reddens this (the listing raises mid-build)."""
 
     @pytest.mark.parametrize("transport", _ALL_WIRE)
@@ -347,8 +362,12 @@ class TestMalformedAssetsBlobCoerced:
         creative = result.wire_response["creatives"][0]
         # Dropped to None → exclude_none omits the key from the wire entirely.
         assert "assets" not in creative
-        # Observability (No Quiet Failures): the drop is surfaced in logs, not silent.
-        assert "Dropping non-dict assets value" in warnings
+        # Observability (No Quiet Failures): the drop is surfaced in logs, not silent. The
+        # value is now validated against the asset union rather than merely type-checked,
+        # so the drop names the reason it was rejected ("invalid-assets") — this assertion
+        # still read the pre-validation wording and had been failing on all three
+        # transports since that change.
+        assert "Dropping invalid-assets assets value" in warnings
 
     @pytest.mark.parametrize("transport", _ALL_WIRE)
     def test_empty_assets_dict_is_preserved_on_wire(self, integration_db, transport):

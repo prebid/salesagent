@@ -1,6 +1,6 @@
 """One auth contract for every webhook sender, graded against real origins.
 
-salesagent-47n9.24 (GH #1893, #1894). ``salesagent-47n9.1`` converged the
+salesagent-47n9.24 (GH #1893, #1894). #1441 converged the
 TRANSPORT — every sender dials through ``src.core.security.outbound_http`` and
 ``json=`` is unreachable from a signing sender. What did not converge is the
 AUTH DECISION above it: three senders still answer "is this delivery signed,
@@ -27,7 +27,7 @@ The contract, stated once, is the one ``order_approval_service`` already keeps
 
 Every case here was RED until each sender routed its decision through the egress
 seam — ``deliver_webhook``/``adeliver_webhook`` in
-``src.core.security.webhook_egress`` (salesagent-47n9.24). They went green by
+``src.core.security.webhook_egress`` (#1894). They went green by
 CONVERGING on that seam, not by repairing the inline copies — repairing them in
 place would have made each the fourth divergent copy, which is the disease
 itself.
@@ -67,7 +67,7 @@ BEARER_SCHEME = "Bearer"
 
 # Any credential a buyer might store. There is deliberately no length
 # requirement to satisfy: the 32-char strength gate was deleted with the inline
-# resolver (salesagent-47n9.24) — it tested a column with no writers, so it had
+# resolver (#1894) — it tested a column with no writers, so it had
 # never once fired, and re-pointing it at authentication_token would have taken
 # short-credential buyers from "delivered" to "not delivered at all".
 STRONG_SECRET = "buyer-shared-secret-padded-to-the-pinned-32-char-min"

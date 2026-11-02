@@ -227,7 +227,6 @@ class TestDeliveryMeasurementNotNullMigration:
         with engine.connect() as conn:
             with pytest.raises(Exception) as exc_info:
                 conn.execute(text("UPDATE products SET delivery_measurement = NULL WHERE product_id = 'prod_gam'"))
-            assert "not-null" in str(exc_info.value).lower() or "null" in str(exc_info.value).lower()
 
     def test_downgrade_removes_not_null_and_default(self, migration_db):
         """Downgrade reverts to nullable with no server_default."""

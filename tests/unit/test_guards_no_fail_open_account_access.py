@@ -13,8 +13,10 @@ This guard bans the fail-open shape structurally (AST, not text) across ``src/``
 - Form B: ``if <principal_id>:`` (bare truthiness) whose body performs a
   ``has_access(...)`` check — a falsy principal skips the whole block.
 
-The existing ``test_architecture_no_handrolled_identity_guard`` only scans
-``*_impl`` functions; the motivating site was a helper, which slipped it.
+The AST guard that used to scan ``*_impl`` functions for hand-rolled identity checks
+was deleted in favour of ``ruff-boundary.toml``'s TID251 ban on raising the auth errors
+outside the resolver and ``require_*``; the motivating site here was a helper that raised
+nothing, so that ban does not see it and this guard stays.
 """
 
 import ast

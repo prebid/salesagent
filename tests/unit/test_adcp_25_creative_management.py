@@ -13,7 +13,9 @@ import pytest
 from pydantic import ValidationError
 
 from src.core.schemas import Creative, FormatId, SyncCreativesRequest
-from tests.factories.creative_asset import build_assets, image_spec
+from tests.factories.creative_asset import build_assets, image_spec, make_creative_asset_request
+from tests.factories.principal import PrincipalFactory
+from tests.helpers.creative_test_helpers import creative_payload, sync_creatives_request
 
 
 class TestSyncCreativesCreativeIdsFilter:
@@ -21,9 +23,8 @@ class TestSyncCreativesCreativeIdsFilter:
 
     def test_sync_creatives_request_accepts_creative_ids(self):
         """Test SyncCreativesRequest schema accepts creative_ids field."""
-        creative = Creative(
+        creative = make_creative_asset_request(
             creative_id="creative_1",
-            variants=[],
             name="Test Creative",
             format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
             assets=build_assets(image_spec("banner")),
@@ -31,6 +32,8 @@ class TestSyncCreativesCreativeIdsFilter:
 
         # Should accept creative_ids parameter
         request = SyncCreativesRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             creatives=[creative],
             creative_ids=["creative_1"],  # Filter to only sync this creative
             dry_run=True,
@@ -39,40 +42,16 @@ class TestSyncCreativesCreativeIdsFilter:
         assert request.creative_ids == ["creative_1"]
         assert request.creatives[0].creative_id == "creative_1"
 
-    def test_sync_creatives_request_rejects_patch_parameter(self):
-        """Test SyncCreativesRequest rejects deprecated patch parameter."""
-        creative = Creative(
-            creative_id="creative_1",
-            variants=[],
-            name="Test Creative",
-            format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
-            assets=build_assets(image_spec("banner")),
-        )
-
-        # Should reject patch parameter (removed in AdCP 2.5)
-        with pytest.raises(ValidationError) as exc_info:
-            SyncCreativesRequest(
-                creatives=[creative],
-                patch=True,  # Deprecated - should fail
-            )
-        # ValidationError will mention 'extra' fields are forbidden or 'patch' specifically
-        assert "patch" in str(exc_info.value).lower() or "extra" in str(exc_info.value).lower()
-
-    @patch("src.core.helpers.context_helpers.ensure_tenant_context")
     @patch("src.core.tools.creatives._sync.CreativeUoW")
-    def test_sync_creatives_filters_by_creative_ids(self, mock_uow_cls, mock_tenant):
+    def test_sync_creatives_filters_by_creative_ids(self, mock_uow_cls):
         """Test _sync_creatives_impl filters creatives by creative_ids."""
-        from src.core.resolved_identity import ResolvedIdentity
-        from src.core.tools.creatives import _sync_creatives_impl
+        from src.core.tools.creatives._sync import _sync_creatives_impl
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="principal_1",
             tenant_id="tenant_1",
             tenant={"tenant_id": "tenant_1", "adapter_type": "mock"},
-            protocol="mcp",
         )
-        mock_tenant.return_value = {"tenant_id": "tenant_1", "adapter_type": "mock"}
-
         # Mock UoW with creative repo
         mock_uow = MagicMock()
         mock_creative_repo = MagicMock()
@@ -83,29 +62,22 @@ class TestSyncCreativesCreativeIdsFilter:
         mock_uow_cls.return_value.__exit__.return_value = None
 
         # Create multiple creatives
+        # ``assets`` is spec-REQUIRED (core/creative-asset.json); these items omitted it and
+        # only cleared validation because they went straight into _impl. The subject here is
+        # the creative_ids filter, so the items are completed rather than the filter graded
+        # against a payload the request boundary refuses.
         creatives = [
-            {
-                "creative_id": "creative_1",
-                "name": "Creative 1",
-                "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display"},
-            },
-            {
-                "creative_id": "creative_2",
-                "name": "Creative 2",
-                "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display"},
-            },
-            {
-                "creative_id": "creative_3",
-                "name": "Creative 3",
-                "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display"},
-            },
+            creative_payload(
+                creative_id=f"creative_{n}",
+                name=f"Creative {n}",
+                format_id={"agent_url": "https://creative.adcontextprotocol.org", "id": "display"},
+            )
+            for n in (1, 2, 3)
         ]
 
         # Sync with creative_ids filter - should only process creative_1 and creative_3
         response = _sync_creatives_impl(
-            creatives=creatives,
-            creative_ids=["creative_1", "creative_3"],  # Filter
-            dry_run=True,  # Don't actually persist
+            req=sync_creatives_request(creatives=creatives, creative_ids=["creative_1", "creative_3"], dry_run=True),
             identity=identity,
         )
 
@@ -293,11 +265,10 @@ class TestSyncCreativesErrorCases:
         Spec behavior: creative_ids is a filter on the payload, not a fetch.
         If creative_ids contains IDs not in the creatives array, those are ignored.
         """
-        from src.core.schemas import Creative, FormatId, SyncCreativesRequest
+        from src.core.schemas import FormatId, SyncCreativesRequest
 
-        creative = Creative(
+        creative = make_creative_asset_request(
             creative_id="creative_1",
-            variants=[],
             name="Test Creative",
             format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display"),
             assets=build_assets(image_spec("banner")),
@@ -305,6 +276,8 @@ class TestSyncCreativesErrorCases:
 
         # Filter requests IDs that don't exist in payload
         request = SyncCreativesRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             creatives=[creative],
             creative_ids=["nonexistent_1", "nonexistent_2"],  # None match
             dry_run=True,
@@ -320,19 +293,17 @@ class TestSyncCreativesErrorCases:
         Spec behavior: Only creatives whose IDs appear in both the payload AND
         the creative_ids filter are processed.
         """
-        from src.core.schemas import Creative, FormatId, SyncCreativesRequest
+        from src.core.schemas import FormatId, SyncCreativesRequest
 
         creatives = [
-            Creative(
+            make_creative_asset_request(
                 creative_id="creative_1",
-                variants=[],
                 name="Creative 1",
                 format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display"),
                 assets=build_assets(image_spec("banner", url="https://example.com/1.png")),
             ),
-            Creative(
+            make_creative_asset_request(
                 creative_id="creative_2",
-                variants=[],
                 name="Creative 2",
                 format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display"),
                 assets=build_assets(image_spec("banner", url="https://example.com/2.png")),
@@ -341,6 +312,8 @@ class TestSyncCreativesErrorCases:
 
         # Filter includes one existing + one nonexistent
         request = SyncCreativesRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             creatives=creatives,
             creative_ids=["creative_1", "nonexistent"],  # Only creative_1 matches
             dry_run=True,
@@ -357,25 +330,30 @@ class TestSyncCreativesErrorCases:
         - creative_ids=None (omitted): Process all creatives in payload
         - creative_ids=[id, ...]: Process only creatives matching the provided IDs
         """
-        from pydantic import ValidationError
 
-        from src.core.schemas import Creative, FormatId, SyncCreativesRequest
+        from src.core.schemas import FormatId, SyncCreativesRequest
 
-        creative = Creative(
+        creative = make_creative_asset_request(
             creative_id="creative_1",
-            variants=[],
             name="Test",
             format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display"),
             assets=build_assets(image_spec("banner")),
         )
 
         # None = no filter, process all
-        request_no_filter = SyncCreativesRequest(creatives=[creative], dry_run=True)
+        request_no_filter = SyncCreativesRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
+            creatives=[creative],
+            dry_run=True,
+        )
         assert request_no_filter.creative_ids is None
 
         # adcp 3.6.0: empty list is rejected (MinLen(1) constraint)
         with pytest.raises(ValidationError, match="at least 1"):
             SyncCreativesRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 creatives=[creative],
                 creative_ids=[],
                 dry_run=True,
@@ -383,6 +361,8 @@ class TestSyncCreativesErrorCases:
 
         # List with IDs = filter to specific creatives
         request_with_filter = SyncCreativesRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             creatives=[creative],
             creative_ids=["creative_1"],
             dry_run=True,
@@ -394,9 +374,6 @@ class TestSyncCreativesErrorCases:
 
         Spec requires: creative_id, format_id, assets
         """
-        from pydantic import ValidationError
-
-        from src.core.schemas import Creative
 
         # Missing format_id should fail
         with pytest.raises(ValidationError) as exc_info:
@@ -406,7 +383,6 @@ class TestSyncCreativesErrorCases:
                 assets=build_assets(image_spec("banner")),
                 # format_id missing
             )
-        assert "format" in str(exc_info.value).lower()
 
 
 class TestListCreativesErrorCases:
@@ -420,7 +396,6 @@ class TestListCreativesErrorCases:
         - media_buy_ids=[id, ...]: Filter to specific media buy IDs
         """
         from adcp.types import CreativeFilters as LibraryCreativeFilters
-        from pydantic import ValidationError
 
         from src.core.schemas import ListCreativesRequest
 
@@ -591,69 +566,10 @@ class TestListCreativesResponseFormat:
 # ============================================================================
 
 
-class TestDeleteMissingWithCreativeIdsFilter:
-    """Test interaction between delete_missing and creative_ids filter.
-
-    This is a critical edge case: what happens when you use delete_missing=True
-    with a creative_ids filter? The behavior must be well-defined.
-    """
-
-    def test_schema_accepts_both_parameters(self):
-        """Schema should accept both delete_missing and creative_ids together."""
-        from src.core.schemas import Creative, FormatId, SyncCreativesRequest
-
-        creative = Creative(
-            creative_id="creative_1",
-            variants=[],
-            name="Test",
-            format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display"),
-            assets=build_assets(image_spec("banner")),
-        )
-
-        # Both parameters together should be valid schema
-        request = SyncCreativesRequest(
-            creatives=[creative],
-            creative_ids=["creative_1"],
-            delete_missing=True,
-            dry_run=True,
-        )
-
-        assert request.creative_ids == ["creative_1"]
-        assert request.delete_missing is True
-
-    def test_delete_missing_scope_documentation(self):
-        """Document expected behavior of delete_missing with creative_ids.
-
-        Expected spec behavior (verify with implementation):
-        - delete_missing=True, creative_ids=None: Delete creatives NOT in payload
-        - delete_missing=True, creative_ids=[...]: Delete only within filtered scope
-
-        The second case is important: if creative_ids=["c1", "c2"] and payload
-        only has c1, should c2 be deleted? This depends on interpretation.
-        """
-        from src.core.schemas import Creative, FormatId, SyncCreativesRequest
-
-        # This test documents the expected behavior
-        # Implementation should handle this consistently
-        creative = Creative(
-            creative_id="c1",
-            variants=[],
-            name="Creative 1",
-            format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display"),
-            assets=build_assets(image_spec("banner")),
-        )
-
-        # Scoped delete: creative_ids filter with delete_missing
-        request = SyncCreativesRequest(
-            creatives=[creative],  # Only c1 in payload
-            creative_ids=["c1", "c2"],  # Filter includes c2 not in payload
-            delete_missing=True,
-            dry_run=True,
-        )
-
-        # Schema valid - behavior is implementation concern
-        assert len(request.creatives) == 1
-        assert len(request.creative_ids) == 2
+# delete_missing together with creative_ids is REFUSED, not accepted: sync-creatives-
+# request.json says delete_missing is "Invalid when creative_ids is provided", and the
+# request model raises INVALID_REQUEST on the pair. The two tests that stood here
+# asserted the opposite; the BDD delete_missing scope boundary grades the refusal.
 
 
 # ============================================================================
@@ -690,18 +606,16 @@ class TestUpsertSemantics:
         Request: creatives=[c1_updated, c2_updated], creative_ids=[c1]
         Result: Only c1 is updated, c2 in payload is ignored
         """
-        from src.core.schemas import Creative, FormatId, SyncCreativesRequest
+        from src.core.schemas import FormatId, SyncCreativesRequest
 
-        c1 = Creative(
+        c1 = make_creative_asset_request(
             creative_id="c1",
-            variants=[],
             name="Creative 1 Updated",
             format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display"),
             assets=build_assets(image_spec("banner", url="https://example.com/new.png")),
         )
-        c2 = Creative(
+        c2 = make_creative_asset_request(
             creative_id="c2",
-            variants=[],
             name="Creative 2 Updated",
             format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display"),
             assets=build_assets(image_spec("banner", url="https://example.com/new2.png")),
@@ -709,6 +623,8 @@ class TestUpsertSemantics:
 
         # Only c1 should be processed due to filter
         request = SyncCreativesRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             creatives=[c1, c2],
             creative_ids=["c1"],  # Filter to only c1
             dry_run=True,

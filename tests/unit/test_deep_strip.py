@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.core.request_compat import deep_strip_to_schema
+from src.core.schemas._accepted_shape import deep_strip_to_schema
 
 # ---------------------------------------------------------------------------
 # Shared schemas
@@ -365,21 +365,29 @@ class TestP7RefResolution:
 class TestP8AdditionalPropertiesTrue:
     """P8: When additionalProperties is true (or absent), unknowns are preserved."""
 
-    def test_open_schema_preserves_unknowns(self):
+    def test_open_schema_still_strips_because_it_declares_a_shape(self):
+        """``additionalProperties: true`` no longer preserves unknowns on a declared shape.
+
+        The spec's permissiveness says what a buyer MAY SEND; this seller decides what it
+        PROCESSES, and it processes only what its schema declares. An object that declares
+        properties has a shape, so a key outside it is dropped whatever the schema permits.
+        Only a container declaring NO properties keeps its contents -- see
+        ``TestFreeFormContainer`` below.
+        """
         result = deep_strip_to_schema(
-            {"name": "Alice", "whatever": "kept"},
+            {"name": "Alice", "whatever": "dropped"},
             FLAT_OBJECT_OPEN,
         )
-        assert result == {"name": "Alice", "whatever": "kept"}
+        assert result == {"name": "Alice"}
 
-    def test_no_additional_properties_key_defaults_to_true(self):
-        """Schema without additionalProperties key defaults to allowing extras."""
+    def test_absent_additional_properties_key_still_strips_a_declared_shape(self):
+        """An omitted ``additionalProperties`` is as permissive as ``true``, and as irrelevant."""
         schema = {
             "type": "object",
             "properties": {"x": {"type": "integer"}},
         }
         result = deep_strip_to_schema({"x": 1, "y": 2}, schema)
-        assert result == {"x": 1, "y": 2}
+        assert result == {"x": 1}
 
 
 # ===========================================================================
@@ -824,12 +832,12 @@ class TestAdversarialFinding1MixedAdditionalProperties:
         Open should win because more declared properties match.
         """
         result = deep_strip_to_schema(
-            {"ref": {"name": "acme", "domain": "acme.com", "extra": "kept"}},
+            {"ref": {"name": "acme", "domain": "acme.com", "extra": "dropped"}},
             self.MIXED_AP_SCHEMA,
         )
-        # Open variant: name + domain match (score 2) > Strict: no match (score 0)
-        # additionalProperties: true → extra preserved
-        assert result == {"ref": {"name": "acme", "domain": "acme.com", "extra": "kept"}}
+        # Open variant still WINS the match (name + domain score 2 > Strict's 0); what changed
+        # is that winning no longer means keeping extras, because the variant declares a shape.
+        assert result == {"ref": {"name": "acme", "domain": "acme.com"}}
 
 
 class TestAdversarialFinding2AllOf:
@@ -881,16 +889,16 @@ class TestAdversarialFinding2AllOf:
         )
         assert result == {"base_field": "b", "extension": "e"}
 
-    def test_allof_preserves_extras_when_all_members_allow_additional(self):
-        """If all allOf members allow additionalProperties, extras preserved."""
+    def test_allof_strips_extras_against_the_merged_shape(self):
+        """The merged members declare a shape, so a key outside their union is dropped."""
         schema = {
             "allOf": [
                 {"type": "object", "properties": {"a": {"type": "string"}}},
                 {"type": "object", "properties": {"b": {"type": "string"}}},
             ],
         }
-        result = deep_strip_to_schema({"a": "1", "b": "2", "extra": "kept"}, schema)
-        assert result == {"a": "1", "b": "2", "extra": "kept"}
+        result = deep_strip_to_schema({"a": "1", "b": "2", "extra": "dropped"}, schema)
+        assert result == {"a": "1", "b": "2"}
 
 
 class TestAdversarialFinding5OneOf:
@@ -944,3 +952,87 @@ class TestAdversarialFinding5OneOf:
             self.ONEOF_SCHEMA,
         )
         assert result == {"signal": {"source": "segment", "segment_id": "seg-1"}}
+
+
+class TestFreeFormContainer:
+    """An object declaring NO properties keeps everything: it has no shape to strip against.
+
+    This is the ``ext`` and ``context`` case. AdCP uses an empty open object for "arbitrary
+    data lives here" -- ``core/context.json`` is echoed to the buyer verbatim and
+    ``ExtensionObject`` carries vendor-namespaced parameters. Stripping such an object does not
+    filter its contents, it deletes them.
+    """
+
+    CONTAINER = {"type": "object", "additionalProperties": True, "properties": {}}
+
+    def test_contents_survive(self):
+        payload = {"gam": {"line_item": 1}, "roku": "anything"}
+        assert deep_strip_to_schema(payload, self.CONTAINER) == payload
+
+    def test_a_container_nested_in_a_declared_shape_survives(self):
+        schema = {
+            "type": "object",
+            "properties": {"name": {"type": "string"}, "ext": self.CONTAINER},
+        }
+        result = deep_strip_to_schema({"name": "n", "ext": {"vendor": 1}, "junk": 2}, schema)
+        assert result == {"name": "n", "ext": {"vendor": 1}}
+
+    def test_the_exemption_ends_when_the_container_declares_a_field(self):
+        """A model that grows a real field stops being a container and starts stripping."""
+        shaped = {"type": "object", "additionalProperties": True, "properties": {"known": {"type": "string"}}}
+        assert deep_strip_to_schema({"known": "k", "other": 1}, shaped) == {"known": "k"}
+
+
+class TestRejectedPointers:
+    """``rejected=`` collects the RFC 6901 pointer of every removed key.
+
+    This is what lets the strip's REFUSAL name what it refused (``issues[].pointer`` and
+    the ``field`` derived from it). A bare key name would be ambiguous the moment the
+    offending key is nested or inside an array element, which is why the walk reports a
+    pointer rather than the name it happens to have at its own level.
+    """
+
+    def test_top_level_key_reports_its_pointer(self):
+        rejected: list[str] = []
+        result = deep_strip_to_schema({"name": "n", "junk": 1}, FLAT_OBJECT_STRICT, rejected=rejected)
+        assert result == {"name": "n"}
+        assert rejected == ["/junk"]
+
+    def test_nested_and_indexed_keys_report_full_pointers(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "inner": {
+                    "type": "object",
+                    "properties": {"kept": {"type": "string"}},
+                    "additionalProperties": False,
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {"kept": {"type": "string"}},
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "additionalProperties": False,
+        }
+        rejected: list[str] = []
+        result = deep_strip_to_schema(
+            {"inner": {"kept": "a", "junk": 1}, "items": [{"kept": "b"}, {"kept": "c", "junk": 2}]},
+            schema,
+            rejected=rejected,
+        )
+        assert result == {"inner": {"kept": "a"}, "items": [{"kept": "b"}, {"kept": "c"}]}
+        assert rejected == ["/inner/junk", "/items/1/junk"]
+
+    def test_reserved_characters_are_escaped_per_rfc_6901(self):
+        rejected: list[str] = []
+        deep_strip_to_schema({"name": "n", "a/b": 1, "c~d": 2}, FLAT_OBJECT_STRICT, rejected=rejected)
+        assert sorted(rejected) == ["/a~1b", "/c~0d"]
+
+    def test_nothing_removed_reports_nothing(self):
+        rejected: list[str] = []
+        deep_strip_to_schema({"name": "n"}, FLAT_OBJECT_STRICT, rejected=rejected)
+        assert rejected == []

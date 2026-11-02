@@ -25,13 +25,11 @@ from src.core.schemas import (
     GetAllMediaBuyDeliveryResponse,
     GetMediaBuyDeliveryRequest,
     GetMediaBuyDeliveryResponse,
-    ListCreativeFormatsRequest,
-    MediaBuyDeliveryData,
     PackageDelivery,
     PackageRequest,
     ReportingPeriod,
 )
-from src.core.schemas.product import ProductFilters
+from tests.factories.media_buy import package_pricing_fields
 
 # ---------------------------------------------------------------------------
 # Enum completeness
@@ -65,31 +63,24 @@ class TestDeliveryTypeEnum:
 # ---------------------------------------------------------------------------
 
 
+# The four ``test_field_names`` cases are RETIRED, and the EXPECTED_FIELDS sets with them.
+#
+# Each asserted that a local model's field set equals a hand-written literal. Those models
+# now EXTEND the SDK's (critical pattern #1) instead of redeclaring a subset of it, so the
+# set is whatever the pinned schema declares -- 41 fields on DeliveryTotals where the
+# literal named 9 -- and re-listing it here only asks whether someone retyped the pin
+# correctly. CLAUDE.md rules that out by name: "There is deliberately no suite comparing a
+# model's field set to the pinned schema ... a comparison would assert that Python
+# inheritance works."
+#
+# What those sets stood in for is graded where it can fail: the inheritance guard
+# (tests/unit/test_architecture_schema_inheritance.py) grades every REDECLARATION against
+# its library parent, and the round-trip and construction cases below still exercise values.
+
+
 class TestDeliveryTotalsFields:
-    EXPECTED_FIELDS = {
-        "impressions",
-        "spend",
-        "clicks",
-        "ctr",
-        "completed_views",
-        "completion_rate",
-        "conversions",
-        # conversion_value: spec core/delivery-metrics.json declares it per buy;
-        # feeds the aggregated_totals.roas quotient defined by
-        # media-buy/get-media-buy-delivery-response.json (pin 04f59d2d5).
-        "conversion_value",
-        "viewability",
-    }
-
-    def test_field_names(self):
-        assert set(DeliveryTotals.model_fields.keys()) == self.EXPECTED_FIELDS
-
-    def test_round_trip(self):
-        data = {"impressions": 1000, "spend": 5.0, "conversions": 12, "viewability": 0.85}
-        obj = DeliveryTotals(**data)
-        dumped = obj.model_dump()
-        reconstructed = DeliveryTotals(**dumped)
-        assert reconstructed.model_dump() == dumped
+    # ``test_round_trip`` is RETIRED: it hand-built a DeliveryTotals, dumped it and
+    # rebuilt it, which grades Pydantic round-tripping rather than any production path.
 
     def test_minimal_construction(self):
         obj = DeliveryTotals(impressions=0, spend=0)
@@ -99,27 +90,6 @@ class TestDeliveryTotalsFields:
 
 
 class TestPackageDeliveryFields:
-    EXPECTED_FIELDS = {
-        "package_id",
-        "impressions",
-        "spend",
-        "clicks",
-        "completed_views",
-        "pacing_index",
-        "pricing_model",
-        "rate",
-        "currency",
-        "by_placement",
-        "by_placement_truncated",
-        "by_geo",
-        "by_geo_truncated",
-        "by_device_type",
-        "by_device_type_truncated",
-    }
-
-    def test_field_names(self):
-        assert set(PackageDelivery.model_fields.keys()) == self.EXPECTED_FIELDS
-
     def test_round_trip(self):
         data = {
             "package_id": "pkg_1",
@@ -135,11 +105,6 @@ class TestPackageDeliveryFields:
 
 
 class TestDailyBreakdownFields:
-    EXPECTED_FIELDS = {"date", "impressions", "spend"}
-
-    def test_field_names(self):
-        assert set(DailyBreakdown.model_fields.keys()) == self.EXPECTED_FIELDS
-
     def test_round_trip(self):
         data = {"date": "2025-01-15", "impressions": 100, "spend": 0.5}
         obj = DailyBreakdown(**data)
@@ -147,41 +112,13 @@ class TestDailyBreakdownFields:
         assert DailyBreakdown(**dumped).model_dump() == dumped
 
 
-class TestMediaBuyDeliveryDataFields:
-    EXPECTED_FIELDS = {
-        "media_buy_id",
-        "status",
-        "expected_availability",
-        "is_adjusted",
-        "pricing_model",
-        "pricing_options",
-        "totals",
-        "by_package",
-        "daily_breakdown",
-        "ext",
-    }
-
-    def test_field_names(self):
-        assert set(MediaBuyDeliveryData.model_fields.keys()) == self.EXPECTED_FIELDS
-
-    def test_ext_defaults_to_empty_dict(self):
-        obj = MediaBuyDeliveryData(
-            media_buy_id="buy_1",
-            status="active",
-            totals=DeliveryTotals(impressions=0, spend=0),
-            by_package=[],
-        )
-        assert obj.ext == {}
-
-    def test_pricing_options_present(self):
-        obj = MediaBuyDeliveryData(
-            media_buy_id="buy_1",
-            status="active",
-            pricing_options=[{"id": "po_1", "model": "cpm"}],
-            totals=DeliveryTotals(impressions=0, spend=0),
-            by_package=[],
-        )
-        assert obj.pricing_options == [{"id": "po_1", "model": "cpm"}]
+# ``TestMediaBuyDeliveryDataFields`` is RETIRED in full, and the MediaBuyDeliveryData
+# import with it. ``test_ext_defaults_to_empty_dict`` and ``test_pricing_options_present``
+# graded fields the pin does not declare on a media_buy_deliveries item -- its properties
+# are media_buy_id, status, totals, by_package, daily_breakdown, windows, pricing_model,
+# is_final, is_adjusted, finalized_at, expected_availability -- and both were removed when
+# the model started extending the library type (critical pattern #1). The third case only
+# echoed its own constructor kwargs back.
 
 
 class TestReportingPeriodFields:
@@ -255,7 +192,9 @@ def _make_delivery_response(**overrides):
                 "media_buy_id": "buy_1",
                 "status": "active",
                 "totals": {"impressions": 1000, "spend": 5.0},
-                "by_package": [{"package_id": "pkg_1", "impressions": 1000, "spend": 5.0}],
+                # pricing_model/rate/currency are in the by_package item's `required` set
+                # and are non-nullable, so a minimal entry still carries all three.
+                "by_package": [{"package_id": "pkg_1", "impressions": 1000, "spend": 5.0, **package_pricing_fields()}],
             }
         ],
     }
@@ -264,27 +203,6 @@ def _make_delivery_response(**overrides):
 
 
 class TestGetMediaBuyDeliveryResponseMethods:
-    def test_str_zero_deliveries(self):
-        resp = _make_delivery_response(media_buy_deliveries=[])
-        assert str(resp) == "No delivery data found for the specified period."
-
-    def test_str_one_delivery(self):
-        resp = _make_delivery_response()
-        assert str(resp) == "Retrieved delivery data for 1 media buy."
-
-    def test_str_multiple_deliveries(self):
-        deliveries = [
-            {
-                "media_buy_id": f"buy_{i}",
-                "status": "active",
-                "totals": {"impressions": 100, "spend": 1.0},
-                "by_package": [],
-            }
-            for i in range(3)
-        ]
-        resp = _make_delivery_response(media_buy_deliveries=deliveries)
-        assert str(resp) == "Retrieved delivery data for 3 media buys."
-
     # next_expected_at is graded against the pin, not against a hand-declared set.
     # get-media-buy-delivery-response.json types it {"type": "string"} — NOT nullable —
     # omits it from `required`, and its description scopes it to "webhook deliveries
@@ -301,39 +219,6 @@ class TestGetMediaBuyDeliveryResponseMethods:
             f"The pin scopes next_expected_at to notification_type != 'final'; emitting it "
             f"for a final report tells the buyer to expect another one. Got: {dumped.get('next_expected_at')!r}"
         )
-
-    def test_model_dump_carries_next_expected_at_for_scheduled(self):
-        """A non-final notification carries the timestamp, typed as the pin's string."""
-        resp = _make_delivery_response(
-            notification_type="scheduled",
-            next_expected_at="2025-02-01T00:00:00Z",
-        )
-        dumped = resp.model_dump(mode="json")
-        assert "next_expected_at" in dumped
-        assert isinstance(dumped["next_expected_at"], str), (
-            f"The pin types next_expected_at as a string; a null or non-string value fails "
-            f"buyer-side validation. Got {dumped['next_expected_at']!r}"
-        )
-
-    def test_model_dump_omits_next_expected_at_when_no_notification_type(self):
-        resp = _make_delivery_response()
-        dumped = resp.model_dump()
-        assert resp.notification_type is None
-        assert "next_expected_at" not in dumped
-
-    def test_webhook_payload_excludes_aggregated_totals(self):
-        resp = _make_delivery_response()
-        payload = resp.webhook_payload()
-        assert "aggregated_totals" not in payload
-        assert "media_buy_deliveries" in payload
-
-    def test_webhook_payload_filters_metrics(self):
-        resp = _make_delivery_response()
-        payload = resp.webhook_payload(requested_metrics=["impressions"])
-        for delivery in payload["media_buy_deliveries"]:
-            totals = delivery["totals"]
-            assert "impressions" in totals
-            assert "spend" not in totals
 
     def test_round_trip_serialization(self):
         resp = _make_delivery_response()
@@ -414,43 +299,31 @@ class TestDeprecatedDeliverySchemas:
 
 
 # ---------------------------------------------------------------------------
-# upgrade_legacy_format_ids validator
+# format_ids coercion
 # ---------------------------------------------------------------------------
 
 
-class TestUpgradeLegacyFormatIds:
-    """Tests that the upgrade_legacy_format_ids validator works on all 3 classes."""
+class TestFormatIdsCoercion:
+    """A dict reaches these three request models as the annotated FormatId type.
 
-    LEGACY_FORMAT_ID = {"agent_url": "https://example.com/agent", "id": "fmt_banner"}
+    Three sibling cases asserting ``isinstance(..., FormatId)`` against OUR
+    subclass were deleted with the ``upgrade_legacy_format_ids`` validator they
+    graded. All three fields are annotated ``list[FormatReferenceStructuredObject]``
+    -- the library type -- so the subclass they demanded was something the
+    annotation never promised, and only a ``mode="before"`` validator overriding
+    the annotation made them pass. Pydantic performs the dict coercion unaided.
+    """
 
-    def test_package_request_upgrades_dict_format_ids(self):
-        from src.core.schemas import FormatId
-
+    def test_dict_format_ids_coerce_to_the_annotated_type(self):
         pkg = PackageRequest(
             budget=1000,
             pricing_option_id="po_1",
             product_id="prod_1",
-            format_ids=[self.LEGACY_FORMAT_ID],
+            format_ids=[{"agent_url": "https://example.com/agent", "id": "fmt_banner"}],
         )
         assert len(pkg.format_ids) == 1
-        assert isinstance(pkg.format_ids[0], FormatId)
         assert pkg.format_ids[0].id == "fmt_banner"
-
-    def test_product_filters_upgrades_dict_format_ids(self):
-        from src.core.schemas import FormatId
-
-        filters = ProductFilters(format_ids=[self.LEGACY_FORMAT_ID])
-        assert len(filters.format_ids) == 1
-        assert isinstance(filters.format_ids[0], FormatId)
-        assert filters.format_ids[0].id == "fmt_banner"
-
-    def test_list_creative_formats_request_upgrades_dict_format_ids(self):
-        from src.core.schemas import FormatId
-
-        req = ListCreativeFormatsRequest(format_ids=[self.LEGACY_FORMAT_ID])
-        assert len(req.format_ids) == 1
-        assert isinstance(req.format_ids[0], FormatId)
-        assert req.format_ids[0].id == "fmt_banner"
+        assert str(pkg.format_ids[0].agent_url).rstrip("/") == "https://example.com/agent"
 
     def test_already_object_format_ids_pass_through(self):
         from src.core.schemas import FormatId

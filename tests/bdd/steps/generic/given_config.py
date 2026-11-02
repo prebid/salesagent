@@ -13,9 +13,10 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 
-from pytest_bdd import given, parsers
+from pytest_bdd import given, parsers, when
 
 from tests.bdd.steps.generic._registry import sync_registry as _sync_registry
+from tests.bdd.steps.generic._table import rows as table_rows
 from tests.factories.format import (
     CATEGORY_MAP,
     FormatFactory,
@@ -26,6 +27,7 @@ from tests.factories.format import (
     make_renders,
     make_responsive_renders,
 )
+from tests.factories.webhook import PushNotificationConfigRequestFactory
 
 
 def _add_format(ctx: dict, fmt: object) -> None:
@@ -47,8 +49,7 @@ def _datatable_to_dicts(datatable: Sequence[Sequence[object]]) -> list[dict[str,
     The first row is treated as column headers. Remaining rows become dicts
     keyed by those headers.
     """
-    headers = [str(cell) for cell in datatable[0]]
-    return [{headers[i]: str(cell) for i, cell in enumerate(row)} for row in datatable[1:]]
+    return table_rows(datatable)
 
 
 # ── Format by type + asset type ──────────────────────────────────────
@@ -237,9 +238,17 @@ def given_registry_format_no_input_ids(ctx: dict, name: str) -> None:
 
 @given("the registry has formats:")
 def given_registry_formats_table(ctx: dict, datatable: Sequence[Sequence[object]]) -> None:
-    """Register multiple formats from a data table with name and type columns."""
+    """Register formats from a data table whose only required column is ``name``.
+
+    ``type`` is optional because adcp 3.12 removed it from ``Format``. A table that still
+    declares the column keeps working; one that does not no longer dies on ``KeyError:
+    'type'`` before the scenario runs.
+    """
     rows = _datatable_to_dicts(datatable)
-    formats = [FormatFactory.build(name=row["name"], type=CATEGORY_MAP.get(row["type"])) for row in rows]
+    formats = [
+        FormatFactory.build(name=row["name"], **({"type": CATEGORY_MAP.get(row["type"])} if "type" in row else {}))
+        for row in rows
+    ]
     ctx["registry_formats"] = formats
     _sync_registry(ctx)
 
@@ -247,19 +256,61 @@ def given_registry_formats_table(ctx: dict, datatable: Sequence[Sequence[object]
 # ── Formats from inline list ────────────────────────────────────────
 
 
-@given(parsers.parse('the registry has formats: "{name_a}" ({type_a}), "{name_b}" ({type_b}), "{name_c}" ({type_c})'))
-def given_registry_three_formats_inline(
-    ctx: dict, name_a: str, type_a: str, name_b: str, type_b: str, name_c: str, type_c: str
-) -> None:
-    """Register three formats from inline notation."""
-    for name, fmt_type in [(name_a, type_a), (name_b, type_b), (name_c, type_c)]:
-        _add_format(ctx, FormatFactory.build(name=name, type=CATEGORY_MAP.get(fmt_type)))
-    _sync_registry(ctx)
+# Two INLINE `the registry has formats: "<name>" (<type>), ...` Givens bound here, neither
+# reachable: the only registry-formats sentence in any feature is the DATATABLE form at
+# BR-UC-005-discover-creative-formats.feature:106, which a different step serves. Both also
+# took a `(<type>)` column, and adcp 3.12 removed `type` from Format.
 
 
-@given(parsers.parse('the registry has formats: "{name_a}" ({type_a}), "{name_b}" ({type_b})'))
-def given_registry_two_formats_inline(ctx: dict, name_a: str, type_a: str, name_b: str, type_b: str) -> None:
-    """Register two formats from inline notation."""
-    for name, fmt_type in [(name_a, type_a), (name_b, type_b)]:
-        _add_format(ctx, FormatFactory.build(name=name, type=CATEGORY_MAP.get(fmt_type)))
-    _sync_registry(ctx)
+@given(parsers.parse('the request includes a push_notification_config with url "{url}"'))
+@when(parsers.parse('the request includes a push_notification_config with url "{url}"'))
+def push_notification_config_with_url(ctx: dict, url: str) -> None:
+    """Attach a push_notification_config to the upcoming dispatch.
+
+    REGISTERED UNDER BOTH KEYWORDS, on purpose. Both feature lines that use this
+    sentence write it as ``And``, which inherits whichever keyword came before --
+    and that is how it ended up defined as ``@given`` in
+    ``steps/domain/uc006_sync_creatives.py`` and ``@when`` in
+    ``steps/domain/uc011_accounts.py``. A sentence whose keyword depends on its
+    neighbour cannot be owned by one keyword.
+
+    The two copies were not equivalent, and the difference was a live defect: the
+    @given one set ``push_notification_config`` (which the dispatch reads) AND a
+    ``push_notification_url`` mirror; the @when one set only the mirror. Scenarios
+    routed to the @when copy therefore dispatched with NO webhook config, while the
+    Then step that checks "the system registered the webhook" fell back to the url
+    key and passed anyway. Both the fallback and the mirror are gone: the config is
+    the one key, so a scenario that fails to attach one now fails.
+    """
+    attach_push_notification_config(ctx, url)
+
+
+def attach_push_notification_config(ctx: dict, url: str) -> dict:
+    """Put a push_notification_config on the context, ONE way, and return it.
+
+    THE OWNER OF THE CTX PROTOCOL, not just of the payload shape. The factory
+    already deduplicated what a config LOOKS like; this deduplicates what
+    attaching one MEANS, which is where the copies actually diverged:
+
+      * this module set ``push_notification_config`` and a ``push_notification_url``
+        mirror but never ``request_kwargs``;
+      * ``given_media_buy.given_media_buy_with_push_config`` set the config and
+        ``request_kwargs["push_notification_config"]`` but never the url.
+
+    So which keys a scenario ended up with depended on which sentence it happened
+    to use, and a Then step reading a key the other sentence never wrote passed on
+    a fallback rather than on the thing it names. That is the same defect the
+    docstring above describes between the @given and @when copies, one level up:
+    the sentences were unified and the STATE THEY LEAVE was not.
+
+    Writes the config, and ``request_kwargs`` only when the scenario has one,
+    because creating it here would hand a create-shaped bag to a scenario that
+    dispatches something else. The url mirror is NOT written: once the Then step
+    stopped falling back to it, nothing read it, and a second spelling of a fact
+    is how the two sentences disagreed in the first place.
+    """
+    config = PushNotificationConfigRequestFactory.payload(url=url)
+    ctx["push_notification_config"] = config
+    if "request_kwargs" in ctx:
+        ctx["request_kwargs"]["push_notification_config"] = config
+    return config

@@ -66,9 +66,12 @@ class TestDatabaseSchema:
         assert hasattr(Tenant, "tenant_id")
         assert hasattr(Tenant, "name")
 
-        # Test Principal has auth fields
+        # Test Principal has auth fields. token_hash, not access_token: the row stores
+        # sha256(token) and a prefix and never the plaintext, so asserting the old column
+        # asserted the opposite of the design.
         assert hasattr(Principal, "principal_id")
-        assert hasattr(Principal, "access_token")
+        assert hasattr(Principal, "token_hash")
+        assert not hasattr(Principal, "access_token")
 
         # Test Product has required fields
         assert hasattr(Product, "product_id")
@@ -80,12 +83,16 @@ class TestConfiguration:
 
     @pytest.mark.smoke
     def test_config_loader_imports(self):
-        """Test that config loader can be imported."""
-        from src.core.config_loader import load_config, set_current_tenant
+        """Test that config loader can be imported.
 
-        # Functions should exist and be callable
-        assert callable(load_config)
-        assert callable(set_current_tenant)
+        ``load_config`` and ``set_current_tenant`` are both gone -- the ambient tenant
+        ContextVar with its setter (commit 76c2a96fb), and the file-based config loader
+        before it. What the module still owns is tenant LOOKUP, which the resolver calls.
+        """
+        from src.core.config_loader import get_tenant_by_id, tenant_id_for
+
+        assert callable(get_tenant_by_id)
+        assert callable(tenant_id_for)
 
 
 class TestCriticalPaths:
@@ -93,11 +100,18 @@ class TestCriticalPaths:
 
     @pytest.mark.smoke
     def test_principal_auth_logic(self):
-        """Test principal authentication logic exists."""
-        from src.core.auth import get_principal_from_token
+        """Principal resolution exists, and lives in ONE place.
 
-        # Function should exist and be callable
-        assert callable(get_principal_from_token)
+        ``src.core.auth.get_principal_from_token`` is gone: resolving a caller from a
+        request is the resolver's job (``_resolve_identity``), and a stored id resolves
+        through ``identity_of`` -- both in ``src/core/resolved_identity.py``. A smoke
+        check that imports a second resolver would be asserting the shape the refactor
+        removed.
+        """
+        from src.core.resolved_identity import _resolve_identity, identity_of
+
+        assert callable(_resolve_identity)
+        assert callable(identity_of)
 
     @pytest.mark.smoke
     def test_adapter_factory_pattern(self):
@@ -114,7 +128,7 @@ class TestCriticalPaths:
 
         # Should be able to create adapter
         config = {"enabled": True}
-        adapter = MockAdServer(config=config, principal=principal, dry_run=False, tenant_id="test_tenant")
+        adapter = MockAdServer(config=config, principal=principal, tenant_id="test_tenant")
         assert adapter is not None
 
     @pytest.mark.smoke

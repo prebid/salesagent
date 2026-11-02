@@ -7,10 +7,9 @@ These tests verify that:
 4. AdCP protocol requirements are met
 """
 
+import json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from enum import Enum
-from typing import Literal
 
 import pytest
 from adcp.types import CreativePolicy
@@ -19,10 +18,10 @@ from src.core.database.models import (
     Principal as PrincipalModel,
 )  # Need both for contract test
 from src.core.database.models import Product as ProductModel
+from src.core.product_conversion import default_reporting_capabilities
 from src.core.schemas import (
     Budget,
     CreateMediaBuyRequest,
-    CreateMediaBuyResponse,
     Creative,
     CreativeApprovalStatus,
     CreativeAssignment,
@@ -32,8 +31,6 @@ from src.core.schemas import (
     GetMediaBuyDeliveryResponse,
     GetProductsRequest,
     GetProductsResponse,
-    ListAuthorizedPropertiesRequest,
-    ListAuthorizedPropertiesResponse,
     ListCreativeFormatsResponse,
     ListCreativesResponse,
     Measurement,
@@ -46,7 +43,6 @@ from src.core.schemas import (
     QuerySummary,
     Signal,
     SignalDeployment,
-    SyncCreativesRequest,
     SyncCreativesResponse,
     Targeting,
     TaskStatus,
@@ -58,6 +54,8 @@ from src.core.schemas import (
     Product as ProductSchema,
 )
 from tests.factories.creative_asset import build_assets, image_spec, url_spec, video_spec
+from tests.factories.media_buy import package_pricing_fields
+from tests.factories.principal import plaintext_token_for
 
 
 class TestSchemaMatchesLibrary:
@@ -83,7 +81,6 @@ class TestSchemaMatchesLibrary:
             GetSignalsRequest as LibGetSignalsRequest,
         )
 
-        # NOTE: ListAuthorizedPropertiesRequest was removed from adcp 3.2.0
         # We define it locally in src/core/schemas.py
         from adcp import (
             ListCreativeFormatsRequest as LibListCreativeFormatsRequest,
@@ -107,8 +104,6 @@ class TestSchemaMatchesLibrary:
         from src.core.schemas import (
             GetSignalsRequest as LocalGetSignalsRequest,
         )
-
-        # NOTE: ListAuthorizedPropertiesRequest comparison skipped - removed from adcp 3.2.0
         from src.core.schemas import (
             ListCreativeFormatsRequest as LocalListCreativeFormatsRequest,
         )
@@ -119,18 +114,14 @@ class TestSchemaMatchesLibrary:
             SyncCreativesRequest as LocalSyncCreativesRequest,
         )
 
-        # GetProductsRequest - local extends library with internal-only fields
+        # GetProductsRequest - local declares no field the library does not
+        # push_notification_config — a real library field on GetProductsWholesaleRequest
+        #   (adcp 6.6 / spec 3.1.1); inherited, present in both sets
+        # buying_mode and account are in the library (adcp 3.9) but overridden locally
+        # (buying_mode widened to str|None, account made optional)
         lib_fields = set(LibGetProductsRequest.model_fields.keys())
         local_fields = set(GetProductsRequest.model_fields.keys())
-        # product_selectors — internal-only field (not in AdCP spec)
-        # push_notification_config — now a real library field on GetProductsWholesaleRequest
-        #   (adcp 6.6 / spec 3.1.1); inherited, present in both sets, no longer a local extension
-        # buying_mode and account are now in the library (adcp 3.9) but overridden locally
-        # (buying_mode widened to str|None, account made optional)
-        local_extensions = {"product_selectors"}
-        assert lib_fields == local_fields - local_extensions, (
-            f"GetProductsRequest drift: lib={lib_fields}, local={local_fields}"
-        )
+        assert lib_fields == local_fields, f"GetProductsRequest drift: lib={lib_fields}, local={local_fields}"
 
         # GetMediaBuyDeliveryRequest - local now matches library exactly
         # (SDK 5.7 provides time_granularity, include_window_breakdown,
@@ -148,7 +139,9 @@ class TestSchemaMatchesLibrary:
         local_fields = set(LocalCreateMediaBuyRequest.model_fields.keys())
         assert lib_fields == local_fields, f"CreateMediaBuyRequest drift: lib={lib_fields}, local={local_fields}"
 
-        # ListCreativesRequest - now extends library, should match
+        # ListCreativesRequest - the buyer shape, matching the library exactly. The
+        # reader's two internal knobs (format, page) are on ListCreativesRequest, which
+        # subclasses this and is what the builder and the _impl are typed to.
         lib_fields = set(LibListCreativesRequest.model_fields.keys())
         local_fields = set(LocalListCreativesRequest.model_fields.keys())
         assert lib_fields == local_fields, f"ListCreativesRequest drift: lib={lib_fields}, local={local_fields}"
@@ -158,7 +151,6 @@ class TestSchemaMatchesLibrary:
         local_fields = set(LocalListCreativeFormatsRequest.model_fields.keys())
         assert lib_fields == local_fields, f"ListCreativeFormatsRequest drift: lib={lib_fields}, local={local_fields}"
 
-        # NOTE: ListAuthorizedPropertiesRequest comparison skipped - type removed from adcp 3.2.0
         # We define it locally in src/core/schemas.py with fields: context, ext, property_tags, publisher_domains
 
         # GetSignalsRequest - adcp 3.9 now includes signal_ids and pagination
@@ -268,166 +260,6 @@ class TestSchemaMatchesLibrary:
             f"CreateMediaBuySuccess.{field_name} drifts from the adcp parent: "
             f"local={local_annotation!r} vs parent={parent_annotation!r} — "
             f"delete the stale local redeclaration and inherit the parent's typed field"
-        )
-
-
-# The four classes that adopt CompletedTaskStatusMixin, split by the obsolescence
-# condition their adoption carries. One spec fact — "status is completed on a
-# synchronous success arm" (dist/schemas/3.1.1/core/protocol-envelope.json) — but
-# two different reasons to hold the declaration, so two different pins:
-#
-#   sync arm     the adcp parent OMITS status, so the mixin SUPPLIES the field.
-#                That adoption dies the day adcp ships it. Graded biconditionally.
-#   media-buy arm the adcp parent already declares status Literal["completed"] and
-#                REQUIRED; the mixin only supplies the DEFAULT so the 25 construction
-#                sites need not thread an invariant literal. Permanent — no SDK bump
-#                obsoletes it, so no biconditional.
-_SYNC_ARM_ADOPTERS = ("SyncAccountsResponse", "SyncCreativesResponse")
-_MEDIA_BUY_ARM_ADOPTERS = ("CreateMediaBuySuccess", "UpdateMediaBuySuccess")
-
-
-def _status_mixin_adopter(local_name: str) -> tuple[type, type]:
-    """Return ``(local class, the adcp parent it extends)`` for one mixin adopter.
-
-    Imported inside the call rather than at module scope on purpose: these classes
-    and the mixin they compose are exactly what the tests below pin, so a missing
-    name must redden the test that asserts it rather than break collection of this
-    whole file.
-    """
-    from adcp.types.aliases import CreateMediaBuySuccessResponse as LibraryCreateMediaBuySuccess
-    from adcp.types.aliases import SyncAccountsSuccessResponse as LibrarySyncAccountsSuccess
-    from adcp.types.aliases import UpdateMediaBuySuccessResponse as LibraryUpdateMediaBuySuccess
-    from adcp.types.generated_poc.creative.sync_creatives_response import (
-        SyncCreativesResponse1 as LibrarySyncCreativesSuccess,
-    )
-
-    from src.core import schemas as local_schemas
-
-    parents = {
-        "SyncAccountsResponse": LibrarySyncAccountsSuccess,
-        "SyncCreativesResponse": LibrarySyncCreativesSuccess,
-        "CreateMediaBuySuccess": LibraryCreateMediaBuySuccess,
-        "UpdateMediaBuySuccess": LibraryUpdateMediaBuySuccess,
-    }
-    return getattr(local_schemas, local_name), parents[local_name]
-
-
-class TestCompletedTaskStatusMixinPin:
-    """The `status: Literal["completed"]` workaround must delete itself, not fossilize.
-
-    Four classes declare the same envelope invariant. Collapsing them onto one
-    `CompletedTaskStatusMixin` is only an improvement if something forces the
-    declaration OUT when it stops being needed — otherwise a single shared copy
-    just outlives four separate ones. These pins are that force.
-    """
-
-    @pytest.mark.parametrize("local_name", _SYNC_ARM_ADOPTERS)
-    def test_sync_arm_mixin_presence_tracks_the_parents_missing_status(self, local_name):
-        """Biconditional: parent-lacks-status <-> mixin-present.
-
-        `("status" not in Parent.model_fields) == (CompletedTaskStatusMixin in
-        Local.__mro__)`, spelled as two directed branches so each failure names the
-        edit that fixes it.
-
-        Asserting only the parent's state (the shape this pin was first designed in)
-        would make EDITING THE ASSERTION the shortest path to green on an adcp bump —
-        i.e. the fossilization this lane exists to prevent. Tying it to the local
-        `__mro__` leaves removing the mixin as the only route.
-
-        The reverse direction is graded for the first time here: mixin dropped while
-        the SDK still omits the field means a required envelope field silently absent
-        from the wire, which is GH #1900 verbatim.
-        """
-        from src.core.schemas._base import CompletedTaskStatusMixin
-
-        local, parent = _status_mixin_adopter(local_name)
-        parent_lacks_status = "status" not in parent.model_fields
-        mixin_present = CompletedTaskStatusMixin in local.__mro__
-
-        if parent_lacks_status:
-            assert mixin_present, (
-                f"{local_name} no longer composes CompletedTaskStatusMixin, but its parent "
-                f"{parent.__name__} still omits `status` — the required envelope field would be "
-                f"silently absent from the wire (GH #1900 verbatim). Restore the mixin."
-            )
-        else:
-            assert not mixin_present, f"adcp now ships status on {parent.__name__} — delete the mixin from this class."
-
-    @pytest.mark.parametrize("local_name", _MEDIA_BUY_ARM_ADOPTERS)
-    def test_media_buy_arm_keeps_the_mixin_and_the_parent_keeps_the_literal(self, local_name):
-        """The mixin stays permanently here; the parent's own declaration must not drift.
-
-        No biconditional: the parent already declares `status`, so the mixin supplies
-        only the default that every construction site relies on. Deleting it is never
-        the right answer, whatever adcp does.
-
-        The parent half is the `:246`-precedent drift catch. A parent that widens
-        `status` to the pinned 8-member TaskStatus would mean our `Literal` silently
-        NARROWS it; a parent that drops `required` or the field entirely changes what
-        the default is compensating for. The Literal narrowing is the SDK's own choice,
-        not the spec's, so it is a live risk rather than a tautology.
-        """
-        from src.core.schemas._base import CompletedTaskStatusMixin
-
-        local, parent = _status_mixin_adopter(local_name)
-        assert CompletedTaskStatusMixin in local.__mro__, (
-            f"{local_name} must compose CompletedTaskStatusMixin permanently — its 25-odd "
-            f"construction sites pass no status= and rely on the default the mixin supplies."
-        )
-
-        parent_field = parent.model_fields.get("status")
-        assert parent_field is not None, (
-            f"adcp dropped `status` from {parent.__name__} — the local Literal is no longer a "
-            f"default over a parent field but an invented one. Re-ground it against the pinned "
-            f"protocol-envelope before keeping it."
-        )
-        assert parent_field.annotation == Literal["completed"], (
-            f"{parent.__name__}.status drifted to {parent_field.annotation!r}; "
-            f"CompletedTaskStatusMixin's Literal['completed'] now silently NARROWS the parent. "
-            f"Re-ground the mixin against the pinned protocol-envelope."
-        )
-        assert parent_field.is_required(), (
-            f"{parent.__name__}.status is no longer required — the mixin's default was there to "
-            f"satisfy a required parent field. Re-check whether the mixin is still warranted here."
-        )
-
-    @pytest.mark.parametrize("local_name", _SYNC_ARM_ADOPTERS + _MEDIA_BUY_ARM_ADOPTERS)
-    def test_composed_status_field_is_optional_and_defaults_to_completed(self, local_name):
-        """Grade the COMPOSED class, which is what production actually depends on.
-
-        The pins above grade the parent and the `__mro__`; neither observes the field
-        the composition ACTUALLY yields. Every construction site of these four classes
-        omits `status=` and relies on this exact composed shape.
-
-        The expected annotation is the parent's where the parent declares one; for the
-        sync arm the parent declares nothing, so the mixin's own declaration is the only
-        authority there is.
-        """
-        from src.core.schemas._base import CompletedTaskStatusMixin
-
-        local, parent = _status_mixin_adopter(local_name)
-        parent_field = parent.model_fields.get("status")
-        expected_annotation = (
-            parent_field.annotation if parent_field is not None else CompletedTaskStatusMixin.__annotations__["status"]
-        )
-
-        assert "status" in local.model_fields, (
-            f"{local_name} composes no `status` field at all — CompletedTaskStatusMixin is not "
-            f"in its bases, or something removed the declaration. The envelope field the pinned "
-            f"protocol-envelope.json marks REQUIRED would be absent from the wire (GH #1900)."
-        )
-        composed = local.model_fields["status"]
-        assert composed.annotation == expected_annotation, (
-            f"{local_name}.status composes to {composed.annotation!r}, not {expected_annotation!r} — "
-            f"something in the bases shadows CompletedTaskStatusMixin's declaration."
-        )
-        assert composed.is_required() is False, (
-            f"{local_name}.status composed as REQUIRED — every construction site omits status= and "
-            f"would now raise. The mixin exists to supply this default."
-        )
-        assert composed.get_default() == "completed", (
-            f"{local_name}.status defaults to {composed.get_default()!r}, not 'completed' — a "
-            f"synchronous success arm reports a status it did not complete."
         )
 
 
@@ -573,14 +405,7 @@ class TestAdCPContract:
                 "provider": "test_provider",
                 "notes": "Test measurement",
             },  # Required per AdCP spec
-            "reporting_capabilities": {
-                "available_reporting_frequencies": ["daily"],
-                "expected_delay_minutes": 60,
-                "timezone": "UTC",
-                "supports_webhooks": True,
-                "available_metrics": ["impressions", "clicks"],
-                "date_range_support": "date_range",
-            },  # Required per AdCP 4.3 spec
+            "reporting_capabilities": default_reporting_capabilities(),  # Required per AdCP 3.1.1
         }
 
         # Should be convertible to AdCP schema
@@ -640,6 +465,7 @@ class TestAdCPContract:
                 "provider": "test_provider",
                 "notes": "Test measurement",
             },  # Required per AdCP spec
+            "reporting_capabilities": default_reporting_capabilities(),
         }
 
         schema = ProductSchema(**model_dict)
@@ -649,11 +475,11 @@ class TestAdCPContract:
 
     def test_principal_model_to_schema(self):
         """Test that Principal model matches AdCP authentication requirements."""
-        model = PrincipalModel(
+        model = PrincipalModel.with_token(
+            plaintext_token_for("test_principal"),
             tenant_id="test_tenant",
             principal_id="test_principal",
             name="Test Advertiser",
-            access_token="secure_token_123",
             platform_mappings={"google_ad_manager": {"advertiser_id": "123456"}, "mock": {"id": "test"}},
         )
 
@@ -736,7 +562,10 @@ class TestAdCPContract:
             estimated_exposures=50000,
             publisher_properties=[
                 create_test_publisher_properties_by_tag(publisher_domain="test.com")
-            ],  # Required per AdCP spec
+            ],  # Required per AdCP spec,
+            # reporting_capabilities is required on the pinned Product (AdCP 3.1.1) and
+            # carries no default, so a construction that omits it cannot validate.
+            reporting_capabilities=default_reporting_capabilities(),
         )
 
         # Verify AdCP-compliant response includes PR #79 fields
@@ -764,7 +593,10 @@ class TestAdCPContract:
             ],
             publisher_properties=[
                 create_test_publisher_properties_by_tag(publisher_domain="test.com")
-            ],  # Required per AdCP spec
+            ],  # Required per AdCP spec,
+            # reporting_capabilities is required on the pinned Product (AdCP 3.1.1) and
+            # carries no default, so a construction that omits it cannot validate.
+            reporting_capabilities=default_reporting_capabilities(),
         )
 
         adcp_response = non_guaranteed_product.model_dump()
@@ -823,10 +655,14 @@ class TestAdCPContract:
                     "pricing_option_id": "cpm_usd_auction",
                     "pricing_model": "cpm",
                     "currency": "USD",
-                    "is_fixed": False,  # Required in adcp 2.4.0+
-                    "price_guidance": {"floor": 1.0, "p50": 5.0},
+                    # V3 auction shape: floor at top level, percentiles in guidance
+                    "floor_price": 1.0,
+                    "price_guidance": {"p50": 5.0},
                 }
             ],
+            # reporting_capabilities is required on the pinned Product (AdCP 3.1.1) and
+            # carries no default, so a construction that omits it cannot validate.
+            reporting_capabilities=default_reporting_capabilities(),
         )
 
         adcp_response = product_with_properties.model_dump()
@@ -856,6 +692,9 @@ class TestAdCPContract:
                         rate=10.0,
                     )
                 ],
+                # reporting_capabilities is required on the pinned Product (AdCP 3.1.1) and
+                # carries no default, so a construction that omits it cannot validate.
+                reporting_capabilities=default_reporting_capabilities(),
                 # Missing publisher_properties
             )
 
@@ -907,6 +746,7 @@ class TestAdCPContract:
         # Per AdCP spec, packages is required and budget is at package level
         # In adcp 3.6.0, brand_manifest is replaced by brand (BrandReference with domain field)
         request = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "nike.com"},  # Required in adcp 3.6.0 (was brand_manifest)
             # Required per AdCP spec
             packages=[
@@ -943,6 +783,38 @@ class TestAdCPContract:
         # format_obj.type is an enum, check its value
         # type removed from Format in adcp 3.12
         assert format_obj.name == "Native Feed Ad"
+
+    def test_format_canonical_parameters_round_trip(self):
+        """canonical_parameters keeps format_kind and params (3.1.1 product-format-declaration.json
+        requires both). The SDK's generated declaration has neither field and ignores extras, so a
+        creative agent's catalog came back as {"canonical_formats_only": false, "experimental": false}."""
+        from tests.helpers.adcp_factories import create_test_format_id
+
+        declaration = {"format_kind": "image", "params": {"width": 300, "height": 250, "pixel_ratios": [2]}}
+        format_obj = Format.model_validate(
+            {
+                "format_id": create_test_format_id("display_300x250_image_2x"),
+                "name": "Medium Rectangle - Image (2x)",
+                "canonical": {"kind": "image"},
+                "canonical_parameters": declaration,
+            }
+        )
+
+        dumped = format_obj.model_dump(mode="json", exclude_none=True)["canonical_parameters"]
+        assert dumped == {**declaration, "canonical_formats_only": False, "experimental": False}
+
+    def test_list_creative_formats_response_round_trips_the_reference_catalog(self):
+        """A response re-parsed from its own wire serializes to the same wire, as a buyer reads it.
+
+        The response inherited the library ``formats`` type, so the re-parse rebuilt each entry as
+        the library Format and dropped canonical_parameters.format_kind and .params."""
+        from src.core.format_cache import load_reference_formats
+
+        wire = ListCreativeFormatsResponse(formats=list(load_reference_formats())).model_dump(mode="json")
+        # The catalog must carry declarations, or the round-trip below has nothing to lose.
+        assert any("format_kind" in (f.get("canonical_parameters") or {}) for f in wire["formats"])
+
+        assert ListCreativeFormatsResponse.model_validate(wire).model_dump(mode="json") == wire
 
     def test_field_mapping_consistency(self):
         """Test that field names are consistent between models and schemas."""
@@ -1008,6 +880,9 @@ class TestAdCPContract:
                         rate=10.0,
                     )
                 ],
+                # reporting_capabilities is required on the pinned Product (AdCP 3.1.1) and
+                # carries no default, so a construction that omits it cannot validate.
+                reporting_capabilities=default_reporting_capabilities(),
             )
             # delivery_type is an enum, check its value
             assert product.delivery_type.value in valid_delivery_types
@@ -1032,6 +907,9 @@ class TestAdCPContract:
                         rate=10.0,
                     )
                 ],
+                # reporting_capabilities is required on the pinned Product (AdCP 3.1.1) and
+                # carries no default, so a construction that omits it cannot validate.
+                reporting_capabilities=default_reporting_capabilities(),
             )
 
     def test_adcp_response_excludes_internal_fields(self):
@@ -1061,6 +939,9 @@ class TestAdCPContract:
                         rate=10.0,
                     )
                 ],
+                # reporting_capabilities is required on the pinned Product (AdCP 3.1.1) and
+                # carries no default, so a construction that omits it cannot validate.
+                reporting_capabilities=default_reporting_capabilities(),
             )
         ]
 
@@ -1087,7 +968,6 @@ class TestAdCPContract:
                 "auto_intenders_q1_2025",
                 "high_income_households",
             ],
-            key_value_pairs={"custom_audience_1": "abc123", "lookalike_model": "xyz789"},
         )
 
         # Verify signals are supported in Targeting schema
@@ -1097,7 +977,9 @@ class TestAdCPContract:
             "auto_intenders_q1_2025",
             "high_income_households",
         ]
-        assert targeting.key_value_pairs is not None
+        # ``key_value_pairs`` was seeded and asserted here. Targeting no longer declares it
+        # (src/core/schemas/_base.py — the pin declares no managed-only field), and the
+        # subject of this test is signal support, which the assertion above grades.
 
     def test_creative_adcp_compliance(self):
         """Test that Creative model complies with AdCP listing Creative schema.
@@ -1106,7 +988,7 @@ class TestAdCPContract:
         - Public model_dump() contains: creative_id, format_id, name, status,
           created_date, updated_date, assets, tags (listing schema fields)
         - Internal fields (principal_id) are excluded from model_dump()
-          but available via model_dump_internal()
+          but carried on the model as attributes
         """
 
         # Test creating a Creative with all fields (some public, some internal)
@@ -1147,14 +1029,12 @@ class TestAdCPContract:
         assert adcp_response["format_id"]["id"] == "display_300x250", "Format ID should be display_300x250"
         assert "agent_url" in adcp_response["format_id"], "format_id should have agent_url"
 
-        # Test internal model_dump includes all fields
-        internal_response = creative.model_dump_internal()
-        assert "principal_id" in internal_response, "principal_id missing from internal response"
-        assert "status" in internal_response, "status missing from internal response"
-
-        # Verify internal response has principal_id that external doesn't
-        internal_only_fields = set(internal_response.keys()) - set(adcp_response.keys())
-        assert "principal_id" in internal_only_fields, "principal_id should be internal-only"
+        # The internal half of the split: principal_id is CARRIED on the model, and the
+        # attribute is what existing means for a Field(exclude=True) field. There is no
+        # second dump shape to read it out of (CLAUDE.md pattern 4 — one serializer seat).
+        assert creative.principal_id == "test_principal", "principal_id must be carried on the model"
+        # status is on BOTH: a spec field, so the attribute and the wire agree.
+        assert creative.status == adcp_response["status"]
 
     def test_signal_adcp_compliance(self):
         """Test that Signal model complies with AdCP get-signals-response schema."""
@@ -1239,22 +1119,19 @@ class TestAdCPContract:
         assert signal.signal_agent_segment_id == "signal_auto_intenders_q1_2025", "Primary ID should work"
         assert signal.signal_type == "marketplace", "signal_type field should work"
 
-        # Test internal model_dump includes all fields
-        internal_response = signal.model_dump_internal()
+        # The internal half of the split: every Field(exclude=True) field is CARRIED on the
+        # model, and the attribute is what existing means. There is no second dump shape to
+        # read them out of (CLAUDE.md pattern 4 — one serializer seat).
         for field in internal_fields:
-            assert field in internal_response, f"Internal field '{field}' missing from internal response"
+            assert getattr(signal, field) is not None, f"Internal field '{field}' not carried on the model"
+        assert signal.deployments[0].scope == "account-specific", "deployment scope not carried on the model"
 
         # Verify field count expectations (flexible to allow AdCP spec evolution)
         assert len(adcp_response) >= 8, f"AdCP response should have at least 8 core fields, got {len(adcp_response)}"
-        assert len(internal_response) >= len(adcp_response), (
-            "Internal response should have at least as many fields as external response"
-        )
 
-        # Verify internal response has more fields than external (due to internal fields)
-        internal_only_fields = set(internal_response.keys()) - set(adcp_response.keys())
-        assert len(internal_only_fields) >= 3, (
-            f"Expected at least 3 internal-only fields, got {len(internal_only_fields)}"
-        )
+        # Every internal name is off the wire while the attribute above holds it — the split
+        # itself, asserted with the two mechanisms that survive.
+        assert not set(internal_fields) & set(adcp_response), "an internal field reached the wire"
 
     def test_package_adcp_compliance(self):
         """Test that Package model complies with AdCP package schema."""
@@ -1321,24 +1198,27 @@ class TestAdCPContract:
             for assignment in adcp_response["creative_assignments"]:
                 assert isinstance(assignment, dict), "each creative assignment must be object"
 
-        # Test internal model_dump includes all fields
-        internal_response = package.model_dump_internal()
+        # There is no second, internal dump any more, and no internal field for one to
+        # carry. This block used to call a model_dump_internal() helper and assert each
+        # internal name WAS present in it, then assert the internal dump had at least three
+        # keys the AdCP dump lacked -- a two-dump design where the wire shape was produced by
+        # stripping. Both the helper and the seven internal declarations on Package are gone:
+        # the model declares what the pin declares, and extra="ignore" means a value handed
+        # in under one of the removed names is not kept at all. That is what makes the
+        # absence assertions above a guarantee rather than a coincidence, so it is asserted
+        # here instead of the old helper's behaviour.
+        assert type(package).model_config.get("extra") == "ignore", (
+            "Package must refuse to keep undeclared keys; under the library parent's "
+            "extra='allow' every name above would be stored and then serialized"
+        )
         for field in internal_fields:
-            assert field in internal_response, f"Internal field '{field}' missing from internal response"
+            assert field not in type(package).model_fields, f"'{field}' must not be declared on the wire model"
+        assert not package.model_extra, f"undeclared input was retained: {package.model_extra}"
 
         # Verify field count expectations (flexible to allow AdCP spec evolution)
         # Package has 1 required field (package_id) + any optional fields that are set
         # We set several optional fields above, so expect at least 1 field
         assert len(adcp_response) >= 1, f"AdCP response should have at least required fields, got {len(adcp_response)}"
-        assert len(internal_response) >= len(adcp_response), (
-            "Internal response should have at least as many fields as external response"
-        )
-
-        # Verify internal response has more fields than external (due to internal fields)
-        internal_only_fields = set(internal_response.keys()) - set(adcp_response.keys())
-        assert len(internal_only_fields) >= 3, (
-            f"Expected at least 3 internal-only fields, got {len(internal_only_fields)}"
-        )
 
     def test_package_ignores_invalid_fields(self):
         """Test that Package schema ignores fields that don't exist in AdCP spec.
@@ -1383,11 +1263,6 @@ class TestAdCPContract:
             device_type_any_of=["desktop", "mobile", "tablet"],
             os_any_of=["windows", "macos", "ios", "android"],
             browser_any_of=["chrome", "firefox", "safari"],
-            key_value_pairs={"aee_segment": "high_value", "aee_score": "0.85"},  # Managed-only
-            tenant_id="test_tenant",  # Internal
-            created_at=datetime.now(),  # Internal
-            updated_at=datetime.now(),  # Internal
-            metadata={"campaign_type": "awareness"},  # Internal
         )
 
         # Verify isinstance — Targeting IS a TargetingOverlay
@@ -1412,16 +1287,13 @@ class TestAdCPContract:
             if getattr(targeting, field) is not None:
                 assert field in adcp_response, f"AdCP optional field '{field}' missing from response"
 
-        # Verify managed and internal fields are excluded from AdCP response
-        managed_internal_fields = [
-            "key_value_pairs",  # Managed-only field
-            "tenant_id",
-            "created_at",
-            "updated_at",
-            "metadata",  # Internal fields
-        ]
-        for field in managed_internal_fields:
-            assert field not in adcp_response, f"Managed/internal field '{field}' exposed in AdCP response"
+        # Targeting declares NO internal field, so it has no internal/wire split to grade.
+        # key_value_pairs, tenant_id, created_at, updated_at and metadata were all removed
+        # from the model (src/core/schemas/_base.py — the pinned core/targeting.json
+        # declares no managed-only field, and a seller-side value that must persist belongs
+        # on a repository-owned carrier). An undeclared key is now refused on construction
+        # in dev, so the wire shape is exactly what the fields declare.
+        assert not set(adcp_response) - set(Targeting.model_fields), "Targeting dumped a field it does not declare"
 
         # Verify v3 geo structure
         if adcp_response.get("geo_countries"):
@@ -1444,27 +1316,8 @@ class TestAdCPContract:
             for browser in adcp_response["browser_any_of"]:
                 assert browser in valid_browsers, f"Invalid browser: {browser}"
 
-        # Test internal model_dump includes all fields
-        internal_response = targeting.model_dump_internal()
-        for field in managed_internal_fields:
-            assert field in internal_response, f"Managed/internal field '{field}' missing from internal response"
-
-        # Test managed fields are accessible internally
-        assert internal_response["key_value_pairs"]["aee_segment"] == "high_value", (
-            "Managed field should be in internal response"
-        )
-
         # Verify field count expectations (flexible - targeting has many optional fields)
         assert len(adcp_response) >= 9, f"AdCP response should have at least 9 fields, got {len(adcp_response)}"
-        assert len(internal_response) >= len(adcp_response), (
-            "Internal response should have at least as many fields as external response"
-        )
-
-        # Verify internal response has more fields than external (due to managed/internal fields)
-        internal_only_fields = set(internal_response.keys()) - set(adcp_response.keys())
-        assert len(internal_only_fields) >= 4, (
-            f"Expected at least 4 internal/managed-only fields, got {len(internal_only_fields)}"
-        )
 
     def test_budget_adcp_compliance(self):
         """Test that Budget model complies with AdCP budget schema."""
@@ -1633,97 +1486,6 @@ class TestAdCPContract:
             f"CreativeAssignment response should have at least 4 core fields, got {len(adcp_response)}"
         )
 
-    def test_sync_creatives_request_adcp_compliance(self):
-        """Test that SyncCreativesRequest model complies with AdCP v2.4 sync-creatives schema."""
-        # Create Creative objects with AdCP v1 spec-compliant format
-        creative = Creative(
-            creative_id="creative_123",
-            variants=[],
-            name="Test Creative",
-            format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
-            assets=build_assets(
-                image_spec("banner_image", url="https://example.com/creative.jpg"),
-                url_spec("click_url", url="https://example.com/click", url_type="clickthrough"),
-            ),
-            tags=["sports", "premium"],
-            # Internal fields (added by sales agent during processing)
-            principal_id="principal_456",
-            created_date=datetime.now(tz=UTC),
-            updated_date=datetime.now(tz=UTC),
-        )
-
-        # Test with spec-compliant fields only (adcp 3.9)
-        from adcp.types.generated_poc.creative.sync_creatives_request import (
-            Assignment,
-        )  # TODO: no stable alias in adcp.types  # TODO: no stable alias in adcp.types
-
-        request = SyncCreativesRequest(
-            creatives=[creative],
-            assignments=[
-                Assignment(creative_id="creative_123", package_id="pkg_1"),
-                Assignment(creative_id="creative_123", package_id="pkg_2"),
-            ],
-            # creative_ids: AdCP 2.5 replaces the deprecated patch parameter
-            delete_missing=False,
-            dry_run=False,
-            validation_mode="strict",
-        )
-
-        # Test model_dump (SyncCreativesRequest doesn't have internal fields)
-        adcp_response = request.model_dump()
-
-        # Verify required AdCP fields are present
-        adcp_required_fields = ["creatives"]
-        for field in adcp_required_fields:
-            assert field in adcp_response, f"Required AdCP field '{field}' missing from response"
-            assert adcp_response[field] is not None, f"Required AdCP field '{field}' is None"
-
-        # Verify AdCP v2.5 optional fields - some may be excluded when None
-        # Note: 'patch' was removed in AdCP 2.5, replaced by 'creative_ids'
-        # Fields with default values should be present, fields with None defaults may be excluded
-        adcp_fields_with_defaults = ["delete_missing", "dry_run", "validation_mode"]
-        for field in adcp_fields_with_defaults:
-            assert field in adcp_response, f"AdCP field '{field}' missing from response"
-
-        # Optional fields that may be None: creative_ids, assignments, context, push_notification_config
-        # These are correctly excluded from output when None
-
-        # Verify non-spec fields are NOT present
-        non_spec_fields = ["media_buy_id", "assign_to_packages", "upsert", "patch"]
-        for field in non_spec_fields:
-            assert field not in adcp_response, f"Non-spec field '{field}' should not be in response"
-
-        # Verify creatives array structure
-        assert isinstance(adcp_response["creatives"], list), "Creatives must be an array"
-        assert len(adcp_response["creatives"]) > 0, "Creatives array must not be empty"
-
-        # Test creative object structure
-        # Creative extends listing Creative: model_dump() contains listing fields
-        # (creative_id, format_id, name, status, created_date, updated_date, assets, tags)
-        # Only principal_id is internal/excluded
-        creative_obj = adcp_response["creatives"][0]
-        creative_public_fields = ["creative_id", "format_id", "name", "status", "created_date", "updated_date"]
-        for field in creative_public_fields:
-            assert field in creative_obj, f"Creative public field '{field}' missing"
-            assert creative_obj[field] is not None, f"Creative public field '{field}' is None"
-
-        # Delivery-only fields should NOT be present
-        for field in ["variants", "variant_count", "totals", "media_buy_id"]:
-            assert field not in creative_obj, f"Delivery field '{field}' should not be in listing response"
-
-        # Internal fields should NOT be in the response
-        assert "principal_id" not in creative_obj, "Internal field 'principal_id' exposed in response"
-
-        # Verify assignments structure (adcp 3.9: list of Assignment objects)
-        if adcp_response.get("assignments"):
-            assert isinstance(adcp_response["assignments"], list), "Assignments must be a list"
-            for assignment in adcp_response["assignments"]:
-                assert "creative_id" in assignment, "Assignment must have creative_id"
-                assert "package_id" in assignment, "Assignment must have package_id"
-
-        # Verify field count (flexible due to optional fields)
-        assert len(adcp_response) >= 1, f"SyncCreativesRequest should have at least 1 field, got {len(adcp_response)}"
-
     def test_sync_creatives_response_adcp_compliance(self):
         """Test that SyncCreativesResponse model complies with AdCP sync-creatives response schema."""
         from src.core.schemas import SyncCreativeResult
@@ -1865,7 +1627,6 @@ class TestAdCPContract:
         """Test that ListCreativesResponse model complies with AdCP list-creatives response schema."""
         creative1 = Creative(
             creative_id="creative_123",
-            variants=[],
             name="Test Creative 1",
             format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
             assets=build_assets(
@@ -1881,7 +1642,6 @@ class TestAdCPContract:
 
         creative2 = Creative(
             creative_id="creative_456",
-            variants=[],
             name="Test Creative 2",
             format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_1280x720"),
             assets=build_assets(
@@ -1956,268 +1716,31 @@ class TestAdCPContract:
             f"Response should have at least {len(required_fields)} required fields, got {len(adcp_response)}"
         )
 
-    def test_create_media_buy_response_adcp_compliance(self):
-        """Test that CreateMediaBuyResponse complies with AdCP create-media-buy-response schema.
-
-        Per AdCP PR #186, responses use oneOf discriminator for atomic semantics.
-        Success responses have media_buy_id + packages, error responses have errors array.
-        """
-        # Create success response with domain fields only (per AdCP PR #113)
-        # Protocol fields (status, task_id, message) are added by transport layer
-        # Note: creative_deadline must be timezone-aware datetime (adcp 2.0.0)
-        # Note: packages in response require package_id and paused field (adcp 2.12.0+)
-        from src.core.schemas import CreateMediaBuyError, CreateMediaBuySuccess
-
-        successful_response = CreateMediaBuySuccess.carrier(
-            media_buy_id="mb_12345",
-            packages=[{"package_id": "pkg_1", "paused": False}],
-            creative_deadline=datetime.now(UTC) + timedelta(days=7),
-        )
-
-        # Test successful response AdCP compliance
-        adcp_response = successful_response.model_dump()
-
-        # Verify required AdCP domain fields present and non-null
-        required_fields = []
-        for field in required_fields:
-            assert field in adcp_response, f"Required AdCP field '{field}' missing from response"
-            assert adcp_response[field] is not None, f"Required AdCP field '{field}' is None"
-
-        # Verify optional AdCP domain fields that were set are present with valid values
-        # Per AdCP spec, optional fields with None values are omitted (not present with null)
-        assert "media_buy_id" in adcp_response, "media_buy_id was set, should be present"
-        assert isinstance(adcp_response["media_buy_id"], str), "media_buy_id must be string"
-        assert len(adcp_response["media_buy_id"]) > 0, "media_buy_id must not be empty"
-
-        assert "packages" in adcp_response, "packages was set, should be present"
-        assert isinstance(adcp_response["packages"], list), "packages must be array"
-
-        assert "creative_deadline" in adcp_response, "creative_deadline was set, should be present"
-
-        # Per oneOf constraint: success responses cannot have errors field
-        assert "errors" not in adcp_response, "Success response cannot have errors field"
-
-        # Test error response (oneOf error branch)
-        error_response = CreateMediaBuyError(
-            errors=[{"code": "test_error", "message": "test error"}],
-        )
-        adcp_error = error_response.model_dump()
-        assert "errors" in adcp_error, "Error response must have errors field"
-        assert isinstance(adcp_error["errors"], list), "errors must be array"
-        assert len(adcp_error["errors"]) > 0, "errors array must not be empty"
-
-        # Per oneOf constraint: error responses cannot have success fields
-        assert "media_buy_id" not in adcp_error, "Error response cannot have media_buy_id"
-        assert "packages" not in adcp_error, "Error response cannot have packages"
-
-        # Test that Union type works for type hints
-
-        success_via_union: CreateMediaBuyResponse = CreateMediaBuySuccess.carrier(
-            media_buy_id="mb_union",
-            packages=[],
-        )
-        error_via_union: CreateMediaBuyResponse = CreateMediaBuyError(
-            errors=[{"code": "test", "message": "test"}],
-        )
-
-        # Verify Union type assignments work
-        assert isinstance(success_via_union, CreateMediaBuySuccess)
-        assert isinstance(error_via_union, CreateMediaBuyError)
-
-        # Verify field count for success response
-        assert len(adcp_response) >= 3, (
-            f"CreateMediaBuySuccess should have at least 3 required fields, got {len(adcp_response)}"
-        )
-
-    def test_get_products_response_adcp_compliance(self):
-        """Test that GetProductsResponse complies with AdCP get-products-response schema."""
-        # Create Product using the actual Product model (not ProductSchema)
-        from src.core.schemas import Product as ProductModel
-        from tests.helpers.adcp_factories import (
-            create_test_cpm_pricing_option,
-            create_test_publisher_properties_by_tag,
-        )
-
-        product = ProductModel(
-            product_id="prod_1",
-            name="Premium Display",
-            description="High-quality display advertising",
-            format_ids=[
-                {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
-                {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_728x90"},
-            ],
-            delivery_type="guaranteed",
-            delivery_measurement={"provider": "test_provider", "notes": "Test measurement"},  # Required per AdCP spec
-            measurement=None,
-            creative_policy=None,
-            is_custom=False,
-            publisher_properties=[create_test_publisher_properties_by_tag(publisher_domain="test.com")],
-            pricing_options=[
-                create_test_cpm_pricing_option(
-                    pricing_option_id="cpm_usd_fixed",
-                    currency="USD",
-                    rate=10.0,
-                )
-            ],
-        )
-
-        # Create response with products
-        response = GetProductsResponse(
-            products=[product],
-            errors=[],
-        )
-
-        # Test AdCP-compliant response
-        adcp_response = response.model_dump()
-
-        # Verify required AdCP fields present and non-null
-        required_fields = ["products"]
-        for field in required_fields:
-            assert field in adcp_response, f"Required AdCP field '{field}' missing from response"
-            assert adcp_response[field] is not None, f"Required AdCP field '{field}' is None"
-
-        # Verify optional AdCP fields present (can be null)
-        # Note: message field removed - handled via __str__() for protocol layer
-        optional_fields = ["errors"]
-        for field in optional_fields:
-            assert field in adcp_response, f"Optional AdCP field '{field}' missing from response"
-
-        # Verify message is provided via __str__() not as schema field
-        assert "message" not in adcp_response, "message should not be in schema (use __str__() instead)"
-        assert str(response) == "Found 1 product that matches your requirements."
-
-        # Verify optional status field (AdCP PR #77 - MCP Status System)
-        # Status field is optional and only present when explicitly set
-        if "status" in adcp_response:
-            assert isinstance(adcp_response["status"], (str, Enum)), "status must be string/enum when present"
-
-        # Verify specific field types and constraints
-        assert isinstance(adcp_response["products"], list), "products must be array"
-        assert len(adcp_response["products"]) > 0, "products array should not be empty"
-
-        # Verify product structure - Product.model_dump() should convert formats -> format_ids
-        product_data = adcp_response["products"][0]
-        assert "product_id" in product_data, "product must have product_id"
-        assert "format_ids" in product_data, "product must have format_ids (not formats)"
-        assert "formats" not in product_data, "product should not have formats field (use format_ids)"
-
-        # Test empty response case
-        empty_response = GetProductsResponse(products=[], errors=[])
-
-        empty_adcp_response = empty_response.model_dump()
-        assert empty_adcp_response["products"] == [], "Empty products list should be empty array"
-        # Verify __str__() provides appropriate empty message
-        assert str(empty_response) == "No products matched your requirements."
-        # SDK 5.7 protocol envelope includes cache_scope, replayed, status as defaults
-        assert "products" in empty_adcp_response, "products field must be present"
-        assert "errors" in empty_adcp_response, "errors field must be present"
-
-    def test_list_creative_formats_response_adcp_compliance(self):
-        """Test that ListCreativeFormatsResponse complies with AdCP list-creative-formats-response schema."""
-
-        # Create response with formats using actual Format schema
-        response = ListCreativeFormatsResponse(
-            formats=[
-                Format(
-                    format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
-                    name="Medium Rectangle",
-                    type="display",
-                    is_standard=True,
-                    iab_specification="IAB Display",
-                    requirements={"width": 300, "height": 250, "file_types": ["jpg", "png", "gif"]},
-                    assets=None,  # Use new 'assets' field (assets_required is deprecated)
-                )
-            ],
-            # errors omitted - per AdCP spec, optional fields with None/empty values should be omitted
-        )
-
-        # Test AdCP-compliant response
-        adcp_response = response.model_dump()
-
-        # Verify required AdCP fields present and non-null
-        required_fields = ["formats"]
-        for field in required_fields:
-            assert field in adcp_response, f"Required AdCP field '{field}' missing from response"
-            assert adcp_response[field] is not None, f"Required AdCP field '{field}' is None"
-
-        # Verify optional AdCP fields with None values are omitted (not present with null)
-        # Note: message, adcp_version, status fields removed - handled via protocol envelope
-        assert "errors" not in adcp_response, "errors with None/empty value should be omitted"
-        assert "creative_agents" not in adcp_response, "creative_agents with None value should be omitted"
-
-        # Verify message is provided via __str__() not as schema field
-        assert "message" not in adcp_response, "message should not be in schema (use __str__() instead)"
-        assert str(response) == "Found 1 creative format."
-
-        # Verify specific field types and constraints
-        assert isinstance(adcp_response["formats"], list), "formats must be array"
-
-        # Verify format structure (using actual Format schema fields)
-        if len(adcp_response["formats"]) > 0:
-            format_obj = adcp_response["formats"][0]
-            assert "format_id" in format_obj, "format must have format_id"
-            assert "name" in format_obj, "format must have name"
-            assert "type" in format_obj, "format must have type"
-            # Note: width/height are in requirements dict, not direct fields
-
-        # Verify field count - only required fields + non-None optional fields
-        # formats is required; errors and creative_agents are omitted (None values)
-        assert len(adcp_response) >= 1, (
-            f"ListCreativeFormatsResponse should have at least required fields, got {len(adcp_response)}"
-        )
-
-    def test_update_media_buy_response_adcp_compliance(self):
-        """Test that UpdateMediaBuyResponse complies with AdCP update-media-buy-response schema.
-
-        Per AdCP PR #186, responses use oneOf discriminator for atomic semantics.
-        Success responses have media_buy_id, error responses have errors array.
-        """
-        # Create successful update response (oneOf success branch)
-        # Note: implementation_date must be timezone-aware datetime (adcp 2.0.0)
-        # Note: affected_packages now uses full Package type with paused field (adcp 2.12.0+)
-        from src.core.schemas import UpdateMediaBuyError, UpdateMediaBuySuccess
-
-        response = UpdateMediaBuySuccess.carrier(
-            media_buy_id="buy_123",
-            implementation_date=datetime.now(UTC) + timedelta(hours=1),
-            affected_packages=[{"package_id": "pkg_1", "paused": False}],
-        )
-
-        # Test AdCP-compliant response
-        adcp_response = response.model_dump()
-
-        # Verify required AdCP fields present and non-null
-        required_fields = ["media_buy_id"]
-        for field in required_fields:
-            assert field in adcp_response, f"Required AdCP field '{field}' missing from response"
-            assert adcp_response[field] is not None, f"Required AdCP field '{field}' is None"
-
-        # Verify affected_packages if provided
-        if "affected_packages" in adcp_response:
-            assert isinstance(adcp_response["affected_packages"], list), "affected_packages must be array"
-
-        # Note: implementation_date and affected_packages are internal fields
-        # excluded by model_dump() per AdCP PR #113
-        # They are only included in model_dump_internal() for database storage
-
-        # Per oneOf constraint: success responses cannot have errors field
-        assert "errors" not in adcp_response, "Success response cannot have errors field"
-
-        # Test error response (oneOf error branch)
-        error_response = UpdateMediaBuyError(
-            errors=[{"code": "update_failed", "message": "Update operation failed"}],
-        )
-        adcp_error = error_response.model_dump()
-        assert "errors" in adcp_error, "Error response must have errors field"
-        assert len(adcp_error["errors"]) > 0, "errors array must not be empty"
-
-        # Per oneOf constraint: error responses cannot have success fields
-        assert "media_buy_id" not in adcp_error, "Error response cannot have media_buy_id"
-
-        # Verify field count for success response (media_buy_id required)
-        assert len(adcp_response) >= 2, (
-            f"UpdateMediaBuySuccess should have at least 2 required fields, got {len(adcp_response)}"
-        )
+    # REMOVED: test_create_media_buy_response_adcp_compliance and
+    # test_update_media_buy_response_adcp_compliance. Both were field-PRESENCE contracts
+    # over fields this model INHERITS -- media_buy_id, packages, creative_deadline,
+    # affected_packages and revision are all declared by the adcp parent, not redeclared
+    # here -- so they asserted that Python inheritance works. CLAUDE.md states the rule:
+    # "There is deliberately no suite comparing a model's field set to the pinned schema."
+    #
+    # The create case had already rotted past the point of grading anything: it read
+    # ``required_fields = []`` and then looped over it, so both of its carefully-worded
+    # assertions ("Required AdCP field 'X' missing from response") had never once
+    # executed. Its remaining checks were presence/type plus ``len(adcp_response) >= 3``,
+    # a floor nothing can trip.
+    #
+    # Where the obligations live now:
+    #   - the parent's TYPED annotations (account, sandbox, creative_deadline,
+    #     valid_actions, context):
+    #     TestSchemaMatchesLibrary::test_create_media_buy_success_inherits_parent_typed_annotations
+    #     -- derived from the library parent per field, so it grades drift rather than presence;
+    #   - the success branch carrying no ``errors`` key:
+    #     tests/unit/test_property_list_unsupported_advisory.py::TestSuccessEnvelopeErrorsField
+    #     (``errors`` is OUR field, absent from the library parent, so that one can fail);
+    #   - no key outside the pin on the wire:
+    #     tests/integration/test_a2a_response_compliance.py (the pinned create/update roots
+    #     leave additionalProperties unset, so schema validation cannot see a stray key --
+    #     that oracle is the only thing that can).
 
     def test_get_media_buy_delivery_request_adcp_compliance(self):
         """Test that GetMediaBuyDeliveryRequest complies with AdCP get-media-buy-delivery-request schema."""
@@ -2297,7 +1820,9 @@ class TestAdCPContract:
             PackageDelivery,
         )
 
-        # Create AdCP-compliant delivery data using new models
+        # Create AdCP-compliant delivery data using new models.
+        # pricing_model/rate/currency are in the by_package item's `required` set and are
+        # non-nullable, so a compliance fixture that omits them is not AdCP-compliant.
         package_delivery = PackageDelivery(
             package_id="pkg_123",
             impressions=25000.0,
@@ -2305,6 +1830,7 @@ class TestAdCPContract:
             clicks=125.0,
             completed_views=None,
             pacing_index=1.0,
+            **package_pricing_fields(rate=20.03),
         )
 
         daily_breakdown = DailyBreakdown(date="2025-01-15", impressions=1250.0, spend=25.05)
@@ -2516,73 +2042,6 @@ class TestAdCPContract:
         # Verify field count expectations
         assert len(adcp_response) == 2
 
-    def test_list_authorized_properties_request_adcp_compliance(self):
-        """Test that ListAuthorizedPropertiesRequest complies with AdCP list-authorized-properties-request schema."""
-        # Create request with optional fields per spec
-        # Per AdCP spec: context, ext, publisher_domains, property_tags are all optional
-        request = ListAuthorizedPropertiesRequest(publisher_domains=["example.com", "news.example.com"])
-
-        # Test AdCP-compliant response - use exclude_none=False to see all fields
-        adcp_response = request.model_dump(exclude_none=False)
-
-        # Per AdCP spec, all fields are optional
-        optional_fields = ["context", "ext", "publisher_domains", "property_tags"]
-        for field in optional_fields:
-            assert field in adcp_response
-
-        # Verify publisher_domains is array when present
-        if adcp_response["publisher_domains"] is not None:
-            assert isinstance(adcp_response["publisher_domains"], list)
-
-        # Verify field count expectations - all 4 optional fields
-        assert len(adcp_response) == 4
-
-    def test_list_authorized_properties_response_adcp_compliance(self):
-        """Test that ListAuthorizedPropertiesResponse complies with AdCP v2.4 list-authorized-properties-response schema."""
-        # Create response with required fields only (per AdCP spec, optional fields should be omitted if not set)
-        # Per /schemas/v1/media-buy/list-authorized-properties-response.json, only these fields are spec-compliant:
-        # - publisher_domains (required)
-        # - primary_channels, primary_countries, portfolio_description, advertising_policies, last_updated, errors (optional)
-        response = ListAuthorizedPropertiesResponse(
-            publisher_domains=["example.com"],
-            # All optional fields omitted - per AdCP spec, optional fields with None/empty values should be omitted
-        )
-
-        # Test AdCP-compliant response
-        adcp_response = response.model_dump()
-
-        # Verify required AdCP fields present and non-null
-        required_fields = ["publisher_domains"]
-        for field in required_fields:
-            assert field in adcp_response
-            assert adcp_response[field] is not None
-
-        # Verify publisher_domains is array
-        assert isinstance(adcp_response["publisher_domains"], list)
-
-        # Verify optional fields with None values are omitted per AdCP spec
-        assert "errors" not in adcp_response, "errors with None/empty value should be omitted"
-        assert "primary_channels" not in adcp_response, "primary_channels with None value should be omitted"
-        assert "primary_countries" not in adcp_response, "primary_countries with None value should be omitted"
-        assert "portfolio_description" not in adcp_response, "portfolio_description with None value should be omitted"
-        assert "advertising_policies" not in adcp_response, "advertising_policies with None value should be omitted"
-        assert "last_updated" not in adcp_response, "last_updated with None value should be omitted"
-
-        # Verify message is provided via __str__() not as schema field
-        assert str(response) == "Found 1 authorized publisher domain."
-
-        # Test with optional fields set to non-None values
-        response_with_optionals = ListAuthorizedPropertiesResponse(
-            publisher_domains=["example.com", "example.org"],
-            primary_channels=["display", "video"],
-            advertising_policies="No tobacco ads",
-        )
-        adcp_with_optionals = response_with_optionals.model_dump()
-        assert "primary_channels" in adcp_with_optionals, "Set optional fields should be present"
-        assert "advertising_policies" in adcp_with_optionals, "Set optional fields should be present"
-        assert isinstance(adcp_with_optionals["primary_channels"], list)
-        assert isinstance(adcp_with_optionals["advertising_policies"], str)
-
     def test_get_signals_request_adcp_compliance(self):
         """Test that GetSignalsRequest model complies with AdCP get-signals-request schema."""
         # adcp 3.9: GetSignalsRequest is a regular model (not RootModel).
@@ -2656,63 +2115,6 @@ class TestAdCPContract:
         # Verify field count
         assert len(adcp_response) >= 2, f"AdCP request should have at least 2 fields, got {len(adcp_response)}"
 
-    def test_update_media_buy_request_adcp_compliance(self):
-        """Test that UpdateMediaBuyRequest model complies with AdCP update-media-buy-request schema."""
-        # ✅ FIXED: Implementation now matches AdCP spec
-        # AdCP spec requires: media_buy_id, optional active/start_time/end_time/budget/packages
-
-        from datetime import UTC, datetime
-
-        from src.core.schemas import AdCPPackageUpdate, Budget, UpdateMediaBuyRequest
-
-        # Test AdCP-compliant request with media_buy_id (oneOf option 1)
-        adcp_request_id = UpdateMediaBuyRequest(
-            media_buy_id="mb_12345",
-            paused=False,  # adcp 2.12.0+: replaced 'active' with 'paused'
-            start_time=datetime(2025, 2, 1, 9, 0, 0, tzinfo=UTC),
-            end_time=datetime(2025, 2, 28, 23, 59, 59, tzinfo=UTC),
-            budget=Budget(total=5000.0, currency="USD", pacing="even"),
-            packages=[AdCPPackageUpdate(package_id="pkg_123", paused=False, budget=2500.0)],  # adcp 2.12.0+
-        )
-
-        adcp_response_id = adcp_request_id.model_dump()
-
-        # ✅ VERIFY ADCP COMPLIANCE: media_buy_id is required
-        assert "media_buy_id" in adcp_response_id, "media_buy_id must be present"
-        assert adcp_response_id["media_buy_id"] is not None, "media_buy_id must not be None"
-
-        # ✅ VERIFY ADCP COMPLIANCE: Optional fields present when provided
-        optional_fields = ["paused", "start_time", "end_time", "budget", "packages"]  # adcp 2.12.0+
-        for field in optional_fields:
-            if getattr(adcp_request_id, field) is not None:
-                assert field in adcp_response_id, f"Optional AdCP field '{field}' missing from response"
-
-        # ✅ VERIFY start_time/end_time are datetime (not date)
-        if adcp_response_id.get("start_time"):
-            # Should be datetime object (model_dump preserves datetime objects)
-            start_time_obj = adcp_response_id["start_time"]
-            assert isinstance(start_time_obj, datetime), "start_time should be datetime object"
-
-        if adcp_response_id.get("end_time"):
-            # Should be datetime object (model_dump preserves datetime objects)
-            end_time_obj = adcp_response_id["end_time"]
-            assert isinstance(end_time_obj, datetime), "end_time should be datetime object"
-
-        # ✅ VERIFY packages array structure
-        if adcp_response_id.get("packages"):
-            assert isinstance(adcp_response_id["packages"], list), "packages must be array"
-            for package in adcp_response_id["packages"]:
-                # Each package must have package_id
-                has_package_id = package.get("package_id") is not None
-                assert has_package_id, "Each package must have package_id"
-
-        # media_buy_id is required for update
-        import pytest
-        from pydantic import ValidationError as PydanticValidationError
-
-        with pytest.raises((PydanticValidationError, ValueError)):
-            UpdateMediaBuyRequest(paused=False)  # missing required media_buy_id
-
     def test_task_status_mcp_integration(self):
         """Test TaskStatus integration with MCP response schemas (AdCP PR #77)."""
 
@@ -2749,11 +2151,28 @@ class TestAdCPContract:
         assert "products" in data  # Domain field present
 
     def test_package_excludes_internal_fields(self):
-        """Test that Package model_dump excludes internal fields from AdCP responses.
+        """An internal name handed to the response Package reaches no serialization path.
 
-        Internal fields like platform_line_item_id, tenant_id, etc. should NOT appear
-        in external AdCP responses but SHOULD appear in internal database operations.
+        The names below were once declared on this class as Field(exclude=True), and the
+        class also had a model_dump_internal() helper, so this test asserted they were
+        absent from the AdCP dump and present in the internal one. Both halves are obsolete:
+        the declarations are deleted because the pin does not declare them, and the helper is
+        deleted because a model has one serializer.
+
+        What replaced the old guarantee is not "the field is excluded" but "the class does
+        not keep what it did not declare", and that distinction is the whole point of this
+        test. The library parent sets extra="allow", so with the declarations removed and
+        nothing else changed, each name below became an EXTRA -- stored on the model and
+        then serialized, on model_dump, model_dump_json and to_wire alike. Deleting an
+        internal field from a wire model made it MORE exposed, not less. extra="ignore" on
+        the class is what closes it, and this test fails if that setting is lost.
+
+        All three paths are checked because this class is what the buyer receives: it is
+        built into response_packages in the create tool and into CreateMediaBuySuccess for
+        the admin approval path, which reaches the buyer and the webhook.
         """
+        from src.core.tools._wire import to_wire
+
         # Create package with internal fields
         pkg = Package(
             package_id="pkg_test_123",
@@ -2767,26 +2186,38 @@ class TestAdCPContract:
             metadata={"internal_key": "internal_value"},
         )
 
-        # External response (AdCP protocol) - should exclude internal fields
-        external_dump = pkg.model_dump()
-        assert "package_id" in external_dump
-        assert "platform_line_item_id" not in external_dump, "platform_line_item_id should NOT be in AdCP response"
-        assert "tenant_id" not in external_dump, "tenant_id should NOT be in AdCP response"
-        assert "media_buy_id" not in external_dump, "media_buy_id should NOT be in AdCP response"
-        assert "created_at" not in external_dump, "created_at should NOT be in AdCP response"
-        assert "updated_at" not in external_dump, "updated_at should NOT be in AdCP response"
-        assert "metadata" not in external_dump, "metadata should NOT be in AdCP response"
+        internal_names = [
+            "platform_line_item_id",
+            "tenant_id",
+            "media_buy_id",
+            "created_at",
+            "updated_at",
+            "metadata",
+        ]
 
-        # Internal database dump - should include internal fields
-        internal_dump = pkg.model_dump_internal()
-        assert "package_id" in internal_dump
-        assert "paused" in internal_dump  # Changed from status in adcp 2.12.0
-        assert "platform_line_item_id" in internal_dump, "platform_line_item_id SHOULD be in internal dump"
-        assert internal_dump["platform_line_item_id"] == "gam_987654321"
-        assert "tenant_id" in internal_dump, "tenant_id SHOULD be in internal dump"
-        assert internal_dump["tenant_id"] == "tenant_test"
-        assert "media_buy_id" in internal_dump, "media_buy_id SHOULD be in internal dump"
-        assert internal_dump["media_buy_id"] == "mb_test_456"
+        # Not retained on the model in the first place. This is the assertion that fails
+        # under the parent's extra="allow", and it fails BEFORE any dump, which is why it
+        # comes first: every path below is clean only because nothing was kept.
+        assert not pkg.model_extra, f"undeclared input was retained on the model: {pkg.model_extra}"
+        assert type(pkg).model_config.get("extra") == "ignore"
+
+        # All three serialization paths, not just model_dump. A field can be absent from one
+        # and present in another when a per-class hook shapes only that one; nothing shapes
+        # these, and that is the claim.
+        wire = to_wire(pkg)
+        paths = {
+            "model_dump": pkg.model_dump(),
+            "model_dump_json": json.loads(pkg.model_dump_json()),
+            "to_wire": wire,
+        }
+        for path_name, payload in paths.items():
+            assert "package_id" in payload, f"package_id missing from {path_name}"
+            for name in internal_names:
+                assert name not in payload, f"internal name '{name}' reached the buyer via {path_name}"
+
+        # And none of them is declared, so there is no exclude=True to rely on.
+        for name in internal_names:
+            assert name not in type(pkg).model_fields, f"'{name}' must not be declared on the wire model"
 
     def test_create_media_buy_asap_start_time(self):
         """Test that CreateMediaBuyRequest accepts 'asap' as start_time per AdCP v1.7.0."""
@@ -2796,6 +2227,7 @@ class TestAdCPContract:
         # Per AdCP spec, budget is at package level, not request level
         # adcp 3.6.0: brand_manifest replaced by brand (BrandReference with required domain)
         request = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "flashsale.com"},
             start_time="asap",  # AdCP v1.7.0 supports literal "asap"
             end_time=end_date,
@@ -2819,6 +2251,8 @@ class TestAdCPContract:
 
         # Test with 'asap' start_time
         request = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id="mb_test_123",
             start_time="asap",  # AdCP v1.7.0 supports literal "asap"
         )
@@ -2839,6 +2273,7 @@ class TestAdCPContract:
         # Per AdCP spec, budget is at package level, not request level
         # adcp 3.6.0: brand_manifest replaced by brand (BrandReference with required domain)
         request = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "scheduled.com"},
             start_time=start_date,
             end_time=end_date,
@@ -2878,6 +2313,9 @@ class TestAdCPContract:
                     rate=10.0,
                 )
             ],
+            # reporting_capabilities is required on the pinned Product (AdCP 3.1.1) and
+            # carries no default, so a construction that omits it cannot validate.
+            reporting_capabilities=default_reporting_capabilities(),
         )
         assert len(product_with_properties.publisher_properties) == 1
         # publisher_properties is a discriminated union with RootModel wrapper (adcp 2.14.0+)
@@ -2905,6 +2343,9 @@ class TestAdCPContract:
                         rate=10.0,
                     )
                 ],
+                # reporting_capabilities is required on the pinned Product (AdCP 3.1.1) and
+                # carries no default, so a construction that omits it cannot validate.
+                reporting_capabilities=default_reporting_capabilities(),
                 # Missing publisher_properties - should fail
             )
 
@@ -2920,6 +2361,7 @@ class TestAdCPContract:
         # Test with inline brand reference
         # Per AdCP spec, budget is at package level, not request level
         request = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "nike.com"},
             packages=[{"product_id": "product_1", "pricing_option_id": "test_pricing", "budget": 5000.0}],
             start_time=start_date,
@@ -2941,6 +2383,7 @@ class TestAdCPContract:
 
         # Test with brand reference + optional brand_id
         request = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "nike.com", "brand_id": "brand_nike_001"},
             packages=[{"product_id": "product_1", "pricing_option_id": "test_pricing", "budget": 5000.0}],
             start_time=start_date,
@@ -3026,548 +2469,6 @@ class TestAdCPContract:
         full_dump = full_response.model_dump(exclude_none=True)
         assert full_dump["signal_id"] == "sig_456"
         assert full_dump["activation_details"]["platform_id"] == "seg_789"
-
-
-class TestProductV36FieldContract:
-    """Contract tests for Product fields added in adcp v3.4.0-v3.6.0.
-
-    Tests cover:
-    - delivery_measurement (REQUIRED): presence + default behavior
-    - delivery_type (REQUIRED): already tested in TestAdCPContract, verified here for completeness
-    - product_card (optional): presence-when-set + absence-when-null
-    - product_card_detailed (optional): presence-when-set + absence-when-null
-    - placements (optional): presence-when-set + absence-when-null
-    - reporting_capabilities (REQUIRED): always present, validated default when unset
-    - signal_targeting_allowed (optional, default=False): presence + default
-    - property_targeting_allowed (optional, default=False): presence + default
-    - catalog_match (optional): presence-when-set + absence-when-null
-    - catalog_types (optional): presence-when-set + absence-when-null
-    - conversion_tracking (optional): presence-when-set + absence-when-null
-    - data_provider_signals (optional): presence-when-set + absence-when-null
-    - forecast (optional): presence-when-set + absence-when-null
-    - channels (optional): presence-when-set + absence-when-null
-    """
-
-    @staticmethod
-    def _make_base_product(**overrides):
-        """Create a minimal valid Product with required fields only."""
-        from src.core.schemas import Product
-        from tests.helpers.adcp_factories import (
-            create_test_cpm_pricing_option,
-            create_test_publisher_properties_by_tag,
-        )
-
-        defaults = {
-            "product_id": "v36_test",
-            "name": "V3.6 Test Product",
-            "description": "Product for v3.6 field contract tests",
-            "format_ids": [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
-            "delivery_type": "guaranteed",
-            "delivery_measurement": {"provider": "publisher", "notes": "Standard measurement"},
-            "publisher_properties": [create_test_publisher_properties_by_tag()],
-            "pricing_options": [create_test_cpm_pricing_option()],
-        }
-        defaults.update(overrides)
-        return Product(**defaults)
-
-    # --- delivery_measurement (REQUIRED) ---
-
-    def test_delivery_measurement_required(self):
-        """delivery_measurement is required per AdCP spec; omitting it fails validation."""
-        from src.core.schemas import Product
-        from tests.helpers.adcp_factories import (
-            create_test_cpm_pricing_option,
-            create_test_publisher_properties_by_tag,
-        )
-
-        # adcp 3.10: delivery_measurement is now optional (was required in 3.6-3.9)
-        product = Product(
-            product_id="no_dm",
-            name="No DM",
-            description="Missing delivery_measurement",
-            format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
-            delivery_type="guaranteed",
-            publisher_properties=[create_test_publisher_properties_by_tag()],
-            pricing_options=[create_test_cpm_pricing_option()],
-            # delivery_measurement intentionally omitted — now optional per adcp 3.10
-        )
-        assert product.delivery_measurement is None
-
-    def test_delivery_measurement_present_in_dump(self):
-        """delivery_measurement appears in model_dump with correct structure."""
-        product = self._make_base_product(
-            delivery_measurement={"provider": "ias", "notes": "IAS viewability"},
-        )
-        dump = product.model_dump()
-        assert "delivery_measurement" in dump
-        assert dump["delivery_measurement"]["provider"] == "ias"
-        assert dump["delivery_measurement"]["notes"] == "IAS viewability"
-
-    def test_delivery_measurement_provider_only(self):
-        """delivery_measurement with provider only (notes is optional)."""
-        product = self._make_base_product(
-            delivery_measurement={"provider": "moat"},
-        )
-        dump = product.model_dump()
-        assert dump["delivery_measurement"]["provider"] == "moat"
-
-    # --- property_targeting_allowed (optional, default=False) ---
-
-    def test_property_targeting_allowed_default(self):
-        """property_targeting_allowed defaults to False and appears in dump."""
-        product = self._make_base_product()
-        dump = product.model_dump()
-        assert "property_targeting_allowed" in dump
-        assert dump["property_targeting_allowed"] is False
-
-    def test_property_targeting_allowed_when_true(self):
-        """property_targeting_allowed=True appears correctly in dump."""
-        product = self._make_base_product(property_targeting_allowed=True)
-        dump = product.model_dump()
-        assert dump["property_targeting_allowed"] is True
-
-    # --- signal_targeting_allowed (optional, default=False) ---
-
-    def test_signal_targeting_allowed_default(self):
-        """signal_targeting_allowed defaults to False and appears in dump."""
-        product = self._make_base_product()
-        dump = product.model_dump()
-        assert "signal_targeting_allowed" in dump
-        assert dump["signal_targeting_allowed"] is False
-
-    def test_signal_targeting_allowed_when_true(self):
-        """signal_targeting_allowed=True appears correctly in dump."""
-        product = self._make_base_product(signal_targeting_allowed=True)
-        dump = product.model_dump()
-        assert dump["signal_targeting_allowed"] is True
-
-    # --- channels (optional, default=None) ---
-
-    def test_channels_absent_when_null(self):
-        """channels not in model_dump when not set (None)."""
-        product = self._make_base_product()
-        dump = product.model_dump()
-        assert "channels" not in dump
-
-    def test_channels_present_when_set(self):
-        """channels appears in model_dump with MediaChannel enum values."""
-        product = self._make_base_product(channels=["display", "olv", "ctv"])
-        dump = product.model_dump()
-        assert "channels" in dump
-        assert len(dump["channels"]) == 3
-
-        # JSON serialization should produce strings
-        json_dump = product.model_dump(mode="json")
-        assert json_dump["channels"] == ["display", "olv", "ctv"]
-
-    # --- product_card (optional, default=None) ---
-
-    def test_product_card_absent_when_null(self):
-        """product_card not in model_dump when not set."""
-        product = self._make_base_product()
-        dump = product.model_dump()
-        assert "product_card" not in dump
-
-    def test_product_card_present_when_set(self):
-        """product_card appears in model_dump with correct structure."""
-        card = {
-            "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "product_card_v1"},
-            "manifest": {"headline": "Premium Display", "cta": "Learn More"},
-        }
-        product = self._make_base_product(product_card=card)
-        dump = product.model_dump()
-        assert "product_card" in dump
-        assert dump["product_card"]["manifest"]["headline"] == "Premium Display"
-
-        json_dump = product.model_dump(mode="json")
-        assert json_dump["product_card"]["format_id"]["id"] == "product_card_v1"
-
-    # --- product_card_detailed (optional, default=None) ---
-
-    def test_product_card_detailed_absent_when_null(self):
-        """product_card_detailed not in model_dump when not set."""
-        product = self._make_base_product()
-        dump = product.model_dump()
-        assert "product_card_detailed" not in dump
-
-    def test_product_card_detailed_present_when_set(self):
-        """product_card_detailed appears in model_dump with correct structure."""
-        card = {
-            "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "detail_card_v1"},
-            "manifest": {"sections": [{"title": "Overview", "body": "Detailed product info"}]},
-        }
-        product = self._make_base_product(product_card_detailed=card)
-        dump = product.model_dump()
-        assert "product_card_detailed" in dump
-        assert dump["product_card_detailed"]["manifest"]["sections"][0]["title"] == "Overview"
-
-    # --- placements (optional, default=None) ---
-
-    def test_placements_absent_when_null(self):
-        """placements not in model_dump when not set."""
-        product = self._make_base_product()
-        dump = product.model_dump()
-        assert "placements" not in dump
-
-    def test_placements_present_when_set(self):
-        """placements appears in model_dump with correct Placement structure."""
-        # adcp 6.6 (spec 3.1.1) made Placement.kind and Placement.mode required.
-        placements = [
-            {
-                "placement_id": "top_banner",
-                "name": "Top Banner",
-                "description": "Above the fold",
-                "kind": "publisher_ref",
-                "mode": "targetable",
-            },
-            {
-                "placement_id": "sidebar",
-                "name": "Sidebar",
-                "kind": "publisher_ref",
-                "mode": "targetable",
-                "format_ids": [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
-            },
-        ]
-        product = self._make_base_product(placements=placements)
-        dump = product.model_dump()
-        assert "placements" in dump
-        assert len(dump["placements"]) == 2
-        assert dump["placements"][0]["placement_id"] == "top_banner"
-        assert dump["placements"][0]["name"] == "Top Banner"
-        assert dump["placements"][1]["placement_id"] == "sidebar"
-
-    # --- reporting_capabilities (REQUIRED, validated default_factory on the model) ---
-
-    def test_reporting_capabilities_always_present(self):
-        """reporting_capabilities is never omitted from model_dump(), even when unset.
-
-        The pinned core/product.json's top-level required array lists
-        reporting_capabilities unconditionally (unlike format_ids, which is
-        only required via anyOf with format_options) — it is a genuine
-        AdCP-schema requirement, not merely a wire-layer one. Product's field
-        carries a validated default_factory, so a caller that doesn't know the
-        value yet still produces schema-valid output — and the attribute holds
-        the same value the wire reports.
-        """
-        product = self._make_base_product()
-        dump = product.model_dump()
-        assert "reporting_capabilities" in dump
-        assert dump["reporting_capabilities"] is not None
-
-    def test_reporting_capabilities_present_when_set(self):
-        """reporting_capabilities appears in model_dump with correct structure."""
-        rc = {
-            "available_metrics": ["impressions", "clicks", "spend"],
-            "available_reporting_frequencies": ["daily", "hourly"],
-            "date_range_support": "date_range",
-            "expected_delay_minutes": 120,
-            "supports_webhooks": True,
-            "timezone": "America/New_York",
-        }
-        product = self._make_base_product(reporting_capabilities=rc)
-        dump = product.model_dump()
-        assert "reporting_capabilities" in dump
-        assert dump["reporting_capabilities"]["expected_delay_minutes"] == 120
-        assert dump["reporting_capabilities"]["supports_webhooks"] is True
-        assert dump["reporting_capabilities"]["timezone"] == "America/New_York"
-
-        # JSON mode should serialize enums to strings
-        json_dump = product.model_dump(mode="json")
-        assert "impressions" in json_dump["reporting_capabilities"]["available_metrics"]
-        assert json_dump["reporting_capabilities"]["date_range_support"] == "date_range"
-
-    # --- catalog_match (optional, default=None) ---
-
-    def test_catalog_match_absent_when_null(self):
-        """catalog_match not in model_dump when not set."""
-        product = self._make_base_product()
-        dump = product.model_dump()
-        assert "catalog_match" not in dump
-
-    def test_catalog_match_present_when_set(self):
-        """catalog_match appears in model_dump with correct CatalogMatch structure."""
-        cm = {"submitted_count": 500, "matched_count": 420, "matched_ids": ["sku_001", "sku_002"]}
-        product = self._make_base_product(catalog_match=cm)
-        dump = product.model_dump()
-        assert "catalog_match" in dump
-        assert dump["catalog_match"]["submitted_count"] == 500
-        assert dump["catalog_match"]["matched_count"] == 420
-        assert dump["catalog_match"]["matched_ids"] == ["sku_001", "sku_002"]
-
-    # --- catalog_types (optional, default=None) ---
-
-    def test_catalog_types_absent_when_null(self):
-        """catalog_types not in model_dump when not set."""
-        product = self._make_base_product()
-        dump = product.model_dump()
-        assert "catalog_types" not in dump
-
-    def test_catalog_types_present_when_set(self):
-        """catalog_types appears in model_dump with CatalogType enum values."""
-        product = self._make_base_product(catalog_types=["offering", "product", "store"])
-        dump = product.model_dump()
-        assert "catalog_types" in dump
-        assert len(dump["catalog_types"]) == 3
-
-        # JSON mode should serialize enums to strings
-        json_dump = product.model_dump(mode="json")
-        assert json_dump["catalog_types"] == ["offering", "product", "store"]
-
-    # --- conversion_tracking (optional, default=None) ---
-
-    def test_conversion_tracking_absent_when_null(self):
-        """conversion_tracking not in model_dump when not set."""
-        product = self._make_base_product()
-        dump = product.model_dump()
-        assert "conversion_tracking" not in dump
-
-    def test_conversion_tracking_present_when_set(self):
-        """conversion_tracking appears in model_dump with correct structure."""
-        ct = {"platform_managed": True, "action_sources": ["website", "app"]}
-        product = self._make_base_product(conversion_tracking=ct)
-        dump = product.model_dump()
-        assert "conversion_tracking" in dump
-        assert dump["conversion_tracking"]["platform_managed"] is True
-
-        json_dump = product.model_dump(mode="json")
-        assert "website" in json_dump["conversion_tracking"]["action_sources"]
-
-    # --- data_provider_signals (optional, default=None) ---
-
-    def test_data_provider_signals_absent_when_null(self):
-        """data_provider_signals not in model_dump when not set."""
-        product = self._make_base_product()
-        dump = product.model_dump()
-        assert "data_provider_signals" not in dump
-
-    def test_data_provider_signals_present_when_set(self):
-        """data_provider_signals appears in model_dump with discriminated union structure."""
-        dps = [
-            {"selection_type": "all", "data_provider_domain": "acmedata.com"},
-            {"selection_type": "by_id", "data_provider_domain": "betadata.com", "signal_ids": ["sig_001", "sig_002"]},
-        ]
-        product = self._make_base_product(data_provider_signals=dps)
-        dump = product.model_dump()
-        assert "data_provider_signals" in dump
-        assert len(dump["data_provider_signals"]) == 2
-
-        json_dump = product.model_dump(mode="json")
-        assert json_dump["data_provider_signals"][0]["selection_type"] == "all"
-        assert json_dump["data_provider_signals"][0]["data_provider_domain"] == "acmedata.com"
-        assert json_dump["data_provider_signals"][1]["selection_type"] == "by_id"
-
-    # --- forecast (optional, default=None) ---
-
-    def test_forecast_absent_when_null(self):
-        """forecast not in model_dump when not set."""
-        product = self._make_base_product()
-        dump = product.model_dump()
-        assert "forecast" not in dump
-
-    def test_forecast_present_when_set(self):
-        """forecast appears in model_dump with correct DeliveryForecast structure."""
-        fc = {
-            "method": "estimate",
-            "currency": "USD",
-            "points": [
-                {"budget": 1000.0, "metrics": {"impressions": {"mid": 50000.0, "low": 40000.0, "high": 60000.0}}},
-                {"budget": 5000.0, "metrics": {"impressions": {"mid": 250000.0}}},
-            ],
-        }
-        product = self._make_base_product(forecast=fc)
-        dump = product.model_dump()
-        assert "forecast" in dump
-        assert dump["forecast"]["currency"] == "USD"
-        assert len(dump["forecast"]["points"]) == 2
-        assert dump["forecast"]["points"][0]["budget"] == 1000.0
-        assert dump["forecast"]["points"][0]["metrics"]["impressions"]["mid"] == 50000.0
-
-        json_dump = product.model_dump(mode="json")
-        assert json_dump["forecast"]["method"] == "estimate"
-
-    # --- Roundtrip: DB model -> product_conversion -> schema -> model_dump ---
-
-    def test_v36_fields_roundtrip_conversion(self):
-        """Roundtrip: mock DB model -> convert_product_model_to_schema -> model_dump produces valid AdCP JSON."""
-        from unittest.mock import MagicMock
-
-        from src.core.product_conversion import convert_product_model_to_schema
-
-        m = MagicMock()
-        m.product_id = "rt_v36"
-        m.name = "Roundtrip V36"
-        m.description = "Roundtrip test with all v3.6 fields"
-        m.delivery_type = "guaranteed"
-        m.effective_format_ids = [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}]
-        m.effective_properties = [
-            {"selection_type": "by_tag", "publisher_domain": "test.com", "property_tags": ["all_inventory"]}
-        ]
-        m.delivery_measurement = {"provider": "pub_direct", "notes": "Publisher direct measurement"}
-        m.measurement = None
-        m.creative_policy = None
-        m.countries = None
-        m.channels = ["display", "olv"]
-        m.product_card = {
-            "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "card"},
-            "manifest": {"headline": "Test"},
-        }
-        m.product_card_detailed = {
-            "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "detail"},
-            "manifest": {"body": "Details"},
-        }
-        m.placements = [{"placement_id": "top", "name": "Top Banner"}]
-        m.reporting_capabilities = {
-            "available_metrics": ["impressions", "clicks"],
-            "available_reporting_frequencies": ["daily"],
-            "date_range_support": "date_range",
-            "expected_delay_minutes": 30,
-            "supports_webhooks": False,
-            "timezone": "UTC",
-        }
-        m.is_custom = False
-        m.property_targeting_allowed = True
-        m.signal_targeting_allowed = True
-        m.catalog_match = {"submitted_count": 100, "matched_count": 80}
-        m.catalog_types = ["offering", "product"]
-        m.conversion_tracking = {"platform_managed": True}
-        m.data_provider_signals = [{"selection_type": "all", "data_provider_domain": "data.example.com"}]
-        m.forecast = {
-            "method": "estimate",
-            "currency": "USD",
-            "points": [{"budget": 2000.0, "metrics": {"impressions": {"mid": 100000.0}}}],
-        }
-        m.effective_implementation_config = None
-        m.allowed_principal_ids = None
-
-        # Mock pricing option
-        po = MagicMock()
-        po.pricing_model = "cpm"
-        po.currency = "USD"
-        po.fixed_price = 10.0
-        po.floor_price = None
-        po.price_guidance = None
-        po.min_spend_per_package = None
-        po.parameters = None
-        po.pricing_option_id = "cpm_usd"
-        m.pricing_options = [po]
-
-        # Convert and serialize
-        schema = convert_product_model_to_schema(m)
-        dump = schema.model_dump()
-        json_dump = schema.model_dump(mode="json")
-
-        # Verify all v3.6 fields survived the roundtrip
-        assert dump["property_targeting_allowed"] is True
-        assert dump["signal_targeting_allowed"] is True
-        assert len(dump["channels"]) == 2
-        assert dump["product_card"]["manifest"]["headline"] == "Test"
-        assert dump["product_card_detailed"]["manifest"]["body"] == "Details"
-        assert dump["placements"][0]["placement_id"] == "top"
-        assert dump["reporting_capabilities"]["expected_delay_minutes"] == 30
-        assert dump["catalog_match"]["submitted_count"] == 100
-        assert len(dump["catalog_types"]) == 2
-        assert dump["conversion_tracking"]["platform_managed"] is True
-        assert dump["data_provider_signals"][0]["data_provider_domain"] == "data.example.com"
-        assert dump["forecast"]["currency"] == "USD"
-        assert dump["forecast"]["points"][0]["metrics"]["impressions"]["mid"] == 100000.0
-
-        # Verify JSON serialization produces strings for enums
-        assert json_dump["forecast"]["method"] == "estimate"
-        assert json_dump["channels"] == ["display", "olv"]
-        assert json_dump["catalog_types"] == ["offering", "product"]
-
-        # Verify internal fields are excluded
-        assert "implementation_config" not in dump
-        assert "countries" not in dump
-        assert "allowed_principal_ids" not in dump
-
-    def test_v36_fields_roundtrip_null_omission(self):
-        """Roundtrip: DB model with null v3.6 fields -> model_dump omits them."""
-        from unittest.mock import MagicMock
-
-        from src.core.product_conversion import convert_product_model_to_schema
-
-        m = MagicMock()
-        m.product_id = "rt_null"
-        m.name = "Roundtrip Null"
-        m.description = "Roundtrip test with null v3.6 fields"
-        m.delivery_type = "non_guaranteed"
-        m.effective_format_ids = [{"agent_url": "https://creative.adcontextprotocol.org", "id": "video_15s"}]
-        m.effective_properties = [
-            {"selection_type": "by_tag", "publisher_domain": "test.com", "property_tags": ["all"]}
-        ]
-        m.delivery_measurement = {"provider": "publisher"}
-        m.measurement = None
-        m.creative_policy = None
-        m.countries = None
-        m.channels = None
-        m.product_card = None
-        m.product_card_detailed = None
-        m.placements = None
-        m.reporting_capabilities = None
-        m.is_custom = False
-        m.property_targeting_allowed = None
-        m.signal_targeting_allowed = None
-        m.catalog_match = None
-        m.catalog_types = None
-        m.conversion_tracking = None
-        m.data_provider_signals = None
-        m.forecast = None
-        m.effective_implementation_config = None
-        m.allowed_principal_ids = None
-
-        po = MagicMock()
-        po.pricing_model = "cpm"
-        po.currency = "USD"
-        po.fixed_price = None
-        po.floor_price = 2.0
-        po.price_guidance = {"p75": 5.0}
-        po.min_spend_per_package = None
-        po.parameters = None
-        po.pricing_option_id = "cpm_usd_auction"
-        m.pricing_options = [po]
-
-        schema = convert_product_model_to_schema(m)
-        dump = schema.model_dump()
-
-        # None-valued optional fields should be omitted from dump
-        # reporting_capabilities is required in adcp 4.3 — the field's default_factory
-        # guarantees a validated value, so it is never among the absent fields
-        absent_fields = [
-            "channels",
-            "product_card",
-            "product_card_detailed",
-            "placements",
-            "catalog_match",
-            "catalog_types",
-            "conversion_tracking",
-            "data_provider_signals",
-            "forecast",
-        ]
-        for field in absent_fields:
-            assert field not in dump, f"Null field '{field}' should not appear in model_dump"
-
-    def test_v36_product_in_get_products_response(self):
-        """Product with v3.6 fields serializes correctly inside GetProductsResponse."""
-        product = self._make_base_product(
-            channels=["display"],
-            signal_targeting_allowed=True,
-            property_targeting_allowed=True,
-            catalog_types=["offering"],
-        )
-
-        response = GetProductsResponse(products=[product])
-        response_dict = response.model_dump()
-
-        product_data = response_dict["products"][0]
-        assert product_data["signal_targeting_allowed"] is True
-        assert product_data["property_targeting_allowed"] is True
-        assert product_data["channels"] is not None
-        assert product_data["catalog_types"] is not None
-
-        # Internal fields must still be excluded
-        assert "implementation_config" not in product_data
-        assert "countries" not in product_data
 
 
 if __name__ == "__main__":

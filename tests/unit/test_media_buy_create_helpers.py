@@ -3,7 +3,7 @@
 Tests the helper functions used in media buy creation, particularly
 format specification retrieval: the error taxonomy of the single shared
 fetch path (format_resolver.fetch_format_spec) as seen through the
-``_get_format_spec_sync`` delegate — typed AdCPError propagates with its
+``_get_format_spec_sync`` delegate — typed AdCPSalesAgentError propagates with its
 recovery semantics, untyped failures and unknown formats become None.
 """
 
@@ -64,7 +64,7 @@ class TestFormatSpecTransientErrors:
     """Transient creative-agent failures must stay transient on the wire.
 
     _get_format_spec_sync wraps the async registry; a typed transient
-    AdCPError from it (rate limit, timeout, connect failure) must PROPAGATE
+    AdCPSalesAgentError from it (rate limit, timeout, connect failure) must PROPAGATE
     so the buyer sees SERVICE_UNAVAILABLE (transient, retryable) — not be
     swallowed into None, which downstream validation treats as unknown format
     and converts to a correctable CREATIVE_REJECTED that misdirects the buyer
@@ -74,6 +74,6 @@ class TestFormatSpecTransientErrors:
     def test_transient_registry_error_propagates_not_rejected(self):
         from src.core.exceptions import AdCPServiceUnavailableError
 
-        with _patched_registry(side_effect=AdCPServiceUnavailableError("Creative agent rate limited (429)")):
+        with _patched_registry(side_effect=AdCPServiceUnavailableError()):
             with pytest.raises(AdCPServiceUnavailableError):
                 _get_format_spec_sync(_AGENT_URL, "display_300x250_image")

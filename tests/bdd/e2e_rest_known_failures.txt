@@ -26,10 +26,11 @@
 # entries now owned by the env E2EUnsupportedSetup declaration. 47 genuine-gap
 # entries remain, grouped by gap below.
 #
-# FINAL SET AFTER THE main MERGE: 17 entries =
+# FINAL SET AFTER THE main MERGE: 14 entries =
 #   5  uc004 invalid-input rows the live server still accepts (spec-production gap)
 #   2  explicit inline-xfail production gaps (attribution default, push-notification ack)
-#   10 parallel-e2e_rest mock-injection artifacts (E2E_PER_WORKER, owner-approved)
+#   7  parallel-e2e_rest mock-injection artifacts (E2E_PER_WORKER, owner-approved)
+# (was 10 — the 3 uc018 rows GRADUATED 2026-08-31 on main; see that block below.)
 # The 4 uc004 date-range rows and the 2 uc004 account valid rows GRADUATED at the
 # #1417 merge and must never be re-added.
 
@@ -53,10 +54,7 @@
 # (d4af23095, strict-xfail XPASS in-network) — that is the positive evidence the
 # twins were waiting for, so all four date-range rows are off the ledger.
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_include_package_daily_breakdown_boundary__boundary_point[e2e_rest-string 'true' (non-boolean type)-"true"-invalid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_principal_ownership_boundary__boundary_point[e2e_rest-principal differs from owner-invalid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_principal_ownership_partition__partition[e2e_rest-owner_mismatch-invalid]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-geo with geo_level=metro but no system (behavioral gap)-{"geo": {"geo_level": "metro"}}-invalid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_boundary__boundary_point[e2e_rest-Unknown string not in enum-systematic-invalid]
 
 # --- uc004 delivery account valid rows — GRADUATED (#1417 merge) ---
 # Was: valid account rows referenced acc_acme_001 / acme-corp.com and no uc004
@@ -119,12 +117,47 @@ tests/bdd/test_uc011_manage_accounts.py::test_push_notification_for_async_status
 # failed with 'asyncio.run() cannot be called from a running event loop').
 # Verified in-network: all 4 transports pass incl. e2e_rest.
 
-# --- parallel e2e_rest mock-injection artifacts (7) ---
+# --- parallel e2e_rest mock-injection artifacts (2) ---
 # Added 2026-07-09: surfaced when perf/parallelize-test-suite enabled parallel
 # e2e_rest (E2E_PER_WORKER). Mock-injection-incompatible artifacts, not regressions:
-# UC-004 set_adapter_response (delivery) and UC-005 set_registry_formats are not
-# visible to the separate HTTP server.
-# Ledger: salesagent-5p68 / e2e_rest retirement epic salesagent-rlgl.
+# UC-005 set_registry_formats is not visible to the separate HTTP server.
+# Ledger: salesagent-5p68 / e2e_rest retirement issue #1418.
+#
+# Graduated 2026-09-15 — the 4 UC-004 delivery rows, one at a time, each inspected
+# against .claude/rules/workflows/xpass-graduation.md and adversarially re-checked.
+# The block's UC-004 clause named the wrong mechanism: set_adapter_response is no
+# longer a mock the live server cannot see. #1418 gave it an e2e realization
+# (@realize_e2e(_persist_simulation_config)) that writes a DeliverySimulationConfig
+# row the deployed server's MockAdServer reads, so the seeded by_geo / by_device_type
+# entries reach production over real HTTP. Each scenario's Then reads the real body
+# through require_payload and compares VALUES, not presence: the truncation rows
+# assert the literal false / true (the field's own default is None, so a missing flag
+# cannot satisfy them) and both breakdown rows refuse an empty package list. All four
+# pass plain on a2a, mcp and rest in-process, and XPASSED in-network in
+# innet_150926_0531.
+#
+# Graduated 2026-09-15 — the UC-005 format-id roundtrip row, same protocol. The
+# set_registry_formats clause never described it: its only registry-touching Given is
+# a ctx.setdefault no-op, and the live server serves the same checked-in reference
+# catalog through ReferenceFormatsRegistry, honouring the (agent_url, id) pair filter.
+# Its Thens grade the actual HTTP body against the pinned schema and exact verbatim
+# values. XPASSED in-network in innet_150926_0531. The two rows that remain below are
+# NOT covered by this note.
+#
+# The baseline row still genuinely fails in-network.
+#
+# The third-party-agent row was xpassing VACUOUSLY: its ONE discriminating assertion --
+# the seller must not substitute its own same-id format for a foreign reference, which
+# is what separates (agent_url, id) matching from id-only matching -- compared a
+# hand-built raw tuple against canonicalized identities. format_id_identity
+# canonicalizes the agent_url (core/format-id.json makes that a MUST for anyone
+# comparing two format-id values), turning ...adcontextprotocol.org into
+# ...adcontextprotocol.org/, so the two could never be equal and the assertion held
+# whatever the seller returned. Measured, not inferred. The comparison now runs both
+# sides through format_id_identity and fires on a substitution; the in-process
+# transports pass with it. The row stays here until an in-network run says what the
+# repaired assertion does over real HTTP -- graduating it on the strength of the run
+# that xpassed the BROKEN assertion would be citing the wrong measurement.
 #
 # Graduated 2026-08-31 — the 3 UC-018 rows, one at a time, each inspected against
 # .claude/rules/workflows/xpass-graduation.md. The block's UC-018 clause ("injected
@@ -138,10 +171,142 @@ tests/bdd/test_uc011_manage_accounts.py::test_push_notification_for_async_status
 # counter steps refuse to pass on an empty array. All three pass on a2a, mcp and
 # rest in-process, and XPASSED in three consecutive in-network runs spanning two
 # merges from main: innet_270826_0338, innet_270826_1824, innet_310826_1248.
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_breakdown_complete_not_truncated__truncation_flag_set_false[e2e_rest]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_breakdown_truncated_by_limit__truncation_flag_set_true[e2e_rest]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_buyer_requests_supported_dimension__seller_returns_breakdown[e2e_rest]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_multiple_dimensions_requested_simultaneously[e2e_rest]
 tests/bdd/test_uc005_discover_creative_formats.py::test_baseline_list_creative_formats_response_carries_format_id_objects_with_agent_url_and_id[e2e_rest]
-tests/bdd/test_uc005_discover_creative_formats.py::test_format_id_roundtrip__list_creative_formats_returns_the_same_format_object_that_get_products_advertised[e2e_rest]
 tests/bdd/test_uc005_discover_creative_formats.py::test_format_id_with_agent_url_pointing_at_a_thirdparty_creative_agent_is_reported_as_observation_not_failure[e2e_rest]
+
+# UC-010 capability-degradation scenarios (eiww batches chbi/tmpd) — RESOLVED
+# 2026-07-24 (salesagent-689e). The 6 entries formerly here split per the
+# ledger's own header doctrine (mock-injection-only entries belong at the
+# env seam, not this ledger):
+#   - 3 adapter-state scenarios (adapter_fail, adapter_unavailable_defaults,
+#     nested_absent) now GRADUATE: CapabilitiesEnv.make_adapter_unavailable /
+#     set_targeting_capabilities persist AdapterConfig.config_json[
+#     "test_behavior"] over e2e (tests/harness/capabilities.py), read by
+#     get_adapter_class_for_tenant / get_targeting_capabilities_override
+#     (src/core/helpers/adapter_helpers.py) — a real production fault-
+#     injection surface, not a harness-only mock. They now pass on e2e_rest.
+#   - 3 DB-failure scenarios (schemavalid, adapter_and_db_fail, db_fail) move
+#     to an env-level E2EUnsupportedSetup declaration —
+#     CapabilitiesEnv.break_tenant_config_db (tests/harness/capabilities.py)
+#     — no production DB fault hook exists to inject a TenantConfigUoW read
+#     failure over real HTTP. Surfaced as xfail by the conftest report hook,
+#     pinned in EXPECTED_UNSUPPORTED_DECLARATIONS
+#     (test_architecture_e2e_rest_escape_hatches.py), not listed here.
+#   - set_adapter_channels was in-process-only at the time of that note; #1871
+#     then gave it the same write-through (get_adapter_channels_override).
+# All three reads were deleted by a1b79d22d ("remove the testing-hook channel"),
+# and the deletion was right: they were test-only control surfaces in src/core/,
+# which is what prebid/salesagent#1891 questions. Two facts confirm test_behavior
+# never belonged in that column at all -- it is absent from MockConnectionConfig,
+# which is extra="forbid", and save_adapter_config replaces config_json wholesale,
+# so an operator saving mock config through the admin UI silently deletes it.
+# The Givens then landed nowhere over e2e and 8 UC-010 scenarios graded the mock
+# adapter's class defaults while still passing in-process against a MagicMock.
+#
+# Resolved WITHOUT restoring any of it:
+#   - channels: portfolio.primary_channels now unions each product's effective
+#     channels (src/core/helpers/channel_helpers.py), the same rule get_products
+#     applies per product. Product.channels is a real per-tenant column, so the
+#     Given seeds ordinary catalog data in BOTH worlds -- one mechanism, no
+#     @realize_e2e branch.
+#   - degradation: an adapter_type outside ADAPTER_REGISTRY is real operator
+#     misconfiguration and get_adapter_class already refuses it. No new code.
+#   - targeting granularity: no per-tenant surface exists and none is being added.
+#     The three rows below record that.
+
+# --- upstream adcp#7338 on the live catalog (1) ---
+# Added 2026-09-13 when @T-UC-005-main's Given moved from minted fmt_N ids to three
+# reference-catalog formats (the tag-level strict xfail that parked all four transports
+# is gone; in-process the scenario now grades POST-S1/S2 for real). Over e2e_rest the
+# live server answers with the WHOLE reference catalog, and "the response is compliant
+# with the list_creative_formats spec" fails on the pixel_tracker assets the pinned
+# core/format.json assets union does not admit -- the same defect the #7338 rows in
+# tests/bdd/conftest.py's _SELECTIVE_XFAIL block record for the UC-005 outlines.
+# Graduates when adcp#7338 lands and the pin moves, or when production stops serving
+# assets the pin does not admit (salesagent-i5znm).
+#
+# The inconsistency is UPSTREAM's, within the v3.1.1 release: its reference creative agent
+# publishes pixel_tracker assets on 45 formats and its core/format.json admits none.
+# adcp#7338 fixed the schema in v3.1.22. tests/fixtures/creative_formats/reference_formats.json
+# is now captured at agent pin 76b031a85eb8 (v3.1.25), which carries the same 45, while the
+# feature files still cite the v3.1.1 schemas (@source ref=v3.1.1 commit=467fd93d7). So the
+# row graduates when the SPEC pin moves to v3.1.22 or later, not when the agent pin moves.
+# The adcp SDK from that release ALREADY accommodates the mismatch on the read path:
+# adcp/types/aliases.py adds an UnknownFormatAsset arm to Format.assets because "AdCP
+# enums grow additively by design", with declared asymmetric strictness (strict on emit,
+# lenient on parse). The JSON schema is the half that did not get the arm.
+#
+# The one local "fix" available is to drop the assets the pin omits from the catalog this
+# seller serves, and that is worse than the gap: list_creative_formats aggregates a
+# creative agent's own format definitions, so stripping an asset slot tells the buyer a
+# format needs fewer assets than it does, and it is a rule the pin does not carry --
+# exactly what then_webhook_payload_compliant's docstring refuses for the same reason.
+#
+# THIS BLOCK STAYS AT ONE ROW, and the near-miss is worth recording.
+# @T-UC-005-main-referrals was about to be added here 2026-09-15 for the same failure: its
+# tag-level xfail is gone (the in-process registry mock stopped faking _get_tenant_agents,
+# so it grades POST-S4 for real), and over e2e_rest the only thing still failing was a COPY
+# of the same whole-catalog compliance Then. A second row would have bought nothing -- the
+# live server answers with the whole catalog whichever formats a Given names, so both copies
+# validate a byte-identical document -- while permanently denying POST-S4 the one transport
+# where the seller's real federation path runs. The copy was deleted from that scenario
+# instead, with the redundancy argued at the scenario itself. One obligation, one row: this one.
+#
+# SCOPE OF THE GAP, measured, because "one row" understates it: 45 of the reference catalog's
+# 57 formats carry a pixel_tracker asset, so EVERY uc005 success path fails this check over
+# e2e_rest. Nothing passes by luck today -- all 12 green uc005 e2e_rest nodes in
+# innet_150926_0258 are refusal paths, where _assert_compliant grades core/error.json and
+# never reaches the success schema. But any uc005 scenario that graduates onto a success path
+# over e2e_rest lands on this defect immediately. Expect that rather than reading it as a
+# regression.
+tests/bdd/test_uc005_discover_creative_formats.py::test_discover_full_format_catalog[e2e_rest]
+
+# --- UC-010 targeting granularity has no per-tenant surface (3) ---
+# Added 2026-09-15. These three rows configure a targeting SHAPE per tenant --
+# which metro systems and which country-keyed postal systems the seller supports --
+# and read it back from
+#   get-adcp-capabilities-response.json
+#     #/properties/media_buy/properties/execution/properties/targeting
+# (geo_metros -> core/geo-metros.json, geo_postal_areas -> core/postal-area-support.json).
+# The pin is not the problem: production BUILDS both blocks correctly from a
+# TargetingCapabilities, and the in-process rows prove it.
+#
+# WHY THIS CANNOT BE FIXED HERE, not a symptom:
+#   1. TargetingCapabilities is ADAPTER-CLASS-LEVEL by documented design.
+#      AdServerAdapter.get_targeting_capabilities is a @staticmethod, and
+#      src/adapters/base.py states why: capability discovery must read it off the
+#      adapter CLASS, tenant-only, without constructing a Principal-bound instance
+#      (INV-4 / salesagent-dn2s -- Kevel and TritonDigital crash in __init__ for a
+#      synthetic Principal). So the value is per-adapter-TYPE and cannot vary by
+#      tenant at all. In-process a scenario patches the class; over HTTP the server
+#      resolves its own, and there is nothing per-tenant for a Given to write.
+#   2. A per-tenant DECLARATION is forbidden on purpose. The declaration store
+#      (src/core/schemas/capability_declarations.py) carries fields only for facts
+#      production backs: "a field that exists but is always rejected still tempts
+#      the next implementer to relax the check. The absence is the enforcement."
+#      Adding a targeting block would let an operator declare geo granularity the
+#      adapter cannot deliver -- the false-conformance risk that store exists to
+#      prevent.
+#   3. The obvious third option is what a1b79d22d deleted and #1891 questions: a
+#      test_behavior override read in src/core/. Not reinstated.
+# The sibling channel and degradation rows needed none of this and were fixed on
+# real production paths; only the targeting SHAPE is stuck.
+#
+# GRADUATES when either a real per-tenant targeting surface lands (an adapter
+# reading its own config through a signature that is not a plain @staticmethod
+# override, which base.py's comment already prescribes as the deliberate decision
+# that change requires), or the three rows are rewritten to grade the blocks off
+# the adapter class's own declared shape instead of a configured one.
+tests/bdd/test_uc010_discover_seller_capabilities.py::test_targeting_capability_configurations__partition[e2e_rest-nested_absent no nested sub-properties declared-no nested sub-properties true-geo_metros and geo_postal_areas absent from targeting]
+tests/bdd/test_uc010_discover_seller_capabilities.py::test_targeting_capability_configurations__partition[e2e_rest-nested_populated native postal map and metros-geo_metros.nielsen_dma=true, geo_postal_areas US=["zip"]-geo_metros equals {nielsen_dma: true} and geo_postal_areas has US containing "zip"]
+tests/bdd/test_uc010_discover_seller_capabilities.py::test_targeting_capability_configurations__partition[e2e_rest-postal_areas_native DE/CH/AT via native country-keyed map-geo_postal_areas DE=["plz"] CH=["plz"] AT=["plz"]-geo_postal_areas equals {DE: [plz], CH: [plz], AT: [plz]}]
+
+# salesagent-3cs7o.54 — asset-level provenance is absent from the stored creative over
+# e2e_rest only; the same scenario passes on a2a, mcp and rest. The pin mandates the
+# behaviour (core/creative-asset.json /properties/provenance: an asset with its own
+# provenance "replaces this object entirely (no field-level merging)"), and production
+# carries it on every hop readable from the source — the DTO, deep_strip_to_schema,
+# _build_creative_data, the JSONType serializer, the generative overwrite, the update
+# merge and _validation — each eliminated by direct measurement and listed on the ticket.
+# The remaining step is a live-stack probe, so this is ledgered rather than guessed at.
+tests/bdd/test_uc006_sync_creatives.py::test_inv5__assetlevel_provenance_replaces_creativelevel_entirely[e2e_rest]

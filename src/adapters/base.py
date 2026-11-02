@@ -1,33 +1,37 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 
 if TYPE_CHECKING:
     from src.core.schemas import Snapshot, Targeting
 
+from adcp.types import BrandReference
 from adcp.types.aliases import Package as ResponsePackage
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 from rich.console import Console
 
 from src.core.audit_logger import get_audit_logger
 from src.core.enum_helpers import enum_value
+from src.core.errors.codes import ErrorCode
+from src.core.errors.details import ErrorProblem
 from src.core.exceptions import AdCPConfigurationError
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
+    AffectedPackage,
     AssetStatus,
     CheckMediaBuyStatusResponse,
     CreateMediaBuyRequest,
-    CreateMediaBuyResponse,
-    CreateMediaBuySuccess,
     MediaPackage,
-    PackagePerformance,
     Principal,
+    PushNotificationConfig,
     ReportingPeriod,
-    UpdateMediaBuyResponse,
 )
+from src.core.validation_helpers import package_field_path
 
 # Return type of AdServerAdapter._require_config — preserves the caller's value type.
 _ConfigT = TypeVar("_ConfigT")
@@ -58,6 +62,8 @@ class TargetingCapabilities:
     gb_outward: bool = False  # UK outward code (first part)
     gb_full: bool = False  # Full UK postcode
     de_plz: bool = False  # German PLZ
+    ch_plz: bool = False  # Swiss PLZ
+    at_plz: bool = False  # Austrian PLZ
     fr_code_postal: bool = False  # French postal code
     au_postcode: bool = False  # Australian postcode
 
@@ -76,6 +82,8 @@ class TargetingCapabilities:
         "ca_fsa",
         "ca_full",
         "de_plz",
+        "ch_plz",
+        "at_plz",
         "fr_code_postal",
         "au_postcode",
     )
@@ -166,6 +174,139 @@ class BaseProductConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class AdapterCreateRequest(BaseModel):
+    """What the create path hands an adapter: the buy to place, not the buyer's request.
+
+    The mirror of ``AdapterCreateResult`` on the way in. A ``CreateMediaBuyRequest`` is
+    the ACCEPTED SHAPE OF A REQUEST — it requires ``idempotency_key`` and ``account``
+    because a buyer sending one must supply them. An adapter reads neither, and the
+    approval executor is not a request at all: it replays a buy the seller already
+    accepted, off the row. Handing the DTO to adapters forced that replay to rebuild one
+    and to FABRICATE an idempotency key for rows stored before the field was required —
+    a value no buyer ever sent, in a field whose whole meaning is "what the buyer sent".
+
+    So this carries exactly what the adapters read, and nothing a buyer must send:
+
+    * ``brand`` — the campaign name every adapter derives, through ``brand_key_parts``.
+    * ``po_number`` — the buy's id prefix and the order/campaign name.
+    * ``total_budget`` — one number, already summed. ``CreateMediaBuyRequest`` computes
+      it from its packages (``get_total_budget``); the replay reads the row's column.
+    * ``already_approved`` — the approval executor's replay flag, a declared field
+      instead of the ``setattr(request, "_already_approved", True)`` it replaces.
+    * ``push_notification_config`` — GAM's webhook target for background order approval.
+
+    A field an adapter does not read does not belong here; ``extra="forbid"`` says so.
+
+    There are exactly TWO sources a carrier is ever built from — a buyer's validated
+    request, and the same request as the row persisted it — so there are exactly two
+    constructors, both below, and no caller builds one by hand. That is not a style
+    preference: the approval replay built its own and silently omitted
+    ``push_notification_config``, so a buy approved off the queue never told the buyer
+    its order had been approved. Neither constructor NAMES the buyer-supplied fields;
+    both read ``_buyer_supplied_fields()``, which is derived from the declared fields.
+    A field added to this class therefore reaches both sources with no further edit,
+    which is what keeps the two from disagreeing again.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    brand: BrandReference | dict[str, Any] | str | None = None
+    po_number: str | None = None
+    total_budget: Decimal = Decimal(0)
+    already_approved: bool = False
+    push_notification_config: PushNotificationConfig | None = None
+
+    #: The two fields the SELLER supplies rather than the buyer: ``total_budget`` is
+    #: summed by the caller (from the request's packages, or off the row's column), and
+    #: ``already_approved`` is the replay flag. Everything else comes from the buyer
+    #: under its own name, which is also the key the persisted dump stores it under.
+    _SELLER_SUPPLIED: ClassVar[frozenset[str]] = frozenset({"total_budget", "already_approved"})
+
+    @classmethod
+    def _buyer_supplied_fields(cls) -> tuple[str, ...]:
+        """The declared fields a buyer supplies, in declaration order."""
+        return tuple(name for name in cls.model_fields if name not in cls._SELLER_SUPPLIED)
+
+    @classmethod
+    def from_buyer_request(cls, req: CreateMediaBuyRequest) -> AdapterCreateRequest:
+        """Project a buyer's validated request onto what the adapters read.
+
+        ``already_approved`` is false by definition here: a request arriving from a
+        buyer has not been through the approval queue.
+        """
+        buyer_supplied = {name: getattr(req, name) for name in cls._buyer_supplied_fields()}
+        return cls(total_budget=req.get_total_budget(), **buyer_supplied)
+
+    @classmethod
+    def from_persisted_request(
+        cls,
+        raw_request: Mapping[str, Any],
+        *,
+        total_budget: Decimal,
+    ) -> AdapterCreateRequest:
+        """Project a PERSISTED request — ``media_buys.raw_request`` — onto the same shape.
+
+        For the approval executor, which replays a buy the seller already accepted. It
+        cannot go through ``from_buyer_request``: that takes a ``CreateMediaBuyRequest``,
+        and rebuilding the DTO from a row is exactly what forced the executor to
+        fabricate an ``idempotency_key`` no buyer ever sent. So the replay reads the dump
+        directly — ``raw_request`` is ``CreateMediaBuyRequest.model_dump(mode="json")``
+        as ``MediaBuyRepository.create_from_request`` wrote it, so the keys are the
+        buyer's field names and each value validates back through this model's own
+        annotations.
+
+        ``total_budget`` is passed rather than read from the dump: the row's own budget
+        column is the summed figure, and it is what the seller accepted.
+        ``already_approved`` is true by definition — this buy came through the queue.
+        """
+        buyer_supplied = {name: raw_request.get(name) for name in cls._buyer_supplied_fields()}
+        return cls(total_budget=total_budget, already_approved=True, **buyer_supplied)
+
+
+class AdapterCreateResult(BaseModel):
+    """What an adapter's ``create_media_buy`` hands back to the tool.
+
+    Read by ``media_buy_create`` after the row is written; the tool builds the buyer's
+    ``CreateMediaBuySuccess`` itself from the persisted row. This is never serialized
+    to a buyer, so it carries a seller-internal value (the per-package ad-server
+    line-item ids) without a wire model having to strip it. It carries exactly what the
+    tool reads: a workflow step an adapter opens is tracked by the workflow tables, not
+    handed back here.
+
+    ``extra="forbid"`` is what makes "exactly what the tool reads" a check rather than a
+    claim: a kwarg no tool reads raises at construction instead of being dropped. One
+    adapter kept passing the update response's effective-date field after the carrier
+    split precisely because nothing refused it.
+    """
+
+    # A carrier, never on the wire: an unknown keyword is a stale field from a deleted
+    # carrier version, so it fails at construction instead of being dropped silently.
+    model_config = ConfigDict(extra="forbid")
+
+    media_buy_id: str
+    packages: list[ResponsePackage]
+    creative_deadline: AwareDatetime | None = None
+    #: package_id -> ad-server line-item id, persisted as package_config["platform_line_item_id"].
+    platform_line_item_ids: dict[str, str] = Field(default_factory=dict)
+
+
+class AdapterUpdateResult(BaseModel):
+    """What an adapter's ``update_media_buy`` hands back to the tool.
+
+    Read by ``media_buy_update`` after the ad server is changed; the tool builds the
+    buyer's ``UpdateMediaBuySuccess`` itself from the re-read row. Never serialized to
+    a buyer.
+
+    ``extra="forbid"`` for the same reason as ``AdapterCreateResult``.
+    """
+
+    # Same reason as AdapterCreateResult: a stale keyword fails loudly.
+    model_config = ConfigDict(extra="forbid")
+
+    media_buy_id: str
+    affected_packages: list[AffectedPackage]
+
+
 class CreativeEngineAdapter(ABC):
     """Abstract base class for creative engine adapters."""
 
@@ -199,18 +340,14 @@ class AdServerAdapter(ABC):
         self,
         config: dict[str, Any],
         principal: Principal,
-        dry_run: bool = False,
         creative_engine: CreativeEngineAdapter | None = None,
         tenant_id: str | None = None,
     ):
         if not tenant_id:
-            raise ValueError(
-                "tenant_id is required for adapter initialization. All tenant-scoped operations need a valid tenant_id."
-            )
+            raise AdCPConfigurationError()
         self.config = config
         self.principal = principal
         self.principal_id = principal.principal_id  # For backward compatibility
-        self.dry_run = dry_run
         self.creative_engine = creative_engine
         self.tenant_id = tenant_id
         self.console = Console()
@@ -231,14 +368,13 @@ class AdServerAdapter(ABC):
             config.get("manual_approval_operations", ["create_media_buy", "update_media_buy", "add_creative_assets"])
         )
 
-    def _require_config(self, value: _ConfigT | None, *, field: str, message: str | None = None) -> _ConfigT:
+    def _require_config(self, value: _ConfigT | None, *, field: str) -> _ConfigT:
         """Return ``value`` when present; otherwise raise ``AdCPConfigurationError``.
 
         Centralizes the adapter-``__init__`` "required config value is absent"
         guard so every adapter raises the same exception type with the missing
-        ``field`` attached to the error. Pass ``message`` for the operator-facing
-        wording (adapters keep their own phrasing, standardized on "is missing");
-        ``field`` is always recorded on the error for structured consumers.
+        ``field`` attached to the error. The class, the code and ``field`` are the
+        whole diagnosis; no sentence is authored here.
 
         Returns the value with ``None`` stripped from its type, so callers can
         rebind (``self.x = self._require_config(self.x, ...)``) to narrow the
@@ -246,14 +382,11 @@ class AdServerAdapter(ABC):
         """
         if value:
             return value
-        raise AdCPConfigurationError(message or f"Adapter config is missing required field '{field}'", field=field)
+        raise AdCPConfigurationError(field=field)
 
-    def log(self, message: str, dry_run_prefix: bool = True):
-        """Log a message, with optional dry-run prefix."""
-        if self.dry_run and dry_run_prefix:
-            self.console.print(f"[dim](dry-run)[/dim] {message}")
-        else:
-            self.console.print(message)
+    def log(self, message: str):
+        """Log a message to the adapter console."""
+        self.console.print(message)
 
     def _build_package_responses(
         self,
@@ -274,7 +407,7 @@ class AdServerAdapter(ABC):
                 (useful for adapters that need product tracking, e.g. Mock).
 
         Returns:
-            List of ResponsePackage objects ready for CreateMediaBuySuccess.
+            List of ResponsePackage objects ready for AdapterCreateResult.
         """
         responses = []
         for package in packages:
@@ -289,36 +422,38 @@ class AdServerAdapter(ABC):
 
     def _build_create_success(
         self,
-        request: CreateMediaBuyRequest,
         media_buy_id: str,
         packages: list[MediaPackage],
         *,
         paused: bool = False,
         creative_deadline_days: int | None = 2,
-        workflow_step_id: str | None = None,
         package_responses: list[ResponsePackage] | None = None,
         include_product_id: bool = False,
-    ) -> CreateMediaBuySuccess:
-        """Build a CreateMediaBuySuccess response with standard fields.
+        platform_line_item_ids: dict[str, str] | None = None,
+    ) -> AdapterCreateResult:
+        """Build an AdapterCreateResult with standard fields.
 
-        Constructs the response with media_buy_id, creative_deadline,
+        Constructs the result with media_buy_id, creative_deadline,
         and package responses. If package_responses is not provided, builds them
         from the packages list.
 
+        Takes no request: the result is built from the ad server's own ids, and the
+        parameter this used to declare was read by nothing.
+
         Args:
-            request: The original create media buy request.
             media_buy_id: The generated media buy ID.
             packages: List of MediaPackage objects from the request.
             paused: Whether packages should be marked as paused.
             creative_deadline_days: Days from now for creative deadline.
                 None means no creative deadline (e.g. GAM sets this explicitly).
-            workflow_step_id: Optional workflow step ID for HITL tracking.
             package_responses: Pre-built package responses (overrides packages).
             include_product_id: Whether to include product_id in package responses
                 (only used when package_responses is None).
+            platform_line_item_ids: package_id -> ad-server line-item id, for adapters
+                that create one line item per package.
 
         Returns:
-            CreateMediaBuySuccess response.
+            AdapterCreateResult.
         """
         if package_responses is None:
             package_responses = self._build_package_responses(
@@ -327,28 +462,45 @@ class AdServerAdapter(ABC):
         creative_deadline = (
             datetime.now(UTC) + timedelta(days=creative_deadline_days) if creative_deadline_days is not None else None
         )
-        return CreateMediaBuySuccess.carrier(
+        return AdapterCreateResult(
             media_buy_id=media_buy_id,
             creative_deadline=creative_deadline,
             packages=package_responses,
-            workflow_step_id=workflow_step_id,
+            platform_line_item_ids=platform_line_item_ids or {},
         )
 
-    def get_supported_pricing_models(self) -> set[str]:
+    @staticmethod
+    def get_supported_pricing_models() -> set[str]:
         """Return set of pricing models this adapter supports (AdCP PR #88).
 
         Default implementation supports only CPM. Override in subclasses.
+        Staticmethod: no per-principal state, so it can be resolved from the
+        adapter CLASS alone via get_adapter_class_for_tenant() (salesagent-r9rf,
+        same INV-4 pattern as get_targeting_capabilities(), salesagent-dn2s) —
+        capability data must not require a resolved Principal to read.
 
         Returns:
             Set of pricing model strings: {"cpm", "cpcv", "cpp", "cpc", "cpv", "flat_rate"}
         """
         return {"cpm"}
 
-    def get_targeting_capabilities(self) -> TargetingCapabilities:
+    @staticmethod
+    def get_targeting_capabilities() -> TargetingCapabilities:
         """Return targeting capabilities this adapter supports.
 
         Default implementation returns minimal capabilities (geo country only).
         Override in subclasses with actual adapter capabilities.
+
+        A ``@staticmethod`` (not an instance method) because capability
+        discovery (get_adcp_capabilities) must read this off the adapter
+        CLASS, tenant-only, without ever constructing a Principal-bound
+        adapter instance (some adapters require principal-bound config in
+        ``__init__`` and would crash for a synthetic Principal — see
+        salesagent-dn2s). Keeping this a staticmethod makes
+        instance-independence a structural fact instead of an unenforced
+        convention: any future override that needs ``self`` (e.g. to read
+        adapter config) MUST stop being a plain override of this signature,
+        which forces a deliberate decision instead of a silent crash.
 
         Returns:
             TargetingCapabilities describing what targeting is supported
@@ -357,54 +509,72 @@ class AdServerAdapter(ABC):
 
     def validate_media_buy_request(
         self,
-        request: CreateMediaBuyRequest,
+        request: AdapterCreateRequest,
         packages: list[MediaPackage],
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
-    ) -> list[str]:
+    ) -> list[ErrorProblem]:
         """Pre-validate a media buy request without creating anything.
 
-        Called before adapter execution (including dry_run) to catch
+        Called before adapter execution to catch
         adapter-specific constraint violations early. Override in
         subclasses to add adapter-specific validation.
 
         Default implementation validates pricing model compatibility.
         Subclasses can override to add adapter-specific checks (e.g., impressions limits).
 
+        Returns ``ErrorProblem`` rather than strings (salesagent-rys3u.4). An adapter
+        CLASSIFIES a constraint violation; it does not describe one. ``ErrorProblem``
+        has no free-text field, so the four authored sentences this used to append --
+        the last of them a suggestion, the field the epic made a function of the code --
+        are not merely deleted but unwritable.
+
         Returns:
-            List of error messages. Empty list means validation passed.
+            One problem per violation. Empty list means validation passed.
         """
-        errors: list[str] = []
+        problems: list[ErrorProblem] = []
         supported = self.get_supported_pricing_models()
 
         if package_pricing_info:
-            for _pkg_id, pricing in package_pricing_info.items():
+            # Position, not just id: package_field_path builds an INDEXED pointer
+            # (packages[0].x), which is the shape the pinned contract grades and the
+            # only one that says WHICH package on a multi-package request.
+            index_of = {pkg.package_id: i for i, pkg in enumerate(packages)}
+            for pkg_id, pricing in package_pricing_info.items():
                 pricing_model = pricing.get("pricing_model", "")
                 if pricing_model and pricing_model.lower() not in supported:
-                    sorted_supported = ", ".join(sorted(s.upper() for s in supported))
-                    errors.append(
-                        f"Adapter does not support '{pricing_model}' pricing. "
-                        f"Supported pricing models: {sorted_supported}. "
-                        f"The requested pricing model ('{pricing_model}') is not available. "
-                        f"Please choose a product with compatible pricing."
+                    problems.append(
+                        ErrorProblem(
+                            code=ErrorCode.UNSUPPORTED_FEATURE,
+                            subject_type="package",
+                            # The old message discarded this, so a buyer with three
+                            # packages could not tell which one was refused.
+                            subject_id=pkg_id,
+                            field=package_field_path("pricing_option_id", index_of.get(pkg_id, 0)),
+                            rejected_value=pricing_model,
+                            # An ARRAY, which is the pin's canonical accepted_values
+                            # (core/error.json details description). It was a joined
+                            # string, which a machine has to split on ", ".
+                            accepted_values=sorted(m.upper() for m in supported),
+                        )
                     )
 
-        return errors
+        return problems
 
     @abstractmethod
     def create_media_buy(
         self,
-        request: CreateMediaBuyRequest,
+        request: AdapterCreateRequest,
         packages: list[MediaPackage],
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
-    ) -> CreateMediaBuyResponse:
+    ) -> AdapterCreateResult:
         """Creates a new media buy on the ad server from selected packages.
 
         Args:
-            request: Full create media buy request
+            request: The buy to place (never the buyer's DTO — see AdapterCreateRequest)
             packages: Simplified package models for adapter
             start_time: Campaign start time
             end_time: Campaign end time
@@ -412,7 +582,8 @@ class AdServerAdapter(ABC):
                 Maps package_id → {pricing_model, rate, currency, is_fixed, bid_price}
 
         Returns:
-            CreateMediaBuyResponse with media buy details
+            AdapterCreateResult with the ad server's ids. Failures are raised as
+            AdCPSalesAgentError subclasses, never returned.
         """
         pass
 
@@ -468,13 +639,6 @@ class AdServerAdapter(ABC):
         raise NotImplementedError("Snapshots not supported by this adapter")
 
     @abstractmethod
-    def update_media_buy_performance_index(
-        self, media_buy_id: str, package_performance: list[PackagePerformance]
-    ) -> bool:
-        """Updates the performance index for packages in a media buy."""
-        pass
-
-    @abstractmethod
     def update_media_buy(
         self,
         media_buy_id: str,
@@ -482,8 +646,11 @@ class AdServerAdapter(ABC):
         package_id: str | None,
         budget: int | None,
         today: datetime,
-    ) -> UpdateMediaBuyResponse:
-        """Updates a media buy with a specific action."""
+    ) -> AdapterUpdateResult:
+        """Updates a media buy with a specific action.
+
+        Failures are raised as AdCPSalesAgentError subclasses, never returned.
+        """
         pass
 
     def get_config_ui_endpoint(self) -> str | None:

@@ -12,20 +12,17 @@ before their start date.
 
 import asyncio
 import logging
-import os
 from datetime import UTC, datetime
 
 from sqlalchemy import select
 
+from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative, CreativeAssignment, MediaBuy, PersistedMediaBuyStatus
 from src.core.database.repositories import MediaBuyRepository
 from src.core.tools._media_buy_transitions import resolve_flight_window_status
 
 logger = logging.getLogger(__name__)
-
-# Configurable via env var - default 60 seconds
-STATUS_CHECK_INTERVAL_SECONDS = int(os.getenv("MEDIA_BUY_STATUS_CHECK_INTERVAL") or "60")
 
 
 _ACTIVATABLE_STATUSES = frozenset(
@@ -44,6 +41,8 @@ class MediaBuyStatusScheduler:
         self.is_running = False
         self._task: asyncio.Task | None = None
         self._lock = asyncio.Lock()
+        # MEDIA_BUY_STATUS_CHECK_INTERVAL, default 60 seconds. Read when the scheduler starts.
+        self._check_interval_seconds = 60
 
     async def start(self) -> None:
         """Start the scheduler background task."""
@@ -52,9 +51,10 @@ class MediaBuyStatusScheduler:
                 logger.warning("Media buy status scheduler is already running")
                 return
 
+            self._check_interval_seconds = get_settings().limits.media_buy_status_check_interval
             self.is_running = True
             self._task = asyncio.create_task(self._run_scheduler())
-            logger.info(f"Media buy status scheduler started (checking every {STATUS_CHECK_INTERVAL_SECONDS}s)")
+            logger.info(f"Media buy status scheduler started (checking every {self._check_interval_seconds}s)")
 
     async def stop(self) -> None:
         """Stop the scheduler background task."""
@@ -82,7 +82,7 @@ class MediaBuyStatusScheduler:
                 logger.error(f"Error in media buy status scheduler: {e}", exc_info=True)
             finally:
                 # Wait before next check
-                await asyncio.sleep(STATUS_CHECK_INTERVAL_SECONDS)
+                await asyncio.sleep(self._check_interval_seconds)
 
     async def _update_statuses(self) -> None:
         """Check and update media buy statuses based on flight dates."""

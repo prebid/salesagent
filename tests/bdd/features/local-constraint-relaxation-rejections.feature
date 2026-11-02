@@ -29,7 +29,8 @@ Feature: Request-schema bounds the local models must enforce (local)
     And the account exists and is active
     But a package carries an impression goal of -5
     When the Buyer Agent sends the create_media_buy request
-    Then the request is refused on the wire with code "VALIDATION_ERROR" recovery "correctable" naming field "packages[0].impressions"
+    Then the error is compliant with the AdCP error spec
+    And the request is refused on the wire with code "INVALID_REQUEST" recovery "correctable" naming field "packages[0].impressions"
     And no media buy is persisted for the tenant
 
   @T-UC-002-ext-bounds-packages @extension @error @local-relaxation
@@ -39,7 +40,8 @@ Feature: Request-schema bounds the local models must enforce (local)
     And the account exists and is active
     But the request carries an empty packages array
     When the Buyer Agent sends the create_media_buy request
-    Then the request is refused on the wire with code "VALIDATION_ERROR" recovery "correctable" naming field "packages"
+    Then the error is compliant with the AdCP error spec
+    And the request is refused on the wire with code "INVALID_REQUEST" recovery "correctable" naming field "packages"
     And no media buy is persisted for the tenant
 
   @T-UC-002-ext-bounds-creatives @extension @error @local-relaxation
@@ -55,7 +57,8 @@ Feature: Request-schema bounds the local models must enforce (local)
     And the account exists and is active
     But a package carries an empty creatives array
     When the Buyer Agent sends the create_media_buy request
-    Then the request is refused on the wire with code "VALIDATION_ERROR" recovery "correctable" naming field "packages[0].creatives"
+    Then the error is compliant with the AdCP error spec
+    And the request is refused on the wire with code "INVALID_REQUEST" recovery "correctable" naming field "packages[0].creatives"
     And no media buy is persisted for the tenant
 
   # ── update_media_buy ────────────────────────────────────────────────
@@ -72,5 +75,6 @@ Feature: Request-schema bounds the local models must enforce (local)
     Given an existing media buy to update
     But the update carries an empty packages array
     When the Buyer Agent sends the update_media_buy request as raw wire parameters
-    Then the request is refused on the wire with code "VALIDATION_ERROR" recovery "correctable" naming field "packages"
+    Then the error is compliant with the AdCP error spec
+    And the request is refused on the wire with code "INVALID_REQUEST" recovery "correctable" naming field "packages"
     And the media buy's persisted revision is unchanged

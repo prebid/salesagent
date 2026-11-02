@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pricing_option_id — problem, fix, grading, observable change</title>
+<style>
+  :root {
+    --bg: #fbfaf8; --fg: #1c1b19; --muted: #6b6862; --rule: #e0dcd4;
+    --card: #ffffff; --accent: #8a3b12; --good: #2f6b3a; --bad: #a32a1f;
+    --code-bg: #f4f1ec;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14150f; --fg: #eae7df; --muted: #9b968c; --rule: #2f302a;
+      --card: #1b1c16; --accent: #e0a06a; --good: #7fbc8c; --bad: #e08076;
+      --code-bg: #21221b;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14150f; --fg: #eae7df; --muted: #9b968c; --rule: #2f302a;
+    --card: #1b1c16; --accent: #e0a06a; --good: #7fbc8c; --bad: #e08076;
+    --code-bg: #21221b;
+  }
+  body { background: var(--bg); color: var(--fg); font: 15px/1.62 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+         margin: 0; padding: 40px 24px 80px; }
+  main { max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 27px; line-height: 1.25; margin: 0 0 6px; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); margin: 0 0 34px; font-size: 14px; }
+  h2 { font-size: 19px; margin: 42px 0 12px; padding-bottom: 7px; border-bottom: 2px solid var(--rule); letter-spacing: -0.005em; }
+  h3 { font-size: 15.5px; margin: 26px 0 8px; color: var(--accent); }
+  p { margin: 0 0 13px; }
+  code { background: var(--code-bg); padding: 1.5px 5px; border-radius: 3px;
+         font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  pre { background: var(--code-bg); padding: 13px 15px; border-radius: 6px; overflow-x: auto;
+        font: 12.5px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 0 0 15px; }
+  .tw { overflow-x: auto; margin: 0 0 16px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+  th, td { text-align: left; padding: 8px 11px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { font-weight: 600; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+  td code { font-size: 12.5px; }
+  .card { background: var(--card); border: 1px solid var(--rule); border-radius: 8px; padding: 16px 19px; margin: 0 0 16px; }
+  .card > :last-child { margin-bottom: 0; }
+  .bad { color: var(--bad); font-weight: 600; }
+  .good { color: var(--good); font-weight: 600; }
+  ul, ol { margin: 0 0 13px; padding-left: 22px; }
+  li { margin-bottom: 5px; }
+  .note { color: var(--muted); font-size: 13.5px; }
+  .lede { font-size: 16px; }
+</style>
+</head>
+<body>
+<main>
+
+<h1><code>pricing_option_id</code>: from five recomputations to one stored column</h1>
+<p class="sub">Branch <code>feature/spec-gaps-1210</code> · AdCP 3.1.1 (<code>adcp==6.6.0</code>) · 2026-09-08</p>
+
+<h2>1. The original problem</h2>
+
+<p class="lede"><code>pricing_option_id</code> is how a buyer selects what they are paying.
+It is <strong>required</strong> in all nine <code>pricing-options/*.json</code> schemas, and
+<code>media-buy/package-request.json</code> marks the buyer's copy
+<code>"x-entity": "product_pricing_option"</code> — it is a reference to a stored entity.</p>
+
+<p>The <code>pricing_options</code> table had <strong>no such column</strong>. So five places in
+the codebase independently rebuilt the string
+<code>{pricing_model}_{currency}_{fixed|auction}</code> out of three other columns:</p>
+
+<div class="tw">
+<table>
+<tr><th>Site</th><th>Role</th><th>Spelling</th></tr>
+<tr><td><code>product_conversion.py:81</code></td><td>announces it in <code>get_products</code></td><td>lowercases the model</td></tr>
+<tr><td><code>product_conversion.py:245</code></td><td>CPA branch, hand-typed separately</td><td>always <code>_fixed</code></td></tr>
+<tr><td><code>database/product_pricing.py:53</code></td><td>second announcer</td><td>does <em>not</em> lowercase the model</td></tr>
+<tr><td><code>media_buy_create.py:1651</code></td><td>matches the buyer's selection</td><td>via a shared helper, did <em>not</em> lowercase</td></tr>
+<tr><td><code>media_buy_delivery.py:1108</code></td><td>resolves the option for a delivery report</td><td>same helper</td></tr>
+<tr><td><code>bdd/steps/generic/_create_request.py:17</code></td><td>test-side sixth copy</td><td>did <em>not</em> lowercase</td></tr>
+</table>
+</div>
+
+<h3>What that cost, concretely</h3>
+
+<div class="card">
+<p><span class="bad">Defect 1 — a row stored as <code>"CPM"</code> was unreachable.</span>
+Nothing normalises <code>pricing_model</code> on the way into the table. A row holding
+<code>"CPM"</code> was <em>announced</em> as <code>cpm_usd_auction</code> (the announcer lowercases)
+and then <em>looked up</em> as <code>CPM_usd_auction</code> (the resolver did not). The buyer sent
+back exactly the id they were given, and it matched nothing.</p>
+
+<p><span class="bad">Defect 2 — two options could share one id.</span> Nothing prevented a product
+from carrying two rows that produced the same string. The reader built a <code>dict</code> keyed by
+it, so one row was silently dropped and the buyer's selection resolved to whichever row won.</p>
+
+<p><span class="bad">Defect 3 — the id could not be chosen.</span> A publisher had no way to
+name an option; the id was a function of three unrelated columns, so re-pricing an option
+(cpm → cpc) silently <em>renamed</em> the entity a buyer had already selected.</p>
+</div>
+
+<h3>Two adjacent defects the work surfaced</h3>
+
+<p>Both were measured, not inferred.</p>
+
+<ul>
+<li><strong>Both shared helpers were dead against real V3 objects.</strong>
+<code>synthetic_pricing_option_id()</code> reads <code>option.is_fixed</code> and
+<code>pricing_info_for()</code> reads <code>option.rate</code> — neither field exists on the SDK's V3
+pricing options (<code>declared: [currency, fixed_price, floor_price, max_bid, …]</code>). Both raise
+<code>AttributeError</code> on a real schema option. They happened to work only because every live
+call site passes an ORM row, which does have those columns.</li>
+<li><strong>The admin create form never wrote a price into the product card.</strong>
+<code>products.py</code> read <code>first_option.get("fixed_price")</code> — a key the form parser has never
+produced (the parser emits <code>rate</code>). The branch was dead, so a product created through the
+admin UI got a <code>product_card.manifest</code> with a <code>pricing_model</code> and no
+<code>pricing_amount</code>. The edit form read <code>rate</code> and worked. Typing the parser's output
+made the mismatch a hard error instead of a silent <code>.get()</code> miss.</li>
+</ul>
+
+<h2>2. How it was solved</h2>
+
+<h3>A real column, and one place that assigns it</h3>
+
+<p>Migration <code>d1a7c4b90e33</code> adds
+<code>pricing_options.pricing_option_id VARCHAR(100) NOT NULL</code> plus
+<code>UNIQUE (tenant_id, product_id, pricing_option_id)</code> — "unique … <em>within the
+product</em>", as the schema says.</p>
+
+<p>The backfill reproduces the id <code>get_products</code> <strong>already announced</strong>, verbatim.
+That is the binding constraint: buyers hold these ids, so a backfill that spelled them
+differently would strand every id in the wild. Where a product had two rows that announced the
+same id, the later one gets an ordinal suffix — renaming an id that named two rows and was
+therefore never reliable.</p>
+
+<pre>lower(pricing_model) || '_' || lower(currency) || '_' ||
+CASE WHEN is_fixed OR lower(pricing_model) = 'cpa' THEN 'fixed' ELSE 'auction' END</pre>
+
+<p>All six grammar copies are deleted. <code>synthetic_pricing_option_id()</code> is gone. Every
+reader now reads <code>po.pricing_option_id</code>. The grammar survives in exactly one place —
+<code>PricingOption.default_option_id()</code> — and it is a <strong>default for a new row</strong>, not
+a derivation on read. Once written, the column is authoritative, so a publisher can give an
+option any id it likes and every reader honours it.</p>
+
+<p>Every writer goes through <code>PricingOption.create()</code>, so no row can reach the database
+without an id.</p>
+
+<h3>Collateral DRY cleanup the typing forced</h3>
+
+<p><code>parse_pricing_options_from_form()</code> returned <code>list[dict]</code> — a second shape for a
+thing the ORM model already types. It now returns <code>list[PricingOption]</code>. That removed
+three copies of the same <code>Decimal</code> coercion and one hand-written seven-name column list;
+the edit form's copy list is now derived from the mapper, so a column added to the model is
+carried without anyone remembering to list it.</p>
+
+<h2>3. How it is tested</h2>
+
+<p>The grading lives where the behaviour is observable: <strong>on the wire, across all three
+transports</strong>. Two mock-based unit files were retired in the process — see §5.</p>
+
+<div class="tw">
+<table>
+<tr><th>Scenario</th><th>Grades</th><th>Runs</th></tr>
+<tr><td><code>T-UC-GET-PRODUCTS-pricing-fixed</code></td><td>all nine models, fixed: the exact option a buyer receives</td><td>9 × 3</td></tr>
+<tr><td><code>T-UC-GET-PRODUCTS-pricing-auction</code></td><td>auction: <code>floor_price</code> lifted out of <code>price_guidance</code></td><td>3 × 3</td></tr>
+<tr><td><code>T-UC-GET-PRODUCTS-pricing-id-case</code></td><td>a row stored as <code>"CPM"</code> is announced <code>cpm_usd_fixed</code> — Defect 1</td><td>1 × 3</td></tr>
+<tr><td><code>T-UC-GET-PRODUCTS-pricing-id-distinct</code></td><td>two options on one product get distinct ids — Defect 2</td><td>1 × 3</td></tr>
+<tr><td><code>T-UC-GET-PRODUCTS-pricing-unannounceable</code></td><td>4 stored rows the seller cannot announce → <code>INTERNAL_ERROR</code></td><td>4 × 3</td></tr>
+<tr><td><code>T-UC-002-ext-n-min-spend</code></td><td>budget under <code>min_spend_per_package</code> → <code>VALIDATION_ERROR</code></td><td>1 × 3</td></tr>
+</table>
+</div>
+
+<p><strong>57 runs, all live</strong> (no xfail, no dormancy). Every scenario stores a real
+<code>PricingOption</code> row through the factory and reads the serialized response body — not the
+typed payload, which has already coerced its fields and so cannot show a serialization defect.
+The announcement scenarios compare the <em>whole</em> option by value, so a field the seller adds
+is as much a failure as one it drops.</p>
+
+<h3>Mutation-checked, not assumed</h3>
+
+<div class="card">
+<p>A passing test is not a grading test. Five deliberate production mutations:</p>
+<div class="tw">
+<table>
+<tr><th>Mutation</th><th>Result</th></tr>
+<tr><td><code>default_option_id</code> stops lowercasing the model</td><td class="good">3 red — the id-case scenario</td></tr>
+<tr><td><code>product_conversion</code> recomputes the id instead of reading the column</td><td class="good">42 red</td></tr>
+<tr><td>CPA stops promoting <code>event_type</code></td><td class="good">3 red — <em>after</em> a fix, see below</td></tr>
+<tr><td>minimum-spend branch disabled</td><td class="good">3 red — only that scenario</td></tr>
+<tr><td>fixed-rate branch disabled</td><td class="good">3 red — only that scenario</td></tr>
+</table>
+</div>
+<p class="note">The CPA mutation initially left <strong>all 63 green</strong>: the example row used
+<code>event_type: "purchase"</code>, the exact constant the mutation hardcoded, so the field was
+never graded. The example was changed to <code>qualify_lead</code> (and the time row to
+<code>week</code>) so no row uses a value production could plausibly default to. Found by running
+the mutation, not by reading the test.</p>
+</div>
+
+<h2>3b. What only the real database could show</h2>
+
+<div class="card">
+<p>Three of the error scenarios above originally graded states that <strong>cannot exist</strong>.
+The <code>pricing_options</code> table carries constraints no in-process fixture was meeting:</p>
+<pre>check_fixed_has_rate                is_fixed  =&gt; rate IS NOT NULL
+check_auction_has_price_guidance    !is_fixed =&gt; price_guidance ? 'floor'
+enforce_min_one_pricing_option      a product's last option cannot be deleted</pre>
+<p>So "a fixed option with no rate", "an auction option with no floor", and "a product with
+no pricing options" are rows the seller can never hold. Those scenarios passed in-process
+and failed only on the <code>e2e_rest</code> transport, which writes to a real migrated
+database — the in-process passes were <strong>vacuous</strong>. They are removed, with the
+reason recorded in the feature files. What survives are the four model-specific
+<code>parameters</code> defects that no constraint covers.</p>
+<p>The same constraints are why <code>PricingOptionFactory</code> now derives
+<code>rate</code> and <code>price_guidance</code> from <code>is_fixed</code>: a flat
+<code>Decimal("5.00")</code> default was giving every auction fixture a fixed rate.</p>
+</div>
+
+<h2>3c. Three defects the CI run found in this change</h2>
+
+<div class="tw">
+<table>
+<tr><th>Defect</th><th>Cost</th><th>Why local checks missed it</th></tr>
+<tr><td><code>_adjust_kwargs</code> set <code>product = None</code> instead of removing the key</td>
+    <td>~200 integration failures</td>
+    <td><code>product</code> is a relationship over the FK columns, so an explicit
+        <code>None</code> means "no parent" and SQLAlchemy nulls <code>tenant_id</code>/
+        <code>product_id</code> <em>at flush</em>. A <code>.build()</code> check reads the
+        attributes, which still hold the caller's values, so it looks correct until the INSERT.</td></tr>
+<tr><td>Seven raw ORM constructions used import aliases</td>
+    <td>including one in <code>src/</code></td>
+    <td>The migration matched the literal name <code>PricingOption(</code>.
+        <code>PricingOptionModel(</code> and <code>DBPricingOption(</code> are the same class
+        under a different local name. An AST scan that resolves each module's alias finds them;
+        a text scan cannot.</td></tr>
+<tr><td>25 stale <code>response, _ = await _create_media_buy_impl(...)</code> unpacks</td>
+    <td>pre-existing, unrelated</td>
+    <td>Left over from the <code>AdcpResponse</code> refactor; the impl returns one object.</td></tr>
+</table>
+</div>
+
+<p class="note">A fourth item is about method, not code: the first local integration and BDD
+runs were dismissed as contaminated because they had overlapped on one database. They were
+not — CI reproduced them almost exactly (99F/130E vs 100F/134E; 26F vs 26F). The convenient
+explanation was the wrong one, and the numbers were real.</p>
+
+<h2>4. What behaviour actually changes</h2>
+
+<h3>Over MCP / A2A / REST</h3>
+
+<div class="tw">
+<table>
+<tr><th>Situation</th><th>Before</th><th>After</th></tr>
+<tr><td><code>get_products</code>, option stored with model <code>"CPM"</code></td>
+    <td>announced <code>cpm_usd_auction</code>; sending it back resolved to nothing</td>
+    <td>announced <code>cpm_usd_auction</code> and resolves — one stored spelling</td></tr>
+<tr><td><code>get_products</code>, two same-shaped options on one product</td>
+    <td>one silently dropped from the response</td>
+    <td>unrepresentable — the database refuses the duplicate at write time</td></tr>
+<tr><td><code>create_media_buy</code> naming an announced id</td>
+    <td>matched a recomputed string; case-sensitive mismatch failed as <code>VALIDATION_ERROR</code></td>
+    <td>matches the stored id</td></tr>
+<tr><td><code>get_media_buy_delivery</code> for such a buy</td>
+    <td>option unresolvable → <code>_package_pricing</code> raises → <strong>the buy vanishes from its own delivery report</strong></td>
+    <td>resolves</td></tr>
+<tr><td>A stored option missing what its model requires</td>
+    <td>same <code>INTERNAL_ERROR</code>, but ungraded</td>
+    <td>unchanged, now graded on all three transports</td></tr>
+</table>
+</div>
+
+<p class="note">For a seller whose <code>pricing_model</code> values are already lowercase — the
+common case — <strong>nothing on the wire changes</strong>. The backfill reproduces the ids
+byte-for-byte. The fix removes a class of failure; it does not move anyone's ids.</p>
+
+<h3>In the Admin UI</h3>
+
+<ul>
+<li><strong>Creating a product now writes a price into its product card.</strong> Previously
+<code>pricing_amount</code> and <code>pricing_currency</code> were silently omitted on the create path
+(dead <code>fixed_price</code> key). Edit already worked; the two paths now agree.</li>
+<li><strong>Re-pricing an option no longer renames it.</strong> Editing a product's pricing model
+or currency keeps <code>pricing_option_id</code>, so a buyer's stored selection stays valid. Before,
+the announced id silently changed under them.</li>
+<li><strong>Adding a duplicate option is now refused by the database</strong> instead of producing
+two rows a buyer cannot tell apart. <span class="note">Note: this surfaces as an
+<code>IntegrityError</code>, not a flash message — see Open items.</span></li>
+</ul>
+
+<h2>5. Two unit files retired</h2>
+
+<p>Both were commented out, not deleted, so the mapping stays reviewable.</p>
+
+<div class="card">
+<p><code>tests/unit/test_product_conversion_pricing.py</code> — 54 tests calling the translator
+directly with a hand-built option dict. That grades the translator against itself: nothing
+stored a row and nothing read a wire, and it could not express what a buyer gets when the
+stored row is malformed, because at that level there is no response. Replaced by the 21
+<code>GET-PRODUCTS</code> scenarios above, which cover strictly more.</p>
+
+<p><code>tests/unit/test_pricing_validation.py</code> — 11 tests built on <code>Mock()</code> products
+whose fields were typed out by hand, so they went stale the moment the model gained a column.
+Three of its obligations were already graded live by existing UC-002 scenarios; three more got
+new scenarios. Two happy paths are the UC-002 main flow. One
+(<code>test_currency_mismatch</code>) exercised the legacy <code>pricing_model</code> fallback that a
+request carrying the required <code>pricing_option_id</code> cannot reach — grading it would pin a
+branch no conformant buyer can enter.</p>
+</div>
+
+<h2>6. Suite state</h2>
+
+<p>Unit: <strong>8 failures, all pre-existing</strong> — the same set present at the branch head
+before this work (12 there; 4 were <code>test_architecture_repository_pattern</code> rows this change
+cleared). <strong>Zero new failures.</strong> The pre-existing 8 are
+<code>test_adcp_contract</code> (1), <code>test_architecture_schema_inheritance</code> (2),
+<code>test_architecture_harness_realize_e2e_coverage</code> (1), <code>test_creative</code> (1),
+<code>test_datetime_string_parsing</code> (1), <code>test_delivery_schema_contracts</code> (2). They are
+unrelated to pricing and are not addressed here.</p>
+
+<h2>7. Open items</h2>
+
+<ol>
+<li><strong>The admin form cannot set a <code>pricing_option_id</code>.</strong> The column supports
+publisher-chosen ids and every reader honours one, but the UI offers no field, so in practice
+every id is still the default. Adding the input is the remaining half of "the publisher owns
+the id".</li>
+<li><strong>A duplicate option surfaces as an <code>IntegrityError</code>, not a flash message.</strong>
+The constraint is correct; the admin form should catch it and say "two options on a product
+cannot share an id".</li>
+<li><strong><code>pricing_info_for()</code> still cannot take a schema object.</strong>
+It reads <code>option.rate</code>, which V3 options do not declare. Every live caller passes an
+ORM row so nothing is broken today, but the signature says <code>Any</code> and the failure
+mode is an <code>AttributeError</code> at runtime. This is item #1 of the agreed 2 → 1 → 3
+sequence, still to do. (Its sibling <code>synthetic_pricing_option_id()</code> is gone —
+the column replaced it.)</li>
+<li><strong>Auction delivery is still broken</strong> — <code>prebid/salesagent#2229</code>. An auction
+option's <code>rate</code> column is NULL, so <code>_package_pricing</code> raises and the buy is dropped
+from its own delivery report. Graded as a spec-production gap by
+<code>T-UC-004-package-auction-rate</code>; not fixed here.</li>
+</ol>
+
+</main>
+</body>
+</html>

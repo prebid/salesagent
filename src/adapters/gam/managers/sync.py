@@ -37,7 +37,6 @@ class GAMSyncManager:
         inventory_manager: GAMInventoryManager,
         orders_manager: GAMOrdersManager,
         tenant_id: str,
-        dry_run: bool = False,
     ):
         """Initialize sync manager.
 
@@ -46,20 +45,18 @@ class GAMSyncManager:
             inventory_manager: GAM inventory manager instance
             orders_manager: GAM orders manager instance
             tenant_id: Tenant identifier
-            dry_run: Whether to run in dry-run mode
         """
         self.client_manager = client_manager
         self.inventory_manager = inventory_manager
         self.orders_manager = orders_manager
         self.tenant_id = tenant_id
-        self.dry_run = dry_run
 
         # Sync configuration
         self.sync_timeout = timedelta(minutes=30)  # Maximum sync time
         self.retry_attempts = 3
         self.retry_delay = timedelta(minutes=5)
 
-        logger.info(f"Initialized GAMSyncManager for tenant {tenant_id} (dry_run: {dry_run})")
+        logger.info(f"Initialized GAMSyncManager for tenant {tenant_id}")
 
     def sync_inventory(
         self,
@@ -97,37 +94,19 @@ class GAMSyncManager:
             sync_job.status = "running"
             db_session.commit()
 
-            if self.dry_run:
-                # Simulate inventory sync in dry-run mode
-                summary = {
-                    "tenant_id": self.tenant_id,
-                    "sync_time": datetime.now(UTC).isoformat(),
-                    "dry_run": True,
-                    "duration_seconds": 0,
-                    "ad_units": {"total": 0, "active": 0},
-                    "placements": {"total": 0, "active": 0},
-                    "labels": {"total": 0, "active": 0},
-                    "custom_targeting": {"total_keys": 0, "total_values": 0},
-                    "audience_segments": {"total": 0},
-                }
-                logger.info("[DRY RUN] Simulated inventory sync completed")
-            else:
-                # Perform actual inventory sync with custom targeting parameters
-                summary = self.inventory_manager.sync_all_inventory(
-                    custom_targeting_limit=custom_targeting_limit, fetch_values=fetch_custom_targeting_values
-                )
+            # Perform actual inventory sync with custom targeting parameters
+            summary = self.inventory_manager.sync_all_inventory(
+                custom_targeting_limit=custom_targeting_limit, fetch_values=fetch_custom_targeting_values
+            )
 
-                # Save inventory to database - this would be delegated to inventory service
-                from src.adapters.gam_inventory_discovery import GAMInventoryDiscovery
-                from src.services.gam_inventory_service import GAMInventoryService
+            # Save inventory to database - this would be delegated to inventory service
+            from src.services.gam_inventory_service import GAMInventoryService
 
-                inventory_service = GAMInventoryService(db_session)
+            inventory_service = GAMInventoryService(db_session)
 
-                # Get the discovery instance and save to DB
-                discovery = self.inventory_manager._get_discovery()
-                # Only save real discovery instances to DB, not mock instances
-                if isinstance(discovery, GAMInventoryDiscovery):
-                    inventory_service._save_inventory_to_db(self.tenant_id, discovery)
+            # Get the discovery instance and save to DB
+            discovery = self.inventory_manager._get_discovery()
+            inventory_service._save_inventory_to_db(self.tenant_id, discovery)
 
             # Update sync job with results
             sync_job.status = "completed"
@@ -183,28 +162,16 @@ class GAMSyncManager:
             sync_job.status = "running"
             db_session.commit()
 
-            if self.dry_run:
-                # Simulate orders sync in dry-run mode
-                summary = {
-                    "tenant_id": self.tenant_id,
-                    "sync_time": datetime.now(UTC).isoformat(),
-                    "dry_run": True,
-                    "duration_seconds": 0,
-                    "orders": {"total": 0, "active": 0},
-                    "line_items": {"total": 0, "active": 0},
-                }
-                logger.info("[DRY RUN] Simulated orders sync completed")
-            else:
-                # Perform actual orders sync
-                # This would be implemented when orders sync is needed
-                summary = {
-                    "tenant_id": self.tenant_id,
-                    "sync_time": datetime.now(UTC).isoformat(),
-                    "duration_seconds": 0,
-                    "orders": {"total": 0, "active": 0},
-                    "line_items": {"total": 0, "active": 0},
-                    "message": "Orders sync not yet implemented in sync manager",
-                }
+            # Perform actual orders sync
+            # This would be implemented when orders sync is needed
+            summary = {
+                "tenant_id": self.tenant_id,
+                "sync_time": datetime.now(UTC).isoformat(),
+                "duration_seconds": 0,
+                "orders": {"total": 0, "active": 0},
+                "line_items": {"total": 0, "active": 0},
+                "message": "Orders sync not yet implemented in sync manager",
+            }
 
             # Update sync job with results
             sync_job.status = "completed"
@@ -254,10 +221,9 @@ class GAMSyncManager:
             db_session.commit()
 
             start_time = datetime.now(UTC)
-            combined_summary = {
+            combined_summary: dict[str, Any] = {
                 "tenant_id": self.tenant_id,
                 "sync_time": start_time.isoformat(),
-                "dry_run": self.dry_run,
             }
 
             # Sync inventory first with custom targeting limit
@@ -330,36 +296,21 @@ class GAMSyncManager:
 
             start_time = datetime.now(UTC)
 
-            if self.dry_run:
-                # Simulate selective sync in dry-run mode
-                summary = {
-                    "tenant_id": self.tenant_id,
-                    "sync_time": start_time.isoformat(),
-                    "dry_run": True,
-                    "sync_types": sync_types,
-                    "duration_seconds": 0,
-                }
-                logger.info("[DRY RUN] Simulated selective sync completed")
-            else:
-                # Get discovery instance
-                from src.adapters.gam_inventory_discovery import GAMInventoryDiscovery
+            # Get discovery instance
+            discovery = self.inventory_manager._get_discovery()
 
-                discovery = self.inventory_manager._get_discovery()
+            # Perform selective sync using the discovery's sync_selective method
+            summary = discovery.sync_selective(
+                sync_types=sync_types,
+                custom_targeting_limit=custom_targeting_limit,
+                audience_segment_limit=audience_segment_limit,
+            )
 
-                # Perform selective sync using the discovery's sync_selective method
-                summary = discovery.sync_selective(
-                    sync_types=sync_types,
-                    custom_targeting_limit=custom_targeting_limit,
-                    audience_segment_limit=audience_segment_limit,
-                )
+            # Save inventory to database
+            from src.services.gam_inventory_service import GAMInventoryService
 
-                # Save inventory to database
-                from src.services.gam_inventory_service import GAMInventoryService
-
-                inventory_service = GAMInventoryService(db_session)
-                # Only save real discovery instances to DB, not mock instances
-                if isinstance(discovery, GAMInventoryDiscovery):
-                    inventory_service._save_inventory_to_db(self.tenant_id, discovery)
+            inventory_service = GAMInventoryService(db_session)
+            inventory_service._save_inventory_to_db(self.tenant_id, discovery)
 
             # Update sync job with results
             sync_job.status = "completed"

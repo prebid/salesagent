@@ -14,7 +14,7 @@ from __future__ import annotations
 import datetime
 from collections.abc import Collection
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
@@ -24,9 +24,8 @@ from src.core.database.models import (
     MediaPackage,
     PersistedMediaBuyStatus,
 )
-
-if TYPE_CHECKING:
-    from adcp.types import ContextObject
+from src.core.errors.details import EntityRefDetails
+from src.core.idempotency_canonical import canonical_request_hash
 
 
 class MediaBuyRepository:
@@ -75,26 +74,19 @@ class MediaBuyRepository:
             )
         ).first()
 
-    def get_by_id_or_raise(
-        self, media_buy_id: str, *, context: ContextObject | dict[str, Any] | None = None
-    ) -> MediaBuy:
+    def get_by_id_or_raise(self, media_buy_id: str) -> MediaBuy:
         """Get a media buy by ID or raise ``AdCPMediaBuyNotFoundError``.
 
         Collapses the "look up the media buy, raise the typed not-found if it
         does not exist" guard duplicated across the update tool into one place.
-        ``context`` is echoed into the error envelope so buyer agents can
-        correlate the failure. Coexists with ``get_by_id`` — callers that
-        deliberately tolerate ``None`` keep using that.
+        Coexists with ``get_by_id`` — callers that deliberately tolerate ``None``
+        keep using that.
         """
         media_buy = self.get_by_id(media_buy_id)
         if media_buy is None:
             from src.core.exceptions import AdCPMediaBuyNotFoundError
 
-            raise AdCPMediaBuyNotFoundError(
-                f"Media buy '{media_buy_id}' not found",
-                suggestion="Verify the media_buy_id is correct and belongs to your account.",
-                context=context,
-            )
+            raise AdCPMediaBuyNotFoundError(details=EntityRefDetails(media_buy_id=media_buy_id))
         return media_buy
 
     def find_by_idempotency_key(
@@ -142,6 +134,7 @@ class MediaBuyRepository:
         *,
         media_buy_ids: list[str] | None = None,
         statuses: list[PersistedMediaBuyStatus] | None = None,
+        account_id: str | None = None,
     ) -> list[MediaBuy]:
         """Get media buys for a principal within the tenant.
 
@@ -155,6 +148,8 @@ class MediaBuyRepository:
             stmt = stmt.where(MediaBuy.media_buy_id.in_(media_buy_ids))
         if statuses is not None:
             stmt = stmt.where(MediaBuy.status.in_(statuses))
+        if account_id is not None:
+            stmt = stmt.where(MediaBuy.account_id == account_id)
         return list(self._session.scalars(stmt).all())
 
     def get_active(self) -> list[MediaBuy]:
@@ -201,23 +196,18 @@ class MediaBuyRepository:
             )
         ).first()
 
-    def get_package_or_raise(
-        self, media_buy_id: str, package_id: str, *, context: ContextObject | dict[str, Any] | None = None
-    ) -> MediaPackage:
+    def get_package_or_raise(self, media_buy_id: str, package_id: str) -> MediaPackage:
         """Get a package or raise ``AdCPPackageNotFoundError``.
 
         Collapses the package fetch-and-raise guard duplicated across the update
-        tool. ``context`` is echoed into the error envelope. Coexists with
-        ``get_package`` for callers that tolerate ``None``.
+        tool. Coexists with ``get_package`` for callers that tolerate ``None``.
         """
         package = self.get_package(media_buy_id, package_id)
         if package is None:
             from src.core.exceptions import AdCPPackageNotFoundError
 
             raise AdCPPackageNotFoundError(
-                f"Package '{package_id}' not found for media buy '{media_buy_id}'",
-                suggestion="Verify the package_id exists in this media buy; list the media buy's packages to find valid ids.",
-                context=context,
+                details=EntityRefDetails(package_id=package_id, media_buy_id=media_buy_id),
             )
         return package
 
@@ -353,7 +343,6 @@ class MediaBuyRepository:
         by_alias: bool = False,
         created_at: datetime.datetime | None = None,
         account_id: str | None = None,
-        payload_hash: str | None = None,
     ) -> MediaBuy:
         """Create a MediaBuy from a request model, serializing raw_request at the DB boundary.
 
@@ -378,8 +367,6 @@ class MediaBuyRepository:
             by_alias: Whether to serialize with field aliases (e.g., content_uri).
             created_at: Optional explicit created_at timestamp.
             account_id: Resolved account scope (AdCP idempotency scope is agent+account+key).
-            payload_hash: Canonical request hash from the idempotency probe; the
-                degraded fallback's IDEMPOTENCY_CONFLICT signal.
 
         Returns:
             The created MediaBuy ORM object (added to session, not committed).
@@ -406,11 +393,17 @@ class MediaBuyRepository:
             "end_time": end_time,
             "status": PersistedMediaBuyStatus.parse(status, media_buy_id=media_buy_id),
             "raw_request": raw,
-            # Canonical request hash as computed by the idempotency probe —
-            # raw_request is not canonicalizable (injected package_ids,
-            # alias-dependent names), so the degraded idempotency fallback
-            # conflict-checks against this stored hash.
-            "payload_hash": payload_hash,
+            # The DURABLE conflict signal, computed HERE from the request this method already
+            # holds. It outlives the idempotency cache row: once that row is evicted, this
+            # column is all the seller has to tell a faithful retry from a key reused for a
+            # different request. ``raw_request`` above cannot serve -- it carries injected
+            # package_ids and alias-dependent names, so it is not canonicalizable.
+            #
+            # Computed rather than passed in. It used to be a parameter, threaded from a
+            # transport through the _impl, which is how the whole per-transport hash
+            # arrangement started; a repository is not an ``_impl``, so it may canonicalize
+            # the request it was handed.
+            "payload_hash": canonical_request_hash(req) if getattr(req, "idempotency_key", None) else None,
         }
         if campaign_objective is not None:
             kwargs["campaign_objective"] = campaign_objective
@@ -517,7 +510,7 @@ class MediaBuyRepository:
         buyer-visible and write-once, while a missing one is corrected by the next
         genuine commit.
 
-        Pinned contract: ``create-media-buy-response.json`` @ 3.1.1 arm0 types
+        Pinned contract: ``create-media-buy-response.json`` @ 3.1.1 branch0 types
         ``confirmed_at`` ["string","null"], lists it in ``required``, and describes it
         as "the moment the seller committed... May be null in deferred or
         manual-approval flows until seller commitment occurs" -- an event, in the
@@ -525,9 +518,9 @@ class MediaBuyRepository:
         ``status == "active"``, which holds: ACTIVE is only ever reached through a
         writer that commits.
 
-        Graded by @T-UC-002-v31-success-revision-and-actions (the auto-approval arm,
+        Graded by @T-UC-002-v31-success-revision-and-actions (the auto-approval branch,
         which requires a timestamp) and by the approval-route integration tests (the
-        held arm, which requires NULL). Settles the question filed as #2116.
+        held branch, which requires NULL). Settles the question filed as #2116.
         """
         if media_buy.confirmed_at is not None:
             return False

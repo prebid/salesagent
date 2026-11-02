@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import builtins
 import importlib.util
+import sys
 
 import pytest
 
@@ -38,15 +39,29 @@ _script = _load_script_module()
 
 
 def test_missing_sdk_exits_2(monkeypatch, capsys):
-    """An unimportable adcp SDK produces the diagnostic exit code, never the findings one."""
-    real_import = builtins.__import__
+    """An unimportable dependency produces the diagnostic exit code, never the findings one.
 
-    def _no_adcp(name, *args, **kwargs):
-        if name == "adcp":
-            raise ModuleNotFoundError("No module named 'adcp'")
+    The gate now resolves canonicality through CODE_TABLE rather than adcp.ErrorCode
+    (#1753: emittability, not spec membership), so this blocks the module
+    load_enum actually performs. Patching `adcp` alone made the test ORDER-DEPENDENT:
+    once any earlier test had imported src.core.errors.codes, it sat in sys.modules and
+    the import never re-entered __import__, so the guard did not fire and the test
+    passed alone but failed in a full run.
+
+    The exit-2-not-exit-1 contract this test exists for is unchanged.
+    """
+    real_import = builtins.__import__
+    blocked = "src.core.errors.codes"
+
+    def _no_code_table(name, *args, **kwargs):
+        if name in (blocked, "adcp"):
+            raise ModuleNotFoundError(f"No module named {name!r}")
         return real_import(name, *args, **kwargs)
 
-    monkeypatch.setattr(builtins, "__import__", _no_adcp)
+    # Evict it first: an already-imported module is served from sys.modules without
+    # ever consulting __import__, which is exactly what made this order-dependent.
+    monkeypatch.delitem(sys.modules, blocked, raising=False)
+    monkeypatch.setattr(builtins, "__import__", _no_code_table)
 
     with pytest.raises(SystemExit) as exc_info:
         _script.load_enum()
@@ -56,7 +71,7 @@ def test_missing_sdk_exits_2(monkeypatch, capsys):
         "'non-canonical codes found' and gates make quality — an instrument failure reported "
         "that way is a silent false result."
     )
-    assert "pinned enum not found" in capsys.readouterr().err
+    assert "emittable code table not found" in capsys.readouterr().err
 
 
 def test_unrelated_import_error_is_not_swallowed(monkeypatch):

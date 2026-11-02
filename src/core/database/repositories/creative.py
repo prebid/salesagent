@@ -10,10 +10,10 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import UTC, datetime
-from typing import NamedTuple, cast
+from typing import Any, NamedTuple, cast
 
-from sqlalchemy import func, select
-from sqlalchemy.orm import InstrumentedAttribute, Session, attributes
+from sqlalchemy import SQLColumnExpression, and_, case, func, or_, select
+from sqlalchemy.orm import Session, attributes
 
 from src.core.database.models import (
     Creative,
@@ -24,8 +24,15 @@ from src.core.database.models import (
     Principal,
     Product,
 )
+from src.core.database.repositories.effects import SessionEffectsMixin
+from src.core.schemas import CreativeStatus
 
 logger = logging.getLogger(__name__)
+
+#: The one status an unfiltered read excludes, READ OFF the pinned enum rather than spelled
+#: here: core/creative-filters.json says archived creatives are excluded by default, and
+#: enums/creative-status.json is where the value lives.
+ARCHIVED_STATUS = CreativeStatus.archived.value
 
 
 class CreativeListResult(NamedTuple):
@@ -35,7 +42,25 @@ class CreativeListResult(NamedTuple):
     total_count: int
 
 
-class CreativeRepository:
+def _assignment_count_of(creative: type[Creative]) -> SQLColumnExpression[int]:
+    """A creative's active package-assignment count, as a correlated subquery.
+
+    ``assignment_count`` is the last member of enums/creative-sort-field.json, and it is
+    not a column: it is the size of the creative's assignment set. A subquery keeps it
+    orderable without a GROUP BY that would change what the surrounding SELECT returns.
+    """
+    return (
+        select(func.count())
+        .select_from(CreativeAssignment)
+        .where(
+            CreativeAssignment.tenant_id == creative.tenant_id,
+            CreativeAssignment.creative_id == creative.creative_id,
+        )
+        .scalar_subquery()
+    )
+
+
+class CreativeRepository(SessionEffectsMixin):
     """Tenant-scoped data access for Creative.
 
     All queries filter by tenant_id automatically. Callers cannot bypass
@@ -99,9 +124,13 @@ class CreativeRepository:
         self,
         principal_id: str,
         *,
-        status: str | None = None,
+        statuses: list[str] | None = None,
         format: str | None = None,
         tags: list[str] | None = None,
+        tags_any: list[str] | None = None,
+        has_variables: bool | None = None,
+        creative_ids: list[str] | None = None,
+        format_ids: list[tuple[str, str]] | None = None,
         created_after: datetime | None = None,
         created_before: datetime | None = None,
         search: str | None = None,
@@ -115,6 +144,14 @@ class CreativeRepository:
         """Get creatives for a principal with filtering, sorting, and pagination.
 
         Returns a CreativeListResult with the matching creatives and total count.
+
+        ``statuses`` is a LIST because that is what the filter is: AdCP 3.1.1
+        core/creative-filters.json declares ``statuses`` (an array, minItems 1) and no
+        singular sibling. It used to be a single ``status`` string, which silently
+        answered a two-status request with a one-status query.
+
+        ``format_ids`` carries (agent_url, id) pairs — the pin's format_id is an object,
+        so matching one member alone would return another agent's like-named format.
         """
         # Build base query - filter by tenant AND principal for security
         stmt = select(Creative).filter_by(
@@ -132,11 +169,45 @@ class CreativeRepository:
                 Creative.creative_id == CreativeAssignment.creative_id,
             ).where(CreativeAssignment.media_buy_id.in_(media_buy_ids))
 
-        if status:
-            stmt = stmt.where(Creative.status == status)
+        # AdCP 3.1.1 core/creative-filters.json, on the filter object itself: "By default,
+        # archived creatives are excluded from results. To include archived creatives,
+        # explicitly filter by status='archived' or include 'archived' in the statuses
+        # array." So an explicit list is honoured verbatim (naming `archived` is how a
+        # buyer asks for it) and an absent one excludes the archived rows rather than
+        # returning the whole table.
+        if statuses:
+            stmt = stmt.where(Creative.status.in_(statuses))
+        else:
+            stmt = stmt.where(Creative.status != ARCHIVED_STATUS)
 
         if format:
             stmt = stmt.where(Creative.format == format)
+
+        if creative_ids:
+            stmt = stmt.where(Creative.creative_id.in_(creative_ids))
+
+        if format_ids:
+            # format_id is an OBJECT in v3.1 (core/format-id.json: agent_url + id), and the
+            # two columns that store it are independent — so each pair must match together.
+            #
+            # CEILING: the pairs arrive with agent_url in the spec's canonical form, but the
+            # column holds whatever the write path stored, so the comparison accepts the
+            # canonical spelling and the same URL without its trailing slash. Two agent_urls
+            # differing in anything else the canonicalization normalizes (case, a default
+            # port, an IDN host) read as different agents here, where format_id_identity
+            # would treat them as one. Closing that means storing the canonical form on the
+            # write path; a column comparison cannot canonicalize.
+            stmt = stmt.where(
+                or_(
+                    *[
+                        and_(
+                            Creative.agent_url.in_([agent_url, agent_url.rstrip("/")]),
+                            Creative.format == format_id,
+                        )
+                        for agent_url, format_id in format_ids
+                    ]
+                )
+            )
 
         # v3.1 concept_ids filter: concepts group related creatives across sizes
         # and formats (e.g. Flashtalking concepts, Celtra campaign folders). The
@@ -144,9 +215,41 @@ class CreativeRepository:
         if concept_ids:
             stmt = stmt.where(Creative.data["concept_id"].as_string().in_(concept_ids))
 
+        # A tag is a TAG, not a name substring. core/creative-filters.json declares
+        # `tags` ("all tags must match") and `tags_any` ("any tag must match") over the
+        # creative's own tags, which this schema keeps on the JSON data blob (there is no
+        # tags column) and which list_creatives reads back from `data["tags"]`. The
+        # previous implementation matched `Creative.name.contains(tag)`, so a buyer
+        # filtering on tag "q1" was answered with every creative whose NAME happened to
+        # contain "q1" — a different question, and one `name_contains` already asks.
+        #
+        # `jsonb ? text` is true when the string is a top-level ARRAY ELEMENT (as well as
+        # an object key), which is exactly the containment test a tag list needs.
         if tags:
             for tag in tags:
-                stmt = stmt.where(Creative.name.contains(tag))
+                stmt = stmt.where(func.jsonb_exists(Creative.data["tags"], tag))
+
+        if tags_any:
+            stmt = stmt.where(or_(*[func.jsonb_exists(Creative.data["tags"], tag) for tag in tags_any]))
+
+        if has_variables is not None:
+            # core/creative-filters.json: "When true, return only creatives with dynamic
+            # variables (DCO). When false, return only static creatives." The variables
+            # live on the same JSON blob the listing reads them back from, so the question
+            # is whether that key holds a non-empty array.
+            #
+            # Written as a CASE rather than a conjunction, because both of the shortcuts
+            # are wrong on real rows: jsonb_array_length raises on a value that is not an
+            # array, and a NOT over a predicate that is NULL for an absent key is NULL, so
+            # `has_variables: false` would return no static creative at all. The CASE gives
+            # every row a number — zero when the key is absent or not an array — and both
+            # directions of the filter then compare against it.
+            variables_value = Creative.data["variables"]
+            variable_count = case(
+                (func.jsonb_typeof(variables_value) == "array", func.jsonb_array_length(variables_value)),
+                else_=0,
+            )
+            stmt = stmt.where(variable_count > 0 if has_variables else variable_count == 0)
 
         if created_after:
             stmt = stmt.where(Creative.created_at >= created_after)
@@ -162,12 +265,17 @@ class CreativeRepository:
         total_count_result = self._session.scalar(select(func.count()).select_from(stmt.subquery()))
         total_count = int(total_count_result) if total_count_result is not None else 0
 
-        # Apply sorting
-        sort_column: InstrumentedAttribute
+        # Apply sorting. The members are enums/creative-sort-field.json's:
+        # created_date, updated_date, name, status, assignment_count.
+        sort_column: SQLColumnExpression[Any]
         if sort_by == "name":
             sort_column = Creative.name
         elif sort_by == "status":
             sort_column = Creative.status
+        elif sort_by == "updated_date":
+            sort_column = Creative.updated_at
+        elif sort_by == "assignment_count":
+            sort_column = _assignment_count_of(Creative)
         else:
             sort_column = Creative.created_at
 
@@ -180,6 +288,29 @@ class CreativeRepository:
         db_creatives = list(self._session.scalars(stmt.offset(offset).limit(limit)).all())
 
         return CreativeListResult(creatives=db_creatives, total_count=total_count)
+
+    def assignments_by_creative(
+        self, creative_ids: list[str], principal_id: str
+    ) -> dict[str, list[CreativeAssignment]]:
+        """The active package assignments of each named creative, keyed by creative_id.
+
+        One query for the whole page rather than one per creative, and scoped by tenant AND
+        principal like every other read here — an assignment names a media buy, so leaking
+        one across principals would leak the other principal's buy ids.
+        """
+        if not creative_ids:
+            return {}
+        rows = self._session.scalars(
+            select(CreativeAssignment).where(
+                CreativeAssignment.tenant_id == self._tenant_id,
+                CreativeAssignment.principal_id == principal_id,
+                CreativeAssignment.creative_id.in_(creative_ids),
+            )
+        ).all()
+        grouped: dict[str, list[CreativeAssignment]] = {}
+        for row in rows:
+            grouped.setdefault(row.creative_id, []).append(row)
+        return grouped
 
     def list_by_principal(self, principal_id: str) -> list[Creative]:
         """Get all creatives for a principal within the tenant (no pagination)."""
@@ -205,7 +336,11 @@ class CreativeRepository:
         format: str,
         format_parameters: dict | None = None,
         principal_id: str,
-        status: str = "pending",
+        # Must stay a member of the AdCP CreativeStatus enum: list_creatives parses this
+        # value through the closed spec enum, so a non-member default (this was "pending")
+        # is unreadable to the buyer-facing reader. Pinned by
+        # tests/unit/test_architecture_creative_status_vocabulary.py.
+        status: str = "pending_review",
         data: dict | None = None,
     ) -> Creative:
         """Create a new creative within this tenant.
@@ -237,10 +372,6 @@ class CreativeRepository:
     def flush(self) -> None:
         """Flush pending changes to the database without committing."""
         self._session.flush()
-
-    def begin_nested(self):
-        """Start a savepoint (nested transaction) for partial-success patterns."""
-        return self._session.begin_nested()
 
     def commit(self) -> None:
         """Commit the current transaction."""
@@ -414,6 +545,25 @@ class CreativeAssignmentRepository:
             ).all()
         )
 
+    def get_by_media_buy_and_package(self, media_buy_id: str, package_id: str) -> list[CreativeAssignment]:
+        """Every assignment on one package OF one media buy, within the tenant.
+
+        ``package_id`` alone is not that question: the column is not unique across
+        buys, so ``get_by_package`` answers a wider one. Both of ``update_media_buy``'s
+        replace-the-package's-creatives branches need this narrower key — they compute
+        the added and removed creative ids from it — and each open-coded it against the
+        raw session with the model imported as ``DBAssignment``.
+        """
+        return list(
+            self._session.scalars(
+                select(CreativeAssignment).where(
+                    CreativeAssignment.tenant_id == self._tenant_id,
+                    CreativeAssignment.media_buy_id == media_buy_id,
+                    CreativeAssignment.package_id == package_id,
+                )
+            ).all()
+        )
+
     def get_existing(
         self,
         media_buy_id: str,
@@ -449,12 +599,21 @@ class CreativeAssignmentRepository:
         creative_id: str,
         principal_id: str,
         weight: int = 100,
+        placement_ids: list[str] | None = None,
     ) -> CreativeAssignment:
         """Create a new assignment within this tenant.
 
         ``principal_id`` is required — the column is NOT NULL (part of the
         composite FK to creatives), so a defaulted None here would only fail
         at flush time, far from the caller.
+
+        ``placement_ids`` is placement-specific targeting (adcp#208), carried for
+        the ``creative_assignments`` branch of ``update_media_buy``; None leaves the
+        column as the model defaults it, which is what every other caller wants.
+
+        The assignment id is minted HERE and nowhere else. ``create_media_buy`` and
+        ``update_media_buy`` each generated their own ``assign_<hex>``, so the table
+        carried two id shapes from four sites; nothing reads the shape.
 
         Does NOT commit - the caller handles that.
         """
@@ -466,10 +625,22 @@ class CreativeAssignmentRepository:
             creative_id=creative_id,
             principal_id=principal_id,
             weight=weight,
+            placement_ids=placement_ids,
             created_at=datetime.now(UTC),
         )
+        if placement_ids is not None:
+            assignment.placement_ids = placement_ids
         self._session.add(assignment)
         return assignment
+
+    def delete_row(self, assignment: CreativeAssignment) -> None:
+        """Delete an assignment this repository already handed the caller.
+
+        ``delete(assignment_id)`` re-selects; the replace-a-package's-creatives paths
+        have just listed the rows and know which to drop, so re-reading each one by id
+        is a query per row for information already in hand.
+        """
+        self._session.delete(assignment)
 
     def delete(self, assignment_id: str) -> bool:
         """Delete an assignment by its ID within this tenant.

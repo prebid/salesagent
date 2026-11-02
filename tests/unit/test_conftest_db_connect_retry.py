@@ -1,4 +1,4 @@
-"""Regression test for the test-stack DB connect-retry helper .
+"""Regression test for the test-stack DB connect-retry helper (salesagent-qpst).
 
 Targets the behaviour of ``tests.conftest_db._connect_with_retry`` directly:
 the parallel-tox port-collision race is non-deterministic and cannot be
@@ -60,6 +60,10 @@ def test_persistent_failure_raises_bounded_clear_error_not_psycopg2():
     assert not isinstance(excinfo.value, psycopg2.OperationalError)
     msg = str(excinfo.value)
     assert "localhost:54321" in msg, "error must name the unreachable host:port"
-    assert "" in msg, "error must point at the tracking issue/cause"
+    assert "after 4 attempts" in msg, "error must say how many attempts were made"
+    # The tracking-issue assertion this replaces pinned a local beads id, which is
+    # unresolvable to anyone outside this checkout (main de-beaded it into a vacuous
+    # `"" in msg`). The CAUSE the message actually states is what the obligation was
+    # always about, and the chained original below is what makes it debuggable.
     # The original psycopg2 error is chained for debuggability.
     assert isinstance(excinfo.value.__cause__, psycopg2.OperationalError)

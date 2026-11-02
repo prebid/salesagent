@@ -14,8 +14,7 @@ from contextlib import contextmanager
 from pydantic import ValidationError
 
 from src.core.exceptions import (
-    AdCPValidationError,
-    build_validation_error_details,
+    adcp_error_for,
 )
 from src.core.exceptions import (
     first_validation_error_field as first_validation_error_field,
@@ -34,25 +33,34 @@ def _qualified_field(error: ValidationError, field_prefix: str | None) -> str | 
 
 @contextmanager
 def adcp_validation_boundary(
-    context: str = "parameters",
     field: str | None = None,
     field_prefix: str | None = None,
 ) -> Iterator[None]:
-    """Translate a Pydantic ``ValidationError`` into a typed ``AdCPValidationError``.
+    """Requalify the FIELD a Pydantic ``ValidationError`` reports, then translate it.
 
-    Transport wrappers and skill handlers validate buyer parameters at the
-    boundary. A raw ``ValidationError`` leaking from ``model_validate`` (or a
-    typed-model constructor) would surface as an untyped error — and the outer
-    dispatcher only builds the two-layer error envelope for ``AdCPError``
-    subclasses, so the buyer would lose the real code/recovery. This boundary is
-    the SINGLE translation point (#1417): every rejection carries the
-    buyer-friendly ``format_validation_error`` message, the structured ``field``
-    path, and error.json's top-level ``suggestion`` — no tool hand-rolls its own
-    try/except copy.
+    NOT a translation seam. ``adcp_error_for`` is, and every transport boundary
+    already calls it: MCP through ``RegistryTool.run``, A2A through ``_dispatch_skill``,
+    REST through ``@app.exception_handler(ValueError)`` (a pydantic
+    ``ValidationError`` IS a ``ValueError``). A ``ValidationError`` raised anywhere
+    inside a handler therefore reaches the buyer as INVALID_REQUEST with ``field``
+    and ``issues`` with no wrapper involved, on all three transports: the boundary
+    builds one ``AdcpErrorResponse`` from the one typed exception.
 
-    ``context`` names what was invalid in the message (e.g. ``"get_products
-    request"``); the default renders the ``Invalid parameters`` prefix existing
-    wire assertions rely on.
+    Which is why this used to wrap 48 sites and now wraps 2. Forty-six of them passed
+    NO arguments, and a bare block is exactly ``raise adcp_error_for(e, field=None)``
+    — the same call the boundary makes one frame later, off the same exception, with
+    the same result. Deleting them changed no envelope on any transport. The RULE is:
+    populate the DTO, validate, let it throw.
+
+    The two survivors are the two that are not bare, and both do the one job a
+    later frame genuinely cannot do — name the field of the document the BUYER sent.
+    A model coerced OUTSIDE its parent request has lost that context by the time the
+    error is in hand: pydantic's ``loc`` starts at the coerced model's own root, so
+    ``to_push_notification_config`` would report ``authentication.schemes[0]`` and
+    the brand coercion would report ``domain`` — neither of which is a path into
+    what the buyer sent. Coercing the same value AS A DTO FIELD needs no wrapper (the
+    loc carries the field), so the honest end state for these two is to stop coercing
+    ahead of construction rather than to keep a wrapper. That move is not done.
 
     ``field`` pins the reported request field when the failing model is nested
     under a named request field: coercing a ``BrandReference`` reports
@@ -74,13 +82,12 @@ def adcp_validation_boundary(
     try:
         yield
     except ValidationError as e:
-        errors = e.errors()
-        raise AdCPValidationError(
-            format_validation_error(e, context=context),
-            field=field if field is not None else _qualified_field(e, field_prefix),
-            suggestion=suggest_validation_fix(e),
-            details=build_validation_error_details(errors),
-        ) from e
+        # ``field_prefix`` is resolved HERE rather than inside ``adcp_error_for``:
+        # qualifying a derived path is a property of the wrapped BLOCK (which named
+        # the outer request field), not of an exception handed over in isolation.
+        # With no prefix the derived path is left to ``adcp_error_for`` so the two
+        # entry points cannot compute it differently.
+        raise adcp_error_for(e, field=field if field_prefix is None else _qualified_field(e, field_prefix)) from e
 
 
 def run_async_in_sync_context(coroutine):
@@ -171,19 +178,29 @@ def safe_parse_json_field(field_value, field_name="field", default=None):
         return default if default is not None else {}
 
 
-def package_field_path(attr: str) -> str:
-    """Bracket-notation field path for a per-package field in an _impl-layer error.
+#: The array parameter itself, for a failure that is about the COLLECTION rather
+#: than one entry (e.g. a total-budget check across all packages). Naming the array
+#: is what the spec asks for when no single element is at fault.
+PACKAGES_FIELD = "packages"
 
-    Mirrors the list notation of :func:`first_validation_error_field` but without a
-    concrete index: the _impl layer validates the package collection as a whole and
-    raises ``packages[].budget`` / ``packages[].package_id`` / ``packages[].product_id``,
-    while the boundary-derived path carries the offending index (``packages[0].budget``).
-    Centralizing the prefix here stops the hand-rolled literals from drifting apart.
+
+def package_field_path(attr: str, index: int) -> str:
+    """Indexed JSON pointer for a per-package field in an _impl-layer error.
+
+    ``packages[0].budget``, not ``packages[].budget``. The empty-bracket form this
+    replaces could not tell a buyer WHICH package was refused, which is the entire
+    purpose of the pointer on a multi-package request -- and it matched neither
+    shape the pinned contract uses: notification-config-event-scope.yaml grades
+    ``field == 'notification_configs[0].event_types[0]'``, an INDEXED pointer, and
+    the collection-level form is the bare array name (see :data:`PACKAGES_FIELD`).
+
+    Use this where one entry is at fault and its position is known; use
+    ``PACKAGES_FIELD`` where the collection as a whole failed (salesagent-rfxfu).
     """
-    return f"packages[].{attr}"
+    return f"packages[{index}].{attr}"
 
 
-def format_validation_error(validation_error: ValidationError, context: str = "request") -> str:
+def format_validation_error(validation_error: ValidationError, label: str = "request") -> str:
     """Format Pydantic ValidationError with helpful context for clients.
 
     Provides clear, actionable error messages that reference the AdCP spec
@@ -191,7 +208,7 @@ def format_validation_error(validation_error: ValidationError, context: str = "r
 
     Args:
         validation_error: The Pydantic ValidationError to format
-        context: Context string for the error message (e.g., "request", "creative")
+        label: What was being validated, for the message (e.g., "request", "creative")
 
     Returns:
         Formatted error message string suitable for client consumption
@@ -238,7 +255,7 @@ def format_validation_error(validation_error: ValidationError, context: str = "r
             error_details.append(f"  • {field_path}: {msg}")
 
     error_msg = (
-        f"Invalid {context}: The following fields do not match the AdCP specification:\n\n"
+        f"Invalid {label}: The following fields do not match the AdCP specification:\n\n"
         + "\n".join(error_details)
         + "\n\nPlease check the AdCP spec at https://adcontextprotocol.org/schemas/v1/ for correct field types."
     )

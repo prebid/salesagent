@@ -25,8 +25,20 @@ REQUIRED_RENDERED_CHECKS = {
     "CI / Integration (other)",
     "CI / E2E Tests",
     "CI / Admin UI Tests",
-    "CI / BDD Tests (Shard 1/2)",
-    "CI / BDD Tests (Shard 2/2)",
+    # Four shards, not two. The BDD suite outgrew a two-way split as this branch
+    # converted dormant scenarios into executing ones, and both shards were being
+    # KILLED at the 25-minute cap rather than failing -- so nothing reported a
+    # failure and nothing cascaded. Sharding now prices each file by measured
+    # seconds instead of Gherkin scenario count, which called two shards even at
+    # 586 against 569 while they actually held 120 and 91 minutes.
+    #
+    # These names are matched exactly by branch protection, so widening the split
+    # means an out-of-band GitHub settings edit: the two 1/2 checks must be
+    # replaced by these four, or protection silently stops covering BDD.
+    "CI / BDD Tests (Shard 1/4)",
+    "CI / BDD Tests (Shard 2/4)",
+    "CI / BDD Tests (Shard 3/4)",
+    "CI / BDD Tests (Shard 4/4)",
     "CI / BDD Tests",
     # In-network bdd (e2e_rest transport) — grades the known-failures ledger
     # (PR #1430 review). Mirror this into branch protection's required checks.

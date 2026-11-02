@@ -1,5 +1,4 @@
 # Generated from adcp-req @ a14db6e5894e781a8b2c577e86e1b136876e4915 on 2026-06-03T11:30:04Z (merge mode)
-# DO NOT EDIT -- re-run: python scripts/compile_bdd.py --merge
 
 @signals @BR-UC-008
 Feature: BR-UC-008 Manage Audience Signals
@@ -214,7 +213,7 @@ Feature: BR-UC-008 Manage Audience Signals
     And destinations include "dv360"
     When the Buyer Agent sends an activate_signal request
     Then the system returns an error "Authentication required for signal activation"
-    And the error code should be "AUTH_REQUIRED"
+    And the error code should be "AUTH_MISSING"
     And the error should include "suggestion" field
     And the suggestion should contain "provide authentication credentials"
     # POST-F1: System state unchanged
@@ -258,8 +257,7 @@ Feature: BR-UC-008 Manage Audience Signals
     When the Buyer Agent sends an activate_signal A2A task request
     Then the response contains errors array (error variant)
     And the response does not contain deployments
-    And the error code is "APPROVAL_REQUIRED"
-    And the error message contains "requires manual approval"
+    And the error code is "PERMISSION_DENIED"
     And the error should include "suggestion" field
     And the suggestion should contain "contact the Seller for approval"
     And the response context equals {"trace_id": "premium-trace"}
@@ -275,8 +273,7 @@ Feature: BR-UC-008 Manage Audience Signals
     When the Buyer Agent calls the activate_signal MCP tool
     Then the response contains errors array (error variant)
     And the response does not contain deployments
-    And the error code is "APPROVAL_REQUIRED"
-    And the error message contains "requires manual approval"
+    And the error code is "PERMISSION_DENIED"
     And the error should include "suggestion" field
     And the suggestion should contain "contact the Seller for approval"
     # POST-F1: No activation occurred
@@ -293,8 +290,7 @@ Feature: BR-UC-008 Manage Audience Signals
     When the Buyer Agent sends an activate_signal A2A task request
     Then the response contains errors array (error variant)
     And the response does not contain deployments
-    And the error code is "ACTIVATION_FAILED"
-    And the error message contains "provider unavailable"
+    And the error code is "SERVICE_UNAVAILABLE"
     And the error should include "suggestion" field
     And the suggestion should contain "retry later or contact support"
     And the response context equals {"trace_id": "fail-trace"}
@@ -310,7 +306,7 @@ Feature: BR-UC-008 Manage Audience Signals
     And destinations include "dv360"
     When the Buyer Agent calls the activate_signal MCP tool
     Then the response contains errors array (error variant)
-    And the error code is "ACTIVATION_FAILED"
+    And the error code is "SERVICE_UNAVAILABLE"
     And the error should include "suggestion" field
     And the suggestion should contain "retry later or contact support"
     # POST-F1, POST-F2
@@ -324,7 +320,7 @@ Feature: BR-UC-008 Manage Audience Signals
     When the Buyer Agent sends an activate_signal A2A task request
     Then the response contains errors array (error variant)
     And the response does not contain deployments
-    And the error code is "ACTIVATION_ERROR"
+    And the error code is "INTERNAL_ERROR"
     And the error should include "suggestion" field
     And the suggestion should contain "retry or contact support"
     # POST-F1, POST-F2
@@ -337,7 +333,7 @@ Feature: BR-UC-008 Manage Audience Signals
     And destinations include "dv360"
     When the Buyer Agent calls the activate_signal MCP tool
     Then the response contains errors array (error variant)
-    And the error code is "ACTIVATION_ERROR"
+    And the error code is "INTERNAL_ERROR"
     And the error should include "suggestion" field
     And the suggestion should contain "retry or contact support"
     # POST-F1, POST-F2
@@ -350,7 +346,7 @@ Feature: BR-UC-008 Manage Audience Signals
     And the request includes context {"trace_id": "fail-context"}
     When the Buyer Agent sends an activate_signal request
     Then the response context equals {"trace_id": "fail-context"}
-    And the error code is "APPROVAL_REQUIRED"
+    And the error code is "PERMISSION_DENIED"
     And the error should include "suggestion" field
     And the suggestion should contain "contact the Seller for approval"
     # POST-F3: Context echoed
@@ -404,7 +400,7 @@ Feature: BR-UC-008 Manage Audience Signals
     And the Buyer Agent provides signal_agent_segment_id "premium_luxury_auto"
     And destinations include "dv360"
     When the Buyer Agent sends an activate_signal request
-    Then the error code is "APPROVAL_REQUIRED"
+    Then the error code is "PERMISSION_DENIED"
     And the error should include "suggestion" field
     And the suggestion should contain "contact the Seller for approval"
 
@@ -1114,7 +1110,7 @@ Feature: BR-UC-008 Manage Audience Signals
     And the response carries at least one signal entry
     And the first signal carries a signal_agent_segment_id and at least one pricing_option_id
     When the Buyer Agent calls activate_signal with the captured signal_agent_segment_id and pricing_option_id
-    Then the activation response should be schema-valid against activate-signal-response.json
+    Then the response is compliant with the activate_signal success spec
     And the deployments array should carry at least one entry with a type discriminator
     And the signal_agent_segment_id on the activation request should match the value captured from discovery
     # signals_baseline storyboard exercises a single end-to-end happy path:
@@ -1129,7 +1125,7 @@ Feature: BR-UC-008 Manage Audience Signals
   Scenario: Signals baseline activation -- agent destination type returns schema-valid deployment
     Given the Buyer Agent holds a signal_agent_segment_id and pricing_option_id from get_signals
     When the Buyer Agent sends activate_signal with destinations of type "agent" and agent_url "https://wonderstruck.salesagents.example"
-    Then the response should be schema-valid against activate-signal-response.json
+    Then the response is compliant with the activate_signal success spec
     And the deployments array should carry at least one entry whose type is "agent"
     And a live deployment should carry an activation_key
     And an async deployment may carry is_live false with estimated_activation_duration_minutes
@@ -1144,7 +1140,7 @@ Feature: BR-UC-008 Manage Audience Signals
   Scenario: Signals baseline activation -- platform destination returns activation_key of type segment_id
     Given the Buyer Agent holds a signal_agent_segment_id and pricing_option_id from get_signals
     When the Buyer Agent sends activate_signal with destinations of type "platform", platform "the-trade-desk", and account "agency-123-ttd"
-    Then the response should be schema-valid against activate-signal-response.json
+    Then the response is compliant with the activate_signal success spec
     And the deployments array should carry at least one entry whose type is "platform"
     And a live deployment should carry an activation_key with type "segment_id"
     And an async deployment may report is_live false with estimated_activation_duration_minutes

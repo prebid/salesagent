@@ -32,14 +32,14 @@ _METADATA_URL = "http://169.254.169.254/latest/meta-data/"
 # the address and not of the box the suite happens to run on.
 _UNRESOLVABLE_URL = "http://webhook-endpoint-does-not-exist.invalid/webhook"
 
-# The key set of the ``(bool, dict)`` result on every failure arm. Pinned rather
+# The key set of the ``(bool, dict)`` result on every failure branch. Pinned rather
 # than left to whatever the recorder happens to build: three call sites in
 # ``src/services/slack_notifier.py`` read ``result["attempts"]`` and
 # ``result.get("error")`` off these dicts, so the shape is a caller contract even
 # though no caller reads the rest of it.
 _FAILURE_RESULT_KEYS = frozenset({"delivery_id", "status", "attempts", "response_code", "error"})
 
-# The success arm carries no ``error`` and does carry the total wall time.
+# The success branch carries no ``error`` and does carry the total wall time.
 _SUCCESS_RESULT_KEYS = frozenset({"delivery_id", "status", "attempts", "response_code", "duration"})
 
 # ---------------------------------------------------------------------------
@@ -86,7 +86,7 @@ class TestWebhookDeliveryHappyPath:
 
             # Verify HMAC signature headers were added. Spec header names
             # (X-AdCP-Signature/X-AdCP-Timestamp, from adcp.sign_legacy_webhook
-            # via the shared deliver_webhook seam) since salesagent-47n9.1 —
+            # via the shared deliver_webhook seam) since #1441 —
             # the non-spec X-Webhook-* pair no longer exists.
             sent_headers = env.last_delivery.headers
             assert "X-AdCP-Signature" in sent_headers
@@ -102,7 +102,7 @@ class TestWebhookDeliveryHappyPath:
 # UC-004-ALT-WEBHOOK-PUSH-REPORTING-07
 #
 # Formerly TestWebhookHmacSha256Signing here, unit-testing the deleted
-# WebhookAuthenticator.sign_payload directly. salesagent-47n9.1 deleted that
+# WebhookAuthenticator.sign_payload directly. #1441 deleted that
 # class (dead in production; its only production caller path never set
 # signing_secret) and re-homed this obligation onto a byte-verifying test:
 # tests/integration/test_webhook_sender_signed_body_integrity.py::
@@ -137,6 +137,7 @@ class TestWebhookBearerTokenAuth:
             success, result = env.call_deliver(
                 webhook_url=env.webhook_url,
                 payload={"media_buy_id": "mb_001"},
+                # ast-grep-ignore: test-credential-header-single-producer - outbound seller->buyer webhook credential, not a request we present
                 headers={
                     "Content-Type": "application/json",
                     "Authorization": "Bearer test-bearer-token-xyz",
@@ -457,7 +458,7 @@ class TestEXT_G_06_HmacAuthRejection:
 
         Recomputes over the raw received body rather than a re-serialization
         of the payload dict, so a sender that signs one serialization and
-        transmits another cannot pass this test vacuously (salesagent-47n9.1).
+        transmits another cannot pass this test vacuously (#1441).
 
         Covers: UC-004-EXT-G-06
         """
@@ -479,7 +480,7 @@ class TestEXT_G_06_HmacAuthRejection:
             )
 
             # Spec header names (X-AdCP-Signature/X-AdCP-Timestamp) since
-            # salesagent-47n9.1 -- the non-spec X-Webhook-* pair no longer exists.
+            # #1441 -- the non-spec X-Webhook-* pair no longer exists.
             assert_signature_verifies_over_wire_body(env.last_delivery, secret)
 
     def test_auth_rejection_vs_server_error_retry_behavior(self, integration_db):
@@ -1073,19 +1074,19 @@ class TestWebhookOutcomeMetrics:
 
 @pytest.mark.requires_db
 class TestWebhookResultShape:
-    """Each arm returns a pinned key set, so a shared recorder cannot widen it silently.
+    """Each branch returns a pinned key set, so a shared recorder cannot widen it silently.
 
     ``deliver_webhook_with_retry`` reports failure by returning, never by
     raising — that is what keeps a webhook failure off the buyer's synchronous
     path. Its three callers in ``src/services/slack_notifier.py`` read
     ``result["attempts"]`` and ``result.get("error")``, so those two keys are
-    load-bearing on every failure arm; the rest of the shape is pinned here
-    because nothing else grades it, and a refactor that routes all three arms
+    load-bearing on every failure branch; the rest of the shape is pinned here
+    because nothing else grades it, and a refactor that routes all three branches
     through one recorder changes it by accident otherwise.
 
-    The refused arm is the one that moves: today it returns before a delivery id
+    The refused branch is the one that moves: today it returns before a delivery id
     exists, so it carries neither ``delivery_id`` nor ``response_code``. The
-    decision (salesagent-4fya.11 R5) is that all three failure arms return the
+    decision (salesagent-4fya.11 R5) is that all three failure branches return the
     same five keys, and that ``duration`` stays only where it already is.
 
     Covers: UC-004-EXT-G-08
@@ -1102,7 +1103,7 @@ class TestWebhookResultShape:
         ids=["refused", "client_error", "retry_exhaustion", "delivered"],
     )
     def test_result_key_set_per_arm(self, integration_db, webhook_url, http_status, expected_keys):
-        """The result dict carries exactly the keys its arm is specified to carry.
+        """The result dict carries exactly the keys its branch is specified to carry.
 
         Covers: UC-004-EXT-G-08
         """

@@ -65,8 +65,8 @@ class WebhookDeliveryResult(TypedDict):
     payload-is-paused early return, which skips delivery entirely and so
     never gets a ``delivery_id`` or ``response_code``). ``delivery_id``,
     ``response_code``, ``error`` and ``duration`` are each present only on
-    the arms that actually have a value for them -- see the two functions'
-    docstrings for exactly which arm sets which field.
+    the branches that actually have a value for them -- see the two functions'
+    docstrings for exactly which branch sets which field.
     """
 
     status: str
@@ -116,10 +116,6 @@ def deliver_webhook_with_retry(delivery: WebhookDelivery) -> tuple[bool, Webhook
 
     headers = delivery.headers.copy()
 
-    # Track delivery attempts
-    attempts = 0
-    last_error = None
-    response_code = None
     start_time = time.time()
 
     # Create initial database record if tracking is enabled
@@ -183,7 +179,7 @@ def deliver_webhook_with_retry(delivery: WebhookDelivery) -> tuple[bool, Webhook
         # Refused before a connection was opened. attempts=0 is the honest count:
         # nothing was sent. NOTE this bucket also catches an UNRESOLVABLE host,
         # which previously exhausted retries and booked max_retries_exceeded.
-        # Severity carried on the outcome, not chosen here (#1802).
+        # Severity carried on the outcome, not chosen here (salesagent-pldmk.39).
         logger.log(
             outcome.log_level,
             "[Webhook Delivery] REFUSED: %s to %s",
@@ -285,7 +281,7 @@ def _record_failure(
 ) -> tuple[bool, WebhookDeliveryResult]:
     """Record one failed delivery: the DB row, the counter, and the caller's dict.
 
-    The three failure arms differ only in which metric status they book, what they
+    The three failure branches differ only in which metric status they book, what they
     know about attempts and status, and whether the duration/attempt histograms are
     observed — so they share this rather than repeating the record-and-count block
     three times with substituted variables.
@@ -296,10 +292,10 @@ def _record_failure(
     stopped on the first answer; folding either into the latency histogram would
     change what that metric means.
 
-    Every arm returns the same key set — delivery_id, status, attempts,
+    Every branch returns the same key set — delivery_id, status, attempts,
     response_code, error — so the shape does not vary by failure mode. ``duration``
-    is added only where it exists today (the exhausted-retries arm), which is the
-    one arm whose callers could have been reading it.
+    is added only where it exists today (the exhausted-retries branch), which is the
+    one branch whose callers could have been reading it.
     """
     from src.core.metrics import webhook_delivery_attempts, webhook_delivery_duration, webhook_delivery_total
 

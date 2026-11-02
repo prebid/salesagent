@@ -1,9 +1,28 @@
-"""Integration test: execute_approved_media_buy must persist _platform_line_item_ids.
+"""Integration test: execute_approved_media_buy must persist platform_line_item_ids.
 
 Bug: (GitHub #1037)
-Root cause: execute_approved_media_buy calls adapter, gets _platform_line_item_ids
-back on the response object, but never persists them to MediaPackage.package_config.
-The auto-approval path in _create_media_buy_impl DOES persist them (lines 3047-3079).
+Root cause: execute_approved_media_buy calls adapter, gets platform_line_item_ids
+back on the adapter's result, but never persists them to MediaPackage.package_config.
+The auto-approval path in _create_media_buy_impl DOES persist them.
+
+WHY THESE SIX MOCK-HEAVY CASES ARE KEPT. They are the ONLY verification of this branch.
+Measured in run innet_150926_1232: a phrase search across all 52 files in
+``tests/bdd/features/`` for the seller-approves-then-the-adapter-executes outcome, and for
+line-item-id persistence, returns ZERO scenarios -- and create_media_buy measures ~11% of
+its BDD rows live (165 passed of 1394). There is no wire to grade this on: the stimulus is
+an ADMIN action and the outcome is internal persistence (``package_config
+["platform_line_item_id"]`` per package), which is not a buyer-facing response shape any
+scenario covers. So the mocks are not laziness here; delete these and the manual-approval
+branch has nothing watching it.
+
+The stimulus is an ``AdapterCreateResult`` -- what ``create_media_buy`` returns
+(``src/adapters/base.py``, commit ecfdd7771) and what production reads
+(``response.platform_line_item_ids``, media_buy_create.py). Each case below used to
+stage a ``CreateMediaBuySuccess`` and hang the mapping off it under a PRIVATE name via
+``object.__setattr__``, because the buyer's wire model has no field for a seller-internal
+ad-server id. That is the state the carrier split removed: the mapping is a declared
+field on the adapter's result, so it is passed as a keyword and nothing reaches past the
+model to plant an attribute.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -11,9 +30,10 @@ from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
+from src.adapters.base import AdapterCreateResult
 from src.core.database.database_session import get_db_session, get_engine
 from src.core.database.models import MediaPackage as DBMediaPackage
-from src.core.schemas import CreateMediaBuySuccess
+from tests.helpers.gam_client import gam_line_item, stub_gam_client_manager
 from tests.helpers.media_buy_approval import run_approval
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -26,6 +46,8 @@ def pending_media_buy_with_package(integration_db):
 
     from tests.factories import (
         ALL_FACTORIES,
+        AccountFactory,
+        AgentAccountAccessFactory,
         MediaBuyFactory,
         MediaPackageFactory,
         PricingOptionFactory,
@@ -34,6 +56,7 @@ def pending_media_buy_with_package(integration_db):
         PropertyTagFactory,
         TenantFactory,
     )
+    from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID
 
     engine = get_engine()
     session = SASession(bind=engine)
@@ -48,6 +71,11 @@ def pending_media_buy_with_package(integration_db):
             principal_id="test_principal",
             platform_mappings={"mock": {"id": "test_advertiser"}},
         )
+        # The approval path rebuilds the caller's identity from the stored row
+        # (``identity_of`` -> ``find_account``), so the buy's account must exist AND the
+        # principal must have access to it. MediaBuyFactory names DEFAULT_TEST_ACCOUNT_ID.
+        _account = AccountFactory(tenant=tenant, account_id=DEFAULT_TEST_ACCOUNT_ID)
+        AgentAccountAccessFactory(tenant=tenant, principal=principal, account=_account)
         product = ProductFactory(
             tenant=tenant,
             product_id="guaranteed_display",
@@ -121,6 +149,8 @@ def pending_media_buy_with_two_packages(integration_db):
 
     from tests.factories import (
         ALL_FACTORIES,
+        AccountFactory,
+        AgentAccountAccessFactory,
         MediaBuyFactory,
         MediaPackageFactory,
         PricingOptionFactory,
@@ -129,6 +159,7 @@ def pending_media_buy_with_two_packages(integration_db):
         PropertyTagFactory,
         TenantFactory,
     )
+    from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID
 
     engine = get_engine()
     session = SASession(bind=engine)
@@ -143,6 +174,10 @@ def pending_media_buy_with_two_packages(integration_db):
             principal_id="test_principal_multi",
             platform_mappings={"mock": {"id": "test_advertiser"}},
         )
+        # See pending_media_buy_with_package: the approval path resolves the buy's
+        # account and checks this principal's access to it.
+        _account = AccountFactory(tenant=tenant, account_id=DEFAULT_TEST_ACCOUNT_ID)
+        AgentAccountAccessFactory(tenant=tenant, principal=principal, account=_account)
         product = ProductFactory(
             tenant=tenant,
             product_id="guaranteed_display",
@@ -225,7 +260,7 @@ def _run_execute_approved(media_buy_id, tenant_id, adapter_response):
 
 
 class TestExecuteApprovedPlatformIds:
-    """execute_approved_media_buy must persist _platform_line_item_ids to package_config."""
+    """execute_approved_media_buy must persist platform_line_item_ids to package_config."""
 
     def test_platform_line_item_ids_persisted_after_approval(self, pending_media_buy_with_package):
         """After adapter execution via manual approval, platform_line_item_id
@@ -237,16 +272,11 @@ class TestExecuteApprovedPlatformIds:
         tenant_id = pending_media_buy_with_package["tenant_id"]
         package_id = pending_media_buy_with_package["package_id"]
 
-        # Build adapter response with _platform_line_item_ids attached
-        adapter_response = CreateMediaBuySuccess.carrier(
+        # This is how GAM/Broadstreet adapters return the mapping.
+        adapter_response = AdapterCreateResult(
             media_buy_id=media_buy_id,
             packages=[],
-        )
-        # This is how GAM/Broadstreet adapters attach the mapping
-        object.__setattr__(
-            adapter_response,
-            "_platform_line_item_ids",
-            {package_id: "GAM_LINE_ITEM_12345"},
+            platform_line_item_ids={package_id: "GAM_LINE_ITEM_12345"},
         )
 
         with (
@@ -285,7 +315,7 @@ class TestExecuteApprovedPlatformIds:
 
 
 class TestExecuteApprovedPlatformIdsEdgeCases:
-    """Edge case tests for _platform_line_item_ids persistence."""
+    """Edge case tests for platform_line_item_ids persistence."""
 
     def test_multiple_packages_all_persisted(self, pending_media_buy_with_two_packages):
         """Multiple packages in one media buy — each gets its own platform_line_item_id."""
@@ -293,14 +323,10 @@ class TestExecuteApprovedPlatformIdsEdgeCases:
         media_buy_id = data["media_buy_id"]
         tenant_id = data["tenant_id"]
 
-        adapter_response = CreateMediaBuySuccess.carrier(
+        adapter_response = AdapterCreateResult(
             media_buy_id=media_buy_id,
             packages=[],
-        )
-        object.__setattr__(
-            adapter_response,
-            "_platform_line_item_ids",
-            {"pkg_A": "LINE_ITEM_A", "pkg_B": "LINE_ITEM_B"},
+            platform_line_item_ids={"pkg_A": "LINE_ITEM_A", "pkg_B": "LINE_ITEM_B"},
         )
 
         result = _run_execute_approved(media_buy_id, tenant_id, adapter_response)
@@ -324,14 +350,10 @@ class TestExecuteApprovedPlatformIdsEdgeCases:
         media_buy_id = data["media_buy_id"]
         tenant_id = data["tenant_id"]
 
-        adapter_response = CreateMediaBuySuccess.carrier(
+        adapter_response = AdapterCreateResult(
             media_buy_id=media_buy_id,
             packages=[],
-        )
-        object.__setattr__(
-            adapter_response,
-            "_platform_line_item_ids",
-            {"nonexistent_pkg": "LINE_ITEM_999"},
+            platform_line_item_ids={"nonexistent_pkg": "LINE_ITEM_999"},
         )
 
         result = _run_execute_approved(media_buy_id, tenant_id, adapter_response)
@@ -343,11 +365,11 @@ class TestExecuteApprovedPlatformIdsEdgeCases:
         media_buy_id = data["media_buy_id"]
         tenant_id = data["tenant_id"]
 
-        adapter_response = CreateMediaBuySuccess.carrier(
+        adapter_response = AdapterCreateResult(
             media_buy_id=media_buy_id,
             packages=[],
+            platform_line_item_ids={},
         )
-        object.__setattr__(adapter_response, "_platform_line_item_ids", {})
 
         result = _run_execute_approved(media_buy_id, tenant_id, adapter_response)
         assert result.ok, f"Should succeed with empty dict: {result.error_msg}"
@@ -362,20 +384,27 @@ class TestExecuteApprovedPlatformIdsEdgeCases:
             assert pkg is not None
             assert "platform_line_item_id" not in pkg.package_config
 
-    def test_no_platform_line_item_ids_attr(self, pending_media_buy_with_package):
-        """Response has no _platform_line_item_ids attr — getattr default {}, no crash."""
+    def test_omitted_platform_line_item_ids(self, pending_media_buy_with_package):
+        """An adapter that maps no line items omits the field — it defaults to {}, no crash.
+
+        Formerly "Response has no _platform_line_item_ids attr — getattr default {}".
+        The attribute cannot be absent any more: it is a declared field with
+        ``default_factory=dict`` on ``AdapterCreateResult``, and production reads it
+        directly rather than through a ``getattr`` default. What is still worth grading is
+        the OMISSION at the construction site, which is what an adapter with no mapping
+        does.
+        """
         data = pending_media_buy_with_package
         media_buy_id = data["media_buy_id"]
         tenant_id = data["tenant_id"]
 
-        adapter_response = CreateMediaBuySuccess.carrier(
+        adapter_response = AdapterCreateResult(
             media_buy_id=media_buy_id,
             packages=[],
         )
-        # Don't set _platform_line_item_ids at all
 
         result = _run_execute_approved(media_buy_id, tenant_id, adapter_response)
-        assert result.ok, f"Should succeed without attr: {result.error_msg}"
+        assert result.ok, f"Should succeed with no mapping: {result.error_msg}"
 
         from sqlalchemy import select
 
@@ -450,6 +479,8 @@ class TestExecuteApprovedEnrichesSellerConcept:
         from src.adapters.google_ad_manager import GoogleAdManager
         from src.core.schemas import Principal
 
+        # The SCHEMA Principal, which carries no token at all — ``with_token`` is a
+        # classmethod on the ORM ``Principal`` row, not on this model.
         gam_principal = Principal(
             principal_id="test_principal",
             name="Test Principal",
@@ -460,20 +491,25 @@ class TestExecuteApprovedEnrichesSellerConcept:
             "service_account_key_file": "/path/to/key.json",
             "trafficker_id": "trafficker_123",
         }
-        with patch.object(GoogleAdManager, "_init_client"):
+        # The adapter reaches GAM on construction, so the client manager is a stand-in
+        # serving the one line item this order has. ``_init_client``, which this used to
+        # patch, is a legacy delegate the constructor no longer calls.
+        with patch("src.adapters.google_ad_manager.GAMClientManager") as client_manager:
+            client_manager.return_value = stub_gam_client_manager(
+                line_items=[gam_line_item("test_package", sizes=((970, 250),))]
+            )
             gam = GoogleAdManager(
                 config=config,
                 principal=gam_principal,
                 network_code=config["network_code"],
                 advertiser_id="123",
                 trafficker_id=config["trafficker_id"],
-                dry_run=True,
                 tenant_id=tenant_id,
             )
-        # "test_package" is a placeholder the dry-run GAM manager knows, so the producer's
-        # size-vs-placeholder check passes (mirrors the producer unit test). This asset only
-        # drives the producer to emit the concept-bearing status — it is independent of the
-        # DB package the writeback (step 2) uses.
+        # The order's line item accepts the asset's 970x250 (read off its format), so the
+        # producer's size-vs-placeholder check passes. This asset only drives the producer
+        # to emit the concept-bearing status — it is independent of the DB package the
+        # writeback (step 2) uses.
         gam_asset = {
             "creative_id": creative_id,
             "name": "HTML5 Banner",
@@ -510,7 +546,7 @@ class TestExecuteApprovedEnrichesSellerConcept:
         # (2) ...fed through the REAL execute_approved_media_buy writeback. The adapter
         # response carries the GAM order id; the adapter itself is a stand-in whose
         # creatives_manager returns the real producer's output.
-        adapter_response = CreateMediaBuySuccess.carrier(media_buy_id=gam_order_id, packages=[])
+        adapter_response = AdapterCreateResult(media_buy_id=gam_order_id, packages=[])
         mock_adapter = MagicMock()
         mock_adapter.creatives_manager.add_creative_assets.return_value = produced
         mock_adapter.orders_manager.approve_order.return_value = True

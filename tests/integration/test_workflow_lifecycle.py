@@ -11,6 +11,7 @@ from sqlalchemy import delete, func, select
 from src.core.context_manager import ContextManager
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Context, Principal, Tenant, WorkflowStep
+from tests.factories.principal import plaintext_token_for
 
 
 @pytest.mark.integration
@@ -41,15 +42,20 @@ class TestWorkflowLifecycle:
 
             # Create test tenant and principal for the tests
             tenant = Tenant(
-                tenant_id=self.tenant_id, name="Test Tenant", subdomain="test", is_active=True, ad_server="mock"
+                tenant_id=self.tenant_id,
+                name="Test Tenant",
+                subdomain="test",
+                virtual_host="workflow-lifecycle.adcp.test",
+                is_active=True,
+                ad_server="mock",
             )
             session.add(tenant)
 
-            principal = Principal(
+            principal = Principal.with_token(
+                plaintext_token_for(self.principal_id),
                 tenant_id=self.tenant_id,
                 principal_id=self.principal_id,
                 name="Test Principal",
-                access_token="test_token",
                 platform_mappings={"mock": {"advertiser_id": "test_advertiser"}},
             )
             session.add(principal)

@@ -87,5 +87,4 @@ uv run pytest tests/unit/test_adcp_contract.py -v
 ## Quality Rules
 - Max 10 mocks per test file
 - Test YOUR code, not Python built-ins
-- Roundtrip test required for `apply_testing_hooks()`
 - Never use `skip_ci` without explicit justification

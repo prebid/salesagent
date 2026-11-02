@@ -38,6 +38,7 @@ Read-only. ``--jsonl`` for the source of truth, ``--markdown`` for the report.
 from __future__ import annotations
 
 import dataclasses
+import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -119,8 +120,11 @@ class CheckRecord:
     # graded_by_live_scenario when at least one claiming scenario has both its
     # steps bound AND its harness registry-verified wired. graduation_candidate is
     # true when a claiming scenario is locally ledgered (a curated xfail for a known
-    # gap) while this check's own conformance-ledger measurement is NOT "FAILING" —
-    # a mismatch worth taking through the xpass-graduation workflow.
+    # gap) while this check's own conformance-ledger measurement is `not failing` — a
+    # mismatch worth taking through the xpass-graduation workflow. It requires
+    # `not failing` and not merely "not FAILING": the difference is whether a run
+    # reached the storyboard at all, and a check nobody has been shown to grade is not
+    # a graduation candidate, it is an unmeasured one.
     claimed_by_scenario: bool
     scenario_liveness: dict[str, dict[str, Any]]
     graded_by_live_scenario: bool
@@ -147,13 +151,60 @@ class CheckRecord:
 def _ledger_steps(repo: Path) -> dict[tuple[str, str], list[str]]:
     """(storyboard_id, step_id) -> protocols on which the ledger records a failure."""
     failures: dict[tuple[str, str], list[str]] = {}
-    for check_id in ledger.load(repo / ledger.LEDGER):
+    for check_id in ledger.load(ledger.ledger_path(repo)):
         failures.setdefault((check_id.storyboard_key, check_id.step_id), []).append(check_id.protocol)
     return failures
 
 
+def _exercised_storyboards(repo: Path) -> set[str]:
+    """Storyboards a real in-network run demonstrably REACHED.
+
+    ``tests/storyboard/known_failures.txt`` records FAILURES only — its own header
+    says so — so the absence of a row is not evidence of a pass. What the ledger DOES
+    establish is that a run got as far as any storyboard it holds a row for.
+
+    KNOWN CEILING, deliberate: this is storyboard grain, not check grain, and it
+    infers "the run reached this storyboard's steps" from "the run failed one of
+    them". A runner that aborts a storyboard part-way (``prerequisite_failed`` is a
+    native skip, never ledgered) leaves later steps unreached while this reads them as
+    exercised. The upgrade is an artifact of what the run COLLECTED — the conformance
+    session computes exactly that set in-process for its stale-entry check
+    (``test_storyboard_conformance.pytest_generate_tests``) and does not persist it.
+    Publishing it would make this per-check rather than per-storyboard.
+
+    IT IS PUBLISHED NOW, and this reads it when it is there. The ledger inference is
+    kept as the FALLBACK rather than deleted, because an absent artifact must not read
+    as "the run exercised nothing" -- turning a missing measurement into a confident
+    zero is the same defect one level up, and it is the one that made this function
+    worth a ticket. So: measurement when we have it, the old bounded over-count when we
+    do not, never a silent zero.
+    """
+    artifact = _collected_artifact_path(repo)
+    if artifact.exists():
+        payload = json.loads(artifact.read_text(encoding="utf-8"))
+        collected = {c["storyboard_id"] for c in payload.get("checks", [])}
+        if collected:
+            return collected
+    return _ledger_storyboards(repo)
+
+
+def _collected_artifact_path(repo: Path) -> Path:
+    """Where the conformance session publishes what it collected.
+
+    Indirected through a function so the guard suite can point it somewhere else; the
+    path itself has ONE owner, ``storyboard_spec.COLLECTED_ARTIFACT_PATH``, shared with
+    the emitter in ``tests/storyboard/collected.py``.
+    """
+    return repo / "test-results" / storyboard_spec.COLLECTED_ARTIFACT_PATH
+
+
+def _ledger_storyboards(repo: Path) -> set[str]:
+    """The pre-artifact inference: storyboards the FAILURE ledger holds a row for."""
+    return {check_id.storyboard_key for check_id in ledger.load(ledger.ledger_path(repo))}
+
+
 def binding_buckets(repo: Path, adcp: Path) -> dict[str, str]:
-    """Scenario id -> binding-sweep bucket (A verified … E blocked).
+    """Scenario id -> binding-sweep bucket (``storyboard_binding_sweep.BUCKET_LEGEND``).
 
     A scenario in bucket B cites a storyboard it does not actually claim, so
     "covered by that scenario" is a weaker statement than it looks. Carrying the
@@ -205,18 +256,80 @@ def _wire_fields(entry: dict[str, Any] | None, requires_controller: bool) -> dic
 # at all) stays out — that is a different agent's surface, not a gap in ours.
 INDEXED_STATUSES = ("ON-PATH", "GATED")
 
+#: The ``measured`` column's vocabulary. ``NOT MEASURED`` used to be spelled "no ledger
+#: entry", which is an accurate description of the DATA and a misleading verdict: the
+#: ledger holds failures only, so an empty result covers both "the in-network run graded
+#: this and it passed" and "no run ever reached this check". Measured at the 3.1.1 pin,
+#: 427 checks read "no ledger entry" and 355 of them — 83% — belonged to storyboards the
+#: ledger has no row for at all, i.e. nothing established that any run reached them.
+MEASURED_FAILING = "FAILING"
+MEASURED_NOT_FAILING = "not failing"
+MEASURED_NOT_MEASURED = "NOT MEASURED"
+MEASURED_UNGRADABLE = "ungradable"
+MEASURED_GATED = "gated"
+
+
+def measured_status(*, gated: bool, failing: bool, step_controller: bool, storyboard_exercised: bool) -> str:
+    """The ``measured`` verdict for one check.
+
+    Its own function because it is the verdict step, and a verdict step has to be
+    gradable without the pinned tree — ``tests/unit/test_architecture_storyboard_measured_status.py``
+    exercises every branch offline.
+
+    The order is precedence. A ledgered failure outranks everything, including the
+    controller gate: a failure is PROOF the run reached the assertions, so reporting
+    ``ungradable`` there would discard a real measurement.
+    """
+    if gated:
+        # Not graded, so neither "not failing" nor "NOT MEASURED" — those belong to a
+        # check we DO grade.
+        return MEASURED_GATED
+    if failing:
+        return MEASURED_FAILING
+    if step_controller:
+        return MEASURED_UNGRADABLE
+    if storyboard_exercised:
+        # No row for this step, and the ledger proves a run reached this storyboard —
+        # see _exercised_storyboards for the grain's ceiling.
+        return MEASURED_NOT_FAILING
+    return MEASURED_NOT_MEASURED
+
+
+def _tool_step_keys(adcp: Path) -> set[tuple[str, str]]:
+    """Ledger keys for pinned steps that invoke a tool and grade no ``check:``.
+
+    Walks EVERY storyboard in the pinned tree, not only the ones ``build``
+    indexes: the question this answers is whether the pin declares the step at
+    all, which does not depend on the storyboard's coverage status.
+
+    A storyboard shipped in both ``domains/`` and ``protocols/`` yields the same
+    keys twice; the set absorbs it.
+    """
+    return {
+        (ledger.join_id(storyboard_spec.storyboard_id(sb.text), sb.stem), step_id)
+        for sb in storyboard_spec.storyboards(adcp)
+        for step_id, _task in storyboard_spec.tool_steps_without_checks(sb.text)
+    }
+
 
 def build(repo: Path, adcp: Path) -> dict[str, Any]:
     coverage = storyboard_coverage_map.build(repo, adcp)
     dist = storyboard_spec.dist_root(adcp, coverage["pinned_version"])
     issue_map = ledger.load_issue_map(repo)
     ledger_failures = _ledger_steps(repo)
+    exercised = _exercised_storyboards(repo)
     wireability = ledger.load_wireability(repo)
     buckets = binding_buckets(repo, adcp)
     claiming_scenarios = {
         s for row in coverage["storyboards"] if row["status"] in INDEXED_STATUSES for s in row["covered_by"]
     }
     liveness = scenario_liveness_join.build_index(claiming_scenarios)
+    # Whether a real `pytest tests/bdd` run was joined at all. Without the artifact every
+    # scenario reports measured_this_run=False and `with_live_scenario` is 0 — a zero
+    # indistinguishable from "a run happened and nothing is live" unless this travels
+    # beside it. Derived here rather than read off `coverage["totals"]` so this module
+    # depends on the join it performs, not on a sibling report's shape.
+    liveness_measured = any(f.measured_this_run for f in liveness.values())
 
     records: list[CheckRecord] = []
     for row in coverage["storyboards"]:
@@ -247,20 +360,23 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
             # gradable checks ungradable.
             step_controller = CONTROLLER in tools or CONTROLLER in storyboard_spec.step_tools(text, step_id)
             wire = _wire_fields(wireability.get(f"{row['storyboard']}::{step_id}"), step_controller)
-            if gate == "GATED":
-                # Not graded, so not "no ledger entry" either — that phrasing
-                # belongs to a check we DO grade and that happens to pass.
-                measured = "gated"
-            else:
-                measured = "FAILING" if failing else ("ungradable" if step_controller else "no ledger entry")
+            measured = measured_status(
+                gated=gate == "GATED",
+                failing=bool(failing),
+                step_controller=step_controller,
+                storyboard_exercised=storyboard_id in exercised,
+            )
             claiming = row["covered_by"]
             live_facts = {s: liveness[s] for s in claiming}
             # A ledgered claiming scenario (a curated xfail for a known gap) whose
-            # check the real conformance run does NOT currently measure FAILING is
-            # a graduation candidate — worth taking through the xpass-graduation
-            # workflow. `ungradable` (comply_test_controller-gated) is excluded on
-            # purpose: those checks can never graduate regardless of BDD status.
-            graduation_candidate = measured == "no ledger entry" and any(f.ledgered for f in live_facts.values())
+            # check the real conformance run reached and did NOT measure FAILING is a
+            # graduation candidate — worth taking through the xpass-graduation
+            # workflow. Two exclusions, for opposite reasons: `ungradable`
+            # (comply_test_controller-gated) can never graduate regardless of BDD
+            # status, and NOT MEASURED has no run behind it — offering a check nobody
+            # has been shown to run as ready to graduate is how a candidate list
+            # becomes a to-do list nobody can act on.
+            graduation_candidate = measured == MEASURED_NOT_FAILING and any(f.ledgered for f in live_facts.values())
             records.append(
                 CheckRecord(
                     # identity
@@ -360,15 +476,27 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
     #     listed by name.
     #   * the runner-level synthetic (ledger.RUNNER_SYNTHETIC_KEY), emitted when
     #     the runner grades nothing at all.
+    #   * a step invoking a real TOOL with no `check:` line. The runner runs it
+    #     and reports pass or fail on the INVOCATION — the tool answered or it
+    #     did not — while the index, keyed on `check:` lines, produces no row.
+    #     `media_buy_seller/creative_reception::list_formats` is the measured
+    #     case: declared by the 3.1.1 pin under section
+    #     `discover_accepted_formats`, carrying zero checks, and genuinely
+    #     FAILING on both protocols. Derived by
+    #     storyboard_spec.tool_steps_without_checks() from the pinned tree,
+    #     never listed by name, so a storyboard reshaped upstream moves it.
     #
-    # So the join universe is the index keys plus those two families. Measured
+    # So the join universe is the index keys plus those three families. Measured
     # when this landed: index-only leaves 40 orphans, this universe leaves 0.
     known_step_keys = (
-        {(r.storyboard_id, r.step_id) for r in records} | ledger.vector_step_keys(adcp) | {ledger.RUNNER_SYNTHETIC_KEY}
+        {(r.storyboard_id, r.step_id) for r in records}
+        | ledger.vector_step_keys(adcp)
+        | {ledger.RUNNER_SYNTHETIC_KEY}
+        | _tool_step_keys(adcp)
     )
     orphan_ledger_rows = sorted(
         f"{storyboard_id}::{step_id}"
-        for storyboard_id, step_id in {(c.storyboard_key, c.step_id) for c in ledger.load(repo / ledger.LEDGER)}
+        for storyboard_id, step_id in {(c.storyboard_key, c.step_id) for c in ledger.load(ledger.ledger_path(repo))}
         if (storyboard_id, step_id) not in known_step_keys
     )
     if orphan_ledger_rows:
@@ -390,6 +518,7 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
     gaps = [r for r in graded if not r.scenarios and not r.issues]
     return {
         "pinned_version": coverage["pinned_version"],
+        "liveness_measured": liveness_measured,
         "totals": {
             "checks": len(records),
             "storyboards": len({r.storyboard for r in records}),
@@ -402,8 +531,22 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
             "graduation_candidates": sum(1 for r in graded if r.graduation_candidate),
             "with_issue": sum(1 for r in graded if r.issues),
             "neither": len(gaps),
-            "failing": sum(1 for r in graded if r.measured_failing_protocols),
-            "ungradable": sum(1 for r in graded if r.requires_controller),
+            # ALL FOUR READ `r.measured`, which is `measured_status()`'s verdict and the
+            # one place the precedence lives. Two of them used to read the raw INPUTS
+            # instead — `measured_failing_protocols` and `requires_controller` — and a
+            # check that is both a ledgered failure AND controller-gated was therefore
+            # counted twice. The precedence says such a check is FAILING (a failure
+            # proves the run reached the assertions, so `ungradable` would discard a
+            # real measurement), so the double count also contradicted the documented
+            # order. Latent until the ledger first admitted a media_buy_seller failure
+            # on a controller-gated step, at which point the partition assertion in
+            # tests/unit/test_architecture_storyboard_measured_status.py caught it at 7
+            # over. Reading the verdict makes the partition true by construction rather
+            # than by three predicates happening to stay disjoint.
+            "failing": sum(1 for r in graded if r.measured == MEASURED_FAILING),
+            "not_failing": sum(1 for r in graded if r.measured == MEASURED_NOT_FAILING),
+            "not_measured": sum(1 for r in graded if r.measured == MEASURED_NOT_MEASURED),
+            "ungradable": sum(1 for r in graded if r.measured == MEASURED_UNGRADABLE),
             "wireable": sum(1 for r in graded if r.e2e_wireable == "wireable"),
             "conditional": sum(1 for r in graded if r.e2e_wireable == "conditional"),
             "not_wireable": sum(1 for r in graded if r.e2e_wireable == "not_wireable"),
@@ -452,13 +595,33 @@ def render(result: dict[str, Any]) -> str:
         "`media_buy.features.*` path is not expressible. It is not a claim that we lack the "
         "capability: the live runner reads the real capability document off the wire and may "
         "grade what we gate. These rows are listed, with their reason, in §7.",
-        f"- claimed by a BDD scenario: **{totals['with_scenario']}**",
-        f"- graded by a LIVE scenario (steps bound + registry-verified harness): **{totals['with_live_scenario']}**",
+        f"- claimed by a BDD scenario: **{totals['with_scenario']} of {totals['graded_checks']}**",
+        (
+            f"- graded by a LIVE scenario (steps bound + registry-verified harness): "
+            f"**{totals['with_live_scenario']} of {totals['with_scenario']} claimed**"
+            if result["liveness_measured"]
+            else (
+                "- graded by a LIVE scenario: **NOT MEASURED** — no "
+                "`test-results/bdd_scenario_liveness.json` was joined, so every claim below reads "
+                "dormant by omission rather than by observation. Run `pytest tests/bdd` and "
+                "regenerate before quoting a liveness number."
+            )
+        ),
         f"- tracked by an issue: **{totals['with_issue']}**",
         f"- **neither scenario nor ticket: {totals['neither']}**",
-        f"- measured FAILING: **{totals['failing']}**",
-        f"- permanently ungradable (`comply_test_controller`): **{totals['ungradable']}**",
-        f"- graduation candidates (ledgered, not measured FAILING): **{totals['graduation_candidates']}**",
+        "",
+        f"Measured status over the **{totals['graded_checks']}** graded checks, from the in-network "
+        f"conformance ledger: **{totals['failing']}** FAILING · **{totals['not_failing']}** not failing "
+        f"(a run reached their storyboard) · **{totals['ungradable']}** permanently ungradable "
+        f"(`comply_test_controller`) · **{totals['not_measured']} NOT MEASURED**. That last number is "
+        "the one the old report hid: `tests/storyboard/known_failures.txt` records FAILURES only, so "
+        'an empty result covers both "the run graded this and it passed" and "no run ever reached '
+        'it". A check is `not failing` only when the ledger holds a row for some OTHER step of the '
+        "same storyboard, which is what proves a run got there; with no row anywhere for the "
+        "storyboard, nothing has been established and the check is NOT MEASURED.",
+        "",
+        f"- graduation candidates (ledgered locally, reached by a run, not measured FAILING): "
+        f"**{totals['graduation_candidates']} of {totals['not_failing']}**",
         "",
         f"E2E wireability — **{totals['wireable']}** wireable as-is, **{totals['conditional']}** "
         f"conditional on provisioning, **{totals['not_wireable']}** not wireable"
@@ -476,7 +639,9 @@ def render(result: dict[str, Any]) -> str:
         "`signed_requests`' runtime-generated `negative-NNN` steps (built from vector fixtures, "
         "as the pinned file states) and the `agent_reachability` runner-level synthetic, neither "
         "of which is a spec check. Before this, seven `universal/webhook-emission.yaml` entries "
-        "resolved to nothing and a check reading `no ledger entry` was not evidence it passed.",
+        "resolved to nothing, so a check with no ledger row was not evidence it passed. Fixing "
+        "the join made the row-to-record mapping trustworthy; the column now also distinguishes "
+        "a check the run reached and did not fail from one no run has been shown to reach.",
         "",
         "Scenario coverage is declared per STORYBOARD (`@storyboard-v3.1` tags a scenario "
         "to a storyboard, not to a check), so a scenario shown against a check means "
@@ -492,14 +657,36 @@ def render(result: dict[str, Any]) -> str:
         "",
         "## 1. Measured status",
         "",
+        "Every check except the `not failing` ones — those are the rows a run reached and "
+        "did not fail, and listing them would bury the four statuses a reader acts on.",
+        "",
         "| Check | Status | Protocols failing |",
         "|---|---|---|",
     ]
     for r in records:
-        if r["measured"] == "no ledger entry" and not r["requires_controller"]:
+        if r["measured"] == MEASURED_NOT_FAILING:
             continue
         protocols = ", ".join(f"`{p}`" for p in r["measured_failing_protocols"]) or "—"
         out.append(f"| {_check_id(r)} | {r['measured']} | {protocols} |")
+
+    unmeasured: dict[str, int] = {}
+    for r in records:
+        if r["measured"] == MEASURED_NOT_MEASURED:
+            unmeasured[r["storyboard"]] = unmeasured.get(r["storyboard"], 0) + 1
+    out += [
+        "",
+        "### 1b. Storyboards no run has been shown to reach",
+        "",
+        f"**{sum(unmeasured.values())} checks across {len(unmeasured)} storyboards.** The ledger "
+        "holds no row for any step of these, so nothing establishes that the in-network "
+        "conformance job ever graded them. They are NOT passing checks; they are unmeasured "
+        "ones, and any conformance number that counts them as clean is flattering by exactly "
+        "this much.",
+        "",
+        "| Storyboard | Unmeasured checks |",
+        "|---|---|",
+    ]
+    out += [f"| `{sb}` | {n} |" for sb, n in sorted(unmeasured.items())]
 
     out += [
         "",
@@ -539,11 +726,16 @@ def render(result: dict[str, Any]) -> str:
         "## 4. Graduation candidates",
         "",
         "A claiming scenario locally xfails this check's storyboard as a known gap (the "
-        "`ledgered` bucket, from a real BDD run — see `tests/bdd/scenario_liveness.py`), but "
-        "the real conformance-ledger run (`tests/storyboard/known_failures.txt`) does not "
-        "currently measure this check FAILING. That mismatch is a candidate for the "
-        "xpass-graduation workflow — inspect per scenario before removing the xfail, per "
-        "scenario, never in bulk. Visibility only: no CI gate reads this table.",
+        "`ledgered` bucket, from a real BDD run — see `tests/bdd/scenario_liveness.py`), while "
+        "the in-network conformance run REACHED this check's storyboard and did not measure "
+        "the check FAILING. That mismatch is a candidate for the xpass-graduation workflow — "
+        "inspect per scenario before removing the xfail, per scenario, never in bulk. "
+        "Visibility only: no CI gate reads this table.",
+        "",
+        "Checks whose status is NOT MEASURED are deliberately absent: with no ledger row "
+        "anywhere for their storyboard there is no run to graduate against, and offering "
+        "them here would put checks nobody has been shown to grade on a list a human is "
+        "meant to act on.",
         "",
         "| Check | Ledgered scenario(s) |",
         "|---|---|",

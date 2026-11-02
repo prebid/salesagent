@@ -126,7 +126,7 @@ def _scan_bdd_steps() -> set[XfailSite]:
 # ---------------------------------------------------------------------------
 # The pin. Allowlists can only SHRINK — never add a new triple, fix it instead.
 # ---------------------------------------------------------------------------
-# FIXME(#1858): 101 pre-existing inline-xfail sites (135 calls across 10 files)
+# FIXME(#1858): 100 pre-existing inline-xfail sites (132 calls across 10 files)
 # predate that Core Invariant. They are PINNED here, not swept: each must
 # migrate to a ledger tag (tests/bdd/conftest.py's *_XFAIL_TAGS maps, or
 # tests/bdd/e2e_rest_known_failures.txt) as its use case is next touched.
@@ -136,102 +136,36 @@ def _scan_bdd_steps() -> set[XfailSite]:
 # times: any triple bearing that path is a NEW violation, not an allowlisted one.
 _ALLOWLIST: set[XfailSite] = {
     ("domain/uc002_create_media_buy.py", "_assert_pipeline_routing", 1),
-    ("domain/uc002_create_media_buy.py", "then_webhook_notification", 1),
-    ("domain/uc002_nfr.py", "then_response_within_sla", 1),
-    ("domain/uc002_task_query.py", "_xfail_on_unsupported_param", 1),
     ("domain/uc003_ext_error_scenarios.py", "given_seller_minimum_budget", 1),
-    ("domain/uc004_delivery.py", "_assert_placements_sorted_by", 2),
-    ("domain/uc004_delivery.py", "then_attribution_default", 1),
-    ("domain/uc004_delivery.py", "then_geo_system", 1),
-    ("domain/uc004_delivery.py", "then_packages_include_breakdown", 1),
-    ("domain/uc006_sync_creatives.py", "_assert_generative_build", 1),
-    ("domain/uc006_sync_creatives.py", "_assert_per_creative_failure", 3),
-    ("domain/uc006_sync_creatives.py", "_assert_standard_processing", 1),
-    ("domain/uc006_sync_creatives.py", "_xfail_if_e2e", 1),
-    ("domain/uc006_sync_creatives.py", "given_principal_no_associated_tenant", 1),
-    ("domain/uc006_sync_creatives.py", "given_product_format_ids_using_format_id_key", 1),
-    ("domain/uc006_sync_creatives.py", "then_asset_has_provenance_not_inherited", 3),
-    ("domain/uc006_sync_creatives.py", "then_assignment_created_as_paused", 1),
-    ("domain/uc006_sync_creatives.py", "then_assignment_created_as_paused_no_delivery", 1),
-    ("domain/uc006_sync_creatives.py", "then_assignment_created_with_specified_weight", 1),
-    ("domain/uc006_sync_creatives.py", "then_assignment_created_with_weight", 1),
-    ("domain/uc006_sync_creatives.py", "then_assignment_errors_contain_package_id", 2),
-    ("domain/uc006_sync_creatives.py", "then_assignment_includes_placement", 1),
-    ("domain/uc006_sync_creatives.py", "then_assignment_results_list_assigned_packages", 1),
-    ("domain/uc006_sync_creatives.py", "then_assignment_skipped_with_warning", 2),
-    ("domain/uc006_sync_creatives.py", "then_compatible_package_assignment_created", 1),
-    ("domain/uc006_sync_creatives.py", "then_creative_a_more_delivery_than_b", 2),
-    ("domain/uc006_sync_creatives.py", "then_creative_action_created", 1),
-    ("domain/uc006_sync_creatives.py", "then_creative_action_created_or_updated", 1),
-    ("domain/uc006_sync_creatives.py", "then_creative_action_failed", 1),
-    ("domain/uc006_sync_creatives.py", "then_creative_associated_with_principal", 1),
-    ("domain/uc006_sync_creatives.py", "then_creative_has_generated_content", 2),
-    ("domain/uc006_sync_creatives.py", "then_creative_validated_by_agent", 1),
-    ("domain/uc006_sync_creatives.py", "then_error_assignment_creative_id_required", 1),
-    ("domain/uc006_sync_creatives.py", "then_error_assignment_package_id_required", 1),
-    ("domain/uc006_sync_creatives.py", "then_error_code_with_suggestion", 2),
-    ("domain/uc006_sync_creatives.py", "then_existing_assignment_updated_not_duplicated", 1),
-    ("domain/uc006_sync_creatives.py", "then_existing_creative_updated_by_triple_key", 1),
-    ("domain/uc006_sync_creatives.py", "then_formats_match_after_url_normalization", 2),
-    ("domain/uc006_sync_creatives.py", "then_formats_match_using_format_id_key", 2),
-    ("domain/uc006_sync_creatives.py", "then_generative_build_skipped", 1),
-    ("domain/uc006_sync_creatives.py", "then_generative_build_uses_prompt", 1),
-    ("domain/uc006_sync_creatives.py", "then_invalid_creative_action", 1),
-    ("domain/uc006_sync_creatives.py", "then_invoke_generative_with_asset_prompt", 1),
-    ("domain/uc006_sync_creatives.py", "then_media_buy_status_should_remain", 1),
-    ("domain/uc006_sync_creatives.py", "then_new_creative_created_for_principal", 1),
-    ("domain/uc006_sync_creatives.py", "then_no_field_level_merging", 2),
-    ("domain/uc006_sync_creatives.py", "then_nonexistent_package_reported_as_warning", 1),
-    ("domain/uc006_sync_creatives.py", "then_operation_fails_with_assignment_error", 7),
-    ("domain/uc006_sync_creatives.py", "then_operation_should_abort_package_not_found", 2),
-    ("domain/uc006_sync_creatives.py", "then_preview_urls_generated", 1),
-    ("domain/uc006_sync_creatives.py", "then_proceed_with_resolved_account", 1),
-    ("domain/uc006_sync_creatives.py", "then_processed_as_generative", 1),
-    ("domain/uc006_sync_creatives.py", "then_processed_without_external_validation", 1),
-    ("domain/uc006_sync_creatives.py", "then_processing_continues_normally", 1),
-    ("domain/uc006_sync_creatives.py", "then_response_includes_assignment_errors", 2),
-    ("domain/uc006_sync_creatives.py", "then_response_includes_assignment_errors_for_nonexistent", 2),
-    ("domain/uc006_sync_creatives.py", "then_response_includes_creative_with_assignment_results", 1),
-    ("domain/uc006_sync_creatives.py", "then_response_includes_one_creative_with_action", 1),
-    ("domain/uc006_sync_creatives.py", "then_review_workflow_with_ai", 1),
-    ("domain/uc006_sync_creatives.py", "then_second_is_idempotent_upsert", 1),
-    ("domain/uc006_sync_creatives.py", "then_system_should_reject_validation_error", 4),
-    ("domain/uc006_sync_creatives.py", "then_two_assignments_created_successfully", 1),
-    ("domain/uc006_sync_creatives.py", "then_uc006_result_should_be", 2),
-    ("domain/uc006_sync_creatives.py", "then_user_assets_preserved", 1),
-    ("domain/uc006_sync_creatives.py", "then_user_assets_priority_over_generated", 2),
-    ("domain/uc006_sync_creatives.py", "then_valid_assignment_created", 3),
-    ("domain/uc006_sync_creatives.py", "then_valid_creative_action", 1),
-    ("domain/uc006_sync_creatives.py", "then_valid_not_affected_by_invalid", 1),
+    # Merge reconciliation (spec-gaps-1210 <- main): this row was authored against
+    # main's copy of the function (3 calls). The branch's copy has 4: its single
+    # request-level hatch was SPLIT in two — "wire code mismatched" and "the request
+    # failed before it ever reached the wire" — while grading moved off the rebuilt
+    # exception's class onto the wire code (salesagent-3dawm.18), which is strictly
+    # tighter. No new gap category is admitted; one decision point became two calls.
+    # This is the ONE row here whose count moved UP, and it is a follow-up: collapse
+    # those two calls back into one in uc006_sync_creatives.py and re-key to 3.
+    # UNCONDITIONAL, and that is why it stays: "this is not implemented" is a legible
+    # claim, unlike a conditional xfail keyed on the outcome, which passes when production
+    # agrees and excuses itself when it does not. The other 102
+    # conditional sites in tests/bdd/steps are gone; this one was never one of them.
+    # Graduated 7 -> 5 (salesagent-3dawm.18): the two prose-routed hatches
+    # ("package not found"/"not supported by product" substring matches) are DELETED
+    # and replaced with an unconditional wire-code assertion. Both were already dead —
+    # CODE_TABLE derives the message from the code, so neither substring can appear.
+    # Graduated 2 -> 1 (salesagent-3dawm.18): the "AdCPNotFoundError.error_code is
+    # 'NOT_FOUND' — needs a domain-specific subclass" hatch is DELETED; that subclass
+    # exists (AdCPPackageNotFoundError, _assignments.py) and the step now asserts
+    # PACKAGE_NOT_FOUND on the wire unconditionally.
     ("domain/uc011_accounts.py", "then_account_transitions", 1),
     ("domain/uc011_accounts.py", "then_push_sent", 1),
     ("domain/uc011_accounts.py", "then_response_includes_context", 1),
     ("domain/uc011_accounts.py", "then_webhook_registered", 1),
-    ("domain/uc019_query_media_buys.py", "_assert_flight_dates_present", 1),
     ("domain/uc019_query_media_buys.py", "given_creative_status_extra", 1),
     ("domain/uc019_query_media_buys.py", "given_creative_status_simple", 1),
     ("domain/uc019_query_media_buys.py", "given_creative_status_with_reason", 1),
     ("domain/uc019_query_media_buys.py", "given_no_creative_exists", 1),
     ("domain/uc019_query_media_buys.py", "given_package_creative_assignment", 1),
-    ("domain/uc019_query_media_buys.py", "given_package_creative_ref_nonexistent", 1),
-    ("domain/uc019_query_media_buys.py", "then_package_details", 1),
-    ("domain/uc026_package_media_buy.py", "then_catalogs_unchanged", 1),
-    ("domain/uc026_package_media_buy.py", "then_goals_unchanged", 1),
-    ("domain/uc026_package_media_buy.py", "then_keyword_bid_ceiling", 1),
-    ("domain/uc026_package_media_buy.py", "then_keyword_updated_bid", 2),
-    ("domain/uc026_package_media_buy.py", "then_keyword_with_match_type", 1),
-    ("domain/uc026_package_media_buy.py", "then_negative_keyword", 1),
-    ("domain/uc026_package_media_buy.py", "then_no_delivery", 1),
-    ("domain/uc026_package_media_buy.py", "then_old_audience_absent", 1),
-    ("domain/uc026_package_media_buy.py", "then_old_catalog_absent", 1),
-    ("domain/uc026_package_media_buy.py", "then_package_default_formats", 1),
-    ("domain/uc026_package_media_buy.py", "then_paused_unchanged", 2),
-    ("domain/uc026_package_media_buy.py", "then_pkg_goals", 1),
-    ("domain/uc026_package_media_buy.py", "then_pkg_has_keyword", 2),
-    ("domain/uc026_package_media_buy.py", "then_pricing_defaults", 1),
-    ("domain/uc026_package_media_buy.py", "then_resume_delivery", 1),
-    ("domain/uc026_package_media_buy.py", "then_targeting_audience", 2),
-    ("domain/uc026_package_media_buy.py", "then_updated_keyword_and_negative", 2),
     ("generic/given_media_buy.py", "given_product_minimum_spend", 1),
     ("generic/given_media_buy.py", "given_proposal_budget_guidance_min", 1),
     ("generic/given_media_buy.py", "given_proposal_not_exists", 1),
@@ -244,6 +178,95 @@ _FIX_HINT = (
     "obligation unconditionally. An inline pytest.xfail registers nothing, is keyed "
     "to no scenario, and aborts every later assertion in the scenario as dead code."
 )
+
+
+def find_conditional_xfail_calls(tree: ast.Module) -> list[tuple[int, str]]:
+    """Every ``pytest.xfail`` reachable only through a branch, as ``(lineno, guard)``.
+
+    A conditional xfail is categorically worse than an unconditional one, and the
+    difference is not stylistic. Unconditional says "this is not implemented" — a legible,
+    falsifiable claim that stops being true when someone implements it. Conditional says
+    "excuse me IF the outcome is the one I was written to catch", so the step passes when
+    production agrees and excuses itself when it does not: it cannot fail in either
+    direction.
+
+    Guarded by branch context rather than by reason text, because the reason is prose and
+    drifts; ``if`` / ``try`` / ``except`` is structure and cannot.
+    """
+    parents: dict[ast.AST, ast.AST] = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parents[child] = node
+
+    out: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "xfail"
+            and getattr(node.func.value, "id", "") == "pytest"
+        ):
+            continue
+        parent = parents.get(node)
+        while parent is not None:
+            if isinstance(parent, ast.If):
+                out.append((node.lineno, ast.unparse(parent.test)))
+                break
+            if isinstance(parent, (ast.Try, ast.ExceptHandler)):
+                out.append((node.lineno, "try/except"))
+                break
+            if isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                break
+            parent = parents.get(parent)
+    return out
+
+
+class TestBddNoConditionalXfail:
+    """Structural guard: ZERO conditional xfails, with no allowlist.
+
+    There is deliberately no allowlist here. 103 of these existed and all 103 are gone,
+    so the honest pin is zero — an allowlist would only be a place to put the next one.
+    """
+
+    @pytest.mark.arch_guard
+    def test_no_conditional_xfail_anywhere_in_steps(self):
+        offenders: list[str] = []
+        for py_file in step_module_paths():
+            tree = ast.parse(py_file.read_text(), filename=str(py_file))
+            relative = str(py_file.relative_to(_BDD_STEPS_DIR))
+            for lineno, guard in find_conditional_xfail_calls(tree):
+                offenders.append(f"  {relative}:{lineno}  guarded by: {guard}")
+        assert not offenders, (
+            f"{len(offenders)} conditional pytest.xfail call(s) in tests/bdd/steps:\n"
+            + "\n".join(sorted(offenders))
+            + "\n\nA conditional xfail is keyed on the OUTCOME, so the step passes when "
+            "production agrees and excuses itself when it does not — it cannot fail in the "
+            "one direction that matters. Assert the obligation unconditionally, and declare "
+            "any genuine gap as a scenario/Examples-row tag in the ratcheted ledger "
+            "(a *_XFAIL_TAGS map in tests/bdd/conftest.py, or a nodeid in "
+            "tests/bdd/e2e_rest_known_failures.txt), where strict=True makes it XPASS loudly "
+            "the day the gap closes. If the guard is about the ENVIRONMENT rather than the "
+            "outcome (no DB session, wrong transport), it is a skip or a harness fix, not an "
+            "expected failure."
+        )
+
+    @pytest.mark.arch_guard
+    def test_detector_catches_a_conditional_xfail(self):
+        """The guard must go red on the shape it bans — a passing guard proves nothing."""
+        bad = ast.parse(
+            "import pytest\n"
+            "def then_x(ctx):\n"
+            "    error = ctx.get('error')\n"
+            "    if error is not None:\n"
+            "        pytest.xfail('SPEC-PRODUCTION GAP: excuse')\n"
+        )
+        assert find_conditional_xfail_calls(bad), "detector missed a conditional xfail"
+
+    @pytest.mark.arch_guard
+    def test_detector_allows_an_unconditional_xfail(self):
+        """An unconditional xfail is a legible claim and must NOT trip this guard."""
+        good = ast.parse("import pytest\ndef then_x(ctx):\n    pytest.xfail('not implemented')\n")
+        assert not find_conditional_xfail_calls(good), "detector flagged an unconditional xfail"
 
 
 class TestBddNoInlineXfail:

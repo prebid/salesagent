@@ -1,0 +1,368 @@
+<title>Error Details Design</title>
+<style>
+  :root{
+    --bg:#fbfaf8; --panel:#fff; --ink:#1a1a1a; --ink-2:#4a4a4a; --ink-3:#767676;
+    --line:#e2ded7; --line-2:#efece6;
+    --now:#b0453a; --now-bg:#fdf3f1; --spec:#2b5f8a; --spec-bg:#f0f5fa;
+    --ours:#3f6b46; --ours-bg:#f1f6f1; --warn:#8a6a1f; --warn-bg:#fbf6e8;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+    --bg:#16171a; --panel:#1d1f23; --ink:#e8e6e3; --ink-2:#b4b1ac; --ink-3:#8a8681;
+    --line:#31343a; --line-2:#26282d;
+    --now:#e08a7e; --now-bg:#2a1e1c; --spec:#7cb0dc; --spec-bg:#18242e;
+    --ours:#82b98c; --ours-bg:#1a2620; --warn:#d9b667; --warn-bg:#2a2417;
+  }}
+  :root[data-theme="dark"]{
+    --bg:#16171a; --panel:#1d1f23; --ink:#e8e6e3; --ink-2:#b4b1ac; --ink-3:#8a8681;
+    --line:#31343a; --line-2:#26282d;
+    --now:#e08a7e; --now-bg:#2a1e1c; --spec:#7cb0dc; --spec-bg:#18242e;
+    --ours:#82b98c; --ours-bg:#1a2620; --warn:#d9b667; --warn-bg:#2a2417;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.65 ui-serif,Georgia,"Times New Roman",serif;
+    -webkit-font-smoothing:antialiased}
+  .wrap{max-width:min(112ch,94vw);margin:0 auto;padding:3.5rem 1.5rem 6rem}
+  h1{font-size:clamp(1.9rem,4vw,2.7rem);line-height:1.12;margin:0 0 .4rem;letter-spacing:-.02em}
+  .sub{color:var(--ink-3);font-size:1.02rem;margin:0 0 .6rem}
+  .meta{font-family:var(--mono);font-size:.74rem;color:var(--ink-3);
+    border-top:1px solid var(--line);padding-top:.7rem;margin-bottom:3rem}
+  h2{font-size:1.42rem;margin:3.4rem 0 .3rem;letter-spacing:-.01em;
+    padding-bottom:.4rem;border-bottom:2px solid var(--line)}
+  h3{font-size:1.06rem;margin:2.1rem 0 .5rem;letter-spacing:-.005em}
+  h4{font-size:.94rem;margin:1.4rem 0 .35rem;color:var(--ink-2)}
+  p{margin:.7rem 0}
+  code{font-family:var(--mono);font-size:.855em;background:var(--line-2);
+    padding:.09em .34em;border-radius:3px}
+  pre{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+    padding:1rem 1.15rem;overflow-x:auto;margin:1rem 0}
+  pre code{background:none;padding:0;font-size:.79rem;line-height:1.62}
+  .lede{font-size:1.09rem;color:var(--ink-2);border-left:3px solid var(--line);
+    padding-left:1.1rem;margin:1.3rem 0 2rem}
+  .tw{overflow-x:auto;margin:1.2rem 0;border:1px solid var(--line);border-radius:8px}
+  table{border-collapse:collapse;width:100%;font-family:system-ui,sans-serif;font-size:.83rem}
+  th{text-align:left;font-weight:650;padding:.62rem .8rem;background:var(--line-2);
+    border-bottom:1px solid var(--line);white-space:nowrap}
+  td{padding:.62rem .8rem;border-bottom:1px solid var(--line-2);vertical-align:top}
+  tr:last-child td{border-bottom:none}
+  td code,th code{font-size:.86em}
+  .box{border:1px solid var(--line);border-left-width:4px;border-radius:7px;
+    padding:.9rem 1.15rem;margin:1.3rem 0;background:var(--panel)}
+  .box p:first-child{margin-top:0} .box p:last-child{margin-bottom:0}
+  .b-now{border-left-color:var(--now);background:var(--now-bg)}
+  .b-spec{border-left-color:var(--spec);background:var(--spec-bg)}
+  .b-ours{border-left-color:var(--ours);background:var(--ours-bg)}
+  .b-warn{border-left-color:var(--warn);background:var(--warn-bg)}
+  .tag{display:inline-block;font-family:var(--mono);font-size:.66rem;
+    letter-spacing:.055em;text-transform:uppercase;padding:.18em .5em;
+    border-radius:3px;vertical-align:.12em;margin-right:.45rem;font-weight:600}
+  .t-now{background:var(--now);color:#fff} .t-spec{background:var(--spec);color:#fff}
+  .t-ours{background:var(--ours);color:#fff} .t-warn{background:var(--warn);color:#fff}
+  .stat{display:flex;flex-wrap:wrap;gap:.7rem;margin:1.4rem 0}
+  .stat div{flex:1 1 8rem;border:1px solid var(--line);border-radius:7px;
+    padding:.7rem .85rem;background:var(--panel)}
+  .stat b{display:block;font-family:var(--mono);font-size:1.4rem;line-height:1.1}
+  .stat span{font-family:system-ui,sans-serif;font-size:.72rem;color:var(--ink-3)}
+  .flow{font-family:var(--mono);font-size:.78rem;line-height:1.9;white-space:pre;
+    overflow-x:auto;background:var(--panel);border:1px solid var(--line);
+    border-radius:8px;padding:1.1rem}
+  ul,ol{padding-left:1.4rem} li{margin:.32rem 0}
+  .note{font-size:.87rem;color:var(--ink-3);font-style:italic}
+  hr{border:none;border-top:1px solid var(--line);margin:3rem 0}
+  a{color:var(--spec)}
+</style>
+
+<div class="wrap">
+
+<h1>Error details: today, the spec, and the target</h1>
+<p class="sub">How a buyer-facing <code>error.details</code> block is built, what AdCP&nbsp;3.1.1 actually mandates, and the class structure that makes a wrong one unconstructible.</p>
+<p class="meta">prebid/salesagent &middot; branch feature/spec-gaps-1210 &middot; pin adcp==6.6.0 / AdCP 3.1.1 &middot; epic salesagent-rys3u &middot; 2026-08-25</p>
+
+<p class="lede">Three commits have landed (<code>2d27cfe6c</code>, <code>0362e1bd7</code>, <code>3bda506d4</code>). 47 of 173 construction sites are converted. This document is the design of record for the remaining 126, and it supersedes the first-pass catalog on one point: multi-field rejection belongs in the pin's <code>issues[]</code>, not in our own details shape.</p>
+
+<div class="stat">
+  <div><b>173</b><span>details-bearing construction sites</span></div>
+  <div><b>47</b><span>converted so far</span></div>
+  <div><b>31</b><span>error classes carrying details</span></div>
+  <div><b>14</b><span>pinned detail shapes</span></div>
+  <div><b>30</b><span>error codes with 2+ classes</span></div>
+</div>
+
+<h2><span class="tag t-now">Today</span>How details are sent now</h2>
+
+<p>An error's <code>details</code> is a free-form dict, assembled inline at the raise site. There is no declaration anywhere of what keys an error may carry, so the key name <em>is</em> the contract — and it drifts.</p>
+
+<pre><code># src/core/tools/media_buy_create.py, before conversion
+raise AdCPValidationError(details={"validation_errors": validation_errors})
+raise AdCPValidationError(details={"config_errors": config_errors})
+raise AdCPValidationError(details={"adapter_errors": pre_creation_errors})
+raise AdCPCreativeRejectedError(details={"creative_errors": detail_msgs})
+raise AdCPValidationError(details={"violations": violations})</code></pre>
+
+<p>Five key names, one concept: a list of problems. And every one of those lists is <code>list[str]</code>, built by interpolating structured facts into an f-string and discarding the structure:</p>
+
+<pre><code># src/core/helpers/creative_helpers.py:583
+detail_msgs = [f"{r.creative_id}: {err.message}" for r in failed_results for err in (r.errors or [])]
+
+# src/core/tools/media_buy_create.py:486
+validation_errors.append(
+    f"Creative {cid} has format '{creative_fmt}' which is not accepted by "
+    f"product {package.product_id} (accepted formats: {sorted(accepted)})"
+)</code></pre>
+
+<div class="box b-now">
+<p><strong>The measured drift.</strong> An AST survey of all 173 sites found <code>AdCPValidationError</code> alone carrying <strong>30 distinct key sets across 34 sites</strong>. <code>AdCPCapabilityNotSupportedError</code>: 15 across 28. <code>AdCPConfigurationError</code>: 14 across 19. <code>AdCPCreativeRejectedError</code>: 10 across 16.</p>
+<p>A buyer receiving <code>{"creative_errors": ["cre_123: missing url"]}</code> must apply a regular expression to learn which creative failed.</p>
+</div>
+
+<h3>The second channel nobody closed</h3>
+
+<p>The epic locked <code>message</code>, <code>suggestion</code>, and <code>recovery</code> to <code>CODE_TABLE</code> so no raise site could author buyer-facing text. <code>details</code> is a second channel to the same buyer, and it was never covered:</p>
+
+<pre><code># src/adapters/base.py:410 -- four authored sentences, the last one a SUGGESTION,
+# which is the exact field the epic made a function of the code
+errors.append(
+    f"Adapter does not support '{pricing_model}' pricing. "
+    f"Supported pricing models: {sorted_supported}. "
+    f"The requested pricing model ('{pricing_model}') is not available. "
+    f"Please choose a product with compatible pricing."
+)</code></pre>
+
+<h2><span class="tag t-spec">Spec</span>What AdCP 3.1.1 actually mandates</h2>
+
+<p>Two places in the pin govern this, and they answer different questions.</p>
+
+<h3>1. <code>core/error.json</code> — the error object</h3>
+
+<div class="tw"><table>
+<tr><th>Property</th><th>Required</th><th>What it is</th></tr>
+<tr><td><code>code</code></td><td>yes</td><td>Open vocabulary; the discriminator a buyer switches on</td></tr>
+<tr><td><code>message</code></td><td>yes</td><td>Human-readable. This repo derives it from <code>CODE_TABLE</code></td></tr>
+<tr><td><code>field</code></td><td>no</td><td>JSONPath-lite pointer, e.g. <code>packages[0].targeting</code></td></tr>
+<tr><td><code>suggestion</code></td><td>no</td><td>Derived from <code>CODE_TABLE</code></td></tr>
+<tr><td><code>retry_after</code></td><td>no</td><td>Seconds; first-class, <em>not</em> a details key</td></tr>
+<tr><td><code>issues</code></td><td>no</td><td><strong>Structured list of validation failures.</strong> The canonical multi-field channel</td></tr>
+<tr><td><code>details</code></td><td>no</td><td><code>type: object</code>, <code>additionalProperties: true</code>. Task-specific specifics</td></tr>
+<tr><td><code>recovery</code></td><td>no</td><td>transient / correctable / terminal. Derived from <code>CODE_TABLE</code></td></tr>
+</table></div>
+
+<div class="box b-spec">
+<p><strong>The finding that changed the design.</strong> <code>issues[]</code> is the pin's canonical channel for multi-field rejection, and our first-pass catalog invented a parallel one. Quoting the schema:</p>
+<p class="note">&ldquo;Structured list of validation failures. Primary use is <code>VALIDATION_ERROR</code>, where multi-field rejections are common and <code>field</code> (singular) cannot carry the full pointer map.&rdquo;</p>
+<p>Item schema: <code>required: ["pointer", "message", "keyword"]</code>, <code>additionalProperties: true</code>. Plus optional <code>schemaPath</code>, <code>schema_id</code>, <code>discriminator</code>.</p>
+<p>And a <strong>MUST</strong> on the seller: &ldquo;When <code>issues</code> is present, sellers MUST also populate <code>field</code> from <code>issues[0]</code> &hellip; translating the RFC&nbsp;6901 <code>pointer</code> format to the JSONPath-lite format <code>field</code> uses.&rdquo;</p>
+</div>
+
+<h4>What <code>pointer</code> is</h4>
+
+<p>RFC&nbsp;6901 JSON Pointer is a string that addresses one value inside a JSON document: a sequence of tokens, each prefixed by <code>/</code>, where each token is an object member name or an array index.</p>
+
+<pre><code>/packages/0/targeting/geo_countries/2
+ └─ root's "packages" member → element 0 → "targeting" → "geo_countries" → element 2
+
+""            the whole document
+/a~1b         a member literally named  a/b     ( / escapes to ~1 )
+/m~0n         a member literally named  m~n     ( ~ escapes to ~0 )</code></pre>
+
+<p>The escaping is why the pin chose it over the JSONPath-lite form that <code>field</code> uses. <code>packages[0].targeting</code> becomes ambiguous the moment a key contains a dot or a bracket; <code>/packages/0/targeting</code> never does. The pin also notes it matches Ajv's <code>instancePath</code>, so a JSON&nbsp;Schema validator's output drops straight in.</p>
+
+<h3>2. <code>error-details/*.json</code> — 14 per-code shapes</h3>
+
+<p>Only five declare required fields. Only two clamp <code>additionalProperties: false</code>.</p>
+
+<div class="tw"><table>
+<tr><th>Shape file</th><th>Required</th><th>Extra</th><th>Canonical keys</th></tr>
+<tr><td><code>version-unsupported</code></td><td><code>supported_versions</code></td><td>true</td><td>supported_versions, supported_majors, build_version</td></tr>
+<tr><td><code>agent-permission-denied</code></td><td><code>scope</code>, <code>reason</code></td><td><strong>false</strong></td><td>scope (const "agent"), reason (enum)</td></tr>
+<tr><td><code>billing-not-permitted-for-agent</code></td><td>yes</td><td><strong>false</strong></td><td>—</td></tr>
+<tr><td><code>action-not-allowed</code></td><td>yes</td><td>true</td><td>—</td></tr>
+<tr><td><code>stale-response</code></td><td>yes</td><td>true</td><td>—</td></tr>
+<tr><td><code>budget-too-low</code></td><td>none</td><td>true</td><td>minimum_budget, currency</td></tr>
+<tr><td><code>creative-rejected</code></td><td>none</td><td>true</td><td>policy_id, policy_url, reasons</td></tr>
+<tr><td><code>conflict</code></td><td>none</td><td>true</td><td>resource_id, expected_version, current_version</td></tr>
+<tr><td><code>policy-violation</code></td><td>none</td><td>true</td><td>policy_id, policy_url, violated_rules</td></tr>
+<tr><td colspan="4" class="note">plus account-setup-required, audience-too-small, authorization-required, billing-not-supported, rate-limited &middot; vendor-error-codes.json is a registry, not a shape</td></tr>
+</table></div>
+
+<div class="box b-spec">
+<p><strong>Canonical rejection-set keys.</strong> <code>core/error.json</code>'s <code>details</code> description names the shape for &ldquo;enum mismatch, unsupported pricing option, invalid signal id&rdquo;: <code>rejected_value</code> and <code>accepted_values</code>, explicitly &ldquo;rather than seller-specific variants observed in the wild (<code>available</code>, <code>allowed</code>&hellip;)&rdquo;. SHOULD-level, and we adopt it.</p>
+<p><strong>Caution.</strong> Do not import a pinned shape's key under a code the pin does not associate with it. A site emitting <code>VALIDATION_ERROR</code> may not borrow <code>minimum_budget</code> from <code>budget-too-low.json</code>.</p>
+</div>
+
+<h2><span class="tag t-ours">Target</span>The class structure</h2>
+
+<p>Five rules, in dependency order. Each removes a way to be wrong rather than adding a check that catches it.</p>
+
+<h3>Rule 1 — the exception owns the code; a shape owns nothing but fields</h3>
+
+<p>The exception class is the authority on which code it is. A detail shape names no code, which is exactly why one shape can serve several errors, and sharing is preferred over copying.</p>
+
+<pre><code>class AdCPError[DetailsT: ErrorDetails](Exception):
+    _code: ClassVar[ErrorCodeT]
+    def __init__(self, *, details: DetailsT | None = None, field=None,
+                 retry_after=None, context=None, internal_detail=None) -> None: ...
+
+class AdCPPackageNotFoundError(AdCPNotFoundError[EntityRefDetails]): ...   # PACKAGE_NOT_FOUND
+class AdCPGamUpdateError(AdCPAdapterError): ...                            # AD_SERVER_UPDATE_FAILED</code></pre>
+
+<p>One <code>__init__</code> on the base gives all 31 classes their own exact detail type. mypy rejects both a dict and a foreign shape at every raise site, and <code>exc.details</code> reads back typed. Parameterizing rather than overriding <code>__init__</code> 31 times is what keeps this free of the copy-paste the DRY invariant forbids.</p>
+
+<div class="box b-warn">
+<p><strong>Why the code is not on the shape.</strong> An earlier draft had the shape name its code and the exception adopt it. That inverted the authority: <code>{package_id, media_buy_id}</code> legitimately serves both <code>AdCPPackageNotFoundError</code> and <code>AdCPGamUpdateError</code>, and <code>{creative_id}</code> already appears under three classes. A code on the shape forces one shape copy per error. It also required a runtime check that the two halves agreed — a check that existed only to catch a contradiction the duplication created.</p>
+</div>
+
+<h3>Rule 2 — no authored prose, at any level</h3>
+
+<p>A declared class stops field-<em>name</em> drift. It does not stop prose inside a declared field: a <code>reason: str</code> slot is just a new home for the f-string. So no shape declares a free-text field, and classification uses <code>code</code> drawn from the existing 100-code vocabulary — never a parallel <code>reason</code> enum.</p>
+
+<pre><code>class ErrorProblem(BaseModel):
+    code: ErrorCodeT | None = None
+    subject_type: Literal["creative","product","package","account"] | None = None
+    subject_id: str | None = None
+    field: str | None = None
+    rejected_value: str | None = None          # pin-canonical
+    accepted_values: list[str] | None = None   # pin-canonical</code></pre>
+
+<h3>Rule 3 — required prose is <em>derived</em>, never authored</h3>
+
+<p>Each <code>issues[]</code> item requires <code>message</code>, so it cannot be omitted. The pin requires the field to be <em>present</em>; it does not require a human to write it. That is the same situation as the top-level <code>message</code>, which this epic already made a function of the code.</p>
+
+<pre><code>class ErrorIssue(LibraryIssue):                 # extends adcp.types...core.error.Issue
+    model_config = ConfigDict(extra=get_pydantic_extra_mode(), frozen=True)
+
+    pointer: str                                # built by JsonPointer, never a literal
+    keyword: JsonSchemaKeyword                  # Literal of the JSON Schema vocabulary
+    code: ErrorCodeT                            # our classification -> derives message
+    rejected_value: str | None = None           # legal extras, still typed
+    accepted_values: list[str] | None = None
+    # NO `message` parameter exists. A mode="before" validator resolves it from
+    # (code, keyword) -- the mechanism Error._derive_graded_fields already uses.</code></pre>
+
+<div class="box b-ours">
+<p><strong>One policy, not two.</strong> A buyer-facing sentence is derived from a table and never authored at a raise site — now at both the error level and the item level. The 11-agent design review rejected this routing on the grounds that rule 2 forbids a prose field; that reads rule 2 as &ldquo;no prose field&rdquo; when it means &ldquo;no <em>authored</em> prose.&rdquo;</p>
+<p><code>additionalProperties: true</code> on the item is what lets the typed fields sit alongside the pinned keys rather than being displaced. The property that matters survives: a caller cannot populate this except by instantiating a typed class.</p>
+</div>
+
+<h3>Rule 4 — a pointer is a value type, not a string</h3>
+
+<p>The pin's MUST (populate <code>field</code> from <code>issues[0].pointer</code>, translated) must not be satisfied by hand at raise sites — that is the drift this migration removes. One value type owns both renderings:</p>
+
+<pre><code>JsonPointer.of("packages", 0, "targeting")
+    .pointer   ->  "/packages/0/targeting"       # issues[].pointer  (RFC 6901)
+    .field     ->  "packages[0].targeting"       # top-level field   (JSONPath-lite)</code></pre>
+
+<p>It owns the <code>~0</code>/<code>~1</code> escaping, so a member named <code>a/b</code> round-trips. <code>field</code> is then derived, never typed twice. Cross-check against the existing JSONPath-lite producer, <code>first_validation_error_field()</code>.</p>
+
+<h3>Rule 5 — compose, never redeclare</h3>
+
+<p>Because a shape names no code, one shape serves every error whose details answer the same question. The AST survey found 11 key-sets already duplicated across unrelated classes — <code>{account_id}</code> under four, <code>{media_buy_id}</code> and <code>{product_id}</code> under three each.</p>
+
+<pre><code>class EntityRefDetails(ErrorDetails):        # WHICH entity: account_id, media_buy_id,
+    ...                                      #   package_id, product_id, creative_id, ...
+class UpstreamCallDetails(ErrorDetails):     # what the upstream did: status, status_code, url
+class ProblemsDetails(ErrorDetails):         # problems: list[SerializeAsAny[ErrorProblem]]
+
+class AdapterFailureDetails(EntityRefDetails, UpstreamCallDetails, ProblemsDetails):
+    """All three axes, by composition. Zero fields redeclared."""</code></pre>
+
+<h3>Which channel carries what</h3>
+
+<div class="tw"><table>
+<tr><th>Case</th><th>Channel</th><th>Item type</th><th>Why</th></tr>
+<tr><td>Multi-<strong>field</strong> rejection</td><td><code>issues[]</code></td><td><code>ErrorIssue</code></td><td>Pin-canonical; carries a pointer map <code>field</code> cannot</td></tr>
+<tr><td>Multi-<strong>entity</strong> outcome</td><td><code>details.problems</code></td><td><code>ErrorProblem</code></td><td>A failed creative is not a field, so <code>issues[]</code> does not govern it</td></tr>
+<tr><td>Single entity reference</td><td><code>details</code></td><td><code>EntityRefDetails</code></td><td>&ldquo;Which entity&rdquo;, shared across ~10 classes</td></tr>
+<tr><td>Upstream call failure</td><td><code>details</code></td><td><code>AdapterFailureDetails</code></td><td>Entity + call + per-item problems</td></tr>
+<tr><td>Retry timing</td><td><code>retry_after</code></td><td>—</td><td>First-class on the error; never a details key</td></tr>
+</table></div>
+
+<h3>End to end</h3>
+
+<div class="flow">raise site        raise AdCPAdapterError(details=AdapterFailureDetails(
+                      media_buy_id="mb_1",
+                      problems=[ErrorProblem(code=ErrorCode.CREATIVE_INACCESSIBLE,
+                                             subject_type="creative",
+                                             subject_id="cre_9")]))
+                            │
+                            │  mypy: a dict or a foreign shape is rejected here
+                            ▼
+_impl               raises AdCPError -- never ToolError, no transport imports
+                            │
+                            ▼
+boundary            failure_response(...) -> AdcpErrorResponse.of(exc), context stamped by _served, raised as AdcpFailure
+                      code/message/suggestion/recovery  <- CODE_TABLE, by code
+                      details                           <- _details_to_wire(exc.details)
+                      issues                            <- [i.to_wire() for i in exc.issues]
+                      field                             <- issues[0].pointer, translated
+                            │
+                            ▼
+wire                to_wire(response): {"adcp_error": {...}, "errors": [{...}], "status": ...}
+                            │
+                            ▼
+BDD                 result.assert_wire_error(CODE, recovery=..., details={...})</div>
+
+<h2><span class="tag t-ours">Verification</span>How the BDD side checks it</h2>
+
+<p>Construction is typed; assertion is on the wire. Those are different layers and the asymmetry is deliberate — a test that asserted on a reconstructed Python object would be proving serializer self-consistency, not what the buyer received.</p>
+
+<pre><code># tests/harness/transport.py -- the ONE way to assert an error
+result.assert_wire_error(
+    "SERVICE_UNAVAILABLE",
+    recovery="transient",          # required keyword: pins buyer retry semantics
+    field="packages[0].budget",
+    details={"media_buy_id": "mb_1"},   # subset membership on the wire dict
+    retry_after=30,
+)</code></pre>
+
+<div class="tw"><table>
+<tr><th>Helper</th><th>Location</th><th>Asserts on</th></tr>
+<tr><td><code>assert_wire_error</code></td><td><code>tests/harness/transport.py</code></td><td>The exact wire envelope from this run</td></tr>
+<tr><td><code>assert_envelope_shape</code></td><td><code>tests/helpers/envelope_assertions.py</code></td><td><code>errors[0]</code> at the protocol position</td></tr>
+<tr><td><code>wire_error_details</code></td><td><code>tests/harness/transport.py</code></td><td>The details block, for exact-set checks</td></tr>
+<tr><td><code>dispatch_request</code></td><td><code>tests/bdd/steps/generic/_dispatch.py</code></td><td>The one writer of <code>ctx["result"]</code></td></tr>
+</table></div>
+
+<p>Every scenario runs across <strong>mcp / a2a / rest / e2e_rest</strong>. <code>recovery</code> is a required keyword, not a soft default. And a structural guard with <strong>no allowlist</strong>, <code>test_architecture_one_wire_error_assertion.py</code>, bans the older two-step spelling so there is exactly one way to assert an error.</p>
+
+<div class="box b-warn">
+<p><strong>Gap: the assertion layer cannot grade <code>issues[]</code> yet.</strong> A scan of both helpers finds <code>details</code> mentioned 16 and 19 times respectively, and <code>issues</code> <strong>zero</strong> times. Until <code>assert_wire_error</code> takes an <code>issues=</code> keyword, every <code>issues[]</code> scenario would pass vacuously. That is part of <code>salesagent-rys3u.6</code>, not a follow-up: an ungraded channel is indistinguishable from an absent one.</p>
+</div>
+
+<h4>What a converted site's scenario grades</h4>
+
+<pre><code>Then the response is an error with code "SERVICE_UNAVAILABLE" and recovery "transient"
+ And errors[0].details.problems[0].subject_id is "cre_9"
+ And errors[0].details.problems[0].code is "CREATIVE_INACCESSIBLE"</code></pre>
+
+<p class="note">The generated <code>BR-UC-*.feature</code> file is the authority, not the step body. A scenario must carry the exact expected code and recovery as examples, and a green run that took no wall time is an auto-xfail, not a pass.</p>
+
+<h2>Order of work</h2>
+
+<div class="tw"><table>
+<tr><th>#</th><th>Task</th><th>State</th></tr>
+<tr><td>—</td><td>Generic base, code adoption removed, <code>_details_to_wire</code>, <code>ErrorProblem</code></td><td>landed <code>2d27cfe6c</code> &rarr; <code>3bda506d4</code></td></tr>
+<tr><td>—</td><td>Entity + adapter families, 47 sites, <code>AdCPInventoryUnavailableError</code> merged</td><td>landed <code>3bda506d4</code></td></tr>
+<tr><td><strong>.6</strong></td><td><code>JsonPointer</code>, <code>ErrorIssue</code>, <code>(code, keyword)</code> table, <code>issues</code> on <code>AdCPError</code>, derived <code>field</code>, <code>issues=</code> on the assertion helpers</td><td><strong>ready — blocks .2</strong></td></tr>
+<tr><td>.2</td><td>Remaining 126 sites; delete <code>details: dict</code> and the <code>Mapping</code> scaffolding</td><td>blocked on .6</td></tr>
+<tr><td>.4</td><td><code>validate_media_buy_request</code> returns structured problems, not prose</td><td>blocked on .2</td></tr>
+<tr><td>.3</td><td>Detail-class factories; local-model bridge until upstream exports them</td><td>blocked on .2</td></tr>
+<tr><td>.5</td><td>Replace <code>isinstance</code> dispatch on exceptions with <code>except</code> and object state</td><td>open</td></tr>
+</table></div>
+
+<h3>Prerequisites before any further conversion</h3>
+<ol>
+<li><code>ProblemsDetails.problems</code> must become <code>list[SerializeAsAny[ErrorProblem]]</code>. Without it a subclass passes <code>to_wire()</code> with its own fields <strong>silently dropped</strong> — a warning in CI, field loss in production.</li>
+<li>A <code>to_wire()</code> key-set test must land before editing the two committed shapes. Re-basing <code>AdapterFailureDetails</code> moves serialization order.</li>
+</ol>
+
+<h3>Known hole in what has already landed</h3>
+<p><code>EntityRefDetails</code> is both a shared base and the type parameter of ~10 error classes, so <code>ProductRefDetails</code> and any future descendant is silently assignable at those raise sites. The narrowing is weaker than claimed for those specific classes. Each new family gets a zero-field leaf to stop the pattern spreading; repairing the committed ones is a follow-up.</p>
+
+<h3>Blocked on the spec-grounding gate</h3>
+<p>Five decisions are protocol behavior, not shape design: whether <code>CONFIGURATION_ERROR</code> may carry <code>details</code> at all (the pin defines no shape for it); <code>UPDATE_ACTIONS</code> intersecting the pinned <code>media-buy-valid-action</code> enum in <strong>zero</strong> members; whether below-minimum-budget sites should raise <code>BUDGET_TOO_LOW</code> rather than <code>VALIDATION_ERROR</code>; no pinned code for a cardinality refusal; absent-versus-malformed URL distinguishability.</p>
+
+<hr>
+<p class="note">Full catalog and all four adversarial verdicts: <code>.claude/notes/error-details-shape-catalog.json</code>. Design of record: <code>bd show salesagent-rys3u</code> and <code>bd show salesagent-rys3u.2</code>.</p>
+
+</div>

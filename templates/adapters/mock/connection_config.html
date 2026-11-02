@@ -26,17 +26,6 @@ Expected context variables:
         </div>
 
         <div class="form-group">
-            <label for="mock_dry_run">
-                <input type="checkbox" id="mock_dry_run" name="mock_dry_run"
-                       {% if adapter_config and adapter_config.get('dry_run') %}checked{% endif %}>
-                Dry Run Mode
-            </label>
-            <small class="form-text text-muted">
-                When enabled, operations are simulated without persisting state.
-            </small>
-        </div>
-
-        <div class="form-group">
             <label for="mock_manual_approval_required">
                 <input type="checkbox" id="mock_manual_approval_required" name="mock_manual_approval_required"
                        {% if adapter_config and adapter_config.get('manual_approval_required') %}checked{% endif %}>
@@ -59,7 +48,6 @@ Expected context variables:
 function saveMockConfig() {
     const scriptRoot = '{{ request.script_root }}' || '';
     const config = {
-        dry_run: document.getElementById('mock_dry_run').checked,
         manual_approval_required: document.getElementById('mock_manual_approval_required').checked
     };
 

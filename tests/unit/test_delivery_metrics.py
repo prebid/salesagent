@@ -34,43 +34,8 @@ def gam_adapter(mock_principal):
         network_code="123456",
         advertiser_id="789",
         trafficker_id="101112",
-        dry_run=True,  # Use dry-run mode for testing
         tenant_id="test_tenant",
     )
-
-
-def test_get_media_buy_delivery_dry_run_mode(gam_adapter):
-    """Test get_media_buy_delivery returns simulated metrics in dry-run mode."""
-    # Setup
-    media_buy_id = "mb_test_123"
-    date_range = ReportingPeriod(
-        start=datetime.now(UTC),
-        end=datetime.now(UTC) + timedelta(days=7),
-    )
-
-    # Mock database query - patch where it's used in the function
-    with patch("src.core.database.database_session.get_db_session") as mock_db:
-        mock_session = MagicMock()
-        mock_db.return_value.__enter__.return_value = mock_session
-
-        # Create mock media buy
-        mock_media_buy = Mock()
-        mock_media_buy.media_buy_id = media_buy_id
-        mock_media_buy.budget = 1000.0
-        mock_media_buy.currency = "USD"
-        mock_media_buy.raw_request = {"packages": []}
-
-        mock_session.scalars.return_value.first.return_value = mock_media_buy
-
-        # Execute
-        result = gam_adapter.get_media_buy_delivery(media_buy_id, date_range, datetime.now())
-
-        # Assert
-        assert result is not None
-        assert result.media_buy_id == media_buy_id
-        assert result.totals.impressions > 0  # Should have simulated metrics
-        assert result.totals.spend > 0
-        assert result.currency == "USD"
 
 
 def test_get_media_buy_delivery_media_buy_not_found(gam_adapter):
@@ -121,7 +86,6 @@ def test_get_media_buy_delivery_with_real_gam_data(mock_reporting_service_class,
             network_code="123456",
             advertiser_id="789",
             trafficker_id="101112",
-            dry_run=False,
             tenant_id="test_tenant",
         )
         adapter.client = mock_client

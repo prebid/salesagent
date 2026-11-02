@@ -39,7 +39,21 @@ def mock_all_external_dependencies():
     with patch("src.core.database.database_session.get_db_session") as mock_db:
         mock_db.return_value = mock_session
 
-        # Mock external services
+        # Mock external services. This is an egress GUARD, not a test double: it
+        # exists so a unit test cannot dial off this machine. Production egress no
+        # longer runs through ``requests`` at all — every outbound call goes through
+        # src/core/security/outbound_http.py (httpx) behind the SSRF gate — so what
+        # this catches now is a stray ``requests.post`` from a test or a third-party
+        # library, and a test asserting on it is asserting on nothing production does.
+        #
+        # Never grade a test against the canned response below. It answers 200 and
+        # captures nothing worth asserting on — no URL, no headers, no bytes — so a
+        # test leaning on it cannot tell a signed POST from an unsigned one
+        # (#1291). A test that needs to control or observe an outbound POST says so
+        # at its own site: capture_outbound_webhooks (tests/helpers/webhook_wire)
+        # patches over this stub — and over httpx.Client/AsyncClient, which is where
+        # the real delivery goes — for the duration of its block, and records the
+        # real wire bytes (salesagent-og9k.6).
         real_post = requests.post
 
         def _post(url, *args, **kwargs):
@@ -106,41 +120,11 @@ def fast_password_hashing():
 
 
 @pytest.fixture
-def make_auth_test_client():
-    """Factory fixture: context manager yielding (client, mock_session) with auth DB patched.
-
-    Usage::
-
-        with make_auth_test_client(auth_setup_mode=True) as (client, mock_session):
-            with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true", ...}):
-                response = client.post("/test/auth", ...)
-    """
-    from contextlib import contextmanager
-
-    from src.admin.app import create_app
-
-    @contextmanager
-    def _factory(auth_setup_mode: bool = True):
-        app = create_app({"TESTING": True, "SECRET_KEY": "test-secret", "WTF_CSRF_ENABLED": False})
-        client = app.test_client()
-        mock_tenant = MagicMock()
-        mock_tenant.auth_setup_mode = auth_setup_mode
-        mock_session = MagicMock()
-        mock_session.scalars.return_value.first.return_value = mock_tenant
-        with patch("src.admin.blueprints.auth.get_db_session") as mock_db:
-            mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
-            mock_db.return_value.__exit__ = MagicMock(return_value=False)
-            yield client, mock_session
-
-    return _factory
-
-
-@pytest.fixture
 def make_users_test_client():
     """Factory fixture: context manager yielding (client, mock_session) for users blueprint.
 
-    Sets up ADCP_AUTH_TEST_MODE=true + a super-admin test session so
-    @require_tenant_access() passes without a DB call. tenant_id used in routes is "default".
+    Establishes a super-admin session so @require_tenant_access() passes without a DB call.
+    tenant_id used in routes is "default".
 
     Usage::
 
@@ -179,11 +163,13 @@ def make_users_test_client():
         with patch("src.admin.blueprints.users.get_db_session") as mock_db:
             mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
             mock_db.return_value.__exit__ = MagicMock(return_value=False)
-            with client.session_transaction() as sess:
-                sess["test_user"] = "admin@test.com"
-                sess["test_tenant_id"] = "default"
-                sess["test_user_role"] = "super_admin"
-            with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
+            # The session an authenticated super admin carries, from the one definition of
+            # it — not hand-written session keys, which authenticate only while whatever
+            # minted them is composed into the app.
+            from tests.helpers.admin_session import admin_auth_session
+
+            admin_auth_session(client, "default")
+            with patch.dict(os.environ, {}):
                 yield client, mock_session
 
     return _factory

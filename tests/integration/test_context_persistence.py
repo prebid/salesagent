@@ -7,6 +7,7 @@ import pytest
 from rich.console import Console
 
 from src.core.context_manager import ContextManager
+from tests.factories.principal import plaintext_token_for
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -25,15 +26,21 @@ def test_simplified_context(integration_db):
 
     with get_db_session() as session:
         # Create tenant
-        tenant = Tenant(tenant_id="test_tenant", name="Test Tenant", subdomain="test-tenant")
+        tenant = Tenant(
+            tenant_id="test_tenant",
+            name="Test Tenant",
+            subdomain="test-tenant",
+            # Required (NOT NULL) and UNIQUE. Nothing routes to this host; it exists to satisfy the column.
+            virtual_host="test-tenant.adcp.test",
+        )
         session.add(tenant)
 
         # Create principal
-        principal = Principal(
+        principal = Principal.with_token(
+            plaintext_token_for("test_principal"),
             tenant_id="test_tenant",
             principal_id="test_principal",
             name="Test Principal",
-            access_token="test_token",
             platform_mappings={"mock": {"advertiser_id": "test-advertiser"}},
         )
         session.add(principal)

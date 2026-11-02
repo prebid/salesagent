@@ -73,17 +73,6 @@ async def generate_variants_for_brief(tenant_id: str, brief: str, our_agent_url:
                 if (template.signals_agent_ids is None or template.signals_agent_ids) and template.countries:
                     all_countries.update(template.countries)
 
-            # Build context with deployment specification per AdCP spec
-            context = {}
-            if our_agent_url:
-                deliver_to: dict[str, list] = {
-                    "destinations": [{"agent_url": our_agent_url}],
-                }
-                # Add countries if we have any from products
-                if all_countries:
-                    deliver_to["countries"] = sorted(all_countries)  # Sort for consistency
-                context["deliver_to"] = deliver_to
-
             # Call async registry function
             import time
 
@@ -92,10 +81,12 @@ async def generate_variants_for_brief(tenant_id: str, brief: str, our_agent_url:
             countries_info = f" for countries {sorted(all_countries)}" if all_countries else ""
             logger.info(f"[TIMING] Querying signals agents with brief: {brief[:100]}...{countries_info}")
 
+            # No deliver_to is sent: the registry's get_signals never forwarded the
+            # deployment specification this used to build, so building it claimed a
+            # scoping the query did not have.
             all_signals = await registry.get_signals(
                 brief=brief,  # Note: Registry uses 'brief', not 'signal_spec' (TODO: update to match AdCP spec)
                 tenant_id=tenant_id,
-                context=context,
             )
 
             query_duration = time.time() - query_start

@@ -20,19 +20,19 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import (
     Creative,
     CreativeAssignment,
-    CurrencyLimit,
     MediaBuy,
     PersistedMediaBuyStatus,
     Principal,
-    PropertyTag,
     Tenant,
 )
 from src.core.database.repositories import MediaBuyRepository
 from src.services.media_buy_status_scheduler import MediaBuyStatusScheduler
+from tests.factories.principal import plaintext_token_for
 from tests.helpers.media_buy_write_seam import (
     assert_status_move_carried_bookkeeping,
     read_media_buy_state,
 )
+from tests.utils.database_helpers import add_product_prerequisites, vhost_for
 
 
 def _create_test_tenant(tenant_id: str = "test_tenant") -> str:
@@ -42,28 +42,20 @@ def _create_test_tenant(tenant_id: str = "test_tenant") -> str:
             tenant_id=tenant_id,
             name="Test Tenant",
             subdomain="test",
+            virtual_host=vhost_for(tenant_id),
             ad_server="mock",
             is_active=True,
         )
         session.add(tenant)
 
-        # Required: CurrencyLimit
-        currency_limit = CurrencyLimit(
-            tenant_id=tenant_id,
-            currency_code="USD",
+        # Required: the USD CurrencyLimit and the "all_inventory" PropertyTag.
+        add_product_prerequisites(
+            session,
+            tenant_id,
             min_package_budget=1.00,
             max_daily_package_spend=100000.00,
+            tag_description="All available inventory",
         )
-        session.add(currency_limit)
-
-        # Required: PropertyTag
-        property_tag = PropertyTag(
-            tenant_id=tenant_id,
-            tag_id="all_inventory",
-            name="All Inventory",
-            description="All available inventory",
-        )
-        session.add(property_tag)
 
         session.commit()
 
@@ -73,11 +65,11 @@ def _create_test_tenant(tenant_id: str = "test_tenant") -> str:
 def _create_test_principal(tenant_id: str, principal_id: str = "test_principal") -> str:
     """Create a test principal."""
     with get_db_session() as session:
-        principal = Principal(
+        principal = Principal.with_token(
+            plaintext_token_for(principal_id),
             tenant_id=tenant_id,
             principal_id=principal_id,
             name="Test Principal",
-            access_token="test_token",
             platform_mappings={"mock": {"advertiser_id": "mock_adv_123"}},
         )
         session.add(principal)

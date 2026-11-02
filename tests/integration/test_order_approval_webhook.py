@@ -297,7 +297,7 @@ class TestSigningIsGatedByTheScheme:
     """Only a row that ASKED for HMAC-SHA256 gets a signature.
 
     The sibling sender ``webhook_delivery_service`` shows what the other answer
-    costs (salesagent-ywzz): signing driven by "is a credential present" rather
+    costs (#1894): signing driven by "is a credential present" rather
     than "is the scheme HMAC-SHA256" starts signing rows that stored a bearer
     token, and a receiver expecting a plain bearer POST sees headers it did not
     ask for. Both non-HMAC paths are graded, because a regression in the gate

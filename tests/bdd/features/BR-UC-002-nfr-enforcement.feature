@@ -21,7 +21,7 @@ Feature: BR-UC-002 NFR Enforcement (restructured)
   Background:
     Given a Seller Agent is operational and accepting requests
     And a tenant exists with completed setup checklist
-    And the Buyer is authenticated with a valid principal_id
+    And the Buyer is authenticated
 
   # Replaces nfr-001 "Then the system should validate authentication before any business logic"
   # Original scenario sent a valid request then probed with bad creds in Then.
@@ -32,14 +32,14 @@ Feature: BR-UC-002 NFR Enforcement (restructured)
     And the account exists and is active
     But the request has no valid authentication
     When the Buyer Agent sends the create_media_buy request
-    Then the operation should fail with authentication error
+    Then the response is compliant with the create_media_buy error spec
+    And the operation should fail with authentication error
     # Strict wire conformance (salesagent-b0kx): pin the canonical code and the
     # top-level error.json suggestion (POST-F3 — buyer knows how to recover),
     # matching the 13 sibling UCs that already assert the suggestion on auth
     # errors. Routes through each transport's REAL auth gate (A2A
     # on_message_send no-token gate, REST _require_auth_dep, MCP boundary).
-    And the error code should be "AUTH_REQUIRED"
-    And the suggestion should contain "credentials"
+    And the error code should be "AUTH_MISSING"
     And no adapter calls should have been made
 
   # Replaces nfr-006 "Then the system should validate budget against minimum order requirements"
@@ -52,7 +52,8 @@ Feature: BR-UC-002 NFR Enforcement (restructured)
     And the tenant has minimum order size requirements
     But the package budget is below the minimum
     When the Buyer Agent sends the create_media_buy request
-    Then the operation should fail
+    Then the response is compliant with the create_media_buy error spec
+    And the operation should fail
     And the error should indicate minimum spend requirement
 
   # salesagent-wvry: get_total_budget() returns Decimal; the pending-approval
@@ -68,4 +69,5 @@ Feature: BR-UC-002 NFR Enforcement (restructured)
     And the account exists and is active
     And the Seller observes high-value audit alerts
     When the Buyer Agent sends the create_media_buy request
-    Then a high-value alert should be sent to the Seller
+    Then the response is compliant with the create_media_buy spec
+    And a high-value alert should be sent to the Seller

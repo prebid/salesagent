@@ -4,21 +4,24 @@ import asyncio
 import json
 import logging
 import uuid
+from decimal import Decimal
 
 from adcp.exceptions import ADCPConnectionError, ADCPError, ADCPTimeoutError
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, inspect, select
 from sqlalchemy.orm import joinedload
 
+from src.admin.form_validation import sanitize_form_data
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
+from src.core.database.integrity import resolve_or_write
 from src.core.database.models import PersistedMediaBuyStatus, PricingOption, Product, ProductInventoryMapping, Tenant
 from src.core.database.product_pricing import get_product_pricing_options
 from src.core.database.repositories.media_buy import MediaBuyRepository
+from src.core.database.repositories.principal import PrincipalRepository
 from src.core.schemas import Format
-from src.core.validation import sanitize_form_data
 from src.services.gam_product_config_service import GAMProductConfigService
 
 logger = logging.getLogger(__name__)
@@ -203,15 +206,19 @@ def get_creative_formats(
     return formats_list
 
 
-def parse_pricing_options_from_form(form_data: dict) -> list[dict]:
-    """Parse pricing options from form data (AdCP PR #88).
+def parse_pricing_options_from_form(form_data: dict) -> list[PricingOption]:
+    """Parse pricing options from form data into unpersisted ``PricingOption`` rows.
 
     Form data uses indexed fields: pricing_model_0, pricing_model_1, etc.
     Indices may be non-contiguous if user removed and re-added pricing options.
 
-    Returns list of pricing option dicts ready for database insertion.
+    Returns rows, not dicts. A dict of the same seven fields is a second shape for a
+    thing the ORM model already types, and it cost three copies of the ``Decimal``
+    coercion plus a mapping step at every write site. ``tenant_id`` and ``product_id``
+    are left unset: on the create form the product does not exist yet when the form is
+    parsed, so the caller stamps them just before ``session.add``.
     """
-    pricing_options = []
+    pricing_options: list[PricingOption] = []
 
     # Find all pricing option indices by scanning form keys
     # This handles non-contiguous indices (e.g., 0 removed, only 1 exists)
@@ -327,21 +334,34 @@ def parse_pricing_options_from_form(form_data: dict) -> list[dict]:
                 except ValueError:
                     pass
 
-        # Build pricing option dict
-        pricing_option = {
-            "pricing_model": pricing_model,
-            "currency": currency,
-            "is_fixed": is_fixed,
-            "rate": rate,
-            "price_guidance": price_guidance,
-            "parameters": parameters,
-            "min_spend_per_package": min_spend,
-        }
-
-        pricing_options.append(pricing_option)
+        pricing_options.append(
+            PricingOption.create(
+                pricing_model=pricing_model,
+                currency=currency,
+                is_fixed=is_fixed,
+                rate=Decimal(str(rate)) if rate is not None else None,
+                price_guidance=price_guidance,
+                parameters=parameters,
+                min_spend_per_package=Decimal(str(min_spend)) if min_spend is not None else None,
+            )
+        )
         index += 1
 
     return pricing_options
+
+
+#: Which columns are IDENTITY rather than terms — the one judgement a program cannot
+#: derive. ``tenant_id``/``product_id`` say which product the row belongs to, and
+#: ``pricing_option_id`` is what a buyer's ``PackageRequest`` names, so re-pricing an
+#: option must not rename the entity that buyer selected.
+_IDENTITY_COLUMNS = frozenset({"id", "tenant_id", "product_id", "pricing_option_id"})
+
+#: Everything else the model declares. Read off the mapper so a column added to
+#: ``PricingOption`` is carried by the edit form without anyone remembering to list it
+#: here — a hand-written list of the same names silently stops covering the model.
+_FORM_OWNED_COLUMNS = tuple(
+    attr.key for attr in inspect(PricingOption).mapper.column_attrs if attr.key not in _IDENTITY_COLUMNS
+)
 
 
 def create_custom_key_inventory_mappings(db_session, tenant_id: str, product_id: str, custom_keys: dict) -> int:
@@ -616,7 +636,6 @@ def _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_d
         AuthorizedProperty,
         GAMInventory,
         InventoryProfile,
-        Principal,
         PropertyTag,
         SignalsAgent,
     )
@@ -644,7 +663,7 @@ def _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_d
         ).all()
 
         # Load principals for access control dropdown
-        principals = db_session.scalars(select(Principal).filter_by(tenant_id=tenant_id).order_by(Principal.name)).all()
+        principals = PrincipalRepository(db_session, tenant_id).list_all()
         principals_list = [{"principal_id": p.principal_id, "name": p.name} for p in principals]
 
         if adapter_type == "google_ad_manager":
@@ -775,7 +794,7 @@ def add_product(tenant_id):
 
                                 logger.info(f"Validated {len(formats)} formats for new product")
 
-                        except (ADCPError, Exception) as e:
+                        except Exception as e:
                             logger.error(f"Failed to validate formats: {e}")
                             flash("Unable to validate formats. Please try again.", "error")
                             return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
@@ -808,7 +827,7 @@ def add_product(tenant_id):
                 if pricing_options_data and len(pricing_options_data) > 0:
                     first_option = pricing_options_data[0]
                     # Determine delivery_type based on is_fixed
-                    if first_option.get("is_fixed", True):
+                    if first_option.is_fixed:
                         delivery_type = "guaranteed"
                     else:
                         delivery_type = "non_guaranteed"
@@ -1010,16 +1029,14 @@ def add_product(tenant_id):
                     # Add pricing info to manifest if available
                     if pricing_options_data and len(pricing_options_data) > 0:
                         first_option = pricing_options_data[0]
-                        product_kwargs["product_card"]["manifest"]["pricing_model"] = first_option.get(
-                            "pricing_model", "CPM"
-                        )
-                        if first_option.get("is_fixed") and first_option.get("fixed_price"):
-                            product_kwargs["product_card"]["manifest"]["pricing_amount"] = str(
-                                first_option["fixed_price"]
-                            )
-                            product_kwargs["product_card"]["manifest"]["pricing_currency"] = first_option.get(
-                                "currency_code", "USD"
-                            )
+                        product_kwargs["product_card"]["manifest"]["pricing_model"] = first_option.pricing_model
+                        # ``fixed_price`` is what this branch used to read, and the form
+                        # parser has never produced that key — so a created product's card
+                        # never carried an amount. The column is ``rate``, as the edit path
+                        # below already read.
+                        if first_option.is_fixed and first_option.rate:
+                            product_kwargs["product_card"]["manifest"]["pricing_amount"] = str(first_option.rate)
+                            product_kwargs["product_card"]["manifest"]["pricing_currency"] = first_option.currency
 
                 # Handle property authorization (AdCP requirement)
                 # Default to empty property_tags if not specified (satisfies DB constraint)
@@ -1245,24 +1262,9 @@ def add_product(tenant_id):
                     logger.info(
                         f"Creating {len(pricing_options_data)} pricing options for product {product.product_id}"
                     )
-                    for option_data in pricing_options_data:
-                        from decimal import Decimal
-
-                        pricing_option = PricingOption(
-                            tenant_id=tenant_id,
-                            product_id=product.product_id,
-                            pricing_model=option_data["pricing_model"],
-                            rate=Decimal(str(option_data["rate"])) if option_data["rate"] is not None else None,
-                            currency=option_data["currency"],
-                            is_fixed=option_data["is_fixed"],
-                            price_guidance=option_data["price_guidance"],
-                            parameters=option_data["parameters"],
-                            min_spend_per_package=(
-                                Decimal(str(option_data["min_spend_per_package"]))
-                                if option_data["min_spend_per_package"] is not None
-                                else None
-                            ),
-                        )
+                    for pricing_option in pricing_options_data:
+                        pricing_option.tenant_id = tenant_id
+                        pricing_option.product_id = product.product_id
                         db_session.add(pricing_option)
 
                 # Create inventory mappings for GAM ad units and placements
@@ -1398,7 +1400,7 @@ def edit_product(tenant_id, product_id):
 
                     logger.info(f"Validated {len(validated_formats)} formats for product {product_id}")
 
-                except (ADCPError, Exception) as e:
+                except Exception as e:
                     # Unexpected error - fail hard
                     logger.error(f"Failed to validate formats: {e}")
                     flash("Unable to validate formats. Please try again.", "error")
@@ -1707,30 +1709,39 @@ def edit_product(tenant_id, product_id):
                     # Flush deletes to avoid unique constraint violations
                     db_session.flush()
 
-                    # Recreate mappings from implementation_config
-                    # Ad units
-                    if base_config.get("targeted_ad_unit_ids"):
-                        for idx, ad_unit_id in enumerate(base_config["targeted_ad_unit_ids"]):
+                    # Recreate mappings from implementation_config — ad units and
+                    # placements are the same mapping, only the inventory type differs
+                    for config_key, inventory_type in (
+                        ("targeted_ad_unit_ids", "ad_unit"),
+                        ("targeted_placement_ids", "placement"),
+                    ):
+                        for idx, inventory_id in enumerate(base_config.get(config_key) or []):
+                            mapping_stmt = select(ProductInventoryMapping).filter_by(
+                                tenant_id=tenant_id,
+                                product_id=product_id,
+                                inventory_type=inventory_type,
+                                inventory_id=inventory_id,
+                            )
                             mapping = ProductInventoryMapping(
                                 tenant_id=tenant_id,
                                 product_id=product_id,
-                                inventory_type="ad_unit",
-                                inventory_id=ad_unit_id,
+                                inventory_type=inventory_type,
+                                inventory_id=inventory_id,
                                 is_primary=(idx == 0),
                             )
-                            db_session.add(mapping)
 
-                    # Placements
-                    if base_config.get("targeted_placement_ids"):
-                        for idx, placement_id in enumerate(base_config["targeted_placement_ids"]):
-                            mapping = ProductInventoryMapping(
-                                tenant_id=tenant_id,
-                                product_id=product_id,
-                                inventory_type="placement",
-                                inventory_id=placement_id,
-                                is_primary=(idx == 0),
+                            # A mapping's identity IS uq_product_inventory, so a lost race
+                            # means the row is already there; the caller's is_primary still
+                            # applies. Both callables run before this iteration ends, so the
+                            # late binding B023 warns about cannot happen.
+                            already_mapped = resolve_or_write(
+                                db_session,
+                                conflict=lambda: db_session.scalars(mapping_stmt).first(),  # noqa: B023
+                                write=lambda: db_session.add(mapping),  # noqa: B023
+                                constraint="uq_product_inventory",
                             )
-                            db_session.add(mapping)
+                            if already_mapped is not None:
+                                already_mapped.is_primary = idx == 0
 
                     # Custom targeting keys
                     if base_config.get("custom_targeting_keys"):
@@ -1739,8 +1750,6 @@ def edit_product(tenant_id, product_id):
 
                 # Update pricing options (AdCP PR #88)
                 # Note: min_spend is now stored in pricing_options[].min_spend_per_package
-                from decimal import Decimal
-
                 # Parse pricing options from form FIRST
                 try:
                     pricing_options_data = parse_pricing_options_from_form(form_data)
@@ -1768,39 +1777,16 @@ def edit_product(tenant_id, product_id):
                 )
 
                 # Update existing options or create new ones
-                for idx, option_data in enumerate(pricing_options_data):
+                for idx, parsed in enumerate(pricing_options_data):
                     if idx < len(existing_options):
-                        # Update existing pricing option
+                        # Copy the TERMS onto the existing row and keep its identity.
                         po = existing_options[idx]
-                        po.pricing_model = option_data["pricing_model"]
-                        po.rate = Decimal(str(option_data["rate"])) if option_data["rate"] is not None else None
-                        po.currency = option_data["currency"]
-                        po.is_fixed = option_data["is_fixed"]
-                        po.price_guidance = option_data["price_guidance"]
-                        po.parameters = option_data["parameters"]
-                        po.min_spend_per_package = (
-                            Decimal(str(option_data["min_spend_per_package"]))
-                            if option_data["min_spend_per_package"] is not None
-                            else None
-                        )
+                        for column in _FORM_OWNED_COLUMNS:
+                            setattr(po, column, getattr(parsed, column))
                     else:
-                        # Create new pricing option
-                        pricing_option = PricingOption(
-                            tenant_id=tenant_id,
-                            product_id=product.product_id,
-                            pricing_model=option_data["pricing_model"],
-                            rate=Decimal(str(option_data["rate"])) if option_data["rate"] is not None else None,
-                            currency=option_data["currency"],
-                            is_fixed=option_data["is_fixed"],
-                            price_guidance=option_data["price_guidance"],
-                            parameters=option_data["parameters"],
-                            min_spend_per_package=(
-                                Decimal(str(option_data["min_spend_per_package"]))
-                                if option_data["min_spend_per_package"] is not None
-                                else None
-                            ),
-                        )
-                        db_session.add(pricing_option)
+                        parsed.tenant_id = tenant_id
+                        parsed.product_id = product.product_id
+                        db_session.add(parsed)
 
                 # Delete excess existing options (if new list is shorter)
                 if len(existing_options) > len(pricing_options_data):
@@ -1849,10 +1835,10 @@ def edit_product(tenant_id, product_id):
                     # Add pricing info to manifest if available
                     if pricing_options_data and len(pricing_options_data) > 0:
                         first_option = pricing_options_data[0]
-                        product.product_card["manifest"]["pricing_model"] = first_option.get("pricing_model", "CPM")
-                        if first_option.get("is_fixed") and first_option.get("rate"):
-                            product.product_card["manifest"]["pricing_amount"] = str(first_option["rate"])
-                            product.product_card["manifest"]["pricing_currency"] = first_option.get("currency", "USD")
+                        product.product_card["manifest"]["pricing_model"] = first_option.pricing_model
+                        if first_option.is_fixed and first_option.rate:
+                            product.product_card["manifest"]["pricing_amount"] = str(first_option.rate)
+                            product.product_card["manifest"]["pricing_currency"] = first_option.currency
 
                     from sqlalchemy.orm import attributes
 
@@ -1982,11 +1968,7 @@ def edit_product(tenant_id, product_id):
             product_dict["pricing_options"] = pricing_options_list
 
             # Get all principals for this tenant (for access control dropdown)
-            from src.core.database.models import Principal
-
-            principals = db_session.scalars(
-                select(Principal).filter_by(tenant_id=tenant_id).order_by(Principal.name)
-            ).all()
+            principals = PrincipalRepository(db_session, tenant_id).list_all()
             principals_list = [{"principal_id": p.principal_id, "name": p.name} for p in principals]
 
             # Get authorized properties for publisher properties selector
@@ -2265,27 +2247,26 @@ def assign_inventory_to_product(tenant_id, product_id):
                 return jsonify({"error": "Inventory item not found"}), 404
 
             # Check if mapping already exists
-            existing = db_session.scalars(
-                select(ProductInventoryMapping).filter_by(
-                    tenant_id=tenant_id, product_id=product_id, inventory_id=inventory_id, inventory_type=inventory_type
-                )
-            ).first()
-
-            if existing:
-                # Update existing mapping
+            mapping_stmt = select(ProductInventoryMapping).filter_by(
+                tenant_id=tenant_id, product_id=product_id, inventory_id=inventory_id, inventory_type=inventory_type
+            )
+            mapping = ProductInventoryMapping(
+                tenant_id=tenant_id,
+                product_id=product_id,
+                inventory_id=inventory_id,
+                inventory_type=inventory_type,
+                is_primary=is_primary,
+            )
+            existing = resolve_or_write(
+                db_session,
+                conflict=lambda: db_session.scalars(mapping_stmt).first(),
+                write=lambda: db_session.add(mapping),
+                constraint="uq_product_inventory",
+            )
+            if existing is not None:
+                # Update existing mapping — also where an insert that lost the race lands.
                 existing.is_primary = is_primary
-                db_session.commit()
-            else:
-                # Create new mapping
-                mapping = ProductInventoryMapping(
-                    tenant_id=tenant_id,
-                    product_id=product_id,
-                    inventory_id=inventory_id,
-                    inventory_type=inventory_type,
-                    is_primary=is_primary,
-                )
-                db_session.add(mapping)
-                db_session.commit()
+            db_session.commit()
 
             # CRITICAL: Update product's implementation_config with inventory targeting
             # GAM adapter requires this to create line items

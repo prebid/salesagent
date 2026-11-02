@@ -172,6 +172,44 @@ class TestCallerBehavioursThatDelegationMustNotEat:
         assert first.startswith("bdd-key-")
 
 
+class TestHarnessRePinDoesNotClobberADeliberateOverride:
+    """``harness_create_request_kwargs`` re-pins PLACEHOLDER ids and nothing else.
+
+    Its job is to rescue a request built before the harness seeded its rows. Written
+    unconditionally it also overwrote a package a Given had deliberately pointed at
+    another option — an auction option, a EUR option, a second product — and the
+    scenario went on grading the default fixed option while reading as if it graded what
+    it asked for. A silent wrong answer, not a failure, which is why it needs a test
+    rather than a comment.
+    """
+
+    def test_a_placeholder_built_request_is_repinned_to_the_seeded_rows(self, seeded_ctx: dict[str, Any]):
+        """The behaviour the re-pin exists for: no seed at build time, seed by dispatch time."""
+        ctx: dict[str, Any] = {}
+        given_media_buy._ensure_request_defaults(ctx)
+        assert ctx["request_kwargs"]["packages"][0]["product_id"] == "guaranteed_display", (
+            "precondition: a ctx with no seeded product must build against the placeholder ids"
+        )
+
+        ctx.update(seeded_ctx)
+        package = given_media_buy.harness_create_request_kwargs(ctx)["packages"][0]
+
+        assert package["product_id"] == seeded_ctx["default_product"].product_id
+        assert package["pricing_option_id"] == _create_request.pricing_option_id(seeded_ctx["default_pricing_option"])
+
+    def test_a_deliberate_override_survives_the_repin(self, seeded_ctx: dict[str, Any]):
+        """A Given that chose another product/option keeps it — that choice IS the scenario."""
+        ctx = dict(seeded_ctx)
+        given_media_buy._ensure_request_defaults(ctx)
+        ctx["request_kwargs"]["packages"][0]["product_id"] = "standard_video"
+        ctx["request_kwargs"]["packages"][0]["pricing_option_id"] = "cpm_usd_auction"
+
+        package = given_media_buy.harness_create_request_kwargs(ctx)["packages"][0]
+
+        assert package["product_id"] == "standard_video"
+        assert package["pricing_option_id"] == "cpm_usd_auction"
+
+
 class TestOnePricingOptionIdHelper:
     """``pricing_option_id`` exists once, not once per module (BINDING #3)."""
 

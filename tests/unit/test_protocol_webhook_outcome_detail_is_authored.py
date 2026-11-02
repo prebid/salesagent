@@ -1,4 +1,4 @@
-"""The protocol sender's unexpected-error arm authors its own outcome detail.
+"""The protocol sender's unexpected-error branch authors its own outcome detail.
 
 Covers salesagent-pldmk.6, Move 2 -- the SECOND of the two out-of-module
 ``WebhookDeliveryOutcome`` construction sites.
@@ -16,14 +16,14 @@ and pass ``detail=str(e)`` for an arbitrary caught exception:
 2. ``src/services/protocol_webhook_service.py:360`` -- THIS module. It had zero
    coverage of any kind before this file existed.
 
-Why ``outcome.detail`` at the arm is the right choke point rather than a
+Why ``outcome.detail`` at the branch is the right choke point rather than a
 downstream proxy: both durable surfaces read that one field VERBATIM.
 ``src/core/database/repositories/delivery.py:327`` writes it to
 ``webhook_delivery_log.error_message``, and ``protocol_webhook_service.py:280``
 emits it as an audit warning. So this is disclosure into storage and into an
 operator record, not just into a log line.
 
-The stimulus is the case the arm's OWN comment names -- "the pinned transport's
+The stimulus is the case the branch's OWN comment names -- "the pinned transport's
 own wrong-host guard raises a bare RuntimeError". That message is, verbatim from
 ``adcp/signing/ip_pinned_transport.py:150-154``, an interpolation of TWO
 hostnames into a field contracted never to carry a URL.
@@ -48,13 +48,13 @@ PINNED_TRANSPORT_ERROR = RuntimeError(
 
 # No ``tenant_id``: ``WebhookTaskContext.records_delivery_log`` is then False and
 # no audit logger is built, so this test needs neither a database nor an audit
-# backend to reach the arm. The arm is what is under test, not the epilogue.
+# backend to reach the branch. The branch is what is under test, not the epilogue.
 TASK = WebhookTaskContextFactory()
 PAYLOAD = {"task_id": "t1", "status": "completed"}
 
 
 async def _outcome_from_the_unexpected_arm() -> WebhookDeliveryOutcome:
-    """Drive the arm and hand back the outcome it built.
+    """Drive the branch and hand back the outcome it built.
 
     ``_conclude`` returns a bool, so the outcome is captured as it is passed in
     -- the recorder delegates to the real ``_conclude`` so the epilogue still
@@ -83,7 +83,7 @@ async def _outcome_from_the_unexpected_arm() -> WebhookDeliveryOutcome:
             TASK,
         )
 
-    assert len(captured) == 1, f"the arm concluded {len(captured)} times, expected exactly 1"
+    assert len(captured) == 1, f"the branch concluded {len(captured)} times, expected exactly 1"
     return captured[0]
 
 
@@ -101,15 +101,15 @@ async def test_the_unexpected_arm_carries_no_foreign_exception_text():
 
 
 async def test_the_unexpected_arm_builds_the_named_outcome():
-    """The arm builds exactly ``WebhookDeliveryOutcome.unexpected(<type name>)``.
+    """The branch builds exactly ``WebhookDeliveryOutcome.unexpected(<type name>)``.
 
     Whole-object equality, so ``kind``, ``attempts``, ``http_status``,
     ``payload_size_bytes``, ``reason`` and ``scheme`` stay pinned as well: the
-    arm's honest report is "exhausted with zero attempts", and a named
+    branch's honest report is "exhausted with zero attempts", and a named
     constructor must not quietly change any of that while fixing ``detail``.
     """
     outcome = await _outcome_from_the_unexpected_arm()
 
     assert outcome == WebhookDeliveryOutcome.unexpected("RuntimeError"), (
-        f"the arm did not build the named outcome: {outcome!r}"
+        f"the branch did not build the named outcome: {outcome!r}"
     )

@@ -149,22 +149,26 @@ class TestJSONTypeBindParam:
         assert isinstance(result, list)
 
     def test_process_bind_param_with_invalid_type_string(self):
-        """Test that non-JSON types are converted to empty dict."""
+        """A str (typically json.dumps pre-serialization) must raise, not silently empty to {}.
+
+        The old {}-coercion silently destroyed audit details, principal
+        platform_mappings, and signup tenant fields (salesagent-akjc).
+        """
         json_type = JSONType()
-        result = json_type.process_bind_param("invalid", None)
-        assert result == {}
+        with pytest.raises(TypeError, match="never pre-serialize with json.dumps"):
+            json_type.process_bind_param('{"a": 1}', None)
 
     def test_process_bind_param_with_invalid_type_int(self):
-        """Test that int is converted to empty dict."""
+        """An int is a caller bug — loud TypeError, not silent {}."""
         json_type = JSONType()
-        result = json_type.process_bind_param(42, None)
-        assert result == {}
+        with pytest.raises(TypeError, match="JSONType column received int"):
+            json_type.process_bind_param(42, None)
 
     def test_process_bind_param_with_invalid_type_bool(self):
-        """Test that bool is converted to empty dict."""
+        """A bool is a caller bug — loud TypeError, not silent {}."""
         json_type = JSONType()
-        result = json_type.process_bind_param(True, None)
-        assert result == {}
+        with pytest.raises(TypeError, match="JSONType column received bool"):
+            json_type.process_bind_param(True, None)
 
 
 class TestJSONTypePostgreSQLOptimization:

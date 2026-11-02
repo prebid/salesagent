@@ -23,12 +23,33 @@ import pytest
 from sqlalchemy import delete, select
 
 from src.core.database.database_session import get_db_session
-from src.core.resolved_identity import ResolvedIdentity
+from src.core.resolved_identity import AccountIdentity
 from src.core.schemas import CreateMediaBuyRequest, PackageRequest, Targeting
-from src.core.testing_hooks import AdCPTestContext
+from src.core.schemas.account import Account
+from src.core.tenant_context import TenantContext
+from tests.factories import AccountFactory
+from tests.factories.principal import PrincipalFactory, plaintext_token_for
 from tests.integration.conftest import add_required_setup_data, create_test_product_with_pricing
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db, pytest.mark.asyncio]
+
+_TENANT_ID = "test_tenant_v24"
+_ACCOUNT_ID = "acct_test"
+
+
+def _account_identity() -> AccountIdentity:
+    """The caller ``_create_media_buy_impl`` takes: the identity with the account inside.
+
+    ``create-media-buy-request.json`` requires ``account``, so the implementation is
+    annotated ``AccountIdentity``; the tenant is the committed ROW, which is what the
+    resolver would have loaded.
+    """
+    tenant = TenantContext.load(_TENANT_ID)
+    assert tenant is not None, "the setup fixture must have committed the tenant row"
+    return PrincipalFactory.make_account_identity(
+        PrincipalFactory.make_identity(principal_id="test_principal_v24", tenant_id=_TENANT_ID, tenant=tenant),
+        Account(account_id=_ACCOUNT_ID, name="Test Account", status="active"),
+    )
 
 
 @pytest.mark.integration
@@ -39,7 +60,6 @@ class TestCreateMediaBuyV24Format:
     @pytest.fixture
     def setup_test_tenant(self, integration_db):
         """Set up test tenant with product."""
-        from src.core.config_loader import set_current_tenant
         from src.core.database.models import CurrencyLimit
         from src.core.database.models import Principal as ModelPrincipal
         from src.core.database.models import Tenant as ModelTenant
@@ -54,6 +74,8 @@ class TestCreateMediaBuyV24Format:
                 tenant_id="test_tenant_v24",
                 name="Test V24 Tenant",
                 subdomain="testv24",
+                # Required (NOT NULL) and UNIQUE. Nothing routes to this host; it exists to satisfy the column.
+                virtual_host="test-tenant-v24.adcp.test",
                 ad_server="mock",
                 is_active=True,
                 human_review_required=False,
@@ -66,11 +88,11 @@ class TestCreateMediaBuyV24Format:
             session.flush()  # Flush so add_required_setup_data can find the tenant
 
             # Create principal
-            principal = ModelPrincipal(
+            principal = ModelPrincipal.with_token(
+                plaintext_token_for("test_principal_v24"),
                 tenant_id="test_tenant_v24",
                 principal_id="test_principal_v24",
                 name="Test Principal V24",
-                access_token="test_token_v24",
                 platform_mappings={"mock": {"advertiser_id": "adv_test_v24"}},
             )
             session.add(principal)
@@ -145,18 +167,15 @@ class TestCreateMediaBuyV24Format:
             )
             session.add(currency_limit_gbp)
 
+            # The account every request below names. media_buys has a
+            # (tenant_id, account_id) foreign key, so the row must exist; in production
+            # the boundary resolves the reference and these tests call _impl directly.
+            session.add(AccountFactory.build(tenant_id="test_tenant_v24", account_id=_ACCOUNT_ID))
+
             session.commit()
 
-            # Set tenant context
-            set_current_tenant(
-                {
-                    "tenant_id": "test_tenant_v24",
-                    "name": "Test V24 Tenant",
-                    "ad_server": "mock",
-                    "auto_approve_format_ids": ["display_300x250"],
-                    "human_review_required": False,
-                }
-            )
+            # No ambient tenant to set: the tenant reaches the implementation on the
+            # identity each test builds, loaded from the row committed above.
 
             # Get pricing_option_ids for created products (needed for PackageRequest)
             # NOTE: pricing_option_id is auto-generated from pricing model details
@@ -210,9 +229,6 @@ class TestCreateMediaBuyV24Format:
             session.execute(delete(ModelTenant).where(ModelTenant.tenant_id == "test_tenant_v24"))
             session.commit()
 
-            # Clear global tenant context to avoid polluting other tests
-            set_current_tenant(None)
-
     async def test_create_media_buy_with_package_budget_mcp(self, setup_test_tenant):
         """Test MCP path with packages containing Budget objects.
 
@@ -231,19 +247,13 @@ class TestCreateMediaBuyV24Format:
             )
         ]
 
-        # Create identity for auth
-        identity = ResolvedIdentity(
-            principal_id="test_principal_v24",
-            tenant_id="test_tenant_v24",
-            tenant={"tenant_id": "test_tenant_v24"},
-            testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-            protocol="mcp",
-        )
+        identity = _account_identity()
 
         # Call _impl with a CreateMediaBuyRequest object
         # This exercises the FULL serialization path including response_packages construction
         # NOTE: budget is at package level per AdCP v2.4 spec (not a top-level parameter)
         req = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             packages=[p.model_dump() for p in packages],
             start_time=datetime.now(UTC) + timedelta(days=1),
@@ -251,7 +261,7 @@ class TestCreateMediaBuyV24Format:
             po_number="TEST-V24-001",
             idempotency_key=f"int-key-{uuid.uuid4().hex}",
         )
-        response, _ = await _create_media_buy_impl(req=req, identity=identity)
+        response = await _create_media_buy_impl(req=req, identity=identity)
 
         # Verify response structure
         if not hasattr(response, "media_buy_id"):
@@ -298,16 +308,10 @@ class TestCreateMediaBuyV24Format:
             )
         ]
 
-        # Create identity for auth
-        identity = ResolvedIdentity(
-            principal_id="test_principal_v24",
-            tenant_id="test_tenant_v24",
-            tenant={"tenant_id": "test_tenant_v24"},
-            testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-            protocol="mcp",
-        )
+        identity = _account_identity()
 
         req = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             packages=[p.model_dump() for p in packages],
             start_time=datetime.now(UTC) + timedelta(days=1),
@@ -315,7 +319,7 @@ class TestCreateMediaBuyV24Format:
             po_number="TEST-V24-002",
             idempotency_key=f"int-key-{uuid.uuid4().hex}",
         )
-        response, _ = await _create_media_buy_impl(req=req, identity=identity)
+        response = await _create_media_buy_impl(req=req, identity=identity)
 
         # Verify response structure
         if not hasattr(response, "media_buy_id"):
@@ -371,19 +375,13 @@ class TestCreateMediaBuyV24Format:
             ),
         ]
 
-        # Create identity for auth
-        identity = ResolvedIdentity(
-            principal_id="test_principal_v24",
-            tenant_id="test_tenant_v24",
-            tenant={"tenant_id": "test_tenant_v24"},
-            testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-            protocol="mcp",
-        )
+        identity = _account_identity()
 
         # Total budget is sum of all package budgets
         total_budget_value = sum(pkg.budget for pkg in packages)
 
         req = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             packages=[p.model_dump() for p in packages],
             start_time=datetime.now(UTC) + timedelta(days=1),
@@ -391,7 +389,7 @@ class TestCreateMediaBuyV24Format:
             po_number="TEST-V24-003",
             idempotency_key=f"int-key-{uuid.uuid4().hex}",
         )
-        response, _ = await _create_media_buy_impl(req=req, identity=identity)
+        response = await _create_media_buy_impl(req=req, identity=identity)
 
         # Verify all packages serialized correctly
         assert response.media_buy_id
@@ -418,16 +416,10 @@ class TestCreateMediaBuyV24Format:
             )
         ]
 
-        # Create identity for auth
-        identity = ResolvedIdentity(
-            principal_id="test_principal_v24",
-            tenant_id="test_tenant_v24",
-            tenant={"tenant_id": "test_tenant_v24"},
-            testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-            protocol="mcp",
-        )
+        identity = _account_identity()
 
         req = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             packages=[p.model_dump() for p in packages],
             start_time=datetime.now(UTC) + timedelta(days=1),
@@ -435,7 +427,7 @@ class TestCreateMediaBuyV24Format:
             po_number="TEST-V24-A2A-001",
             idempotency_key=f"int-key-{uuid.uuid4().hex}",
         )
-        response, _ = await _create_media_buy_impl(req=req, identity=identity)
+        response = await _create_media_buy_impl(req=req, identity=identity)
 
         # Verify response structure (same as MCP)
         assert response.media_buy_id
@@ -455,18 +447,12 @@ class TestCreateMediaBuyV24Format:
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
-        # Create identity for auth
-        identity = ResolvedIdentity(
-            principal_id="test_principal_v24",
-            tenant_id="test_tenant_v24",
-            tenant={"tenant_id": "test_tenant_v24"},
-            testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-            protocol="mcp",
-        )
+        identity = _account_identity()
 
         # Standard AdCP format with explicit package
         # pricing_option_id format: {model}_{currency}_{fixed|auction}
         req = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             packages=[
                 PackageRequest(
@@ -480,7 +466,7 @@ class TestCreateMediaBuyV24Format:
             po_number="TEST-STANDARD-001",
             idempotency_key=f"int-key-{uuid.uuid4().hex}",
         )
-        response, _ = await _create_media_buy_impl(req=req, identity=identity)
+        response = await _create_media_buy_impl(req=req, identity=identity)
 
         # Verify response
         assert response.media_buy_id

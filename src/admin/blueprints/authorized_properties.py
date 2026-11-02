@@ -2,7 +2,6 @@
 
 import json
 import logging
-import os
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -13,9 +12,10 @@ from werkzeug.wrappers import Response
 
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
+from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
+from src.core.database.integrity import resolve_or_write
 from src.core.database.models import AuthorizedProperty, PropertyTag, Tenant
-from src.core.domain_config import get_tenant_url
 from src.core.schemas import (
     PROPERTY_ERROR_MESSAGES,
     PROPERTY_REQUIRED_FIELDS,
@@ -156,34 +156,41 @@ def _save_properties_batch(properties_data: list[dict[str, Any]], tenant_id: str
                     AuthorizedProperty.tenant_id == tenant_id,
                     AuthorizedProperty.property_id == property_id,
                 )
-                existing_property = db_session.scalars(stmt).first()
+                uploaded = AuthorizedProperty(
+                    property_id=property_id,
+                    tenant_id=tenant_id,
+                    property_type=prop_data["property_type"],
+                    name=prop_data["name"],
+                    identifiers=prop_data["identifiers"],
+                    tags=prop_data.get("tags", []),
+                    publisher_domain=prop_data["publisher_domain"],
+                    verification_status="pending",
+                    created_at=datetime.now(UTC),
+                    updated_at=datetime.now(UTC),
+                )
+
+                # A property's identity IS the authorized_properties primary key, so a
+                # lost race means the row is there and the upload's values belong on top
+                # of it. Both callables run before this iteration ends, so the late
+                # binding B023 warns about cannot happen.
+                existing_property = resolve_or_write(
+                    db_session,
+                    conflict=lambda: db_session.scalars(stmt).first(),  # noqa: B023
+                    write=lambda: db_session.add(uploaded),  # noqa: B023
+                    constraint="authorized_properties_pkey",
+                )
 
                 if existing_property:
                     # Update existing property
-                    existing_property.property_type = prop_data["property_type"]
-                    existing_property.name = prop_data["name"]
-                    existing_property.identifiers = prop_data["identifiers"]
-                    existing_property.tags = prop_data.get("tags", [])
-                    existing_property.publisher_domain = prop_data["publisher_domain"]
-                    existing_property.verification_status = "pending"
+                    existing_property.property_type = uploaded.property_type
+                    existing_property.name = uploaded.name
+                    existing_property.identifiers = uploaded.identifiers
+                    existing_property.tags = uploaded.tags
+                    existing_property.publisher_domain = uploaded.publisher_domain
+                    existing_property.verification_status = uploaded.verification_status
                     existing_property.verification_checked_at = None
                     existing_property.verification_error = None
-                    existing_property.updated_at = datetime.now(UTC)
-                else:
-                    # Create new property
-                    new_property = AuthorizedProperty(
-                        property_id=property_id,
-                        tenant_id=tenant_id,
-                        property_type=prop_data["property_type"],
-                        name=prop_data["name"],
-                        identifiers=prop_data["identifiers"],
-                        tags=prop_data.get("tags", []),
-                        publisher_domain=prop_data["publisher_domain"],
-                        verification_status="pending",
-                        created_at=datetime.now(UTC),
-                        updated_at=datetime.now(UTC),
-                    )
-                    db_session.add(new_property)
+                    existing_property.updated_at = uploaded.updated_at
 
                 success_count += 1
 
@@ -212,60 +219,26 @@ def _parse_and_save_properties_file(file, tenant_id: str) -> tuple[int, int, lis
     return _save_properties_batch(properties_data, tenant_id)
 
 
-def _construct_agent_url(tenant_id: str, request: Any) -> str:
-    """Construct the agent URL using existing tenant resolution logic."""
-    import os
+def _construct_agent_url(tenant_id: str) -> str:
+    """This tenant's canonical agent URL — the SAME string every document publishes.
 
-    from src.core.database.models import Tenant
+    These URLs are compared against the ``url`` values in publishers' adagents.json
+    files (``publisher_partners.py``, the property-sync service) and against the URL
+    the agent card published, and there is no diagnostic when two of them disagree —
+    the check simply fails. So this reads ``tenant.agent_url``, the one accessor,
+    rather than deriving its own.
 
-    logger.info(f"🏗️ Constructing agent URL for tenant: {tenant_id}")
+    Takes no ``request``: a tenant's published identity comes from its row, and a
+    request parameter on a function deriving it is an invitation to read a header
+    instead.
+    """
+    from src.core.database.repositories.tenant_lookup import TenantLookupRepository
 
-    # Check if we have an explicit override for testing
-    override_url = os.environ.get("ADCP_AGENT_URL")
-    if override_url:
-        logger.info(f"🔧 Using ADCP_AGENT_URL override: {override_url}")
-        return override_url
-
-    # Get tenant information directly from database using tenant_id parameter
-    try:
-        with get_db_session() as db_session:
-            stmt = select(Tenant).where(Tenant.tenant_id == tenant_id)
-            tenant_obj = db_session.scalars(stmt).first()
-            if not tenant_obj:
-                raise ValueError(f"Tenant {tenant_id} not found")
-
-            subdomain = tenant_obj.subdomain or tenant_id
-            virtual_host = tenant_obj.virtual_host
-
-        logger.info(f"🏢 Tenant info - subdomain: '{subdomain}', virtual_host: '{virtual_host}'")
-
-        # In production, use the existing virtual host system
-        if os.environ.get("PRODUCTION") == "true":
-            if virtual_host:
-                url = f"https://{virtual_host}"
-                logger.info(f"🌐 Production: using virtual_host -> {url}")
-                return url
-            else:
-                # Fallback to subdomain pattern
-                tenant_url = get_tenant_url(subdomain)
-                if tenant_url:
-                    logger.info(f"🌐 Production: using subdomain pattern -> {tenant_url}")
-                    return tenant_url
-                # If SALES_AGENT_DOMAIN not configured, fall through to development mode
-
-        # For development, use MCP server port
-        mcp_port = os.environ.get("ADCP_SALES_PORT", "8080")
-        url = f"http://localhost:{mcp_port}"
-        logger.info(f"🛠️ Development: using localhost -> {url}")
-        return url
-
-    except Exception as e:
-        # Fallback if tenant context unavailable
-        logger.warning(f"⚠️ Failed to get tenant context: {e}")
-        mcp_port = os.environ.get("ADCP_SALES_PORT", "8080")
-        url = f"http://localhost:{mcp_port}"
-        logger.info(f"🆘 Fallback: using localhost -> {url}")
-        return url
+    with get_db_session() as db_session:
+        tenant = TenantLookupRepository(db_session).find_by_id(tenant_id)
+        if not tenant:
+            raise ValueError(f"Tenant {tenant_id} not found")
+        return tenant.agent_url
 
 
 @authorized_properties_bp.route("/<tenant_id>/authorized-properties")
@@ -312,7 +285,7 @@ def list_authorized_properties(tenant_id: str) -> str | Response:
             logger.info("Rendering template...")
 
             # Get environment info for dev/production detection
-            is_production = os.environ.get("PRODUCTION") == "true"
+            is_production = get_settings().runtime.is_production
 
             return render_template(
                 "authorized_properties_list.html",
@@ -445,19 +418,25 @@ def list_property_tags(tenant_id: str) -> str | Response:
             tag_stmt = select(PropertyTag).where(
                 PropertyTag.tenant_id == tenant_id, PropertyTag.tag_id == "all_inventory"
             )
-            all_inventory_tag = db_session.scalars(tag_stmt).first()
-
-            if not all_inventory_tag:
-                # Auto-create the default tag
-                all_inventory_tag = PropertyTag(
-                    tag_id="all_inventory",
-                    tenant_id=tenant_id,
-                    name="All Inventory",
-                    description="Default tag that applies to all properties. Used when no specific targeting is needed.",
-                    created_at=datetime.now(UTC),
-                    updated_at=datetime.now(UTC),
+            all_inventory_tag = PropertyTag(
+                tag_id="all_inventory",
+                tenant_id=tenant_id,
+                name="All Inventory",
+                description="Default tag that applies to all properties. Used when no specific targeting is needed.",
+                created_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
+            )
+            # Auto-create the default tag; a concurrent viewer that created it first
+            # leaves it present, which is all this branch wanted.
+            if (
+                resolve_or_write(
+                    db_session,
+                    conflict=lambda: db_session.scalars(tag_stmt).first(),
+                    write=lambda: db_session.add(all_inventory_tag),
+                    constraint="property_tags_pkey",
                 )
-                db_session.add(all_inventory_tag)
+                is None
+            ):
                 db_session.commit()
                 logger.info(f"Auto-created 'all_inventory' tag for tenant {tenant_id}")
 
@@ -501,11 +480,14 @@ def create_property_tag(tenant_id: str) -> Response:
         tag_id = tag_id.lower().replace("-", "_")
 
         with get_db_session() as db_session:
-            # Check if tag already exists
+            # Check if tag already exists. The primary key is the authority, so this
+            # same answer serves the loser of a concurrent create (see resolve_or_write)
+            # rather than a flash carrying the driver's message.
             stmt = select(PropertyTag).where(PropertyTag.tenant_id == tenant_id, PropertyTag.tag_id == tag_id)
-            existing_tag = db_session.scalars(stmt).first()
 
-            if existing_tag:
+            def tag_already_exists() -> Response | None:
+                if db_session.scalars(stmt).first() is None:
+                    return None
                 flash(PROPERTY_ERROR_MESSAGES["tag_already_exists"].format(tag_id=tag_id), "error")
                 return redirect(url_for("authorized_properties.list_property_tags", tenant_id=tenant_id))
 
@@ -519,7 +501,15 @@ def create_property_tag(tenant_id: str) -> Response:
                 updated_at=datetime.now(UTC),
             )
 
-            db_session.add(new_tag)
+            taken = resolve_or_write(
+                db_session,
+                conflict=tag_already_exists,
+                write=lambda: db_session.add(new_tag),
+                constraint="property_tags_pkey",
+            )
+            if taken is not None:
+                return taken
+
             db_session.commit()
             flash(f"Tag '{name}' created successfully", "success")
 
@@ -538,16 +528,16 @@ def verify_all_properties(tenant_id: str) -> Response:
     try:
         # In production, always construct agent URL from tenant context
         # Dev overrides only allowed in development
-        is_production = os.environ.get("PRODUCTION") == "true"
+        is_production = get_settings().runtime.is_production
 
         if is_production:
             # Production: ignore any dev overrides, always use tenant context
-            agent_url = _construct_agent_url(tenant_id, request)
+            agent_url = _construct_agent_url(tenant_id)
         else:
             # Development: allow dev overrides from form
             agent_url = request.form.get("dev_agent_url", "").strip() or request.form.get("agent_url", "").strip()
             if not agent_url:
-                agent_url = _construct_agent_url(tenant_id, request)
+                agent_url = _construct_agent_url(tenant_id)
 
         verification_service = get_property_verification_service()
         results = verification_service.verify_all_properties(tenant_id, agent_url)
@@ -608,6 +598,11 @@ def sync_properties_from_adagents(tenant_id: str) -> Response:
             stmt = select(Tenant).where(Tenant.tenant_id == tenant_id)
             tenant = session.scalars(stmt).first()
 
+            # The URL this tenant publishes, read off the row while it is still attached.
+            # One accessor: a scheme written in here answers https for a deployment served
+            # over http and drifts from what the card published (#1845).
+            agent_url: str | None = tenant.agent_url if tenant else None
+
             if tenant and isinstance(tenant.metadata, dict):
                 last_sync = tenant.metadata.get("last_property_sync")
                 if last_sync:
@@ -625,14 +620,6 @@ def sync_properties_from_adagents(tenant_id: str) -> Response:
                                 tenant_id=tenant_id,
                             )
                         )
-
-        # Compute agent_url for property resolution (handles property_ids, property_tags)
-        agent_url: str | None = None
-        if tenant:
-            if tenant.virtual_host:
-                agent_url = f"https://{tenant.virtual_host}"
-            else:
-                agent_url = get_tenant_url(tenant.subdomain)
 
         # Get optional domain filter from form
         publisher_domains_str = request.form.get("publisher_domains", "").strip()
@@ -752,13 +739,13 @@ def verify_property_auto(tenant_id: str, property_id: str) -> Response:
 
         # In production, always construct agent URL from tenant context
         # Dev overrides only allowed in development
-        is_production = os.environ.get("PRODUCTION") == "true"
+        is_production = get_settings().runtime.is_production
         logger.info(f"🏭 Environment: {'PRODUCTION' if is_production else 'DEVELOPMENT'}")
 
         if is_production:
             # Production: ignore any dev overrides, always use tenant context
             logger.info("🔒 Production mode: ignoring any dev URL overrides")
-            agent_url = _construct_agent_url(tenant_id, request)
+            agent_url = _construct_agent_url(tenant_id)
             logger.info(f"🏢 Constructed agent URL from tenant context: {agent_url}")
         else:
             # Development: allow dev overrides from form
@@ -768,7 +755,7 @@ def verify_property_auto(tenant_id: str, property_id: str) -> Response:
 
             agent_url = dev_url or explicit_url
             if not agent_url:
-                agent_url = _construct_agent_url(tenant_id, request)
+                agent_url = _construct_agent_url(tenant_id)
                 logger.info(f"🏗️ No override provided, constructed from tenant: {agent_url}")
             else:
                 logger.info(f"🔧 Using override URL: {agent_url}")

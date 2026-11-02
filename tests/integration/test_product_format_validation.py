@@ -17,13 +17,13 @@ import json
 from unittest.mock import patch
 
 import pytest
-from adcp.types import Error as AdCPResponseError
 from sqlalchemy import select
 
 from src.admin.app import create_app
 from src.core.creative_agent_registry import FormatFetchResult
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AuthorizedProperty, CurrencyLimit, Product, PropertyTag, Tenant
+from src.core.schemas import Error as AdCPResponseError
 from src.core.schemas import Format
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -49,6 +49,7 @@ def tenant_with_prereqs(integration_db):
             tenant_id="fmt_test_tenant",
             name="Format Test Tenant",
             subdomain="fmt-test",
+            virtual_host="fmt-test.adcp.test",
             is_active=True,
             ad_server="mock",
         )
@@ -99,7 +100,6 @@ def tenant_with_prereqs(integration_db):
 @pytest.fixture
 def app_client(tenant_with_prereqs, monkeypatch):
     """Flask test client with authenticated admin session."""
-    monkeypatch.setenv("ADCP_AUTH_TEST_MODE", "true")
 
     # Set up super admin email in DB
     from src.core.database.models import TenantManagementConfig

@@ -48,7 +48,6 @@ _STEPDEF_PREFIX = "pytestbdd_stepdef_"
 _ALLOWED_UNREGISTERED: set[str] = {
     # (A) dead-pending-harness:
     "tests.bdd.steps.domain.uc002_task_query",
-    "tests.bdd.steps.domain.uc026_package_media_buy",
     "tests.bdd.steps.generic.then_media_buy",
     # (B) intentionally-local (live via test_uc019_query_media_buys.py `import *`;
     # kept out of pytest_plugins so its 8 generic-step overrides stay UC-019-scoped):

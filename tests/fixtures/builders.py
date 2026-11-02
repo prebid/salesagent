@@ -6,77 +6,8 @@ These builders provide fluent interfaces for creating test data.
 
 import json
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
-
-
-class RequestBuilder:
-    """Builder for constructing API request objects."""
-
-    def __init__(self):
-        """Initialize request builder."""
-        self.data = {}
-        self.headers = {}
-
-    def with_auth(self, token: str):
-        """Add authentication."""
-        self.headers["x-adcp-auth"] = token
-        return self
-
-    def with_tenant(self, tenant_id: str):
-        """Add tenant context."""
-        self.headers["x-tenant-id"] = tenant_id
-        return self
-
-    def with_data(self, **kwargs):
-        """Add request data."""
-        self.data.update(kwargs)
-        return self
-
-    def with_media_buy(
-        self,
-        product_ids: list[str] = None,
-        total_budget: float = 5000.0,
-        flight_start_date: str = None,
-        flight_end_date: str = None,
-        **kwargs,
-    ):
-        """Add media buy data."""
-        self.data.update(
-            {
-                "product_ids": product_ids or [f"prod_{uuid.uuid4().hex[:8]}"],
-                "total_budget": total_budget,
-                "flight_start_date": flight_start_date or datetime.now(UTC).date().isoformat(),
-                "flight_end_date": flight_end_date or (datetime.now(UTC) + timedelta(days=30)).date().isoformat(),
-                **kwargs,
-            }
-        )
-        return self
-
-    def with_creative(self, format_id: str = "display_300x250", content: dict = None, **kwargs):
-        """Add creative data."""
-        default_content = {
-            "headline": "Test Ad",
-            "body": "Test ad content",
-            "image_url": "https://example.com/image.jpg",
-            "click_url": "https://example.com/landing",
-        }
-
-        self.data.update({"format_id": format_id, "content": content or default_content, **kwargs})
-        return self
-
-    def with_targeting(self, targeting: dict):
-        """Add targeting overlay."""
-        self.data["targeting_overlay"] = targeting
-        return self
-
-    def build(self) -> dict:
-        """Build the request object."""
-        return {"headers": self.headers, "data": self.data}
-
-    def build_json(self) -> str:
-        """Build as JSON string."""
-        return json.dumps(self.build())
 
 
 class ResponseBuilder:
@@ -251,7 +182,12 @@ class TargetingBuilder:
 
 
 class TestDataBuilder:
-    """Builder for complete test scenarios."""
+    """Builder for complete test scenarios.
+
+    There is no ``with_creatives``: the dict ``CreativeFactory`` it called emitted the
+    pre-3.1.1 creative shape and is deleted (see tests/fixtures/factories.py). Seed
+    creatives with the ORM ``CreativeFactory`` in ``tests/factories/creative.py``.
+    """
 
     def __init__(self):
         """Initialize test data builder."""
@@ -259,7 +195,6 @@ class TestDataBuilder:
         self.principal = None
         self.products = []
         self.media_buys = []
-        self.creatives = []
 
     def with_tenant(self, **kwargs):
         """Add tenant."""
@@ -297,17 +232,6 @@ class TestDataBuilder:
         self.media_buys.append(MediaBuyFactory.create(**kwargs))
         return self
 
-    def with_creatives(self, count: int = 2, **kwargs):
-        """Add creatives."""
-        from .factories import CreativeFactory
-
-        if self.tenant:
-            kwargs["tenant_id"] = self.tenant["tenant_id"]
-        if self.principal:
-            kwargs["principal_id"] = self.principal["principal_id"]
-        self.creatives = [CreativeFactory.create(**kwargs) for _ in range(count)]
-        return self
-
     def build(self) -> dict:
         """Build complete test scenario."""
         return {
@@ -315,7 +239,6 @@ class TestDataBuilder:
             "principal": self.principal,
             "products": self.products,
             "media_buys": self.media_buys,
-            "creatives": self.creatives,
         }
 
     def build_complete_scenario(self) -> dict:
@@ -325,7 +248,6 @@ class TestDataBuilder:
             .with_principal(name="Test Advertiser")
             .with_products(count=3)
             .with_media_buy(total_budget=10000.0)
-            .with_creatives(count=2)
             .build()
         )
 
@@ -376,11 +298,13 @@ async def create_test_tenant_with_principal(**kwargs) -> dict:
             if isinstance(principal["platform_mappings"], str)
             else principal["platform_mappings"]
         )
-        db_principal = ModelPrincipal(
+        # with_token, not access_token=: the row keeps sha256(token) plus a display
+        # prefix, so the plaintext is a constructor argument rather than a column.
+        db_principal = ModelPrincipal.with_token(
+            principal["access_token"],
             tenant_id=principal["tenant_id"],
             principal_id=principal["principal_id"],
             name=principal["name"],
-            access_token=principal["access_token"],
             platform_mappings=platform_mappings,
             created_at=datetime.now(UTC),
         )
@@ -388,11 +312,12 @@ async def create_test_tenant_with_principal(**kwargs) -> dict:
         db_session.commit()
 
     # Convert principal dict to Principal schema object for compatibility
+    # The schema Principal declares exactly principal_id, name and platform_mappings —
+    # it is what a tool reads off identity.principal, so it carries no credential and
+    # no tenant_id.
     principal_obj = Principal(
-        tenant_id=principal["tenant_id"],
         principal_id=principal["principal_id"],
         name=principal["name"],
-        access_token=principal["access_token"],
         platform_mappings=platform_mappings,
     )
 

@@ -12,28 +12,31 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.core.resolved_identity import ResolvedIdentity
+from src.core.schemas import GetProductsRequest
+from tests.helpers.unit_identity import fabricated_identity
 
 
-def _make_identity(tenant_id="test-tenant"):
-    return ResolvedIdentity(
+def _make_identity(tenant_id="test-tenant", **tenant_fields):
+    """The caller ``_get_products_impl`` runs as. Mocked DB (``_mock_uow_with_products``).
+
+    The tenant facts are stated rather than loaded because there is no row to load in this
+    module: the UoW is a MagicMock. ``_get_products_impl`` reads each of them off
+    ``identity.tenant`` in production too — the resolver puts the row's values there — so
+    the fabrication stands in for the row rather than contradicting one.
+    """
+    return fabricated_identity(
         principal_id="user-1",
         tenant_id=tenant_id,
-        tenant={
-            "tenant_id": tenant_id,
-            "name": "Test",
-            "subdomain": "test",
-            "ad_server": {"adapter": "mock"},
-            "advertising_policy": None,
-        },
-        protocol="mcp",
+        name="Test",
+        ad_server="mock",
+        advertising_policy=None,
+        **tenant_fields,
     )
 
 
 def _make_request(brief="test brief"):
-    from src.core.schema_helpers import create_get_products_request
 
-    return create_get_products_request(brief=brief)
+    return GetProductsRequest(brief=brief)
 
 
 def _mock_uow_with_products(products):
@@ -50,7 +53,6 @@ def _base_patches(mock_uow, convert_fn=None):
         convert_fn = lambda p, **kw: p  # noqa: E731
     return [
         patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_uow),
-        patch("src.core.tools.products.get_principal_object", return_value=None),
         patch("src.core.tools.products.convert_product_model_to_schema", side_effect=convert_fn),
     ]
 
@@ -157,7 +159,6 @@ class TestDynamicPricingExceptionPropagation:
 
         patches = [
             patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_uow),
-            patch("src.core.tools.products.get_principal_object", return_value=None),
             patch("src.core.tools.products.convert_product_model_to_schema", side_effect=lambda p, **kw: p),
             patch(
                 "src.services.dynamic_products.generate_variants_for_brief",
@@ -194,7 +195,6 @@ class TestDynamicPricingExceptionPropagation:
 
         patches = [
             patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_uow),
-            patch("src.core.tools.products.get_principal_object", return_value=None),
             patch("src.core.tools.products.convert_product_model_to_schema", side_effect=lambda p, **kw: p),
             patch(
                 "src.services.dynamic_products.generate_variants_for_brief",
@@ -234,19 +234,7 @@ class TestAIRankingExceptionPropagation:
         mock_uow = _mock_uow_with_products([product])
 
         # Need tenant with product_ranking_prompt to trigger AI ranking path
-        identity = ResolvedIdentity(
-            principal_id="user-1",
-            tenant_id="test-tenant",
-            tenant={
-                "tenant_id": "test-tenant",
-                "name": "Test",
-                "subdomain": "test",
-                "ad_server": {"adapter": "mock"},
-                "advertising_policy": None,
-                "product_ranking_prompt": "Rank by relevance",
-            },
-            protocol="mcp",
-        )
+        identity = _make_identity(product_ranking_prompt="Rank by relevance")
 
         mock_factory = MagicMock()
         mock_factory.is_ai_enabled.return_value = True
@@ -282,49 +270,9 @@ class TestAIRankingExceptionPropagation:
                 await _get_products_impl(_make_request(brief="video ads"), identity)
 
 
-class TestAdapterAnnotationExceptionPropagation:
-    """Adapter annotation fail-open.
-
-    Covers: UC-001-MAIN-43
-    """
-
-    @pytest.mark.asyncio
-    async def test_type_error_propagates(self):
-        """TypeError (bug) propagates, not swallowed.
-
-        Covers: UC-001-MAIN-43
-        """
-        from tests.helpers.adcp_factories import create_test_product
-
-        product = create_test_product(product_id="p1")
-        mock_uow = _mock_uow_with_products([product])
-
-        # Need a principal to trigger adapter annotation path
-        mock_principal = MagicMock()
-        mock_principal.principal_id = "user-1"
-
-        patches = [
-            patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_uow),
-            patch("src.core.tools.products.get_principal_object", return_value=mock_principal),
-            patch("src.core.tools.products.convert_product_model_to_schema", side_effect=lambda p, **kw: p),
-            patch(
-                "src.services.dynamic_products.generate_variants_for_brief",
-                new_callable=AsyncMock,
-                return_value=[],
-            ),
-            patch("src.services.dynamic_pricing_service.DynamicPricingService"),
-            patch(
-                "src.core.helpers.adapter_helpers.get_adapter",
-                side_effect=TypeError("'NoneType' object has no attribute 'get'"),
-            ),
-        ]
-
-        import contextlib
-
-        from src.core.tools.products import _get_products_impl
-
-        with contextlib.ExitStack() as stack:
-            for p in patches:
-                stack.enter_context(p)
-            with pytest.raises(TypeError, match="NoneType"):
-                await _get_products_impl(_make_request(), _make_identity())
+# (Deleted) TestAdapterAnnotationExceptionPropagation graded the fail-open around the
+# pricing-option adapter annotation in get_products -- the block that called
+# get_adapter_class_for_tenant() and wrote `supported` / `unsupported_reason` onto every
+# pricing option. Commit ecfdd7771 deleted that block with the two unread fields it set,
+# so get_products no longer resolves an adapter class at all and there is no fail-open
+# left to grade. The obligation it cited, UC-001-MAIN-43, has no other test.

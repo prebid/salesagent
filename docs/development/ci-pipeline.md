@@ -73,7 +73,7 @@ uv run pytest $(uv run python scripts/ci/shard_paths.py bdd 1)
 
 **Load metric note:** greedy assignment balances Gherkin `Scenario` line counts (~920 total). Collected pytest items are much higher (~9×) because each scenario expands by `Examples:` rows and transport parametrization. Wall-clock is dominated by slow DB-heavy scenarios, not test volume — the reason 2 shards was chosen over 3–4.
 
-Structural guard: `tests/collection/test_architecture_ci_bdd_shard_manifest.py`.
+Structural guard: `tests/unit/test_architecture_ci_bdd_shard_manifest.py`, with the partition itself in `tests/collection/test_architecture_ci_bdd_shard_partition.py`.
 
 ## Integration Test Shards
 
@@ -303,7 +303,7 @@ not persist baseline writes.
 Checks invoked directly by `make quality-ci` (not via `pre-commit run --all-files` in the Quality Gate):
 
 - **CI-only** (no commit/pre-push stage): `check_code_duplication`, `check-gam-auth-support`,
-  `check_response_attribute_access`, `check_roundtrip_tests`.
+  `check_response_attribute_access`.
 - **Dual-stage** (`pre-push + ci-step` in the coverage map): `check-route-conflicts`,
   `type-ignore-no-regression`, `check-docs-links`, `no-hardcoded-urls`.
 

@@ -194,9 +194,9 @@ class ResolvedIdentity(BaseModel, frozen=True):
 - Created once per request by each transport boundary via `resolve_identity()`
 - `_impl` functions accept this instead of `Context`/`ToolContext`
 
-**Error hierarchy -- `AdCPError`** (`src/core/exceptions.py`):
+**Error hierarchy -- `AdCPSalesAgentError`** (`src/core/exceptions.py`):
 ```
-AdCPError (500, INTERNAL_ERROR)
+AdCPSalesAgentError (500, INTERNAL_ERROR)
   +-- AdCPValidationError (400, VALIDATION_ERROR)
   +-- AdCPAuthenticationError (401, AUTHENTICATION_ERROR)
   +-- AdCPAuthorizationError (403, AUTHORIZATION_ERROR)
@@ -206,9 +206,9 @@ AdCPError (500, INTERNAL_ERROR)
 ```
 - `_impl` functions raise these exclusively
 - Each transport boundary translates to its own format:
-  - MCP: `AdCPError` → `ToolError` via `_translate_to_tool_error()`
-  - A2A: `AdCPError` → failed Task with two-layer envelope via `_build_error_envelope()`
-  - REST: `AdCPError` → HTTP status code + JSON body
+  - MCP: `AdCPSalesAgentError` → `ToolError` via `_translate_to_tool_error()`
+  - A2A: `AdCPSalesAgentError` → failed Task with two-layer envelope via `_build_error_envelope()`
+  - REST: `AdCPSalesAgentError` → HTTP status code + JSON body
 
 **REST API added** (`src/routes/api_v1.py`, 183 lines):
 - Full feature parity with MCP and A2A in a single file
@@ -326,7 +326,7 @@ Eleven AST-scanning tests enforce architecture invariants on every `make quality
 
 | # | Guard | Enforces | Violations | Tracked By |
 |---|-------|----------|------------|------------|
-| 1 | No ToolError in _impl | `_impl` raises AdCPError, never ToolError | 0 | -- |
+| 1 | No ToolError in _impl | `_impl` raises AdCPSalesAgentError, never ToolError | 0 | -- |
 | 2 | Transport-agnostic _impl | Zero transport imports in `_impl` | 0 | -- |
 | 3 | ResolvedIdentity in _impl | `_impl` accepts ResolvedIdentity, not Context | 0 | -- |
 | 4 | Schema inheritance | Schemas extend library base types | 30 known overrides | salesagent-v0kb |
@@ -663,7 +663,7 @@ Feb 28  ■ Obligation coverage       1012 → 451   ▼ 55% reduction
 ```
 
 **Key observations:**
-- Guards 1-3 were introduced with **zero violations** because the underlying refactoring (ResolvedIdentity, AdCPError, transport imports) was completed first, then the guard was added to prevent regression
+- Guards 1-3 were introduced with **zero violations** because the underlying refactoring (ResolvedIdentity, AdCPSalesAgentError, transport imports) was completed first, then the guard was added to prevent regression
 - Guard 5 (boundary completeness) saw the best ratio reduction: 8 → 2 (75%)
 - Guard 7 (no model_dump) went from 29 → 25, with 4 violations fixed by migrating serialization to repository/transport boundaries
 - Guard 8 (repository pattern, tests) grew from 57 to ~155 because the scanner was expanded to discover more legacy test files -- the allowlist grew to capture pre-existing debt, not new violations
@@ -722,7 +722,7 @@ To quantify the transformation, the codebase was checked out at commit `a5f396c3
 | `scripts/tag_obligation_ids.py` | Did not exist | 424-line obligation ID generator |
 | REST API (`src/routes/api_v1.py`) | Did not exist | Full feature parity with MCP/A2A |
 | `src/core/resolved_identity.py` | Did not exist | Frozen identity model for all transports |
-| `src/core/exceptions.py` (AdCPError hierarchy) | Did not exist | 6-class error hierarchy |
+| `src/core/exceptions.py` (AdCPSalesAgentError hierarchy) | Did not exist | 6-class error hierarchy |
 | `src/core/database/repositories/` | Did not exist | 2 repositories + 2 UoW classes |
 | `tests/coverage_scopes.yaml` | Did not exist | Per-domain scoped coverage config |
 
@@ -839,11 +839,11 @@ Obligation tags                0            0                 675
 
 | Path | Branch | Purpose |
 |------|--------|---------|
-| `/Users/konst/projects/salesagent` | `v3.6-product-completion` | Product domain |
-| `/Users/konst/projects/salesagent-creative` | `v3.6-creative-completion` | Creative domain |
-| `/Users/konst/projects/salesagent-delivery` | `v3.6-delivery-mb-cleanup` | Delivery domain |
-| `/Users/konst/projects/salesagent-errors` | `v3.6-error-resilience-clean` | Error classification |
-| `/Users/konst/projects/salesagent-admin-oath` | `admin-gam-oauth-fix` | GAM OAuth fix |
+| `salesagent` | `v3.6-product-completion` | Product domain |
+| `salesagent-creative` | `v3.6-creative-completion` | Creative domain |
+| `salesagent-delivery` | `v3.6-delivery-mb-cleanup` | Delivery domain |
+| `salesagent-errors` | `v3.6-error-resilience-clean` | Error classification |
+| `salesagent-admin-oath` | `admin-gam-oauth-fix` | GAM OAuth fix |
 
 ### Test Suite Snapshot (March 9, 2026)
 

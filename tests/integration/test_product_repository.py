@@ -14,13 +14,13 @@ from datetime import UTC, datetime
 import pytest
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import PricingOption as PricingOptionModel
 from src.core.database.models import Product as ProductModel
 from src.core.database.models import Tenant as TenantModel
 from src.core.database.repositories.product import ProductRepository
 from src.core.database.repositories.uow import ProductUoW
 from src.core.product_conversion import convert_product_model_to_schema
 from src.core.schemas import Product as ProductSchema
+from tests.factories import PricingOptionFactory
 
 
 def _create_test_tenant(session, unique_id: str) -> TenantModel:
@@ -69,7 +69,7 @@ def _create_test_product(
     session.flush()
 
     if with_pricing:
-        pricing = PricingOptionModel(
+        pricing = PricingOptionFactory.build(
             tenant_id=tenant_id,
             product_id=product_id,
             pricing_model=pricing_model,

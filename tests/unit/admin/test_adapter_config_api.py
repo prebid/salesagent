@@ -28,13 +28,11 @@ class TestAdapterConfigAPI:
         config_class = schemas.connection_config
 
         # Valid config
-        valid = config_class(dry_run=True, manual_approval_required=False)
-        assert valid.dry_run is True
-        assert valid.manual_approval_required is False
+        valid = config_class(manual_approval_required=True)
+        assert valid.manual_approval_required is True
 
         # Defaults
         default = config_class()
-        assert default.dry_run is False
         assert default.manual_approval_required is False
 
     def test_mock_capabilities(self):

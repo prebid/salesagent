@@ -12,7 +12,7 @@ helper) that the media-buy behavioral migration removed.
 
 This guard pins each behavioral file at its current count of mock constructions
 via a per-file cap dict that can only shrink (same ratcheting convention as
-``test_architecture_resolved_identity_inline_cap`` and ``.duplication-baseline``).
+``test_architecture_no_value_error_in_impl`` and ``.duplication-baseline``).
 New behavioral files with mock constructions fail immediately; existing files
 that drop below their cap force it down (no silent regression). The intent is to
 keep the harness migration's gains and steer remaining mocks toward env fluent
@@ -34,18 +34,17 @@ from tests.unit._architecture_helpers import iter_call_expressions
 # Frozen at the current count; can only shrink. New behavioral files with mock
 # constructions fail immediately (force a deliberate cap entry or harness use).
 BEHAVIORAL_MOCK_CONSTRUCTION_CAP: dict[str, int] = {
-    "tests/integration/test_create_media_buy_behavioral.py": 38,
-    "tests/integration/test_creative_sync_behavioral.py": 1,
+    "tests/integration/test_create_media_buy_behavioral.py": 27,
     "tests/integration/test_delivery_poll_behavioral.py": 2,
     "tests/integration/test_delivery_webhook_behavioral.py": 0,
-    "tests/integration/test_get_products_behavioral.py": 44,
-    "tests/unit/test_authorized_properties_behavioral.py": 23,
+    # 44 -> 40: TestAdapterSupportAnnotation deleted (it graded a field no model declares).
+    "tests/integration/test_get_products_behavioral.py": 40,
     "tests/unit/test_creative_formats_behavioral.py": 17,
-    "tests/unit/test_delivery_poll_behavioral.py": 14,
-    "tests/unit/test_delivery_service_behavioral.py": 2,
-    "tests/unit/test_performance_index_behavioral.py": 33,
-    "tests/unit/test_sync_creatives_behavioral.py": 28,
-    "tests/unit/test_update_media_buy_behavioral.py": 113,
+    "tests/unit/test_delivery_poll_behavioral.py": 1,
+    # 2 -> 1: the webhook delivery path owns its connection and the retry-loop
+    # test builds a real QueuedWebhook instead of mocking a config object.
+    "tests/unit/test_delivery_service_behavioral.py": 1,
+    "tests/unit/test_update_media_buy_behavioral.py": 103,
 }
 
 # unittest.mock construction callables counted as hand-rolled mocking.

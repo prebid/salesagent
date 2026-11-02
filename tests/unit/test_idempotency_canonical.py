@@ -189,6 +189,7 @@ class TestCanonicalRequestHash:
             "end_time": datetime(2026, 6, 30, tzinfo=UTC),
             "po_number": "CANON-1",
             "idempotency_key": "request-hash-key-0001",
+            "account": {"account_id": "acct_test"},
         }
         kwargs.update(overrides)
         return CreateMediaBuyRequest(**kwargs)
@@ -199,6 +200,7 @@ class TestCanonicalRequestHash:
 
         a = self._request()
         b = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             idempotency_key="request-hash-key-0001",
             po_number="CANON-1",
             end_time=datetime(2026, 6, 30, tzinfo=UTC),

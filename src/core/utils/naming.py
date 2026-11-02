@@ -15,8 +15,19 @@ Supports variable substitution with fallback syntax:
 - {package_index} - Package position number (1, 2, 3...)
 """
 
+from __future__ import annotations
+
 import logging
 from datetime import datetime
+from typing import TYPE_CHECKING
+
+from src.core.helpers.brand_key import brand_key_parts
+
+if TYPE_CHECKING:
+    # The caller is always an adapter (or an adapter's workflow manager), so `request`
+    # here is the adapter carrier, never the buyer's DTO. TYPE_CHECKING-only: this
+    # module is under src/core and the carrier lives with the adapters.
+    from src.adapters.base import AdapterCreateRequest
 
 logger = logging.getLogger(__name__)
 
@@ -45,27 +56,25 @@ def format_month_year(start_time: datetime) -> str:
     return start_time.strftime("%b %Y")
 
 
-def _extract_brand_name(request) -> str | None:
-    """Extract brand name from request's brand (BrandReference)."""
-    if not hasattr(request, "brand") or not request.brand:
-        return None
+def _extract_brand_name(request: AdapterCreateRequest) -> str | None:
+    """Read the brand's domain, through the canonical accessor.
 
-    brand = request.brand
-    if hasattr(brand, "domain"):
-        return brand.domain
-    elif isinstance(brand, dict):
-        return brand.get("domain")
-    return None
+    ``brand`` is the widened union (BrandReference | dict | str | None), and
+    ``brand_key_parts`` is total over it — the three-branch narrowing this replaces was
+    one of the hand-rolled copies that helper exists to delete, and it read nothing off
+    the bare-string branch.
+    """
+    return brand_key_parts(request.brand)[0]
 
 
-def _get_fallback_name(request) -> str:
+def _get_fallback_name(request: AdapterCreateRequest) -> str:
     """Get fallback name when AI is unavailable."""
     brand_name = _extract_brand_name(request)
     return brand_name or "Campaign"
 
 
 def generate_auto_name(
-    request,
+    request: AdapterCreateRequest,
     packages: list,
     start_time: datetime,
     end_time: datetime,
@@ -76,7 +85,7 @@ def generate_auto_name(
     """Generate AI-powered order name using Pydantic AI.
 
     Args:
-        request: CreateMediaBuyRequest object
+        request: The adapter's AdapterCreateRequest carrier
         packages: List of MediaPackage objects
         start_time: Order start datetime
         end_time: Order end datetime
@@ -121,17 +130,15 @@ def generate_auto_name(
         # Extract context for AI
         brand_name = _extract_brand_name(request) or "N/A"
 
-        # Build budget info
+        # Build budget info. The currency lookup this replaces walked the request's
+        # packages for a `currency` attribute that the buyer's package shape does not
+        # declare (PackageRequest has no such field), so it could only ever yield the
+        # default — and the carrier deliberately does not invent one: the order currency
+        # an adapter uses comes from package_pricing_info, not from here.
         budget_info = None
-        budget_amount = request.get_total_budget()
+        budget_amount = request.total_budget
         if budget_amount > 0:
-            currency = "USD"
-            if request.packages:
-                for pkg in request.packages:
-                    if hasattr(pkg, "currency") and pkg.currency:
-                        currency = pkg.currency
-                        break
-            budget_info = f"${budget_amount:,.2f} {currency}"
+            budget_info = f"${budget_amount:,.2f} USD"
 
         # BrandReference has no campaign_objectives; pass None
         objectives = None
@@ -220,7 +227,7 @@ def apply_naming_template(
 
 
 def build_order_name_context(
-    request,
+    request: AdapterCreateRequest,
     packages: list,
     start_time: datetime,
     end_time: datetime,
@@ -231,7 +238,7 @@ def build_order_name_context(
     """Build context dictionary for order name template.
 
     Args:
-        request: CreateMediaBuyRequest object
+        request: The adapter's AdapterCreateRequest carrier
         packages: List of MediaPackage objects
         start_time: Order start datetime
         end_time: Order end datetime

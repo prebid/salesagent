@@ -13,12 +13,17 @@ the field list differ, so those are DATA here and there is one place to add a ca
 * a row narrowed to fewer than every wire transport without saying why -- the
   reason is a required field, so "we quietly dropped REST" cannot be written.
 
-Not everything here is a row. Three obligations below are genuinely different
+Not everything here is a row. Two obligations below are genuinely different
 operations that merely lived next door: get_products' IMPL-level dump (no wire by
-definition), sync_creatives' "these fields are arrays, not just non-null", and the
-signals pair (unreachable on every transport). Collapsing those into the table
-would mean pretending different assertions are the same one, which is how the
-drift above started.
+definition) and sync_creatives' "these fields are arrays, not just non-null".
+Collapsing those into the table would mean pretending different assertions are the
+same one, which is how the drift above started.
+
+A third pair lived here until 2026-09-03: get_signals / activate_signal, carried as
+"the sweep's single documented exemption" because neither was reachable on any
+transport. They were unreachable because #826 unregistered them in 2025-12 and left
+the implementation behind; the implementation is now deleted, so the exemption is
+retired by removal rather than by wiring (GH #1353).
 """
 
 from __future__ import annotations
@@ -30,23 +35,17 @@ from dataclasses import dataclass
 import pytest
 
 from tests.factories import (
-    MediaBuyFactory,
     PricingOptionFactory,
     PrincipalFactory,
     ProductFactory,
-    PublisherPartnerFactory,
     TenantFactory,
 )
 from tests.factories.creative_asset import CreativeAssetFactory
 from tests.harness.assertions import assert_wire_omits_unset
-from tests.harness.authorized_properties import AuthorizedPropertiesEnv
 from tests.harness.capabilities import CapabilitiesEnv
 from tests.harness.creative_sync import CreativeSyncEnv
-from tests.harness.performance import PerformanceEnv
 from tests.harness.product import ProductEnv
-from tests.harness.signals import ActivateSignalEnv, GetSignalsEnv
 from tests.harness.transport import Transport
-from tests.helpers import pinned_schema
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -122,37 +121,14 @@ def _capabilities_env() -> Iterator[tuple[object, dict]]:
 
 
 @contextmanager
-def _authorized_properties_env() -> Iterator[tuple[object, dict]]:
-    with AuthorizedPropertiesEnv(tenant_id="wire-shape-properties", principal_id="test_principal") as env:
-        tenant = TenantFactory(tenant_id="wire-shape-properties")
-        PrincipalFactory(tenant=tenant, principal_id="test_principal")
-        # A verified publisher with no advertising_policy — exercises the "has
-        # publishers" branch where every optional field but publisher_domains is unset.
-        PublisherPartnerFactory(tenant=tenant, publisher_domain="example.com")
-        yield env, {}
-
-
-@contextmanager
-def _performance_env() -> Iterator[tuple[object, dict]]:
-    with PerformanceEnv(tenant_id="wire-shape-performance", principal_id="test_principal") as env:
-        tenant = TenantFactory(tenant_id="wire-shape-performance")
-        principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
-        media_buy = MediaBuyFactory(tenant=tenant, principal=principal, media_buy_id="mb_perf_wire_shape")
-        yield (
-            env,
-            {
-                "media_buy_id": media_buy.media_buy_id,
-                "performance_data": [{"product_id": "prod_1", "performance_index": 1.0}],
-            },
-        )
-
-
-@contextmanager
 def _sync_creatives_env() -> Iterator[tuple[object, dict]]:
     with CreativeSyncEnv() as env:
-        env.setup_default_data()
+        # account is in sync-creatives-request.json /required, so the call cannot be built
+        # without one. setup_default_account seeds the row and hands back the matching
+        # reference; setup_default_data runs inside it, so the tenant the FK names exists.
+        account = env.default_account_reference()
         creative = CreativeAssetFactory(creative_id="c_mcp_wire_shape", name="MCP Wire Shape Creative")
-        yield env, {"creatives": [creative]}
+        yield env, {"creatives": [creative], "account": account}
 
 
 _CASES = [
@@ -168,35 +144,24 @@ _CASES = [
         tool="get_adcp_capabilities",
         setup=_capabilities_env,
         schema="protocol/get-adcp-capabilities-response.json",
-        # capabilities.py builds MediaBuy(portfolio=..., features=..., execution=...),
-        # leaving supported_pricing_models unset — the exact field #1710 cited.
-        absent_paths=["media_buy.supported_pricing_models"],
-    ),
-    WireOmissionCase(
-        tool="list_authorized_properties",
-        setup=_authorized_properties_env,
-        # No pinned schema validates this response: ListAuthorizedPropertiesResponse is a
-        # v2.4 shape and the pinned 3.1 tree has no list-authorized-properties-response.json
-        # (2.5 had one, for a different shape). The field list carries the obligation.
-        schema=None,
+        # capabilities.py builds MediaBuy(portfolio, features, execution,
+        # supported_pricing_models, creative_approval_mode) and sets nothing else, so
+        # every field below is structurally unset and must be OMITTED, not null.
+        #
+        # These three are chosen because they default to None: a field whose default is
+        # non-None (buying_modes, supports_proposals, governance_aware,
+        # propagation_surfaces) is legitimately present and grades nothing here.
+        #
+        # This row originally cited media_buy.supported_pricing_models — "the exact field
+        # #1710 cited" — which capabilities.py has since implemented (it is now a
+        # populated pre-flight buyer signal). A field going from unset to implemented is
+        # the expected way this row goes stale: re-point it at another structurally-unset
+        # field, never delete the row and never assert the implemented field is absent.
         absent_paths=[
-            "primary_channels",
-            "primary_countries",
-            "portfolio_description",
-            "advertising_policies",
-            "last_updated",
-            "errors",
+            "media_buy.audience_targeting",
+            "media_buy.frequency_capping",
+            "media_buy.conversion_tracking",
         ],
-    ),
-    WireOmissionCase(
-        tool="update_performance_index",
-        setup=_performance_env,
-        # No task for this tool resolves in the pinned 3.1 tree (it is listed in
-        # _KNOWN_MISSING_SCHEMA_SKILLS). The pinned provide-performance-feedback-response
-        # is a structurally different task — validating against it would fail on grounds
-        # unrelated to null-omission. Pre-existing spec-grounding gap.
-        schema=None,
-        absent_paths=["context"],
     ),
     WireOmissionCase(
         tool="sync_creatives",
@@ -244,7 +209,7 @@ def test_wire_omits_unset_optional_fields(integration_db, case, transport):
 # ── The table's own two guardrails ──────────────────────────────────────────
 # __post_init__ is what makes this table safe to add rows to: it is the only
 # thing standing between a future row and the two failure modes that read as
-# coverage while grading nothing. Neither arm fires on any row above — that is
+# coverage while grading nothing. Neither branch fires on any row above — that is
 # the point of them — so without these two tests both are dead code, and
 # deleting either one leaves the whole file green. Construction only: no env,
 # no wire, no DB (the module-level requires_db mark is inherited, harmlessly).
@@ -273,25 +238,6 @@ def test_case_narrowed_without_a_reason_is_rejected():
 # one thing.
 
 
-def test_get_products_impl_payload_is_schema_valid(integration_db):
-    """IMPL has no wire: this grades ``Product.model_dump`` directly, not a boundary.
-
-    Kept because the null-leak lives in ``Product.model_dump`` itself, so a direct dump
-    is the tightest failure signal. It is NOT a substitute for the three wire transports
-    in the table and must never be the reason any of them is dropped.
-    """
-    with _get_products_env() as (env, call_kwargs):
-        result = env.call_via(Transport.IMPL, **call_kwargs)
-        assert result.is_success, f"IMPL get_products failed: {result.error}"
-
-        response = result.payload.model_dump(mode="json")
-        products = response.get("products")
-        assert isinstance(products, list) and products, (
-            f"IMPL: expected a non-empty 'products' list in the response, got {products!r}"
-        )
-        pinned_schema.validate_against_pinned_schema(_GET_PRODUCTS_SCHEMA, response)
-
-
 def test_sync_creatives_mcp_wire_changes_and_warnings_are_arrays(integration_db):
     """Per-creative changes/warnings/errors are LISTS on the MCP wire, never null.
 
@@ -304,7 +250,10 @@ def test_sync_creatives_mcp_wire_changes_and_warnings_are_arrays(integration_db)
     """
     with _sync_creatives_env() as (env, call_kwargs):
         result = env.call_via(Transport.MCP, **call_kwargs)
-        creatives = result.require_wire().get("creatives")
+        assert result.is_success, f"Expected success but got error: {result.error}"
+        assert result.wire_response is not None, "MCP dispatch must stash the real structured_content wire"
+
+        creatives = result.wire_response.get("creatives")
         assert isinstance(creatives, list) and creatives, f"MCP wire must carry the creatives array, got {creatives!r}"
         for i, item in enumerate(creatives):
             for name in ("changes", "warnings", "errors"):
@@ -315,41 +264,22 @@ def test_sync_creatives_mcp_wire_changes_and_warnings_are_arrays(integration_db)
                     )
 
 
-# get_signals / activate_signal are unreachable on EVERY transport: neither is
-# registered as an MCP tool, A2A intentionally excludes signals, and no REST route
-# exists — so there is no wire for a buyer to observe and no live-dispatch coverage
-# is possible. This is the sweep's single documented exemption. Whether the dead code
-# is removed or wired is tracked at
-# https://github.com/prebid/salesagent/issues/1353; that issue retires the exemption
-# either way. Until then these grade the typed model_dump() as defense-in-depth at the
-# model layer, and are NOT wire coverage.
+def test_every_row_names_a_tool_a_transport_can_reach():
+    """A row for a tool with no registry entry has no wire to grade, on any transport.
 
+    ``update_performance_index`` was such a row. It is not in
+    ``src/core/tools/registry.py``, so MCP registers no tool for it, the A2A card
+    advertises no skill, and no REST route exists -- all three of its parametrisations
+    failed on "no such tool", which reads as a wire regression and is not one.
 
-def test_get_signals_impl_payload_omits_signal_ref(integration_db):
-    """Production never sets signal_ref on the mock signals it returns."""
-    with GetSignalsEnv(tenant_id="wire-shape-signals", principal_id="test_principal") as env:
-        tenant = TenantFactory(tenant_id="wire-shape-signals")
-        PrincipalFactory(tenant=tenant, principal_id="test_principal")
+    Derived from ``TOOLS`` rather than restated here, so the next tool to leave the
+    registry fails this one test by name instead of three cases by symptom.
+    """
+    from src.core.tools.registry import TOOLS
 
-        result = env.call_via(Transport.IMPL)
-        assert result.is_success, f"get_signals failed: {result.error}"
-
-        payload = result.payload.model_dump(mode="json")
-        assert len(payload["signals"]) > 0, "expected non-empty signals list"
-        assert "signal_ref" not in payload["signals"][0], (
-            f"expected signals[0].signal_ref absent, got {payload['signals'][0].get('signal_ref')!r}"
-        )
-
-
-def test_activate_signal_impl_payload_omits_unset_fields(integration_db):
-    """errors is explicitly None on success and context is unset — both must be absent."""
-    with ActivateSignalEnv(tenant_id="wire-shape-activate-signal", principal_id="test_principal") as env:
-        tenant = TenantFactory(tenant_id="wire-shape-activate-signal")
-        PrincipalFactory(tenant=tenant, principal_id="test_principal")
-
-        result = env.call_via(Transport.IMPL, signal_agent_segment_id="auto_intenders_q1_2025")
-        assert result.is_success, f"activate_signal failed: {result.error}"
-
-        payload = result.payload.model_dump(mode="json")
-        for name in ("errors", "context"):
-            assert name not in payload, f"expected '{name}' absent, got {payload.get(name)!r}"
+    unreachable = sorted({case.tool for case in _CASES} - set(TOOLS))
+    assert unreachable == [], (
+        f"these rows name tools no transport can reach: {unreachable}. A tool without a "
+        f"registry row has no MCP registration, no A2A skill and no REST route, so the "
+        f"table cannot dispatch it."
+    )

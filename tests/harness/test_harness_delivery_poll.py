@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 
 from src.core.schemas import GetMediaBuyDeliveryResponse
+from tests.factories.media_buy import pricing_options_named, request_package
 from tests.harness.delivery_poll_unit import DeliveryPollEnv
 
 
@@ -23,6 +24,24 @@ class TestDeliveryPollEnvContract:
             response = env.call_impl(media_buy_ids=["mb_001"])
 
             assert isinstance(response, GetMediaBuyDeliveryResponse)
+
+    def test_default_env_reports_an_active_buy_as_active(self):
+        """An env that says nothing about the circuit breaker runs with it CLOSED.
+
+        Pins the default in ``_configure_mocks``. ``_is_circuit_breaker_open`` is patched,
+        and an unconfigured MagicMock returns a TRUTHY Mock — so without the default every
+        test in this env polls with the breaker OPEN and reads "reporting_delayed" for a
+        serving buy. Nothing else grades that: a test about degraded reporting sets the
+        state itself (``set_circuit_open``), which is exactly what makes it blind to what
+        the unset default does.
+        """
+        with DeliveryPollEnv() as env:
+            env.add_buy(media_buy_id="mb_default", status="active")
+            env.set_adapter_response("mb_default", impressions=5000)
+
+            response = env.call_impl(media_buy_ids=["mb_default"])
+
+            assert response.media_buy_deliveries[0].status == "active"
 
     def test_add_buy_visible_to_impl(self):
         """A buy added via add_buy appears in media_buy_deliveries."""
@@ -55,10 +74,16 @@ class TestDeliveryPollEnvContract:
 
             response = env.call_impl(media_buy_ids=["mb_err"])
 
-            # When adapter fails, _impl returns a valid response with an error entry
+            # When adapter fails, _impl returns a valid response with an error entry.
+            # WHICH buy failed travels in details, never in the message: message is
+            # derived from the code via CODE_TABLE (salesagent-3dawm), so it reads
+            # "Seller service is temporarily unavailable" for every failing buy.
             assert isinstance(response, GetMediaBuyDeliveryResponse)
             assert len(response.errors) >= 1
-            assert any("mb_err" in e.message for e in response.errors)
+            assert any(
+                e.code == "SERVICE_UNAVAILABLE" and (e.details or {}).get("media_buy_id") == "mb_err"
+                for e in response.errors
+            ), f"expected a SERVICE_UNAVAILABLE entry naming mb_err in details, got {response.errors!r}"
 
     def test_custom_identity_flows_through(self):
         """principal_id override reaches the mock principal lookup."""
@@ -76,32 +101,36 @@ class TestDeliveryPollEnvContract:
         """env.mock[name] provides access to all patch targets."""
         with DeliveryPollEnv() as env:
             assert "uow" in env.mock
-            assert "principal" in env.mock
+            # No "principal" patch: the principal comes off the identity the env builds,
+            # so there is no principal lookup for the env to stand in for.
             assert "adapter" in env.mock
             assert "pricing" in env.mock
 
     def test_pricing_options(self):
-        """set_pricing_options makes pricing data available to _impl."""
-        with DeliveryPollEnv() as env:
-            from unittest.mock import MagicMock
+        """set_pricing_options makes pricing data available to _impl.
 
-            mock_pricing = MagicMock()
-            mock_pricing.pricing_model = "cpm"
-            mock_pricing.rate = 5.0
-            env.set_pricing_options({"1": mock_pricing})
+        The option states its TERMS and the key is read off the row's stored
+        ``pricing_option_id`` column, so the key the lookup answers under is the one the
+        package below names. An id passed by hand could be one no reader resolves while
+        the fixture answered for it anyway — which is how a package naming an
+        unresolvable option went green.
+        """
+        with DeliveryPollEnv() as env:
+            env.set_pricing_options(pricing_options_named(pricing_model="cpm", rate="5.00"))
 
             env.add_buy(
                 media_buy_id="mb_001",
-                raw_request={
-                    "packages": [{"package_id": "pkg_001", "product_id": "prod_001", "pricing_option_id": "1"}],
-                },
+                raw_request={"packages": [request_package(0)]},
             )
             env.set_adapter_response("mb_001", impressions=5000)
 
             response = env.call_impl(media_buy_ids=["mb_001"])
             assert isinstance(response, GetMediaBuyDeliveryResponse)
-            # Pricing mock was called
-            env.mock["pricing"].assert_called()
+            # The configured option reached the wire, not merely the lookup: asserting only
+            # that env.mock["pricing"] was CALLED passed even while a MagicMock option
+            # produced a MagicMock currency and the buy was dropped into errors[].
+            pkg = response.media_buy_deliveries[0].by_package[0]
+            assert (pkg.rate, pkg.currency) == (5.0, "USD")
 
     def test_unregistered_media_buy_id_produces_error(self):
         """Adapter mock must fail for unregistered media_buy_ids, not silently succeed.
@@ -118,20 +147,33 @@ class TestDeliveryPollEnvContract:
             env.add_buy(media_buy_id="mb_unregistered")
             response = env.call_impl(media_buy_ids=["mb_unregistered"])
 
-            # The unregistered ID should produce an error, not a delivery
+            # The unregistered ID should produce an error, not a delivery. The id is
+            # in details, not the message — see the note above.
+            #
+            # SERVICE_UNAVAILABLE, not MEDIA_BUY_NOT_FOUND: add_buy() DID persist
+            # this buy, so it is not missing from the DB. What is unregistered is the
+            # harness's ADAPTER RESPONSE, so the mock adapter raises and production
+            # takes its adapter-failure path (media_buy_delivery.py:362).
             assert len(response.errors) >= 1
-            assert any("mb_unregistered" in e.message for e in response.errors)
+            assert any(
+                e.code == "SERVICE_UNAVAILABLE" and (e.details or {}).get("media_buy_id") == "mb_unregistered"
+                for e in response.errors
+            ), f"expected a SERVICE_UNAVAILABLE entry naming mb_unregistered in details, got {response.errors!r}"
 
     def test_multi_package_adapter_response(self):
         """set_adapter_response with packages= builds multi-package response."""
         with DeliveryPollEnv() as env:
             env.add_buy(
                 media_buy_id="mb_multi",
+                # Each package names its pricing option: the delivery report states
+                # pricing_model/rate/currency per package, and refuses to guess. The
+                # request factory puts one on every package, because the accepted
+                # ``PackageRequest`` model requires it.
                 raw_request={
                     "packages": [
-                        {"package_id": "pkg_A", "product_id": "prod_001"},
-                        {"package_id": "pkg_B", "product_id": "prod_002"},
-                    ],
+                        request_package(0, package_id="pkg_A"),
+                        request_package(1, package_id="pkg_B"),
+                    ]
                 },
             )
             env.set_adapter_response(
@@ -167,7 +209,7 @@ class TestDeliveryPollEnvContract:
     def test_call_impl_accepts_identity_kwarg(self):
         """call_impl must handle identity kwarg from dispatcher without error.
 
-        When dispatched via call_via → ImplDispatcher, identity is injected
+        When dispatched via call_impl directly, identity is injected
         as a kwarg. call_impl must pop it before building the request (identity
         is not a GetMediaBuyDeliveryRequest field) and pass it to _impl separately.
         """
@@ -189,28 +231,6 @@ class TestDeliveryPollEnvContract:
 
             assert isinstance(response, GetMediaBuyDeliveryResponse)
             assert len(response.media_buy_deliveries) >= 1
-
-    def test_wrappers_accept_adcp_request_params(self):
-        """A2A/MCP wrappers must accept all GetMediaBuyDeliveryRequest params.
-
-        BDD scenarios dispatch with reporting_dimensions, attribution_window,
-        include_package_daily_breakdown, etc. The wrappers must accept these
-        params and forward to the request — not reject with TypeError.
-        """
-        from src.core.tools.media_buy_delivery import get_media_buy_delivery_raw
-
-        with DeliveryPollEnv() as env:
-            env.add_buy(media_buy_id="mb_001")
-            env.set_adapter_response("mb_001", impressions=5000)
-
-            # include_package_daily_breakdown is a simple bool — no schema complexity
-            response = get_media_buy_delivery_raw(
-                media_buy_ids=["mb_001"],
-                include_package_daily_breakdown=True,
-                identity=env.identity,
-            )
-
-            assert isinstance(response, GetMediaBuyDeliveryResponse)
 
     def test_custom_date_range(self):
         """start_date/end_date parameters flow through to the request."""

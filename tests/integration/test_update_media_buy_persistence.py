@@ -20,23 +20,30 @@ from src.core.database.models import (
 from src.core.database.models import (
     Principal as ModelPrincipal,
 )
-from src.core.exceptions import AdCPAuthenticationError, AdCPMediaBuyNotFoundError
-from src.core.resolved_identity import ResolvedIdentity
+from src.core.exceptions import AdCPMediaBuyNotFoundError
+from src.core.resolved_identity import AccountIdentity
 from src.core.schemas import UpdateMediaBuyRequest, UpdateMediaBuyResponse, UpdateMediaBuyResult
+from src.core.schemas.account import Account
 from src.core.tools.media_buy_update import _update_media_buy_impl
+from tests.factories.principal import PrincipalFactory, plaintext_token_for
+from tests.utils.database_helpers import vhost_for
 
 # Note: _verify_principal is now internal to _update_media_buy_impl
 # Tests that used _verify_principal directly will need to test through the public API
 
+_ACCOUNT_ID = "acct_test"
 
-def _make_identity(tenant_id: str, principal_id: str, token: str) -> ResolvedIdentity:
-    """Create a ResolvedIdentity for testing."""
-    return ResolvedIdentity(
-        principal_id=principal_id,
-        tenant_id=tenant_id,
-        tenant={"tenant_id": tenant_id},
-        auth_token=token,
-        protocol="mcp",
+
+def _make_identity(tenant_id: str, principal_id: str) -> AccountIdentity:
+    """The caller ``_update_media_buy_impl`` takes: an identity with the account inside.
+
+    ``update-media-buy-request.json`` requires ``account``, so the implementation is
+    annotated ``AccountIdentity`` and reads ``identity.account``; the boundary resolved the
+    reference before the tool ran.
+    """
+    return PrincipalFactory.make_account_identity(
+        PrincipalFactory.make_identity(principal_id=principal_id, tenant_id=tenant_id, tenant={"tenant_id": tenant_id}),
+        Account(account_id=_ACCOUNT_ID, name="Test Account", status="active"),
     )
 
 
@@ -53,6 +60,7 @@ def test_tenant_setup(integration_db):
             tenant_id=tenant_id,
             name="Test Update Persist Tenant",
             subdomain="test-update-persist",
+            virtual_host=vhost_for(tenant_id),
             ad_server="mock",
             is_active=True,
             human_review_required=False,
@@ -62,11 +70,11 @@ def test_tenant_setup(integration_db):
         session.add(tenant)
 
         # Create principal
-        principal = ModelPrincipal(
+        principal = ModelPrincipal.with_token(
+            plaintext_token_for(principal_id),
             tenant_id=tenant_id,
             principal_id=principal_id,
             name="Test Advertiser Persist",
-            access_token=token,
             platform_mappings={"mock": {"id": "adv_persist"}},
         )
         session.add(principal)
@@ -129,42 +137,29 @@ def test_update_media_buy_with_database_persisted_buy(test_tenant_setup):
         session.add(media_buy)
         session.commit()
 
-    # Set tenant context
-    from src.core.config_loader import set_current_tenant
-
-    set_current_tenant(
-        {
-            "tenant_id": tenant_id,
-            "name": "Test Update Persist Tenant",
-            "subdomain": "test-update-persist",
-            "ad_server": "mock",
-            "is_active": True,
-        }
-    )
-
-    # Create identity
-    identity = _make_identity(tenant_id, principal_id, token)
+    # No ambient tenant to set: the tenant travels on the identity.
+    identity = _make_identity(tenant_id, principal_id)
 
     # Test: Call update_media_buy (should not raise "Media buy not found")
     req = UpdateMediaBuyRequest(
+        account={"account_id": "acct_test"},
+        idempotency_key="test-idem-key-0001",
         media_buy_id=media_buy_id,
     )
     result = _update_media_buy_impl(req=req, identity=identity)
 
     # Verify response
     assert isinstance(result, UpdateMediaBuyResult)
-    response = result.response  # _impl returns UpdateMediaBuyResult; domain response is on .response
+    response = result  # _impl returns UpdateMediaBuyResult; domain response is on .response
     assert isinstance(response, UpdateMediaBuyResponse)
     assert response.media_buy_id == media_buy_id
 
 
-@pytest.mark.requires_db
-def test_update_media_buy_requires_context():
-    """Test update_media_buy raises error when context is None."""
-    # Provide only media_buy_id (the sole identifier).
-    with pytest.raises(AdCPAuthenticationError, match="Authentication required"):
-        req = UpdateMediaBuyRequest(media_buy_id="buy_test_123")
-        _update_media_buy_impl(req=req)
+# (Retired) test_update_media_buy_requires_context called the implementation with no
+# identity at all and expected it to mint AdCPAuthenticationError. Nothing can call it that
+# way now: the parameter is required and typed ``AccountIdentity``, so an anonymous caller
+# is refused by the resolver before the tool runs -- the refusal has ONE minting site and is
+# graded on the wire (BR-UC-003 auth scenarios), not by a tool re-checking it.
 
 
 @pytest.mark.requires_db
@@ -174,10 +169,11 @@ def test_update_media_buy_requires_media_buy_id(test_tenant_setup):
     identity = _make_identity(
         tenant_id=test_tenant_setup["tenant_id"],
         principal_id=test_tenant_setup["principal_id"],
-        token=test_tenant_setup["token"],
     )
 
     # media_buy_id that doesn't exist should raise AdCPMediaBuyNotFoundError
-    with pytest.raises(AdCPMediaBuyNotFoundError, match="nonexistent_ref"):
-        req = UpdateMediaBuyRequest(media_buy_id="nonexistent_ref")
+    with pytest.raises(AdCPMediaBuyNotFoundError):
+        req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"}, idempotency_key="test-idem-key-0001", media_buy_id="nonexistent_ref"
+        )
         _update_media_buy_impl(req=req, identity=identity)

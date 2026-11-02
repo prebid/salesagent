@@ -27,40 +27,72 @@ Spec grounding — AdCP 3.1.1, the version this repo PINS (``adcp==6.6.0``,
    back to the RFC 9421 profile, because the block's PRESENCE already selected
    legacy. The registration is unservable and the only honest answer is to
    refuse it while the buyer is still on the phone.
-3. ``docs/building/by-layer/L3/error-handling.mdx`` § "Request
-   Validation" (``VALIDATION_ERROR | correctable``): the buyer is the only
-   party who can supply the secret, and supplying it makes the identical
-   request succeed — so ``correctable``, not ``terminal``.
+3. ``enums/error-code.json`` ``enumDescriptions`` settles the CODE, and the
+   two members are defined against each other:
 
-The spec does not say what a seller MUST do with such a registration, so the
-refusal SHAPE is an internal decision (source hierarchy: schema silent →
-production authoritative). It is settled by the sibling gate one field over:
-``reject_unsafe_webhook_registration_url`` (``src/core/webhook_validator.py``)
-raises ``AdCPValidationError`` → ``VALIDATION_ERROR`` / ``correctable`` /
-``field``. Asserted from ``tests/helpers/webhook_credential_refusal.py`` so the
-A2A-native surface in ``tests/unit/test_a2a_push_config_credential_refusal.py``
-cannot drift from it.
+     INVALID_REQUEST  — "Request is malformed, missing required fields, or
+                         violates schema constraints."
+     VALIDATION_ERROR — "Request contains invalid field values or violates
+                         business rules beyond schema validation."
+
+   Point 1 already established that this document violates the pinned schema:
+   ``credentials`` is REQUIRED and carries ``minLength: 32``. "Missing required
+   fields" and "violates schema constraints" are the literal words, so the code
+   is ``INVALID_REQUEST``. ``enumMetadata`` gives BOTH members
+   ``recovery: "correctable"``, so recovery cannot discriminate them; the buyer
+   is still the only party who can supply the secret, and supplying it makes the
+   identical request succeed, so ``correctable`` is right for the reason it was
+   always right.
+
+The spec does not say a seller MUST refuse such a registration — that half is
+genuinely silent, and the conformance storyboard grades no such step (see
+below). But it is NOT silent on which code a refusal carries, because the
+refused document violates a schema constraint and ``error-code.json`` assigns
+that case by name. This module previously reasoned from the silence to the
+sibling gate one field over — ``reject_unsafe_webhook_registration_url``
+(``src/core/webhook_validator.py``) → ``VALIDATION_ERROR`` — and so copied a
+code for a question the pin had already answered. The sibling keeps
+``VALIDATION_ERROR`` correctly: a deny-listed host is a SCHEMA-VALID
+``format: "uri"`` string refused by seller policy, which is "business rules
+beyond schema validation". Same envelope shape, different halves of one
+sentence pair.
+
+Production already encodes exactly this split, and emits ``INVALID_REQUEST``
+here because it is right to: ``src/core/exceptions.py:1266-1281`` maps a pydantic
+``ValidationError`` ("BY CONSTRUCTION a schema-constraint violation") to
+``AdCPInvalidRequestError``, and leaves a plain ``ValueError`` from business
+logic on ``AdCPValidationError``. Every surface graded here refuses through the
+pinned request model.
+
+Asserted from ``tests/helpers/webhook_credential_refusal.py``, which owns this
+contract for the protocol AND admin surfaces so they cannot drift from it.
 
 Conformance storyboard: UNGRADED — nothing in ``dist/compliance/3.1.1/`` grades
 a seller refusing an unservable webhook registration (same finding recorded for
 the sibling URL refusal, ``test_webhook_url_ingest_refusal.py``).
 
-Transport coverage is deliberately asymmetric, because the surfaces differ:
+Transport coverage is per-surface, and the surfaces no longer differ in
+MECHANISM the way they did when this module was written. Every transport now
+enters through ``src/core/tools/_boundary.py`` — MCP (``src/core/main.py``), A2A
+(``src/a2a_server/adcp_a2a_server.py``) and REST (``src/routes/api_v1.py``) each
+call ``serve()``, which runs ``validated_request()`` →
+``CreateMediaBuyRequest.model_validate(raw)``, and that DTO types the parameter
+as ``PushNotificationConfig | None``. So the invalid document is refused at
+schema conformance on all three, and there is no longer a transport that hands a
+raw dict to ``_impl`` untouched (the per-transport wrappers that did —
+``create_media_buy_raw`` and its siblings — are gone; tools are rows in
+``src/core/tools/registry.py``).
 
-* REST (``CreateMediaBuyBody.push_notification_config: dict[str, Any]``) and
-  A2A (the create skill forwards the raw dict — ``create_media_buy_raw``
-  ``model_dump``s only when it is already a ``PushNotificationConfig``) accept
-  the invalid document and hand it to ``_impl`` untouched. These are the
-  surfaces the gate exists for.
-* MCP types the parameter as ``adcp.PushNotificationConfig``, so FastMCP's
-  TypeAdapter rejects the document one layer earlier, on
-  ``authentication.credentials`` being required. Same buyer outcome, different
-  mechanism — graded separately below so nobody "simplifies" that annotation to
-  ``dict`` and silently opens a third hole.
+That symmetry is the reason every surface is STILL graded separately rather than
+collapsed into one case. What each class below pins is that its surface reaches
+the same buyer verdict; the equivalence is asserted directly in
+:class:`TestShortCredentialReachesOneVerdictOnEverySurface`. Relax the DTO field
+to ``dict`` for "forward compatibility" and one of these reddens instead of a
+hole opening silently.
 
 Buyer-visible change (named here as well as in the PR, not smuggled): a
 create_media_buy that TODAY succeeds with ``schemes: ["HMAC-SHA256"]`` and no
-credentials starts failing with a correctable VALIDATION_ERROR. That is the
+credentials starts failing with a correctable INVALID_REQUEST. That is the
 intent.
 """
 
@@ -72,14 +104,32 @@ from tests.harness.media_buy_create import MediaBuyCreateEnv
 from tests.harness.transport import Transport
 from tests.helpers.adcp_factories import create_test_media_buy_request_dict
 from tests.helpers.envelope_assertions import assert_envelope_shape
+from tests.helpers.signing import inbound_verifier_disabled
 from tests.helpers.webhook_credential_refusal import SHORT_CREDENTIAL, assert_credentials_refusal_envelope
 
 # The persistence assertion for this exact table, already written for the
 # sibling URL refusal. Imported rather than re-implemented: "the repository
 # upsert is the single write funnel, so an empty active list IS 'the refusal
 # preceded the store'" is one fact about one table, and two copies of it would
-# drift the moment the funnel moves.
-from tests.integration.test_webhook_url_ingest_refusal import _assert_no_push_config_persisted
+# drift the moment the funnel moves. Its home is the suite-local helper module,
+# not the sibling suite that used to own it, because a module whose job is to BE
+# a test must not also be a helper library
+# (``tests/unit/test_architecture_no_cross_test_module_imports.py``).
+from tests.integration._egress_ingest_helpers import _assert_no_push_config_persisted
+
+# ``declared_refusals`` — the spy that captures the typed refusals the admin
+# route declares. Under ADR-010 the flash carries CODE_TABLE's sentence for the
+# code and nothing else, so WHICH FIELD was refused travels on the channel the
+# route hands the whole error to (``record_admin_action_failure``); this is that
+# channel. At module level rather than inside the test because pytest resolves
+# fixtures from the module namespace at collection time.
+#
+# Still imported from the sibling SUITE because that is where the fixture lives
+# in this tree — ``tests/helpers/webhook_credential_refusal.py`` reaches the same
+# module for ``assert_webhook_registration_refused``. Moving both into
+# ``_egress_ingest_helpers`` is the guard-clean end state and is not this file's
+# to do.
+from tests.integration.test_admin_ingest_url_policy import declared_refusals  # noqa: F401
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -88,18 +138,24 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 # host the gate's own "allows public" case uses.
 _SAFE_URL = "https://buyer.example.com/hook"
 
-# Transports that carry the buyer's document through to ``_impl`` unvalidated.
-# A2A alone hands the raw ``push_notification_config`` dict to ``_impl``, so it
-# is the only transport whose refusal comes from the ingest GATE.
+# The A2A leg, graded on its own because it is the one that historically let the
+# document through.
 #
-# REST was originally listed here too, and that was wrong about production: the
-# REST request model validates ``push_notification_config`` against the AdCP
-# spec model, whose ``Authentication`` requires ``credentials``, so REST refuses
-# at schema conformance BEFORE the gate runs — the same mechanism as MCP. It is
-# graded in :class:`TestSchemaTypedTransportsRefuseTheSameDocument` below, where
-# the assertion matches the layer that actually refuses. Moved after observing
-# the real envelope, not to make a red test pass: REST already produced
-# VALIDATION_ERROR / correctable / a field naming credentials.
+# This list is NAMED for what it once was: the transports that carried the
+# buyer's document to ``_impl`` unvalidated, where the refusal came from the
+# ingest GATE rather than from schema conformance. REST left it first (its
+# request model validated ``push_notification_config`` against the spec model),
+# and A2A left it when the per-transport wrappers were replaced by
+# ``serve()``/``validated_request()``, which validates every payload against
+# ``CreateMediaBuyRequest`` regardless of wire. So A2A now refuses by the same
+# MECHANISM as MCP and REST.
+#
+# It stays a separate case rather than folding into
+# :class:`TestSchemaTypedTransportsRefuseTheSameDocument` because the OUTCOME
+# this grades is the gate's contract — INVALID_REQUEST / correctable / a field
+# naming the credential, nothing persisted — and that contract must hold on A2A
+# whichever layer happens to enforce it. A future change that reintroduces an
+# untyped A2A payload path reddens here, which is the point.
 _UNTYPED_TRANSPORTS = [Transport.A2A]
 
 # Every spelling of "asked for HMAC-SHA256, supplied no secret" that can reach
@@ -146,13 +202,45 @@ def _create_kwargs(product, authentication: dict | None) -> dict:
     )
 
 
+@pytest.fixture(autouse=True)
+def _not_a_verifying_agent(monkeypatch):
+    """This module's agent does not verify inbound signatures.
+
+    Every scenario here grades the INGEST gate's verdict on a webhook credential's
+    SHAPE, and every one of them registers ``push_notification_config.authentication``.
+    On an agent that CAN verify, that block forces a signature "regardless of
+    ``required_for`` membership" (security.mdx @ v3.1.1 :1462-1465,
+    ``src.core.signing.webhook_credentials.registers_webhook_credentials``, read at the
+    boundary by ``invoke_tool``), so the REST leg is refused with a bodyless 401
+    — no body, so no AdCP envelope, so the assertions fail with "no error envelope
+    captured" instead of on the obligation they exist to grade.
+
+    ``SigningSettings.verifier_enabled`` is the lever rather than a per-tenant
+    ``request_signing {supported: false}`` because the pin defines that field as an
+    AGENT-level fact and ``verify_inbound_signature`` runs inside ``_resolve_identity``
+    for every request this process serves; see
+    :func:`tests.helpers.signing.inbound_verifier_disabled`. It is sound HERE because
+    every transport this module dispatches on (MCP, REST, A2A) runs in THIS process.
+
+    The sibling BDD ``@egress`` scenarios use the declared-posture lever instead, and
+    must: they also run over ``e2e_rest``, whose server is a separate process this
+    patch cannot reach.
+
+    Autouse rather than a per-test seeding call — a per-test call is the line the next
+    case added here will forget, and forgetting it fails as "no error envelope
+    captured" rather than as a missing declaration.
+    """
+    with inbound_verifier_disabled(monkeypatch):
+        yield
+
+
 class TestCreateMediaBuyRefusesHmacRegistrationWithoutCredentials:
     """The untyped transports must refuse the document ``_impl`` actually receives."""
 
     @pytest.mark.parametrize("transport", _UNTYPED_TRANSPORTS, ids=lambda t: t.value)
     @pytest.mark.parametrize("authentication", _HMAC_WITHOUT_CREDENTIALS)
     def test_refused_at_ingest_naming_the_credentials_field(self, integration_db, transport, authentication):
-        """VALIDATION_ERROR / correctable / field=...authentication.credentials, nothing persisted."""
+        """INVALID_REQUEST / correctable / field=...authentication.credentials, nothing persisted."""
         with MediaBuyCreateEnv() as env:
             _tenant, _principal, product, _pricing = env.setup_media_buy_data()
 
@@ -197,7 +285,11 @@ class TestCreateMediaBuyRefusesHmacRegistrationWithoutCredentials:
             envelope = result.error_envelope()
             assert_envelope_shape(
                 envelope,
-                "VALIDATION_ERROR",
+                # ``hmac-sha256`` is outside the pinned ``enums/auth-scheme.json``
+                # membership, so this document violates a schema constraint —
+                # INVALID_REQUEST by ``enums/error-code.json``, exactly as the
+                # credential cases above. See the module docstring.
+                "INVALID_REQUEST",
                 recovery="correctable",
                 field="push_notification_config.authentication.schemes[0]",
             )
@@ -258,7 +350,12 @@ class TestShortCredentialReachesOneVerdictOnEverySurface:
     stays open; a suffix assertion keeps this pin honest about what it grades.
     """
 
-    _EXPECTED = ("VALIDATION_ERROR", "correctable")
+    # A 31-character secret violates the pinned ``credentials.minLength: 32``, and
+    # ``enums/error-code.json`` assigns a schema-constraint violation to
+    # INVALID_REQUEST. ``correctable`` is the recovery BOTH candidate codes carry
+    # in ``enumMetadata``, so it discriminates nothing on its own — the pair is
+    # asserted together so a code/recovery mismatch cannot slip through.
+    _EXPECTED = ("INVALID_REQUEST", "correctable")
 
     @staticmethod
     def _verdict(result) -> tuple[str, str, str]:
@@ -308,7 +405,13 @@ class TestShortCredentialReachesOneVerdictOnEverySurface:
             f"error.field is {field!r}; the buyer must be pointed at the secret, not at a URL that is fine"
         )
 
-    def test_the_admin_form_reaches_the_same_verdict(self, integration_db, authenticated_admin_client, monkeypatch):
+    def test_the_admin_form_reaches_the_same_verdict(
+        self,
+        integration_db,
+        authenticated_admin_client,
+        monkeypatch,
+        declared_refusals,  # noqa: F811 - the imported fixture, requested by name
+    ):
         """The fourth surface, and the one the carve-out's own justification never covered.
 
         ``accept_push_notification_primitives`` is called from
@@ -320,9 +423,23 @@ class TestShortCredentialReachesOneVerdictOnEverySurface:
         The admin surface answers in flashes, not envelopes, so the shapes cannot
         be compared byte-for-byte. What must match is the VERDICT: refused,
         nothing stored, and the operator pointed at the credential.
+
+        The operator is pointed at the credential on the channel that carries it
+        under ADR-010 — the typed refusal the route declares, captured by
+        ``declared_refusals`` — because the flash is now CODE_TABLE's sentence
+        for the code and names no field at all. The helper owns which code and
+        which field a credential refusal must be; this test owns driving the
+        real form and reading the table back.
         """
         from tests.helpers.webhook_credential_refusal import assert_admin_flash_refuses_the_credential
-        from tests.integration.test_admin_ingest_url_policy import flashes, post_register_hmac_webhook
+        from tests.integration._egress_ingest_helpers import post_register_hmac_webhook
+
+        # ``set_flags`` is the INJECTED hatch (``inject_limits`` onto
+        # ``limits.adcp_outbound_allow_private``), not the retired
+        # ``ADCP_OUTBOUND_ALLOW_PRIVATE`` environ write: the seam reads
+        # ``get_settings().limits`` off a settings object built once and cached, so a
+        # ``setenv`` reaches it only if nothing has resolved settings yet — a hatch that
+        # silently stays shut and decides this case by accident.
         from tests.integration.test_outbound_http import set_flags
 
         set_flags(monkeypatch, private=True)
@@ -339,7 +456,9 @@ class TestShortCredentialReachesOneVerdictOnEverySurface:
             )
 
             assert response.status_code == 302
-            assert_admin_flash_refuses_the_credential(flashes(authenticated_admin_client), secret=SHORT_CREDENTIAL)
+            assert_admin_flash_refuses_the_credential(
+                authenticated_admin_client, declared_refusals, secret=SHORT_CREDENTIAL
+            )
             _assert_no_push_config_persisted(env._tenant_id, env._principal_id)
 
 
@@ -406,7 +525,14 @@ class TestSchemaTypedTransportsRefuseTheSameDocument:
                 f"against the AdCP spec. Got: {getattr(result, 'wire_response', None) or result.payload!r}"
             )
             envelope = result.error_envelope()
-            assert_envelope_shape(envelope, "VALIDATION_ERROR", recovery="correctable")
+            # Every parametrization above is a PINNED-SCHEMA violation — a missing
+            # required ``credentials``, one under ``minLength: 32``, or a scheme
+            # outside the ``auth-scheme.json`` enum. ``enums/error-code.json``
+            # assigns that case to INVALID_REQUEST ("violates schema
+            # constraints"), not to VALIDATION_ERROR ("beyond schema
+            # validation"). REST reaches it through the typed request model,
+            # which is the mechanism the code names.
+            assert_envelope_shape(envelope, "INVALID_REQUEST", recovery="correctable")
             for layer, body in (("adcp_error", envelope["adcp_error"]), ("errors[0]", envelope["errors"][0])):
                 field = body.get("field") or ""
                 assert field.endswith(expected_field_suffix), (

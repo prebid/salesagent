@@ -29,12 +29,11 @@ callers ONLY — transport wrappers thread the raw wire payload to
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Protocol
 
 from adcp.server.idempotency import EXCLUDED_FIELDS as _EXCLUDED_FIELDS
 from adcp.server.idempotency import canonical_json_sha256 as _canonical_json_sha256
 from adcp.server.idempotency import strip_excluded_fields
-from pydantic import BaseModel
 
 from src.core.exceptions import AdCPValidationError
 
@@ -61,10 +60,21 @@ def canonical_payload_hash(payload: dict[str, Any]) -> str:
     except RecursionError as exc:
         # A pathologically nested payload must reject as a buyer error, not
         # crash the boundary with an unhandled RecursionError.
-        raise AdCPValidationError("request payload too deeply nested to canonicalize for idempotency") from exc
+        raise AdCPValidationError() from exc
 
 
-def canonical_request_hash(request: BaseModel) -> str:
+class SupportsModelDump(Protocol):
+    """Anything that can render itself as a JSON-ready dict.
+
+    Named structurally because the two kinds of value hashed here -- a plain pydantic model
+    and a :class:`~src.core.schemas._base.BuyerRequest` DTO, which is a model plus a mixin --
+    have no common nominal base and Python has no intersection type.
+    """
+
+    def model_dump(self, **kwargs: Any) -> dict[str, Any]: ...
+
+
+def canonical_request_hash(request: SupportsModelDump) -> str:
     """Canonical hash of a Pydantic request model.
 
     Thin wrapper over :func:`canonical_payload_hash` that performs the

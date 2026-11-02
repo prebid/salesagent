@@ -16,7 +16,8 @@ from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
 from src.core.database.models import FormatPerformanceMetrics
-from src.core.schemas import PriceGuidance, PricingModel, PricingOption, Product
+from src.core.schemas import CpmPricingOption, PriceGuidance, Product
+from src.core.schemas.pricing import PricingOption
 
 logger = logging.getLogger(__name__)
 
@@ -226,19 +227,21 @@ class DynamicPricingService:
         if floor_cpm is None and recommended_cpm is None:
             return
 
-        # Find existing CPM pricing option
-        cpm_option = None
+        # Find existing CPM pricing option. isinstance narrows the union member
+        # (the discriminator guarantees pricing_model == "cpm" for this type),
+        # so the writes below are plain declared-field assignments.
+        cpm_option: CpmPricingOption | None = None
         for option in product.pricing_options:
             inner = option.root
-            if inner.pricing_model.upper() == "CPM":
+            if isinstance(inner, CpmPricingOption):
                 cpm_option = inner
                 break
 
         if cpm_option:
             # Update existing option's price_guidance
             # V3: floor moved to floor_price at PricingOption level, price_guidance only has percentiles
-            existing_guidance = getattr(cpm_option, "price_guidance", None)
-            existing_floor_price = getattr(cpm_option, "floor_price", None)
+            existing_guidance = cpm_option.price_guidance
+            existing_floor_price = cpm_option.floor_price
             updated_floor = floor_cpm if floor_cpm is not None else existing_floor_price
             updated_p75 = (
                 recommended_cpm
@@ -249,10 +252,10 @@ class DynamicPricingService:
             if updated_floor is not None or updated_p75 is not None:
                 # V3: Set floor_price at option level, price_guidance only for percentiles
                 if updated_floor is not None:
-                    cpm_option.floor_price = updated_floor  # type: ignore[union-attr]
+                    cpm_option.floor_price = updated_floor
                 if updated_p75 is not None:
                     new_guidance = PriceGuidance(p25=None, p50=None, p75=updated_p75, p90=None)
-                    cpm_option.price_guidance = new_guidance  # type: ignore[union-attr]
+                    cpm_option.price_guidance = new_guidance
                 logger.debug(f"Updated existing CPM pricing option for {product.product_id}")
         # Create new CPM pricing option with price_guidance
         # V3: floor_price at top level, price_guidance only for percentiles
@@ -268,17 +271,14 @@ class DynamicPricingService:
                 else None
             )
 
-            new_option = PricingOption(
+            new_option = CpmPricingOption(
                 pricing_option_id=f"{product.product_id}_dynamic_cpm",
-                pricing_model=PricingModel.cpm,
                 floor_price=floor_cpm,  # V3: floor moved to top-level
                 currency=pricing.get("currency", "USD"),
                 price_guidance=price_guidance_obj,
                 min_spend_per_package=None,
-                supported=None,
-                unsupported_reason=None,
             )
-            # Pydantic validates PricingOption against discriminated union at runtime
-            # mypy doesn't understand this is compatible with CpmPricingOption
-            product.pricing_options.append(new_option)  # type: ignore[arg-type]
+            # Wrap in the local RootModel so the list stays homogeneous — every
+            # element supports .root exactly like options built at conversion time.
+            product.pricing_options.append(PricingOption(new_option))
             logger.debug(f"Created new CPM pricing option for {product.product_id}")

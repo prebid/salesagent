@@ -24,22 +24,33 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-from src.core.schemas import ListCreativeFormatsResponse
+from src.core.schemas import FormatIdentity, ListCreativeFormatsResponse
 from tests.harness._base import IntegrationEnv
 from tests.harness._realize import E2EUnsupportedSetup, realize_e2e
 from tests.harness.transport import DeliverResult
 
 
-def _format_id_key(fmt: Any) -> str:
-    """Stable comparable id for a Format / FormatId / raw string.
+def _format_identity_key(fmt: Any) -> FormatIdentity:
+    """Federation identity ``(canonical agent_url, id)`` of a Format / FormatId / bare id.
 
-    The reference catalog keys on the namespaced ``format_id.id`` (e.g.
-    ``"display_300x250"``); ``str(format_id)`` is a verbose structured repr and
-    is NOT a stable identity. Accepts a ``Format`` (``.format_id.id``), a bare
-    ``FormatId`` (``.id``), or a plain string id.
+    Delegates to ``src.core.format_resolver.format_identity``, which is the ONE
+    place that answers "same format?" — it normalizes the three shapes a
+    reference actually arrives in (model, wire dict, legacy bare string) and then
+    hands the rule itself to ``src.core.schemas.format_id_identity``. The pinned
+    ``core/format-id.json`` makes canonicalizing ``agent_url`` before treating two
+    references as one a MUST, so a harness that compared ``.format_id.id`` alone
+    (what this helper used to do) would call a third-party format that merely
+    shares an id "already in the reference catalog" and silently skip the
+    unrealizable-setup error the scenario needs.
+
+    Accepts a ``Format`` (unwrapped via ``.format_id``), a bare ``FormatId``, a
+    wire dict, or a plain string id — a bare id is namespaced to the canonical
+    creative agent, which is the agent every entry in the reference fixture
+    carries.
     """
-    format_id = getattr(fmt, "format_id", fmt)
-    return str(getattr(format_id, "id", format_id))
+    from src.core.format_resolver import format_identity
+
+    return format_identity(getattr(fmt, "format_id", fmt))
 
 
 def _validate_registry_formats(env: Any, formats: list[Any]) -> None:
@@ -55,6 +66,11 @@ def _validate_registry_formats(env: Any, formats: list[Any]) -> None:
     - requested ids ⊆ reference set -> no-op: the server already serves them.
     - requested ⊄ reference set -> unrealizable: name the missing ids and point
       at the fixture-refresh path.
+
+    Membership is decided on the ``(canonical agent_url, id)`` federation pair
+    (:func:`_format_identity_key`), never on the bare id: two agents may publish
+    the same ``id``, and only the pair says whether the LIVE catalog actually
+    serves the format this scenario asked for.
     """
     from src.core.format_cache import load_reference_formats
 
@@ -63,12 +79,13 @@ def _validate_registry_formats(env: Any, formats: list[Any]) -> None:
             "live stack always serves the agent catalog; an empty catalog cannot be realized over e2e"
         )
 
-    reference_ids = {_format_id_key(f) for f in load_reference_formats()}
-    requested_ids = {_format_id_key(f) for f in formats}
+    reference_ids = {_format_identity_key(f) for f in load_reference_formats()}
+    requested_ids = {_format_identity_key(f) for f in formats}
     missing = requested_ids - reference_ids
     if missing:
+        named = sorted(f"{identity.id} @ {identity.agent_url}" for identity in missing)
         raise E2EUnsupportedSetup(
-            f"requested formats not in the reference catalog: {sorted(missing)}. "
+            f"requested formats not in the reference catalog: {named}. "
             "Register them in the creative agent registry and refresh the fixture "
             "(`make creative-formats-refresh`)."
         )
@@ -114,7 +131,7 @@ class CreativeFormatsEnv(IntegrationEnv):
         explicitly call set_registry_formats() still get non-empty results.
         Scenarios needing specific formats override via set_registry_formats().
         """
-        from src.core.creative_agent_registry import FormatFetchResult
+        from src.core.creative_agent_registry import CreativeAgentRegistry, FormatFetchResult
         from src.core.format_cache import load_reference_formats
 
         default_formats = list(load_reference_formats())
@@ -126,6 +143,19 @@ class CreativeFormatsEnv(IntegrationEnv):
             return_value=FormatFetchResult(formats=default_formats, errors=[])
         )
         self.mock["registry"].return_value = mock_registry
+
+        # ``_get_tenant_agents`` is the REAL method, bound to a real registry, so the
+        # referral path (``creative_agents``, POST-S4) reads the tenant's
+        # ``creative_agents`` rows exactly as the live server does. Left as a MagicMock
+        # attribute it returned a MagicMock, which MagicMock makes ITERABLE AND EMPTY --
+        # so production walked zero agents and answered ``creative_agents: []`` on every
+        # in-process transport. That is a mock inventing an answer it does not have, and
+        # it read as a production gap for long enough to be recorded as one.
+        #
+        # ``_get_tenant_agents`` is defined once, on the base, and neither
+        # ``ReferenceFormatsRegistry`` nor anything else overrides it, so which class is
+        # instantiated here cannot change the answer.
+        mock_registry._get_tenant_agents = CreativeAgentRegistry()._get_tenant_agents
 
         # Audit logger: no-op
         mock_logger = MagicMock()
@@ -160,13 +190,42 @@ class CreativeFormatsEnv(IntegrationEnv):
         kwargs.setdefault("req", None)
         return _list_creative_formats_impl(**kwargs)
 
-    # build_rest_body is inherited from IntegrationEnv: it serializes the Pydantic
-    # ``req`` via model_dump(mode="json", exclude_none=True). ListCreativeFormatsBody
-    # (src/routes/api_v1.py) declares format_ids + every other filter and the route
-    # maps them into ListCreativeFormatsRequest, so REST filters for real — there is
-    # no need to drop kwargs. (A prior override returned {} behind a stale docstring
-    # claiming the body had no parameters; that suppressed REST filter coverage.)
+    def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
+        """Forward FLAT kwargs to the REST body, matching a2a/mcp.
 
-    def parse_rest_response(self, data: dict[str, Any]) -> ListCreativeFormatsResponse:
-        """Parse REST JSON into ListCreativeFormatsResponse."""
-        return ListCreativeFormatsResponse(**data)
+        This env dispatches a2a and mcp BY TOOL NAME, so its callers pass flat
+        kwargs (``format_ids=[...]``) rather than a ``req`` object. The inherited
+        default only serializes a Pydantic ``req`` and returns ``{}`` for
+        anything else — so every flat-kwarg filter was silently dropped on REST
+        alone, and REST ran UNFILTERED while a2a and mcp filtered. A parametrized
+        test then reported three green transports while only two graded the
+        filter (found via salesagent-3dawm.16).
+
+        ListCreativeFormatsBody (src/routes/api_v1.py) declares format_ids and
+        every other filter, and the route maps them into
+        ListCreativeFormatsRequest, so forwarding them makes REST filter for real.
+
+        A Pydantic ``req`` still takes precedence, so callers that pass one keep
+        the inherited behaviour.
+        """
+        from pydantic import BaseModel as PydanticBaseModel
+
+        if isinstance(kwargs.get("req"), PydanticBaseModel):
+            return super().build_rest_body(**kwargs)
+
+        body: dict[str, Any] = {}
+        for key, value in kwargs.items():
+            if key in ("req", "identity") or value is None:
+                continue
+            if isinstance(value, PydanticBaseModel):
+                body[key] = value.model_dump(mode="json", exclude_none=True)
+            elif isinstance(value, list):
+                body[key] = [
+                    v.model_dump(mode="json", exclude_none=True) if isinstance(v, PydanticBaseModel) else v
+                    for v in value
+                ]
+            else:
+                body[key] = value
+        return body
+
+    # parse_rest_response: the base's, which revives RESPONSE_MODEL.

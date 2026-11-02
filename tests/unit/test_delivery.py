@@ -31,7 +31,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from adcp.types import MediaBuyStatus
 
-from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
+from src.core.exceptions import AdCPValidationError
 from src.core.helpers import enum_value
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
@@ -44,13 +44,16 @@ from src.core.schemas import (
     PricingModel,
     ReportingPeriod,
 )
-from src.core.testing_hooks import AdCPTestContext
-from src.core.tools.media_buy_delivery import (
-    _get_media_buy_delivery_impl,
-    get_media_buy_delivery,
-    get_media_buy_delivery_raw,
-)
+from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from src.services.webhook_delivery_service import CircuitBreaker, CircuitState, WebhookDeliveryService
+from tests.factories.media_buy import (
+    default_request_packages,
+    pricing_options_for,
+    pricing_options_named,
+    request_package,
+)
+from tests.factories.principal import PrincipalFactory
+from tests.factories.product import PricingOptionFactory
 from tests.harness.delivery_poll_unit import DeliveryPollEnv
 
 # ---------------------------------------------------------------------------
@@ -63,20 +66,20 @@ _PATCH_PREFIX = "src.core.tools.media_buy_delivery"
 def _make_identity(
     principal_id: str = "test_principal",
     tenant_id: str = "test_tenant",
-    testing_context: AdCPTestContext | None = None,
 ) -> ResolvedIdentity:
     """Build a test ResolvedIdentity via the canonical factory.
 
     Delegates to PrincipalFactory.make_identity (the single source of truth
     per tests/CLAUDE.md) instead of constructing ResolvedIdentity inline.
-    A custom testing_context override is applied on top when provided.
-    """
-    from tests.factories import PrincipalFactory
 
-    identity = PrincipalFactory.make_identity(principal_id=principal_id, tenant_id=tenant_id)
-    if testing_context is not None:
-        identity = identity.model_copy(update={"testing_context": testing_context})
-    return identity
+    The ``testing_context`` parameter is gone with the channel it carried: commit
+    a1b79d22d deleted ``src/core/testing_hooks`` and took the testing context off the
+    identity ("requests carry no testing headers"), so there is nothing to override and
+    nothing downstream that would read one. The ``model_copy`` that applied it was also
+    the one thing ``.ast-grep/rules/resolved-identity-constructed-only-by-its-owners.yml``
+    forbids of an identity.
+    """
+    return PrincipalFactory.make_identity(principal_id=principal_id, tenant_id=tenant_id)
 
 
 def _make_mock_media_buy(
@@ -104,11 +107,10 @@ def _make_mock_media_buy(
     buy.principal_id = principal_id
     buy.tenant_id = tenant_id
     buy.is_paused = False
-    buy.raw_request = raw_request or {
-        "packages": [
-            {"package_id": "pkg_001", "product_id": "prod_1"},
-        ]
-    }
+    # Packages name a pricing option, because ``package-request.json`` REQUIRES one on
+    # every package — a buy without it is a shape ``create_media_buy`` cannot store, and
+    # the impl rightly refuses to report delivery it cannot price.
+    buy.raw_request = raw_request or {"packages": default_request_packages()}
     return buy
 
 
@@ -173,25 +175,25 @@ def _standard_patches(
     mock_uow.media_buys = MagicMock()
 
     return {
-        "principal_obj": patch(
-            "src.core.auth.get_principal_object",
-            return_value=principal_obj,
-        ),
         "adapter": patch(
             f"{_PATCH_PREFIX}.get_adapter",
             return_value=adapter,
-        ),
-        "tenant": patch(
-            "src.core.helpers.context_helpers.ensure_tenant_context",
-            return_value={"tenant_id": "test_tenant", "name": "Test"},
         ),
         "target_buys": patch(
             f"{_PATCH_PREFIX}._get_target_media_buys",
             return_value=target_buys,
         ),
+        # Answers about the ids production asked for, derived the way the real lookup
+        # derives them, unless the caller pins its own map. The delivery report REQUIRES
+        # pricing_model/rate/currency per package (get-media-buy-delivery-response.json)
+        # and these mock buys have no MediaPackage row, so this is their pricing source.
         "pricing_options": patch(
             f"{_PATCH_PREFIX}._get_pricing_options",
-            return_value=pricing_options or {},
+            # NOT ``{}`` — the pin REQUIRES pricing_model/rate/currency on every
+            # by_package entry, so an empty map makes the response unbuildable.
+            side_effect=lambda option_ids, **_: (
+                pricing_options if pricing_options is not None else pricing_options_for(option_ids)
+            ),
         ),
         "uow": patch(
             f"{_PATCH_PREFIX}.MediaBuyUoW",
@@ -224,9 +226,7 @@ def _run_impl_with_patches(
     mock_inner_session.scalars.return_value.all.return_value = []
 
     with (
-        patches["principal_obj"],
         patches["adapter"],
-        patches["tenant"],
         patches["target_buys"],
         patches["pricing_options"],
         patches["uow"],
@@ -259,7 +259,7 @@ class TestDeliveryPollingSingleBuy:
             budget=10000.0,
             start_date=date(2025, 1, 1),
             end_date=date(2025, 12, 31),
-            raw_request={"packages": [{"package_id": "pkg_a", "product_id": "prod_1"}]},
+            raw_request={"packages": [request_package(package_id="pkg_a", product_id="prod_1")]},
         )
 
         mock_adapter = MagicMock()
@@ -338,14 +338,14 @@ class TestDeliveryPollingMultiBuy:
             budget=5000.0,
             start_date=date(2025, 1, 1),
             end_date=date(2025, 12, 31),
-            raw_request={"packages": [{"package_id": "pkg_1a", "product_id": "prod_1"}]},
+            raw_request={"packages": [request_package(package_id="pkg_1a", product_id="prod_1")]},
         )
         buy2 = _make_mock_media_buy(
             media_buy_id="mb_agg_2",
             budget=8000.0,
             start_date=date(2025, 3, 1),
             end_date=date(2025, 12, 31),
-            raw_request={"packages": [{"package_id": "pkg_2a", "product_id": "prod_2"}]},
+            raw_request={"packages": [request_package(package_id="pkg_2a", product_id="prod_2")]},
         )
 
         mock_adapter = MagicMock()
@@ -397,79 +397,6 @@ class TestDeliveryPollingMultiBuy:
 class TestDeliveryIdentificationModes:
     """UC-004 BR-RULE-030: media_buy_ids identification (provided vs neither)."""
 
-    def test_media_buy_ids_only(self):
-        """UC-004-MAIN-02: media_buy_ids provided.
-
-        Spec: media_buy_ids is the delivery identifier.
-        Covers: UC-004-MAIN-02
-        """
-        buy = _make_mock_media_buy(media_buy_id="mb_ref1")
-        mock_adapter = MagicMock()
-        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
-            media_buy_id="mb_ref1",
-            impressions=200,
-            spend=20.0,
-            packages=[{"package_id": "pkg_001", "impressions": 200, "spend": 20.0}],
-        )
-
-        patches = _standard_patches(adapter=mock_adapter, target_buys=[("mb_ref1", buy)])
-        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_ref1"])
-        identity = _make_identity()
-
-        mock_inner_session = MagicMock()
-        mock_inner_session.scalars.return_value.all.return_value = []
-
-        with (
-            patches["principal_obj"],
-            patches["adapter"],
-            patches["tenant"],
-            patches["target_buys"] as mock_target,
-            patches["pricing_options"],
-            patches["uow"],
-        ):
-            response = _get_media_buy_delivery_impl(req, identity)
-
-        assert len(response.media_buy_deliveries) == 1
-        call_req = mock_target.call_args[0][0]
-        assert call_req.media_buy_ids == ["mb_ref1"]
-
-    def test_neither_provided_fetches_all(self):
-        """UC-004-MAIN-04: neither identifiers fetches all principal buys.
-
-        Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-request.json
-        CONFIRMED: media_buy_ids is optional (no required fields in request schema).
-        Covers: UC-004-MAIN-04
-        """
-        buy = _make_mock_media_buy(media_buy_id="mb_all1")
-        mock_adapter = MagicMock()
-        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
-            media_buy_id="mb_all1",
-            impressions=100,
-            spend=10.0,
-            packages=[{"package_id": "pkg_001", "impressions": 100, "spend": 10.0}],
-        )
-
-        patches = _standard_patches(adapter=mock_adapter, target_buys=[("mb_all1", buy)])
-        req = GetMediaBuyDeliveryRequest()
-        identity = _make_identity()
-
-        mock_inner_session = MagicMock()
-        mock_inner_session.scalars.return_value.all.return_value = []
-
-        with (
-            patches["principal_obj"],
-            patches["adapter"],
-            patches["tenant"],
-            patches["target_buys"] as mock_target,
-            patches["pricing_options"],
-            patches["uow"],
-        ):
-            response = _get_media_buy_delivery_impl(req, identity)
-
-        call_req = mock_target.call_args[0][0]
-        assert call_req.media_buy_ids is None
-        assert len(response.media_buy_deliveries) == 1
-
     def test_partial_ids_returns_found_and_errors_for_missing(self):
         """UC-004-MAIN-14: partial resolution returns found buys AND errors for missing.
 
@@ -512,9 +439,10 @@ class TestDeliveryIdentificationModes:
         # Missing IDs reported as errors
         assert response.errors is not None
         assert len(response.errors) == 2
-        error_messages = " ".join(e.message for e in response.errors)
-        assert "mb_missing_1" in error_messages
-        assert "mb_missing_2" in error_messages
+        # WHICH buys were missing travels in details, not in the sentence: message is
+        # derived from the code, so every MEDIA_BUY_NOT_FOUND advisory reads identically.
+        reported = {e.details["media_buy_id"] for e in response.errors if e.details}
+        assert reported == {"mb_missing_1", "mb_missing_2"}
         for err in response.errors:
             assert err.code == "MEDIA_BUY_NOT_FOUND"
 
@@ -548,9 +476,9 @@ class TestDeliveryIdentificationModes:
         assert len(response.errors) == 2
         error_codes = {e.code for e in response.errors}
         assert error_codes == {"MEDIA_BUY_NOT_FOUND"}
-        error_messages = " ".join(e.message for e in response.errors)
-        assert "mb_ghost_1" in error_messages
-        assert "mb_ghost_2" in error_messages
+        # WHICH buys were missing travels in details, not in the sentence.
+        reported = {e.details["media_buy_id"] for e in response.errors if e.details}
+        assert reported == {"mb_ghost_1", "mb_ghost_2"}
 
 
 # ===========================================================================
@@ -614,10 +542,12 @@ class TestDeliveryStatusFilter:
         req = GetMediaBuyDeliveryRequest()
         identity = _make_identity()
 
+        # "principal_obj" and "tenant" are no longer patch entries: the principal and the
+        # tenant are carried BY the identity (the tool reads identity.principal /
+        # identity.tenant and looks up neither), so _standard_patches has nothing to
+        # stand in for. The patches that remain are the collaborators the tool calls.
         with (
-            patches["principal_obj"],
             patches["adapter"],
-            patches["tenant"],
             patches["target_buys"] as mock_target,
             patches["pricing_options"],
             patches["uow"],
@@ -754,61 +684,17 @@ class TestDeliveryStatusFilter:
 
         assert len(result) == 0
 
-    def test_simulated_clock_filter_matches_reported_status(self):
-        """status_filter resolves against the simulated clock, not the real one.
-
-        Regression (#1545 O2): the filter path used the real reference_date while
-        the display path used mock_time, so a buy the tool would report as
-        "completed" under mock_time was excluded by a status_filter=["completed"]
-        query (and emitted a spurious MEDIA_BUY_NOT_FOUND). Filter and report must
-        agree.
-        """
-        from src.core.tools.media_buy_delivery import _get_target_media_buys
-
-        ref_date = date(2025, 2, 15)  # real clock: inside the flight window
-        buy = _make_mock_media_buy(
-            media_buy_id="mb_sim",
-            status="active",
-            start_date=date(2025, 1, 1),
-            end_date=date(2025, 3, 31),
-        )
-        mock_req = MagicMock()
-        mock_req.media_buy_ids = ["mb_sim"]
-        mock_req.status_filter = [MediaBuyStatus.completed]
-        mock_repo = MagicMock()
-        mock_repo.get_by_principal.return_value = [buy]
-
-        # Simulated clock strictly past the flight window -> resolves "completed".
-        sim_ctx = AdCPTestContext(mock_time=datetime(2025, 6, 1, tzinfo=UTC))
-        result = _get_target_media_buys(mock_req, "test_principal", mock_repo, ref_date, sim_ctx)
-
-        assert [buy_id for buy_id, _ in result] == ["mb_sim"]
-
-    def test_simulated_clock_filter_excludes_non_matching_status(self):
-        """The simulated clock also excludes buys whose simulated status differs.
-
-        Same buy as above under mock_time past flight end resolves to "completed",
-        so a status_filter=["active"] query must NOT return it.
-        """
-        from src.core.tools.media_buy_delivery import _get_target_media_buys
-
-        ref_date = date(2025, 2, 15)
-        buy = _make_mock_media_buy(
-            media_buy_id="mb_sim",
-            status="active",
-            start_date=date(2025, 1, 1),
-            end_date=date(2025, 3, 31),
-        )
-        mock_req = MagicMock()
-        mock_req.media_buy_ids = ["mb_sim"]
-        mock_req.status_filter = [MediaBuyStatus.active]
-        mock_repo = MagicMock()
-        mock_repo.get_by_principal.return_value = [buy]
-
-        sim_ctx = AdCPTestContext(mock_time=datetime(2025, 6, 1, tzinfo=UTC))
-        result = _get_target_media_buys(mock_req, "test_principal", mock_repo, ref_date, sim_ctx)
-
-        assert result == []
+    # test_simulated_clock_filter_matches_reported_status and
+    # test_simulated_clock_filter_excludes_non_matching_status are REMOVED, not ported.
+    # Their subject was the simulated clock: both passed a fifth argument (an
+    # AdCPTestContext carrying mock_time) to _get_target_media_buys and asserted that the
+    # status filter resolved against it. Commit a1b79d22d deleted the whole testing-hook
+    # channel -- src/core/testing_hooks is gone, a request carries no x-mock-time header,
+    # resolve_canonical_status lost its simulate parameter and _get_target_media_buys now
+    # takes exactly (req, principal_id, repo, reference_date). There is no simulated clock
+    # to disagree with the real one, so the #1545 O2 regression they guarded (filter path
+    # on the real date, display path on mock_time) is unreachable by construction. The
+    # sibling cases above still grade the filter itself against reference_date.
 
     def test_valid_status_enum_values_accepted(self):
         """UC-004-FILT-07: valid MediaBuyStatus enum values accepted by schema.
@@ -826,51 +712,6 @@ class TestDeliveryStatusFilter:
                 response = env.call_impl(
                     media_buy_ids=["mb_status"],
                     status_filter=[status.value],
-                )
-                assert isinstance(response, GetMediaBuyDeliveryResponse)
-
-    async def test_valid_status_enum_values_accepted_mcp(self):
-        """UC-004-FILT-07: valid status values accepted via MCP wrapper.
-
-        Covers: UC-004-ALT-STATUS-FILTERED-DELIVERY-07
-
-        Route: mcp -- MCP wrapper accepts each MediaBuyStatus enum value.
-        """
-        from unittest.mock import AsyncMock
-
-        from fastmcp.server.context import Context
-
-        for status in MediaBuyStatus:
-            with DeliveryPollEnv() as env:
-                env.add_buy(media_buy_id="mb_mcp")
-                env.set_adapter_response("mb_mcp", impressions=100)
-
-                mock_ctx = AsyncMock(spec=Context)
-                mock_ctx.get_state.return_value = env.identity
-
-                result = await get_media_buy_delivery(
-                    media_buy_ids=["mb_mcp"],
-                    status_filter=status,
-                    ctx=mock_ctx,
-                )
-                assert result.structured_content is not None
-
-    def test_valid_status_enum_values_accepted_a2a(self):
-        """UC-004-FILT-07: valid status values accepted via A2A wrapper.
-
-        Covers: UC-004-ALT-STATUS-FILTERED-DELIVERY-07
-
-        Route: a2a -- A2A raw function accepts each MediaBuyStatus enum value.
-        """
-        for status in MediaBuyStatus:
-            with DeliveryPollEnv() as env:
-                env.add_buy(media_buy_id="mb_a2a")
-                env.set_adapter_response("mb_a2a", impressions=100)
-
-                response = get_media_buy_delivery_raw(
-                    media_buy_ids=["mb_a2a"],
-                    status_filter=status,
-                    identity=env.identity,
                 )
                 assert isinstance(response, GetMediaBuyDeliveryResponse)
 
@@ -1006,16 +847,16 @@ class TestDeliveryPricingOptionLookup:
         """
         from src.core.tools.media_buy_delivery import _get_pricing_options
 
-        mock_po1 = MagicMock()
-        mock_po1.id = 42
-        mock_po1.pricing_model = "cpm"
-        mock_po1.currency = "USD"
-        mock_po1.is_fixed = True
-        mock_po1.rate = Decimal("5.00")
-        mock_po1.tenant_id = "test_tenant"
+        # A real (unpersisted) row. A bare MagicMock fabricates every attribute it is
+        # asked for, ``root`` included — so the RootModel unwrap production performs
+        # returns a child mock and the id is built from Mock repr, not from these values.
+        pricing_option = PricingOptionFactory.build(
+            id=42, pricing_model="cpm", currency="USD", is_fixed=True, rate=Decimal("5.00")
+        )
+        pricing_option.tenant_id = "test_tenant"
 
         mock_repo = MagicMock()
-        mock_repo.get_all_pricing_options.return_value = [mock_po1]
+        mock_repo.get_all_pricing_options.return_value = [pricing_option]
 
         result = _get_pricing_options(["cpm_usd_fixed"], tenant_id="test_tenant", product_repo=mock_repo)
 
@@ -1030,16 +871,22 @@ class TestDeliveryPricingOptionLookup:
         CONFIRMED: spend (type: number, minimum: 0) and impressions (type: number, minimum: 0) are defined.
         Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-03
         """
+        # Real (unpersisted) rows, not MagicMocks: every by_package entry must state
+        # currency, and a MagicMock attribute is not a string. The map's KEY is derived by
+        # production's own ``synthetic_pricing_option_id``, and the package names that same
+        # derived id — so the lookup the impl performs is the one this fixture answers.
+        pricing_options = pricing_options_named(pricing_model="cpm", rate="5.00")
+        [pricing_option_id] = pricing_options
+
         buy = _make_mock_media_buy(
             media_buy_id="mb_cpm",
             budget=10000.0,
-            raw_request={"packages": [{"package_id": "pkg_cpm", "product_id": "prod_1", "pricing_option_id": "1"}]},
+            raw_request={
+                "packages": [
+                    request_package(package_id="pkg_cpm", product_id="prod_1", pricing_option_id=pricing_option_id)
+                ]
+            },
         )
-
-        mock_po = MagicMock()
-        mock_po.id = 1
-        mock_po.pricing_model = PricingModel.cpm
-        mock_po.rate = Decimal("5.00")
 
         mock_adapter = MagicMock()
         mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
@@ -1059,7 +906,7 @@ class TestDeliveryPricingOptionLookup:
             req,
             adapter=mock_adapter,
             target_buys=[("mb_cpm", buy)],
-            pricing_options={"1": mock_po},
+            pricing_options=pricing_options,
         )
 
         assert response.aggregated_totals.impressions == 10000.0
@@ -1075,16 +922,19 @@ class TestDeliveryPricingOptionLookup:
         CONFIRMED: clicks (type: number, minimum: 0) and spend are defined metrics.
         Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-04
         """
+        # "cpc" as a plain string: the DB column is String(20), not the enum.
+        pricing_options = pricing_options_named(pricing_model="cpc", rate="0.50")
+        [pricing_option_id] = pricing_options
+
         buy = _make_mock_media_buy(
             media_buy_id="mb_cpc",
             budget=5000.0,
-            raw_request={"packages": [{"package_id": "pkg_cpc", "product_id": "prod_1", "pricing_option_id": "2"}]},
+            raw_request={
+                "packages": [
+                    request_package(package_id="pkg_cpc", product_id="prod_1", pricing_option_id=pricing_option_id)
+                ]
+            },
         )
-
-        mock_po = MagicMock()
-        mock_po.id = 2
-        mock_po.pricing_model = "cpc"  # DB stores string, not enum
-        mock_po.rate = Decimal("0.50")
 
         mock_adapter = MagicMock()
         mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
@@ -1105,7 +955,7 @@ class TestDeliveryPricingOptionLookup:
             req,
             adapter=mock_adapter,
             target_buys=[("mb_cpc", buy)],
-            pricing_options={"2": mock_po},
+            pricing_options=pricing_options,
         )
 
         delivery = response.media_buy_deliveries[0]
@@ -1121,16 +971,18 @@ class TestDeliveryPricingOptionLookup:
         CONFIRMED: flat-rate-option is one of the pricing option types.
         Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-05
         """
+        pricing_options = pricing_options_named(pricing_model="flat_rate", rate="5000.00")
+        [pricing_option_id] = pricing_options
+
         buy = _make_mock_media_buy(
             media_buy_id="mb_flat",
             budget=5000.0,
-            raw_request={"packages": [{"package_id": "pkg_flat", "product_id": "prod_1", "pricing_option_id": "3"}]},
+            raw_request={
+                "packages": [
+                    request_package(package_id="pkg_flat", product_id="prod_1", pricing_option_id=pricing_option_id)
+                ]
+            },
         )
-
-        mock_po = MagicMock()
-        mock_po.id = 3
-        mock_po.pricing_model = PricingModel.flat_rate
-        mock_po.rate = Decimal("5000.00")
 
         mock_adapter = MagicMock()
         mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
@@ -1151,7 +1003,7 @@ class TestDeliveryPricingOptionLookup:
             req,
             adapter=mock_adapter,
             target_buys=[("mb_flat", buy)],
-            pricing_options={"3": mock_po},
+            pricing_options=pricing_options,
         )
 
         delivery = response.media_buy_deliveries[0]
@@ -1159,6 +1011,52 @@ class TestDeliveryPricingOptionLookup:
         # FLAT_RATE: no click computation (clicks should be None)
         pkg = delivery.by_package[0]
         assert pkg.clicks is None
+
+    def test_by_package_carries_the_resolved_pricing_options_terms(self):
+        """The three pin-REQUIRED pricing fields on by_package come from the resolved option.
+
+        Spec: get-media-buy-delivery-response.json (AdCP 3.1, the pinned version) lists
+        ``pricing_model``, ``rate`` and ``currency`` in the by_package item's ``required``
+        set and types all three non-nullable (rate {type: number, minimum: 0}, currency
+        {type: string, pattern: ^[A-Z]{3}$}).
+
+        This grades the VALUES, which nothing else did: the sibling cases above assert
+        clicks and spend, and the failure mode this pins -- ``_package_pricing`` refusing a
+        package whose buy names no pricing option -- reaches every one of them as a crash,
+        so a green suite never proved the writer put the right numbers on the wire.
+
+        Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-02
+        """
+        pricing_options = pricing_options_named(pricing_model="cpm", rate="5.00", currency="USD")
+        [pricing_option_id] = pricing_options
+
+        buy = _make_mock_media_buy(
+            media_buy_id="mb_terms",
+            raw_request={"packages": [request_package(package_id="pkg_terms", pricing_option_id=pricing_option_id)]},
+        )
+
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
+            media_buy_id="mb_terms",
+            impressions=20000,
+            spend=100.0,
+            packages=[{"package_id": "pkg_terms", "impressions": 20000, "spend": 100.0}],
+        )
+
+        response = _run_impl_with_patches(
+            GetMediaBuyDeliveryRequest(media_buy_ids=["mb_terms"]),
+            adapter=mock_adapter,
+            target_buys=[("mb_terms", buy)],
+            pricing_options=pricing_options,
+        )
+
+        pkg = response.media_buy_deliveries[0].by_package[0]
+        assert (pkg.pricing_model, pkg.rate, pkg.currency) == (PricingModel.cpm, 5.0, "USD")
+        # ...and they SURVIVE serialization. The SDK base dumps with exclude_none=True, so
+        # an unset one is dropped rather than emitted as null, which is how a delivery
+        # response went schema-invalid without any model complaining (GH #2130).
+        dumped = response.model_dump()["media_buy_deliveries"][0]["by_package"][0]
+        assert {"pricing_model", "rate", "currency"} <= dumped.keys()
 
 
 # ===========================================================================
@@ -1168,83 +1066,6 @@ class TestDeliveryPricingOptionLookup:
 
 class TestDeliveryUpgradeCompat:
     """UC-004-UPG: 3.6 upgrade schema compatibility."""
-
-    def test_delivery_entries_returned(self):
-        """UC-004-UPG-03: delivery returns entries for resolved media_buy_ids.
-
-        Covers: UC-004-MAIN-16
-        """
-        buy = _make_mock_media_buy(
-            media_buy_id="mb_ref",
-            raw_request={"packages": [{"package_id": "pkg_1", "product_id": "prod_1"}]},
-        )
-        mock_adapter = MagicMock()
-        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
-            media_buy_id="mb_ref",
-            impressions=100,
-            spend=10.0,
-            packages=[{"package_id": "pkg_1", "impressions": 100, "spend": 10.0}],
-        )
-
-        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_ref"])
-
-        response = _run_impl_with_patches(
-            req,
-            adapter=mock_adapter,
-            target_buys=[("mb_ref", buy)],
-        )
-
-        assert len(response.media_buy_deliveries) == 1
-
-    def test_nested_serialization_model_dump(self):
-        """UC-004-UPG-04: GetMediaBuyDeliveryResponse nested serialization with NestedModelSerializerMixin.
-
-        Spec: UNSPECIFIED (implementation-defined serialization mechanism).
-        Verifies that model_dump() correctly serializes nested MediaBuyDeliveryData,
-        DeliveryTotals, and PackageDelivery via NestedModelSerializerMixin.
-        Covers: UC-004-RESPONSE-SERIALIZATION-SALESAGENT-01
-        """
-        buy = _make_mock_media_buy(media_buy_id="mb_serial")
-        mock_adapter = MagicMock()
-        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
-            media_buy_id="mb_serial",
-            impressions=2000,
-            spend=100.0,
-            clicks=20,
-            packages=[{"package_id": "pkg_001", "impressions": 2000, "spend": 100.0}],
-        )
-
-        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_serial"])
-        response = _run_impl_with_patches(
-            req,
-            adapter=mock_adapter,
-            target_buys=[("mb_serial", buy)],
-        )
-
-        # Serialize via model_dump
-        data = response.model_dump(mode="json")
-
-        # Verify nested structures are properly serialized as dicts/lists
-        assert isinstance(data["media_buy_deliveries"], list)
-        assert len(data["media_buy_deliveries"]) == 1
-        delivery_dict = data["media_buy_deliveries"][0]
-        assert isinstance(delivery_dict, dict)
-        assert delivery_dict["media_buy_id"] == "mb_serial"
-
-        # Nested totals serialized
-        assert isinstance(delivery_dict["totals"], dict)
-        assert "impressions" in delivery_dict["totals"]
-        assert "spend" in delivery_dict["totals"]
-
-        # Nested by_package serialized
-        assert isinstance(delivery_dict["by_package"], list)
-        assert len(delivery_dict["by_package"]) == 1
-        assert isinstance(delivery_dict["by_package"][0], dict)
-        assert delivery_dict["by_package"][0]["package_id"] == "pkg_001"
-
-        # Aggregated totals serialized
-        assert isinstance(data["aggregated_totals"], dict)
-        assert "impressions" in data["aggregated_totals"]
 
     def test_ext_fields_preserved(self):
         """UC-004-UPG-05: delivery response preserves ext fields.
@@ -1274,75 +1095,33 @@ class TestDeliveryUpgradeCompat:
 
 
 # ===========================================================================
-# 8. Auth Errors (UC-004-EXT-A1, EXT-A2, EXT-B1)
+# 8. Auth Errors (UC-004-EXT-A1, EXT-A2, EXT-B1) — REMOVED, not ported
 # ===========================================================================
-
-
-class TestDeliveryAuthErrors:
-    """UC-004-EXT-A/B: authentication and principal errors."""
-
-    def test_missing_principal_id_returns_error(self):
-        """UC-004-EXT-A1: no principal_id raises AdCPAuthenticationError.
-
-        Spec: UNSPECIFIED (implementation-defined authentication/authorization boundary).
-        Covers: UC-004-EXT-A-01
-        """
-        identity = ResolvedIdentity(
-            principal_id="",
-            tenant_id="test_tenant",
-            tenant={"tenant_id": "test_tenant"},
-            protocol="mcp",
-            testing_context=AdCPTestContext(dry_run=False, mock_time=None, jump_to_event=None, test_session_id=None),
-        )
-
-        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_x"])
-
-        with pytest.raises(AdCPAuthenticationError, match="[Pp]rincipal"):
-            _get_media_buy_delivery_impl(req, identity)
-
-    def test_principal_not_found_returns_error(self):
-        """UC-004-EXT-B1: principal ID not in tenant raises AdCPAuthenticationError.
-
-        Spec: UNSPECIFIED (implementation-defined authentication/authorization boundary).
-        Covers: UC-004-EXT-B-01
-        """
-        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_x"])
-        identity = _make_identity(principal_id="ghost_principal")
-
-        with patch("src.core.auth.get_principal_object", return_value=None):
-            with pytest.raises(AdCPAuthenticationError, match="ghost_principal"):
-                _get_media_buy_delivery_impl(req, identity)
-
-    def test_auth_failure_no_state_change(self):
-        """UC-004-EXT-A2: system state unchanged on auth failure (read-only op).
-
-        Spec: UNSPECIFIED (implementation-defined security boundary).
-        Delivery is a read-only operation. Auth failure must not cause any DB writes
-        or adapter calls. Verifies that get_adapter and _get_target_media_buys are never called.
-        Covers: UC-004-EXT-A-02
-        """
-        identity = ResolvedIdentity(
-            principal_id="",
-            tenant_id="test_tenant",
-            tenant={"tenant_id": "test_tenant"},
-            protocol="mcp",
-            testing_context=AdCPTestContext(dry_run=False, mock_time=None, jump_to_event=None, test_session_id=None),
-        )
-
-        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_x"])
-
-        with (
-            patch(f"{_PATCH_PREFIX}.get_adapter") as mock_adapter,
-            patch(f"{_PATCH_PREFIX}._get_target_media_buys") as mock_target,
-        ):
-            with pytest.raises(AdCPAuthenticationError):
-                _get_media_buy_delivery_impl(req, identity)
-
-        # No adapter or DB calls occurred
-        mock_adapter.assert_not_called()
-        mock_target.assert_not_called()
-
-
+#
+# TestDeliveryAuthErrors held three cases (test_missing_principal_id_returns_error,
+# test_principal_not_found_returns_error, test_auth_failure_no_state_change) and all
+# three graded a re-check inside the tool: hand _get_media_buy_delivery_impl an identity
+# with no usable principal, or patch src.core.auth.get_principal_object to return None,
+# and expect AdCPAuthenticationError from the tool.
+#
+# That re-check is deliberately gone, and so is the thing it checked:
+#
+# * commit 47d57e5d6 deleted get_principal_object (with LazyTenantContext, the
+#   admin-token fallback and resolve_principal_or_raise), because the identity now
+#   CARRIES the Principal and TenantContext the resolver loaded — there is no second
+#   lookup for a test to stub, and the commit removed "the tests that pinned them";
+# * a protected tool declares ``identity: ResolvedIdentity``, which by type cannot be
+#   anonymous, and the resolver refuses a missing or rejected credential before the tool
+#   runs (critical pattern #5: "a tool never re-checks what the boundary decided").
+#   ``ruff-boundary.toml`` bans raising AdCPAuthRequiredError / AdCPAuthenticationError
+#   anywhere but the resolver, so the exception these cases expected cannot be raised
+#   from media_buy_delivery at all.
+#
+# So the obligation (an unauthenticated delivery read is refused, and nothing is read or
+# called on the way out) is not a delivery-tool obligation any more; it is the resolver's,
+# graded once there and on the wire by the transport-blind auth scenarios rather than
+# once per tool. Reinstating a tool-level version would require reinstating the re-check.
+#
 # ===========================================================================
 # 9. Media Buy Not Found (UC-004-EXT-C1, EXT-C2, EXT-C3)
 # ===========================================================================
@@ -1377,49 +1156,7 @@ class TestDeliveryMediaBuyNotFound:
         assert response.errors is not None
         assert len(response.errors) == 1
         assert response.errors[0].code == "MEDIA_BUY_NOT_FOUND"
-        assert "mb_nonexistent" in response.errors[0].message
-
-    def test_partial_ids_returns_found_and_errors(self):
-        """UC-004-EXT-C2: partial failure returns found buys + errors for missing.
-
-        Spec: CONTRADICTS -- current impl returns found buys with errors=None.
-        Correct: return found buys in media_buy_deliveries AND populate errors with
-        media_buy_not_found for each missing ID. Both arrays populated simultaneously.
-        https://github.com/adcontextprotocol/adcp-client-python/blob/a08805d6345c96d43ba9369bb0afe0597182871f/schemas/cache/media-buy/get-media-buy-delivery-response.json
-        Fix: _get_target_media_buys must diff requested vs found.
-        Priority: P1
-        Type: unit
-        Source: UC-004, , BR-RULE-030
-        Covers: UC-004-EXT-C-02
-        """
-        buy = _make_mock_media_buy(media_buy_id="mb_exists")
-        mock_adapter = MagicMock()
-        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
-            media_buy_id="mb_exists",
-            impressions=500,
-            spend=25.0,
-            packages=[{"package_id": "pkg_001", "impressions": 500, "spend": 25.0}],
-        )
-
-        req = GetMediaBuyDeliveryRequest(
-            media_buy_ids=["mb_exists", "mb_gone"],
-        )
-
-        response = _run_impl_with_patches(
-            req,
-            adapter=mock_adapter,
-            target_buys=[("mb_exists", buy)],
-        )
-
-        # Found buy present
-        assert len(response.media_buy_deliveries) == 1
-        assert response.media_buy_deliveries[0].media_buy_id == "mb_exists"
-
-        # Missing ID reported as error
-        assert response.errors is not None
-        assert len(response.errors) == 1
-        assert response.errors[0].code == "MEDIA_BUY_NOT_FOUND"
-        assert "mb_gone" in response.errors[0].message
+        assert response.errors[0].details == {"media_buy_id": "mb_nonexistent"}
 
 
 # ===========================================================================
@@ -1455,7 +1192,7 @@ class TestDeliveryOwnership:
         assert response.errors is not None
         assert len(response.errors) == 1
         assert response.errors[0].code == "MEDIA_BUY_NOT_FOUND"
-        assert "mb_other_principal" in response.errors[0].message
+        assert response.errors[0].details == {"media_buy_id": "mb_other_principal"}
 
     def test_no_info_leakage_on_ownership_error(self):
         """UC-004-EXT-D2: SECURITY: error is media_buy_not_found not ownership_mismatch (no info leakage).
@@ -1476,44 +1213,7 @@ class TestDeliveryOwnership:
         assert response.errors is not None
         # Must NOT reveal ownership: code is "MEDIA_BUY_NOT_FOUND", not "ownership_mismatch"
         assert response.errors[0].code == "MEDIA_BUY_NOT_FOUND"
-        assert "ownership" not in response.errors[0].message.lower()
-
-    def test_mixed_ownership_behavior(self):
-        """UC-004-EXT-D3: mixed ownership: some owned, some not.
-
-        Spec: UNSPECIFIED (implementation-defined security boundary).
-        When requesting multiple IDs, only owned buys are returned. Non-owned buys
-        appear as media_buy_not_found errors (same as genuinely missing).
-        Covers: UC-004-EXT-D-03
-        """
-        buy_owned = _make_mock_media_buy(media_buy_id="mb_mine")
-        mock_adapter = MagicMock()
-        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
-            media_buy_id="mb_mine",
-            impressions=100,
-            spend=10.0,
-            packages=[{"package_id": "pkg_001", "impressions": 100, "spend": 10.0}],
-        )
-
-        req = GetMediaBuyDeliveryRequest(
-            media_buy_ids=["mb_mine", "mb_theirs"],
-        )
-
-        response = _run_impl_with_patches(
-            req,
-            adapter=mock_adapter,
-            target_buys=[("mb_mine", buy_owned)],  # only the owned one found
-        )
-
-        # Owned buy returned
-        assert len(response.media_buy_deliveries) == 1
-        assert response.media_buy_deliveries[0].media_buy_id == "mb_mine"
-
-        # Non-owned buy reported as not found (not ownership error)
-        assert response.errors is not None
-        assert len(response.errors) == 1
-        assert response.errors[0].code == "MEDIA_BUY_NOT_FOUND"
-        assert "mb_theirs" in response.errors[0].message
+        assert "ownership" not in response.errors[0].message.lower()  # table sentence, never ownership-revealing
 
 
 # ===========================================================================
@@ -1536,7 +1236,7 @@ class TestDeliveryInvalidDateRange:
             end_date="2025-03-15",
         )
 
-        with pytest.raises(AdCPValidationError, match="[Ss]tart date"):
+        with pytest.raises(AdCPValidationError):
             _run_impl_with_patches(req)
 
     def test_start_date_after_end_date_returns_error(self):
@@ -1550,7 +1250,7 @@ class TestDeliveryInvalidDateRange:
             end_date="2025-03-10",
         )
 
-        with pytest.raises(AdCPValidationError, match="[Ss]tart date"):
+        with pytest.raises(AdCPValidationError):
             _run_impl_with_patches(req)
 
     def test_date_range_error_no_state_change(self):
@@ -1571,9 +1271,7 @@ class TestDeliveryInvalidDateRange:
         patches = _standard_patches(adapter=mock_adapter)
 
         with (
-            patches["principal_obj"],
             patches["adapter"],
-            patches["tenant"],
             patches["target_buys"] as mock_target,
             patches["pricing_options"],
             patches["uow"],
@@ -1616,7 +1314,6 @@ class TestDeliveryAdapterError:
 
         assert isinstance(result, GetMediaBuyDeliveryResponse)
         assert result.errors is not None
-        assert any("mb_err" in e.message for e in result.errors)
         assert any(e.code == "SERVICE_UNAVAILABLE" for e in result.errors)
 
     def test_adapter_error_returns_adapter_error(self):
@@ -1642,7 +1339,6 @@ class TestDeliveryAdapterError:
 
         assert isinstance(result, GetMediaBuyDeliveryResponse)
         assert result.errors is not None
-        assert any("mb_err2" in e.message for e in result.errors)
         assert any(e.code == "SERVICE_UNAVAILABLE" for e in result.errors)
 
     def test_non_adapter_processing_failure_surfaces_advisory(self):
@@ -1650,11 +1346,26 @@ class TestDeliveryAdapterError:
 
         Regression (#1545 K2): the outer per-buy handler logged and continued with
         no errors[] advisory, so a failure in the status/model-construction path made
-        the buy vanish from the response with no signal. It must now append a
-        SERVICE_UNAVAILABLE advisory, mirroring the adapter handler. The code is the
-        wire-compliant SERVICE_UNAVAILABLE (not the internal-only INTERNAL_ERROR):
-        advisory errors[] entries serialize verbatim and are normalized through
-        translate_error_code at response assembly.
+        the buy vanish from the response with no signal. It must append an advisory.
+
+        EXPECTATION REVERSED by salesagent-tay20, on the strength of this test's own
+        name. The advisory was SERVICE_UNAVAILABLE "mirroring the adapter handler" --
+        the copied justification that ticket exists to remove -- and the adapter
+        handler cannot be the model here, because the adapter cannot reach this branch:
+        its call has its OWN try whose handler advises and `continue`s. What reaches
+        here is a crash in our per-buy processing, exactly as this test's name says,
+        and SERVICE_UNAVAILABLE is pinned transient -- it tells the buyer to retry
+        something no retry fixes.
+
+        The stated reason for preferring it was that INTERNAL_ERROR is "internal-only".
+        That is no longer true: INTERNAL_ERROR is in CODE_TABLE, resolves to
+        recovery=transient with a buyer-facing sentence, and production already emits
+        it on the wire (salesagent-45d27, graded across mcp/a2a/rest). A platform code
+        reaching the buyer untranslated is what this epic established.
+
+        Everything else this test asserts -- the surviving buy still reported, the
+        failed buy surfacing rather than vanishing, one advisory naming which buy --
+        is unchanged.
         """
         good = _make_mock_media_buy(media_buy_id="mb_good")
         bad = _make_mock_media_buy(media_buy_id="mb_bad")
@@ -1679,32 +1390,43 @@ class TestDeliveryAdapterError:
         assert [d.media_buy_id for d in result.media_buy_deliveries] == ["mb_good"]
         # Failed buy surfaces an advisory instead of vanishing.
         assert result.errors is not None
-        advisory_errors = [e for e in result.errors if e.code == "SERVICE_UNAVAILABLE"]
+        advisory_errors = [e for e in result.errors if e.code == "INTERNAL_ERROR"]
         assert len(advisory_errors) == 1
-        assert "mb_bad" in advisory_errors[0].message
+        assert advisory_errors[0].details == {"media_buy_id": "mb_bad"}
+        # The adapter's own code must NOT be borrowed for our crash.
+        assert not [e for e in result.errors if e.code == "SERVICE_UNAVAILABLE"]
 
-    def test_advisory_normalization_collapses_internal_code_to_standard(self):
-        """A hand-built advisory carrying a non-standard/internal code is re-coded to a
-        STANDARD wire code before it reaches the response.
+    def test_advisory_normalization_carries_the_declared_code_verbatim(self):
+        """A hand-built advisory reaches the buyer carrying the code its author declared.
 
-        Advisory errors[] entries serialize verbatim (no boundary translation), so this
-        is the only thing standing between an internal code and the buyer. Reddens if
-        _normalize_advisory_errors stops normalizing (e.g. returns code=e.code).
+        EXPECTATION REVERSED TWICE. salesagent-3dawm.6 stopped the normalizer re-coding
+        INTERNAL_ERROR to SERVICE_UNAVAILABLE, because AdCP 3.1.1 core/error.json makes the
+        vocabulary OPEN: error.code is a wire-typed string, the published codes are
+        documentary, senders MAY emit codes outside that set, and receivers MUST decode an
+        unknown code by reading error.recovery. Collapsing a code DISCARDED information the
+        spec asks senders to keep.
+
+        salesagent-3dawm.14 then deleted the normalizer outright. Derivation moved INTO the
+        Error model, so an advisory is correct at construction rather than corrected on the
+        way out — there is no longer a window in which a wrong one exists. This test now
+        grades that: the code survives verbatim, and message/suggestion/recovery are
+        FUNCTIONS of it (ADR-010), so an authored message is discarded rather than carried.
         """
-        from adcp.types import Error
+        from src.core.errors.codes import CODE_TABLE
+        from src.core.schemas import Error
 
-        from src.core.tools.media_buy_delivery import _normalize_advisory_errors
-
-        out = _normalize_advisory_errors(
-            [
-                Error(code="API_ERROR", message="internal adapter detail for mb_x"),  # internal, unmapped
-                Error(code="INTERNAL_ERROR", message="mapped internal for mb_y"),  # internal, mapped
-                Error(code="MEDIA_BUY_NOT_FOUND", message="already standard for mb_z"),
-            ]
-        )
-        assert [e.code for e in out] == ["SERVICE_UNAVAILABLE", "SERVICE_UNAVAILABLE", "MEDIA_BUY_NOT_FOUND"]
-        # Messages are preserved verbatim.
-        assert out[0].message == "internal adapter detail for mb_x"
+        out = [
+            Error(code="SERVICE_UNAVAILABLE", message="internal adapter detail for mb_x"),
+            Error(code="INTERNAL_ERROR", message="platform code for mb_y"),
+            Error(code="MEDIA_BUY_NOT_FOUND", message="already standard for mb_z"),
+        ]
+        # The declared code reaches the buyer verbatim -- no collapse onto a published one.
+        assert [e.code for e in out] == ["SERVICE_UNAVAILABLE", "INTERNAL_ERROR", "MEDIA_BUY_NOT_FOUND"]
+        # The authored sentence is DISCARDED: message is a function of the code.
+        assert out[0].message == CODE_TABLE["SERVICE_UNAVAILABLE"].message
+        assert "internal adapter detail" not in out[0].message
+        # And every entry carries the recovery its code means, so an unknown code stays decodable.
+        assert [e.recovery for e in out] == ["transient", "transient", "correctable"]
 
     def test_adapter_failure_audit_logged(self):
         """UC-004-EXT-F3: adapter failure logged to audit trail (NFR-003).
@@ -1727,7 +1449,6 @@ class TestDeliveryAdapterError:
             )
 
         assert isinstance(result, GetMediaBuyDeliveryResponse)
-        assert result.errors is not None and any("mb_log" in e.message for e in result.errors)
         # Error was logged before the advisory error was returned
         mock_logger.error.assert_called()
         # Lazy logging: the media_buy_id is a %-arg, not baked into the format string.
@@ -1758,7 +1479,6 @@ class TestDeliveryAdapterError:
 
         assert isinstance(result, GetMediaBuyDeliveryResponse)
         assert result.errors is not None
-        assert any("mb_nowrite" in e.message for e in result.errors)
 
 
 # ===========================================================================
@@ -1806,37 +1526,42 @@ class TestDeliveryWebhookHappyPath:
             )
 
         # Verify the payload passed to _send_webhook_enhanced includes next_expected_at
-        call_kwargs = mock_send.call_args[1]
-        payload = call_kwargs["delivery_payload"]
+        # The delivery REPORT, which is what this case grades. The sender takes it and
+        # wraps it per registration, so the report is the argument and the envelope is
+        # built one layer down (AdCP 3.1.1 L3/webhooks.mdx :217).
+        payload = mock_send.call_args[1]["result"]
         assert "next_expected_at" in payload
         assert payload["notification_type"] == "scheduled"
 
-    def test_webhook_excludes_aggregated_totals(self):
-        """UC-004-WH-09: webhook does NOT include aggregated_totals.
+    # UC-004-WH-07 (HMAC-SHA256 signature headers) is MOVED, not retired. It stood here
+    # and bound a real socket through CircuitBreakerEnv, which a unit test cannot
+    # legitimately do: the only address it can bind is loopback, production's egress gate
+    # refuses loopback, and so the case ran only because ADCP_OUTBOUND_ALLOW_PRIVATE was
+    # open. docker-compose.e2e.yml:988 records that hatch as "considered and rejected" for
+    # precisely this purpose — it "opens 127.0.0.1, host.docker.internal and all of RFC1918
+    # for whatever sets it". Its own docstring said the quiet part: the assertion is only
+    # meaningful "running against an origin the real policy admits", and in unit there is
+    # no such origin.
+    #
+    # The obligation is graded where an origin IS admitted on its own terms — the e2e
+    # network is allocated outside the private ranges for exactly that
+    # (scripts/dev/alloc-e2e-subnet.sh):
+    #
+    #   tests/bdd/features/BR-UC-004-deliver-media-buy-metrics.feature:284
+    #     @T-UC-004-webhook-hmac — "HMAC-SHA256 signed webhook payload", across transports,
+    #     asserting the X-ADCP-Signature header and the timestamp.payload concatenation.
 
-        Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-response.json
-        CONFIRMED: aggregated_totals description says "Only included in API responses
-        (get_media_buy_delivery), not in webhook notifications."
-        Tests that the webhook payload built by send_delivery_webhook does not include
-        aggregated_totals.
-        Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-09
-        """
-        service = WebhookDeliveryService()
-
-        with patch.object(service, "_send_webhook_enhanced", return_value=True) as mock_send:
-            service.send_delivery_webhook(
-                media_buy_id="mb_wh09",
-                tenant_id="t1",
-                principal_id="p1",
-                reporting_period_start=datetime(2025, 1, 1, tzinfo=UTC),
-                reporting_period_end=datetime(2025, 6, 30, tzinfo=UTC),
-                impressions=5000,
-                spend=250.0,
-            )
-
-        payload = mock_send.call_args[1]["delivery_payload"]
-        # Webhook payload must NOT contain aggregated_totals
-        assert "aggregated_totals" not in payload
+    # UC-004-WH-09 (webhook excludes aggregated_totals) is RETIRED, not moved. It asserted
+    # `"aggregated_totals" not in payload` against a dict this function builds key by key
+    # from its own parameters -- a dict that has never had the key and structurally cannot
+    # grow one, so the assertion could not fail whatever production did. The prohibition it
+    # cited is also not in the pinned contract: 3.1/media-buy/media-buy-delivery-webhook
+    # -result.json sets `additionalProperties: true` and does not declare the field, so an
+    # emitted `aggregated_totals` is schema-VALID. What replaced it is the shape assertion
+    # one level up -- the POST body is the mcp-webhook-payload envelope, graded by the
+    # UC-004 webhook-compliance scenarios against the pinned schema. (The other side's copy
+    # also read `call_args[1]["delivery_payload"]`, a kwarg `_send_webhook_enhanced` no
+    # longer takes -- it is `result=` now, as WH-06 above reads.)
 
     def test_webhook_filters_requested_metrics(self):
         """UC-004-WH-10: webhook totals only include metrics actually provided.
@@ -1863,7 +1588,7 @@ class TestDeliveryWebhookHappyPath:
                 # clicks and ctr not provided
             )
 
-        payload_no_clicks = mock_send.call_args[1]["delivery_payload"]
+        payload_no_clicks = mock_send.call_args[1]["result"]
         totals = payload_no_clicks["media_buy_deliveries"][0]["totals"]
         # Without explicit clicks/ctr, they should not be in totals
         assert "clicks" not in totals
@@ -1883,7 +1608,7 @@ class TestDeliveryWebhookHappyPath:
                 ctr=0.1,
             )
 
-        payload_with_clicks = mock_send.call_args[1]["delivery_payload"]
+        payload_with_clicks = mock_send.call_args[1]["result"]
         totals_with = payload_with_clicks["media_buy_deliveries"][0]["totals"]
         assert totals_with["clicks"] == 100
         assert totals_with["ctr"] == 0.1
@@ -1911,7 +1636,7 @@ class TestDeliveryWebhookHappyPath:
                 status="active",
             )
 
-        payload = mock_send.call_args[1]["delivery_payload"]
+        payload = mock_send.call_args[1]["result"]
         assert payload["media_buy_deliveries"][0]["status"] == "active"
 
 
@@ -2085,14 +1810,23 @@ class TestDeliveryProtocol:
     """UC-004-MAIN: protocol envelope and schema completeness."""
 
     def test_protocol_envelope_status_completed(self):
-        """UC-004-MAIN-12: response wrapped in protocol envelope with status=completed.
+        """UC-004-MAIN-12: the response IS the protocol envelope, and says status=completed.
 
         Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/protocol-envelope.json
-        CONFIRMED: protocol envelope wraps task responses with status field.
-        Tests that ProtocolEnvelope.wrap correctly wraps a delivery response.
+        CONFIRMED: every response schema composes core/protocol-envelope.json at its root
+        with allOf, so the envelope's fields are part of the response's own contract.
         Covers: UC-004-MAIN-12
+
+        This used to call ``ProtocolEnvelope.wrap(payload=response, status="completed")``
+        and read the fields back off the wrapper. Both the wrapper and its module are gone
+        (commits d8a39a661, 1d04b782c, 0d3cab2d2): a root allOf reaches every branch
+        unconditionally, so a response does not get wrapped in an envelope -- it inherits
+        one, and the envelope status can no longer be chosen independently of the body.
+        The obligation survives the wrapper, so it is graded here against the response the
+        buyer actually receives: the field is at the ROOT of the wire body, not nested
+        under a ``payload`` key that no longer exists.
         """
-        from src.core.protocol_envelope import ProtocolEnvelope
+        from src.core.tools._wire import to_wire
 
         response = GetMediaBuyDeliveryResponse(
             reporting_period={"start": datetime(2025, 1, 1, tzinfo=UTC), "end": datetime(2025, 6, 30, tzinfo=UTC)},
@@ -2101,92 +1835,13 @@ class TestDeliveryProtocol:
             media_buy_deliveries=[],
         )
 
-        envelope = ProtocolEnvelope.wrap(
-            payload=response,
-            status="completed",
-            message="Retrieved delivery data.",
-        )
+        wire = to_wire(response)
 
-        assert envelope.status == "completed"
-        assert envelope.message == "Retrieved delivery data."
-        assert isinstance(envelope.payload, dict)
-        assert "aggregated_totals" in envelope.payload
-        assert "media_buy_deliveries" in envelope.payload
-        assert envelope.timestamp is not None
-
-    def test_mcp_toolresult_content_and_structured(self):
-        """UC-004-MAIN-13: MCP ToolResult contains both content and structured_content.
-
-        Spec: UNSPECIFIED (MCP transport-specific implementation detail).
-        Tests that the MCP wrapper (get_media_buy_delivery) returns a ToolResult
-        with both content (string) and structured_content (response object).
-        Covers: UC-004-MAIN-13
-        """
-        from fastmcp.tools.tool import ToolResult
-
-        buy = _make_mock_media_buy(media_buy_id="mb_tool")
-        mock_adapter = MagicMock()
-        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
-            media_buy_id="mb_tool",
-            impressions=100,
-            spend=10.0,
-            packages=[{"package_id": "pkg_001", "impressions": 100, "spend": 10.0}],
-        )
-
-        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_tool"])
-        response = _run_impl_with_patches(
-            req,
-            adapter=mock_adapter,
-            target_buys=[("mb_tool", buy)],
-        )
-
-        # Simulate what the MCP wrapper does: ToolResult(content=str(response), structured_content=response)
-        tool_result = ToolResult(content=str(response), structured_content=response)
-
-        # content is converted to list[TextContent] by FastMCP
-        assert tool_result.content is not None
-        assert len(tool_result.content) == 1
-        assert "delivery data" in tool_result.content[0].text.lower()
-        # structured_content contains the actual response data
-        assert tool_result.structured_content is not None
-
-    def test_delivery_metrics_all_standard_fields(self):
-        """UC-004-MAIN-16: delivery metrics include standard fields.
-
-        Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/delivery-metrics.json
-        CONFIRMED: delivery-metrics.json defines impressions, spend, clicks, ctr, views,
-        completed_views, completion_rate, conversions, conversion_value, roas, cost_per_acquisition,
-        viewability, engagement_rate, cost_per_click, quartile_data, dooh_metrics, etc.
-        Covers: UC-004-MAIN-19
-        """
-        buy = _make_mock_media_buy(media_buy_id="mb_fields")
-        mock_adapter = MagicMock()
-        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
-            media_buy_id="mb_fields",
-            impressions=1000,
-            spend=50.0,
-            clicks=10,
-            packages=[{"package_id": "pkg_001", "impressions": 1000, "spend": 50.0}],
-        )
-
-        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_fields"])
-
-        response = _run_impl_with_patches(
-            req,
-            adapter=mock_adapter,
-            target_buys=[("mb_fields", buy)],
-        )
-
-        delivery = response.media_buy_deliveries[0]
-        totals = delivery.totals
-        # Required fields present
-        assert totals.impressions is not None
-        assert totals.spend is not None
-        # Optional fields exist as attributes (may be None)
-        assert hasattr(totals, "clicks")
-        assert hasattr(totals, "ctr")
-        assert hasattr(totals, "completed_views")
-        assert hasattr(totals, "completion_rate")
+        assert wire["status"] == "completed"
+        # The domain fields sit beside the envelope's, at the root.
+        assert "aggregated_totals" in wire
+        assert "media_buy_deliveries" in wire
+        assert "payload" not in wire
 
     def test_unpopulated_fields_handled_gracefully(self):
         """UC-004-MAIN-17: unpopulated optional fields are None, not errors.
@@ -2412,104 +2067,28 @@ class TestNotificationTypeTerminality:
         assert response.next_expected_at is None
 
 
-class TestTimeSimulationReachesFinalNotification:
-    """A time-simulation client can advance a non-serving buy to completed/final.
+class TestPersistedLifecycleIsAuthoritative:
+    """A non-serving buy reports the status the row holds, whatever the dates say.
 
-    Regression (finding #3): honoring the persisted lifecycle short-circuited
-    date refinement, so a buy created as pending_creatives (creation hardcodes
-    creatives_approved=False) could never reach "completed" under simulation and
-    the "final" delivery notification was unreachable. In simulation mode
-    (mock_time / jump_to_event) a non-terminal buy follows the simulated clock.
+    This class used to be ``TestTimeSimulationReachesFinalNotification`` and its first
+    three cases drove the delivery report from a SIMULATED clock — an ``AdCPTestContext``
+    carrying ``mock_time`` or ``jump_to_event``, reached in production through the
+    ``X-Mock-Time`` / ``X-Jump-To-Event`` request headers. That whole channel is gone
+    (commit a1b79d22d): ``src/core/testing_hooks`` is deleted, a request carries no
+    testing headers, the identity has no testing context, and ``apply_testing_hooks`` /
+    ``NextEventCalculator`` / ``TimeSimulator`` do not exist — so "a buy created as
+    pending_creatives can reach completed under simulation" is not a behaviour the
+    server has any more, and neither are the two naive-vs-aware ``TypeError``
+    regressions (#1545 K1) that only the simulated clock could reach.
+
+    The fourth case is the one that graded the real clock, and it is the whole
+    behaviour now: the persisted lifecycle is authoritative.
 
     Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING
     """
 
-    def test_simulated_clock_past_flight_yields_completed_and_final(self):
-        buy = _make_mock_media_buy(
-            media_buy_id="mb_sim",
-            status="pending_creatives",
-            start_date=date(2025, 1, 1),
-            end_date=date(2025, 3, 31),
-        )
-        # Simulated clock strictly past the flight window.
-        identity = _make_identity(testing_context=AdCPTestContext(mock_time=datetime(2025, 6, 1, tzinfo=UTC)))
-
-        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_sim"])
-
-        # Runs through the real apply_testing_hooks — the campaign-progress branch
-        # builds flight datetimes via _combine_utc, so the aware simulated clock no
-        # longer raises TypeError against them.
-        response = _run_impl_with_patches(
-            req,
-            identity=identity,
-            target_buys=[("mb_sim", buy)],
-        )
-
-        assert response.media_buy_deliveries[0].status == "completed"
-        assert enum_value(response.notification_type) == "final"
-
-    def test_mid_flight_mock_time_via_from_headers_does_not_raise(self):
-        """A mid-flight X-Mock-Time through the real header boundary succeeds.
-
-        Regression (#1545 K1 follow-up review): from_headers minted mock_time
-        NAIVE, and a *mid-flight* clock (0 < progress < 1) is the one that
-        reaches NextEventCalculator.calculate_next_event_time — whose
-        'next_event_time <= current_time' comparison against the aware flight
-        datetimes raised TypeError and 500'd the whole request. (A past-flight
-        clock never got there: progress 1.0 makes get_next_event return None.)
-        mock_time is now normalized to UTC-aware at the AdCPTestContext
-        construction boundary.
-        """
-        buy = _make_mock_media_buy(
-            media_buy_id="mb_midflight",
-            status="active",
-            start_date=date(2025, 1, 1),
-            end_date=date(2025, 12, 31),
-        )
-        # The REAL header boundary — not a directly-constructed aware datetime.
-        ctx = AdCPTestContext.from_headers({"x-mock-time": "2025-06-01T00:00:00Z"})
-        identity = _make_identity(testing_context=ctx)
-
-        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_midflight"])
-
-        response = _run_impl_with_patches(
-            req,
-            identity=identity,
-            target_buys=[("mb_midflight", buy)],
-        )
-
-        assert response.media_buy_deliveries[0].status == "active"
-        assert enum_value(response.notification_type) == "scheduled"
-
-    def test_jump_to_event_only_does_not_raise(self):
-        """jump_to_event with no mock_time hits the real hook without a TypeError.
-
-        Regression (#1545 K1): the fallback simulated clock is always UTC-aware,
-        while campaign_info flight dates were built naive — the comparison in
-        TimeSimulator.calculate_campaign_progress raised
-        'can't compare offset-naive and offset-aware datetimes' and failed the
-        whole request. Reachable in production via an X-Jump-To-Event header alone.
-        """
-        buy = _make_mock_media_buy(
-            media_buy_id="mb_jump",
-            status="active",
-            start_date=date(2025, 1, 1),
-            end_date=date(2025, 3, 31),
-        )
-        identity = _make_identity(testing_context=AdCPTestContext(jump_to_event="campaign-complete"))
-
-        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_jump"])
-
-        response = _run_impl_with_patches(
-            req,
-            identity=identity,
-            target_buys=[("mb_jump", buy)],
-        )
-
-        assert response.media_buy_deliveries[0].media_buy_id == "mb_jump"
-
     def test_without_simulation_persisted_pending_status_is_authoritative(self):
-        """The same buy, queried normally, keeps its persisted pending status."""
+        """A pending buy, queried normally, keeps its persisted pending status."""
         buy = _make_mock_media_buy(
             media_buy_id="mb_real",
             status="pending_creatives",

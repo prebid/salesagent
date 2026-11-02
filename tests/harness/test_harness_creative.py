@@ -7,6 +7,8 @@ mock dict populated, identity lazy, _configure_mocks called.
 
 from __future__ import annotations
 
+import re
+
 
 class TestCreativeSyncEnvContract:
     """CreativeSyncEnv must mock only external services, not DB."""
@@ -21,7 +23,22 @@ class TestCreativeSyncEnvContract:
         """CreativeSyncEnv patches registry, run_async, notifications, audit."""
         from tests.harness.creative_sync import CreativeSyncEnv
 
-        expected_keys = {"registry", "run_async", "send_notifications", "audit_log", "config"}
+        # ai_review_executor joined the set with #1721: the ai-powered branch hands a
+        # job to a real ThreadPoolExecutor that opens its OWN AdminCreativeUoW and
+        # commits a review verdict, an effect that escapes the sync transaction
+        # entirely. Patching it is what makes "a preview submitted no AI review" an
+        # observable rather than a race.
+        # slack_notifier: the Slack sender the real _send_creative_notifications reaches.
+        # Patching the sender (not the function) is what lets the function's own
+        # "require-human only, webhook only" guard be graded.
+        expected_keys = {
+            "registry",
+            "run_async",
+            "send_notifications",
+            "slack_notifier",
+            "audit_log",
+            "ai_review_executor",
+        }
         assert set(CreativeSyncEnv.EXTERNAL_PATCHES.keys()) == expected_keys
 
     def test_is_integration_env(self):
@@ -41,10 +58,16 @@ class TestCreativeSyncEnvContract:
         with _UnitMode() as env:
             assert "registry" in env.mock
             assert "run_async" in env.mock
+            assert "ai_review_executor" in env.mock
             assert "send_notifications" in env.mock
+            assert "slack_notifier" in env.mock
             assert "audit_log" in env.mock
-            assert "config" in env.mock
-            assert len(env.mock) == 5
+            assert len(env.mock) == 6
+            # The Gemini key is a settings field, pinned on the settings object for the
+            # env's lifetime rather than mocked through a config accessor.
+            from src.core.config import get_settings
+
+            assert get_settings().integrations.gemini_api_key is None
 
     def test_identity_defaults(self):
         """Identity has sane defaults."""
@@ -86,7 +109,29 @@ class TestCreativeSyncEnvContract:
 
         env = CreativeSyncEnv()
         body = env.build_rest_body(creatives=[], dry_run=True)
-        assert body == {"creatives": [], "dry_run": True}
+
+        # idempotency_key AND account are present because AdCP 3.1.1 lists both in
+        # sync-creatives-request /required: a REST body without them is not a valid request,
+        # so the harness supplies them at every dispatch. ``account`` carries a literal id
+        # here because this env has no session bound -- there is nothing to seed against
+        # outside a ``with env:`` block, and this test asks for the body's SHAPE.
+        # Asserted explicitly rather than loosened to a subset check -- the point of this
+        # contract test is the EXACT body shape. The key's VALUE is checked by pattern
+        # rather than equality: it is minted fresh per call now that sync_creatives honours
+        # it, so a fixed expected value would be wrong by construction. Its shape is still
+        # pinned, which is what a REST body has to get right.
+        key = body.pop("idempotency_key")
+        assert body == {
+            "creatives": [],
+            "dry_run": True,
+            "account": {"account_id": "acct_unbound"},
+        }
+        assert re.fullmatch(r"[A-Za-z0-9_.:-]{16,255}", key), (
+            f"the harness must supply a key matching the pinned pattern, got {key!r}"
+        )
+        assert key != env.build_rest_body(creatives=[], dry_run=True)["idempotency_key"], (
+            "each dispatch must carry its OWN key -- a shared one makes two calls the same request"
+        )
 
     def test_has_parse_rest_response(self):
         """CreativeSyncEnv implements parse_rest_response."""

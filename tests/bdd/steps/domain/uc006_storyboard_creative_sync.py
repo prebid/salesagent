@@ -7,17 +7,16 @@ roundtrip). These scenarios previously auto-xfailed at
 ``StepDefinitionNotFoundError`` — every Given/When/Then below is new
 .
 
-Several exercise production behavior that genuinely does not exist yet:
-``check_provenance_required`` (src/core/tools/creatives/_validation.py) only
-ever emits a soft warning on missing/incomplete provenance — it never produces
-a per-creative ``action="failed"`` result or the spec's ``PROVENANCE_REQUIRED``
-/ ``PROVENANCE_DIGITAL_SOURCE_TYPE_MISSING`` / ``PROVENANCE_DISCLOSURE_MISSING``
-error codes.
-
-Those gaps are registered the ONE sanctioned way — a scenario/Examples-row tag
-in the ratcheted ledger (``_UC006_SPECGAP_XFAIL_TAGS``, tests/bdd/conftest.py)
-— and NEVER as a per-assertion escape hatch inside a step body. Every Then in
-this module asserts unconditionally: a dispatch error or a wrong value FAILS.
+The provenance scenarios grade ``check_provenance_policy``
+(src/core/tools/creatives/_validation.py): a creative that does not meet the
+product's provenance policy is a per-creative ``action="failed"`` result carrying
+the pin's ``PROVENANCE_REQUIRED`` / ``PROVENANCE_DIGITAL_SOURCE_TYPE_MISSING`` /
+``PROVENANCE_DISCLOSURE_MISSING`` code (core/creative-policy.json makes the
+refusal a MUST). Every Then in this module asserts unconditionally: a dispatch
+error or a wrong value FAILS. A genuine production gap is registered the ONE
+sanctioned way — a scenario/Examples-row tag in the ratcheted ledger
+(``_UC006_SPECGAP_XFAIL_TAGS``, tests/bdd/conftest.py) — never as a
+per-assertion escape hatch inside a step body.
 An earlier revision inlined per-assertion xfails here, which meant a 401
 regression, a 500 and a timeout all came out green and indistinguishable from a
 real spec gap; a scenario-level tag cannot make that mistake because it names
@@ -42,15 +41,17 @@ from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._outcome_helpers import is_e2e, payload_or_none, wire_dict
 from tests.bdd.steps.domain.uc006_sync_creatives import (
-    _E2E_AGENT_URL,
-    _E2E_FORMAT_ID,
     _action_str,
     _build_creative_payload,
-    _ensure_tenant_principal,
+    _creative_format_id_entry,
+    _product_format_entry,
     _setup_product_with_creative_policy,
     when_sync_creative,
 )
+from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal
+from tests.bdd.steps.generic._dispatch import gate_and_record
 from tests.factories.creative_asset import build_assets, image_spec, text_spec, url_spec, video_spec
+from tests.factories.request import CreativeAssetRequestFactory
 
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — provenance structural-rejection scenarios
@@ -63,25 +64,28 @@ from tests.factories.creative_asset import build_assets, image_spec, text_spec, 
 def given_tenant_product_requires_digital_source_type(ctx: dict) -> None:
     """Product creative_policy nests provenance_requirements.require_digital_source_type.
 
-    Production's ``check_provenance_required`` (src/core/tools/creatives/
-    _validation.py) only reads the top-level ``provenance_required`` bool —
-    it never reads a nested ``provenance_requirements`` object. The policy is
-    stored verbatim on the product regardless, so a step ordering/shape bug
-    would surface as "provenance_requirements key present but unread", not
-    as a missing Given.
+    ``provenance_required`` rides along: core/creative-policy.json says the requirements
+    object "refines provenance_required" and, when that flag is false or absent,
+    "receivers MUST ignore it" -- a policy carrying only the refinement asks for nothing.
     """
     _setup_product_with_creative_policy(
         ctx,
-        creative_policy={"provenance_requirements": {"require_digital_source_type": True}},
+        creative_policy={
+            "provenance_required": True,
+            "provenance_requirements": {"require_digital_source_type": True},
+        },
     )
 
 
 @given("the tenant has a product with creative_policy.provenance_requirements.require_disclosure_metadata = true")
 def given_tenant_product_requires_disclosure_metadata(ctx: dict) -> None:
-    """Product creative_policy nests provenance_requirements.require_disclosure_metadata."""
+    """Product creative_policy nests provenance_requirements.require_disclosure_metadata (see above)."""
     _setup_product_with_creative_policy(
         ctx,
-        creative_policy={"provenance_requirements": {"require_disclosure_metadata": True}},
+        creative_policy={
+            "provenance_required": True,
+            "provenance_requirements": {"require_disclosure_metadata": True},
+        },
     )
 
 
@@ -115,7 +119,7 @@ def given_creative_provenance_lacks_disclosure(ctx: dict) -> None:
 def given_creative_submission_previously_failed(ctx: dict) -> None:
     """Narrative precondition for the corrected-resubmission scenario.
 
-    Production's provenance handling (``check_provenance_required``) does not
+    Production's provenance handling (``check_provenance_policy``) does not
     persist any prior-rejection state to replay — the subsequent "resubmits"
     Given builds the corrected payload fresh. This step only seeds
     tenant/principal so the storyboard's narrative sequencing (prior failure
@@ -123,7 +127,7 @@ def given_creative_submission_previously_failed(ctx: dict) -> None:
     text, without duplicating DB setup the next step already performs.
     """
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
 
 
 @given(
@@ -177,31 +181,51 @@ def given_three_creatives_three_formats(ctx: dict) -> None:
     catalog behavior (that is UC-005's concern).
     """
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
-    agent_url = env.DEFAULT_AGENT_URL
+    ensure_tenant_principal(ctx, env)
+    display = _creative_format_id_entry(ctx, env)
+    agent_url = display["agent_url"]
+    # The video and native formats must be ones the transport's agent SERVES: on
+    # e2e_rest the real reference agent (v3.1.1 catalog, mirrored by the SDK's
+    # v1-reference-formats.json) answers, and an unserved id is a failed entry with no
+    # status -- which would grade the catalog, not the per-creative status. Their asset
+    # slots are the catalog's required ones for the same reason.
+    if is_e2e(ctx):
+        video_id, native_id = "video_standard_30s", "native_standard"
+        video_assets = build_assets(video_spec("video_file", url="https://example.com/video.mp4"))
+        native_assets = build_assets(
+            text_spec("title", content="Discover something new"),
+            text_spec("description", content="A native placement"),
+            image_spec("main_image", url="https://example.com/native.png"),
+            text_spec("cta_text", content="Learn more"),
+            text_spec("sponsored_by", content="Acme"),
+        )
+    else:
+        video_id, native_id = "video_30s", "native_content"
+        video_assets = build_assets(video_spec("video", url="https://example.com/video.mp4"))
+        native_assets = build_assets(
+            text_spec("headline", content="Discover something new"),
+            image_spec("main_image", url="https://example.com/native.png"),
+        )
 
     creatives = [
-        {
-            "creative_id": "creative-bulk-display-001",
-            "name": "Bulk Display Creative",
-            "format_id": {"id": "display_300x250", "agent_url": agent_url},
-            "assets": build_assets(image_spec("banner_image", url="https://example.com/banner.png")),
-        },
-        {
-            "creative_id": "creative-bulk-video-001",
-            "name": "Bulk Video Creative",
-            "format_id": {"id": "video_30s", "agent_url": agent_url},
-            "assets": build_assets(video_spec("video", url="https://example.com/video.mp4")),
-        },
-        {
-            "creative_id": "creative-bulk-native-001",
-            "name": "Bulk Native Creative",
-            "format_id": {"id": "native_content", "agent_url": agent_url},
-            "assets": build_assets(
-                text_spec("headline", content="Discover something new"),
-                image_spec("main_image", url="https://example.com/native.png"),
-            ),
-        },
+        CreativeAssetRequestFactory.payload(
+            creative_id="creative-bulk-display-001",
+            name="Bulk Display Creative",
+            format_id=display,
+            assets=build_assets(image_spec("banner_image", url="https://example.com/banner.png")),
+        ),
+        CreativeAssetRequestFactory.payload(
+            creative_id="creative-bulk-video-001",
+            name="Bulk Video Creative",
+            format_id={"id": video_id, "agent_url": agent_url},
+            assets=video_assets,
+        ),
+        CreativeAssetRequestFactory.payload(
+            creative_id="creative-bulk-native-001",
+            name="Bulk Native Creative",
+            format_id={"id": native_id, "agent_url": agent_url},
+            assets=native_assets,
+        ),
     ]
     ctx.setdefault("creatives", []).extend(creatives)
 
@@ -235,16 +259,15 @@ def given_captured_format_id_from_get_products_for_sync(ctx: dict) -> None:
     # no transport parametrization for the capture step; transport only varies the
     # subsequent sync_creatives call in the When step.
     env = ctx["env"]
-    _ensure_tenant_principal(ctx, env)
+    ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
-    if is_e2e(ctx):
-        agent_url = _E2E_AGENT_URL
-        format_id = _E2E_FORMAT_ID
-    else:
-        agent_url = env.DEFAULT_AGENT_URL
-        format_id = "display_300x250"
+    # The switch lives in _product_format_entry, not inline here. An inline copy is a second
+    # place the two transports' formats can drift apart, which is the defect this module's
+    # sibling site at given_three_creatives_three_formats actually had (salesagent-6mm5z).
+    entry = _product_format_entry(ctx, env)
+    agent_url, format_id = entry["agent_url"], entry["id"]
 
-    product = ProductFactory(tenant=tenant, format_ids=[{"agent_url": agent_url, "id": format_id}])
+    product = ProductFactory(tenant=tenant, format_ids=[entry])
     PricingOptionFactory(product=product)
     env._commit_factory_data()
 
@@ -275,12 +298,15 @@ def when_sync_creative_with_captured_format_id(ctx: dict) -> None:
         )
     else:
         assets = build_assets(image_spec("banner_image", url="https://example.com/banner.png"))
-    creative_payload = {
-        "creative_id": "creative-format-roundtrip-001",
-        "name": "Format ID Roundtrip Creative",
-        "format_id": {"id": captured["id"], "agent_url": captured["agent_url"]},
-        "assets": assets,
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id="creative-format-roundtrip-001",
+        name="Format ID Roundtrip Creative",
+        # The CAPTURED object verbatim, which is the scenario's whole subject: a
+        # seller must accept back the format_id it handed out. Overrides reach the
+        # wire unmodified, so an un-normalised agent_url stays un-normalised here.
+        format_id={"id": captured["id"], "agent_url": captured["agent_url"]},
+        assets=assets,
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     when_sync_creative(ctx)
 
@@ -384,11 +410,8 @@ def then_response_envelope_schema_valid(ctx: dict) -> None:
 def then_per_creative_result_reports_action(ctx: dict, action: str) -> None:
     """Assert the first per-creative result's action matches *action*.
 
-    Where production genuinely cannot reach the expected action (the
-    provenance-rejection scenarios: ``check_provenance_required`` only ever
-    emits a soft warning, never ``action="failed"`` with a structural
-    provenance code), this xfails with the observed action and
-    warnings/errors instead of asserting a false pass.
+    The message carries the observed action and its errors/warnings, so a wrong
+    action reads as what production actually answered.
     """
     first = _first_creative_result(ctx, f'a per-creative result with action="{action}"')
     actual = _action_str(first.action)
@@ -440,19 +463,6 @@ def then_per_creative_result_not_failed_due_to_format_id(ctx: dict) -> None:
     )
 
 
-@then(parsers.parse('the per-creative errors[0].code should be "{code}"'))
-def then_per_creative_errors_0_code(ctx: dict, code: str) -> None:
-    """Assert the first per-creative error's code matches *code*, or xfail on a genuine production gap."""
-    first = _first_creative_result(ctx, f'a per-creative errors[0].code == "{code}"')
-    errors = first.errors or []
-    assert errors, (
-        f"expected per-creative errors[0].code={code!r}, but production returned no errors "
-        f"(action={_action_str(first.action)!r}, warnings={first.warnings!r})"
-    )
-    actual_code = errors[0].code
-    assert actual_code == code, f"expected per-creative errors[0].code={code!r}, got {actual_code!r}"
-
-
 # ═══════════════════════════════════════════════════════════════════════
 # THEN steps — bulk multi-format sync assertions
 # ═══════════════════════════════════════════════════════════════════════
@@ -489,11 +499,9 @@ def then_every_result_exposes_action(ctx: dict) -> None:
 def then_every_result_exposes_status(ctx: dict) -> None:
     """Assert every per-creative result carries a non-None status field.
 
-    The other half of the decomposition above, and a KNOWN production gap:
-    per ``SyncCreativeResult``'s own docstring (src/core/schemas/creative.py)
-    the inherited spec ``status`` field is deliberately never populated ("we
-    inherit but do NOT populate the spec `status`: it stays None"). Registered
-    as a ledger tag on its own scenario, so this asserts unconditionally.
+    The other half of the decomposition above. A synced creative has a review state
+    (this seller has a review lifecycle), and sync-creatives-response.json makes the
+    per-creative ``status`` that state's advisory mirror.
     """
     resp = _require_response(ctx, "per-creative results exposing a status")
     assert resp.creatives, "Expected at least one per-creative result"
@@ -512,20 +520,18 @@ def then_every_action_value_in_set(ctx: dict, a1: str, a2: str, a3: str) -> None
 
 @then("every status value should be drawn from the creative-status enum")
 def then_every_status_in_creative_status_enum(ctx: dict) -> None:
-    """Assert every per-creative status (where present) is a valid creative-status value.
+    """Assert every per-creative status is a member of the pinned creative-status enum.
 
-    Production never populates ``status`` (see ``then_every_result_exposes_action_and_status``'s
-    docstring) — every value observed here is None, so this xfails with the
-    same SPEC-PRODUCTION GAP rather than asserting a vacuous "all zero
-    populated values are valid" pass.
+    sync-creatives-response.json: "Values come from CreativeStatus only (processing,
+    pending_review, approved, suspended, rejected, archived) -- never from CreativeAction."
     """
     from adcp.types.generated_poc.enums.creative_status import CreativeStatus
 
     resp = _require_response(ctx, "every status drawn from the creative-status enum")
     statuses = [result.status for result in resp.creatives]
-    assert not all(s is None for s in statuses), (
-        "every per-creative status is None — cannot grade enum membership against an always-None field"
-    )
+    members = {member.value for member in CreativeStatus}
+    outside = [s for s in statuses if (s.value if hasattr(s, "value") else s) not in members]
+    assert not outside, f"per-creative statuses {outside!r} are not CreativeStatus members ({sorted(members)})"
     valid = {member.value for member in CreativeStatus}
     assert all(s in valid for s in statuses if s is not None), f"Expected every status in {valid}, got {statuses}"
 
@@ -565,6 +571,11 @@ def then_format_id_roundtrips_verbatim(ctx: dict) -> None:
 
     # ── PRIMARY: read the creative back over the wire ──────────────────────
     client = ctx.get("client") or AdCPTestClient(env)
+    # A READ-BACK still reaches a transport, so it owes the same two obligations as
+    # any other dispatch. It does NOT go through ``dispatch_via_client``: that entry
+    # is the single writer of the ctx dispatch-result contract, and this read-back
+    # must not clobber the result the scenario is actually grading.
+    gate_and_record({})
     listed = client.call("list_creatives", {}, ctx["transport"])
     wire = listed.wire_response
     assert isinstance(wire, dict), (

@@ -51,13 +51,13 @@ mkdir -p "$LOGDIR"
 # in-network ./run_all_tests.sh run). Prior values unit=4077 bdd=1460 (2026-03-22)
 # were stale — the BDD suite has grown to ~9081 tests (1312 passed, 7578 xfailed,
 # 170 xpassed). These are FLOORS: pass counts must not drop below them.
-# CAVEAT for EVALUATE: the 17 current bdd FAILURES are the e2e_rest 5th-transport
-# set tracked under epic salesagent-rlgl — they are NOT regressions from gh8p work.
+# CAVEAT for EVALUATE: the 17 current bdd FAILURES are the e2e_rest transport
+# set tracked under the ledger-retirement issue #1418 — they are NOT regressions from gh8p work.
 # Treat ">17 bdd failures" or "bdd passed < BASELINE" as the regression signal.
 # (--quick mode runs make quality only: unit floor there is ~5013.)
 BASELINE_UNIT=5135
 BASELINE_BDD_PASSED=1312
-BASELINE_BDD_FAILED_ACCEPTED=17   # e2e_rest (salesagent-rlgl); not a gh8p regression
+BASELINE_BDD_FAILED_ACCEPTED=17   # e2e_rest (#1418); not a gh8p regression
 
 GIT_INSTRUCTION="IMPORTANT: Do NOT run git push or bd sync. The pipeline handles git coordination. DO commit your changes with a descriptive message."
 

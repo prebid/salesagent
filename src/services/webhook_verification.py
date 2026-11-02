@@ -8,7 +8,7 @@ bytes as received — never a re-serialization of a parsed payload. Per AdCP
 captured before any JSON parse or re-serialize." A verifier that
 re-serializes a parsed dict (this module's own prior implementation)
 recreates, on the receive side, the exact signed-bytes-vs-wire-bytes
-divergence salesagent-47n9.1 fixes on the send side — and masks it, because
+divergence #1441 fixes on the send side — and masks it, because
 a re-serializing verifier and a re-serializing signer can agree with each
 other while both disagree with the real wire.
 
@@ -30,24 +30,37 @@ from adcp.signing.webhook_hmac import (
     verify_webhook_hmac,
 )
 
+from src.core.exceptions import AdCPAuthenticationError
 from src.core.security.webhook_strict_json import DuplicateKeyInput, loads_rejecting_duplicate_keys
 
 
-class WebhookVerificationError(Exception):
-    """Raised when webhook verification fails."""
+class WebhookVerificationError(AdCPAuthenticationError):
+    """An inbound webhook failed signature or timestamp verification.
 
-    pass
+    In the AdCP hierarchy because we define it and we raise it. AUTH_INVALID is
+    inherited from AdCPAuthenticationError and is what this is: a credential was
+    presented and rejected.
+
+    Every raise site passed a message describing WHICH check failed. Those move to
+    ``internal_detail`` -- server log only -- because the reason a signature check
+    failed is exactly the kind of detail that must not reach the caller, and the
+    buyer-facing sentence comes from CODE_TABLE.
+    """
 
 
 class WebhookBodyMalformedError(WebhookVerificationError):
     """Raised when a webhook's signature verifies but the body is malformed.
 
-    Deliberately a plain ``Exception`` subclass (not a typed ``AdCPError``):
-    neither this class nor its parent can reach a transport boundary today
-    (no production caller, no inbound route — see module docstring), so the
-    wire-code machinery buys nothing yet, and the spec explicitly leaves
-    error-carrier internals implementation-defined. This is a stated
-    decision, not leftover debt.
+    Sits in the AdCP hierarchy under :class:`WebhookVerificationError`, so it
+    inherits that class's ``AUTH_INVALID`` code. Neither class can reach a
+    transport boundary today (no production caller, no inbound route — see
+    module docstring), so nothing derives a wire envelope from that code yet,
+    and the spec explicitly leaves error-carrier internals
+    implementation-defined. The only property any caller depends on is the one
+    below: that a malformed body is a DISTINCT class from a signature failure.
+    Should this reference ever gain an inbound route, this class needs its own
+    non-auth code — a body that is malformed AFTER a valid signature is not a
+    credential rejection.
 
     Distinct from a bare :class:`WebhookVerificationError` (signature
     mismatch, bad timestamp, malformed header) per AdCP 3.1.1
@@ -58,8 +71,6 @@ class WebhookBodyMalformedError(WebhookVerificationError):
     ``verify_webhook_hmac`` succeeds — never before, and never in place of a
     genuine signature failure.
     """
-
-    pass
 
 
 class WebhookVerifier:
@@ -111,7 +122,8 @@ class WebhookVerifier:
 
         Raises:
             WebhookVerificationError: Signature, timestamp, or header format
-                failure.
+                failure. The failing check is carried in ``internal_detail``
+                (server log only), never in the buyer-facing sentence.
             WebhookBodyMalformedError: The signature verified but the body
                 contains a duplicate JSON object key (AdCP 3.1.1
                 L1/security.mdx §Duplicate object keys, verifier checklist
@@ -131,12 +143,12 @@ class WebhookVerifier:
                 ),
             )
         except LegacyWebhookHmacError as exc:
-            raise WebhookVerificationError(str(exc)) from exc
+            raise WebhookVerificationError(internal_detail=exc) from exc
 
         try:
             payload = loads_rejecting_duplicate_keys(body)
         except DuplicateKeyInput as exc:
-            raise WebhookBodyMalformedError(str(exc)) from exc
+            raise WebhookBodyMalformedError(internal_detail=exc) from exc
         except ValueError:
             # Not valid JSON at all (e.g. an empty body) -- the duplicate-key
             # check doesn't apply to non-JSON content; the signature already
@@ -183,7 +195,7 @@ def verify_adcp_webhook(
     Example:
         try:
             payload = verify_adcp_webhook(
-                webhook_secret=os.environ["WEBHOOK_SECRET"],
+                webhook_secret=secret,  # the secret registered for this sender
                 body=request.get_data(),
                 request_headers=dict(request.headers)
             )

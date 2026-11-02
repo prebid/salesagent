@@ -1,0 +1,110 @@
+# BRIDGE PATCH -- not a local customisation, and not a fork of grading behaviour.
+#
+# WHAT GAP. `gradeOneVector` grades content-digest vectors against the agent's declared
+# profile when it is given one (`agentCapability`, or the narrower
+# `agentContentDigestPolicy`). The storyboard dispatch never gives it either.
+# `probe-dispatch.ts` DOES read `_profile.raw_capabilities.request_signing` -- in
+# `declaredProtocolMethodCoverage` -- but takes only `protocol_methods_required_for` from
+# it for the vector-028 gate. `covers_content_digest` sits unread in the same block, and no
+# `--signing-*` CLI flag exposes it either.
+#
+# WHY IT MATTERS. `negative/007-missing-content-digest` asserts a verifier declaring
+# `covers_content_digest: 'required'` and `negative/018-digest-covered-when-forbidden`
+# asserts `'forbidden'`. An agent declares exactly ONE value, so a run that grades both has
+# at least one guaranteed failure whatever the agent implements. This seller declares
+# `'either'` -- the spec default and the widest policy ("signer chooses; verifier accepts
+# both", security.mdx) -- so it answers 200 to both, correctly, and fails both. Measured:
+# run innet_210926_0617 scored 101/17 on each protocol against 101/15 on the pinned build,
+# and the two extra failures were exactly 007 and 018 on both cards.
+#
+# UPSTREAM. Filed as adcontextprotocol/adcp-client#2993, with the suggested derivation.
+# This is the storyboard-side half of #2963: that PR's grader-side half merged and works --
+# `contentDigestDeclarationMismatch` and `CONTENT_DIGEST_POLICY_REFUSALS` are present in
+# rc.42 and correctly narrow the skip to those two vectors -- but nothing reaches them from
+# the storyboard path. So this bridge supplies the ONE missing input, and relies on
+# upstream's own predicate to decide what to do with it.
+#
+# SCOPE. One module, in its CJS and ESM builds: read the declared policy off the profile
+# already in hand and forward it as `agentContentDigestPolicy`. It adds no grading rule, no
+# skip logic and no vector list. `agentContentDigestPolicy` rather than the full
+# `agentCapability` fixture is deliberate -- the protocol-method half of the profile is
+# already handled upstream, and the policy alone skips exactly 007 and 018 while
+# `positive/002`, `negative/010` and `negative/023` keep grading.
+#
+# NOTHING ELSE FROM THE RETIRED rc.35 PATCH COMES BACK. In particular the
+# `legacyCompat: { enabled: false }` flip must NOT be reinstated in any form: measured, on
+# current main `true` is the card-following setting, and `false` silently sends 1.0 framing
+# to an agent that published 0.3.
+#
+# DELETE THIS WHEN adcontextprotocol/adcp-client#2993 lands and the runner pin moves to a
+# release containing it -- i.e. when the storyboard dispatch derives the policy itself.
+# The check that it is safe to delete: with the patch removed, `signed_requests` still
+# reports zero failures on both protocols, and 007/018 come back as `not_selected` /
+# `profile_excluded` rather than as graded failures.
+#
+diff --git a/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/probe-dispatch.js b/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/probe-dispatch.js
+index e7d9421..bf8a342 100644
+--- a/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/probe-dispatch.js
++++ b/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/probe-dispatch.js
+@@ -137,6 +137,10 @@ async function probeRequestSigningVector(stepId, agentUrl, options) {
+       onlyVectors: rsOpts.onlyVectors,
+       skipVectors: rsOpts.skipVectors,
+       skipRateAbuse: rsOpts.skipRateAbuse,
++      // BRIDGE (adcp-client#2993): forward the agent's declared content-digest
++      // policy so 007/018 are excluded as profile mismatches instead of both
++      // being graded against a profile the agent never declared.
++      ...__bridgeDeclaredContentDigestPolicy(options) ? { agentContentDigestPolicy: __bridgeDeclaredContentDigestPolicy(options) } : {},
+       // A vector reaching here without a resolved transport is in-library
+       // only (`gradableWithoutVectorTransport`); the grader never probes it,
+       // so the value is inert.
+@@ -176,6 +180,17 @@ async function probeRequestSigningVector(stepId, agentUrl, options) {
+ function gradableWithoutVectorTransport(kind, vector) {
+   return kind === "negative" && vector.jwks_override !== void 0;
+ }
++function __bridgeDeclaredContentDigestPolicy(options) {
++  // BRIDGE (adcp-client#2993): the agent's declared `covers_content_digest`,
++  // read from the SAME block `declaredProtocolMethodCoverage` already reads.
++  const raw = options._profile?.raw_capabilities;
++  if (!raw || typeof raw !== "object") return void 0;
++  const block = raw.request_signing;
++  if (!block || typeof block !== "object") return void 0;
++  if (block.supported !== true) return void 0;
++  const policy = block.covers_content_digest;
++  return policy === "required" || policy === "forbidden" || policy === "either" ? policy : void 0;
++}
+ function declaredProtocolMethodCoverage(options, sourceDir) {
+   const raw = options._profile?.raw_capabilities;
+   if (!raw || typeof raw !== "object") return void 0;
+diff --git a/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/probe-dispatch.mjs b/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/probe-dispatch.mjs
+index b99d11f..754a354 100644
+--- a/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/probe-dispatch.mjs
++++ b/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/probe-dispatch.mjs
+@@ -100,6 +100,10 @@ async function probeRequestSigningVector(stepId, agentUrl, options) {
+       onlyVectors: rsOpts.onlyVectors,
+       skipVectors: rsOpts.skipVectors,
+       skipRateAbuse: rsOpts.skipRateAbuse,
++      // BRIDGE (adcp-client#2993): forward the agent's declared content-digest
++      // policy so 007/018 are excluded as profile mismatches instead of both
++      // being graded against a profile the agent never declared.
++      ...__bridgeDeclaredContentDigestPolicy(options) ? { agentContentDigestPolicy: __bridgeDeclaredContentDigestPolicy(options) } : {},
+       // A vector reaching here without a resolved transport is in-library
+       // only (`gradableWithoutVectorTransport`); the grader never probes it,
+       // so the value is inert.
+@@ -139,6 +143,17 @@ async function probeRequestSigningVector(stepId, agentUrl, options) {
+ function gradableWithoutVectorTransport(kind, vector) {
+   return kind === "negative" && vector.jwks_override !== void 0;
+ }
++function __bridgeDeclaredContentDigestPolicy(options) {
++  // BRIDGE (adcp-client#2993): the agent's declared `covers_content_digest`,
++  // read from the SAME block `declaredProtocolMethodCoverage` already reads.
++  const raw = options._profile?.raw_capabilities;
++  if (!raw || typeof raw !== "object") return void 0;
++  const block = raw.request_signing;
++  if (!block || typeof block !== "object") return void 0;
++  if (block.supported !== true) return void 0;
++  const policy = block.covers_content_digest;
++  return policy === "required" || policy === "forbidden" || policy === "either" ? policy : void 0;
++}
+ function declaredProtocolMethodCoverage(options, sourceDir) {
+   const raw = options._profile?.raw_capabilities;
+   if (!raw || typeof raw !== "object") return void 0;

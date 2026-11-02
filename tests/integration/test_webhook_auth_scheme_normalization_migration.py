@@ -107,6 +107,40 @@ def _token(engine, row_id):
         return row[0] if row else None
 
 
+#: Row id -> the scheme it held BEFORE the migration, filled by :func:`_prepare`.
+_SCHEME_BEFORE: dict[str, str | None] = {}
+
+
+def _prepare(engine, db_url) -> dict[str, str | None]:
+    """Bring the module's database to ``NORMALIZE_REV`` with ``CASES`` seeded. Idempotent.
+
+    Called from EVERY test body, so no test depends on another having run first. It used
+    to be inline at the top of ``test_upgrade_folds_every_bearer_spelling`` while the other
+    seven only READ, which made the module pass in definition order and fail under any
+    other — measured at ``--randomly-seed=3``: all seven readers failed. Random ordering is
+    the default here and each test is expected to stand alone.
+
+    A plain function rather than a fixture, because the precondition is the same for all
+    eight and the first caller pays for it once. (It HAD to be a function while
+    ``_run_alembic_command`` only set ``DATABASE_URL``: ``alembic/env.py`` resolves its URL
+    at import time through the process-wide ``get_settings()`` cache, so the override was
+    honoured from a test body and silently ignored from a module-scoped fixture. That is
+    fixed at the helper now — it drops and restores the cache — so either shape would work
+    and this one is simply the smaller.)
+
+    Returns the pre-migration scheme per row. That is the control every expectation in this
+    module rests on: without it they would all hold equally against a database where the
+    migration did nothing. Captured, not re-read, because the migration destroys it.
+    """
+    if _SCHEME_BEFORE:
+        return _SCHEME_BEFORE
+    run_alembic_upgrade(db_url, PRE_NORMALIZE_REV)
+    _seed(engine)
+    _SCHEME_BEFORE.update({row_id: _scheme(engine, row_id) for row_id, _stored, _expected in CASES})
+    run_alembic_upgrade(db_url, NORMALIZE_REV)
+    return _SCHEME_BEFORE
+
+
 @pytest.mark.requires_db
 class TestWebhookAuthSchemeNormalization:
     """a1f4c7d92b30 folds supported-scheme spellings and leaves everything else alone."""
@@ -114,16 +148,13 @@ class TestWebhookAuthSchemeNormalization:
     def test_upgrade_folds_every_bearer_spelling(self, migration_db):
         """bearer / Bearer / BEARER / BeArEr all become the canonical Bearer."""
         engine, db_url = migration_db
+        before = _prepare(engine, db_url)
 
-        run_alembic_upgrade(db_url, PRE_NORMALIZE_REV)
-        _seed(engine)
-
-        # The spellings really are unnormalized before the migration runs — without this the
-        # test would pass against a database where nothing happened.
-        assert _scheme(engine, "pnc_bearer_lower") == "bearer"
-        assert _scheme(engine, "pnc_hmac_underscore") == "hmac_sha256"
-
-        run_alembic_upgrade(db_url, NORMALIZE_REV)
+        # The spellings really were unnormalized before the migration ran — without this
+        # every expectation in this module would hold against a database where nothing
+        # happened.
+        assert before["pnc_bearer_lower"] == "bearer"
+        assert before["pnc_hmac_underscore"] == "hmac_sha256"
 
         for row_id, _stored, expected in CASES:
             if expected == BEARER:
@@ -131,7 +162,8 @@ class TestWebhookAuthSchemeNormalization:
 
     def test_upgrade_folds_every_hmac_spelling(self, migration_db):
         """Every hmac variant, separator and casing included, becomes HMAC-SHA256."""
-        engine, _ = migration_db
+        engine, db_url = migration_db
+        _prepare(engine, db_url)
         for row_id, _stored, expected in CASES:
             if expected == HMAC:
                 assert _scheme(engine, row_id) == HMAC, f"{row_id} did not fold onto {HMAC}"
@@ -143,30 +175,35 @@ class TestWebhookAuthSchemeNormalization:
         authentication into one that delivers unsigned. Refusing it and letting the operator
         re-register is the honest outcome, so the migration must not touch these rows.
         """
-        engine, _ = migration_db
+        engine, db_url = migration_db
+        _prepare(engine, db_url)
         assert _scheme(engine, "pnc_basic_canonical") == "Basic"
         assert _scheme(engine, "pnc_basic_lower") == "basic"
 
     def test_upgrade_leaves_unrecognised_and_empty_values_alone(self, migration_db):
         """A scheme the migration does not recognise is not guessed at."""
-        engine, _ = migration_db
+        engine, db_url = migration_db
+        _prepare(engine, db_url)
         assert _scheme(engine, "pnc_unknown") == "oauth2"
         assert _scheme(engine, "pnc_empty_string") == ""
 
     def test_upgrade_leaves_unauthenticated_rows_unauthenticated(self, migration_db):
         """A NULL scheme means no authentication, and stays that way."""
-        engine, _ = migration_db
+        engine, db_url = migration_db
+        _prepare(engine, db_url)
         assert _scheme(engine, "pnc_null") is None
 
     def test_upgrade_touches_no_column_but_the_scheme(self, migration_db):
         """The credential is not rewritten, reformatted or dropped along the way."""
-        engine, _ = migration_db
+        engine, db_url = migration_db
+        _prepare(engine, db_url)
         for row_id, _stored, _expected in CASES:
             assert _token(engine, row_id) == "credential-value", f"{row_id} lost its credential"
 
     def test_upgrade_loses_no_rows(self, migration_db):
         """An UPDATE, never a DELETE — every seeded row still exists."""
-        engine, _ = migration_db
+        engine, db_url = migration_db
+        _prepare(engine, db_url)
         with engine.connect() as conn:
             count = conn.execute(
                 text("SELECT COUNT(*) FROM push_notification_configs WHERE tenant_id = 'tenant_authnorm'")
@@ -182,10 +219,16 @@ class TestWebhookAuthSchemeNormalization:
         not be.
         """
         engine, db_url = migration_db
+        _prepare(engine, db_url)
 
         run_alembic_downgrade(db_url, PRE_NORMALIZE_REV)
-
-        assert _scheme(engine, "pnc_bearer_lower") == BEARER
-        assert _scheme(engine, "pnc_hmac_underscore") == HMAC
-        assert _scheme(engine, "pnc_basic_canonical") == "Basic"
-        assert _scheme(engine, "pnc_null") is None
+        try:
+            assert _scheme(engine, "pnc_bearer_lower") == BEARER
+            assert _scheme(engine, "pnc_hmac_underscore") == HMAC
+            assert _scheme(engine, "pnc_basic_canonical") == "Basic"
+            assert _scheme(engine, "pnc_null") is None
+        finally:
+            # The database is module-scoped, so a downgrade left in place is whatever runs
+            # NEXT test's starting schema. In definition order this test ran last and
+            # nothing noticed; under any other order it took the module down with it.
+            run_alembic_upgrade(db_url, NORMALIZE_REV)

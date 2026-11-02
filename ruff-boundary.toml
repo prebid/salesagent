@@ -1,0 +1,210 @@
+# Tool-implementation import bans for the shipped tree (salesagent-83pmq).
+#
+# Run as its own quality line: `uv run ruff check --config ruff-boundary.toml
+# --no-respect-gitignore src/ scripts/` (see Makefile `quality` / `quality-ci`).
+#
+# ## What this bans, and why the ban is the fix
+#
+# `src/core/tools/_boundary.py`'s `invoke()` is where a tool's obligations happen --
+# account enrichment, idempotency scoping, replay lookup, success caching, version
+# stamping. Its docstring states the invariant: an implementation is called with the
+# request and the caller, and nothing else. A service that imports an `_impl` and calls
+# it gives a tool a SECOND entry point, so the invariant holds for one of them and every
+# obligation added to `invoke()` from then on silently does not apply to the other.
+#
+# The cure is making the call unavailable, not listing offenders --
+# `docs/design/one-tool-registry.md` § "Why this needs no guards", and the precedent of
+# `_register_tool`, which REFUSES a tool with no DTO rather than reporting one. Python
+# cannot make a module-level function unimportable (`registry.py` must import all
+# fourteen to build `TOOLS`), so the ban fires on the IMPORT: a service reaching for an
+# impl fails the build where it reaches, not at review.
+#
+# ## Scope
+#
+# `src/` and `scripts/` -- the code this repo ships and operates with, matching
+# `ruff-egress.toml`. `tests/` is deliberately out, and this is why the bans live in
+# their own config rather than in `pyproject.toml`'s repo-wide table: a direct
+# `_impl` call is SANCTIONED in tests (`tests/CLAUDE.md`: the harness's
+# `env.call_impl(...)`, and `pytest.raises` against the error class, are the oracle
+# where the obligation is about what `_impl` returns or raises). `tests/unit/
+# test_architecture_bdd_no_direct_call_impl.py` governs the one place it is not.
+#
+# Unlike the egress line, this one runs WITHOUT `--ignore-noqa`: an import that cannot
+# be cleaned takes a line-scoped `# noqa: TID251` with a reason beside it. There are
+# none today, and a new one is a review conversation.
+#
+# ## Reaching an implementation legitimately
+#
+# `serve(name, payload, headers, protocol)` from a transport, or
+# `invoke_tool(name, req, headers, protocol)` with a request it already validated;
+# `TOOLS[name].impl` when you need the function object. A caller with no buyer and no request envelope wants a SERVICE,
+# not the tool -- `delivery_for_media_buy` is the worked example.
+
+[lint]
+select = ["TID251"]
+
+[lint.per-file-ignores]
+# The registry must import all fourteen to build TOOLS. It is the ONLY exemption:
+# every other importer is the disease this table exists to prevent.
+"src/core/tools/registry.py" = ["TID251"]
+# The boundary owns the resolver and the stamped entry; the resolver's module defines it.
+"src/core/tools/_boundary.py" = ["TID251"]
+"src/core/resolved_identity.py" = ["TID251"]
+# The resolver's verifier: it reads the signature credential the resolver hands it and mints
+# the request-signature refusal, which is why it is the one other exemption for that class.
+"src/core/signing/verifier.py" = ["TID251"]
+# Defines get_principal_from_token, so it cannot be banned from naming it.
+"src/core/auth_utils.py" = ["TID251"]
+# The four repository modules that query the ORM Principal model. Nothing else under src/
+# or scripts/ may name it: an admin view or a seed script asks PrincipalRepository.
+"src/core/database/repositories/principal.py" = ["TID251"]
+"src/core/database/repositories/principal_lookup.py" = ["TID251"]
+"src/core/database/repositories/creative.py" = ["TID251"]
+"src/core/database/repositories/workflow.py" = ["TID251"]
+# Two legitimate readers of AdCPAuthenticationError that are not identity resolution: the
+# adapter helper translates the SDK's ADCPAuthenticationError (an ad server rejecting the
+# SELLER's credential) into it, and webhook verification subclasses it for an inbound
+# webhook credential. Different credentials, different owners; neither decides who a buyer is.
+"src/core/helpers/adapter_helpers.py" = ["TID251"]
+"src/services/webhook_verification.py" = ["TID251"]
+# The two places a ToolError legitimately exists. ``tool_error_logging`` MINTS one, on the
+# way out to MCP, from an already-typed AdCPSalesAgentError; ``app.py`` registers the handler
+# that renders one. Both are the transport edge. Everything between them raises
+# AdCPSalesAgentError.
+"src/core/tool_error_logging.py" = ["TID251"]
+"src/app.py" = ["TID251"]
+# The request and response schemas DECLARE the context field, so they name its type.
+"src/core/schemas/*.py" = ["TID251"]
+
+[lint.flake8-tidy-imports.banned-api]
+"src.core.tools.accounts._list_accounts_impl".msg = "Reach a tool through invoke_tool() / TOOLS[name].impl, never its _impl directly -- a direct call skips every obligation src/core/tools/_boundary.py performs (salesagent-83pmq)."
+"src.core.tools.accounts._sync_accounts_impl".msg = "Reach a tool through invoke_tool() / TOOLS[name].impl, never its _impl directly -- a direct call skips every obligation src/core/tools/_boundary.py performs (salesagent-83pmq)."
+"src.core.tools.capabilities._get_adcp_capabilities_impl".msg = "Reach a tool through invoke_tool() / TOOLS[name].impl, never its _impl directly -- a direct call skips every obligation src/core/tools/_boundary.py performs (salesagent-83pmq)."
+"src.core.tools.creative_formats._list_creative_formats_impl".msg = "Reach a tool through invoke_tool() / TOOLS[name].impl, never its _impl directly -- a direct call skips every obligation src/core/tools/_boundary.py performs (salesagent-83pmq)."
+"src.core.tools.creatives._sync._sync_creatives_impl".msg = "Reach a tool through invoke_tool() / TOOLS[name].impl, never its _impl directly. The SERVICE sync_creatives() is what another tool calls (critical pattern #5) (salesagent-83pmq)."
+"src.core.tools.creatives._sync_creatives_impl".msg = "The package-level re-export is deleted; reach a tool through invoke_tool() / TOOLS[name].impl, or import the service sync_creatives() (salesagent-83pmq)."
+"src.core.tools.creatives.listing._list_creatives_impl".msg = "Reach a tool through invoke_tool() / TOOLS[name].impl, never its _impl directly -- a direct call skips every obligation src/core/tools/_boundary.py performs (salesagent-83pmq)."
+"src.core.tools.creatives._list_creatives_impl".msg = "The package-level re-export is deleted; reach a tool through invoke_tool() / TOOLS[name].impl (salesagent-83pmq)."
+"src.core.tools.media_buy_create._create_media_buy_impl".msg = "Reach a tool through invoke_tool() / TOOLS[name].impl, never its _impl directly -- a direct call skips every obligation src/core/tools/_boundary.py performs (salesagent-83pmq)."
+"src.core.tools.media_buy_delivery._get_media_buy_delivery_impl".msg = "Reach a tool through invoke_tool() / TOOLS[name].impl. A server-initiated read wants the service: delivery_for_media_buy() in the same module (salesagent-83pmq)."
+"src.core.tools.media_buy_list._get_media_buys_impl".msg = "Reach a tool through invoke_tool() / TOOLS[name].impl, never its _impl directly -- a direct call skips every obligation src/core/tools/_boundary.py performs (salesagent-83pmq)."
+"src.core.tools.media_buy_update._update_media_buy_impl".msg = "Reach a tool through invoke_tool() / TOOLS[name].impl, never its _impl directly -- a direct call skips every obligation src/core/tools/_boundary.py performs (salesagent-83pmq)."
+"src.core.tools.products._get_products_impl".msg = "Reach a tool through invoke_tool() / TOOLS[name].impl, never its _impl directly -- a direct call skips every obligation src/core/tools/_boundary.py performs (salesagent-83pmq)."
+"src.core.tools.task_management._complete_task_impl".msg = "Reach a tool through invoke_tool() / TOOLS[name].impl, never its _impl directly -- a direct call skips every obligation src/core/tools/_boundary.py performs (salesagent-83pmq)."
+"src.core.tools.task_management._get_task_status_impl".msg = "Reach a tool through invoke_tool() / TOOLS[name].impl, never its _impl directly -- a direct call skips every obligation src/core/tools/_boundary.py performs (salesagent-83pmq)."
+"src.core.tools.task_management._list_tasks_impl".msg = "Reach a tool through invoke_tool() / TOOLS[name].impl, never its _impl directly -- a direct call skips every obligation src/core/tools/_boundary.py performs (salesagent-83pmq)."
+
+# Identity resolution and implementation selection. Same rule as the _impl bans above, one
+# layer up: invoke_tool is the only door, and what it does behind that door is private.
+#
+# Four transports used to resolve their own identity and read ToolSpec.auth themselves. They
+# disagreed twice -- A2A refusing a credential on a public task that MCP and REST served, and
+# REST's discovery dependency hardcoding require_valid_token=False so a rejected credential
+# was answered 200 there and 401 everywhere else. Neither was caught by a test; both were
+# found by driving the wire.
+#
+# The primary defence is that there is nothing to call: invoke_tool takes the request headers
+# and no identity, so a transport has nowhere to put one it resolved. These bans are the
+# backstop for the NAMES, so the property survives someone reaching for them again.
+"src.core.resolved_identity._resolve_identity".msg = "Identity is resolved once, in src/core/tools/_boundary.invoke_tool. A transport hands over its request headers; it does not resolve (salesagent-02rgd)."
+"src.core.tools._boundary._resolve_identity".msg = "Identity is resolved once, in invoke_tool. Do not re-export or re-import the resolver (salesagent-02rgd)."
+"src.core.tools._boundary._invoke_stamped".msg = "invoke_tool is the only door: it reads the registry row for both the implementation and the auth declaration. _invoke_stamped takes an already-chosen impl and an already-resolved identity -- which is how a transport used to select both (salesagent-02rgd)."
+
+# fastmcp's ToolError is MCP's WIRE type, produced on the way out. Business logic raises
+# AdCPSalesAgentError and the boundary types whatever escapes; a ToolError travelling INWARDS
+# is a transport error smuggled into transport-agnostic code, and the boundary would have to
+# grow a carve-out to let it past -- which is exactly the accommodation this ban removes the
+# need for.
+#
+# This replaces tests/unit/test_no_toolerror_in_impl.py, which walked the AST of a
+# HAND-WRITTEN list of fourteen files. A fifteenth tool module was a silent hole in it. A
+# TID251 ban is global over src/ and scripts/ by construction, has no list to keep current,
+# and fails at lint time rather than at test time.
+"fastmcp.exceptions.ToolError".msg = "ToolError is MCP's wire type, minted on the way OUT by src/core/tool_error_logging.py. Business logic raises an AdCPSalesAgentError subclass; the boundary (src/core/tools/_boundary.invoke_tool) types anything untyped that escapes. Nothing in between may import it (salesagent-02rgd)."
+
+# The two primitives identity resolution is MADE OF. Banning the resolver itself (above) stops
+# a caller reaching for the finished answer; these stop one assembling its own from the parts,
+# which is how the second resolver got there in the first place.
+#
+# src/core/auth.py carried get_principal_from_context until this change: a FastMCP-Context
+# resolver with its OWN x-adcp-tenant handling running alongside _detect_tenant. Zero
+# production callers -- seven test modules kept it breathing, and one of them said so, holding
+# it "in auth.py for test compat". Nothing detected it because nothing was looking: a second
+# resolver is invisible to a rule that only bans the first.
+#
+# Exempt: src/core/resolved_identity.py, which is where the assembling is SUPPOSED to happen,
+# and src/core/auth_utils.py, which defines one of them.
+"src.core.auth_utils.get_principal_from_token".msg = "Resolving a principal from a token is identity resolution, and it happens once, in src/core/resolved_identity._resolve_identity, called only from the tool boundary. A second caller is a second resolver -- which this codebase had, unnoticed, until it was deleted (salesagent-02rgd)."
+"src.core.auth_utils.get_principal_by_agent_url".msg = "Resolving a principal from a VERIFIED signer is identity resolution too, and it happens in the same one place. The lookup is only sound downstream of verification -- an unverified agent_url is a self-assertion -- so a second caller is both a second resolver and a trust bypass."
+"src.core.resolved_identity._detect_tenant".msg = "Detecting the tenant from request headers happens once, inside _resolve_identity. A caller that detects its own tenant is a second tenant resolver, and the two WILL disagree -- the deleted get_principal_from_context disagreed by reading x-adcp-tenant with different fallbacks (salesagent-02rgd)."
+
+# The ORM Principal model is repository-private. A request's principal is loaded once, by the
+# resolver through the repository, and travels on ResolvedIdentity.principal; a tool reads
+# identity.principal and nothing else. Every other reader or writer of the table -- the admin
+# views, the seed scripts, the setup checklist -- asks PrincipalRepository (or the
+# cross-tenant reads in repositories/principal_lookup.py). _create_media_buy_impl used to
+# select the row twice, under FIXME(#1119), to read a name the identity already carried.
+#
+# This ban lives HERE and not in ruff-ownership.toml because its exemption set is the four
+# repository files above and nothing wider: the ownership config exempts src/admin/** and
+# scripts/**, and under it the model was importable from an admin blueprint and a setup
+# script. TID251 bans the NAME, so `import Principal as ModelPrincipal` and an import under
+# TYPE_CHECKING are both caught.
+"src.core.database.models.Principal".msg = "The ORM Principal model is repository-private (src/core/database/repositories/). A tool reads identity.principal; everything else goes through PrincipalRepository or the reads in repositories/principal_lookup.py. For a type annotation use the repository's return type or src.core.schemas.Principal."
+
+# The account a request names is resolved by the resolver alone. core/account-ref.json lets a
+# request name an account by id or by natural key, and one credential may access many, so the
+# account is per request: the resolver resolves it for the principal, once, and builds the
+# identity with it inside (AccountIdentity / ResolvedIdentity.account). Nothing below the
+# resolver resolves a request's account, the same way nothing below it resolves a token -- the
+# helper that did (enrich_identity_with_account -> resolve_account) copied the identity after
+# the fact and re-checked the principal it already had. The lookup lives in its own module so
+# the NAME can be banned, and the ban lives here because its one exemption is the resolver,
+# already in the table above. The tools that manage accounts as DATA (list_accounts,
+# sync_accounts) use AccountRepository and never import it.
+"src.core.database.repositories.account_lookup".msg = "A request's account is resolved by the resolver alone (src/core/resolved_identity._resolve_identity), which builds the identity with it inside. Read identity.account; do not resolve an AccountReference here."
+
+# The remaining OWNERSHIP bans -- the principal and account repositories, the resolver's
+# primitives and AccountUoW -- live in ruff-ownership.toml, a config of their own, so the
+# admin UI and the setup scripts can be exempt from those and from nothing here.
+
+# The two auth refusals are minted by the resolver alone: it decides AUTH_MISSING versus
+# AUTH_INVALID from the headers it alone reads, for a tool whose implementation declares
+# `identity: ResolvedIdentity`. Business logic never raises them: a protected tool holds a
+# ResolvedIdentity, whose principal and tenant are not optional, so there is nothing left to
+# refuse; a public tool holds a PublicIdentity and branches on `identity.principal`. The
+# require_principal / require_tenant helpers that used to re-check this inside every tool are
+# deleted. The TENANT policy that makes get_products need a caller (brand_manifest_policy
+# "require_auth", BR-UC-001 INV-1) is asked by the resolver once it holds the tenant row
+# (`ToolSpec.requires_credential(tenant)`), so it mints that refusal too: one site.
+#
+# This replaces tests/unit/test_architecture_no_handrolled_identity_guard.py, which walked the
+# AST of *_impl functions for `if identity is None: raise` and `if not principal_id: raise`
+# shapes. It modelled those shapes and missed the rest -- the two sites this ban found on
+# landing were both in helpers, not in an `_impl`. A hand-rolled guard that raises anything
+# else is a wire-graded behaviour (BDD grades the AUTH_MISSING envelope on every transport);
+# one that raises THESE is a second author of the refusal, and this is where it fails.
+"src.core.exceptions.AdCPAuthRequiredError".msg = "AUTH_MISSING is raised by the resolver (src/core/resolved_identity.py) alone. A tool that needs a caller declares identity: ResolvedIdentity and the boundary refuses the anonymous caller before it runs; do not re-check or hand-roll the refusal."
+"src.core.exceptions.AdCPAuthenticationError".msg = "AUTH_INVALID is raised by the resolver (src/core/resolved_identity.py) alone. A credential that was presented and rejected is decided where the credential is read; nothing downstream re-decides it."
+# The third refusal of a buyer's credential, and the same rule. A signature is a credential
+# the resolver reads (src/core/signing/verifier.py, called from _resolve_identity), so the
+# 28-code request-signature taxonomy is minted there and nowhere else. It is a direct
+# AdCPSalesAgentError subclass rather than an AdCPAuthenticationError one because the code
+# differs per refusal and an AUTH_INVALID parent would hand every class that one code
+# through the MRO -- which is exactly why the ban has to list it explicitly: the subsumption
+# that would otherwise have carried it does not exist.
+#
+# THE ABSTRACT PARENT is what the ban names, and it reaches all 28 children: TID251 matches
+# the imported NAME, and no module outside the resolver has business importing any of them by
+# name either. The string-to-class table is module-private (_SIGNATURE_ERROR_BY_CODE) and
+# reached only through adcp_error_for, which is generic and correctly unbanned.
+"src.core.exceptions.AdCPRequestSignatureError".msg = "The request-signature taxonomy is raised by the resolver's verifier (src/core/signing/verifier.py, reached from src/core/resolved_identity.py) alone. A signature is a credential; nothing downstream re-decides it."
+
+# The buyer's context object. Two modules have business with its TYPE: the schemas, which
+# declare the field on every request and response, and the boundary, which reads it once off
+# the request and stamps it once onto whatever leaves (src/core/tools/_boundary._served).
+# Business logic used to thread it through 16 signatures and 103 call sites to reach a raise
+# site (salesagent-3cs7o.2 deleted them); an import of the type anywhere else is the first
+# line of that plumbing growing back. The CALL-SITE half of the same ban -- a `context=`
+# keyword outside the boundary -- is .ast-grep/rules/context-is-written-by-the-boundary-alone.yml.
+"adcp.types.ContextObject".msg = "The buyer's context is read and written by src/core/tools/_boundary.py alone; the schemas declare the field. Business logic neither carries it nor names its type (salesagent-3cs7o.3)."

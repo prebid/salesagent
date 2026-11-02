@@ -16,7 +16,8 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import AuditLog, Principal
+from src.core.database.models import AuditLog
+from src.core.database.repositories.principal import PrincipalRepository
 
 logger = logging.getLogger(__name__)
 
@@ -60,9 +61,7 @@ def get_business_activities(tenant_id: str, limit: int = 50) -> list[dict]:
 
             # Build a cache of principal_id -> friendly name for this tenant
             principal_name_cache: dict[str, str] = {}
-            principal_stmt = select(Principal).filter(Principal.tenant_id == tenant_id)
-            principals = db.scalars(principal_stmt).all()
-            for principal in principals:
+            for principal in PrincipalRepository(db, tenant_id).list_all():
                 principal_name_cache[str(principal.principal_id)] = str(principal.name)
 
             for log in recent_logs:

@@ -13,11 +13,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 from adcp.types import FormatId
 
-from src.core.resolved_identity import ResolvedIdentity
-from src.core.tools.creatives import _sync_creatives_impl
+from src.core.tools.creatives._sync import _sync_creatives_impl
 from src.core.validation_helpers import run_async_in_sync_context
-from tests.factories.creative_asset import build_assets, image_spec
+from tests.factories.creative_asset import build_assets, image_spec, text_spec
 from tests.harness import make_mock_uow
+from tests.helpers.creative_test_helpers import sync_creatives_request
+from tests.helpers.unit_identity import fabricated_account_identity
 
 
 class TestRunAsyncInSyncContext:
@@ -101,59 +102,19 @@ def _make_creative_uow():
 
 
 class TestSyncCreativesErrorHandling:
-    """Test sync_creatives error handling paths that use creative_id."""
+    """Test sync_creatives error handling paths that use creative_id.
 
-    @pytest.mark.asyncio
-    async def test_creative_id_defined_in_error_path(self):
-        """Test that creative_id is available when validation fails (new creative path).
-
-        Before the fix, this would raise:
-        "cannot access local variable 'creative_id' where it is not associated with a value"
-
-        This tests the new creative creation path where validation fails.
-        """
-        mock_uow, mock_creative_repo = _make_creative_uow()
-
-        # ResolvedIdentity replaces context-based auth
-        identity = ResolvedIdentity(
-            principal_id="test_principal",
-            tenant_id="test_tenant",
-            tenant={"tenant_id": "test_tenant", "approval_mode": "auto-approve"},
-            protocol="mcp",
-        )
-
-        # Create a creative that will fail validation (missing required fields)
-        invalid_creative = {
-            "creative_id": "test_creative_123",
-            # Missing required fields like name, format_id
-        }
-
-        with patch("src.core.tools.creatives._sync.CreativeUoW") as mock_uow_cls:
-            mock_uow_cls.return_value.__enter__.return_value = mock_uow
-
-            with patch("src.core.helpers.context_helpers.ensure_tenant_context"):
-                # Mock the Creative schema to raise ValidationError
-                with patch("src.core.schemas.Creative") as mock_creative_class:
-                    from pydantic import ValidationError
-
-                    # Simulate validation error
-                    mock_creative_class.side_effect = ValidationError.from_exception_data(
-                        "Creative", [{"type": "missing", "loc": ("name",), "msg": "Field required"}]
-                    )
-
-                    # This should NOT raise "cannot access local variable 'creative_id'"
-                    # Instead, it should handle the error gracefully
-                    result = _sync_creatives_impl(
-                        creatives=[invalid_creative],
-                        context=None,
-                        identity=identity,
-                    )
-
-                    # Verify the error was captured with the correct creative_id
-                    assert len(result.creatives) == 1
-                    assert result.creatives[0].creative_id == "test_creative_123"
-                    assert result.creatives[0].action == "failed"
-                    assert len(result.creatives[0].errors) > 0
+    ``test_creative_id_defined_in_error_path`` used to live here. Its premise was that a
+    creative dict missing ``name`` and ``format_id`` reaches the per-creative loop and fails
+    THERE with ``creative_id`` bound. That premise is now inverted: every caller builds a
+    SyncCreativesRequest first, and core/creative-asset.json makes both fields required, so
+    such an item is refused at the request boundary and never reaches the loop. The branch it
+    graded -- the loop's ``except (ValidationError, ValueError)`` branch, and that it names the
+    offending creative_id -- is still reached by a spec-legal item that fails
+    ``_validate_creative_input``, and is graded by
+    test_sync_creatives_format_validation.py::test_format_validation_unknown_format and
+    test_creative.py::TestExtensionGaps::test_ext_c_validation_failure_strict_others_processed.
+    """
 
     @pytest.mark.asyncio
     async def test_creative_id_in_preview_failure_path(self):
@@ -167,74 +128,67 @@ class TestSyncCreativesErrorHandling:
         """
         mock_uow, mock_creative_repo = _make_creative_uow()
 
-        # Mock begin_nested for savepoint
-        mock_creative_repo.begin_nested.return_value.__enter__.return_value = None
-        mock_creative_repo.begin_nested.return_value.__exit__.return_value = None
+        # Mock the per-creative savepoint
+        mock_creative_repo.savepoint.return_value.__enter__.return_value = None
+        mock_creative_repo.savepoint.return_value.__exit__.return_value = None
 
-        identity = ResolvedIdentity(
-            principal_id="test_principal",
-            tenant_id="test_tenant",
-            tenant={"tenant_id": "test_tenant", "approval_mode": "auto-approve"},
-            protocol="mcp",
-        )
+        identity = fabricated_account_identity(approval_mode="auto-approve")
 
-        # Creative WITHOUT URL - this should fail when preview returns no previews
+        # Creative with NO URL anywhere - this should fail when preview returns no previews.
+        # ``assets`` is spec-REQUIRED (core/creative-asset.json), so the slot map cannot
+        # simply be omitted the way it was when this payload went straight into _impl; a TEXT
+        # asset satisfies the schema while still carrying no URL, which is what the preview
+        # path here needs.
         creative = {
             "creative_id": "test_creative_456",
             "name": "Test Creative",
             "format_id": {"agent_url": "https://example.com", "id": "display_300x250"},
-            # NO assets, NO url - preview is required
+            "assets": build_assets(text_spec("message", content="No URL anywhere")),
         }
 
         with patch("src.core.tools.creatives._sync.CreativeUoW") as mock_uow_cls:
             mock_uow_cls.return_value.__enter__.return_value = mock_uow
 
-            with patch("src.core.helpers.context_helpers.ensure_tenant_context"):
-                # Mock the creative agent registry to return no previews
-                with patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry:
-                    mock_reg_instance = MagicMock()
-                    mock_registry.return_value = mock_reg_instance
+            # Mock the creative agent registry to return no previews
+            with patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry:
+                mock_reg_instance = MagicMock()
+                mock_registry.return_value = mock_reg_instance
 
-                    _fmt_id = FormatId(agent_url="https://example.com", id="display_300x250")
+                _fmt_id = FormatId(agent_url="https://example.com", id="display_300x250")
 
-                    # Mock get_format to return a valid format spec
-                    async def mock_get_format(*args, **kwargs):
-                        mock_format = MagicMock()
-                        mock_format.format_id = _fmt_id
-                        mock_format.agent_url = "https://example.com"
-                        mock_format.output_format_ids = None  # Not generative
-                        return mock_format
+                # Mock get_format to return a valid format spec
+                async def mock_get_format(*args, **kwargs):
+                    mock_format = MagicMock()
+                    mock_format.format_id = _fmt_id
+                    mock_format.agent_url = "https://example.com"
+                    mock_format.output_format_ids = None  # Not generative
+                    return mock_format
 
-                    mock_reg_instance.get_format = mock_get_format
+                mock_reg_instance.get_format = mock_get_format
 
-                    # Mock list_all_formats to return a matching format
-                    async def mock_list_formats(*args, **kwargs):
-                        mock_format = MagicMock()
-                        mock_format.format_id = _fmt_id
-                        mock_format.agent_url = "https://example.com"
-                        mock_format.output_format_ids = None  # Not generative
-                        return [mock_format]
+                # Mock list_all_formats to return a matching format
+                async def mock_list_formats(*args, **kwargs):
+                    mock_format = MagicMock()
+                    mock_format.format_id = _fmt_id
+                    mock_format.agent_url = "https://example.com"
+                    mock_format.output_format_ids = None  # Not generative
+                    return [mock_format]
 
-                    mock_reg_instance.list_all_formats = mock_list_formats
+                mock_reg_instance.list_all_formats = mock_list_formats
 
-                    # Mock preview_creative to return empty previews (failure case)
-                    async def mock_preview(*args, **kwargs):
-                        return {"previews": []}  # No previews = validation failure
+                # Mock preview_creative to return empty previews (failure case)
+                async def mock_preview(*args, **kwargs):
+                    return {"previews": []}  # No previews = validation failure
 
-                    mock_reg_instance.preview_creative = mock_preview
+                mock_reg_instance.preview_creative = mock_preview
 
-                    # This should handle the error gracefully with creative_id available
-                    result = _sync_creatives_impl(
-                        creatives=[creative],
-                        context=None,
-                        identity=identity,
-                    )
+                # This should handle the error gracefully with creative_id available
+                result = _sync_creatives_impl(req=sync_creatives_request(creatives=[creative]), identity=identity)
 
-                    # Verify error was captured with correct creative_id
-                    assert len(result.creatives) == 1
-                    assert result.creatives[0].creative_id == "test_creative_456"
-                    assert result.creatives[0].action == "failed"
-                    assert any("preview" in err.message.lower() for err in result.creatives[0].errors)
+                # Verify error was captured with correct creative_id
+                assert len(result.creatives) == 1
+                assert result.creatives[0].creative_id == "test_creative_456"
+                assert result.creatives[0].action == "failed"
 
 
 class TestSyncCreativesAsyncScenario:
@@ -251,16 +205,11 @@ class TestSyncCreativesAsyncScenario:
         """
         mock_uow, mock_creative_repo = _make_creative_uow()
 
-        # Mock begin_nested for savepoint
-        mock_creative_repo.begin_nested.return_value.__enter__.return_value = None
-        mock_creative_repo.begin_nested.return_value.__exit__.return_value = None
+        # Mock the per-creative savepoint
+        mock_creative_repo.savepoint.return_value.__enter__.return_value = None
+        mock_creative_repo.savepoint.return_value.__exit__.return_value = None
 
-        identity = ResolvedIdentity(
-            principal_id="test_principal",
-            tenant_id="test_tenant",
-            tenant={"tenant_id": "test_tenant", "approval_mode": "auto-approve"},
-            protocol="mcp",
-        )
+        identity = fabricated_account_identity(approval_mode="auto-approve")
 
         creative = {
             "creative_id": "test_creative_789",
@@ -274,60 +223,57 @@ class TestSyncCreativesAsyncScenario:
         with patch("src.core.tools.creatives._sync.CreativeUoW") as mock_uow_cls:
             mock_uow_cls.return_value.__enter__.return_value = mock_uow
 
-            with patch("src.core.helpers.context_helpers.ensure_tenant_context"):
-                with patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry:
-                    mock_reg_instance = MagicMock()
-                    mock_registry.return_value = mock_reg_instance
+            with patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry:
+                mock_reg_instance = MagicMock()
+                mock_registry.return_value = mock_reg_instance
 
-                    _fmt_id2 = FormatId(agent_url="https://example.com", id="display_300x250")
+                _fmt_id2 = FormatId(agent_url="https://example.com", id="display_300x250")
 
-                    # Mock async methods
-                    async def mock_get_format(*args, **kwargs):
-                        # Simulate work
-                        await asyncio.sleep(0.001)
-                        mock_format = MagicMock()
-                        mock_format.format_id = _fmt_id2
-                        mock_format.agent_url = "https://example.com"
-                        mock_format.output_format_ids = None
-                        return mock_format
+                # Mock async methods
+                async def mock_get_format(*args, **kwargs):
+                    # Simulate work
+                    await asyncio.sleep(0.001)
+                    mock_format = MagicMock()
+                    mock_format.format_id = _fmt_id2
+                    mock_format.agent_url = "https://example.com"
+                    mock_format.output_format_ids = None
+                    return mock_format
 
-                    async def mock_list_formats(*args, **kwargs):
-                        # Simulate work
-                        await asyncio.sleep(0.001)
-                        mock_format = MagicMock()
-                        mock_format.format_id = _fmt_id2
-                        mock_format.agent_url = "https://example.com"
-                        mock_format.output_format_ids = None
-                        return [mock_format]
+                async def mock_list_formats(*args, **kwargs):
+                    # Simulate work
+                    await asyncio.sleep(0.001)
+                    mock_format = MagicMock()
+                    mock_format.format_id = _fmt_id2
+                    mock_format.agent_url = "https://example.com"
+                    mock_format.output_format_ids = None
+                    return [mock_format]
 
-                    async def mock_preview(*args, **kwargs):
-                        await asyncio.sleep(0.001)
-                        return {
-                            "previews": [
-                                {
-                                    "renders": [
-                                        {
-                                            "preview_url": "https://example.com/preview.png",
-                                            "dimensions": {"width": 300, "height": 250},
-                                        }
-                                    ]
-                                }
-                            ]
-                        }
+                async def mock_preview(*args, **kwargs):
+                    await asyncio.sleep(0.001)
+                    return {
+                        "previews": [
+                            {
+                                "renders": [
+                                    {
+                                        "preview_url": "https://example.com/preview.png",
+                                        "dimensions": {"width": 300, "height": 250},
+                                    }
+                                ]
+                            }
+                        ]
+                    }
 
-                    mock_reg_instance.get_format = mock_get_format
-                    mock_reg_instance.list_all_formats = mock_list_formats
-                    mock_reg_instance.preview_creative = mock_preview
+                mock_reg_instance.get_format = mock_get_format
+                mock_reg_instance.list_all_formats = mock_list_formats
+                mock_reg_instance.preview_creative = mock_preview
 
-                    # This is the critical test: calling from async context should work
-                    # Before the fix, this would raise RuntimeError about asyncio.run()
-                    result = _sync_creatives_impl(
-                        creatives=[creative],
-                        context=None,
-                        identity=identity,
-                    )
+                # This is the critical test: calling from async context should work
+                # Before the fix, this would raise RuntimeError about asyncio.run()
+                result = _sync_creatives_impl(
+                    req=sync_creatives_request(creatives=[creative], context=None), identity=identity
+                )
 
-                    # Verify it succeeded
-                    assert result is not None
-                    assert len(result.creatives) >= 1
-                    # May succeed or fail depending on mocks, but should NOT crash with asyncio error
+                # Verify it succeeded
+                assert result is not None
+                assert len(result.creatives) >= 1
+                # May succeed or fail depending on mocks, but should NOT crash with asyncio error

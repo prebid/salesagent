@@ -19,17 +19,38 @@ from src.core.schemas._base import FormatId
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    reason="format_resolver.get_format() compares FormatId object to bare string with ==, "
-    "which always returns False. Fallback lookup without agent_url is silently broken.",
-    strict=True,
-)
+# Graduated 2026-08-25: the xfail routing is gone because production now implements the
+# behaviour, not because the test stopped being able to fail. Both halves were verified
+# before removal, per .claude/rules/workflows/xpass-graduation.md:
+#   - The test was VACUOUS. It patched `src.core.format_resolver.get_creative_agent_registry`,
+#     an attribute that module does not have (the import is function-local), so `patch()`
+#     raised AttributeError before any production code ran, and the strict xfail had been
+#     green on its own broken setup since the 2026-04-30 audit. It also returned the
+#     coroutine from `run_async_in_sync_context` instead of the awaited list. Both were
+#     corrected FIRST, and the test then failed for its stated reason: NOT_FOUND raised for
+#     a format the listing contains.
+#   - Production then changed: get_format's no-agent_url branch resolves through
+#     find_format_by_id, which compares the id component instead of a str against a model.
+# Traced end to end: get_format -> find_format_by_id -> format_identity -> format_id_identity.
 def test_format_resolver_finds_format_without_agent_url():
     """get_format() without agent_url should search all agents and find a match.
 
-    Bug: format_resolver.py:56 does `fmt.format_id == format_id` where fmt.format_id
-    is a FormatId object and format_id is a bare string. This comparison always fails.
+    Two patch targets, both load-bearing, and both wrong in the version of this test
+    that shipped with the 2026-04-30 audit:
+
+    - ``get_creative_agent_registry`` is imported INSIDE ``get_format``, so it is never
+      an attribute of ``src.core.format_resolver``; patching it there raised
+      AttributeError before a line of production code ran. The test was passing as an
+      xfail on the strength of its own broken setup, proving nothing about the bug it
+      claimed to document. Patch the source module instead.
+    - ``run_async_in_sync_context`` must return the AWAITED value. Returning the
+      coroutine itself (``lambda coro: coro``) makes the production loop iterate a
+      coroutine and blow up with TypeError -- again, a red mark for the wrong reason.
+
+    With both fixed, the failure that remains is the real one: the listing contains the
+    requested format and ``get_format`` raises NOT_FOUND anyway.
     """
+    from src.core.exceptions import AdCPFormatNotFoundError
     from src.core.format_resolver import get_format
 
     mock_format = MagicMock()
@@ -38,15 +59,20 @@ def test_format_resolver_finds_format_without_agent_url():
         id="display_300x250_image",
     )
 
-    mock_registry = AsyncMock()
-    mock_registry.list_all_formats.return_value = [mock_format]
+    mock_registry = MagicMock()
 
-    with patch("src.core.format_resolver.get_creative_agent_registry", return_value=mock_registry):
-        with patch("src.core.format_resolver.run_async_in_sync_context", side_effect=lambda coro: coro):
-            # This should find the format by searching all agents
-            # Bug: the comparison at line 56 always returns False
+    with (
+        patch("src.core.creative_agent_registry.get_creative_agent_registry", return_value=mock_registry),
+        patch("src.core.format_resolver.run_async_in_sync_context", side_effect=lambda coro: [mock_format]),
+    ):
+        try:
             result = get_format(format_id="display_300x250_image")
-            assert result is mock_format
+        except AdCPFormatNotFoundError as exc:  # the bug, stated as the failure it is
+            raise AssertionError(
+                f"get_format raised NOT_FOUND for a format the registry listing contains: {exc}"
+            ) from exc
+
+    assert result is mock_format
 
 
 # ---------------------------------------------------------------------------

@@ -12,7 +12,7 @@ full campaign lifecycle in minutes.
 - [Configuration](#configuration) — the `delivery_simulation` block, its defaults, and where it lives
 - [Webhook payload](#webhook-payload) — the exact JSON each webhook carries
 - [Webhook endpoints](#webhook-endpoints) — registering receivers per principal
-- [Simulated metrics](#simulated-metrics) — how spend, impressions, and clicks are computed
+- [Simulated metrics](#simulated-metrics) — how the simulator computes spend, impressions, and clicks
 - [Seeded delivery responses for tests](#seeded-delivery-responses-for-tests) — the polling-side seeding mechanism, distinct from webhooks
 - [Lifecycle and threading](#lifecycle-and-threading)
 - [Troubleshooting](#troubleshooting)
@@ -43,7 +43,7 @@ sequenceDiagram
 
     Buyer->>Adapter: create_media_buy
     Adapter->>Sim: start_simulation(media_buy_id, budget, flight dates)
-    Adapter-->>Buyer: CreateMediaBuyResponse
+    Adapter-->>Buyer: AdapterCreateResult (the tool builds the buyer's response)
     Sim->>WDS: initial webhook (status pending, 0 impressions)
     WDS->>EP: signed POST
     loop Every update_interval_seconds until complete or stopped
@@ -78,8 +78,8 @@ The block lives in two places:
 - **Product `implementation_config`.** The mock product configuration page in
   the Admin UI (`/adapters/mock/config/<tenant_id>/<product_id>`) stores the
   same block on the product's `implementation_config`, and
-  `DeliverySimulator.restart_active_simulations()` reads it from there when
-  simulations are restarted manually.
+  `DeliverySimulator.restart_active_simulations()` reads it from there when you
+  restart simulations manually.
 
 ### Example timings
 
@@ -122,8 +122,8 @@ To reduce webhook volume without changing campaign speed, raise
 
 ## Webhook payload
 
-Each webhook body is the delivery notification built by
-`webhook_delivery_service.send_delivery_webhook()`:
+`webhook_delivery_service.send_delivery_webhook()` builds each webhook body as
+a delivery notification:
 
 ```json
 {
@@ -155,7 +155,7 @@ Each webhook body is the delivery notification built by
 
 The fields behave as follows:
 
-- **`adcp_version`** — the AdCP spec version the server is pinned to. See
+- **`adcp_version`** — the AdCP spec version the server pins. See
   [AdCP spec version](../../adcp-spec-version.md).
 - **`notification_type`** — `scheduled` for a periodic update, `final` for the
   last webhook of a completed campaign, and `adjusted` for a restatement of
@@ -166,10 +166,10 @@ The fields behave as follows:
   on the final webhook.
 - **`status`** — `pending` on the initial webhook, `delivering` while the
   simulated campaign runs, and `completed` at the end.
-- **`reporting_period`** — spans from the campaign start to the current
-  simulated time.
+- **`reporting_period`** — spans from the campaign start to the simulated time
+  the webhook reports.
 
-Delivery itself goes through the webhook egress module: each POST carries an
+Delivery itself goes through the webhook egress module: each `POST` carries an
 HMAC-SHA256 signature (`X-ADCP-Signature` and `X-ADCP-Timestamp` headers) when
 the endpoint's configuration requires one, a per-endpoint circuit breaker
 protects against failing receivers, and each endpoint has a bounded queue of
@@ -195,18 +195,18 @@ The simulator paces spend evenly across the flight with a ±5% random variance,
 capped at the total budget. The other metrics derive from spend:
 
 - Impressions assume a fixed $10 CPM (`impressions = spend / 0.01`).
-- Clicks are 1% of impressions, and `ctr` is reported as `0.01`.
+- Clicks are 1% of impressions, and the simulator reports `ctr` as `0.01`.
 
 ## Seeded delivery responses for tests
 
 Separately from webhook simulation, the mock adapter's
 `get_media_buy_delivery()` can return an exact, pre-seeded payload. When the
 `ADCP_TESTING` environment variable is `true`, the adapter checks the
-`delivery_simulation_configs` table for a row keyed by tenant and media buy
-and, if one exists, returns its stored payload verbatim. The e2e harness
-writes these rows so that in-process and containerized runs see identical
-delivery numbers. Without the environment variable or a matching row, the
-adapter computes delivery from campaign progress as usual.
+`delivery_simulation_configs` table for a row keyed by tenant and media buy. If
+such a row exists, the adapter returns its stored payload verbatim. The e2e
+harness writes these rows so that in-process and containerized runs see
+identical delivery numbers. Without the environment variable or a matching row,
+the adapter computes delivery from campaign progress as usual.
 
 This mechanism affects polling (`get_media_buy_delivery`) only — it neither
 starts nor alters webhook simulations. See
@@ -227,14 +227,14 @@ starts nor alters webhook simulations. See
 
 ## Troubleshooting
 
-**Webhooks are not firing.** Check, in order:
+**Webhooks are not firing.** Check these four things, in order:
 
-1. The `delivery_simulation` block has `enabled: true` in the configuration
-   the adapter reads (see [Configuration](#configuration)).
-2. The principal has an active webhook endpoint registered
+1. Confirm that the `delivery_simulation` block has `enabled: true` in the
+   configuration the adapter reads (see [Configuration](#configuration)).
+2. Confirm that the principal has an active webhook endpoint registered
    (see [Webhook endpoints](#webhook-endpoints)).
-3. The endpoint URL is reachable from the server container.
-4. The server logs. A healthy start logs these lines:
+3. Confirm that the endpoint URL is reachable from the server container.
+4. Read the server logs. A healthy start logs these lines:
 
 ```text
 🚀 Starting delivery simulation (acceleration: 3600x, interval: 1.0s)
@@ -243,14 +243,14 @@ starts nor alters webhook simulations. See
 📤 Delivery webhook #1 for buy_abc123: 0 imps, $0.00 [scheduled]
 ```
 
-If the start lines are missing, the configuration was not read at creation
-time or the media buy was created in dry-run mode. If the start lines appear
-but no `📤` lines follow, the webhook side is failing — look for
+If the start lines are missing, the adapter did not read the configuration at
+creation time, or the media buy was a dry run. If the start lines appear but no
+`📤` lines follow, the webhook side is failing — look for
 `No webhooks configured`, circuit breaker warnings, or delivery errors in the
 same log.
 
-**Too many or too few webhooks.** Raise `update_interval_seconds` to thin them
-out, or lower it for more frequent updates. Adjust `time_acceleration` to
+**Too many or too few webhooks.** Raise `update_interval_seconds` for fewer
+webhooks, or lower it for more frequent updates. Adjust `time_acceleration` to
 change how fast the campaign itself completes.
 
 ## Related documentation

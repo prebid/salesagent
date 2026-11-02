@@ -8,12 +8,13 @@ For every ON-PATH storyboard (from storyboard_coverage_map.build()), attaches:
   * the comply_test_controller divergence tag for the 20 storyboards triaged
     as deliberate (not a plain gap),
 
-Explicitly NOT joined here: scenario-level reconciliation (VERDICT/action)
-from storyboard_reconciliation.py. Its rows key by proposal-file slug
-(``uc003-creativefate``), not by T-UC-* scenario id, and there is no existing
-mapping between the two (40 proposals vs the current 21 tagged scenarios) --
-inventing one would violate the Core Invariant ("never re-derived/inferred").
-Run ``scripts/audit/storyboard_reconciliation.py`` directly for that data.
+Scenario-level reconciliation (VERDICT/action per re-grounding proposal) is NOT
+joined here and no longer exists as a report. ``storyboard_reconciliation.py``
+read 40 proposal files that lived in an agent working directory, and commit
+b09479143 deleted those on the ground that committed code reading an agent's
+working directory as data is a layering violation. This module was corrected in
+that commit; the reconciliation script was left behind, and is now deleted.
+tests/unit/test_architecture_audit_scripts_have_a_subject.py encodes the rule.
 
 Measured-status join key: the runner's ``tested_tracks[].scenarios[].
 scenario`` field is ``"<storyboard_stem>/<sub-scenario-name>"`` in the
@@ -165,7 +166,7 @@ def _ledgered_failures(repo: Path) -> dict[str, list[str]]:
     host-side numbers do not carry over. They stay in the repo as history.
     """
     failures: dict[str, list[str]] = {}
-    for check_id in ledger.load(repo / ledger.LEDGER):
+    for check_id in ledger.load(ledger.ledger_path(repo)):
         # storyboard_key normalizes hyphens to underscores: the ledger carries
         # the runner's underscore spelling (webhook_emission) while
         # coverage_map stems are hyphenated for universal/ (webhook-emission).
@@ -209,6 +210,11 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
                 "stem": row["stem"],
                 "citation": f"repo=adcp ref={coverage['pinned_version']} path={row['storyboard']}",
                 "scenarios": row["covered_by"],
+                # The claim/coverage split the coverage map now carries, passed through
+                # rather than re-derived: "Scenario" in this table was a tag claim, and
+                # "scenarios TO WRITE" counted only the storyboards with no tag at all.
+                "scenarios_live": row["covered_by_live"],
+                "coverage": row["coverage"],
                 "required_tools": sorted(storyboard_spec.required_tools(text)),
                 "checks": checks,
                 **build_row_status_fields(stem=row["stem"], text=text),
@@ -241,7 +247,14 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
         "totals": {
             "on_path": len(on_path),
             "gated": len(gated),
+            "unknown": coverage["totals"]["unknown"],
+            "liveness_measured": coverage["totals"]["liveness_measured"],
             "no_scenario": sum(1 for r in rows if not r["scenarios"]),
+            "scenario_not_live": sum(1 for r in rows if r["coverage"] == storyboard_coverage_map.COVERAGE_CLAIMED),
+            "scenario_not_measured": sum(
+                1 for r in rows if r["coverage"] == storyboard_coverage_map.COVERAGE_NOT_MEASURED
+            ),
+            "scenario_live": sum(1 for r in rows if r["coverage"] == storyboard_coverage_map.COVERAGE_LIVE),
             "no_ticket": sum(1 for r in rows if not r["tracking_issues"]),
             "no_scenario_no_ticket": sum(1 for r in rows if not r["scenarios"] and not r["tracking_issues"]),
             "distinct_issues": len({i for r in rows for i in r["tracking_issues"]}),
@@ -281,7 +294,22 @@ def render(result: dict[str, Any]) -> str:
         "gated checks are indexed with `gate=GATED` rather than dropped.",
         f"- **measured FAILING: {result['totals']['failing']} storyboards, "
         f"{result['totals']['ledgered_checks']} ledgered checks**",
-        f"- **scenarios TO WRITE: {result['totals']['no_scenario']}**",
+        f"- **storyboards with NO scenario claiming them: {result['totals']['no_scenario']} of "
+        f"{result['totals']['on_path']}**",
+        (
+            f"- of the {result['totals']['on_path'] - result['totals']['no_scenario']} that ARE claimed: "
+            f"**{result['totals']['scenario_live']} graded by a live scenario**, "
+            f"{result['totals']['scenario_not_live']} claim-only (tagged, steps not bound or harness "
+            "not wired). A claim is a `@storyboard-v3.1` TAG; only the first number is coverage."
+            if result["totals"]["liveness_measured"]
+            else (
+                f"- of the {result['totals']['on_path'] - result['totals']['no_scenario']} that ARE claimed: "
+                f"**liveness NOT MEASURED for all {result['totals']['scenario_not_measured']}** — no "
+                "`test-results/bdd_scenario_liveness.json` was joined, so no **Scenario** cell below has "
+                "been shown to grade anything. Run `pytest tests/bdd` and regenerate."
+            )
+        ),
+        f"- **unclassified storyboards (no verdict at all): {result['totals']['unknown']}**",
         f"- **tickets TO FILE: {result['totals']['no_ticket']}**",
         f"- **neither scenario nor ticket: {result['totals']['no_scenario_no_ticket']}**",
         f"- existing tickets to REUSE: **{result['totals']['distinct_issues']}**",
@@ -294,8 +322,12 @@ def render(result: dict[str, Any]) -> str:
         "",
         "Reading the cells:",
         "",
-        "- **Scenario** — an id means a `@storyboard-v3.1` scenario claims this storyboard; "
-        "**TO WRITE** means none does. A listed scenario does *not* mean its checks all pass — "
+        "- **Scenario** — an id means a `@storyboard-v3.1` scenario CLAIMS this storyboard; "
+        "**NO SCENARIO** means none does. The parenthesis is the claim's liveness, joined from a "
+        "real `pytest tests/bdd` run plus the `ENV_ROUTES` registry: `LIVE` is the only one that "
+        "is coverage, `claim only` means the scenario is tagged but its steps are not bound or its "
+        "harness is not wired, and `NOT MEASURED` means no BDD run was joined and nothing about "
+        "the claim has been established. A listed scenario does *not* mean its checks all pass — "
         "compare against Status.",
         "- **Ticket** — `#N (partial)` is an EXISTING issue to reuse, covering some of this "
         "storyboard's checks; the map's `note:` says what it leaves out. **TO FILE** means "
@@ -309,15 +341,12 @@ def render(result: dict[str, Any]) -> str:
         "by real API sequencing instead) — and `UNTRIAGED` where that editorial call has "
         "not been made yet.",
         "",
-        "Scenario-level reconciliation (VERDICT/action per proposal) is a separate report — "
-        "run `scripts/audit/storyboard_reconciliation.py`; its rows key by proposal-file slug, "
-        "not by scenario id, so it is not joined into this table.",
         "",
         "| Storyboard | Citation | Scenario | Required tools | Checks | Status | Divergence | Ticket |",
         "|---|---|---|---|---|---|---|---|",
     ]
     for r in result["rows"]:
-        scenarios = ", ".join(f"`{s}`" for s in r["scenarios"]) or "**TO WRITE**"
+        scenarios = storyboard_coverage_map.coverage_cell(r["coverage"], r["scenarios"])
         tools = ", ".join(f"`{t}`" for t in r["required_tools"]) or "—"
         checks = ", ".join(f"{k}×{v}" for k, v in r["checks"].items()) or "—"
         divergence = r["divergence"] or "—"

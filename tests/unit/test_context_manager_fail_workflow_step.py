@@ -10,9 +10,24 @@ Validates the two contracts the helper exists to enforce:
 
 2. A DB hiccup during the audit write must NOT shadow the original
    exception. The caller's bare ``raise`` (intended to re-raise the original
-   AdCPError) would otherwise pick up the audit-failure exception and the
+   AdCPSalesAgentError) would otherwise pick up the audit-failure exception and the
    buyer would see an unrelated DB error in place of the real validation
    failure.
+
+Merge note (origin/main #1858 storyboard-conformance work). main graded the
+helper's defensive wire-code sanitization branch — a source whose code fell
+outside ``WIRE_STANDARD_CODES`` was rewritten to SERVICE_UNAVAILABLE — and
+grew a test proving the rewrite took the PIN's recovery rather than a
+hand-typed ``recovery="terminal"``. That branch no longer exists: the merged
+``exceptions.py`` deletes ``WIRE_STANDARD_CODES``/``translate_error_code``
+outright (see its "Reconciliation note", exceptions.py:74-102) because the pin
+makes the AdCP code vocabulary OPEN and requires receivers to decode an unknown
+code from ``recovery``. The obligation that test carried is not dropped, it is
+relocated to where the merged architecture enforces it —
+``TestWireCodeAndRecoveryCannotContradictThePin`` below — and main's
+anti-self-agreement device (every caller STATES the (code, recovery) pair it
+expects, so a derivation that silently moved reddens these tests instead of
+quietly agreeing with itself) is carried into ``_expected_response_data``.
 """
 
 from unittest.mock import MagicMock
@@ -20,7 +35,10 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.core.context_manager import ContextManager
-from src.core.exceptions import AdCPValidationError
+from src.core.errors.codes import CODE_TABLE, AppErrorCode, ErrorCode, Recovery
+from src.core.errors.details import ValidationDetails
+from src.core.exceptions import AdCPSalesAgentError, AdCPValidationError
+from tests.helpers.envelope_assertions import envelope_for
 
 
 def _new_ctx_manager_with_mocked_update() -> tuple[ContextManager, MagicMock]:
@@ -35,31 +53,36 @@ def _new_ctx_manager_with_mocked_update() -> tuple[ContextManager, MagicMock]:
     return cm, cm.update_workflow_step
 
 
-def _expected_response_data(
-    code: str, message: str, *, recovery: str, field: str | None = None, details: dict | None = None
-) -> dict:
+def _expected_response_data(exc: AdCPSalesAgentError, *, code: ErrorCode | AppErrorCode, recovery: Recovery) -> dict:
     """Build the two-layer wire-shape ``response_data`` the helper must emit.
 
-    Constructs a temporary ``AdCPError`` and calls
-    ``build_two_layer_error_envelope`` — the same function the production code
-    now uses — so the test asserts on EXACTLY the dict shape
-    ``update_workflow_step`` will receive.
+    Built from the SAME exception the test raises, through the same
+    ``AdcpErrorResponse.of`` + ``to_wire`` production calls (``envelope_for``) — so the
+    assertion is on the dict ``update_workflow_step`` receives, with nothing reconstructed.
 
-    ``recovery`` is no longer passed to the constructor (it is a read-only
-    derived property). It is still a REQUIRED argument here, and is asserted
-    against the value the derivation produces: that keeps every caller stating
-    the pair it expects, so a derivation that silently moved would redden these
-    tests rather than quietly agreeing with itself.
+    Reconstructing an equivalent error here would not be equivalent: a NAMED-code
+    ``AdCPSalesAgentError`` resolves recovery and suggestion from CODE_TABLE, while a class-coded
+    subclass keeps its class defaults. Passing the real exception sidesteps that
+    asymmetry instead of encoding it.
+
+    ``code`` and ``recovery`` are REQUIRED, and are asserted against what the
+    exception actually derives (origin/main #1858's device, kept). Building the
+    expected envelope with production's own builder would otherwise let a moved
+    derivation agree with itself; stating the pair here means every caller
+    declares the classification it expects a subscriber to read.
     """
-    from src.core.exceptions import AdCPError, build_two_layer_error_envelope
-
-    exc = AdCPError(message, field=field, details=details)
-    exc.error_code = code
-    assert exc.recovery == recovery, (
-        f"expected {code} to derive recovery {recovery!r}, got {exc.recovery!r} — "
-        "the test's stated expectation and the pin disagree"
+    assert (exc.error_code, exc.recovery) == (code, recovery), (
+        f"expected {code} to derive recovery {recovery!r}, got "
+        f"({exc.error_code!r}, {exc.recovery!r}) — the test's stated expectation and the pin disagree"
     )
-    return build_two_layer_error_envelope(exc)
+    return envelope_for(exc)
+
+
+def _normalized_for(exc: Exception) -> AdCPSalesAgentError:
+    """The typed error production derives from an untyped one, via the same helper."""
+    from src.core.exceptions import adcp_error_for
+
+    return adcp_error_for(exc)
 
 
 class TestFailWorkflowStepForExceptionWebhookPayload:
@@ -68,9 +91,8 @@ class TestFailWorkflowStepForExceptionWebhookPayload:
     def test_adcp_error_threads_envelope_into_response_data(self):
         cm, mock_update = _new_ctx_manager_with_mocked_update()
         exc = AdCPValidationError(
-            "bad budget",
             field="packages[].budget",
-            details={"violations": ["below minimum"]},
+            details=ValidationDetails(reasons=["below minimum"]),
         )
 
         cm.audit_workflow_step_failure("step_abc", exc)
@@ -82,83 +104,137 @@ class TestFailWorkflowStepForExceptionWebhookPayload:
         mock_update.assert_called_once_with(
             "step_abc",
             status="failed",
-            error_message="bad budget",
-            response_data=_expected_response_data(
-                "VALIDATION_ERROR",
-                "bad budget",
-                recovery="correctable",
-                field="packages[].budget",
-                details={"violations": ["below minimum"]},
-            ),
+            error_message=exc.message,
+            response_data=_expected_response_data(exc, code=ErrorCode.VALIDATION_ERROR, recovery=Recovery.CORRECTABLE),
         )
 
-    def test_untyped_exception_wrapped_with_wire_safe_code(self):
-        """Bare exceptions get a synthetic AdCPError so the wire code stays standard.
+    def test_untyped_exception_wrapped_with_typed_error(self):
+        """Bare exceptions get a typed AdCPSalesAgentError, so the payload is classified.
 
-        ``AdCPError`` defaults to ``INTERNAL_ERROR`` which is in
-        ``INTERNAL_CODES``; the helper's defensive wire-code enforcement
-        falls back to ``SERVICE_UNAVAILABLE`` so async subscribers only see
-        codes from ``STANDARD_ERROR_CODES`` even when the source was untyped.
-        Recovery is transient — the pinned enumMetadata classification of the
-        SERVICE_UNAVAILABLE wire code .
+        The code is INTERNAL_ERROR — named on the base by ``adcp_error_for``'s
+        final branch — and its pinned recovery is ``transient``. There is no
+        rewrite to SERVICE_UNAVAILABLE any more: the merged exceptions module
+        deletes the closed wire set that motivated it, because the pin says the
+        vocabulary is open and a receiver decodes an unknown code from
+        ``recovery`` (exceptions.py:74-102). The (code, recovery) pair a
+        subscriber reads is stated below, not inferred.
+
+        This ``response_data`` is a PERSISTED record: wire responses and
+        persisted ``workflow_step.response_data`` share the same two-layer
+        shape, both serialized from ``AdcpErrorResponse.of`` with ``to_wire``.
+        It is read back by async webhook subscribers — so it gets the
+        SAME provenance protection prkv.8 gives the live transports:
+        ``adcp_error_for()``'s untyped-Exception fallback carries NO text from
+        the exception, only the code's own table sentence, because the
+        exception's ``str()`` has no guarantee of being safe to persist/replay
+        to a subscriber (a DSN, a stack fragment, an upstream response body).
         """
         cm, mock_update = _new_ctx_manager_with_mocked_update()
 
-        cm.audit_workflow_step_failure("step_abc", RuntimeError("kaboom"))
+        cm.audit_workflow_step_failure("step_abc", RuntimeError("postgres://admin:s3cr3t@10.0.0.5/prod"))
 
+        # The raw DSN must not reach the payload: the helper normalizes to a typed error
+        # whose text comes from the code, so the expected envelope is built the same way.
+        expected = _normalized_for(RuntimeError("postgres://admin:s3cr3t@10.0.0.5/prod"))
         mock_update.assert_called_once_with(
             "step_abc",
             status="failed",
-            error_message="kaboom",
-            response_data=_expected_response_data("SERVICE_UNAVAILABLE", "kaboom", recovery="transient"),
+            error_message=expected.message,
+            response_data=_expected_response_data(
+                expected, code=AppErrorCode.INTERNAL_ERROR, recovery=Recovery.TRANSIENT
+            ),
         )
+        assert "s3cr3t" not in str(mock_update.call_args)
 
-    def test_non_standard_wire_code_is_sanitized_with_the_pinned_recovery(self):
-        """A code outside WIRE_STANDARD_CODES is rewritten, and takes the PIN's recovery.
+    def test_untyped_exception_with_no_text_is_indistinguishable(self):
+        """A text-less untyped exception yields the same payload as any other.
 
-        This is the helper's defensive sanitization branch, and it is the only
-        path that reaches it: the sibling test above starts from a bare
-        RuntimeError, whose INTERNAL_ERROR maps to SERVICE_UNAVAILABLE and so is
-        already standard — the branch is skipped. A source carrying a code with no
-        mapping entry at all is what enters it.
-
-        The rewrite used to hand-type ``recovery="terminal"`` onto the
-        SERVICE_UNAVAILABLE it substitutes — a pair the pinned enumMetadata
-        contradicts, since that code is classified ``transient``. Webhook
-        subscribers read this envelope verbatim, so the contradiction was
-        buyer-visible: a subscriber classifying by code saw "retry with backoff"
-        and one classifying by recovery saw "stop". Sanitizing the CODE is this
-        branch's whole job; the recovery follows from the code it chose.
+        Its wording used to be the exception's type name; the sentence is now the
+        code's, so an empty ``str(exc)`` is no longer a distinct case at all.
         """
-        from src.core.exceptions import AdCPError
-
-        cm, mock_update = _new_ctx_manager_with_mocked_update()
-
-        source = AdCPError("upstream exploded")
-        source.error_code = "TOTALLY_NON_STANDARD_CODE"
-
-        cm.audit_workflow_step_failure("step_sanitize", source)
-
-        mock_update.assert_called_once_with(
-            "step_sanitize",
-            status="failed",
-            error_message="upstream exploded",
-            response_data=_expected_response_data("SERVICE_UNAVAILABLE", "upstream exploded", recovery="transient"),
-        )
-
-    def test_empty_exception_message_falls_back_to_type_name(self):
         cm, mock_update = _new_ctx_manager_with_mocked_update()
 
         cm.audit_workflow_step_failure("step_abc", RuntimeError())
 
-        # Empty message is replaced with type name so the wire envelope and
-        # error_message never carry blank strings.
+        expected = _normalized_for(RuntimeError())
         mock_update.assert_called_once_with(
             "step_abc",
             status="failed",
-            error_message="RuntimeError",
-            response_data=_expected_response_data("SERVICE_UNAVAILABLE", "RuntimeError", recovery="transient"),
+            error_message=expected.message,
+            response_data=_expected_response_data(
+                expected, code=AppErrorCode.INTERNAL_ERROR, recovery=Recovery.TRANSIENT
+            ),
         )
+
+
+class TestWireCodeAndRecoveryCannotContradictThePin:
+    """origin/main #1858's sanitization obligation, at the layer that now enforces it.
+
+    main's ``test_non_standard_wire_code_is_sanitized_with_the_pinned_recovery``
+    reached the helper's rewrite branch by constructing an ``AdCPSalesAgentError`` and
+    ASSIGNING ``error_code = "TOTALLY_NON_STANDARD_CODE"``, then proved the
+    substituted SERVICE_UNAVAILABLE carried the pin's ``transient`` instead of a
+    hand-typed ``terminal``. Neither the assignment nor the rewrite is
+    expressible now, so the branch is not code the helper can reach — but the
+    buyer-visible contradiction main was protecting against (a subscriber
+    classifying by code sees "retry with backoff" while one classifying by
+    recovery sees "stop") is exactly what these tests still forbid.
+    """
+
+    def test_a_code_the_table_does_not_classify_cannot_be_declared(self):
+        """An out-of-table code is refused at CLASS CREATION, so no error can carry one.
+
+        This is what replaced the sanitize-on-emit branch: rather than rewriting a
+        bad code on its way to the subscriber, the error naming it never exists.
+
+        It moved one step earlier and got stronger. The refusal used to fire on the first
+        CONSTRUCTION of an error naming the code; with ``error_code=`` gone from the
+        constructor, a code reaches an error only by being DECLARED on a class, and
+        ``__init_subclass__`` refuses that at import — so a bad code cannot survive the
+        module that introduces it, let alone reach a raise site.
+        """
+        with pytest.raises(TypeError, match="which CODE_TABLE does not"):
+
+            class _Impossible(AdCPSalesAgentError):
+                _code = "TOTALLY_NON_STANDARD_CODE"
+
+    def test_a_constructed_error_cannot_be_re_coded_after_the_fact(self):
+        """``error_code`` is read-only, closing main's route into the branch.
+
+        Assignment was how a source acquired a non-standard code in the first
+        place; with no setter, ``message``/``recovery``/``suggestion`` cannot drift
+        away from the code they are derived from.
+        """
+        exc = AdCPValidationError()
+
+        with pytest.raises(AttributeError, match="no setter"):
+            exc.error_code = "TOTALLY_NON_STANDARD_CODE"  # type: ignore[misc]
+
+    def test_both_envelope_layers_pair_the_code_with_the_pinned_recovery(self):
+        """The payload a subscriber reads pairs each code with CODE_TABLE's recovery.
+
+        Graded on the dict ``assert_called_once_with`` has just proven production
+        emitted — envelope-level ``adcp_error`` and ``errors[0]`` alike, since the
+        two layers disagreeing is the same buyer-visible contradiction by another
+        route.
+        """
+        cm, mock_update = _new_ctx_manager_with_mocked_update()
+        exc = AdCPValidationError(field="packages[].budget")
+
+        cm.audit_workflow_step_failure("step_sanitize", exc)
+
+        expected = _expected_response_data(exc, code=ErrorCode.VALIDATION_ERROR, recovery=Recovery.CORRECTABLE)
+        mock_update.assert_called_once_with(
+            "step_sanitize",
+            status="failed",
+            error_message=exc.message,
+            response_data=expected,
+        )
+        for layer in (expected["adcp_error"], expected["errors"][0]):
+            assert layer["recovery"] == CODE_TABLE[layer["code"]].recovery, (
+                f"{layer['code']} was emitted with recovery {layer['recovery']!r}, "
+                f"but the pin classifies it {CODE_TABLE[layer['code']].recovery!r}"
+            )
 
 
 class TestFailWorkflowStepForExceptionAuditFailureNonFatal:
@@ -174,7 +250,7 @@ class TestFailWorkflowStepForExceptionAuditFailureNonFatal:
         """
         cm = ContextManager.__new__(ContextManager)
         cm.update_workflow_step = MagicMock(side_effect=RuntimeError("DB went away"))  # type: ignore[method-assign]
-        original = AdCPValidationError("real error the buyer should see")
+        original = AdCPValidationError()
 
         # Helper must return normally so the caller's `raise` propagates `original`.
         cm.audit_workflow_step_failure("step_abc", original)
@@ -189,7 +265,7 @@ class TestFailWorkflowStepForExceptionAuditFailureNonFatal:
         """
         cm = ContextManager.__new__(ContextManager)
         cm.update_workflow_step = MagicMock(side_effect=RuntimeError("DB went away"))  # type: ignore[method-assign]
-        original = AdCPValidationError("real error")
+        original = AdCPValidationError()
 
         def caller_pattern():
             try:
@@ -203,4 +279,3 @@ class TestFailWorkflowStepForExceptionAuditFailureNonFatal:
             caller_pattern()
         # The buyer sees the real error, not the audit failure.
         assert excinfo.value is original
-        assert "real error" in excinfo.value.message

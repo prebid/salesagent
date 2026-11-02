@@ -11,6 +11,7 @@ from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, Principal, Tenant
+from tests.factories.principal import plaintext_token_for
 
 
 @pytest.mark.requires_db
@@ -39,10 +40,12 @@ class TestTenantDashboard:
         """Test dashboard loads correctly with media buys using correct field names."""
         # Create test tenant
         with get_db_session() as db_session:
+            # Required (NOT NULL) and UNIQUE. Nothing routes to this host; it exists to satisfy the column.
             tenant = Tenant(
                 tenant_id="test_dashboard",
                 name="Test Dashboard Tenant",
                 subdomain="test-dashboard",
+                virtual_host="test-dashboard.adcp.test",
                 is_active=True,
                 # Use new schema fields
                 enable_axe_signals=True,
@@ -52,11 +55,11 @@ class TestTenantDashboard:
             db_session.add(tenant)
 
             # Create principal with valid platform mapping
-            principal = Principal(
+            principal = Principal.with_token(
+                plaintext_token_for("test_principal"),
                 tenant_id="test_dashboard",
                 principal_id="test_principal",
                 name="Test Principal",
-                access_token="test_token",
                 platform_mappings={"mock": {"advertiser_id": "test_advertiser"}},  # Valid mapping
             )
             db_session.add(principal)
@@ -100,17 +103,18 @@ class TestTenantDashboard:
                 tenant_id="test_metrics",
                 name="Test Metrics Tenant",
                 subdomain="test-metrics",
+                virtual_host="test-metrics.adcp.test",
                 is_active=True,
             )
             db_session.add(tenant)
 
             # Create principals first (required for foreign key)
             for i in range(3):
-                principal = Principal(
+                principal = Principal.with_token(
+                    plaintext_token_for(f"principal_{i}"),
                     tenant_id="test_metrics",
                     principal_id=f"principal_{i}",
                     name=f"Principal {i}",
-                    access_token=f"token_{i}",
                     platform_mappings={"mock": {"id": f"advertiser_{i}"}},
                 )
                 db_session.add(principal)
@@ -156,6 +160,7 @@ class TestTenantDashboard:
                 tenant_id="test_config",
                 name="Test Config Tenant",
                 subdomain="test-config",
+                virtual_host="test-config.adcp.test",
                 is_active=True,
                 # New schema fields
                 enable_axe_signals=True,
@@ -215,7 +220,13 @@ class TestTenantDashboard:
         """Test dashboard loads correctly for tenant with no data."""
         # Create minimal tenant
         with get_db_session() as db_session:
-            tenant = Tenant(tenant_id="empty_tenant", name="Empty Tenant", subdomain="empty", is_active=True)
+            tenant = Tenant(
+                tenant_id="empty_tenant",
+                name="Empty Tenant",
+                subdomain="empty",
+                virtual_host="empty-tenant.adcp.test",
+                is_active=True,
+            )
             db_session.add(tenant)
             db_session.commit()
 

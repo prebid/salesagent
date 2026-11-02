@@ -11,12 +11,6 @@ from typing import Any
 from urllib.parse import urlparse
 
 
-class GAMValidationError(Exception):
-    """Exception raised when creative fails GAM validation."""
-
-    pass
-
-
 class GAMValidator:
     """Validator for GAM creative assets and content."""
 
@@ -370,7 +364,7 @@ def validate_gam_creative(asset: dict[str, Any]) -> list[str]:
         List of validation error messages (empty if valid)
 
     Raises:
-        GAMValidationError: If validation fails with critical errors
+        Nothing. Returns the validation result; callers decide how to signal it.
     """
     validator = GAMValidator()
     issues = validator.validate_creative_asset(asset)

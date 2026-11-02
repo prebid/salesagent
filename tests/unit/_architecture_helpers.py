@@ -17,13 +17,17 @@ from __future__ import annotations
 
 import ast
 import functools
+import importlib.util
 import os
 import re
+import shutil
 import subprocess
+import sys
+import uuid
 import warnings
 from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import yaml
 
@@ -85,7 +89,26 @@ def iter_module_trees(scan_dirs: list[Path]) -> Iterator[tuple[ast.Module, str]]
         for py_file in sorted(scan_dir.rglob("*.py")):
             if "__pycache__" in str(py_file):
                 continue
-            yield parse_module(py_file), rel(py_file)
+            try:
+                tree = parse_module(py_file)
+            except FileNotFoundError:
+                # VANISHED, which is not the same as unparseable and must not be
+                # conflated with it. The listing above and the parse below are two
+                # separate filesystem passes, and some guards write a real file into
+                # the scanned tree for the duration of one case -- ast-grep scan has
+                # no `--stdin-filename`, so a rule's `files:` glob can only be graded
+                # by a real path (see `_PROBE_STEM` in
+                # test_ast_grep_credential_header_ban.py). Under xdist another worker
+                # deletes its probe between our two passes and the parse raises:
+                # measured as `FileNotFoundError:
+                # tests/unit/_synthetic_credential_probe_<hex>.py` failing
+                # test_no_duplicate_module_defs on an unrelated run.
+                #
+                # Skipping is sound HERE and nowhere near the SyntaxError contract the
+                # docstring defends: a file that no longer exists cannot hold a
+                # violation, whereas one that cannot be parsed might hold any number.
+                continue
+            yield tree, rel(py_file)
 
 
 def walk_with_enclosing_function(tree: ast.AST) -> Iterator[tuple[ast.AST, str]]:
@@ -129,6 +152,277 @@ def _parse_cached(path_str: str, _mtime: float) -> ast.Module:
 def parse_module(path: Path) -> ast.Module:
     """Parse a Python file. Cache key is (path, mtime) so edits invalidate."""
     return _parse_cached(str(path), path.stat().st_mtime)
+
+
+# ---------------------------------------------------------------------------
+# ORM model inventory — the one parse of src/core/database/models.py
+# ---------------------------------------------------------------------------
+
+MODELS_MODULE = REPO_ROOT / "src" / "core" / "database" / "models.py"
+
+#: Bases that make a class an ORM model. ``Base`` itself is excluded.
+_ORM_MODEL_BASES = frozenset({"Base", "JSONValidatorMixin"})
+
+
+def models_module_tree() -> ast.Module:
+    """Parsed ``src/core/database/models.py``, shared by every guard that reads it.
+
+    Four guards independently parsed this file before this accessor existed. It is
+    the same mtime-keyed ``parse_module`` cache underneath, so the parse happens
+    once per session however many guards ask for it.
+    """
+    return parse_module(MODELS_MODULE)
+
+
+def orm_model_class_defs() -> Iterator[ast.ClassDef]:
+    """Yield the ``ClassDef`` of every ORM model declared in ``models.py``."""
+    for node in ast.walk(models_module_tree()):
+        if not isinstance(node, ast.ClassDef) or node.name == "Base":
+            continue
+        for base in node.bases:
+            base_name = base.attr if isinstance(base, ast.Attribute) else getattr(base, "id", "")
+            if base_name in _ORM_MODEL_BASES:
+                yield node
+                break
+
+
+class UniqueKey(NamedTuple):
+    """One declared uniqueness promise on an ORM model.
+
+    ``usable`` is False when the declaration cannot be expressed as a plain set of
+    column names — an expression index, or a partial index whose promise holds only
+    for the rows its ``WHERE`` admits. Such a key is RECORDED and excluded, never
+    truncated to the column subset it happens to mention: ``uq_accounts_natural_key``
+    reduced to ``{tenant_id, operator}`` would assert a uniqueness the database never
+    promised, and any pre-check on that pair would then look like a full key check.
+    """
+
+    model: str
+    name: str
+    columns: frozenset[str]
+    kind: str  # unique-constraint | unique-index | column-unique | composite-pk
+    usable: bool
+    reason: str  # why unusable; "" when usable
+
+
+def _true_kwarg(call: ast.Call, name: str) -> bool:
+    return any(kw.arg == name and isinstance(kw.value, ast.Constant) and kw.value.value is True for kw in call.keywords)
+
+
+def _has_kwarg(call: ast.Call, name: str) -> bool:
+    return any(kw.arg == name for kw in call.keywords)
+
+
+def _string_columns(args: list[ast.expr]) -> tuple[frozenset[str], int]:
+    """Split positional column args into literal names and a count of expression args."""
+    names = {a.value for a in args if isinstance(a, ast.Constant) and isinstance(a.value, str)}
+    return frozenset(names), len(args) - len(names)
+
+
+def _class_body_column_assignments(cls: ast.ClassDef) -> Iterator[tuple[str, ast.Call]]:
+    """Yield ``(column_name, mapped_column_call)`` for each column declared on *cls*."""
+    for stmt in cls.body:
+        target: str | None = None
+        if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+            target = stmt.target.id
+        elif isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name):
+            target = stmt.targets[0].id
+        if target is None:
+            continue
+        value = stmt.value
+        if not isinstance(value, ast.Call):
+            continue
+        func_name = value.func.attr if isinstance(value.func, ast.Attribute) else getattr(value.func, "id", None)
+        if func_name in {"mapped_column", "Column"}:
+            yield target, value
+
+
+def _table_args_calls(cls: ast.ClassDef) -> Iterator[ast.Call]:
+    """Yield each constraint/index call inside the class's ``__table_args__``."""
+    for stmt in cls.body:
+        if not isinstance(stmt, ast.Assign):
+            continue
+        if not any(isinstance(t, ast.Name) and t.id == "__table_args__" for t in stmt.targets):
+            continue
+        elements = stmt.value.elts if isinstance(stmt.value, ast.Tuple | ast.List) else [stmt.value]
+        for element in elements:
+            if isinstance(element, ast.Call):
+                yield element
+
+
+def _model_unique_keys(cls: ast.ClassDef) -> Iterator[UniqueKey]:
+    primary_key_columns: list[str] = []
+    for column, call in _class_body_column_assignments(cls):
+        if _true_kwarg(call, "primary_key"):
+            primary_key_columns.append(column)
+        if _true_kwarg(call, "unique"):
+            yield UniqueKey(cls.name, f"{cls.name}.{column}", frozenset({column}), "column-unique", True, "")
+
+    for call in _table_args_calls(cls):
+        func_name = call.func.attr if isinstance(call.func, ast.Attribute) else getattr(call.func, "id", None)
+        if func_name == "UniqueConstraint":
+            columns, expressions = _string_columns(list(call.args))
+            name = next(
+                (kw.value.value for kw in call.keywords if kw.arg == "name" and isinstance(kw.value, ast.Constant)),
+                f"<unnamed uq on {cls.name}>",
+            )
+            reason = "expression column(s)" if expressions else ""
+            yield UniqueKey(cls.name, name, columns, "unique-constraint", not reason, reason)
+        elif func_name == "Index" and _true_kwarg(call, "unique") and call.args:
+            first = call.args[0]
+            name = first.value if isinstance(first, ast.Constant) else f"<unnamed index on {cls.name}>"
+            columns, expressions = _string_columns(list(call.args[1:]))
+            reasons = []
+            if expressions:
+                reasons.append(f"{expressions} expression column(s)")
+            if _has_kwarg(call, "postgresql_where"):
+                reasons.append("partial (postgresql_where)")
+            reason = ", ".join(reasons)
+            yield UniqueKey(cls.name, name, columns, "unique-index", not reason, reason)
+
+    # A composite PRIMARY KEY is a unique index too — and it is the only uniqueness
+    # several models have (PropertyTag, AuthorizedProperty). Single-column primary
+    # keys are excluded: a pre-check on a surrogate id is a plain existence lookup,
+    # not the contested-write shape this inventory exists to describe.
+    if len(primary_key_columns) >= 2:
+        yield UniqueKey(cls.name, f"{cls.name.lower()}_pkey", frozenset(primary_key_columns), "composite-pk", True, "")
+
+
+@functools.lru_cache(maxsize=1)
+def _unique_key_constraints_cached(_mtime: float) -> tuple[UniqueKey, ...]:
+    return tuple(key for cls in orm_model_class_defs() for key in _model_unique_keys(cls))
+
+
+def unique_key_constraints() -> tuple[UniqueKey, ...]:
+    """Every uniqueness promise declared in ``models.py``, usable and not.
+
+    Covers all four declaration forms, because each is the ONLY form for at least
+    one model: ``UniqueConstraint`` in ``__table_args__``, ``Index(..., unique=True)``
+    (``ix_tenants_virtual_host``), column-level ``unique=True`` (``Tenant.subdomain``,
+    ``Principal.access_token``) and composite ``primary_key=True`` (``PropertyTag``,
+    ``AuthorizedProperty``). A ``UniqueConstraint``-only extractor sees none of the
+    tenant keys at all.
+    """
+    return _unique_key_constraints_cached(MODELS_MODULE.stat().st_mtime)
+
+
+def usable_unique_keys_by_model() -> dict[str, frozenset[frozenset[str]]]:
+    """Model name → the column-name tuples the database really enforces as unique."""
+    by_model: dict[str, set[frozenset[str]]] = {}
+    for key in unique_key_constraints():
+        if key.usable and key.columns:
+            by_model.setdefault(key.model, set()).add(key.columns)
+    return {model: frozenset(tuples) for model, tuples in by_model.items()}
+
+
+# ---------------------------------------------------------------------------
+# Shared guard predicates
+# ---------------------------------------------------------------------------
+
+
+def handles_integrity_error(handler: ast.ExceptHandler) -> bool:
+    """True when this except clause catches IntegrityError (alone or in a tuple)."""
+    node = handler.type
+    if node is None:
+        return False
+    candidates = node.elts if isinstance(node, ast.Tuple) else [node]
+    for candidate in candidates:
+        name = candidate.attr if isinstance(candidate, ast.Attribute) else getattr(candidate, "id", None)
+        if name == "IntegrityError":
+            return True
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Whole-tree source indexing for import-resolving guards
+#
+# Guards that resolve a bare name to the function it refers to all need the same
+# three things: a repo-relative path -> dotted module name, a per-module
+# ``from x import y`` map, and one parse pass over a {relpath: source} dict.
+# They live here rather than in each guard so a resolution fix reaches every
+# guard at once (CLAUDE.md DRY invariant; pylint R0801 in
+# ``.pre-commit-hooks/check_code_duplication.py`` enforces it).
+# ---------------------------------------------------------------------------
+
+
+def module_name_for(relpath: str) -> str:
+    """``src/core/tools/creatives/_sync.py`` -> ``src.core.tools.creatives._sync``."""
+    return relpath[:-3].replace("/", ".").removesuffix(".__init__")
+
+
+def import_map(relpath: str, tree: ast.Module) -> dict[str, tuple[str, str]]:
+    """Local name -> (module, original name), for ``from x import y`` including relative."""
+    package = (
+        module_name_for(relpath) if relpath.endswith("__init__.py") else module_name_for(relpath).rsplit(".", 1)[0]
+    )
+    mapping: dict[str, tuple[str, str]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        if node.level:
+            base = package.rsplit(".", node.level - 1)[0] if node.level > 1 else package
+            target = f"{base}.{node.module}" if node.module else base
+        else:
+            target = node.module or ""
+        for alias in node.names:
+            mapping[alias.asname or alias.name] = (target, alias.name)
+    return mapping
+
+
+def parse_sources(sources: dict[str, str]) -> tuple[dict[str, ast.Module], dict[str, list[str]]]:
+    """Parse a {relpath: source} dict once, returning (trees, split lines).
+
+    Unparseable modules are dropped from both, so a guard never has lines without
+    a tree or the reverse.
+    """
+    trees: dict[str, ast.Module] = {}
+    lines: dict[str, list[str]] = {}
+    for relpath, text in sources.items():
+        try:
+            trees[relpath] = ast.parse(text, filename=relpath)
+        except SyntaxError:
+            continue
+        lines[relpath] = text.splitlines()
+    return trees, lines
+
+
+def collect_visitor_violations(trees: dict[str, ast.Module], make_visitor: Callable[[str], Any]) -> list[Any]:
+    """Run a FRESH visitor over every tree and concatenate its ``violations`` list.
+
+    ``make_visitor(relpath)`` builds the per-module visitor; it must expose
+    ``visit(tree)`` and a ``violations`` list. Every import-resolving guard needs
+    this same loop, and a fresh visitor per module is the part that is easy to get
+    wrong by hoisting it out and leaking state between modules.
+    """
+    found: list[Any] = []
+    for relpath, tree in trees.items():
+        visitor = make_visitor(relpath)
+        visitor.visit(tree)
+        found.extend(visitor.violations)
+    return found
+
+
+def read_source_roots(roots: Iterable[str]) -> dict[str, str]:
+    """{repo-relative path: source} for every ``.py`` under *roots*."""
+    sources: dict[str, str] = {}
+    for root in roots:
+        for path in sorted((REPO_ROOT / root).rglob("*.py")):
+            if "__pycache__" in str(path):
+                continue
+            sources[str(path.relative_to(REPO_ROOT))] = path.read_text(encoding="utf-8")
+    return sources
+
+
+def structural_guard_marker_re(guard_name: str) -> re.Pattern[str]:
+    """Regex for this repo's per-site opt-out comment, ``# structural-guard: <name> - <why>``.
+
+    The reason is REQUIRED — a bare marker is an opt-out, not a justification. The
+    marker is per-site rather than a central allowlist so the justification lives
+    where the next reader needs it, and so no shared list has to grow to admit a
+    legitimate case. It uses ``# structural-guard:`` rather than ``# noqa:``, which
+    ruff parses as a rule-code list and warns about.
+    """
+    return re.compile(re.escape(f"structural-guard: {guard_name}") + r"\s*[-—:]\s*\S+")
 
 
 def _base_expr_is_tenant(node: ast.expr) -> bool:
@@ -239,7 +533,7 @@ def _is_main_guard(node: ast.AST) -> bool:
 
 
 # Statement fields whose contents execute in the ENCLOSING scope at import time.
-# ``ast.Match`` keeps its arms under ``cases``, not ``body``.
+# ``ast.Match`` keeps its branches under ``cases``, not ``body``.
 _IMPORT_TIME_BODY_FIELDS = ("body", "orelse", "finalbody", "handlers", "cases")
 
 
@@ -297,23 +591,29 @@ def _synthetic_expressions(exprs: list[ast.expr]) -> Iterator[ast.stmt]:
 _DEFERRED_EXPR_NODES = (ast.Lambda, ast.GeneratorExp)
 
 
-def iter_statement_scoped_nodes(stmt: ast.stmt) -> Iterator[ast.AST]:
+def iter_statement_scoped_nodes(stmt: ast.stmt, *, skip_deferred: bool = False) -> Iterator[ast.AST]:
     """Yield the nodes of *stmt* WITHOUT descending into nested statements.
 
     ``ast.walk`` on a compound statement swallows its whole body, which silently
     unions everything a function does into one "statement". Callers want the
     header only -- ``If.test``, ``Return.value``, the right-hand side of an
-    assignment.
+    assignment -- so that, for example, two unrelated queries in one ``if``
+    block cannot compose a filter-key tuple neither of them checks.
 
-    Lambda bodies and generator expressions are not descended into either: they
-    are built where they are written but executed somewhere else, so treating
-    them as part of the statement reports a call that has not happened.
+    ``skip_deferred`` additionally stops at lambda bodies and generator
+    expressions. They are BUILT where they are written but RUN somewhere else,
+    so a guard reasoning about what executes here (``find_import_time_fs_io_violations``)
+    must not count them, while a guard reasoning about what the statement
+    lexically contains (the uniqueness pre-check guard, which has to see a
+    ``select(...)`` wherever it is spelled) must. Off by default: skipping is
+    the narrower, execution-semantics reading, and only the caller that needs
+    it asks for it.
     """
     stack: list[ast.AST] = [stmt]
     while stack:
         node = stack.pop()
         yield node
-        if isinstance(node, _DEFERRED_EXPR_NODES):
+        if skip_deferred and isinstance(node, _DEFERRED_EXPR_NODES):
             continue
         for child in ast.iter_child_nodes(node):
             if not isinstance(child, ast.stmt):
@@ -347,7 +647,7 @@ def find_import_time_fs_io_violations(tree: ast.Module) -> list[int]:
     """
     lines: list[int] = []
     for stmt in iter_import_time_statements(tree):
-        for node in iter_statement_scoped_nodes(stmt):
+        for node in iter_statement_scoped_nodes(stmt, skip_deferred=True):
             if isinstance(node, ast.Call) and call_callee_name(node) in _FS_MUTATING_CALLS:
                 lines.append(node.lineno)
     return sorted(lines)
@@ -366,6 +666,28 @@ def iter_call_expressions(tree: ast.AST, name: str | None = None) -> Iterator[as
             yield node
         elif isinstance(f, ast.Attribute) and f.attr == name:
             yield node
+
+
+def called_function_names(node: ast.AST) -> set[str]:
+    """Every function name called anywhere inside *node*, bare or dotted.
+
+    ``foo()`` contributes ``"foo"`` and ``obj.foo()`` contributes ``"foo"`` — the
+    ATTRIBUTE, not the receiver — because guards using this ask "was this policy
+    consulted?", and the same policy is reached both as a bare import and as a
+    classmethod on its owner.
+
+    Built on :func:`iter_call_expressions` rather than its own ``ast.walk``: two
+    guards independently grew this loop, which is what
+    ``test_architecture_no_handrolled_call_walk`` exists to prevent.
+    """
+    names: set[str] = set()
+    for call in iter_call_expressions(node):
+        func = call.func
+        if isinstance(func, ast.Name):
+            names.add(func.id)
+        elif isinstance(func, ast.Attribute):
+            names.add(func.attr)
+    return names
 
 
 def select_call_model_name(call: ast.Call) -> str | None:
@@ -457,11 +779,23 @@ def find_raw_select_violations(
         tree = safe_parse(py_file)
         if tree is None:
             continue
+        # An ALIASED import hid the model from this guard: `from ...models import Tenant as
+        # ModelTenant` then `select(ModelTenant)` reads as a name no model set contains, so
+        # four raw selects in one function went unseen and its allowlist row looked fixed.
+        # Resolve the local name back to the imported one before judging it (#2128).
+        aliased: dict[str, str] = {
+            alias.asname: alias.name
+            for imp in ast.walk(tree)
+            if isinstance(imp, ast.ImportFrom)
+            for alias in imp.names
+            if alias.asname
+        }
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             for call in iter_call_expressions(node):
                 model_name = select_call_model_name(call)
+                model_name = aliased.get(model_name, model_name) if model_name else model_name
                 if model_name and model_name in model_names:
                     violations.append((rel_path, node.name, model_name, call.lineno))
                     break  # One violation per function is enough
@@ -475,7 +809,7 @@ def iter_architecture_guard_trees(
     """Yield ``(parsed_tree, repo_relative_path)`` for each ``test_architecture_*.py`` module."""
     repo = repo_root()
     skip = set(exempt or ())
-    for path in sorted((repo / "tests" / "unit").glob("test_architecture_*.py")):
+    for path in sorted((repo / "tests").glob("*/test_architecture_*.py")):
         rel = path.relative_to(repo)
         if rel in skip:
             continue
@@ -490,9 +824,32 @@ def iter_architecture_guard_trees(
 # ---------------------------------------------------------------------------
 
 
+#: Third-party source copied into the tree. Excluded from every structural scan
+#: because these guards grade AUTHORSHIP decisions -- which repository to reach
+#: through, which error type to raise, whether a URL was rebuilt -- and nobody
+#: here made those decisions. ``src/vendor/__init__.py`` forbids editing the
+#: files, so a violation flagged in one could not be fixed anyway; the only
+#: honest response would be an allowlist entry, and these guards deliberately
+#: have none.
+#:
+#: This code was ALREADY in the dependency tree and already unscanned when it
+#: lived in site-packages. Copying it under ``src/`` for a version pin does not
+#: make it ours, and should not silently enrol it in checks it never passed.
+#: ``test_architecture_vendored_code.py`` keeps the exclusion from becoming a
+#: hiding place.
+VENDOR_DIR = "vendor"
+
+
 def src_python_files(repo: Path) -> Iterator[Path]:
-    """Every .py file under src/."""
-    yield from (repo / "src").rglob("*.py")
+    """Every .py file under src/, EXCEPT vendored third-party source.
+
+    See :data:`VENDOR_DIR`.
+    """
+    vendor_root = repo / "src" / VENDOR_DIR
+    for path in (repo / "src").rglob("*.py"):
+        if vendor_root in path.parents:
+            continue
+        yield path
 
 
 def iter_workflow_files(repo: Path) -> Iterator[Path]:
@@ -1130,9 +1487,278 @@ def format_failure(
     return "\n".join(parts)
 
 
+@functools.cache
+def load_hook_module(name: str) -> Any:
+    """Import a ``.pre-commit-hooks/<name>.py`` script as a module.
+
+    The hooks are standalone scripts, not an importable package, so a guard that
+    wants to RUN one (rather than read its source) has to load it by path.
+    Cached because several guards load the same hook and each load re-executes
+    the module body.
+    """
+    path = repo_root() / ".pre-commit-hooks" / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load hook module {name} from {path}")
+    module = importlib.util.module_from_spec(spec)
+    # The hooks import their shared driver as a top-level ``count_ratchet``.
+    hooks_dir = str(path.parent)
+    if hooks_dir not in sys.path:
+        sys.path.insert(0, hooks_dir)
+    spec.loader.exec_module(module)
+    return module
+
+
+# ---------------------------------------------------------------------------
+# e2e stack wiring detectors — the compose file, the shared TLS front, the leaf
+# certificate. Shared by every guard that checks one origin's four wiring sites
+# (``test_architecture_e2e_webhook_capture_wiring.py``,
+# ``test_architecture_e2e_counterparty_origin_wiring.py``): each such origin is
+# the SAME four questions asked about a different hostname, so the detectors
+# live here and only the hostname/service/expectations belong to the guard.
+# ---------------------------------------------------------------------------
+
+#: The one TLS-terminating service every in-stack HTTPS origin is fronted by.
+#: Extending the EXISTING front is the requirement; a second front would mean two
+#: terminators, two certificates and two places to keep in step.
+TLS_FRONT_SERVICE = "tls-proxy"
+
+#: An nginx ``map $ssl_server_name <target> { ... }`` block.
+_SNI_MAP_RE = re.compile(r"map\s+\$ssl_server_name\s+\$\w+\s*\{(?P<body>[^}]*)\}", re.DOTALL)
+
+#: Rows of an SNI map that name a map DIRECTIVE rather than a hostname.
+_SNI_MAP_DIRECTIVES = frozenset({"default", "hostnames", "volatile"})
+
+
+def load_yaml(path: Path) -> dict:
+    """Parse a YAML file into a dict (empty file -> ``{}``)."""
+    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+
+
+def san_dns_names(source: str) -> tuple[str, ...]:
+    """The ``SAN_DNS_NAMES`` literal from ``gen_test_tls.py``, read without importing it.
+
+    AST rather than import: the generator pulls in ``cryptography`` and writes
+    into ``.test-tls/`` at module scope in some call paths — a guard must read
+    the declaration, not run the generator.
+    """
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        targets = [t.id for t in node.targets if isinstance(t, ast.Name)]
+        if "SAN_DNS_NAMES" not in targets:
+            continue
+        if not isinstance(node.value, ast.Tuple | ast.List):
+            continue
+        return tuple(e.value for e in node.value.elts if isinstance(e, ast.Constant) and isinstance(e.value, str))
+    return ()
+
+
+def san_covers(san_names: tuple[str, ...], hostname: str) -> bool:
+    """Whether *hostname* is covered by *san_names*, exactly or by a one-label wildcard.
+
+    Mirrors RFC 6125 wildcard matching as TLS clients apply it: ``*.example.com``
+    covers ``a.example.com`` and NOT ``a.b.example.com``.
+    """
+    for san in san_names:
+        if san == hostname:
+            return True
+        if san.startswith("*.") and hostname.endswith(san[1:]) and "." not in hostname[: -len(san[1:])]:
+            return True
+    return False
+
+
+def tls_front_aliases(compose: dict) -> list[str]:
+    """Every network alias declared on the shared TLS front service."""
+    service = compose.get("services", {}).get(TLS_FRONT_SERVICE) or {}
+    networks = service.get("networks") or {}
+    if not isinstance(networks, dict):
+        return []
+    aliases: list[str] = []
+    for network in networks.values():
+        if isinstance(network, dict):
+            aliases.extend(network.get("aliases") or [])
+    return aliases
+
+
+def sni_map_upstreams(template: str) -> dict[str, str]:
+    """``hostname -> upstream`` for every route in the template's SNI map block(s).
+
+    The upstream half matters as much as the key: a hostname routed to the WRONG
+    service is wired everywhere a guard would look and still reaches the wrong
+    origin, which on a signing path reads as an unresolvable counterparty rather
+    than as a compose typo.
+    """
+    routes: dict[str, str] = {}
+    for match in _SNI_MAP_RE.finditer(template):
+        for raw in match.group("body").splitlines():
+            line = raw.split("#", 1)[0].strip().rstrip(";")
+            if not line:
+                continue
+            fields = line.split()
+            if fields[0] in _SNI_MAP_DIRECTIVES:
+                continue
+            routes[fields[0]] = fields[1] if len(fields) > 1 else ""
+    return routes
+
+
+def sni_map_hostnames(template: str) -> list[str]:
+    """The SNI names routed by the template's ``map $ssl_server_name`` block(s)."""
+    return list(sni_map_upstreams(template))
+
+
+def compose_service(compose: dict, name: str) -> dict:
+    """One compose service's definition, or ``{}`` when it is not declared."""
+    service = compose.get("services", {}).get(name)
+    return service if isinstance(service, dict) else {}
+
+
+def compose_service_environment(compose: dict, name: str) -> dict[str, str]:
+    """A service's ``environment:`` as a mapping, accepting both compose spellings.
+
+    Compose allows a mapping AND a ``KEY=value`` list; a guard that reads only the
+    mapping form silently passes on the other, which is the shape of a guard that
+    grades nothing.
+    """
+    environment = compose_service(compose, name).get("environment") or {}
+    if isinstance(environment, dict):
+        return {str(key): "" if value is None else str(value) for key, value in environment.items()}
+    if isinstance(environment, list):
+        pairs = (str(entry).split("=", 1) for entry in environment)
+        return {parts[0]: parts[1] if len(parts) > 1 else "" for parts in pairs}
+    return {}
+
+
+# ---------------------------------------------------------------------------
+# BDD xfail-registration structures (tests/bdd/conftest.py)
+# ---------------------------------------------------------------------------
+
+BDD_CONFTEST_PATH = REPO_ROOT / "tests" / "bdd" / "conftest.py"
+
+
+def string_constant(node: ast.expr) -> str | None:
+    """The value of a ``str`` constant expression, or None for anything else."""
+    return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+
+
+def uc010_wired_tags() -> set[str]:
+    """Every ``T-UC-010-*`` tag string literal inside the ``_UC010_WIRED_TAGS``
+    set literal in conftest.py.
+
+    ``_UC010_WIRED_TAGS`` is a nested (function-local) set literal, not a
+    module-level assignment, so it is located by walking the whole AST for a
+    ``Name`` target called ``_UC010_WIRED_TAGS`` rather than via a module-level
+    lookup. Any T-UC-010 tag absent from it fast-xfails via the generic dormant
+    fallback independent of ``_XFAIL_TAGS``/``_SELECTIVE_XFAIL`` — so it can
+    never be "stale by graduation" and must count as active for the stale-
+    citation guard's purposes, and it must not claim a graded production gap
+    for the reason-text guard's purposes.
+    """
+    tree = ast.parse(BDD_CONFTEST_PATH.read_text(encoding="utf-8"))
+    wired: set[str] | None = None
+    for node in ast.walk(tree):
+        targets: list[ast.expr] = []
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, ast.AnnAssign) and node.target is not None:
+            targets = [node.target]
+        else:
+            continue
+        for target in targets:
+            if isinstance(target, ast.Name) and target.id == "_UC010_WIRED_TAGS":
+                assert isinstance(node.value, ast.Set), "_UC010_WIRED_TAGS is not a set literal"
+                wired = {tag for elt in node.value.elts if (tag := string_constant(elt)) is not None}
+    assert wired is not None, "_UC010_WIRED_TAGS not found in conftest.py"
+    return wired
+
+
+#: The transport-wrapper inventory, shared by every guard that walks the wrappers.
+#: Lifted out of tests/unit/test_architecture_wrapper_typed_params.py, which owned it
+#: and was therefore IMPORTED BY a sibling guard -- a cross-test-module import that
+#: test_architecture_no_cross_test_module_imports.py had to allowlist. The constant is
+#: not that guard's subject, it is shared vocabulary, so it belongs here. Same move as
+#: string_constant/uc010_wired_tags above.
+# MCP wrapper functions to check (module_path, function_name)
+MCP_WRAPPERS = [
+    ("src.core.tools.products", "get_products"),
+    ("src.core.tools.media_buy_create", "create_media_buy"),
+    ("src.core.tools.media_buy_update", "update_media_buy"),
+    ("src.core.tools.media_buy_delivery", "get_media_buy_delivery"),
+    ("src.core.tools.media_buy_list", "get_media_buys"),
+    ("src.core.tools.creatives.sync_wrappers", "sync_creatives"),
+    ("src.core.tools.creatives.listing", "list_creatives"),
+    ("src.core.tools.properties", "list_authorized_properties"),
+    ("src.core.tools.accounts", "list_accounts"),
+    ("src.core.tools.accounts", "sync_accounts"),
+    ("src.core.tools.capabilities", "get_adcp_capabilities"),
+    ("src.core.tools.creative_formats", "list_creative_formats"),
+]
+
+# A2A raw wrapper functions to check (module_path, function_name)
+A2A_RAW_WRAPPERS = [
+    ("src.core.tools.products", "get_products_raw"),
+    ("src.core.tools.media_buy_create", "create_media_buy_raw"),
+    ("src.core.tools.media_buy_update", "update_media_buy_raw"),
+    ("src.core.tools.media_buy_delivery", "get_media_buy_delivery_raw"),
+    ("src.core.tools.media_buy_list", "get_media_buys_raw"),
+    ("src.core.tools.creatives.sync_wrappers", "sync_creatives_raw"),
+    ("src.core.tools.creatives.listing", "list_creatives_raw"),
+    ("src.core.tools.properties", "list_authorized_properties_raw"),
+    ("src.core.tools.accounts", "list_accounts_raw"),
+    ("src.core.tools.accounts", "sync_accounts_raw"),
+    ("src.core.tools.capabilities", "get_adcp_capabilities_raw"),
+    ("src.core.tools.creative_formats", "list_creative_formats_raw"),
+    ("src.core.tools.signals", "get_signals_raw"),
+    ("src.core.tools.signals", "activate_signal_raw"),
+    ("src.core.tools.performance", "update_performance_index_raw"),
+]
+
+
 # ---------------------------------------------------------------------------
 # BDD collection helper (e2e_rest transport fitness)
 # ---------------------------------------------------------------------------
+
+
+def collect_bdd_node_ids_with_e2e_enabled(
+    target: str, *, randomly_seed: int | None = None, timeout: int = 300
+) -> list[str]:
+    """Collect pytest node ids under *target* with BDD_E2E_ENABLED=true.
+
+    For a test that compares two seeded collections of one module, which one real
+    run cannot answer: it has one seed. -n0 satisfies the BDD_E2E_ENABLED xdist
+    guard; addopts is cleared so -q prints bare nodeids.
+
+    *randomly_seed* selects the collection ORDER. The default (``None``)
+    disables pytest-randomly, which is what a caller asserting "this scenario
+    is collected" wants: one stable order. A caller asserting that collection
+    does not DEPEND on order passes two different seeds and compares — the
+    suite runs with pytest-randomly live and a fresh seed per run
+    (``tox.ini`` [testenv:bdd-inprocess-s{1,2}] does not pass ``-p no:randomly``), so
+    order-sensitive collection shows up there as a per-run flap.
+    """
+    order = ["-p", "no:randomly"] if randomly_seed is None else ["-p", "randomly", f"--randomly-seed={randomly_seed}"]
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            target,
+            "--collect-only",
+            "-q",
+            "-o",
+            "addopts=",
+            *order,
+            "-n0",
+        ],
+        cwd=repo_root(),
+        env={**os.environ, "BDD_E2E_ENABLED": "true", "BDD_XDIST_N": "0"},
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    assert proc.returncode == 0, f"{target} collection failed (rc={proc.returncode}):\n{proc.stderr[-2000:]}"
+    return [line.strip() for line in proc.stdout.splitlines() if "::" in line]
 
 
 def scan_src(
@@ -1173,7 +1799,15 @@ def scan_src(
     suppressed_exempt: dict[str, list[int]] = {}
     suppressed_prefix: dict[str, list[int]] = {}
 
+    vendor_prefix = f"src/{VENDOR_DIR}/"
     for tree, rel_path in iter_module_trees(scan_dirs if scan_dirs is not None else [root]):
+        # Vendored third-party source is out of scope for EVERY src-scanning guard, for
+        # the reasons on VENDOR_DIR. Silent rather than a `skip_prefixes` entry: that axis
+        # raises when a prefix flags nothing, which would force each guard to declare a
+        # boundary only some of them actually need. Bounded by
+        # tests/unit/test_architecture_vendored_code.py.
+        if rel_path.replace("\\", "/").startswith(vendor_prefix):
+            continue
         lines = detector(tree)
         if not lines:
             continue
@@ -1273,3 +1907,39 @@ def assert_scanned_paths_exist(paths: Iterable[str], *, why: str) -> None:
     """
     missing = sorted(p for p in paths if not (REPO_ROOT / p).exists())
     assert not missing, f"scanned path(s) {missing} no longer exist. {why}"
+
+
+# ---------------------------------------------------------------------------
+# ast-grep probes
+# ---------------------------------------------------------------------------
+
+AST_GREP_CONFIG = "sgconfig.yml"
+AST_GREP_RULE_DIR = ".ast-grep"
+
+
+def stage_ast_grep_root(tmp_dir: Path) -> Path:
+    """A disposable project root holding the REAL ``sgconfig.yml`` and ``.ast-grep/`` rules.
+
+    A probe module written under it at the repo-relative path a rule's ``files:`` glob
+    covers is matched exactly as it would be in the live tree: ast-grep resolves the glob
+    against the directory holding the config, and the config and rule files are the
+    committed ones, copied. The probe is never written into ``src/`` or ``tests/``
+    themselves. There it is a file every other guard's scan can list and then fail to
+    read once the probe's own case deletes it — under xdist a race between workers, seen
+    as ``FileNotFoundError`` on ``_synthetic_identity_probe_*.py`` in
+    ``test_transport_agnostic_impl`` (CI run 36858146603).
+    """
+    root = tmp_dir / "ast-grep-root"
+    root.mkdir()
+    shutil.copy2(repo_root() / AST_GREP_CONFIG, root / AST_GREP_CONFIG)
+    shutil.copytree(repo_root() / AST_GREP_RULE_DIR, root / AST_GREP_RULE_DIR)
+    return root
+
+
+def write_ast_grep_probe(root: Path, rel_dir: str, source: str, *, stem: str = "_synthetic_probe") -> str:
+    """Write *source* at a unique path under *rel_dir* inside *root*; return it relative to *root*."""
+    rel_path = f"{rel_dir}/{stem}_{uuid.uuid4().hex}.py"
+    path = root / rel_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(source)
+    return rel_path

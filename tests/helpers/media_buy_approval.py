@@ -28,10 +28,17 @@ ADAPTER_BOUNDARY = "src.core.tools.media_buy_create._execute_adapter_media_buy_c
 
 
 def adapter_success(*_args: Any, **_kwargs: Any) -> Any:
-    """What a healthy adapter hands back: an order id and no packages to map."""
-    from src.core.schemas import CreateMediaBuySuccess
+    """What a healthy adapter hands back: an order id and no packages to map.
 
-    return CreateMediaBuySuccess.carrier(media_buy_id=f"gam_order_{uuid.uuid4().hex[:8]}", packages=[])
+    This stands in for ``_execute_adapter_media_buy_creation``, whose return type
+    IS the adapter contract, so it returns ``AdapterCreateResult`` and not a wire
+    model. The carrier declares only what the tool reads off an adapter, and its
+    ``extra="forbid"`` refuses anything else, so this cannot claim a
+    ``confirmed_at`` or a ``revision`` that only the persisted row owns.
+    """
+    from src.adapters.base import AdapterCreateResult
+
+    return AdapterCreateResult(media_buy_id=f"gam_order_{uuid.uuid4().hex[:8]}", packages=[])
 
 
 def adapter_failure(*_args: Any, **_kwargs: Any) -> Any:
@@ -191,6 +198,13 @@ def seed_pending_buy(*, starts_in_days: int, status: str = "pending_approval") -
         package_id=f"pkg_appr_{suffix}",
         package_config={"product_id": product.product_id, "budget": 5000.0},
     )
+
+    # The access grant that used to be written here by hand is now MediaBuyFactory's own
+    # ``grant_account_access`` post-generation hook: a factory that cannot produce a
+    # REACHABLE buy without the caller remembering a second factory is the factory's defect,
+    # and three other fixtures were missing exactly this line. The reasoning is recorded on
+    # the hook; pass ``grant_account_access=False`` to seed a buy whose principal is locked
+    # out of its own account.
 
     cm = ContextManager()
     context = cm.create_context(tenant_id=tenant.tenant_id, principal_id=principal.principal_id)

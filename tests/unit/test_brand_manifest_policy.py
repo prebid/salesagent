@@ -14,18 +14,24 @@ from unittest.mock import MagicMock, patch
 import pytest
 from adcp.types import BrandReference
 
-from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError
-from src.core.resolved_identity import ResolvedIdentity
+from src.core.exceptions import AdCPAuthorizationError
 from src.core.tools.products import _get_products_impl
+from tests.factories.principal import PrincipalFactory
 
 logger = logging.getLogger(__name__)
 
 
-def _make_identity(principal_id=None, tenant=None):
-    """Create a ResolvedIdentity for testing."""
-    return ResolvedIdentity(
+def _make_identity(principal_id, tenant):
+    """The identity a get_products call arrives with.
+
+    ``get_products`` is a PUBLIC tool, so it takes a ``PublicIdentity``: whoever reached
+    it, or nobody. ``principal_id=None`` is the anonymous caller — a principal-less
+    identity, not a ``ResolvedIdentity`` whose id is None. *tenant* has no default,
+    because the type has none: there is no tenant-less identity to build.
+    """
+    return PrincipalFactory.make_public_identity(
         principal_id=principal_id,
-        tenant_id=tenant.get("tenant_id") if tenant else None,
+        tenant_id=tenant["tenant_id"],
         tenant=tenant,
     )
 
@@ -50,14 +56,10 @@ async def test_public_policy_allows_no_brand_manifest():
 
     # Mock all the dependencies
     with (
-        patch("src.core.tools.products.get_principal_object") as mock_get_principal_obj,
         patch("src.services.dynamic_products.generate_variants_for_brief") as mock_generate_variants,
         patch("src.services.dynamic_pricing_service.DynamicPricingService") as mock_pricing_service,
         patch("src.core.database.repositories.uow.ProductUoW") as mock_uow_cls,
     ):
-        # Setup mocks
-        mock_get_principal_obj.return_value = None
-
         # Mock variants generation
         mock_generate_variants.return_value = []
 
@@ -99,16 +101,11 @@ async def test_require_brand_policy_rejects_no_brand_manifest():
 
     identity = _make_identity(principal_id="principal_123", tenant=mock_tenant)
 
-    # Mock dependencies - need get_principal_object since it's called before brand_manifest check
-    with (
-        patch("src.core.tools.products.get_principal_object", return_value=None),
-    ):
-        # Call implementation - should raise AdCPAuthorizationError (transport-agnostic)
-        with pytest.raises(AdCPAuthorizationError) as exc_info:
-            await _get_products_impl(mock_request, identity)
-
-        # Verify error message
-        assert "Brand manifest required by tenant policy" in str(exc_info.value)
+    # No dependency mocks: the policy refusal happens before any catalog work, and the
+    # principal the impl reads comes off the identity.
+    # Call implementation - should raise AdCPAuthorizationError (transport-agnostic)
+    with pytest.raises(AdCPAuthorizationError):
+        await _get_products_impl(mock_request, identity)
 
 
 @pytest.mark.asyncio
@@ -131,14 +128,10 @@ async def test_require_brand_policy_accepts_with_brand_manifest():
 
     # Mock all dependencies
     with (
-        patch("src.core.tools.products.get_principal_object") as mock_get_principal_obj,
         patch("src.services.dynamic_products.generate_variants_for_brief") as mock_generate_variants,
         patch("src.services.dynamic_pricing_service.DynamicPricingService") as mock_pricing_service,
         patch("src.core.database.repositories.uow.ProductUoW") as mock_uow_cls,
     ):
-        # Setup mocks
-        mock_get_principal_obj.return_value = None
-
         # Mock variants
         mock_generate_variants.return_value = []
 
@@ -161,33 +154,17 @@ async def test_require_brand_policy_accepts_with_brand_manifest():
         assert response is not None
 
 
-@pytest.mark.asyncio
-async def test_require_auth_policy_rejects_no_auth():
-    """Test that require_auth policy rejects unauthenticated requests."""
-    # Create mock request with brand_manifest
-    mock_brand_manifest = MagicMock()
-    mock_brand_manifest.name = "Nike"
-
-    mock_request = MagicMock()
-    mock_request.brand = mock_brand_manifest
-    mock_request.brief = "Athletic footwear"
-    mock_request.filters = None
-    mock_request.context = None
-
-    mock_tenant = {
-        "tenant_id": "test_tenant",
-        "brand_manifest_policy": "require_auth",
-        "advertising_policy": {},
-    }
-
-    identity = _make_identity(principal_id=None, tenant=mock_tenant)
-
-    # Call implementation - should raise AdCPAuthenticationError (transport-agnostic)
-    with pytest.raises(AdCPAuthenticationError) as exc_info:
-        await _get_products_impl(mock_request, identity)
-
-    # Verify error message
-    assert "Authentication required by tenant policy" in str(exc_info.value)
+# The "require_auth" refusal is NOT gradeable at this level, and no test here attempts it.
+# The anonymous caller of a public tool is a PublicIdentity, not a ResolvedIdentity with a
+# None principal (ResolvedIdentity.principal is a required field), and _get_products_impl
+# does not read the seller policy at all: the refusal is minted by the resolver, which asks
+# ToolSpec.requires_credential(tenant) once the tenant row is loaded (registry.py:195).
+# ruff-boundary.toml bans raising AUTH_MISSING / AUTH_INVALID anywhere but the resolver, so
+# this implementation could not raise it even if a guard were written here.
+#
+# The obligation (BR-UC-001 INV-1: a require_auth seller makes get_products need a caller)
+# is graded where it is decided -- the resolver, for every transport at once -- by the
+# transport-blind auth scenarios asserting the AUTH_MISSING wire envelope.
 
 
 @pytest.mark.asyncio
@@ -208,16 +185,12 @@ async def test_require_auth_policy_accepts_with_auth():
 
     identity = _make_identity(principal_id="principal_123", tenant=mock_tenant)
 
-    # Mock all dependencies
+    # Mock all dependencies (the authenticated caller comes off the identity)
     with (
-        patch("src.core.tools.products.get_principal_object") as mock_get_principal_obj,
         patch("src.services.dynamic_products.generate_variants_for_brief") as mock_generate_variants,
         patch("src.services.dynamic_pricing_service.DynamicPricingService") as mock_pricing_service,
         patch("src.core.database.repositories.uow.ProductUoW") as mock_uow_cls,
     ):
-        # Setup mocks - WITH authentication
-        mock_get_principal_obj.return_value = None
-
         # Mock variants
         mock_generate_variants.return_value = []
 

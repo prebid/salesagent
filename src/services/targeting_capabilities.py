@@ -15,9 +15,11 @@ for upstream inclusion in AdCP.
 from typing import TYPE_CHECKING, Any
 
 from src.core.enum_helpers import enum_value
+from src.core.errors.codes import ErrorCode
+from src.core.errors.details import CapabilityRefusalDetails, ValidationDetails
 from src.core.exceptions import AdCPValidationError
 from src.core.schemas import Error, Targeting, TargetingCapability
-from src.core.validation_helpers import package_field_path
+from src.core.validation_helpers import PACKAGES_FIELD
 
 if TYPE_CHECKING:
     from src.core.database.models import Product
@@ -87,28 +89,6 @@ TARGETING_CAPABILITIES: dict[str, TargetingCapability] = {
         dimension="audience_segment", access="overlay", description="Third-party audience segments"
     ),
     "custom": TargetingCapability(dimension="custom", access="both", description="Platform-specific custom targeting"),
-    # ── Removed dimensions ───────────────────────────────────────────────
-    "geo_city": TargetingCapability(
-        dimension="geo_city",
-        access="removed",
-        description="City-level targeting (removed in v3, no adapter supports it)",
-    ),
-    # ── Managed-only (AEE signal integration) ────────────────────────────
-    "key_value_pairs": TargetingCapability(
-        dimension="key_value_pairs",
-        access="managed_only",
-        description="Key-value pairs for AEE signal integration",
-        axe_signal=True,
-    ),
-    "aee_segment": TargetingCapability(
-        dimension="aee_segment", access="managed_only", description="AEE-computed audience segments", axe_signal=True
-    ),
-    "aee_score": TargetingCapability(
-        dimension="aee_score", access="managed_only", description="AEE effectiveness scores", axe_signal=True
-    ),
-    "aee_context": TargetingCapability(
-        dimension="aee_context", access="managed_only", description="AEE contextual signals", axe_signal=True
-    ),
 }
 
 
@@ -117,25 +97,8 @@ def get_overlay_dimensions() -> list[str]:
     return [name for name, cap in TARGETING_CAPABILITIES.items() if cap.access in ["overlay", "both"]]
 
 
-def get_managed_only_dimensions() -> list[str]:
-    """Get list of dimensions that are managed-only."""
-    return [name for name, cap in TARGETING_CAPABILITIES.items() if cap.access == "managed_only"]
-
-
-def get_removed_dimensions() -> list[str]:
-    """Get list of dimensions that have been removed."""
-    return [name for name, cap in TARGETING_CAPABILITIES.items() if cap.access == "removed"]
-
-
-def get_aee_signal_dimensions() -> list[str]:
-    """Get list of dimensions used for AEE signals."""
-    return [name for name, cap in TARGETING_CAPABILITIES.items() if cap.axe_signal]
-
-
 # Explicit mapping from Targeting field names to capability dimension names.
-# Used by validate_overlay_targeting() to check access control (managed-only
-# vs overlay) on known fields.  Both inclusion and exclusion variants map to
-# the same capability dimension.
+# Both inclusion and exclusion variants map to the same capability dimension.
 #
 # AdCP TargetingOverlay defines only the geo fields, frequency_cap, axe
 # segments, and property_list.  The device/OS/browser/media/audience fields
@@ -170,33 +133,10 @@ FIELD_TO_DIMENSION: dict[str, str] = {
     "audiences_any_of": "audience_segment",
     "audiences_none_of": "audience_segment",
     "custom": "custom",
-    # ── Removed dimensions ───────────────────────────────────────────────
-    "geo_city_any_of": "geo_city",
-    "geo_city_none_of": "geo_city",
-    # ── Managed-only (not exposed via overlay) ───────────────────────────
-    "key_value_pairs": "key_value_pairs",
 }
 
 
-def validate_unknown_targeting_fields(targeting_obj: Any) -> list[str]:
-    """Reject unknown fields in a Targeting object via model_extra inspection.
-
-    Pydantic's extra='allow' accepts any field — unknown buyer fields (typos,
-    bogus names) land in model_extra.  This function checks model_extra and
-    reports them as unknown targeting fields.
-
-    This is separate from validate_overlay_targeting() which checks access
-    control (managed-only vs overlay) on *known* fields.
-
-    Returns list of violation messages for unknown fields.
-    """
-    model_extra = getattr(targeting_obj, "model_extra", None)
-    if not model_extra:
-        return []
-    return [f"{key} is not a recognized targeting field" for key in model_extra]
-
-
-def supports_property_list_filtering(adapter: object | None) -> bool:
+def supports_property_list_filtering(adapter: object | type | None) -> bool:
     """Return True iff the bound adapter compiles ``targeting_overlay.property_list``.
 
     Today no adapter sets ``supports_property_list_filtering=True``; the
@@ -207,10 +147,15 @@ def supports_property_list_filtering(adapter: object | None) -> bool:
     which point this advisory path is unreachable for them. Centralizing the
     check here keeps the wire declaration (capabilities) and the per-call
     advisory (this module) in lockstep with one source of truth.
+
+    Accepts either an adapter INSTANCE (the post-construction create_media_buy
+    path) or an adapter CLASS (the principal-free capabilities-read path,
+    salesagent-dn2s) — the flag is a class attribute either way.
     """
     if adapter is None:
         return False
-    return bool(getattr(adapter.__class__, "supports_property_list_filtering", False))
+    adapter_class = adapter if isinstance(adapter, type) else adapter.__class__
+    return bool(getattr(adapter_class, "supports_property_list_filtering", False))
 
 
 # ─── property_list targeting helpers ────────────────────────────────────
@@ -252,18 +197,14 @@ def build_property_list_unsupported_advisories(
         if overlay is None or getattr(overlay, "property_list", None) is None:
             continue
         advisories.append(
-            Error(
-                code="UNSUPPORTED_FEATURE",
-                message=(
-                    "property_list_filtering is declared off for this seller. "
-                    "The list_id is persisted on the package but will not affect "
-                    "targeting until adapter compilation lands."
-                ),
+            # message, suggestion and recovery all come from CODE_TABLE via the
+            # code. What is specific to THIS advisory -- which package, and which
+            # capability is off -- travels structurally: field names the rejected
+            # path, details names the feature.
+            Error.of(
+                ErrorCode.UNSUPPORTED_FEATURE,
                 field=f"packages[{index}].targeting_overlay.property_list",
-                suggestion=(
-                    "Continue to send property_list; the seller will activate it "
-                    "once the adapter compiles list_ids into native targeting."
-                ),
+                details=CapabilityRefusalDetails(capability="property_list_filtering"),
             )
         )
     return advisories
@@ -325,35 +266,16 @@ def raise_if_property_targeting_violations(violations: list[str]) -> None:
     site; only the raise shape is shared.
     """
     if violations:
+        # The COLLECTION: violations are gathered across every package before this
+        # raises, so no single element is at fault and the array parameter is what
+        # the pointer names. Which packages violated travels in details
+        # (salesagent-rfxfu).
         raise AdCPValidationError(
-            f"Targeting validation failed: {'; '.join(violations)}",
-            field=package_field_path("targeting_overlay.property_list"),
-            details={"violations": violations},
+            field=PACKAGES_FIELD,
+            # list[str] of prose -> reasons. The dict-shaped `violations` the two
+            # overlay sites pass is a different shape under the same old name.
+            details=ValidationDetails(reasons=violations),
         )
-
-
-def validate_overlay_targeting(targeting: Targeting) -> list[str]:
-    """Validate that targeting only uses allowed overlay dimensions.
-
-    Checks the Targeting model's fields directly instead of iterating a
-    serialized dict.  This makes the validation actually effective — the
-    previous dict-based approach missed managed-only fields (excluded by
-    model_dump) and removed fields (consumed by the normalizer).
-
-    Returns list of violations (managed-only or removed dimensions used).
-    """
-    violations = []
-
-    # Managed-only: key_value_pairs is a seller extension, not settable via overlay
-    if targeting.key_value_pairs is not None:
-        violations.append("key_value_pairs is managed-only and cannot be set via overlay")
-
-    # Removed: city targeting was removed in v3. The normalizer consumes
-    # geo_city_any_of/geo_city_none_of and sets had_city_targeting=True.
-    if targeting.had_city_targeting:
-        violations.append("City targeting is not supported (targeting dimension 'geo_city' has been removed)")
-
-    return violations
 
 
 # Geo inclusion/exclusion field pairs for same-value overlap detection.
@@ -410,16 +332,57 @@ def _extract_system_values(items: list) -> dict[str, set[str]]:
     return by_system
 
 
-def validate_geo_overlap(targeting: Targeting) -> list[str]:
+def collect_targeting_violations(targeting: Targeting) -> dict[str, object]:
+    """Assemble every targeting-overlay violation into buyer-facing ``details``.
+
+    THE one place the per-dimension validators are composed. Both tools that validate an
+    overlay -- create_media_buy and update_media_buy -- called them by hand and
+    concatenated the results, which meant the same logical operation lived in two places
+    and a new validator would have to be wired into both (DRY, CLAUDE.md). Neither call
+    site read what it collected: both raised and discarded it.
+
+    Returns a mapping suitable for ``AdCPInvalidRequestError(details=...)``, carrying only
+    the keys that actually have content so the buyer can tell the reasons apart:
+
+        geo_overlaps              {include, exclude, values} per conflicting field pair,
+                                  plus `system` for metro/postal pairs
+
+    Empty mapping means the overlay is clean, so the caller can branch on truthiness.
+
+    These are BUSINESS RULES, discovered by checking them. Schema SHAPE is not among
+    them and deliberately so: an unknown targeting field is rejected by pydantic at model
+    construction (``Targeting`` resolves ``extra`` through ``get_pydantic_extra_mode()`` --
+    ``forbid`` in dev/CI, ``ignore`` in production), so it never reaches business logic.
+    A ``model_extra`` scan lived here until salesagent-3dawm.9 and could not fire in
+    either mode. A "managed-only dimension" check lived here too, over a single seller
+    key/value field the pinned core/targeting.json does not declare; the field and the
+    check are gone (salesagent-3cs7o.22), and such a request is refused as an undeclared
+    field, at model construction, like any other.
+
+    Values, never sentences: the buyer-facing sentence is a function of the error CODE
+    through CODE_TABLE, and a sentence in ``details`` is that message smuggled back in
+    (salesagent-3dawm.9). The code is INVALID_REQUEST with ``field='targeting_overlay'``
+    for every kind -- graded that way by UC-002 @ext-f and UC-003 @*-targeting-overlay --
+    so ``details`` is what distinguishes them, not the code.
+    """
+    candidates: dict[str, object] = {
+        "geo_overlaps": geo_overlap_conflicts(targeting),
+    }
+    return {key: value for key, value in candidates.items() if value}
+
+
+def geo_overlap_conflicts(targeting: Targeting) -> list[dict[str, object]]:
     """Reject same-value overlap between geo inclusion and exclusion fields.
 
     Per AdCP spec (adcp PR #1010): sellers SHOULD reject requests where the
     same value appears in both the inclusion and exclusion field at the same
     level (e.g., geo_countries: ["US"] with geo_countries_exclude: ["US"]).
 
-    Returns list of violation messages.
+    Returns one RECORD per conflicting field pair -- ``{include, exclude, values}``, plus
+    ``system`` for the structured pairs -- rather than a sentence, so the colliding values
+    reach the buyer as data (salesagent-3dawm.9).
     """
-    violations: list[str] = []
+    violations: list[dict[str, object]] = []
 
     # Simple fields: countries, regions (RootModel[str] or plain strings)
     for include_field, exclude_field in _GEO_SIMPLE_PAIRS:
@@ -431,10 +394,7 @@ def validate_geo_overlap(targeting: Targeting) -> list[str]:
         exc_set = _extract_simple_values(exclude_vals)
         overlap = sorted(inc_set & exc_set)
         if overlap:
-            violations.append(
-                f"{include_field}/{exclude_field} conflict: "
-                f"values {', '.join(overlap)} appear in both inclusion and exclusion"
-            )
+            violations.append({"include": include_field, "exclude": exclude_field, "values": overlap})
 
     # Structured fields: metros, postal_areas (system + values)
     for include_field, exclude_field in _GEO_STRUCTURED_PAIRS:
@@ -448,8 +408,7 @@ def validate_geo_overlap(targeting: Targeting) -> list[str]:
             overlap = sorted(inc_by_system[system] & exc_by_system[system])
             if overlap:
                 violations.append(
-                    f"{include_field}/{exclude_field} conflict in system '{system}': "
-                    f"values {', '.join(overlap)} appear in both inclusion and exclusion"
+                    {"include": include_field, "exclude": exclude_field, "system": system, "values": overlap}
                 )
 
     return violations

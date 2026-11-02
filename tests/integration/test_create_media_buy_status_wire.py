@@ -19,12 +19,10 @@ gated by requires_capability media_buy.creative_approval_mode == auto_approve).
 The deprecated per-buy legacy "status" lifecycle slot must NOT be emitted —
 the top-level status slot belongs to the envelope TaskStatus.
 
-Dry-run sibling: the spec is silent on dry-run, so production is authoritative
-(see tests/integration/test_media_buy_dry_run_status.py) — the dry-run branch
-previews the would-be outcome, and its existing valid_actions source is
-MediaBuyStatus.pending_start, so the emitted media_buy_status must be
-"pending_start" (coupled to the same single value source; the spec forbids
-divergent lifecycle emission).
+There is no dry-run sibling any more: create_media_buy and update_media_buy have
+no dry_run branch. It was reachable only through the testing-hook channel, which
+was deleted with the channel (a1b79d22d); dry_run survives as a request field on
+the sync_* tools alone, implemented as a unit-of-work rollback.
 
 Wire faithfulness: CreateMediaBuyResult._serialize (src/core/schemas/_base.py)
 produces the transport-invariant body — result.model_dump(mode="json") is the
@@ -97,39 +95,4 @@ def test_create_success_wire_carries_media_buy_status_distinct_from_envelope_sta
         "the lifecycle and the envelope TaskStatus are distinct fields on this "
         "wire — identical values here would mean the lifecycle leaked into (or "
         "was copied from) the envelope slot"
-    )
-
-
-def test_create_dry_run_wire_carries_media_buy_status_pending_start(integration_db):
-    """Dry-run branch: the simulated success previews media_buy_status = "pending_start".
-
-    Spec silent on dry-run -> production authoritative: the branch already
-    derives valid_actions from MediaBuyStatus.pending_start; the emitted
-    media_buy_status must come from that same single value source.
-    """
-    with MediaBuyCreateEnv(dry_run=True) as env:
-        _tenant, _principal, product, _pricing = env.setup_media_buy_data()
-
-        result = env.call_impl(**_create_kwargs(product, domain="status-wire-dry.example.com"))
-
-    envelope = result.model_dump(mode="json")
-    response_envelope = result.response.model_dump(mode="json")
-
-    # Branch-proof: only the dry-run branch mints a "dry_run_"-prefixed
-    # media_buy_id (no adapter call, no persisted buy).
-    assert response_envelope["media_buy_id"].startswith("dry_run_"), (
-        "guard must exercise the dry_run branch — non-simulated media_buy_id returned"
-    )
-    assert envelope["status"] == "completed", (
-        f"dry_run previews the would-be completed envelope, got {envelope.get('status')!r}"
-    )
-    assert "media_buy_status" in envelope, (
-        "dry-run create-success wire must carry the media_buy_status lifecycle "
-        "preview — the branch's valid_actions already derive from pending_start, "
-        "and the lifecycle emission must come from that same value source"
-    )
-    assert envelope["media_buy_status"] == "pending_start", (
-        f"dry-run simulated lifecycle must preview 'pending_start' (the value "
-        f"already feeding valid_actions_for_status on this branch), got "
-        f"{envelope['media_buy_status']!r}"
     )

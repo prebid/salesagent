@@ -1,222 +1,143 @@
-# Known-failing storyboard-conformance checks — GENUINE production gaps only.
+# Known-failing storyboard-conformance checks.
 #
-# One test id per line, matching a tests/storyboard/test_storyboard_conformance.py
-# parametrized test keyed on (protocol, track, storyboard_id, step_id) from the real
-# @adcp/sdk storyboard runner's measured output. Loaded by tests/storyboard/conftest.py
-# to xfail(strict=False) exactly these test ids.
+# RE-SEEDED FROM ONE MEASURED RUN: test-results/innet_180926_2349, an in-network run of this
+# tree, scoring passed=49 failed=16 skipped=235 storyboards_executed=72 on BOTH protocols
+# with zero disparity between them. Every id below is a nodeid that run produced; none was
+# derived by hand from a check name, because the failure messages print check ids
+# slash-separated while the parametrized ids are ``::``-separated and the media_buy track
+# carries an extra path segment -- converting between them by hand is the arithmetic this
+# header has forbidden since the first seeding.
 #
-# WHAT THIS FILE ACTUALLY ENFORCES (three distinct signals, only two of which bite):
-#   - REGRESSION — a failing check that is NOT listed here fails CI. This is the
-#     signal the job exists for.
-#   - DE-COLLECTION — a listed entry that resolves to no collected check fails CI
-#     via ledger/fitness::stale_entries, computed in-session by
-#     test_storyboard_conformance.pytest_generate_tests. This is what catches an
-#     entry that stopped being graded (a closed capability gate, a rename).
-#   - GRADUATION — a listed entry that IS collected and now PASSES does NOT fail
-#     CI. The marker is strict=False by deliberate design (conftest.py:31-36:
-#     an environment-dependent xpass must not redden the job), so it XPASSes
-#     silently; pytest.ini sets no xfail_strict and the storyboard tox env adds
-#     no flag. Graduation is handled by updating this file and its lock test
-#     together — the same discipline as the e2e_rest ledger
-#     (tests/bdd/conftest.py:39, also non-strict). If graduation should redden,
-#     that needs an xpass assertion, not a comment here.
+# 18 ROWS PER PROTOCOL AGAINST A ``failed`` COUNTER READING 16. The summary's ``failed`` is
+# the runner's own tally; ``summary["failures"]`` is the per-check array the test module turns
+# into parametrized items, and it carries 18 records per protocol. The ledger keys on those
+# records, so 18 is the number of rows. The previous seeding had the same shape -- 23 rows
+# against ``failed=21`` -- so this is the runner's counter, not a miscount here.
 #
-# The runner grades the agent once per PROTOCOL (mcp, a2a), so every entry carries
-# its protocol as the first id segment. The two halves are independent ledgers in
-# one file: an MCP-only fix graduates the mcp:: entry and leaves any a2a:: twin,
-# which is exactly the drift this axis exists to expose. See the a2a section for
-# why that half currently holds a single not-measured entry rather than per-check
-# twins.
+# WHAT THE RE-SEED DID. The previous seeding came from test-results/innet_160926_1917, which
+# scored passed=30 failed=21 on both protocols and put 46 entries here. "fix(storyboard):
+# derive the seeded accounts from the bundle, like the inventory" then took the score from 30
+# to 49, and the ledger did not move with it. Two things happened at once and both are
+# recorded here:
 #
-# Locked by tests/unit/test_storyboard_ledger_state.py — keep that test in sync.
+#   * 26 entries GRADUATED -- 13 per protocol, every one of them a check whose storyboard
+#     could not seed its accounts before. They are gone from this file. ``ledger_fitness::
+#     stale_entries`` failed on them in CI run 35407109423: an entry resolving to no
+#     collected check grades nothing, and the ledger only shrinks.
 #
-# Runner-reported SKIPS (missing_test_controller, missing_tool, prerequisite_failed)
-# are NOT ledgered here — they map to a native pytest.skip() in the test module
-# instead (the conformance job's Core Invariant). Only genuine check FAILURES belong in this file.
+#   * 16 checks that were previously SKIPPED now execute, and fail -- 8 per protocol, in the
+#     media_buy track. They are new lines below. A storyboard whose ``get_products`` step
+#     failed skipped everything downstream with ``prerequisite_failed``, so these gaps were
+#     masked by the skip cascade rather than absent. They are genuine conformance gaps, not
+#     regressions from the account-seeding fix: VALIDATION_ERROR where create_media_buy
+#     should succeed (inventory_list_no_match, inventory_list_targeting,
+#     dependency_impairment_cardinality, measurement_terms_rejected/relaxed_terms),
+#     CREATIVE_NOT_FOUND on assign_creative_to_package, CREATIVE_REJECTED on a legacy inline
+#     creative, NOT_CANCELLABLE on re-cancelling a cancelled buy, and a creative still
+#     present in the library after cancellation.
 #
-# comply_test_controller/pagination-integrity is the sole PERMANENT won't-fix
-# family (missing_test_controller — no test controller wired for these checks).
-# RFC 9421 signing entries, when ledgered, are regular shrinking genuine-gap
-# entries tied to #1291 (RFC 9421 message signing epic) — NOT permanent.
+# The net is 46 -> 36 entries. Of the 8 newly-surfaced checks, three already have issues
+# raised from a later measurement of the same shape:
 #
+#   * dependency_impairment_cardinality::create_buy_two_packages -- #2267, the seller rejects
+#     two packages naming one product where the pinned schema permits it.
+#   * measurement_terms_rejected::create_media_buy_relaxed_terms -- #2269, the mock adapter's
+#     invented 1M-impression cap refuses a conformance-sized buy. That issue records the same
+#     masking this re-seed is undoing: "previously masked, because the create path died on
+#     fixture faults before reaching this scenario".
+#   * inventory_list_no_match::create_buy_no_match -- #1303, zero-inventory pre-validation.
+#
+# The other five (creative_fate_after_cancellation::list_creatives_before_cancel,
+# dependency_impairment::assign_creative_to_package,
+# inline_creatives_without_sync::create_buy_with_legacy_inline_creative,
+# invalid_transitions::second_cancel, inventory_list_targeting::create_buy_with_lists) have no
+# issue of their own yet and sit under the roadmap umbrella, #1247. Every affected storyboard
+# already had a row in docs/test-obligations/storyboard-issue-map.yaml, because its
+# ``get_products`` step was already ledgered, so no storyboard became untriaged here.
+#
+# WHAT THIS FILE COSTS, stated plainly. ``tests/storyboard/conftest.py`` xfails these ids with
+# strict=False, so a regression INSIDE a ledgered check does not redden the job, and the job's
+# failure count is not the gap count. The gap count lives here, in the length of this file, and
+# the pass count lives in ``.storyboard-pass-floor`` -- which is the oracle for the other
+# direction and is why a check that quietly degrades from PASS to SKIP now fails the job.
+# A run-to-run comparison (scripts/audit/compare_runs.py) remains the way to see a ledgered
+# check move.
+#
+# THE SYMMETRY IS THE POINT. 18 mcp entries and 18 a2a entries, and every failing check fails
+# on both surfaces. The runner grades the agent once per PROTOCOL, so an mcp-only fix that
+# leaves its a2a twin behind shows up here as an asymmetric pair -- which is the drift this
+# split exists to expose.
+#
+# FORMAT. One parametrized test id per line, keyed on (protocol, track, storyboard_id,
+# step_id) from the real @adcp/sdk runner's measured output. Loaded by
+# tests/storyboard/conftest.py; pinned entry-for-entry by
+# tests/unit/test_storyboard_ledger_state.py, so an entry added here without updating
+# EXPECTED_LEDGER fails the unit suite.
+#
+# Runner-reported SKIPS (missing_test_controller, missing_tool, prerequisite_failed) are
+# never ledgered -- they map to a native pytest.skip() in the test module. Only genuine
+# check FAILURES are ledgerable.
+#
+# THE SDK PIN CHECK IS LEDGERED, and it is the one entry here that is not a conformance
+# gap. ``test_runner_sdk_pin.py`` compares the npm runner's declared ``adcp_version`` against
+# the version this repo pins, and fails: @adcp/sdk@14.0.0-rc.35 declares 3.2.0-rc.1 while the
+# repo pins 3.1.1. It was already failing in the runs that scored 30/21, so it predates this
+# ledger.
+#
+# It is expected, and the repo's pin is not what is wrong. The SDK release fixes its own
+# ``adcp_version``, so the npm version and the graded spec version are one choice rather than
+# two. ``--compliance-version`` is passed with the pinned version already and does not move it;
+# the guard says so in its own message -- "however right the --compliance-version happens to
+# be". There is no runner flag that separates the client's contract from the vectors it grades
+# against, which is a defect in the grader rather than in this repo, raised upstream.
+#
+# 14.0.0-rc.35 is not a free choice either. The last runner line that declares 3.1 is 11.x, and
+# its A2A path carries an unfixed 0.x dependency; the A2A fixes are not backported. So grading
+# both protocol surfaces at all requires the 14 line, and the 14 line declares 3.2.0-rc.1.
+#
+# It is marked at its own source rather than listed below: this ledger's grammar keys on
+# (protocol, track, storyboard_id, step_id) and refuses an entry without a protocol prefix,
+# which is right -- a ledger of conformance checks should not admit something that is not one.
+# Widening the grammar for one row would cost more than the row is worth.
+#
+# Graduating the mark means an upstream runner that either declares 3.1.1 or honours
+# ``--compliance-version`` as the client contract. Until then, leaving it red would mean a
+# permanently red job whose redness says nothing a reader can act on.
 
-# ============================ mcp ============================
-#
-# RE-SEEDED from a real in-network CI run of THIS tree — run 32478296091, job
-# 96759107129, head_sha 0ec6637dd (2026-08-21): 96 collected, 13 failed,
-# 1 passed, 13 skipped, 69 xfailed, 0 xpassed.
-#
-# Not arithmetic on an older run. The previous seed (run 30962437988, commit
-# 1348eed70, 83 graded checks) described a different collection set, and the
-# `101 = 75 - 14 + 40` re-pin on top of it left 11 measured failures un-ledgered
-# and both structural entries hard-failing.
-#
-# All 69 previously-ledgered mcp entries xfailed at this head — zero
-# graduations. The 11 added below are the measured un-ledgered failures; every
-# one carries `VALIDATION_ERROR: Unexpected keyword argument` and is #1512
-# (adcp_version rejected). #1861 (auth masks DB errors) is also live here.
-#
-# 0 passed is not a typo: the runner's capability probe (get_adcp_capabilities)
-# is itself rejected, so most storyboards never reach their assertions.
-
-
-# --- read_tool_idempotency (8) ---
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::read_tool_idempotency::assert_omitted_key_grace_handled]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::read_tool_idempotency::get_capabilities_with_idempotency_key]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::read_tool_idempotency::get_capabilities_without_idempotency_key_3_1_accept]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::read_tool_idempotency::get_capabilities_without_idempotency_key_3_1_reject]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::read_tool_idempotency::get_products_with_idempotency_key]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::read_tool_idempotency::list_accounts_with_idempotency_key]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::read_tool_idempotency::list_creative_formats_with_idempotency_key]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::read_tool_idempotency::list_creatives_with_idempotency_key]
-
-# --- error_compliance (7) ---
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::error_compliance::get_capabilities]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::error_compliance::missing_fields]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::error_compliance::nonexistent_product]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::error_compliance::reversed_dates_error]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::error_compliance::supported_major_version]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::error_compliance::unsupported_major_version]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::error_compliance::unsupported_release_version]
-
-# --- billing_gate_dispatch (2) ---
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::billing_gate_dispatch::get_capabilities]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::billing_gate_dispatch::sync_accounts_passthrough_rejects_agent]
-
-# --- capability_discovery (2) ---
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::capability_discovery::get_capabilities]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::capability_discovery::get_capabilities_filtered]
-
-# --- security_baseline (2) ---
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security::security_baseline::assert_mechanism]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security::security_baseline::probe_unauth]
-
-# --- stale_response_advisory (2) ---
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::stale_response_advisory::get_capabilities]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::stale_response_advisory::no_stale_on_healthy_upstream]
-
-# --- notification_config_event_scope (1) ---
+# --- core (8) ---
+# --- creative (2) ---
+# --- error_handling (2) ---
+# --- media_buy (20) ---
+# --- security (4) ---
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::notification_config_event_scope::sync_accounts_rejects_scheduled_account_notification]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::notification_config_lifecycle::sync_accounts_create_paused_notification_config]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::notification_config_rejections::sync_accounts_rejects_duplicate_subscriber_id]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::read_tool_idempotency::list_creative_formats_with_idempotency_key]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::creative::media_buy_seller/creative_reception::list_formats]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::error_handling::billing_gate_dispatch::sync_accounts_passthrough_rejects_agent]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/dependency_impairment::assign_creative_to_package]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/dependency_impairment_cardinality::create_buy_two_packages]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/get_products_async::get_products_submitted]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/inline_creatives_without_sync::get_products_canonical_format]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/inline_creatives_without_sync::update_buy_with_replacement_legacy_inline_creative]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/invalid_transitions::second_cancel]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/inventory_list_no_match::create_buy_no_match]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/inventory_list_targeting::create_buy_with_lists]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/measurement_terms_rejected::create_media_buy_aggressive_terms]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/measurement_terms_rejected::create_media_buy_relaxed_terms]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::notification_config_event_scope::sync_accounts_rejects_scheduled_account_notification]
-
-# --- notification_config_lifecycle (1) ---
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::notification_config_lifecycle::sync_accounts_create_paused_notification_config]
-
-# --- notification_config_rejections (1) ---
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::notification_config_rejections::sync_accounts_rejects_duplicate_subscriber_id]
-
-# --- v3_envelope_integrity (1) ---
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::v3_envelope_integrity::no_legacy_status_fields]
-
-# --- version_negotiation (1) ---
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::version_negotiation::get_capabilities_with_version]
-
-
-
-
-
-# --- webhook_emission (1) ---
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::get_capabilities]
-# Newly gradable once the run hosted a reachable webhook receiver
-# (adcontextprotocol/adcp-client#2448 + the patch-package bridge). Previously the
-# whole storyboard skipped as `requirement_unmet: webhook_receiver`, so these are
-# not regressions — they are gaps that were never measured before.
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::assert_webhook_signing_key_present]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::fetch_brand_json]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::trigger_idempotent_webhook_initial]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::trigger_operation_id_echo]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::trigger_retry_scenario]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::trigger_signed_webhook]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::trigger_webhook_operation]
-
-
-# ---- RFC 9421 request signing (#1291) -------------------------------------
-# Collected because the capability probe is REJECTED (#1512): 3.1.1 gates this
-# storyboard on `request_signing.supported: true`, and the runner no-ops that
-# gate when it cannot read get_adcp_capabilities. `request_signing` appears
-# nowhere in src/, so we do not advertise it -- but #1291 (RFC 9421 request
-# signing - Implementation) is OPEN, so this is a genuine unimplemented
-# feature, which is what this ledger records. Per this file's own header these
-# are 'regular shrinking genuine-gap entries tied to #1291 -- NOT permanent'.
-#
-# NOTE FOR WHOEVER LANDS #1546 / #1512: when the probe works, the gate CLOSES
-# and these stop being COLLECTED rather than starting to pass. They will not
-# graduate -- they will vanish, and ledger/fitness will flag all 40 as stale.
-# Remove them in that same change; that is expected, not a regression.
-# Measured: test-results/innet_210826_1048/ (2026-08-21, in-network, MCP only;
-# A2A graded 0 checks -- agent card serves no top-level url, #1440).
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::get_capabilities]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-001-no-signature-header]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-002-wrong-tag]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-003-expired-signature]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-004-window-too-long]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-005-alg-not-allowed]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-006-missing-covered-component]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-007-missing-content-digest]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-008-unknown-keyid]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-009-key-ops-missing-verify]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-010-content-digest-mismatch]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-011-malformed-header]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-012-missing-expires-param]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-013-expires-le-created]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-014-missing-nonce-param]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-015-signature-invalid]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-016-replayed-nonce]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-017-key-revoked]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-018-digest-covered-when-forbidden]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-019-signature-without-signature-input]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-020-rate-abuse]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-021-duplicate-signature-input-label]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-022-multi-valued-content-type]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-023-multi-valued-content-digest]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-024-unquoted-string-param]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-025-jwk-alg-crv-mismatch]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-027-webhook-registration-authentication-unsigned]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-028-unsigned-protocol-method-required]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::positive-001-basic-post]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::positive-002-post-with-content-digest]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::positive-003-es256-post]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::positive-004-multiple-signature-labels]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::positive-005-default-port-stripped]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::positive-006-dot-segment-path]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::positive-007-query-byte-preserved]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::positive-008-percent-encoded-path]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::positive-009-percent-encoded-unreserved-decoded]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::positive-010-percent-encoded-slash-preserved]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::positive-011-ipv6-authority]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::positive-012-ipv6-authority-default-port-stripped]
-
-# ---- wholesale_feed family (4) --------------------------------------------
-# NEW at this head: these storyboards were not in the seed run's collection
-# set at all (83 graded checks then, 96 now). They are not a regression --
-# they are checks that became gradable, measured failing on first sight.
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::wholesale_feed_bulk_webhooks::register_bulk_change_webhook]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::wholesale_feed_product_webhooks::register_product_pricing_webhook]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::wholesale_feed_products::bootstrap_products]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::signals::wholesale_feed_signal_webhooks::register_signal_pricing_webhook]
-
-# ============================ a2a ============================
-#
-# NOT MEASURED at this head — ONE entry, not 32.
-#
-# The card-discovery fix that made this axis gradable was a production change,
-# and 19116bf7e reverted every production change to narrow #1858 to measurement
-# only. So the app's only card path (`/.well-known/agent-card.json`) again
-# serves an A2A 1.0 shape (endpoint under `supportedInterfaces[0].url`) while
-# the runner's bundled `@a2a-js/sdk` 0.3.14 client reads only a top-level
-# `url`. The runner rejects the card and grades ZERO checks
-# (overall_status=unreachable) — #1440.
-#
-# "Not measured" is NOT "measured and absent", and that distinction is worth
-# keeping. This file states it with the mechanism the module already provides:
-# `_no_graded_checks` (test_storyboard_conformance.py:234-261) turns a protocol
-# that graded nothing into one ordinary failing check, ledgerable and
-# graduating like any other. The day the card is fixed, this entry XPASSes and
-# the axis's real checks arrive un-ledgered and fail CI until they are triaged.
-#
-# The 32 per-check a2a entries seeded from run 32027922014 (commit 6d16d9b1e,
-# pre-revert) were REMOVED here. They resolved to no collected check, so they
-# graded nothing and made ledger/fitness::stale_entries a permanent hard
-# failure — the job could never go green while they sat there, which blocks
-# promoting this job into the required gate. They remain in git history and
-# will be re-seeded from a real run when the axis is reachable again.
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::_runner::agent_reachability::graded_checks_produced]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::read_tool_idempotency::list_creative_formats_with_idempotency_key]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::creative::media_buy_seller/creative_reception::list_formats]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::billing_gate_dispatch::sync_accounts_passthrough_rejects_agent]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/dependency_impairment::assign_creative_to_package]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/dependency_impairment_cardinality::create_buy_two_packages]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/get_products_async::get_products_submitted]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/inline_creatives_without_sync::get_products_canonical_format]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/inline_creatives_without_sync::update_buy_with_replacement_legacy_inline_creative]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/invalid_transitions::second_cancel]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/inventory_list_no_match::create_buy_no_match]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/inventory_list_targeting::create_buy_with_lists]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/measurement_terms_rejected::create_media_buy_aggressive_terms]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/measurement_terms_rejected::create_media_buy_relaxed_terms]

@@ -9,21 +9,44 @@ No stub mode. No dict intermediaries -- assertions access Format attributes dire
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from enum import Enum
 from typing import Any
 
 from pytest_bdd import parsers, then
 
-from tests.bdd.steps._outcome_helpers import payload_or_none, require_payload, wire_field
+from tests.bdd.steps._outcome_helpers import is_e2e, payload_or_none, require_payload, wire_field
+from tests.bdd.steps.generic._table import rows as table_rows
 
 # -- Helpers -------------------------------------------------------------------
 
 
 def _is_e2e(ctx: dict) -> bool:
-    """Check if the current scenario runs via an E2E transport."""
-    transport = ctx.get("transport")
-    return transport is not None and hasattr(transport, "value") and str(transport.value).startswith("e2e_")
+    """Assertion-time E2E check: an unset transport is a wiring bug, not "not e2e".
+
+    Every caller here (:func:`then_all_formats`, :func:`then_has_referrals`) uses
+    the result to CHOOSE WHICH ASSERTIONS RUN. The previous body returned ``False``
+    for an unset transport, so a Then reached without a preceding dispatch skipped
+    its entire e2e assertion block and passed having graded nothing — the vacuity
+    this guard exists to remove (salesagent-n78j0.1.5).
+
+    The predicate itself stays in :func:`~tests.bdd.steps._outcome_helpers.is_e2e`
+    (one definition of "what counts as e2e"); this wrapper only adds the
+    unset-transport contract that assertion sites need. Normal flow cannot reach
+    the raise: ``_dispatch.dispatch_request`` and ``when_request._call`` both raise
+    on an unset transport during the When, and UC-005 (the only feature using these
+    steps) has no @rest/@mcp/@a2a-tagged scenarios, so ``ctx['transport']`` is
+    always set by the parametrization.
+    """
+    if ctx.get("transport") is None:
+        raise AssertionError(
+            "then_payload: ctx['transport'] is unset at assertion time — the e2e branch "
+            "would silently evaluate False and skip its assertions. Dispatch through "
+            "dispatch_request (which raises on an unset transport) or set "
+            "ctx['transport'] explicitly."
+        )
+    return is_e2e(ctx)
 
 
 def _get_formats(ctx: dict) -> list[Any]:
@@ -74,12 +97,6 @@ def then_all_formats(ctx: dict) -> None:
     )
 
 
-@then("the response should include an empty formats array")
-def then_empty_formats(ctx: dict) -> None:
-    formats = _get_formats(ctx)
-    assert len(formats) == 0, f"Expected 0 formats, got {len(formats)}"
-
-
 @then("the response should include only display formats")
 def then_only_display(ctx: dict) -> None:
     formats = _get_formats(ctx)
@@ -116,9 +133,10 @@ def then_has_referrals(ctx: dict) -> None:
     """Assert the wire response contains creative_agents matching the Given agents.
 
     Reads ``creative_agents`` from the serialized wire (REST/A2A/MCP/e2e_rest) via
-    the shared :func:`wire_field` reader; IMPL falls through to the production
-    serializer inside the helper. The previous body read the lossy reconstructed
-    ``ctx['response'].creative_agents`` payload — this asserts the buyer-facing wire.
+    the shared :func:`wire_field` reader, which raises on a missing wire rather than
+    serializing a typed payload in its place. The previous body read the lossy
+    reconstructed ``ctx['response'].creative_agents`` payload — this asserts the
+    buyer-facing wire.
     """
     referrals = wire_field(ctx, "creative_agents")
     assert referrals is not None, "Expected creative_agents field on the wire, got None"
@@ -133,14 +151,18 @@ def then_has_referrals(ctx: dict) -> None:
         actual_urls.add(url_str)
         assert _referral_capabilities(ref) is not None, f"Referral missing capabilities: {ref}"
 
+    # ONE comparison, every transport. The e2e branch this replaces re-checked that each
+    # returned URL starts with "http" — which the loop above already asserts — and skipped
+    # the only assertion that can fail: that the agent the Given configured is ACTUALLY
+    # referred. It was written when the Given wrote nothing anywhere, so over e2e there was
+    # no expectation to compare against. The Given now seeds the ``creative_agents`` row
+    # production reads, in the per-test database in process and in the live server's own
+    # over e2e_rest, so the same comparison holds on both.
     given_agents = ctx.get("creative_agent_referrals", [])
-    if given_agents and not _is_e2e(ctx):
+    if given_agents:
         expected_urls = {str(a.agent_url) for a in given_agents}
         missing = expected_urls - actual_urls
         assert not missing, f"Given agent URLs not found in response: {missing}. Response contains: {actual_urls}"
-    elif _is_e2e(ctx):
-        for url_str in actual_urls:
-            assert url_str.startswith("http"), f"E2E referral URL should be http/https, got: {url_str!r}"
 
 
 @then("each referral should include the agent URL and supported capabilities")
@@ -148,8 +170,7 @@ def then_referral_fields(ctx: dict) -> None:
     """Assert each wire referral has a well-formed agent_url AND non-empty capabilities.
 
     Reads referrals from the serialized wire via the shared :func:`wire_field`
-    reader (IMPL falls through to the production serializer) instead of the lossy
-    reconstructed ``ctx['response']`` payload.
+    reader instead of the lossy reconstructed ``ctx['response']`` payload.
     """
     referrals = wire_field(ctx, "creative_agents")
     assert referrals, "No referrals to verify -- expected at least one creative agent"
@@ -189,26 +210,30 @@ def then_format_id_fields(ctx: dict) -> None:
         assert getattr(fid, "id", None), f"Format '{_fmt_name(f)}' format_id missing id"
 
 
-@then("each format should include a name and type category")
-def then_format_name_type(ctx: dict) -> None:
-    valid_types = {
-        "audio",
-        "video",
-        "display",
-        "native",
-        "dooh",
-        "rich_media",
-        "universal",
-    }
-    for f in _get_formats(ctx):
+@then("each format should include a name")
+def then_format_name(ctx: dict) -> None:
+    """Every returned format carries a non-empty string name.
+
+    The `type category` half of this step's predecessor is gone with the field: adcp 3.12
+    removed `type` from Format, so the vocabulary that half graded is one the pin no longer
+    has. See the note below for the step that carried it.
+    """
+    formats = _get_formats(ctx)
+    assert formats, "No formats in response -- cannot verify names"
+    for f in formats:
         name = _fmt_name(f)
         assert name, f"Format missing name: {f}"
         assert isinstance(name, str), f"Format name is not a string: {type(name)}"
-        type_str = _fmt_type_str(f)
-        assert type_str, f"Format missing type: {f}"
-        assert type_str in valid_types, (
-            f"Format '{name}' has invalid type category '{type_str}', expected one of {valid_types}"
-        )
+
+
+# ``each format should include a name and type category`` used to bind here — the second
+# of the two Thens @T-UC-005-main dropped when adcp 3.12 removed ``type`` from ``Format``
+# (BR-UC-005-discover-creative-formats.feature:36-37 names both). The only occurrence of
+# that sentence left in the feature sources is inside that comment, so nothing binds it.
+# Its body could not have graded the pin either way: the ``valid_types`` set is a
+# vocabulary 3.12 no longer defines, ``_fmt_type_str`` raises AttributeError on every row
+# at the pin, and with no formats in the response the loop asserted nothing at all.
+# ``then_format_name`` above keeps the half that survives the removal.
 
 
 @then("each format should include asset requirements with type and dimensions")
@@ -256,21 +281,29 @@ def then_format_assets(ctx: dict) -> None:
 # -- Sorting assertions --------------------------------------------------------
 
 
-@then("the results should be sorted by format type then name")
-def then_sorted_type_name(ctx: dict) -> None:
-    formats = _get_formats(ctx)
-    if len(formats) <= 1:
-        return
-    sort_keys = [(_fmt_type_str(f) or "", _fmt_name(f) or "") for f in formats]
-    assert sort_keys == sorted(sort_keys), f"Formats not sorted by type then name: {sort_keys}"
+# ``the results should be sorted by format type then name`` used to bind here. The
+# sentence was removed from @T-UC-005-main deliberately — adcp 3.12 dropped ``type``
+# from ``Format``, and the feature says so at BR-UC-005-discover-creative-formats.feature:36
+# — leaving a step no rendered sentence binds. It also could not have graded the
+# obligation it named: it returned a pass for a catalog of 0 or 1 formats, and on a
+# longer one ``_fmt_type_str`` raises AttributeError at the pin rather than failing an
+# assertion (see ``then_results_ordered`` below, which reads whatever columns the table
+# declares for exactly that reason).
 
 
 @then("the results should be ordered:")
 def then_results_ordered(ctx: dict, datatable: Sequence[Sequence[object]]) -> None:
-    formats = _get_formats(ctx)
-    headers = [str(cell) for cell in datatable[0]]
-    expected = [{headers[i]: str(cell) for i, cell in enumerate(row)} for row in datatable[1:]]
-    actual = [{"name": _fmt_name(f), "type": _fmt_type_str(f)} for f in formats]
+    """Assert the response's format order matches the table, column by column.
+
+    Reads whatever columns the table declares instead of a fixed {name, type} pair. The
+    fixed pair could not work at the pin: adcp 3.12 removed ``type`` from ``Format``, so
+    ``_fmt_type_str`` raises ``AttributeError`` on every row rather than failing an
+    assertion.
+    """
+    expected = table_rows(datatable)
+    columns = list(expected[0]) if expected else ["name"]
+    readers = {"name": _fmt_name, "type": _fmt_type_str}
+    actual = [{c: readers.get(c, _fmt_name)(f) for c in columns} for f in _get_formats(ctx)]
     assert actual == expected, f"Expected order {expected}, got {actual}"
 
 
@@ -310,10 +343,9 @@ def then_three_returned(ctx: dict, a: str, b: str, c: str) -> None:
         assert name in names, f"Expected '{name}' in results, got {names}"
 
 
-@then(parsers.parse('the returned format type should be "{fmt_type}"'))
-def then_returned_type(ctx: dict, fmt_type: str) -> None:
-    for f in _get_formats(ctx):
-        assert _fmt_type_str(f) == fmt_type, f"Expected type '{fmt_type}', got '{_fmt_type_str(f)}'"
+# `the returned format type should be "{fmt_type}"` bound here — the third casualty of adcp
+# 3.12 dropping `type` from Format, alongside the two noted above. No feature carries the
+# sentence.
 
 
 # -- Partition/boundary test outcomes ------------------------------------------
@@ -348,8 +380,30 @@ _KNOWN_FILTER_FIELDS = frozenset(
 _CREATIVE_AGENT_FIELDS = frozenset({"creative agent type", "creative agent asset type"})
 
 
+#: An outcome cell naming an AdCP error code, e.g. ``INVALID_REQUEST``.
+_OUTCOME_CODE_RE = re.compile(r"^[A-Z][A-Z_0-9]+$")
+
+
 def _assert_partition_outcome(ctx: dict, field: str, expected: str) -> None:
-    """Assert partition/boundary test outcome against real production results."""
+    """Assert a partition/boundary outcome: ``valid``, or a NAMED wire error code.
+
+    The rejection half used to accept ``expected == "invalid"`` and check only
+    that ``"error"`` was a key in ``ctx`` and that no payload came back. Both
+    halves of that were satisfiable WITHOUT the seller ever seeing the request:
+    the When built the typed model in the test process, pydantic raised, the step
+    stashed the exception, and this assertion passed. It could not distinguish a
+    client-side rejection from a server one, and it never looked at a code — so
+    ~36 UC-005 rows asserted only "something went wrong somewhere".
+
+    Now the outcome cell NAMES the code (the Examples table carries the
+    contract) and the assertion is made against the real two-layer envelope the
+    buyer received, via the harness's own ``assert_wire_error`` — the single
+    sanctioned surface, shared with ``then_error.py``'s wire-first steps rather
+    than re-spelled here (CLAUDE.md DRY invariant).
+
+    There is deliberately NO bare-``invalid`` branch left. Keeping one would let
+    an unmigrated row keep grading nothing, and every UC-005 row now names a code.
+    """
     assert field in _KNOWN_FILTER_FIELDS, (
         f"Unknown filter field '{field}' in partition/boundary test. Known fields: {sorted(_KNOWN_FILTER_FIELDS)}"
     )
@@ -363,18 +417,32 @@ def _assert_partition_outcome(ctx: dict, field: str, expected: str) -> None:
         assert isinstance(formats_attr, list), (
             f"Expected 'formats' to be a list for '{field}' filter, got {type(formats_attr).__name__}"
         )
-    elif expected == "invalid":
-        assert "error" in ctx, (
-            f"Expected '{field}' filter to be rejected as invalid, but operation "
-            f"succeeded with response: {payload_or_none(ctx)!r}"
+        return
+
+    if expected == "invalid":
+        raise AssertionError(
+            f"Outcome cell for '{field}' says a bare 'invalid'. Name the AdCP error code the "
+            "seller must return (e.g. INVALID_REQUEST) so the scenario grades WHICH rejection "
+            "the buyer receives, not merely that something failed."
         )
-        resp = payload_or_none(ctx)
-        assert resp is None, (
-            f"Expected no response on invalid '{field}' filter, got both error "
-            f"{ctx.get('error')!r} AND response {resp!r}"
+
+    if not _OUTCOME_CODE_RE.match(expected):
+        raise AssertionError(
+            f"Unexpected outcome value '{expected}' for '{field}' -- expected 'valid' or an AdCP error code"
         )
-    else:
-        raise AssertionError(f"Unexpected outcome value '{expected}' for '{field}' -- expected 'valid' or 'invalid'")
+
+    # The rejection must have crossed a transport. assert_wire_error hard-asserts a
+    # real captured envelope before comparing, so this cannot pass on a
+    # reconstructed exception or on a transport that swallowed the typed error.
+    result = ctx.get("result")
+    assert result is not None, (
+        f"Expected '{field}' to be rejected with {expected} on the wire, but no transport result "
+        f"was captured — the payload never reached the seller. ctx['error']={ctx.get('error')!r}"
+    )
+    try:
+        result.assert_wire_error(expected)
+    except AssertionError as exc:
+        raise AssertionError(f"[{field}] {exc}") from None
 
 
 def _assert_returned_formats_subset_of_registry(ctx: dict, field: str, label: str) -> None:

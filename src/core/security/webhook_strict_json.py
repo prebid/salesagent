@@ -97,7 +97,7 @@ class DuplicateKeyInput(Exception):
     ``code`` is the spec's error identifier (AdCP 3.1.1 L1/security.mdx
     §Duplicate object keys) -- byte-exact, case-sensitive, never renamed to
     match a refactor. It is a plain class attribute, deliberately never
-    surfaced as ``AdCPError.error_code``: ``duplicate_key_input`` is a
+    surfaced as ``AdCPSalesAgentError.error_code``: ``duplicate_key_input`` is a
     lowercase spec-fixture discriminator, absent from the pinned
     ``WIRE_STANDARD_CODES`` table (all SCREAMING_SNAKE), and
     ``translate_error_code`` passes unknown codes to the buyer unchanged --

@@ -80,7 +80,8 @@ guard allowlists) as lead-reconciled after the wave, never edited in parallel.
 ### Step 3: Spawn executors
 
 For each work item, build the prompt from this template, substituting
-`<HEAD_SHA>` (Step 0), `<DATABASE_URL>` (Step 1), `<TASK_IDS>`, `<FORMULA>`,
+`<HEAD_SHA>` (Step 0), `<DATABASE_URL>` (Step 1), `<DEV_PRACTICES_ROOT>`
+(the portable path to the dev-practices plugin), `<TASK_IDS>`, `<FORMULA>`,
 `<VAR>` (`BUG_IDS` for bug-triage, else `TASK_IDS`), and `<FILES>`:
 
 ```
@@ -94,6 +95,7 @@ export DATABASE_URL="<DATABASE_URL>"
 export ADCP_TESTING=true
 export ENCRYPTION_KEY="PEg0SNGQyvzi4Nft-ForSzK8AGXyhRtql1MgoUsfUHk="  # TEST ONLY
 export GEMINI_API_KEY="test_key"
+export DEV_PRACTICES_ROOT="<DEV_PRACTICES_ROOT>"
 Do NOT run agent-db.sh or `docker compose up` — use the DATABASE_URL above.
 
 ## Worktree base reset (required, per .claude/commands/team.md Step 0)
@@ -103,8 +105,8 @@ Make every edit via paths inside your worktree so the commit captures them.
 
 ## Task work
 Cook:
-python3 /Users/konst/projects/pi-agentic-coding/plugins/dev-practices/skills/execute/scripts/cook_formula.py \
-  --formula /Users/konst/projects/pi-agentic-coding/plugins/dev-practices/skills/execute/formulas/<FORMULA> \
+python3 "$DEV_PRACTICES_ROOT/skills/execute/scripts/cook_formula.py" \
+  --formula "$DEV_PRACTICES_ROOT/skills/execute/formulas/<FORMULA>" \
   --var "<VAR>=<TASK_IDS>" --epic-title "Execute: <TASK_IDS>"
 Then walk atoms: bd ready → bd show <atom> → execute → bd close <atom> → repeat.
 Your files (stay in scope): <FILES>

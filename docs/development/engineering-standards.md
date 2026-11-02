@@ -80,7 +80,8 @@ Two boundary rules follow from the layering:
   model and stops; the boundary serializes it once. A hand-assembled
   response dict, or a `model_dump()` inside `_impl`, forks the wire
   contract per call site
-  (guard: `tests/unit/test_architecture_no_model_dump_in_impl.py`).
+  (enforced by `ruff-serialization.toml` and
+  `.ast-grep/rules/serialize-only-at-the-edges.yml`).
 - **Raise typed errors, never build envelopes.** `_impl` raises an
   `AdCPError` subclass from `src/core/exceptions.py`; the boundary
   translator builds the buyer-facing envelope. Never raise a bare

@@ -23,21 +23,26 @@ from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
-from src.core.exceptions import AdCPAuthenticationError, AdCPNotFoundError
 from tests.factories.creative_asset import build_assets, image_spec, text_spec
-from tests.harness import CreativeSyncEnv, Transport, assert_envelope, make_identity
+from tests.harness import CreativeSyncEnv, Transport, assert_envelope
 from tests.helpers.creative_test_helpers import assert_stored_creative_assets, creative_payload
 
 
-def _error_messages(errors: list | None) -> list[str]:
-    """Extract message strings from Error objects or plain strings."""
+def _error_codes(errors: list | None) -> list[str]:
+    """Extract the machine CODE from each per-creative error entry.
+
+    Production emits these entries TYPED — src/core/tools/creatives/_processing.py builds
+    each one with build_error_object(), so every element is an adcp Error carrying a code.
+    The message is deliberately not read: it is a function of the code through CODE_TABLE,
+    so asserting both would check the table against itself.
+    """
     if not errors:
         return []
-    return [e.message if hasattr(e, "message") else str(e) for e in errors]
+    return [str(getattr(e, "code", None) or getattr(e, "error_code", "")) for e in errors]
 
 
 # All four transports: IMPL, A2A, REST, MCP
-ALL_TRANSPORTS = [Transport.IMPL, Transport.A2A, Transport.REST, Transport.MCP]
+ALL_TRANSPORTS = [Transport.A2A, Transport.REST, Transport.MCP]
 
 # GRADUATED — the A2A ledger shrank to zero, so there is no A2A_LEDGERED_TRANSPORTS
 # list any more and every case below is back on plain ALL_TRANSPORTS.
@@ -101,16 +106,24 @@ class TestSyncCreativeCreateTransport:
             assert db_creative.name == "Transport Test Creative"
 
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
-    def test_empty_creative_list_returns_success(self, integration_db, transport):
-        """Empty creative list is a valid no-op across all transports."""
+    def test_empty_creative_list_is_rejected(self, integration_db, transport):
+        """An empty creative list is not a no-op -- the schema forbids it.
+
+        sync-creatives-request.json declares ``creatives: {minItems: 1, maxItems: 100}``,
+        so ``[]`` violates a SCHEMA CONSTRAINT, which 3.1/enums/error-code.json assigns to
+        INVALID_REQUEST. This asserted the opposite until now -- that an empty list "is a
+        valid no-op" returning success -- and passed because no transport built
+        SyncCreativesRequest on this path: the constraint was declared and never enforced.
+        Every transport builds it through SyncCreativesRequest now, so the same
+        request gets the same answer on all four.
+        """
         with CreativeSyncEnv() as env:
             env.setup_default_data()
 
             result = env.call_via(transport, creatives=[])
 
-        assert result.is_success
-        assert_envelope(result, transport)
-        assert len(result.payload.creatives) == 0
+        assert not result.is_success, "an empty creatives array violates minItems: 1"
+        result.assert_wire_error("INVALID_REQUEST", recovery="correctable")
 
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
     def test_dry_run_does_not_persist(self, integration_db, transport):
@@ -161,23 +174,25 @@ def _creative(creative_id: str = "c1", name: str = "Test", **overrides) -> dict:
 
 @pytest.mark.requires_db
 class TestSyncUpsertReturnsUpdatedTransport:
-    """Re-syncing an existing creative returns action="updated" with changes list.
+    """Re-syncing an existing creative with a changed field returns action="updated".
+
+    An identical re-sync is ``unchanged`` (enums/creative-action.json), so the second
+    sync changes the name -- the field the changes list then names.
 
     Covers: UC-006-MAIN-MCP-04
     """
 
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
     def test_upsert_existing_creative_reports_updated(self, integration_db, transport):
-        """Syncing a creative that already exists returns action=updated."""
+        """Syncing a creative that already exists, with a changed field, returns action=updated."""
         with CreativeSyncEnv() as env:
             env.setup_default_data()
 
             # First sync: create the creative (same transport as upsert)
-            creative_data = _creative(creative_id="c_upsert")
-            env.call_via(transport, creatives=[creative_data])
+            env.call_via(transport, creatives=[_creative(creative_id="c_upsert")])
 
-            # Second sync via parametrized transport: upsert
-            result = env.call_via(transport, creatives=[creative_data])
+            # Second sync via parametrized transport: upsert with a changed name
+            result = env.call_via(transport, creatives=[_creative(creative_id="c_upsert", name="Renamed")])
 
         assert result.is_success, f"Expected success but got error: {result.error}"
         assert_envelope(result, transport)
@@ -261,12 +276,16 @@ class TestSyncStrictModeAbortTransport:
             result = env.call_via(
                 transport,
                 creatives=[_creative(creative_id="c_strict", name="Strict Test")],
-                assignments={"c_strict": ["PKG-NONEXISTENT"]},
+                assignments=[{"creative_id": "c_strict", "package_id": "PKG-NONEXISTENT"}],
                 validation_mode="strict",
             )
 
         assert result.is_error, "Strict mode should error on missing package"
-        assert isinstance(result.error, AdCPNotFoundError)
+        # Graded on the CODE the buyer received, not on the class of an exception the
+        # harness used to rebuild from wire bytes. Production
+        # raises AdCPPackageNotFoundError here (_assignments.py:163), which is more
+        # specific than the AdCPNotFoundError this used to accept.
+        assert result.error_code() == "PACKAGE_NOT_FOUND", f"Expected PACKAGE_NOT_FOUND, got {result.error_code()!r}"
 
 
 @pytest.mark.requires_db
@@ -285,7 +304,7 @@ class TestSyncLenientModeContinuesTransport:
             result = env.call_via(
                 transport,
                 creatives=[_creative(creative_id="c_lenient", name="Lenient Test")],
-                assignments={"c_lenient": ["PKG-MISSING"]},
+                assignments=[{"creative_id": "c_lenient", "package_id": "PKG-MISSING"}],
                 validation_mode="lenient",
             )
 
@@ -324,7 +343,7 @@ class TestSyncFormatValidationTransport:
         assert len(result.payload.creatives) == 1
         creative_result = result.payload.creatives[0]
         assert creative_result.action == "failed"
-        assert any("list_creative_formats" in e for e in _error_messages(creative_result.errors))
+        assert "REFERENCE_NOT_FOUND" in _error_codes(creative_result.errors)
 
 
 @pytest.mark.requires_db
@@ -671,11 +690,16 @@ class TestGenerativeBuildUserAssetPriority:
                         "creative_id": "c_gen_08",
                         "name": "Asset Priority Test",
                         "format_id": fmt,
+                        # 3.1 has no top-level `url` on a creative -- core/creative-asset.json
+                        # declares none, and the media URL belongs in `assets`. Production
+                        # still derives the stored data["url"] from the assets block
+                        # (_assets.py _extract_url_from_assets), so the assertion below is
+                        # unchanged; only the retired spelling goes.
                         "assets": build_assets(
                             text_spec("message", content="Build me a banner"),
                             user_headline,
+                            image_spec("image", url="https://user.example.com/image.png"),
                         ),
-                        "url": "https://user.example.com/image.png",
                     }
                 ],
             )
@@ -754,8 +778,19 @@ class TestFormatValidationUnreachable:
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
     def test_unreachable_agent_fails_creative(self, integration_db, transport):
         """Typed transient from registry.get_format → SERVICE_UNAVAILABLE, recovery=transient."""
+        if transport is Transport.A2A:
+            pytest.xfail(
+                "a recorded gap: A2A emits no wire envelope for a tool-internal "
+                "SERVICE_UNAVAILABLE — the raw AdCPServiceUnavailableError escapes instead "
+                "of becoming a failed Task with an artifact DataPart. This leg only ever "
+                "looked green because two synthesizing fallbacks (dispatchers' "
+                "_envelope_from_adcp_error and this test's own `or "
+                "synthesized_error_envelope`) rebuilt the envelope from the same in-memory "
+                "exception with the same builder production uses, so a dead wire and a live "
+                "one were indistinguishable. Both fallbacks are gone; graduating this means "
+                "making A2A emit the envelope, never restoring a fallback."
+            )
         from src.core.exceptions import AdCPServiceUnavailableError
-        from tests.helpers import assert_envelope_shape
 
         with CreativeSyncEnv() as env:
             env.setup_default_data()
@@ -763,9 +798,7 @@ class TestFormatValidationUnreachable:
             # Override: get_format raises the typed error the registry actually
             # raises for network failures (side_effect on the env's existing
             # AsyncMock — mock-cap guard).
-            env.mock["registry"].return_value.get_format.side_effect = AdCPServiceUnavailableError(
-                "Connection failed: agent unreachable"
-            )
+            env.mock["registry"].return_value.get_format.side_effect = AdCPServiceUnavailableError()
 
             result = env.call_via(
                 transport,
@@ -773,13 +806,78 @@ class TestFormatValidationUnreachable:
             )
 
             assert result.is_error, f"[{transport.value}] transient agent failure must fail the request"
-            envelope = result.error_envelope()
-            assert_envelope_shape(
-                envelope,
-                "SERVICE_UNAVAILABLE",
-                recovery="transient",
-                message_substr="unreachable",
+            # Graded through the result rather than by handing an envelope to the
+            # primitive: assert_wire_error reads wire_error_envelope ONLY (never the
+            # synthesized stand-in the two removed fallbacks used to supply), fails
+            # loudly when no envelope was captured, and adds the CODE_TABLE
+            # emittability check. main's result.error_envelope() would also accept the
+            # IMPL-synthesized envelope, which is the tautology the xfail above
+            # describes; tests/unit/test_architecture_one_wire_error_assertion.py
+            # requires this spelling for a TransportResult.
+            result.assert_wire_error("SERVICE_UNAVAILABLE", recovery="transient")
+
+
+@pytest.mark.requires_db
+class TestTypedTransientSurvivesCreativeBuild:
+    """A typed transient from the creative agent keeps its own code on the wire.
+
+    Covers . The generative build/preview path caught EVERY exception
+    from registry.build_creative / preview_creative and rebuilt it as
+    SERVICE_UNAVAILABLE. A rate-limited agent therefore reached the buyer as a
+    generic outage: "retry with backoff" instead of "wait, you are over quota", and
+    with retry_after discarded.
+
+    The handler already carved out AdCPConfigurationError for exactly this reason --
+    so a missing GEMINI_API_KEY would not read as a transient agent outage. That
+    carve-out was right and too narrow; every typed error deserves it. This grades
+    the generalization.
+
+    Asserted on the per-creative advisory rather than the error envelope because
+    that is where this failure legitimately lands: the sync SUCCEEDS and reports the
+    creative as failed, which is the contract test_bad_format above also relies on.
+    """
+
+    @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
+    def test_rate_limit_is_not_degraded_to_service_unavailable(self, integration_db, transport):
+        """RATE_LIMITED survives; before this change the buyer read SERVICE_UNAVAILABLE."""
+        from src.core.exceptions import AdCPRateLimitError
+
+        with CreativeSyncEnv() as env:
+            env.setup_default_data()
+            # A generative format, so the build path this ticket is about actually runs.
+            fmt = env.setup_generative_build()
+            registry_mock = env.mock["registry"].return_value
+            registry_mock.build_creative = AsyncMock(side_effect=AdCPRateLimitError(retry_after=30))
+            registry_mock.preview_creative = AsyncMock(side_effect=AdCPRateLimitError(retry_after=30))
+
+            result = env.call_via(
+                transport,
+                creatives=[
+                    {
+                        "creative_id": "c_rate_limited",
+                        "name": "Rate Limited Build",
+                        "format_id": fmt,
+                        "assets": build_assets(text_spec("message", content="Build me a banner")),
+                    }
+                ],
             )
+
+        assert result.is_success, f"[{transport.value}] a per-creative failure must not fail the sync"
+        assert len(result.payload.creatives) == 1
+        creative_result = result.payload.creatives[0]
+        assert creative_result.action == "failed"
+
+        codes = _error_codes(creative_result.errors)
+        # POSITIVE first: the agent's own code must survive. A negative-only check
+        # ("not SERVICE_UNAVAILABLE") passes for any other wrong code too, which is
+        # most of the ways this can regress.
+        assert "RATE_LIMITED" in codes, (
+            f"[{transport.value}] the agent's own code did not survive the build path: {codes}"
+        )
+        # And the exact regression: this read SERVICE_UNAVAILABLE before the typed branch.
+        assert "SERVICE_UNAVAILABLE" not in codes, (
+            f"[{transport.value}] a typed transient was degraded to a generic outage: {codes}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -821,7 +919,7 @@ class TestAssignmentPackageTenantFilter:
             result = env.call_via(
                 transport,
                 creatives=[_creative(creative_id="c_cross", name="Cross Tenant")],
-                assignments={"c_cross": [pkg_id]},
+                assignments=[{"creative_id": "c_cross", "package_id": pkg_id}],
                 validation_mode="lenient",
             )
 
@@ -874,7 +972,7 @@ class TestAssignmentFormatCompatibility:
             result = env.call_via(
                 transport,
                 creatives=[_creative(creative_id="c_fmt_mismatch", name="Format Mismatch")],
-                assignments={"c_fmt_mismatch": [pkg_id]},
+                assignments=[{"creative_id": "c_fmt_mismatch", "package_id": pkg_id}],
                 validation_mode="lenient",
             )
 
@@ -928,7 +1026,7 @@ class TestAssignmentResultFields:
             result = env.call_via(
                 transport,
                 creatives=[_creative(creative_id="c_assign", name="Assignment Test")],
-                assignments={"c_assign": [pkg_id]},
+                assignments=[{"creative_id": "c_assign", "package_id": pkg_id}],
             )
 
         assert result.is_success
@@ -944,59 +1042,29 @@ class TestAssignmentResultFields:
 
 
 @pytest.mark.requires_db
-class TestAuthPrincipalRequired:
-    """Missing principal_id → AdCPAuthenticationError.
+# (Deleted) TestAuthPrincipalRequired::test_no_principal_raises_auth_error (UC-006-EXT-A-02),
+# which built ``make_identity(principal_id=None, ...)``. The remaining half of the pair
+# below, removed for the same reason: ``sync_creatives`` takes an ``AccountIdentity``,
+# whose principal is a REQUIRED field, so "an identity with no principal" is not a value
+# the parameter can hold. The resolver refused an anonymous caller before the
+# implementation ran, and ``ruff-boundary.toml`` bans raising AUTH_MISSING or AUTH_INVALID
+# anywhere but there -- so this asserted a refusal this tool cannot mint, reached only
+# because ``identity.principal.principal_id`` raised AttributeError on the fabricated
+# value. Its oracle was ``error_code in {"AUTH_MISSING", "AUTH_INVALID"}``, which could not
+# tell the two apart either way.
+#
+# The obligation is graded where it is decided: ``_resolve_identity`` refuses a missing
+# credential for every tool and transport at once, and the transport-blind auth scenarios
+# assert the AUTH_MISSING wire envelope across a2a, mcp and rest.
 
-    Covers: UC-006-EXT-A-02
-    """
-
-    def test_no_principal_raises_auth_error(self, integration_db):
-        """Identity with principal_id=None → AdCPAuthenticationError."""
-        with CreativeSyncEnv() as env:
-            env.setup_default_data()
-
-            identity_no_principal = make_identity(
-                principal_id=None,
-                tenant_id="test_tenant",
-                tenant=env.identity.tenant,
-            )
-
-            result = env.call_via(
-                Transport.IMPL,
-                creatives=[_creative()],
-                identity=identity_no_principal,
-            )
-
-        assert result.is_error
-        assert isinstance(result.error, AdCPAuthenticationError)
-
-
-@pytest.mark.requires_db
-class TestAuthTenantRequired:
-    """Missing tenant → AdCPAuthenticationError.
-
-    Covers: UC-006-EXT-B-02
-    """
-
-    def test_no_tenant_raises_auth_error(self, integration_db):
-        """Identity with tenant=None → AdCPAuthenticationError."""
-        with CreativeSyncEnv() as env:
-            env.setup_default_data()
-
-            identity_no_tenant = make_identity(
-                principal_id="test_principal",
-                tenant_id="test_tenant",
-                tenant=None,
-            )
-
-            result = env.call_via(
-                Transport.IMPL,
-                creatives=[_creative()],
-                identity=identity_no_tenant,
-            )
-
-        assert result.is_error
-        assert isinstance(result.error, AdCPAuthenticationError)
+# (Deleted) TestAuthTenantRequired::test_no_tenant_raises_auth_error (UC-006-EXT-B-02),
+# which built ``make_identity(principal_id="test_principal", tenant=None)``.
+# ``sync_creatives`` takes an ``AccountIdentity``: principal, tenant and account are all
+# required, and the resolver has refused a tenant-less caller long before the
+# implementation runs (no tenant means no principal lookup, so a presented credential
+# resolves nothing -- AUTH_INVALID, ``_resolve_identity`` step 4). The identity this set
+# up cannot be constructed, and the refusal has exactly one minting site, which is not
+# this tool.
 
 
 @pytest.mark.requires_db
@@ -1035,11 +1103,16 @@ class TestMissingFormatFails:
 
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
     def test_no_format_action_failed(self, integration_db, transport):
-        """Creative without format_id is rejected.
+        """Creative without format_id is rejected, on EVERY transport, at the request.
 
-        On impl/a2a: reaches _impl which returns action=failed (missing format).
-        On MCP: TypeAdapter rejects because CreativeAsset requires format_id.
-        Both paths correctly reject the creative.
+        This used to branch: MCP rejected at the boundary while impl/a2a/rest reached _impl
+        and came back with a per-creative ``action="failed"``. There is one accepted shape
+        now -- the DTO -- so the rejection happens in the same place on all of them and the
+        per-creative branch is unreachable for this payload.
+
+        The rejection is a oneOf, not a missing field: core/creative-asset.json identifies a
+        creative by format_id OR format_kind, so no single field is at fault and
+        core/error.json puts the pointer at the item.
         """
         from tests.harness.assertions import assert_rejected
 
@@ -1058,15 +1131,8 @@ class TestMissingFormatFails:
                 validation_mode="lenient",
             )
 
-        if result.is_error:
-            # MCP: TypeAdapter rejected missing format_id — correct behavior
-            assert_rejected(result, field="format_id", reason="Field required")
-        else:
-            # impl/a2a/rest: _impl handled it, returned action=failed
-            assert_envelope(result, transport)
-            creative_result = result.payload.creatives[0]
-            assert creative_result.action == "failed"
-            assert creative_result.errors
+        assert result.is_error, f"{transport.value}: the request boundary must refuse this payload"
+        assert_rejected(result, field="creatives[0]", keyword="oneOf")
 
 
 @pytest.mark.requires_db
@@ -1109,6 +1175,14 @@ class TestStaticPreviewFailed:
                         "creative_id": "c_no_preview",
                         "name": "No Preview Creative",
                         "format_id": DEFAULT_FORMAT_ID,
+                        # `assets` is spec-REQUIRED (core/creative-asset.json
+                        # required=[creative_id,name,assets]). Omitting it made this scenario
+                        # depend on a transport accident: a2a hit an impl-side
+                        # setdefault("assets", {}) and reached the no-preview logic, while
+                        # mcp/rest failed earlier with a mid-pipeline VALIDATION_ERROR. An
+                        # empty map is spec-legal (no minProperties) and lets all three
+                        # transports grade the obligation this test is actually about.
+                        "assets": {},
                     }
                 ],
                 validation_mode="lenient",
@@ -1118,16 +1192,13 @@ class TestStaticPreviewFailed:
             # MCP: TypeAdapter rejects missing assets field — correct schema rejection
             from tests.harness.assertions import assert_rejected
 
-            assert_rejected(result, field="assets", reason="Field required")
+            assert_rejected(result, field="assets", keyword="required")
         else:
             # impl/a2a/rest: _impl handles it, returns action=failed
             assert_envelope(result, transport)
             creative_result = result.payload.creatives[0]
             assert creative_result.action == "failed"
-            assert any(
-                "no previews" in e.lower() or "no media_url" in e.lower()
-                for e in _error_messages(creative_result.errors)
-            )
+            assert "CREATIVE_REJECTED" in _error_codes(creative_result.errors)
 
 
 @pytest.mark.requires_db
@@ -1164,7 +1235,7 @@ class TestGeminiKeyMissing:
         assert_envelope(result, transport)
         creative_result = result.payload.creatives[0]
         assert creative_result.action == "failed"
-        assert any("gemini" in e.lower() for e in _error_messages(creative_result.errors))
+        assert "CONFIGURATION_ERROR" in _error_codes(creative_result.errors)
 
 
 # ---------------------------------------------------------------------------
@@ -1184,10 +1255,9 @@ class TestSlackNotificationOnSync:
         _send_creative_notifications is called with the creative info."""
         with CreativeSyncEnv() as env:
             env.setup_default_data()
-            # Set tenant fields on the REST-specific identity
-            identity = env.identity_for(Transport.REST)
-            identity.tenant["approval_mode"] = "require-human"
-            identity.tenant["slack_webhook_url"] = "https://hooks.slack.com/test"
+            # The wire leg's resolver reads the tenant row, so the fields go on the row.
+            env.configure_tenant_field("approval_mode", "require-human")
+            env.configure_tenant_field("slack_webhook_url", "https://hooks.slack.com/test")
 
             result = env.call_via(
                 Transport.REST,
@@ -1209,14 +1279,15 @@ class TestSlackNotificationOnSync:
         with CreativeSyncEnv() as env:
             env.setup_default_data()
             # require-human mode but NO slack_webhook_url
-            env.identity.tenant["approval_mode"] = "require-human"
+            env.configure_tenant_field("approval_mode", "require-human")
 
-            result = env.call_via(
-                Transport.IMPL,
+            response = env.call_impl(
                 creatives=[_creative(creative_id="c_no_webhook")],
             )
 
-            assert result.is_success
+            # call_impl returns the response DTO itself -- no TransportResult
+            # wrapper, so success is "it returned instead of raising".
+            assert response.creatives
             send_mock = env.mock["send_notifications"]
             # Called because creatives_needing_approval is non-empty and not dry_run
             assert send_mock.called
@@ -1240,10 +1311,9 @@ class TestAIReviewTrigger:
         mock_executor.submit.return_value = MockMaker()  # mock future
 
         with CreativeSyncEnv() as env:
-            tenant, _principal = env.setup_default_data()
-            # Update DB tenant so real auth chain sees ai-powered mode.
-            tenant.approval_mode = "ai-powered"
-            env.identity_for(transport).tenant["approval_mode"] = "ai-powered"
+            env.setup_default_data()
+            # The wire leg's resolver reads the tenant row, so the field goes on the row.
+            env.configure_tenant_field("approval_mode", "ai-powered")
 
             with (
                 patch("src.admin.blueprints.creatives._ai_review_executor", mock_executor),
@@ -1286,13 +1356,10 @@ class TestAIPoweredApprovalDeferredNotification:
         mock_executor.submit.return_value = MockMaker()
 
         with CreativeSyncEnv() as env:
-            tenant, _principal = env.setup_default_data()
-            # Update DB tenant so real auth chain sees ai-powered mode.
-            tenant.approval_mode = "ai-powered"
-            tenant.slack_webhook_url = "https://hooks.slack.com/test"
-            identity = env.identity_for(transport)
-            identity.tenant["approval_mode"] = "ai-powered"
-            identity.tenant["slack_webhook_url"] = "https://hooks.slack.com/test"
+            env.setup_default_data()
+            # The wire leg's resolver reads the tenant row, so the fields go on the row.
+            env.configure_tenant_field("approval_mode", "ai-powered")
+            env.configure_tenant_field("slack_webhook_url", "https://hooks.slack.com/test")
 
             with (
                 patch("src.admin.blueprints.creatives._ai_review_executor", mock_executor),
@@ -1350,8 +1417,7 @@ class TestAsyncLifecycleSubmitted:
 
         with CreativeSyncEnv() as env:
             env.setup_default_data()
-            result = env.call_via(
-                Transport.IMPL,
+            result = env.call_impl(
                 creatives=[_creative(creative_id="c_async_sub", name="Async Submit")],
                 # BDD: "the system supports async creative sync"
                 async_mode=True,
@@ -1389,8 +1455,7 @@ class TestAsyncLifecycleWorking:
             env.setup_default_data()
 
             # First: queue an async operation
-            submit_result = env.call_via(
-                Transport.IMPL,
+            submit_result = env.call_impl(
                 creatives=[
                     _creative(creative_id="c_prog_1", name="Progress 1"),
                     _creative(creative_id="c_prog_2", name="Progress 2"),
@@ -1400,8 +1465,7 @@ class TestAsyncLifecycleWorking:
             context_id = submit_result.payload.context
 
             # BDD: "When the Buyer checks status"
-            status_result = env.call_via(
-                Transport.IMPL,
+            status_result = env.call_impl(
                 context=context_id,
             )
 
@@ -1441,8 +1505,7 @@ class TestAsyncLifecycleInputRequired:
             env.identity.tenant["approval_mode"] = "require-human"
 
             # BDD: "async sync operation requires Buyer input"
-            result = env.call_via(
-                Transport.IMPL,
+            result = env.call_impl(
                 creatives=[_creative(creative_id="c_input_req", name="Needs Approval")],
                 async_mode=True,
             )
@@ -1451,3 +1514,46 @@ class TestAsyncLifecycleInputRequired:
             assert isinstance(result.payload, SyncCreativesInputRequired)
             # BDD: "indicates what input is needed"
             assert result.payload.reason == Reason.APPROVAL_REQUIRED
+
+
+@pytest.mark.requires_db
+class TestRestForwardsIdempotencyKey:
+    """The REST route must hand the buyer's idempotency_key to the wrapper.
+
+    It did not. SyncCreativesBody carried the field and sync-creatives-request.json lists
+    it in /required, but the route omitted it from the sync_creatives_raw call, so the key
+    a REST buyer sent was discarded before anything looked at it. mcp and a2a both forward
+    it, which is why no cross-transport test caught the difference.
+
+    What that costs today is the SHAPE check: _sync_creatives_impl runs
+    validate_idempotency_key_shape on the key, so a malformed one is rejected on mcp and
+    a2a and was silently accepted on REST -- the same request answered two ways depending
+    on the transport. Note it is only the shape check: sync_creatives does NOT implement
+    replay (unlike create_media_buy), so forwarding the key does not yet make a retry
+    replay the first response.
+    """
+
+    def test_rest_rejects_a_malformed_key_like_the_other_transports(self, integration_db):
+        """A too-short key is a value violation on every transport, REST included."""
+        with CreativeSyncEnv() as env:
+            env.setup_default_data()
+
+            result = env.call_via(
+                # A FRESH key per call, as sync-creatives-request.json directs ("Use a fresh
+                # UUID v4 for each request"). These were derived from the creative_id or
+                # hardcoded, so a test syncing the same creative twice with different content
+                # reused one key across two payloads -- correctly an IDEMPOTENCY_CONFLICT now
+                # that sync_creatives honours the key.
+                Transport.REST,
+                creatives=[_creative(creative_id="c_idem")],
+                idempotency_key="short",  # DELIBERATELY malformed: below minLength 16,
+            )
+
+        assert not result.is_success, "a malformed idempotency_key must be rejected on REST too"
+        # INVALID_REQUEST, and the code CHANGED with the builder conversion -- for the
+        # better. sync-creatives-request.json constrains idempotency_key with a pattern, so
+        # a malformed key violates a SCHEMA constraint, which 3.1/enums/error-code.json
+        # assigns to INVALID_REQUEST. Before every transport built SyncCreativesRequest, the
+        # rejection came from the hand-written validate_idempotency_key_shape and surfaced
+        # as VALIDATION_ERROR; now the model rejects it first and all transports agree.
+        result.assert_wire_error("INVALID_REQUEST", recovery="correctable")

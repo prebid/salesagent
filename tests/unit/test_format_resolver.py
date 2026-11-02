@@ -1,11 +1,11 @@
 """Unit tests for format resolver override logic and coverage gaps.
 
-: format_resolver uses model_dump() dict roundtrip to merge
+salesagent-c4s: format_resolver uses model_dump() dict roundtrip to merge
 platform_config overrides, but model_dump() drops exclude=True fields
 (like platform_config), causing the base format's platform_config to be
 silently lost during merging.
 
-: Cover get_format(), _get_product_format_override() edge cases,
+salesagent-uujr: Cover get_format(), _get_product_format_override() edge cases,
 and list_available_formats() error paths — 67% → 100%.
 
 Note: Must use src.core.schemas.Format (which has exclude=True on platform_config),
@@ -19,8 +19,8 @@ not the adcp library Format (which does not).
 #   test_success_returns_formats — AdCP list-creative-formats-response.json: returns formats array
 #
 # DECISION_BACKED (2 tests):
-# test_base_platform_config_preserved_during_override — bug fix
-# test_override_merges_into_existing_platform — bug fix
+#   test_base_platform_config_preserved_during_override — bug fix (salesagent-c4s)
+#   test_override_merges_into_existing_platform — bug fix (salesagent-c4s)
 #
 # CHARACTERIZATION (10 tests):
 #   test_no_platform_config_override_preserves_base — locks: base preserved when no override
@@ -34,10 +34,16 @@ not the adcp library Format (which does not).
 #   test_format_id_not_in_overrides_returns_none — locks: None for missing format_id
 #   test_no_format_overrides_key_returns_none — locks: None for missing key
 #
-# SUSPECT (3 tests):
-# test_base_format_lookup_fails_returns_none — : swallows AdCPNotFoundError silently
-# test_registry_creation_fails_returns_empty — : infrastructure error → []
-# test_format_fetch_fails_returns_empty — : connection error → []
+# DECISION_BACKED, added 2026-08-25 (7 tests, class TestFindFormat):
+#   find_format keys format identity on (agent_url, id, width, height, duration_ms)
+#   rather than pydantic equality — salesagent-kyc89, where a class-sensitive `==`
+#   matched nothing on A2A and demoted every generative creative to a static one.
+#   The parameterized/unparameterized case guards the other direction: class-agnostic
+#   must not become lenient about AdCP 2.5 parameters.
+#
+# SUSPECT (2 tests):
+#   test_registry_creation_fails_returns_empty — salesagent-z60b: infrastructure error → []
+#   test_format_fetch_fails_returns_empty — salesagent-z60b: connection error → []
 # ---
 """
 
@@ -45,7 +51,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.core.exceptions import AdCPFormatNotFoundError, AdCPNotFoundError
+from src.core.exceptions import AdCPFormatNotFoundError
 from src.core.schemas import Format
 from tests.helpers.adcp_factories import create_test_format_id
 
@@ -274,12 +280,16 @@ class TestGetFormat:
     def test_search_all_agents_no_agent_url(self):
         """get_format searches all agents when agent_url is None.
 
-        Note: The search loop at L53-56 compares Format.format_id (FormatId)
-        with the string parameter. To match, we use a mock with matching
-        format_id attribute instead of a real Format object.
+        The listing carries a real FormatId, because that is what
+        ``CreativeAgentRegistry.list_all_formats`` returns -- ``Format.format_id`` is
+        annotated as the library FormatId. The version of this test that shipped with
+        the bug put a bare STRING here, with a docstring explaining that a real Format
+        would not match; that was a test bent to fit broken code, and it is what kept
+        `fmt.format_id == format_id` looking correct while it resolved nothing in
+        production (#2093).
         """
         mock_fmt = MagicMock()
-        mock_fmt.format_id = "display_300x250"  # Plain string to match parameter
+        mock_fmt.format_id = create_test_format_id("display_300x250")
         mock_fmt.name = "Found Format"
 
         with (
@@ -295,7 +305,7 @@ class TestGetFormat:
     def test_search_all_agents_no_match_raises_not_found(self):
         """get_format raises AdCPNotFoundError when format not found in any agent."""
         mock_fmt = MagicMock()
-        mock_fmt.format_id = "video_1920x1080"  # Different format — won't match
+        mock_fmt.format_id = create_test_format_id("video_1920x1080")  # different id -> no match
 
         with (
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg,
@@ -303,7 +313,7 @@ class TestGetFormat:
         ):
             from src.core.format_resolver import get_format
 
-            with pytest.raises(AdCPFormatNotFoundError, match="Unknown format_id 'display_300x250'"):
+            with pytest.raises(AdCPFormatNotFoundError):
                 get_format("display_300x250", tenant_id="t1")
 
     def test_not_found_error_includes_agent_url(self):
@@ -314,12 +324,18 @@ class TestGetFormat:
         ):
             from src.core.format_resolver import get_format
 
-            with pytest.raises(AdCPFormatNotFoundError, match="from agent https://agent.example.com") as exc_info:
+            with pytest.raises(AdCPFormatNotFoundError) as exc_info:
                 get_format("display_300x250", agent_url="https://agent.example.com", tenant_id="t1")
 
-            assert "for tenant t1" in str(exc_info.value)
-            assert exc_info.value.error_code == "FORMAT_NOT_FOUND"
+            assert exc_info.value.error_code == "REFERENCE_NOT_FOUND"
             assert exc_info.value.recovery == "correctable"
+            assert exc_info.value.field == "format_id"
+            # The identifiers this test has always been about are still reported --
+            # they moved from the interpolated sentence onto ``details``, which is
+            # where AdCP 3.1.1 puts request-specific content.
+            assert exc_info.value.details.agent_url == "https://agent.example.com"
+            assert exc_info.value.details.tenant_id == "t1"
+            assert exc_info.value.details.format_id == "display_300x250"
 
     def test_not_found_error_no_agent_url_no_tenant(self):
         """AdCPNotFoundError message is minimal without agent_url and tenant_id."""
@@ -329,12 +345,17 @@ class TestGetFormat:
         ):
             from src.core.format_resolver import get_format
 
-            with pytest.raises(AdCPFormatNotFoundError, match="Unknown format_id 'nonexistent'") as exc_info:
+            with pytest.raises(AdCPFormatNotFoundError) as exc_info:
                 get_format("nonexistent")
 
-            error_msg = str(exc_info.value)
-            assert "from agent" not in error_msg
-            assert "for tenant" not in error_msg
+            # "Minimal" now means: the unset identifiers are absent from ``details``,
+            # and the buyer sentence never carried them in the first place (it is
+            # CODE_TABLE's, not interpolated at the raise site).
+            assert exc_info.value.details.format_id == "nonexistent"
+            assert exc_info.value.details.agent_url is None
+            assert exc_info.value.details.tenant_id is None
+            assert "from agent" not in exc_info.value.message
+            assert "for tenant" not in exc_info.value.message
             assert exc_info.value.recovery == "correctable"
 
 
@@ -384,9 +405,23 @@ class TestProductFormatOverrideEdgeCases:
 
         assert result is None
 
-    # SUSPECT: swallows AdCPNotFoundError — should override path propagate?
     def test_base_format_lookup_fails_returns_none(self):
-        """Returns None when recursive get_format call raises AdCPNotFoundError."""
+        """Returns None when the base format genuinely does not exist.
+
+        The SUSPECT(salesagent-z4zl) marker is REMOVED and its question answered by
+        salesagent-w4x1: yes, the override path should propagate — and now does. The
+        branch was ``except (AdCPNotFoundError, Exception)``, whose first member is dead
+        (``Exception`` already covers it) and whose second swallowed everything,
+        including a typed transient. A creative agent answering 429 was reported as
+        "no such override".
+
+        It is now ``except AdCPFormatNotFoundError`` returning None, with every other
+        typed error re-raised. The mock moved with it: it injected a bare
+        ``AdCPNotFoundError``, a shape ``get_format`` never produces — it raises
+        ``AdCPFormatNotFoundError`` (format_resolver.py:128) and nothing else. A mock
+        carrying a shape production cannot emit was propping up the very swallow this
+        change removes.
+        """
         format_overrides = {"display_300x250": {"platform_config": {"gam": {"width": 1}}}}
 
         with (
@@ -394,7 +429,7 @@ class TestProductFormatOverrideEdgeCases:
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg,
             patch(
                 "src.core.format_resolver.get_format",
-                side_effect=AdCPNotFoundError("Format not found"),
+                side_effect=AdCPFormatNotFoundError(),
             ),
         ):
             mock_session = mock_db.return_value.__enter__.return_value
@@ -415,7 +450,7 @@ class TestProductFormatOverrideEdgeCases:
 class TestListAvailableFormats:
     """Tests for list_available_formats() error and success paths."""
 
-    # SUSPECT: infrastructure error silently returns [] — should it propagate?
+    # SUSPECT(salesagent-z60b): infrastructure error silently returns [] — should it propagate?
     def test_registry_creation_fails_returns_empty(self):
         """Returns empty list when get_creative_agent_registry raises."""
         with patch(
@@ -428,7 +463,7 @@ class TestListAvailableFormats:
 
         assert result == []
 
-    # SUSPECT: connection error silently returns [] — should it propagate?
+    # SUSPECT(salesagent-z60b): connection error silently returns [] — should it propagate?
     def test_format_fetch_fails_returns_empty(self):
         """Returns empty list when list_all_formats raises."""
         with (
@@ -443,6 +478,26 @@ class TestListAvailableFormats:
             result = list_available_formats(tenant_id="t1")
 
         assert result == []
+
+    def test_failure_still_degrades_to_empty(self):
+        """The degradation stays, for EVERY failure -- typed or not.
+
+        salesagent-w4x1 proposed propagating a typed transient here so a
+        rate-limited agent would not read as an empty catalog. That defect is real
+        but is not at this site: the only caller is the admin UI
+        (src/admin/blueprints/products.py:156), which catches the SDK's
+        ``adcp.exceptions.ADCPError`` -- a different class tree from
+        ``src.core.exceptions.AdCPSalesAgentError`` -- so propagating would have 500'd an admin
+        page rather than informed a buyer. Pinned here so the next attempt reads this
+        before repeating it.
+        """
+        with patch(
+            "src.core.creative_agent_registry.get_creative_agent_registry",
+            side_effect=RuntimeError("something unanticipated"),
+        ):
+            from src.core.format_resolver import list_available_formats
+
+            assert list_available_formats(tenant_id="t1") == []
 
     def test_success_returns_formats(self):
         """Returns formats from registry on success."""
@@ -462,3 +517,143 @@ class TestListAvailableFormats:
 
         assert len(result) == 2
         assert result[0].name == "Format 1"
+
+
+class TestFindFormat:
+    """find_format decides format identity by VALUE, never by pydantic class.
+
+    salesagent-kyc89: ``FormatId`` exists twice — the library type the AdCP
+    schemas declare and ``src.core.schemas._base.FormatId``, our field-identical
+    subclass. Pydantic v2 equality is class-sensitive, so the ``==`` loop this
+    helper replaced matched nothing whenever the two sides were built by
+    different code paths, and a generative creative was silently written as a
+    plain static asset.
+    """
+
+    def test_matches_across_the_two_format_id_classes(self):
+        """The subclass and the library type name the same format, so they match."""
+        from adcp.types import FormatId as LibraryFormatId
+
+        from src.core.format_resolver import find_format
+        from src.core.schemas import FormatId as OurFormatId
+
+        fmt = _make_format()
+        library_reference = LibraryFormatId(agent_url=str(fmt.format_id.agent_url), id=fmt.format_id.id)
+        our_reference = OurFormatId(agent_url=str(fmt.format_id.agent_url), id=fmt.format_id.id)
+
+        # The precondition that made the bug invisible: these compare UNEQUAL.
+        assert library_reference != our_reference
+
+        assert find_format([fmt], library_reference) is fmt
+        assert find_format([fmt], our_reference) is fmt
+
+    def test_trailing_slash_on_agent_url_does_not_split_identity(self):
+        """A reference built from a str and one built from AnyUrl name one format."""
+        from adcp.types import FormatId as LibraryFormatId
+
+        from src.core.format_resolver import find_format
+
+        fmt = _make_format()
+        bare = str(fmt.format_id.agent_url).rstrip("/")
+        assert find_format([fmt], LibraryFormatId(agent_url=bare, id=fmt.format_id.id)) is fmt
+
+    def test_a_different_id_does_not_match(self):
+        from adcp.types import FormatId as LibraryFormatId
+
+        from src.core.format_resolver import find_format
+
+        fmt = _make_format()
+        other = LibraryFormatId(agent_url=str(fmt.format_id.agent_url), id="video_640x480")
+        assert find_format([fmt], other) is None
+
+    def test_a_different_agent_url_does_not_match(self):
+        from adcp.types import FormatId as LibraryFormatId
+
+        from src.core.format_resolver import find_format
+
+        fmt = _make_format()
+        other = LibraryFormatId(agent_url="https://other-agent.example.com", id=fmt.format_id.id)
+        assert find_format([fmt], other) is None
+
+    def test_a_parameterized_reference_resolves_to_the_template_it_parameterizes(self):
+        """Identity is (agent_url, id) — the parameters name a variant, not another format.
+
+        This is the graded contract, not a convenience: core/format-id.json requires
+        [agent_url, id], the list_formats storyboard matches on
+        ``match_keys: [agent_url, id]``, and a template format exists precisely so a
+        parameterized reference can resolve to it and read its spec. An identity that
+        included width/height would send a 300x250 request away empty-handed — and in
+        _processing that means format_obj is None, the generative branch is skipped,
+        and the creative is silently written as a static asset. Exactly the failure
+        this whole helper exists to prevent.
+        """
+        from adcp.types import FormatId as LibraryFormatId
+
+        from src.core.format_resolver import find_format
+
+        fmt = _make_format()
+        parameterized = LibraryFormatId(
+            agent_url=str(fmt.format_id.agent_url), id=fmt.format_id.id, width=300, height=250
+        )
+        assert find_format([fmt], parameterized) is fmt
+
+    def test_returns_none_for_an_empty_listing(self):
+        from adcp.types import FormatId as LibraryFormatId
+
+        from src.core.format_resolver import find_format
+
+        assert find_format([], LibraryFormatId(agent_url="https://a.example.com", id="display")) is None
+
+    def test_returns_the_first_match_in_listing_order(self):
+        from adcp.types import FormatId as LibraryFormatId
+
+        from src.core.format_resolver import find_format
+
+        first = _make_format(name="First")
+        second = _make_format(name="Second")
+        reference = LibraryFormatId(agent_url=str(first.format_id.agent_url), id=first.format_id.id)
+        assert find_format([first, second], reference) is first
+
+
+class TestFormatIdentityCanonicalization:
+    """agent_url is compared in the spec's canonical form, not a trimmed string.
+
+        adcp/_schemas/3.1/core/format-id.json, agent_url: "Callers comparing two
+        `format-id` values MUST canonicalize `agent_url` per the AdCP URL canonicalization
+        rules before treating two formats as the same."
+
+    find_format meets that MUST by going through ``format_id_identity`` ->
+        ``canonical_agent_url`` -> the SDK's ``canonicalize_target_uri``, rather than
+        trimming the string itself. These cases are the ones that survive pydantic's own
+        AnyUrl normalization and so actually distinguish the canonical rule from a trim:
+        userinfo and a fragment are stripped by the former and kept by the latter.
+    """
+
+    @pytest.mark.parametrize(
+        ("reference_url", "what_the_trim_kept"),
+        [
+            ("https://creative.adcontextprotocol.org/#section", "a fragment"),
+            ("https://user@creative.adcontextprotocol.org", "userinfo"),
+        ],
+    )
+    def test_a_reference_matches_despite(self, reference_url, what_the_trim_kept):
+        from adcp.types import FormatId as LibraryFormatId
+
+        from src.core.format_resolver import find_format
+
+        fmt = _make_format()
+        reference = LibraryFormatId(agent_url=reference_url, id=fmt.format_id.id)
+
+        assert find_format([fmt], reference) is fmt, (
+            f"{what_the_trim_kept} split two references the spec says name one format"
+        )
+
+    def test_a_genuinely_different_host_still_does_not_match(self):
+        """Canonicalizing must not blur two agents together."""
+        from adcp.types import FormatId as LibraryFormatId
+
+        from src.core.format_resolver import find_format
+
+        fmt = _make_format()
+        other_agent = LibraryFormatId(agent_url="https://someone-else.example.com", id=fmt.format_id.id)
+        assert find_format([fmt], other_agent) is None

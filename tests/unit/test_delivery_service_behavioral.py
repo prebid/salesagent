@@ -76,13 +76,14 @@ class TestCircuitBreakerOpensAfterRetriesExhausted:
             assert cb.can_attempt() is False
 
     def test_delivery_marked_reporting_delayed_when_circuit_open(self):
-        """Delivery should be marked reporting_delayed when circuit breaker is open.
+        """An OPEN reporting circuit marks an active buy's delivery reporting_delayed.
 
         Covers: UC-004-EXT-G-03
         """
         from tests.harness.delivery_poll_unit import DeliveryPollEnv
 
         with DeliveryPollEnv() as env:
+            env.set_circuit_open(True)
             env.add_buy(media_buy_id="mb_001")
             env.set_adapter_response("mb_001", impressions=5000, spend=250.0)
 
@@ -94,6 +95,31 @@ class TestCircuitBreakerOpensAfterRetriesExhausted:
 
             assert len(response.media_buy_deliveries) == 1
             assert response.media_buy_deliveries[0].status == "reporting_delayed"
+
+    def test_delivery_keeps_active_status_when_circuit_closed(self):
+        """The same buy, circuit CLOSED, stays "active".
+
+        The control for the test above: without it, "reporting_delayed" could be the
+        status this fixture produces for any circuit state, and the assertion would grade
+        nothing about the breaker.
+
+        Covers: UC-004-EXT-G-03
+        """
+        from tests.harness.delivery_poll_unit import DeliveryPollEnv
+
+        with DeliveryPollEnv() as env:
+            env.set_circuit_open(False)
+            env.add_buy(media_buy_id="mb_001")
+            env.set_adapter_response("mb_001", impressions=5000, spend=250.0)
+
+            response = env.call_impl(
+                media_buy_ids=["mb_001"],
+                start_date="2025-01-01",
+                end_date="2025-06-30",
+            )
+
+            assert len(response.media_buy_deliveries) == 1
+            assert response.media_buy_deliveries[0].status == "active"
 
 
 # ---------------------------------------------------------------------------
@@ -261,6 +287,7 @@ class TestExtG07WebhookAuthFailureRecovery:
 
             success_after, result_after = env.call_deliver(
                 payload={"media_buy_id": "mb_001", "status": "active"},
+                # ast-grep-ignore: test-credential-header-single-producer - outbound seller->buyer webhook credential
                 headers={"Authorization": "Bearer new-valid-token"},
                 event_type="delivery.update",
                 tenant_id="test_tenant",
@@ -305,6 +332,7 @@ class TestExtG07WebhookAuthFailureRecovery:
             env.set_http_status(403, "Forbidden")
 
             success, result = env.call_deliver(
+                # ast-grep-ignore: test-credential-header-single-producer - outbound seller->buyer webhook credential
                 headers={"Authorization": "Bearer expired-token"},
                 event_type="delivery.update",
                 tenant_id="test_tenant",
@@ -463,12 +491,7 @@ class TestWebhookEnhancedDBErrorHandling:
             env.mock["db"].side_effect = Exception("DB connection refused")
 
             service = env.get_service()
-            result = service._send_webhook_enhanced(
-                tenant_id="t1",
-                principal_id="p1",
-                media_buy_id="mb_001",
-                delivery_payload={"test": "data"},
-            )
+            result = env.call_send_enhanced({"test": "data"}, tenant_id="t1", principal_id="p1", media_buy_id="mb_001")
 
         assert result is False
 
@@ -580,12 +603,11 @@ class TestDeliverWithBackoffGenericException:
     nothing a refusal is.
     """
 
-    def test_generic_exception_breaks_retry_loop(self):
-        from unittest.mock import MagicMock
-
+    def test_generic_exception_breaks_retry_loop(self, monkeypatch):
         from src.core.webhooks.delivery import WebhookDeliveryOutcome
         from src.services.webhook_delivery_service import (
             CircuitBreaker,
+            QueuedWebhook,
             WebhookDeliveryService,
             WebhookQueue,
         )
@@ -594,20 +616,31 @@ class TestDeliverWithBackoffGenericException:
         cb = CircuitBreaker()
         queue = WebhookQueue()
 
-        mock_config = MagicMock()
-        mock_config.url = "https://example.com/hook"
-        # No webhook_secret: production stopped reading that column with
-        # salesagent-47n9.24, and a MagicMock answers every attribute, so leaving
-        # it set would keep this mock describing a config shape nothing reads.
-        mock_config.authentication_type = None
-        mock_config.authentication_token = None
-
+        # A QueuedWebhook, not a MagicMock config: the queue carries PRIMITIVES ONLY
+        # (#1757), so the retry loop cannot hold a session across its sleep and POST.
+        # The three auth-shaped fields below are exactly what the mock used to expose.
+        #
+        # That projection is also how the webhook_secret obligation is now met by
+        # CONSTRUCTION rather than by omission: production stopped reading that column
+        # with #1894, and the old MagicMock answered every attribute, so dropping the
+        # line was the only way to stop it describing a config shape nothing reads.
+        # QueuedWebhook is frozen and has no such field at all, so the mock can no
+        # longer over-answer — which is why the MagicMock is gone entirely.
+        #
+        # ``tenant_id`` is the dispatch-level field _deliver_with_backoff reads off the
+        # DEQUEUED ENTRY to resolve that tenant's delivery signer, so it is named here
+        # rather than left to default. There is deliberately no ``idempotency_key``:
+        # that one is a REQUIRED PAYLOAD field of the webhook document, minted once by
+        # build_webhook_envelope before the queue, and QueuedWebhook does not carry it.
         queue.enqueue(
-            {
-                "config": mock_config,
-                "payload": {"test": "data"},
-                "timestamp": datetime.now(UTC),
-            }
+            QueuedWebhook(
+                url="https://example.com/hook",
+                authentication_type=None,
+                authentication_token=None,
+                payload={"test": "data"},
+                tenant_id="test_tenant",
+                timestamp=datetime.now(UTC),
+            )
         )
 
         # salesagent-vkxf part 2: the subject is a NON-transport exception escaping
@@ -623,7 +656,7 @@ class TestDeliverWithBackoffGenericException:
         # webhook_egress.py authors about an UNEXPECTED failure, so it contains the
         # word "unexpected" itself — making "the exception's own text is absent"
         # unwritable against the old stimulus. So the stimulus is now the realistic
-        # case the arm's own comment names: the pinned transport's wrong-host guard,
+        # case the branch's own comment names: the pinned transport's wrong-host guard,
         # whose message interpolates TWO hostnames (verbatim shape from
         # adcp/signing/ip_pinned_transport.py:150-154) into a field contracted
         # "never a URL, never a credential" and then persisted to
@@ -636,6 +669,22 @@ class TestDeliverWithBackoffGenericException:
         # decision and returns an outcome. The subject is unchanged: a NON-transport
         # exception escaping the delivery call, which no origin can serve, so it is
         # still injected here rather than at a transport this module never touches.
+        # ``_deliver_with_backoff`` resolves the tenant's delivery signer before it calls
+        # the seam, and that resolution reads the database. A unit test has none, so what
+        # it actually reads is whatever ``get_db_session`` happens to be in this process —
+        # and when a neighbour in the same xdist worker has left a MagicMock there, the
+        # provider's ``row.tenant_id`` is a MagicMock and pydantic refuses it while
+        # building ``ConfigurationDetails``. Measured on the box, twice, on whichever
+        # worker drew that order (runs innet_200926_1357 and innet_200926_1638).
+        #
+        # Pinned to ``None`` here — unsigned delivery — because the signer is not this
+        # case's subject: the subject is a NON-transport exception escaping the seam. A
+        # test is responsible for its own preconditions, so this one states the signer it
+        # wants instead of inheriting one.
+        # monkeypatch, not a second ``patch(...)``: the hand-rolled mock cap only
+        # shrinks (test_architecture_behavioral_mock_cap), and this file's cap is 1.
+        monkeypatch.setattr("src.core.signing.outbound.delivery_signer_for_tenant", lambda _tenant_id: None)
+
         with patch("src.services.webhook_delivery_service.deliver_webhook", _unexpected):
             result = svc._deliver_with_backoff("test_endpoint", queue)
 
@@ -652,7 +701,7 @@ class TestDeliverWithBackoffGenericException:
         # The function concludes in an OUTCOME, not a bool: "it did not deliver"
         # and "why" used to collapse into False, which is how a refusal became
         # indistinguishable from three failed attempts. No kind covers a
-        # NON-transport failure, so the arm builds ``exhausted`` with the honest
+        # NON-transport failure, so the branch builds ``exhausted`` with the honest
         # attempt count — zero. Whole-object equality against the named
         # constructor keeps kind/attempts/http_status/reason/scheme pinned exactly
         # as they were, so fixing ``detail`` cannot quietly change anything else.
@@ -660,8 +709,8 @@ class TestDeliverWithBackoffGenericException:
 
         # The circuit breaker is NOT fed here any more, and that is the change,
         # not an oversight: _send_webhook_enhanced now feeds it from the outcome,
-        # once, for every kind — so no arm of this function can be the one that
-        # forgets. Asserting a failure tick here would pin the breaker to an arm
+        # once, for every kind — so no branch of this function can be the one that
+        # forgets. Asserting a failure tick here would pin the breaker to an branch
         # it no longer belongs to. The obligation is graded where it moved, over
         # the public surface: tests/integration/test_delivery_service_behavioral.py
         # asserts get_circuit_breaker_state()'s failure_count for a delivery that

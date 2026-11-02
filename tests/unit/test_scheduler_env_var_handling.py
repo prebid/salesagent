@@ -1,97 +1,70 @@
-"""Tests for scheduler environment variable handling.
+"""The two schedulers read their interval off the settings when they start.
 
-These tests ensure that scheduler modules handle edge cases in environment
-variable parsing, particularly empty strings which can cause startup crashes.
+DELIVERY_WEBHOOK_INTERVAL and MEDIA_BUY_STATUS_CHECK_INTERVAL are read by the settings
+loader (src/core/config.py); an empty value is the default (a compose file that sets
+``DELIVERY_WEBHOOK_INTERVAL=""`` once crashed the process on ``int('')``). The scheduler
+snapshots nothing at import: it reads ``settings.limits`` in ``start()``, so an environment
+change followed by ``load_settings()`` is seen by the next start.
 """
 
-import os
-from unittest.mock import patch
+from __future__ import annotations
+
+import pytest
+
+from src.core.config import load_settings
+from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
+from src.services.media_buy_status_scheduler import MediaBuyStatusScheduler
 
 
-class TestDeliveryWebhookSchedulerEnvVar:
-    """Test DELIVERY_WEBHOOK_INTERVAL environment variable handling."""
-
-    def test_default_value_when_env_not_set(self):
-        """Test that default value (3600) is used when env var is not set."""
-        with patch.dict(os.environ, {}, clear=True):
-            # Remove the env var if it exists
-            os.environ.pop("DELIVERY_WEBHOOK_INTERVAL", None)
-
-            # Re-import to get fresh module-level constant
-            import importlib
-
-            import src.services.delivery_webhook_scheduler as module
-
-            importlib.reload(module)
-
-            assert module.SLEEP_INTERVAL_SECONDS == 3600
-
-    def test_default_value_when_env_is_empty_string(self):
-        """Test that default value is used when env var is empty string.
-
-        This is a regression test for a production crash where docker-compose
-        set DELIVERY_WEBHOOK_INTERVAL="" which caused int('') to raise ValueError.
-        """
-        with patch.dict(os.environ, {"DELIVERY_WEBHOOK_INTERVAL": ""}, clear=False):
-            import importlib
-
-            import src.services.delivery_webhook_scheduler as module
-
-            importlib.reload(module)
-
-            # Should use default 3600, not crash with ValueError
-            assert module.SLEEP_INTERVAL_SECONDS == 3600
-
-    def test_custom_value_when_env_is_set(self):
-        """Test that custom value is used when env var is set to valid integer."""
-        with patch.dict(os.environ, {"DELIVERY_WEBHOOK_INTERVAL": "1800"}, clear=False):
-            import importlib
-
-            import src.services.delivery_webhook_scheduler as module
-
-            importlib.reload(module)
-
-            assert module.SLEEP_INTERVAL_SECONDS == 1800
+async def _noop() -> None:
+    """Stands in for the scheduler loop so start() reads its settings and creates no work."""
 
 
-class TestMediaBuyStatusSchedulerEnvVar:
-    """Test MEDIA_BUY_STATUS_CHECK_INTERVAL environment variable handling."""
+async def _interval_read_at_start(scheduler, attribute: str, monkeypatch: pytest.MonkeyPatch) -> int:
+    monkeypatch.setattr(scheduler, "_run_scheduler", _noop)
+    await scheduler.start()
+    try:
+        return getattr(scheduler, attribute)
+    finally:
+        await scheduler.stop()
 
-    def test_default_value_when_env_not_set(self):
-        """Test that default value (60) is used when env var is not set."""
-        with patch.dict(os.environ, {}, clear=True):
-            os.environ.pop("MEDIA_BUY_STATUS_CHECK_INTERVAL", None)
 
-            import importlib
+@pytest.mark.parametrize(
+    ("make_scheduler", "attribute", "variable", "default"),
+    [
+        (DeliveryWebhookScheduler, "_sleep_interval_seconds", "DELIVERY_WEBHOOK_INTERVAL", 3600),
+        (MediaBuyStatusScheduler, "_check_interval_seconds", "MEDIA_BUY_STATUS_CHECK_INTERVAL", 60),
+    ],
+    ids=["delivery_webhook", "media_buy_status"],
+)
+class TestSchedulerIntervalFromSettings:
+    async def test_default_when_not_set(self, make_scheduler, attribute, variable, default, monkeypatch):
+        monkeypatch.delenv(variable, raising=False)
+        load_settings()
 
-            import src.services.media_buy_status_scheduler as module
+        assert await _interval_read_at_start(make_scheduler(), attribute, monkeypatch) == default
 
-            importlib.reload(module)
+    async def test_default_when_empty_string(self, make_scheduler, attribute, variable, default, monkeypatch):
+        """Regression: an empty value is unset, not a crash on int('')."""
+        monkeypatch.setenv(variable, "")
+        load_settings()
 
-            assert module.STATUS_CHECK_INTERVAL_SECONDS == 60
+        assert await _interval_read_at_start(make_scheduler(), attribute, monkeypatch) == default
 
-    def test_default_value_when_env_is_empty_string(self):
-        """Test that default value is used when env var is empty string.
+    async def test_custom_value_is_read(self, make_scheduler, attribute, variable, default, monkeypatch):
+        monkeypatch.setenv(variable, str(default * 2))
+        load_settings()
 
-        This is a regression test - same pattern as DELIVERY_WEBHOOK_INTERVAL.
-        """
-        with patch.dict(os.environ, {"MEDIA_BUY_STATUS_CHECK_INTERVAL": ""}, clear=False):
-            import importlib
+        assert await _interval_read_at_start(make_scheduler(), attribute, monkeypatch) == default * 2
 
-            import src.services.media_buy_status_scheduler as module
+    async def test_change_is_seen_by_the_next_start(self, make_scheduler, attribute, variable, default, monkeypatch):
+        """Nothing is snapshotted at import: the same scheduler sees a reloaded value."""
+        monkeypatch.setenv(variable, str(default * 2))
+        load_settings()
+        scheduler = make_scheduler()
+        assert await _interval_read_at_start(scheduler, attribute, monkeypatch) == default * 2
 
-            importlib.reload(module)
+        monkeypatch.setenv(variable, str(default * 3))
+        load_settings()
 
-            # Should use default 60, not crash with ValueError
-            assert module.STATUS_CHECK_INTERVAL_SECONDS == 60
-
-    def test_custom_value_when_env_is_set(self):
-        """Test that custom value is used when env var is set to valid integer."""
-        with patch.dict(os.environ, {"MEDIA_BUY_STATUS_CHECK_INTERVAL": "120"}, clear=False):
-            import importlib
-
-            import src.services.media_buy_status_scheduler as module
-
-            importlib.reload(module)
-
-            assert module.STATUS_CHECK_INTERVAL_SECONDS == 120
+        assert await _interval_read_at_start(scheduler, attribute, monkeypatch) == default * 3

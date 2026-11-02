@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 
 import pytz
 
-from src.core.exceptions import AdCPError
+from src.core.exceptions import AdCPAdapterError, AdCPSalesAgentError
 from src.core.security.outbound_http import OperatorEndpoint, OutboundError, send
 
 logger = logging.getLogger(__name__)
@@ -335,7 +335,7 @@ class GAMReportingService:
                 if status == "COMPLETED":
                     break
                 elif status == "FAILED":
-                    raise Exception("GAM report job failed")
+                    raise AdCPAdapterError()
 
                 # Log progress for long-running reports
                 if wait_time > 0 and wait_time % 30 == 0:
@@ -345,22 +345,24 @@ class GAMReportingService:
                 wait_time += poll_interval
 
             if self.report_service.getReportJobStatus(report_job_id) != "COMPLETED":
-                raise Exception(f"GAM report job timed out after {max_wait} seconds")
+                raise AdCPAdapterError()
 
             # Use modern ReportService method instead of deprecated GetDataDownloader
             try:
                 download_url = self.report_service.getReportDownloadURL(report_job_id, "CSV_DUMP")
+            except AdCPSalesAgentError:
+                raise
             except Exception as e:
-                raise Exception(f"Failed to get GAM report download URL: {str(e)}") from e
+                raise AdCPAdapterError(internal_detail=e) from e
 
             # Validate URL is from Google for security
             parsed_url = urlparse(download_url)
             if not parsed_url.hostname or not any(
                 parsed_url.hostname.endswith(domain) for domain in ReportingConfig.ALLOWED_DOMAINS
             ):
-                raise Exception(f"Invalid download URL: not from Google domain ({parsed_url.hostname})")
+                raise AdCPAdapterError()
 
-            # Download the report using requests with proper timeout and error handling
+            # Download the report through the guarded egress seam, with proper timeout and error handling
             try:
                 # The ALLOWED_DOMAINS provenance check above stays: it asserts the URL
                 # came from GAM, which is a different question from whether the address
@@ -374,6 +376,12 @@ class GAMReportingService:
                     max_attempts=1,
                 )
             except OutboundError as e:
+                # `raise_for_status()` and the two `requests.exceptions` branches this
+                # replaces are subsumed, not dropped: the seam already raises
+                # OutboundError on a non-2xx terminal status and on a transport
+                # timeout, and the mapper below turns both into the same typed
+                # AdCP error those branches were migrated to raise -- with the status
+                # classification they could not carry.
                 # Delegates instead of rewrapping, the same way kevel.py:782 and
                 # triton_digital.py:707 did at this migration. The bare Exception
                 # here was this branch's one holdout from its own mapping rule: it
@@ -399,8 +407,10 @@ class GAMReportingService:
                             )
                             break
                         data.append(row)
+            except AdCPSalesAgentError:
+                raise
             except Exception as e:
-                raise Exception(f"Failed to parse GAM report CSV data: {str(e)}") from e
+                raise AdCPAdapterError(internal_detail=e) from e
 
             # Debug: Log the first row to see column names
             if data:
@@ -412,17 +422,20 @@ class GAMReportingService:
 
             return data
 
-        except AdCPError:
-            # The typed error IS the answer. Without this arm the catch-all below
-            # re-wraps whatever `raise_mapped_outbound_error` just classified back
-            # into a bare Exception, and the download branch's migration off
-            # `raise Exception(...)` buys nothing observable -- the buyer sees the
-            # same relabelled string either way, minus `attempts`, `last_status`
-            # and the operator-endpoint terminal classification.
+        except AdCPSalesAgentError:
+            # The typed error IS the answer. Every typed error raised inside this
+            # body -- the job-failed and timeout branches above, the URL refusal, the
+            # parse failure, and whatever `raise_mapped_outbound_error` just
+            # classified -- already names its own fault. Without this branch the
+            # catch-all below relabels them all AdCPAdapterError, and the download
+            # branch's migration off `raise Exception(...)` buys nothing
+            # observable: the buyer sees the same relabelled string either way,
+            # minus `attempts`, `last_status` and the operator-endpoint terminal
+            # classification.
             raise
 
         except Exception as e:
-            raise Exception(f"Error running GAM report: {str(e)}")
+            raise AdCPAdapterError(internal_detail=e) from e
 
     def _process_report_data(
         self, raw_data: list[dict[str, Any]], granularity: str, requested_tz: str

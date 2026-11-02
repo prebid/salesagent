@@ -26,7 +26,8 @@ skip_no_audience_agent = pytest.mark.skipif(
     reason="audience-agent.fly.dev is not reachable",
 )
 
-from src.core.exceptions import RECOVERY_BY_WIRE_CODE, AdCPError, build_two_layer_error_envelope
+from src.core.errors.codes import CODE_TABLE
+from src.core.exceptions import AdCPSalesAgentError
 from src.core.security import outbound_http as outbound_http_module
 from src.core.security.outbound_http import OutboundRequestBlocked
 from src.core.signals_agent_registry import SignalsAgent, SignalsAgentRegistry
@@ -37,12 +38,13 @@ from src.core.utils.mcp_client import (
     call_mcp_tool,
 )
 from tests.helpers import assert_backoff_schedule, assert_envelope_shape
-from tests.helpers.egress_hatches import ALLOW_PRIVATE_ENV
+from tests.helpers.envelope_assertions import envelope_for
+from tests.helpers.settings_injection import inject_limits
 
 # Reused rather than restated (precedent: tests/integration/test_vendor_egress.py):
 # the jitter pin, the escape-hatch setter and the backoff-base knob name are the
 # seam suite's own helpers — copying any of them here is how one copy drifts.
-from tests.integration.test_outbound_http import BACKOFF_BASE_ENV, pin_jitter, set_flags
+from tests.integration.test_outbound_http import pin_jitter, set_backoff_base, set_flags
 
 # A cloud-metadata address: refused by the egress seam unconditionally, escape
 # hatches or not. Spelled as an MCP endpoint because that is the shape a
@@ -134,11 +136,13 @@ class TestCreateMCPClient:
             await call_mcp_tool(agent_url=agent_url, tool="noop", arguments={}, timeout=5, max_attempts=2)
 
         # Opaque by design: the refusal must not echo which host or address failed.
+        # ``str()`` is CODE_TABLE-derived now and no raise site can author it, so this
+        # holds by construction — kept as the guard ON that construction.
         assert "nonexistent.example.com" not in str(exc_info.value)
 
-    async def test_respects_max_retries(self, monkeypatch):
+    async def test_respects_max_retries(self, monkeypatch, recorded_retry_sleeps):
         """Connection failures respect max_attempts parameter."""
-        monkeypatch.setenv(ALLOW_PRIVATE_ENV, "true")
+        inject_limits(monkeypatch, adcp_outbound_allow_private=True)
         # A loopback port with nothing listening: resolves, fails fast, and the retry
         # budget is what is graded. It needs the private-range hatch because policy
         # refuses loopback addresses by default (https is required unconditionally now
@@ -150,8 +154,13 @@ class TestCreateMCPClient:
         with pytest.raises(MCPConnectionError) as exc_info:
             await call_mcp_tool(agent_url=agent_url, tool="noop", arguments={}, timeout=1, max_attempts=1)
 
-        # Should only try once
-        assert "after 1 attempts" in str(exc_info.value)
+        # Should only try once. The budget used to be read out of the sentence
+        # ("after 1 attempts"); that text now lives in ``internal_detail``, which no
+        # serializer emits, so the same fact is graded where it SURVIVES — the typed
+        # details block — and reinforced by the sleep a second attempt would have
+        # needed. A count read off the schedule cannot pass on a message alone.
+        assert exc_info.value.details.max_retries == 1
+        assert recorded_retry_sleeps == [], f"a 1-attempt budget slept {recorded_retry_sleeps} — the call was retried"
 
 
 @pytest.mark.asyncio
@@ -204,7 +213,7 @@ class TestErrorHandling:
     async def test_timeout_handling(self, monkeypatch):
         """Connection timeout is respected."""
         # Use a URL that will timeout (assuming nothing on port 9999)
-        monkeypatch.setenv(ALLOW_PRIVATE_ENV, "true")
+        inject_limits(monkeypatch, adcp_outbound_allow_private=True)
         # Unchanged target: a loopback port with nothing listening, which fails fast.
         # It needs the private-range hatch because policy refuses loopback
         # addresses by default (https is required unconditionally now regardless of
@@ -273,15 +282,19 @@ def recorded_retry_sleeps(monkeypatch):
 
 @pytest.fixture
 def egress_hatches_closed(monkeypatch):
-    """Close the private-range escape hatch explicitly, as the literal ``"false"``.
+    """Close the private-range escape hatch explicitly, on the object the seam reads.
 
     Not optional and not a default: ``run_all_tests_host.sh`` and the e2e compose
     files export ``ADCP_OUTBOUND_ALLOW_PRIVATE`` for the creative-agent stack,
     so a test that merely assumed it unset would grade nothing on exactly the
-    machines this suite runs on. There is no scheme hatch to close anymore
+    machines this suite runs on. Injected rather than written into the environ,
+    because the seam reads ``get_settings().limits.adcp_outbound_allow_private``
+    and the settings object is cached: a ``setenv`` closed the hatch only while
+    nothing had built the settings yet, so this fixture's guarantee depended on
+    fixture order. There is no scheme hatch to close anymore
     (salesagent-e6h0 deleted it) — https is required unconditionally.
     """
-    monkeypatch.setenv(ALLOW_PRIVATE_ENV, "false")
+    inject_limits(monkeypatch, adcp_outbound_allow_private=False)
 
 
 @pytest.mark.asyncio
@@ -291,7 +304,7 @@ class TestRefusedAgentUrlIsNotDialled:
     ``call_mcp_tool`` is the MCP seam's entry point, so the egress seam's
     address and scheme policy applies ONCE, at its top, before the connection
     candidates are built — outside the retry loop and outside the ``try`` whose
-    arm is a bare ``except Exception``.
+    branch is a bare ``except Exception``.
 
     Position is the whole obligation. Validating inside that loop would leave
     ``OutboundRequestBlocked`` caught, logged as "MCP connection attempt N/M
@@ -363,11 +376,11 @@ class TestConnectionRetryBackoffSchedule:
         (patches ``egress.attempts.random.uniform`` — the one home of the draw),
         turning the grade exact: 1.25s then 2.25s. A schedule computed anywhere
         other than the seam never reaches that draw and shows up here as the
-        bare bases. The base knob is ``delenv``'d so an ambient test-speed
-        value cannot turn this into an assertion about something else.
+        bare bases. The base is injected as the shipped default so an ambient
+        test-speed value cannot turn this into an assertion about something else.
         """
         set_flags(monkeypatch, private=True)
-        monkeypatch.delenv(BACKOFF_BASE_ENV, raising=False)
+        set_backoff_base(monkeypatch)
         pin_jitter(monkeypatch, 0.25)
         # A loopback port with nothing listening: resolves, fails fast, and the
         # sleeps between attempts are what is graded (the private-range hatch is open
@@ -402,7 +415,11 @@ class TestConnectionRetryBackoffSchedule:
         with pytest.raises(MCPConnectionError) as exc_info:
             await call_mcp_tool(agent_url=agent_url, tool="noop", arguments={}, timeout=1)
 
-        assert "after 3 attempts" in str(exc_info.value)
+        # Same move as ``test_respects_max_retries``: the budget is read off the typed
+        # details block, not off the sentence, because buyer-facing text is derived
+        # from CODE_TABLE and the "after 3 attempts" wording moved to the non-wire
+        # ``internal_detail``.
+        assert exc_info.value.details.max_retries == 3
         assert len(recorded_retry_sleeps) == 2, (
             f"default attempt budget slept {recorded_retry_sleeps} — expected 2 sleeps for 3 attempts"
         )
@@ -488,8 +505,8 @@ class TestExhaustedFailureReachesTheRegistryClassified:
     """An exhausted TOOL failure classifies exactly as an exhausted CONNECT failure does.
 
     Both legs run the same production path — ``SignalsAgentRegistry._fetch_signals_operator``,
-    whose ``except (MCPConnectionError, MCPCompatibilityError)`` arm delegates to
-    ``raise_mapped_mcp_error`` — and both must land on the one envelope that arm
+    whose ``except (MCPConnectionError, MCPCompatibilityError)`` branch delegates to
+    ``raise_mapped_mcp_error`` — and both must land on the one envelope that branch
     produces for a seam failure carrying no HTTP status.
 
     The connect leg is the reference: it passes today, so a failure of this test
@@ -497,7 +514,7 @@ class TestExhaustedFailureReachesTheRegistryClassified:
     the classifier. The tool leg is the new obligation. Verified against the
     unmodified seam while authoring: today the tool leg raises an unclassified
     ``RuntimeError: generator didn't stop after athrow()`` that the registry's
-    ``except`` arm does not even catch — so this is a NEW obligation, not an
+    ``except`` branch does not even catch — so this is a NEW obligation, not an
     extension of a green one.
     """
 
@@ -521,23 +538,34 @@ class TestExhaustedFailureReachesTheRegistryClassified:
 
         agent = SignalsAgent(agent_url=agent_url, name="stub-signals-agent", enabled=True, timeout=10)
 
-        with pytest.raises(AdCPError) as exc_info:
+        with pytest.raises(AdCPSalesAgentError) as exc_info:
             await SignalsAgentRegistry()._fetch_signals_operator(agent, brief="a brief")
 
         # The recovery is read from the pinned enumMetadata rather than written as
         # a literal, then pinned once here so the derivation cannot silently
-        # return something else.
-        expected_recovery = RECOVERY_BY_WIRE_CODE["SERVICE_UNAVAILABLE"]
+        # return something else. ``CODE_TABLE`` is where that pinned classification
+        # lands on this branch — it absorbed the ``RECOVERY_BY_WIRE_CODE`` map this
+        # lookup used to go through, and is still the pin, not a literal.
+        expected_recovery = CODE_TABLE["SERVICE_UNAVAILABLE"].recovery
         assert expected_recovery == "transient", (
             f"the pinned enumMetadata classifies SERVICE_UNAVAILABLE as {expected_recovery!r}, not 'transient' — "
             "the premise this assertion is built on no longer holds"
         )
+        envelope = envelope_for(exc_info.value)
         assert_envelope_shape(
-            build_two_layer_error_envelope(exc_info.value),
+            envelope,
             "SERVICE_UNAVAILABLE",
             recovery=expected_recovery,
-            message_substr="signals agent stub-signals-agent is unreachable.",
         )
+        # The sentence naming the agent used to be graded ON THE WIRE
+        # (``message_substr="signals agent stub-signals-agent is unreachable."``).
+        # Buyer-facing text is derived from CODE_TABLE now and names nothing, so the
+        # naming moved to ``internal_detail`` — server log only, emitted by no
+        # serializer (``adcp_error_for_status``). Both halves are graded rather than
+        # one dropped: the fact still reaches the operator, and it does NOT reach the
+        # buyer.
+        assert "signals agent stub-signals-agent is unreachable." in str(exc_info.value.internal_detail)
+        assert "stub-signals-agent" not in str(envelope), f"the agent's name leaked onto the buyer's wire: {envelope}"
         assert len(recorded_retry_sleeps) == 2, (
             f"the failure was not retried on the seam's 3-attempt budget (slept {recorded_retry_sleeps})"
         )
@@ -570,9 +598,11 @@ def hatch_closes_between_precheck_and_dial(monkeypatch):
     two verdicts differ only when the DNS answer changes between them — a
     rebind, which is exactly the case where retrying a refused destination is
     worst. That window cannot be opened from a test by waiting for DNS, so it is
-    opened through the OTHER input both resolutions read at CALL time
-    (``_env_flag(ADCP_OUTBOUND_ALLOW_PRIVATE)``): the hatch is open when the
-    pre-check reads it and closed when the dial reads it.
+    opened through the OTHER input both resolutions read at CALL time — the
+    private-range hatch, read as
+    ``get_settings().limits.adcp_outbound_allow_private`` (the ``_env_flag`` this
+    docstring used to name is gone, critical pattern #7): the hatch is open when
+    the pre-check reads it and closed when the dial reads it.
 
     Nothing here fabricates the refusal. The wrapper delegates to the real
     ``guarded_client_factory``, so the ``OutboundRequestBlocked`` the client
@@ -597,7 +627,13 @@ def hatch_closes_between_precheck_and_dial(monkeypatch):
 
         # Closed HERE — after ``validate_url`` has already returned its verdict
         # above the loop, and before the factory resolves the same URL again.
-        monkeypatch.setenv(ALLOW_PRIVATE_ENV, "false")
+        # INJECTED, not written into the environ: the seam reads the hatch off
+        # ``get_settings().limits.adcp_outbound_allow_private``, and the settings object
+        # is built once per process and cached, so a bare ``setenv`` here closed
+        # nothing — the dial was ADMITTED, the origin answered, and the three dials this
+        # fixture then reported were an ordinary connection retry rather than the
+        # retried refusal it exists to catch.
+        inject_limits(monkeypatch, adcp_outbound_allow_private=False)
         return factory
 
     monkeypatch.setattr(mcp_client_module, "guarded_client_factory", building)
@@ -613,7 +649,7 @@ class TestDialTimeRefusalIsNotRetriedOrLaundered:
     grades the other half, and the half that is currently wrong: the pre-check
     PASSES and the in-loop ``guarded_client_factory`` resolution REFUSES. That
     refusal is raised inside ``async with client``, i.e. inside the per-attempt
-    ``try`` whose arm is a bare ``except Exception`` — so today it is caught,
+    ``try`` whose branch is a bare ``except Exception`` — so today it is caught,
     logged as "MCP connection attempt N/M failed", slept on, retried against the
     destination egress policy has already refused, and finally re-raised as
     ``MCPConnectionError``. The registry then classifies that as
@@ -645,7 +681,7 @@ class TestDialTimeRefusalIsNotRetriedOrLaundered:
         origin = mcp_origin_tls(get_signals=_unreached_get_signals)
         agent = SignalsAgent(agent_url=origin.base_url, name="stub-signals-agent", enabled=True, timeout=10)
 
-        with pytest.raises(AdCPError) as exc_info:
+        with pytest.raises(AdCPSalesAgentError) as exc_info:
             await SignalsAgentRegistry()._fetch_signals_operator(agent, brief="a brief")
 
         assert hatch_closes_between_precheck_and_dial == [origin.base_url], (
@@ -660,7 +696,7 @@ class TestDialTimeRefusalIsNotRetriedOrLaundered:
 
         # Read from the pinned enumMetadata rather than written as a literal, then
         # pinned once here so the derivation cannot silently return something else.
-        expected_recovery = RECOVERY_BY_WIRE_CODE["CONFIGURATION_ERROR"]
+        expected_recovery = CODE_TABLE["CONFIGURATION_ERROR"].recovery
         assert expected_recovery == "terminal", (
             f"the pinned enumMetadata classifies CONFIGURATION_ERROR as {expected_recovery!r}, not 'terminal' — "
             "the premise this assertion is built on no longer holds"
@@ -669,9 +705,21 @@ class TestDialTimeRefusalIsNotRetriedOrLaundered:
         # an ``OutboundRequestBlocked`` against an ``OperatorEndpoint``. Reaching
         # SERVICE_UNAVAILABLE/transient here means the refusal arrived at the
         # registry as ``MCPConnectionError`` — swallowed and relabelled by the seam.
+        envelope = envelope_for(exc_info.value)
         assert_envelope_shape(
-            build_two_layer_error_envelope(exc_info.value),
+            envelope,
             "CONFIGURATION_ERROR",
             recovery=expected_recovery,
-            message_substr="is not reachable under this deployment's egress policy",
+        )
+        # ``internal_detail`` carries the CAUSING EXCEPTION, not a sentence: the
+        # parameter is typed ``BaseException | None`` and
+        # ``.ast-grep/rules/internal-detail-is-an-exception.yml`` refuses an authored
+        # string in any spelling, so the substring this used to look for cannot exist.
+        # The operator still learns what happened — the boundary writes one record per
+        # failure with the cause attached — and the type is the durable oracle for it.
+        assert isinstance(exc_info.value.internal_detail, OutboundRequestBlocked), (
+            f"the egress refusal did not reach the operator's record: {exc_info.value.internal_detail!r}"
+        )
+        assert "stub-signals-agent" not in str(envelope), (
+            f"the endpoint's name leaked onto the buyer's wire: {envelope}"
         )

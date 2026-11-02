@@ -16,19 +16,22 @@ import pytest
 
 from src.core.database.database_session import get_db_session
 from src.core.exceptions import AdCPValidationError
-from src.core.resolved_identity import ResolvedIdentity
+from src.core.resolved_identity import AccountIdentity
 from src.core.schemas import (
     CollectionListReference,
     CreateMediaBuyError,
     CreateMediaBuyRequest,
     UpdateMediaBuyRequest,
 )
+from src.core.schemas.account import Account
+from src.core.tenant_context import TenantContext
 from src.core.tools.media_buy_create import _create_media_buy_impl
 from src.core.tools.media_buy_update import _update_media_buy_impl
-from tests.factories import PrincipalFactory
+from tests.factories import AccountFactory, PrincipalFactory
 from tests.helpers.adcp_factories import create_test_package_request
 from tests.utils.database_helpers import (
     add_targeting_test_product,
+    bind_factories_to_session,
     future_iso_date_range,
     seed_media_buy_with_package,
     seed_targeting_test_tenant,
@@ -37,14 +40,22 @@ from tests.utils.database_helpers import (
 pytestmark = pytest.mark.requires_db
 
 TENANT_ID = "test_property_targeting_allowed"
+ACCOUNT_ID = "acct_test"
 
 
-def _make_identity() -> ResolvedIdentity:
-    return PrincipalFactory.make_identity(
-        principal_id="test_adv",
-        tenant_id=TENANT_ID,
-        protocol="mcp",
-        dry_run=True,
+def _make_identity() -> AccountIdentity:
+    """The caller both media-buy implementations take: the identity with the account inside.
+
+    ``create-media-buy-request.json`` and ``update-media-buy-request.json`` both
+    require ``account``, so both implementations are annotated ``AccountIdentity``
+    and read ``identity.account.account_id`` directly. The tenant is the committed
+    ROW, which is what the resolver would have loaded.
+    """
+    tenant = TenantContext.load(TENANT_ID)
+    assert tenant is not None, "the property_targeting_tenant fixture must have committed the tenant row"
+    return PrincipalFactory.make_account_identity(
+        PrincipalFactory.make_identity(principal_id="test_adv", tenant_id=TENANT_ID, tenant=tenant),
+        Account(account_id=ACCOUNT_ID, name="Test Account", status="active"),
     )
 
 
@@ -73,6 +84,11 @@ def property_targeting_tenant(integration_db):
             name="Display Ads (property targeting allowed)",
             property_targeting_allowed=True,
         )
+        # The account the requests name. The boundary resolves it onto the identity in
+        # production; a direct _impl call hands it over through make_account_identity,
+        # and the row has to exist because the created buy carries its account_id.
+        with bind_factories_to_session(session):
+            AccountFactory(tenant_id=TENANT_ID, account_id=ACCOUNT_ID)
         session.commit()
 
     yield TENANT_ID
@@ -89,12 +105,13 @@ async def test_create_rejects_property_list_when_product_disallows(property_targ
 
     The validation block raises AdCPValidationError so the transport boundary translates
     to the spec-compliant two-layer envelope. The raise propagates cleanly through the
-    narrowed except AdCPError boundary; the prior ValueError shape was caught by an inner
+    narrowed except AdCPSalesAgentError boundary; the prior ValueError shape was caught by an inner
     (ValueError, PermissionError) catchall and re-emitted via Pattern A, which is the
     anti-pattern the typed-error substrate eliminates.
     """
     start, end = future_iso_date_range()
     request = CreateMediaBuyRequest(
+        account={"account_id": "acct_test"},
         brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
@@ -118,12 +135,14 @@ async def test_create_rejects_property_list_when_product_disallows(property_targ
         await _create_media_buy_impl(req=request, identity=_make_identity())
 
     exc = excinfo.value
-    assert "prod_no_property_targeting" in exc.message
-    assert "property_targeting_allowed" in exc.message
     assert exc.error_code == "VALIDATION_ERROR"
-    assert exc.field == "packages[].targeting_overlay.property_list"
+    # The ARRAY parameter: violations are gathered across every package before the
+    # raise, so no single element is at fault and details carry which ones were
+    # (salesagent-rfxfu). The old "packages[]" prefix named neither the array nor an
+    # element.
+    assert exc.field == "packages"
     assert exc.details is not None
-    assert "violations" in exc.details
+    assert exc.details.reasons
 
 
 @pytest.mark.requires_db
@@ -131,6 +150,7 @@ async def test_create_accepts_property_list_when_product_allows(property_targeti
     """Product with property_targeting_allowed=True passes the validation."""
     start, end = future_iso_date_range()
     request = CreateMediaBuyRequest(
+        account={"account_id": "acct_test"},
         brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
@@ -150,7 +170,7 @@ async def test_create_accepts_property_list_when_product_allows(property_targeti
         idempotency_key=f"int-key-{uuid.uuid4().hex}",
     )
 
-    response, _ = await _create_media_buy_impl(req=request, identity=_make_identity())
+    response = await _create_media_buy_impl(req=request, identity=_make_identity())
 
     # The validation rule must not fire for an allowing product. Separate
     # assertion gates the success branch — without it the compound
@@ -161,7 +181,6 @@ async def test_create_accepts_property_list_when_product_allows(property_targeti
     assert not isinstance(response, CreateMediaBuyError), (
         f"Expected success but got CreateMediaBuyError: {[err.message for err in (response.errors or [])]}"
     )
-    assert all("property_targeting_allowed" not in err.message for err in (response.errors or []))
 
 
 @pytest.mark.requires_db
@@ -169,6 +188,7 @@ async def test_create_accepts_collection_list_without_property_list(property_tar
     """collection_list alone never triggers the property_list check."""
     start, end = future_iso_date_range()
     request = CreateMediaBuyRequest(
+        account={"account_id": "acct_test"},
         brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
@@ -188,7 +208,7 @@ async def test_create_accepts_collection_list_without_property_list(property_tar
         idempotency_key=f"int-key-{uuid.uuid4().hex}",
     )
 
-    response, _ = await _create_media_buy_impl(req=request, identity=_make_identity())
+    response = await _create_media_buy_impl(req=request, identity=_make_identity())
 
     # Mirror the line-157 split for the sister test — the compound
     # ``isinstance(...) or all(...)`` short-circuits on success, leaving the
@@ -198,7 +218,6 @@ async def test_create_accepts_collection_list_without_property_list(property_tar
     assert not isinstance(response, CreateMediaBuyError), (
         f"Expected success but got CreateMediaBuyError: {[err.message for err in (response.errors or [])]}"
     )
-    assert all("property_targeting_allowed" not in err.message for err in (response.errors or []))
 
 
 # ---------------------------------------------------------------------------
@@ -227,6 +246,8 @@ def test_update_rejects_property_list_when_product_disallows(property_targeting_
     media_buy_id = _seed_media_buy(TENANT_ID, "prod_no_property_targeting")
 
     request = UpdateMediaBuyRequest(
+        account={"account_id": "acct_test"},
+        idempotency_key="test-idem-key-0001",
         media_buy_id=media_buy_id,
         packages=[
             {
@@ -249,9 +270,13 @@ def test_update_rejects_property_list_when_product_disallows(property_targeting_
 
     exc = excinfo.value
     assert exc.error_code == "VALIDATION_ERROR"
-    assert exc.field == "packages[].targeting_overlay.property_list"
-    assert "property_targeting_allowed" in exc.message
-    assert exc.details is not None and "violations" in exc.details
+    # The ARRAY parameter: violations are gathered across every package before the
+    # raise, so no single element is at fault and details carry which ones were
+    # (salesagent-rfxfu). The old "packages[]" prefix named neither the array nor an
+    # element.
+    assert exc.field == "packages"
+    assert exc.details is not None
+    assert exc.details.reasons
 
 
 @pytest.mark.requires_db
@@ -260,6 +285,8 @@ def test_update_accepts_collection_list_only(property_targeting_tenant):
     media_buy_id = _seed_media_buy(TENANT_ID, "prod_no_property_targeting", media_buy_id="mb_collection_only")
 
     request = UpdateMediaBuyRequest(
+        account={"account_id": "acct_test"},
+        idempotency_key="test-idem-key-0001",
         media_buy_id=media_buy_id,
         packages=[
             {
