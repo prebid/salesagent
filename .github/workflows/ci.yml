@@ -269,6 +269,9 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Free runner disk
+        if: matrix.group == 'creative'
+        uses: ./.github/actions/_free-runner-disk
       # Four of the five groups need no service beyond the job's own Postgres,
       # so they stay on the host path exactly as before. None of them talks to
       # the creative agent, so none of them needs the egress seam's private-
@@ -362,6 +365,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: ./.github/actions/_free-runner-disk
       - name: Ensure docker-compose alias exists
         run: |
           docker compose version
@@ -448,6 +452,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: ./.github/actions/_free-runner-disk
       # No _setup-env / host Postgres: the runner container executes tox inside
       # the compose network (postgres:5432, proxy:8000) and publishes no host
       # ports. No coverage upload: the suite asserts behavior on the live
@@ -514,6 +519,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: ./.github/actions/_free-runner-disk
       # The report generators below import `adcp` and `pyyaml`, and the bundle
       # action resolves the pin from that same installed SDK, so this job needs
       # the project venv. It did not before: it only ever drove docker compose.
