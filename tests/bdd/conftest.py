@@ -4710,6 +4710,9 @@ def _uc010_wired_tags() -> frozenset[str]:
             # portfolio.publisher_domains: the verified publishers, or no portfolio at all
             "T-UC-010-portfolio-verified-publishers",
             "T-UC-010-portfolio-no-verified-publisher",
+            "T-UC-010-portfolio-canonical-domain",
+            "T-UC-010-portfolio-rejected-domain",
+            "T-UC-010-portfolio-only-rejected-domain",
             "T-UC-010-main-timestamp",
             "T-UC-010-main-readonly",
             "T-UC-010-pricing",

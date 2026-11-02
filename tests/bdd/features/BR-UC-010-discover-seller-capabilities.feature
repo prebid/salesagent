@@ -496,6 +496,73 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/portfolio/required
     # @source repo=adcp ref=v3.1.1 path=docs/brand-protocol/seller-setup.mdx (L29 "Who publishes what": a sales representative publishes adagents.json "Usually no, unless it also owns properties")
 
+  @T-UC-010-portfolio-canonical-domain @main-flow @post-s6 @partition @boundary
+  Scenario Outline: portfolio names a verified publisher by its canonical domain
+    Given a tenant is resolvable from the request context
+    And the tenant holds an authorized property on "<property>" with verification status "verified"
+    And the tenant has verified publisher partnerships with domains <partner>
+    When the Buyer Agent calls get_adcp_capabilities
+    Then the response is compliant with the get_adcp_capabilities spec
+    And the response should pass schema validation for get-adcp-capabilities-response
+    And the response should include media_buy.portfolio with publisher_domains <named>
+    And the response should NOT contain "errors" field
+    # publisher_domains admits only lower-case hostnames (items.pattern), and the admin
+    # paths store a domain as typed: the sync and the property form only strip it. Such a row
+    # still reaches `verified`, because the fetch normalizes the domain before it dials. So
+    # the seller names the host the fetch verified, and two spellings of one host are one
+    # publisher. Ungraded by storyboards: no 3.1.1 compliance yaml reads portfolio.
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/portfolio/properties/publisher_domains/items/pattern
+
+    Examples:
+      | partition               | property                      | partner              | named                                 |
+      | property mixed case     | News.Example.com              | "partner.example"    | "news.example.com", "partner.example" |
+      | property trailing dot   | news.example.com.             | "partner.example"    | "news.example.com", "partner.example" |
+      | property scheme path    | https://news.example.com/path | "partner.example"    | "news.example.com", "partner.example" |
+      | partner mixed case      | partner.example               | "News.Example.com"   | "news.example.com", "partner.example" |
+      | partner trailing dot    | partner.example               | "news.example.com."  | "news.example.com", "partner.example" |
+      | partner edge spaces     | partner.example               | " news.example.com " | "news.example.com", "partner.example" |
+      | one host, two spellings | News.Example.com              | "news.example.com."  | "news.example.com"                    |
+
+  @T-UC-010-portfolio-rejected-domain @extension @degradation @partition @boundary @post-s6
+  Scenario Outline: a verified domain the pattern rejects is left out and reported, and the other publishers are still named
+    Given a tenant is resolvable from the request context
+    And the tenant has verified publisher partnerships with domains "partner.example"
+    And <rejected_row>
+    When the Buyer Agent calls get_adcp_capabilities
+    Then the response is compliant with the get_adcp_capabilities spec
+    And the response should pass schema validation for get-adcp-capabilities-response
+    And the response should include media_buy.portfolio with publisher_domains "partner.example"
+    And the response should carry one SERVICE_UNAVAILABLE advisory for capability "publisher domains"
+    # A port survives canonicalization and is not admitted by the pattern. It is a different
+    # origin from the bare host the buyer would fetch, so the port is not dropped to make the
+    # row fit. An empty domain reaches `verified` through auto-verify. One bad row costs that
+    # row: the valid publishers stay on the wire, and the advisory tells the buyer that the
+    # read degraded (errors: "Task-specific errors and warnings").
+    # Ungraded by storyboards: no 3.1.1 compliance yaml reads portfolio.
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/portfolio/properties/publisher_domains/items/pattern
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/errors
+
+    Examples:
+      | partition        | rejected_row                                                                                            |
+      | empty partner    | the tenant has verified publisher partnerships with domains ""                                          |
+      | partner on port  | the tenant has verified publisher partnerships with domains "news.example.com:8443"                     |
+      | property on port | the tenant holds an authorized property on "news.example.com:8443" with verification status "verified"  |
+
+  @T-UC-010-portfolio-only-rejected-domain @extension @degradation @partition @boundary @post-s6
+  Scenario: a seller whose only verified domain the pattern rejects omits portfolio and reports the degradation
+    Given a tenant is resolvable from the request context
+    And the tenant has verified publisher partnerships with domains "news.example.com:8443"
+    When the Buyer Agent calls get_adcp_capabilities
+    Then the response is compliant with the get_adcp_capabilities spec
+    And the response should pass schema validation for get-adcp-capabilities-response
+    And media_buy.portfolio should be omitted
+    And the response should carry one SERVICE_UNAVAILABLE advisory for capability "publisher domains"
+    # publisher_domains is REQUIRED with minItems 1, so nothing nameable means no portfolio.
+    # Unlike @T-UC-010-portfolio-no-verified-publisher this seller does have a verified
+    # publisher, so the omission carries the advisory.
+    # Ungraded by storyboards: no 3.1.1 compliance yaml reads portfolio.
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/portfolio/required
+
   @T-UC-010-degradation-account @extension @degradation @partition @boundary @post-s3
   Scenario Outline: Account section presence depends on tenant resolution
     Given <tenant_condition>

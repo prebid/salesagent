@@ -157,6 +157,20 @@ def hostname_of(host: str) -> str:
     return urlsplit(f"//{host}").hostname or host
 
 
+def canonical_publisher_domain(stored: str) -> str:
+    """The host *stored* names: lower-case, with no scheme, path or trailing dot.
+
+    The admin paths store a publisher domain as typed, and such a row still reaches
+    ``verified``, because ``adcp.adagents.fetch_adagents`` normalizes the domain the same
+    way before it dials. This gives a reader the host that fetch verified.
+
+    A port is kept. ``news.example.com:8443`` is a different origin from
+    ``news.example.com``, so dropping it would name a host nobody fetched; the pinned
+    ``publisher_domain`` pattern refuses the colon instead.
+    """
+    return stored.strip().lower().split("://", 1)[-1].split("/", 1)[0].rstrip(".")
+
+
 def path_from_asgi_scope(scope: Mapping[str, Any]) -> str:
     """The request path with any ASGI ``root_path`` mount prefix stripped.
 

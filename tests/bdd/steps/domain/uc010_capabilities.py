@@ -103,7 +103,7 @@ def _config(ctx: dict) -> dict:
 
 def _quoted_list(text: str) -> list[str]:
     """Parse '"a", "b"' / 'display, social' step fragments into a list."""
-    quoted = re.findall(r'"([^"]+)"', text)
+    quoted = re.findall(r'"([^"]*)"', text)
     if quoted:
         return quoted
     return [part.strip() for part in text.split(",") if part.strip()]
@@ -2392,6 +2392,16 @@ def then_errors_array(ctx: dict) -> None:
     assert isinstance(errors, list) and errors, f"errors not a non-empty array: {errors!r}"
     for entry in errors:
         assert isinstance(entry, dict), f"errors entry not an object: {entry!r}"
+
+
+@then(parsers.parse('the response should carry one SERVICE_UNAVAILABLE advisory for capability "{capability}"'))
+def then_one_degradation_advisory(ctx: dict, capability: str) -> None:
+    """A degraded discovery lookup is reported once, by the capability it names, on a success
+    response (get-adcp-capabilities-response.json#/properties/errors, core/error.json)."""
+    errors = wire_field(ctx, "errors")
+    assert len(errors) == 1, f"expected one advisory, got {errors!r}"
+    assert errors[0]["code"] == "SERVICE_UNAVAILABLE", f"advisory carries the wrong code: {errors[0]!r}"
+    assert errors[0]["details"] == {"capability": capability}, f"advisory names the wrong capability: {errors[0]!r}"
 
 
 @then("each errors entry should carry code and message")
