@@ -468,10 +468,9 @@ class TestPartialEnterUnwind:
 
     These tests grade the acquisition set: whatever an env acquired is released,
     wherever it was acquired from. Two of them (``local_origin_mixin`` and
-    ``fast_backoff_mixin``) are security oracles -- the resource they pin is an
-    ENVIRONMENT VARIABLE that relaxes the outbound egress posture, and a leaked
-    ``ADCP_OUTBOUND_ALLOW_PRIVATE=true`` silently disarms every later refusal
-    scenario on the same worker.
+    ``fast_backoff_mixin``) are security oracles -- the resource they pin relaxes
+    the outbound egress posture, and a leaked private-range hatch silently disarms
+    every later refusal scenario on the same worker.
     """
 
     # -- helpers ---------------------------------------------------------
@@ -500,7 +499,7 @@ class TestPartialEnterUnwind:
         Runs only in a ``finally``, after every observation has been captured
         into locals, so it can never mask the leak it exists to clean up. It is
         here because a RED run of these tests genuinely leaks a live TLS server
-        thread and two environment variables into the rest of the session.
+        thread, a settings patch and an environment variable into the rest of the session.
         """
         from contextlib import suppress
 
@@ -595,15 +594,16 @@ class TestPartialEnterUnwind:
         """A base failure must not leave the egress hatch open for the whole worker.
 
         ``LocalOriginMixin`` acquires three resources -- the ``SSL_CERT_FILE``
-        patch, the running TLS origin, and ``ADCP_OUTBOUND_ALLOW_PRIVATE=true``
-        -- and only then enters the base. When the base fails, Python skips
-        ``__exit__`` and all three survive. The env var is the one that matters:
+        patch, the running TLS origin, and ``adcp_outbound_allow_private`` on the
+        settings -- and only then enters the base. When the base fails, Python skips
+        ``__exit__`` and all three survive. The hatch is the one that matters:
         every later scenario on this worker that grades a private-address
         refusal is then graded with the hatch WIDE OPEN, and passes for the
         wrong reason.
         """
         import pytest
 
+        from src.core.config import get_settings
         from tests.harness._base import IntegrationEnv
         from tests.harness._mixins import LocalOriginMixin
         from tests.helpers.egress_hatches import ALLOW_PRIVATE_ENV
@@ -630,14 +630,14 @@ class TestPartialEnterUnwind:
                     env.__enter__()
 
                 leaked_ssl_cert_file = os.environ.get("SSL_CERT_FILE")
-                leaked_allow_private = os.environ.get(ALLOW_PRIVATE_ENV)
+                leaked_allow_private = get_settings().limits.adcp_outbound_allow_private
                 origin = getattr(env, "_origin", None)
                 origin_still_listening = origin is not None and self._origin_is_listening(origin)
             finally:
                 self._force_release(env)
 
-            assert leaked_allow_private is None, (
-                f"{ALLOW_PRIVATE_ENV}={leaked_allow_private!r} survived a failed __enter__ -- "
+            assert leaked_allow_private is False, (
+                f"adcp_outbound_allow_private={leaked_allow_private!r} survived a failed __enter__ -- "
                 f"the private-egress hatch is now open for the rest of this worker, and every "
                 f"later scenario grading a private-address refusal is disarmed"
             )
