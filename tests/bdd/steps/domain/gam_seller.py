@@ -1,10 +1,11 @@
 """Steps for the local-gam-*.feature files: what a Google Ad Manager seller sends GAM, and what it reports.
 
-local-gam-seller.feature and local-gam-line-item-flight.feature: the Given makes the env's
-tenant a GAM seller (``GamSellerMixin.sell_through_gam``). The Thens read two things: the
-buyer's wire response, and the stand-in GAM network's record of what the seller sent it and
-what it created. Their expectations are the scenario's literals, or links the stand-in itself
-established (the id it gave the order), so nothing is compared with what the harness seeded.
+local-gam-seller.feature, local-gam-line-item-flight.feature and local-gam-geo-targeting.feature:
+the Given makes the env's tenant a GAM seller (``GamSellerMixin.sell_through_gam``). The Thens
+read two things: the buyer's wire response, and the stand-in GAM network's record of what the
+seller sent it and what it created. Their expectations are the scenario's literals, or links
+the stand-in itself established (the id it gave the order), so nothing is compared with what
+the harness seeded.
 
 local-gam-delivery-report.feature: the Givens make the tenant a GAM seller whose network
 reports for the buyer's advertiser (``DeliveryPollEnv.report_through_gam``); the UC-004 steps
@@ -381,6 +382,36 @@ def then_one_order_without_flight(ctx: dict) -> None:
     """GAM created exactly one order, and the seller sent it none of the flight keys GAM derives from its line items."""
     flights = _flights(ctx, "OrderService", "createOrders")
     assert flights == [{}], f"expected GAM to create one order carrying no flight dates; it created {flights}"
+
+
+@then(
+    parsers.re(
+        r'^Google Ad Manager received one line item whose geo targeting includes "(?P<targeted>[^"]+)" '
+        r'and excludes "(?P<excluded>[^"]*)"$'
+    )
+)
+def then_one_line_item_geo_targeting(ctx: dict, targeted: str, excluded: str) -> None:
+    """The seller sent exactly one line item, whose geoTargeting holds exactly these GAM location ids.
+
+    *targeted* and *excluded* are comma-separated GAM geo target ids; an empty *excluded*
+    means the line item carries no excludedLocations. GAM ORs the ids of a location list,
+    so their order carries nothing and they are compared as sets: an extra location (a
+    union of inclusion fields) or a missing one fails.
+    """
+    line_items = [
+        {
+            key: {str(location["id"]) for location in locations}
+            # A line item with no geoTargeting reads as {}, which no expectation equals.
+            for key, locations in item["targeting"].get("geoTargeting", {}).items()
+        }
+        for item in ctx["env"].gam_objects_sent("LineItemService", "createLineItems")
+    ]
+    expected = {"targetedLocations": set(targeted.split(","))}
+    if excluded:
+        expected["excludedLocations"] = set(excluded.split(","))
+    assert line_items == [expected], (
+        f"expected GAM to receive one line item geo-targeted {expected}; it received {line_items}"
+    )
 
 
 @then("Google Ad Manager received no order and no line item")

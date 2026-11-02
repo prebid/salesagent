@@ -5553,6 +5553,10 @@ def _uc010_wired_tags() -> frozenset[str]:
             "T-UC-010-v31-request-signing-legacy-digest",
             "T-UC-010-v31-request-signing-subset",
             "T-UC-010-v31-webhook-signing",
+            # Batch 17 — a GAM seller declares only the geo targeting it books
+            # (local-uc010-declaration-backing.feature): the real GoogleAdManager class
+            # answers get_targeting_capabilities.
+            "T-UC-010-local-gam-postal",
         }
     )
     return _UC010_WIRED_TAGS

@@ -413,6 +413,35 @@ class CapabilitiesEnv(IntegrationEnv):
         """
         self._adapter_mock.get_targeting_capabilities.return_value = TargetingCapabilities(**dims)
 
+    def _realize_gam_adapter_class(self) -> None:
+        """Point the tenant's ``AdapterConfig`` at Google Ad Manager (the existing upsert)."""
+        from tests.factories.core import set_adapter_type
+
+        set_adapter_type(self, self._tenant_id, "google_ad_manager")
+
+    @realize_e2e(_realize_gam_adapter_class)
+    def use_gam_adapter_class(self) -> None:
+        """Make the tenant a Google Ad Manager seller, and resolve its adapter class as production does.
+
+        In-process, the adapter-class patch delegates to production's
+        ``get_adapter_class_for_tenant``, which reads the ``AdapterConfig`` row this writes.
+        Three facts make that safe without GAM credentials or a stand-in network:
+
+        * ``get_adcp_capabilities`` reads only the adapter CLASS (``default_channels``,
+          ``get_supported_pricing_models``, the static ``get_targeting_capabilities``), so no
+          ``GoogleAdManager`` instance is built and nothing calls Google;
+        * for the same reason the row needs no GAM credentials;
+        * it is not ``onboard_gam`` (tests/utils/tenant_setup.py): that one writer of a GAM
+          seller's onboarding creates the ``AdapterConfig`` row the create path needs, and
+          fails on the primary key when the tenant already has one, as a tenant on the live
+          server does. This changes only ``adapter_type``, through ``set_adapter_type``'s
+          upsert, whether or not the row exists.
+        """
+        from src.core.helpers.adapter_helpers import get_adapter_class_for_tenant
+
+        self._realize_gam_adapter_class()
+        self.mock["adapter"].side_effect = get_adapter_class_for_tenant
+
     def _realize_adapter_unavailable(self) -> None:
         """E2E realization: point the tenant at an ad server that does not exist.
 
