@@ -317,16 +317,40 @@ def _library_image_creative(
 
     The buyer's own unless *principal* names another; *data* adds keys to its stored record.
     """
+    from tests.factories.creative_asset import image_spec
+
+    _library_creative(
+        ctx,
+        creative_id,
+        "display_300x250_image",
+        image_spec("banner_image", url=url),
+        status=status,
+        principal=principal,
+        **data,
+    )
+
+
+def _library_creative(
+    ctx: dict,
+    creative_id: str,
+    format_id: str,
+    asset: Any,
+    *,
+    status: str = "approved",
+    principal: Any = None,
+    **data: Any,
+) -> None:
+    """A creative stored in the library with one asset, in reference-catalog format *format_id*."""
     from tests.factories.creative import CreativeFactory
-    from tests.factories.creative_asset import build_assets, image_spec
+    from tests.factories.creative_asset import build_assets
 
     CreativeFactory(
         creative_id=creative_id,
         tenant=ctx["tenant"],
         principal=principal or ctx["principal"],
-        format="display_300x250_image",
+        format=format_id,
         status=status,
-        data={"assets": build_assets(image_spec("banner_image", url=url)), **data},
+        data={"assets": build_assets(asset), **data},
     )
 
 
@@ -385,6 +409,34 @@ def given_gam_fails_report_job(ctx: dict, advertiser_id: str) -> None:
 def given_buyer_holds_creative_recorded_with_own_id(ctx: dict, creative_id: str, url: str) -> None:
     """A library creative whose record holds the buyer's id under ``platform_creative_id``, as #2247 wrote it."""
     _library_image_creative(ctx, creative_id, url, platform_creative_id=creative_id)
+    ctx["env"]._commit_factory_data()
+
+
+@given(
+    parsers.parse(
+        'the buyer holds an approved 300x250 HTML creative "{creative_id}" with markup "{markup}", '
+        'recorded with the creative agent\'s preview link "{preview_url}" as its URL'
+    )
+)
+def given_buyer_holds_html_creative(ctx: dict, creative_id: str, markup: str, preview_url: str) -> None:
+    """A library creative in the reference HTML format, recorded as sync_creatives records one.
+
+    Its one asset is HTML markup (core/assets/html-asset.json: ``asset_type: "html"``, the
+    markup in ``content``). The sync records the first render of the creative agent's preview
+    as the creative's root ``url``, ``width`` and ``height``
+    (src/core/tools/creatives/_processing.py).
+    """
+    from tests.factories.creative_asset import asset_spec
+
+    _library_creative(
+        ctx,
+        creative_id,
+        "display_300x250_html",
+        asset_spec("html_creative", "html", content=markup),
+        url=preview_url,
+        width=300,
+        height=250,
+    )
     ctx["env"]._commit_factory_data()
 
 
@@ -598,6 +650,14 @@ def _line_item_created(ctx: dict) -> Any:
     return line_items[0]
 
 
+def _assert_creatives_created(ctx: dict, expected: list[tuple[str, str, str | None, str | None]]) -> None:
+    """GAM created exactly *expected*: (type, advertiser id, image URL, snippet) of each creative, in order."""
+    created = [
+        (c["xsi_type"], str(c["advertiserId"]), c.get("imageUrl"), c.get("snippet")) for c in _creatives_created(ctx)
+    ]
+    assert created == expected, f"expected GAM to create {expected}; it created {created}"
+
+
 @then(
     parsers.re(
         r'Google Ad Manager received one line item, starting (?:at "(?P<start>[^"]+)"|immediately) '
@@ -634,9 +694,20 @@ def then_one_order_without_flight(ctx: dict) -> None:
 )
 def then_gam_created_image_creatives(ctx: dict, advertiser_id: str, urls: str) -> None:
     """GAM holds exactly these creatives from this scenario, in order: images for the advertiser, showing the URLs."""
-    created = [(c["xsi_type"], str(c["advertiserId"]), c.get("imageUrl")) for c in _creatives_created(ctx)]
-    expected = [("ImageRedirectCreative", advertiser_id, url.strip()) for url in urls.split(",")]
-    assert created == expected, f"expected GAM to create {expected}; it created {created}"
+    _assert_creatives_created(
+        ctx, [("ImageRedirectCreative", advertiser_id, url.strip(), None) for url in urls.split(",")]
+    )
+
+
+@then(
+    parsers.parse(
+        'Google Ad Manager created one third-party creative for advertiser "{advertiser_id}" whose snippet is '
+        '"{snippet}" and which names no image URL'
+    )
+)
+def then_gam_created_one_third_party_creative(ctx: dict, advertiser_id: str, snippet: str) -> None:
+    """GAM holds exactly one creative from this scenario: the markup itself, not a picture of a page."""
+    _assert_creatives_created(ctx, [("ThirdPartyCreative", advertiser_id, None, snippet)])
 
 
 @then("Google Ad Manager created no creative")
