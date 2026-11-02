@@ -182,7 +182,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration/test_delivery_webhooks_integration.py", "_create_test_tenant_and_principal"),
     ("tests/integration/test_delivery_webhooks_integration.py", "_create_basic_media_buy_with_webhook"),
     # tests/integration/test_format_conversion_approval.py
-    ("tests/integration/test_format_conversion_approval.py", "create_media_package"),
     ("tests/integration/test_format_conversion_approval.py", "test_tenant"),
     ("tests/integration/test_format_conversion_approval.py", "test_currency_limit"),
     ("tests/integration/test_format_conversion_approval.py", "test_property_tag"),

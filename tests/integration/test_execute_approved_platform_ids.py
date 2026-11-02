@@ -49,7 +49,6 @@ def pending_media_buy_with_package(integration_db):
         AccountFactory,
         AgentAccountAccessFactory,
         MediaBuyFactory,
-        MediaPackageFactory,
         PricingOptionFactory,
         PrincipalFactory,
         ProductFactory,
@@ -110,24 +109,15 @@ def pending_media_buy_with_package(integration_db):
                 "brand": {"domain": "testbrand.com"},
                 "start_time": start.isoformat(),
                 "end_time": end.isoformat(),
+                # MediaBuyFactory writes each named package's row, as the pending writer does.
                 "packages": [
                     {
+                        "package_id": "pkg_001",
                         "product_id": "guaranteed_display",
-                        "pricing_option_id": "po_1",
+                        "pricing_option_id": "cpm_usd_fixed",
                         "budget": 5000.0,
                     }
                 ],
-            },
-        )
-
-        MediaPackageFactory(
-            media_buy=mb,
-            package_id="pkg_001",
-            package_config={
-                "product_id": "guaranteed_display",
-                "name": "Guaranteed Display Ads",
-                "budget": 5000.0,
-                "pricing_model": "cpm",
             },
         )
 
@@ -152,7 +142,6 @@ def pending_media_buy_with_two_packages(integration_db):
         AccountFactory,
         AgentAccountAccessFactory,
         MediaBuyFactory,
-        MediaPackageFactory,
         PricingOptionFactory,
         PrincipalFactory,
         ProductFactory,
@@ -206,30 +195,22 @@ def pending_media_buy_with_two_packages(integration_db):
                 "brand": {"domain": "testbrand.com"},
                 "start_time": start.isoformat(),
                 "end_time": end.isoformat(),
+                # MediaBuyFactory writes each named package's row, as the pending writer does.
                 "packages": [
                     {
+                        "package_id": "pkg_A",
                         "product_id": "guaranteed_display",
-                        "pricing_option_id": "po_1",
+                        "pricing_option_id": "cpm_usd_fixed",
                         "budget": 3000.0,
                     },
                     {
+                        "package_id": "pkg_B",
                         "product_id": "guaranteed_display",
-                        "pricing_option_id": "po_1",
+                        "pricing_option_id": "cpm_usd_fixed",
                         "budget": 2000.0,
                     },
                 ],
             },
-        )
-
-        MediaPackageFactory(
-            media_buy=mb,
-            package_id="pkg_A",
-            package_config={"product_id": "guaranteed_display", "name": "Package A", "budget": 3000.0},
-        )
-        MediaPackageFactory(
-            media_buy=mb,
-            package_id="pkg_B",
-            package_config={"product_id": "guaranteed_display", "name": "Package B", "budget": 2000.0},
         )
 
         yield {

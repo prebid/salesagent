@@ -19,7 +19,7 @@ import asyncio
 import uuid
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import MagicMock
 
 from src.adapters.base import AdapterCreateResult, ResponsePackage
@@ -32,6 +32,9 @@ from tests.harness._realize import realize_e2e
 from tests.harness.gam import GAM_CLIENT_PATCH, GamSellerMixin
 from tests.harness.peer_agent import PeerCreativeAgentMixin
 from tests.harness.transport import DeliverResult
+
+if TYPE_CHECKING:
+    from src.core.tools.media_buy_create import ApprovalResult
 
 # Sentinel for missing-key tests: pass idempotency_key=OMIT_IDEMPOTENCY_KEY to send a
 # request with NO key (the schema rejects it as "Field required" — AdCP 3.0.1).
@@ -416,6 +419,32 @@ class MediaBuyCreateEnv(GamSellerMixin, PeerCreativeAgentMixin, IntegrationEnv):
             response_model=make_active_cached_success(media_buy_id),
             payload_hash=payload_hash,
         )
+
+    def media_buys_awaiting_approval(self) -> list[Any]:
+        """The media buys of this env's tenant whose status is ``pending_approval``.
+
+        Read on the env's own session, so no unit of work commits and closes beside it.
+        """
+        from src.core.database.models import PersistedMediaBuyStatus
+        from src.core.database.repositories.media_buy import MediaBuyRepository
+
+        return MediaBuyRepository(self.get_session(), self._tenant_id).list_by_statuses(
+            [PersistedMediaBuyStatus.PENDING_APPROVAL]
+        )
+
+    def approve_pending_media_buy(self) -> ApprovalResult:
+        """Approve the one media buy of this env's tenant that awaits approval, as an Admin UI route does.
+
+        Every admin approval route calls ``execute_approved_media_buy``; ``run_approval`` is
+        the one spelling of that call in tests. Raises ``RuntimeError`` unless exactly one
+        buy awaits approval.
+        """
+        from tests.helpers.media_buy_approval import run_approval
+
+        pending = self.media_buys_awaiting_approval()
+        if len(pending) != 1:
+            raise RuntimeError(f"expected exactly one media buy awaiting approval; found {len(pending)}")
+        return run_approval(pending[0].media_buy_id, self._tenant_id)
 
     def _configure_mocks(self) -> None:
         """Set up happy-path defaults for external mocks."""

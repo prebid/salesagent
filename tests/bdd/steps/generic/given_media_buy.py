@@ -1582,18 +1582,28 @@ def given_minimum_spend_configuration(ctx: dict, config: str) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-def _set_daily_spend_cap(ctx: dict, *, cap: float | None, budget: float, flight_days: int = 10) -> None:
+def _set_daily_spend_cap(
+    ctx: dict, *, cap: float | None, budget: float, flight_days: int = 10, cpm: float | None = None
+) -> None:
     """Configure daily spend cap and package budget/flight duration.
 
     Sets CurrencyLimit.max_daily_package_spend (tenant-level cap) and adjusts
     the request package budget and flight dates to achieve the target daily spend.
 
     Daily spend = budget / max(flight_days, 1).
+
+    ``cpm`` reprices the scenario's default pricing option, for a row whose budget buys
+    more than a seller books at the default price (``given_daily_spend_boundary`` says
+    why). The row is edited in place, for the reason ``_set_minimums`` gives:
+    ``uq_pricing_options_option_id`` refuses a second cpm/USD/fixed option on the product.
     """
     env = ctx["env"]
     kwargs = _ensure_request_defaults(ctx)
 
     _set_flight_days(kwargs, flight_days)
+
+    if cpm is not None:
+        ctx["default_pricing_option"].rate = Decimal(str(cpm))
 
     # Set package budget
     if kwargs.get("packages"):
@@ -1638,36 +1648,37 @@ def given_daily_spend_boundary(ctx: dict, config: str) -> None:
     """Set up daily spend cap for boundary scenarios (BR-RULE-012).
 
     Boundary configs:
-    - daily=1000 cap=1000: at limit (budget=10000, 10-day flight)
-    - daily=1001 cap=1000: exceeds by 1 (budget=10010, 10-day flight)
-    - daily=9999 no-cap: no cap configured (check skipped)
+    - daily=1000 cap=1000: at limit (budget=2000, 2-day flight)
+    - daily=1001 cap=1000: exceeds by 1 (budget=2002, 2-day flight)
+    - daily=9999 no-cap: no cap configured (check skipped); budget=9999, 1-day flight, 10.00 CPM
     - 0-day-flight: start==end, production floors to 1 day
 
     THE DAILY RATE IS WHAT THESE ROWS VARY; THE TOTAL IS NOT FREE. A cap applies to
-    ``budget / flight_days``, so a row can reach any daily figure by raising the budget or by
-    shortening the flight -- but the TOTAL is what every downstream limit sees, and impressions
-    are derived from it (``budget / cpm * 1000``). The no-cap row reached daily=9999 the first
-    way, with a 99990 budget over ten days, and at the seeded $10 CPM that asks the seller for
-    9,999,000 impressions against the mock ad server's 1,000,000 goal ceiling (a real
-    GAM-style limit, ``mock_ad_server.py``). The live server refused it --
-    ``packages[0].impressions``, rejected_value 9999000 -- and the row failed on e2e_rest while
-    passing on the three transports that mock the adapter and so never reach that check. Its
-    sibling at 10000 survives by exactly one impression: 1,000,000 is not ``> 1000000``.
-    Reaching the same daily figure by shortening the flight keeps the row's meaning and stops
-    it asking for inventory no seller would sell.
+    ``budget / flight_days``, so a row can reach a daily figure by raising the budget or by
+    shortening the flight, but the total is what every downstream limit sees. A package's
+    volume is its own budget at its pricing option's unit price (``package_volume``:
+    ``budget * 1000 / price``), and the mock ad server refuses a package above 1,000,000
+    impressions (``mock_ad_server.py``, the kind of goal ceiling GAM has). The three
+    transports that stand in the adapter never reach that check; e2e_rest books through the
+    live mock and does. At the scenario product's 5.00 CPM the ceiling is a 5000 budget, so
+    a row that must be accepted reaches its daily figure over a short flight: 2000 over two
+    days is 400,000 impressions. That keeps the row's meaning and stops it asking for
+    inventory no seller would sell.
     """
     config = config.strip()
 
     if config == "daily=1000 cap=1000":
-        _set_daily_spend_cap(ctx, cap=1000.0, budget=10000.0)
+        _set_daily_spend_cap(ctx, cap=1000.0, budget=2000.0, flight_days=2)
 
     elif config == "daily=1001 cap=1000":
-        _set_daily_spend_cap(ctx, cap=1000.0, budget=10010.0)
+        _set_daily_spend_cap(ctx, cap=1000.0, budget=2002.0, flight_days=2)
 
     elif config == "daily=9999 no-cap":
         # daily = 9999/1 = 9999, which breaches every cap this outline uses, so the row still
-        # proves the check is SKIPPED rather than merely satisfied. 999,900 impressions.
-        _set_daily_spend_cap(ctx, cap=None, budget=9999.0, flight_days=1)
+        # proves the check is SKIPPED rather than merely satisfied. The flight cannot get
+        # shorter than one day, and 9999 at 5.00 is 1,999,800 impressions, so this row's
+        # product sells at a 10.00 CPM, where 9999 buys 999,900.
+        _set_daily_spend_cap(ctx, cap=None, budget=9999.0, flight_days=1, cpm=10.0)
 
     elif config == "0-day-flight":
         # 0-day flight: start==end, production floors flight_days to 1

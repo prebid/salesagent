@@ -119,7 +119,7 @@ from src.core.helpers.creative_helpers import (
     process_and_upload_package_creatives,
     unidentified_url_asset_reason,
 )
-from src.core.helpers.pricing_helpers import pricing_info_for
+from src.core.helpers.pricing_helpers import package_volume, pricing_info_for
 from src.core.logging_config import log_safe
 from src.core.resolved_identity import AccountIdentity, ResolvedIdentity, identity_of
 from src.core.schemas import (
@@ -1475,8 +1475,6 @@ def execute_approved_media_buy(
 
             # Reconstruct MediaPackage objects (what adapters expect) from database
             # We need to load Products to get name, delivery_type, format_ids, etc.
-            from sqlalchemy.orm import selectinload
-
             from src.core.database.models import Product as ProductModel
 
             packages: list[MediaPackage] = []
@@ -1494,12 +1492,8 @@ def execute_approved_media_buy(
                         logger.error(f"[APPROVAL] {error_msg}")
                         return ApprovalResult.failed(error_msg)
 
-                    # Load product to get name, delivery_type, format_ids, pricing
-                    stmt_product = (
-                        select(ProductModel)
-                        .filter_by(tenant_id=tenant_id, product_id=product_id)
-                        .options(selectinload(ProductModel.pricing_options))
-                    )
+                    # Load product to get name, delivery_type, format_ids
+                    stmt_product = select(ProductModel).filter_by(tenant_id=tenant_id, product_id=product_id)
                     product = session.scalars(stmt_product).first()
 
                     if not product:
@@ -1507,57 +1501,29 @@ def execute_approved_media_buy(
                         logger.error(f"[APPROVAL] {error_msg}")
                         return ApprovalResult.failed(error_msg)
 
-                    # Get budget from package_config (budget is always float | None)
-                    budget_data = package_config.get("budget")
-                    if isinstance(budget_data, dict):
-                        # Legacy dict format (Budget object) - extract total
-                        total_budget = float(budget_data.get("total", 0.0))
-                        budget = total_budget  # MediaPackage expects float
-                    elif isinstance(budget_data, (int, float)):
-                        # format - flat number
-                        total_budget = float(budget_data)
-                        budget = total_budget  # MediaPackage expects float
-                    else:
-                        total_budget = 0.0
-                        budget = None
+                    # The package's own budget (the typed column both package writers fill)
+                    # at the unit price of the pricing option it selected (the pricing_info
+                    # stored when the request was validated): the rule the create path
+                    # applies, so an approved buy books what an auto-approved one would.
+                    #
+                    # Only a create reads that volume. A buy the ad server already holds
+                    # (stored_order_id above) runs none, so it needs neither the plan nor
+                    # the terms for one, and its carrier's zeros reach no adapter.
+                    budget = float(db_pkg.budget) if db_pkg.budget is not None else None
+                    cpm, impressions = 0.0, 0
+                    if not stored_order_id:
+                        if budget is None:
+                            error_msg = f"Package {package_id} missing budget"
+                            logger.error(f"[APPROVAL] {error_msg}")
+                            return ApprovalResult.failed(error_msg)
 
-                    # Get pricing option from product. ``product`` here is the ProductModel
-                    # ORM row loaded above, so these are PricingOption ROWS -- which is why
-                    # ``.rate`` below resolves (it is a column). A row has no ``root``
-                    # attribute, so the ``getattr(po, "root", po)`` hop this replaced always
-                    # fell through to its own default.
-                    pricing_option_inner = None
-                    if product.pricing_options:
-                        # Try to match pricing_model from package_config if present
-                        pkg_pricing_model = package_config.get("pricing_model")
-                        if pkg_pricing_model:
-                            for po in product.pricing_options:
-                                if po.pricing_model == pkg_pricing_model:
-                                    pricing_option_inner = po
-                                    break
-                        if not pricing_option_inner:
-                            # Fall back to first pricing option
-                            pricing_option_inner = product.pricing_options[0]
-
-                    if not pricing_option_inner:
-                        error_msg = f"Product {product_id} has no pricing options"
-                        logger.error(f"[APPROVAL] {error_msg}")
-                        return ApprovalResult.failed(error_msg)
-
-                    # Calculate CPM and impressions (convert Decimal to float for math operations)
-                    cpm = float(pricing_option_inner.rate) if pricing_option_inner.rate else 0.0
-                    impressions = int(total_budget / cpm * 1000) if cpm > 0 else 0
-
-                    # Reconstruct package_pricing_info from package_config if available
-                    # This includes the bid_price for auction pricing
-                    pricing_info_from_config = package_config.get("pricing_info")
-                    if pricing_info_from_config and package_id:
-                        # Use the stored pricing_info which has the correct bid_price
-                        package_pricing_info[package_id] = pricing_info_from_config
-                    elif package_id:
-                        # Fallback for buys stored without pricing_info: the option's terms
-                        # with no bid_price, because the package that bid one is not on hand.
-                        package_pricing_info[package_id] = pricing_info_for(pricing_option_inner)
+                        pricing_info = package_config.get("pricing_info")
+                        if not pricing_info:
+                            error_msg = f"Package {package_id} missing pricing_info"
+                            logger.error(f"[APPROVAL] {error_msg}")
+                            return ApprovalResult.failed(error_msg)
+                        cpm, impressions = package_volume(budget, pricing_info)
+                        package_pricing_info[package_id] = pricing_info
 
                     # Get targeting_overlay from package_config if present
                     # Fallback to "targeting" key for data written before fix.
@@ -4028,47 +3994,17 @@ async def _create_media_buy_impl(
                 else:
                     format_ids_to_use = []
 
-            # Get CPM from pricing_options
-            cpm = 10.0  # Default
-            if pkg_product.pricing_options and len(pkg_product.pricing_options) > 0:
-                first_option = pkg_product.pricing_options[0]
-                # UNLIKE the ORM-row sites elsewhere in this module, ``pkg_product`` comes
-                # from ``get_product_catalog`` and so is the SCHEMA Product: these elements
-                # are union MEMBERS. Neither kind has a ``root``, so the
-                # ``getattr(first_option, "root", first_option)`` hop this replaced always
-                # fell through to its own default.
-                #
-                # Which is also why ``rate`` is dead HERE specifically: it is a column on the
-                # PricingOption row and a pre-V3 keyword no member of the V3 union declares,
-                # so against a schema Product this read can only yield None and the default
-                # above always wins. Left as-is on purpose: choosing which of fixed_price /
-                # floor_price a package's CPM should come from is a pricing-semantics change,
-                # not part of removing the RootModel hop that hid the deadness.
-                rate = getattr(first_option, "rate", None)
-                if rate:
-                    cpm = float(rate)
-
             # Generate permanent package ID (not product_id)
             package_id = f"pkg_{pkg_product.product_id}_{secrets.token_hex(4)}_{idx}"
 
-            # Get budget from matching request package if available
-            package_budget_value: float | None = None
-            if matching_package:
-                if matching_package.budget is not None:
-                    raw_budget = matching_package.budget
-                    # Normalize budget: MediaPackage expects float | None (ADCP 2.5.0)
-                    if raw_budget is not None:
-                        if isinstance(raw_budget, (int, float)):
-                            # ADCP 2.5.0 flat format: use as-is (float)
-                            package_budget_value = float(raw_budget)
-                        elif isinstance(raw_budget, dict):
-                            # Legacy dict format: extract total
-                            package_budget_value = float(raw_budget.get("total", 0.0))
-                        elif isinstance(raw_budget, BaseModel):
-                            # Budget object: extract total
-                            package_budget_value = float(raw_budget.total)
-                        else:
-                            package_budget_value = None
+            # The package's own budget at the unit price of the option it selected
+            # (validated above into package_pricing_info_by_index; a package whose product
+            # does not exist was refused before this loop). A seller-optimized package may
+            # omit its budget (media-buy/package-request.json), and books the buy's total.
+            unit_cost, volume = package_volume(
+                float(total_budget if pkg.budget is None else pkg.budget),
+                package_pricing_info_by_index[pkg_index],
+            )
 
             delivery_type_str = enum_value(pkg_product.delivery_type)
 
@@ -4081,8 +4017,8 @@ async def _create_media_buy_impl(
                     package_id=package_id,
                     name=pkg_product.name,
                     delivery_type=delivery_type_value,
-                    cpm=cpm,
-                    impressions=int(float(total_budget) / cpm * 1000),
+                    cpm=unit_cost,
+                    impressions=volume,
                     format_ids=cast(list[Any], format_ids_to_use),
                     # The selected declarations themselves, so an adapter reads the slot the
                     # seller recorded instead of re-deriving one from a deprecated name.
@@ -4092,7 +4028,7 @@ async def _create_media_buy_impl(
                     formats_to_provide=list(pkg_format_snapshots) or None,
                     targeting_overlay=(matching_package.targeting_overlay if matching_package else None),
                     product_id=pkg_product.product_id,  # Include product_id
-                    budget=package_budget_value,  # Include budget from request (now normalized)
+                    budget=pkg.budget,
                     # The create-time pause the buyer asked for, on its way to the ad
                     # server. ``bool(...)`` rather than a passthrough because the
                     # generated request field is ``bool | None`` while the pin types it

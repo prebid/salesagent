@@ -121,6 +121,7 @@ class GamSellerMixin:
         ad_unit_id: str = DEFAULT_GAM_AD_UNIT_ID,
         network_time_zone: str | None = None,
         network_fault: str | None = None,
+        implementation_config: Mapping[str, Any] | None = None,
     ) -> None:
         """Make this env's tenant a Google Ad Manager seller selling *products* on one ad unit.
 
@@ -145,6 +146,9 @@ class GamSellerMixin:
         client until this method makes the tenant a GAM seller. A later network answer a
         scenario needs is another keyword of this method passed to the same
         ``_configure_gam_client(...)`` call, so one call carries every answer a scenario states.
+
+        ``implementation_config`` is what the seller wrote over each product's generated GAM
+        configuration (``_sell_product_through_gam``): its keys replace the generated ones.
         """
         from tests.factories import GAMInventoryFactory
         from tests.utils.tenant_setup import onboard_gam
@@ -161,7 +165,7 @@ class GamSellerMixin:
         }
         GAMInventoryFactory(tenant=tenant, inventory_id=ad_unit_id)
         for product in products:
-            self._sell_product_through_gam(product, ad_unit_id)
+            self._sell_product_through_gam(product, ad_unit_id, implementation_config or {})
         self._commit_factory_data()
         self.sell_through_tenant_adapter()
 
@@ -248,7 +252,9 @@ class GamSellerMixin:
         )
         assert response.status_code == 200, f"approving creative {creative_id} answered {response.status_code}"
 
-    def _sell_product_through_gam(self, product: Any, ad_unit_id: str) -> None:
+    def _sell_product_through_gam(
+        self, product: Any, ad_unit_id: str, implementation_config: Mapping[str, Any]
+    ) -> None:
         """Configure *product* for GAM on one ad unit.
 
         * Its format is ``display_300x250_image`` from the reference catalog. The adapter
@@ -257,7 +263,8 @@ class GamSellerMixin:
           testing flag's ``reference_formats_only`` holds (#2255).
         * Its ``implementation_config`` is ``GAMProductConfigService.generate_default_config``
           for its delivery type and format, the generator the Admin UI's product form calls,
-          plus the ad unit.
+          plus the ad unit, with *implementation_config* (the keys the seller wrote by hand)
+          over both.
         """
         from src.core.format_cache import DEFAULT_AGENT_URL
         from src.services.gam_product_config_service import GAMProductConfigService
@@ -266,6 +273,7 @@ class GamSellerMixin:
         product.implementation_config = {
             **GAMProductConfigService.generate_default_config(product.delivery_type, ["display_300x250_image"]),
             "targeted_ad_unit_ids": [ad_unit_id],
+            **implementation_config,
         }
 
     def gam_objects_sent(self, service: str, method: str) -> list[Any]:

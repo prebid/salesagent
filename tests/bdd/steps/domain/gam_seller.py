@@ -16,11 +16,17 @@ send the request and read the buyer's wire response.
 local-gam-buy-readback.feature: the Givens build the seller's products and the buyer's packages,
 and state GAM's report per line item the stand-in network created (``serve_gam_report_rows``).
 The Then compares the delivery report with the ids create_media_buy returned.
+
+local-gam-line-item-goal.feature: the Givens build the seller's products and the buyer's
+packages, or a buy that awaits the seller's approval. The Thens read the line items the seller
+sent the stand-in network, and the approval's result.
 """
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from pytest_bdd import given, parsers, then, when
@@ -44,6 +50,7 @@ from tests.helpers.gam_client import gam_delivery_row
         r'"(?P<ad_unit_id>[^"]+)", and the buyer is its advertiser "(?P<advertiser_id>[^"]+)"'
         r'(?:, on a network (?:in time zone "(?P<network_time_zone>[^"]+)"'
         r'|that refuses to name its time zone with "(?P<network_fault>[^"]+)"))?'
+        r"(?:, with product settings '(?P<product_settings>[^']*)')?"
     )
 )
 def given_seller_sells_through_gam(
@@ -53,6 +60,7 @@ def given_seller_sells_through_gam(
     advertiser_id: str,
     network_time_zone: str | None,
     network_fault: str | None,
+    product_settings: str | None,
 ) -> None:
     """Onboard the env's tenant to GAM and sell every product the scenario built on one ad unit.
 
@@ -61,10 +69,13 @@ def given_seller_sells_through_gam(
     gets one here, with the default pricing option, so its booked buys are on a product the
     seller sells.
 
-    The optional clause states the GAM network's own time zone, or the ``ApiError`` reason
-    with which the network refuses to name it; without it the stand-in network keeps its
-    default zone. A scenario that needs another seller fact adds a clause to this sentence
-    rather than a second seller Given.
+    The optional network clause states the GAM network's own time zone, or the ``ApiError``
+    reason with which the network refuses to name it; without it the stand-in network keeps
+    its default zone. The optional
+    product-settings clause is a JSON object of ``implementation_config`` keys the seller
+    wrote over the generated GAM configuration of each product it sells. A scenario that
+    needs another seller fact adds a clause to this sentence rather than a second seller
+    Given.
     """
     from tests.bdd.steps.generic.given_media_buy import scenario_products
 
@@ -81,6 +92,7 @@ def given_seller_sells_through_gam(
         products=list(scenario_products(ctx).values()),
         network_time_zone=network_time_zone,
         network_fault=network_fault,
+        implementation_config=json.loads(product_settings) if product_settings is not None else None,
     )
 
 
@@ -99,8 +111,6 @@ def given_seller_products_with_pricing_options(ctx: dict, delivery: str, datatab
     product. This step does not make the tenant a GAM seller: the seller Given that follows
     it does.
     """
-    from decimal import Decimal
-
     env = ctx["env"]
     options: dict[str, list[dict[str, Any]]] = {}
     for row in table_rows(datatable):
@@ -449,6 +459,40 @@ def given_seller_ad_server_takes_no_creatives(ctx: dict, adapter_type: str) -> N
     ctx["env"]._commit_factory_data()
 
 
+@given("a media buy awaits the seller's approval with one package on the product, stored without its pricing_info")
+def given_pending_buy_without_pricing_info(ctx: dict) -> None:
+    """Persist a 14-day buy awaiting approval whose one package row has its budget and no ``pricing_info``.
+
+    The row a pending writer stored before it kept the terms of the selected option: the
+    request names the product's first option, and nothing on the row says which option the
+    package bought.
+    """
+    from tests.factories import MediaPackageFactory
+    from tests.helpers.media_buy_approval import pending_media_buy
+
+    package = {
+        "product_id": ctx["default_product"].product_id,
+        "budget": 420.0,
+        "pricing_option_id": ctx["default_pricing_option"].pricing_option_id,
+    }
+    media_buy = pending_media_buy(
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        package=package,
+        starts_in_days=1,
+        flight_days=14,
+        budget=Decimal("420"),
+    )
+    MediaPackageFactory(media_buy=media_buy, package_id="pkg_a", budget=Decimal("420"), package_config=package)
+    ctx["env"]._commit_factory_data()
+
+
+@when("the seller approves the media buy")
+def when_seller_approves_media_buy(ctx: dict) -> None:
+    """The seller approves the one buy awaiting approval, as every Admin UI approval route does."""
+    ctx["approval_result"] = ctx["env"].approve_pending_media_buy()
+
+
 def _orders_created(ctx: dict) -> list[Any]:
     """The orders the stand-in GAM network created, each carrying the id it assigned."""
     return ctx["env"].gam_objects_created("OrderService", "createOrders")
@@ -786,6 +830,69 @@ def then_one_line_item_geo_targeting(ctx: dict, targeted: str, excluded: str) ->
     assert line_items == [expected], (
         f"expected GAM to receive one line item geo-targeted {expected}; it received {line_items}"
     )
+
+
+#: The line item columns the booking Then compares, each read off the line item the seller sent.
+_LINE_ITEM_READERS = {
+    "lineItemType": lambda item: item["lineItemType"],
+    "priority": lambda item: item["priority"],
+    "costType": lambda item: item["costType"],
+    "costPerUnitMicros": lambda item: item["costPerUnit"]["microAmount"],
+    "goalType": lambda item: item["primaryGoal"]["goalType"],
+    "unitType": lambda item: item["primaryGoal"]["unitType"],
+    "units": lambda item: item["primaryGoal"]["units"],
+}
+
+#: The columns whose cells are integers in GAM's line item.
+_INTEGER_COLUMNS = frozenset({"priority", "costPerUnitMicros", "units"})
+
+
+@then("Google Ad Manager received these line items, in package order:")
+def then_line_items_in_package_order(ctx: dict, datatable: Any) -> None:
+    """The seller sent GAM exactly these line items, one per package in the request's order.
+
+    Columns: ``lineItemType | priority | costType | costPerUnitMicros | goalType | unitType |
+    units``; ``costPerUnitMicros`` is the ``microAmount`` of the line item's ``costPerUnit``,
+    the price GAM bills each unit (or, for CPD, each day) at. The whole list is compared, so
+    a missing, extra or reordered line item fails it. An integer column is compared with its
+    type, so a float goal (GAM's ``Goal.units`` is a long) fails it.
+    """
+    expected = [
+        {column: (int, int(cell)) if column in _INTEGER_COLUMNS else cell for column, cell in row.items()}
+        for row in table_rows(datatable)
+    ]
+    sent = [
+        {
+            column: (type(value), value) if column in _INTEGER_COLUMNS else value
+            for column, value in ((column, read(item)) for column, read in _LINE_ITEM_READERS.items())
+        }
+        for item in ctx["env"].gam_objects_sent("LineItemService", "createLineItems")
+    ]
+    assert sent == expected, (
+        f"expected GAM to receive line items {expected}; it received {sent} (approval: {ctx.get('approval_result')})"
+    )
+
+
+@then("the seller's approval books the media buy")
+def then_approval_books_media_buy(ctx: dict) -> None:
+    """The approval ran the adapter to the end, and no buy of the tenant awaits approval any longer."""
+    result = ctx["approval_result"]
+    assert result.ok, f"expected the seller's approval to book the media buy; it returned {result}"
+    pending = ctx["env"].media_buys_awaiting_approval()
+    assert pending == [], f"expected no media buy to await approval; {len(pending)} still do"
+
+
+@then("the seller's approval fails on the package's missing pricing_info, and the media buy still awaits approval")
+def then_approval_fails_on_missing_pricing_info(ctx: dict) -> None:
+    """The approval failed naming the missing ``pricing_info``, and left the buy awaiting approval."""
+    from src.core.tools.media_buy_create import ApprovalOutcome
+
+    result = ctx["approval_result"]
+    assert result.outcome is ApprovalOutcome.FAILED and "missing pricing_info" in (result.error_msg or ""), (
+        f"expected the approval to fail on the package's missing pricing_info; it returned {result}"
+    )
+    pending = ctx["env"].media_buys_awaiting_approval()
+    assert len(pending) == 1, f"expected the media buy to still await approval; {len(pending)} buys do"
 
 
 @then("Google Ad Manager received no order and no line item")
