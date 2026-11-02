@@ -8,7 +8,7 @@ requires-python = ">=3.12"
 dependencies = [
     "a2wsgi>=1.10.0",
     "adcp==6.6.0",  # exact pin — 6.6.0 (latest stable); bump WIP, see docs/adcp-spec-version.md
-    "fastmcp>=3.4.10,<3.5", # GHSA-7xgj-8392-5q4r (no 3.2.x fix); minor-capped because 3.3.0 broke Context/Middleware imports between minors
+    "fastmcp>=3.4.10,<4.2", # GHSA-7xgj-8392-5q4r (no 3.2.x fix); minor-capped because 3.3.0 broke Context/Middleware imports between minors
     "mcp>=1.30.0", # CVE-2026-59951 / GHSA-84m7-p3x7-pcfv; earlier CVE-2026-59950 / GHSA-vj7q-gjh5-988w
     "google-cloud-iam>=2.19.1",
     "rich>=13.7.1",
