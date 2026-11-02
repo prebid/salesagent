@@ -59,6 +59,11 @@ class RequestedPackage:
     format_ids_to_provide: list[LibraryFormatId] | None = None
 
 
+def stored_line_item_id(package: MediaPackage) -> str | None:
+    """The ad server line item a package row stores, None for a package not booked as one."""
+    return (package.package_config or {}).get("platform_line_item_id")
+
+
 class MediaBuyRepository:
     """Tenant-scoped data access for MediaBuy and MediaPackage.
 

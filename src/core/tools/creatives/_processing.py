@@ -775,6 +775,11 @@ def _update_existing_creative(
     # Full upsert semantics (replace all data, not merge)
     url = _extract_url_from_assets(creative)
     data = _build_creative_data(creative, url)
+    # The ad server's id for the creative is the seller's record, not the buyer's content: a
+    # re-sync keeps it, so the creative is not created in the ad server a second time. It is
+    # carried over here until it has a seller-owned home outside this document (#2430).
+    if "ad_server_creative_id" in (existing_creative.data or {}):
+        data["ad_server_creative_id"] = existing_creative.data["ad_server_creative_id"]
 
     # The buyer's own upsert values, COPIED out before the creative agent below can
     # back-fill any of them. From here on `data` is the persistence document only: it is

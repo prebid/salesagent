@@ -7382,6 +7382,11 @@ ENV_ROUTES: list[EnvRoute] = [
                 # Plus the scenarios named one by one, because the family tags do not
                 # partition along the wired boundary -- see _UC006_WIRED_SCENARIOS.
                 or bool(m & _UC006_WIRED_SCENARIOS)
+                # Every scenario of local-uc006-gam-assignment-trafficking.feature needs
+                # exactly this row: the sync chain on the tenant's own adapter. The row claims
+                # that feature's tag prefix once, so a new scenario joins it without editing
+                # this predicate.
+                or any(t.startswith("T-UC-006-local-gam-") for t in m)
             ),
         ),
         env_builder=_env("tests.harness.creative_sync.CreativeSyncEnv"),

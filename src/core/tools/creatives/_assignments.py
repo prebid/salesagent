@@ -8,7 +8,8 @@ from typing import Any
 from adcp.types import CreativeAssignment as LibraryCreativeAssignment
 
 from src.core.database.models import CreativeAssignment, PersistedMediaBuyStatus
-from src.core.database.repositories.creative import CreativeAssignmentRepository
+from src.core.database.repositories.creative import CLEARED_TO_SERVE, CreativeAssignmentRepository
+from src.core.database.repositories.media_buy import stored_line_item_id
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.errors.details import CreativeRefDetails, EntityRefDetails, ValidationDetails
 from src.core.exceptions import (
@@ -181,6 +182,8 @@ def _process_assignments(
     # assigned to: its whole creative set is graded for placement coverage once the
     # request's assignments are in place.
     packages_to_cover: dict[tuple[str, str], Any] = {}
+    # (creative_id, media_buy_id) -> the packages to traffic into the ad server once committed
+    ad_server_pushes: dict[tuple[str, str], list[str]] = {}
 
     # AdCP v3 spec defines assignments as list[{creative_id, package_id, weight?,
     # placement_ids?}]; normalise to {creative_id: {package_id: (weight, placement_ids)}}
@@ -424,6 +427,21 @@ def _process_assignments(
                     if actual_package_id is not None:
                         assignments_by_creative[creative_id].append(actual_package_id)
 
+                    # An approved creative assigned to a package booked as a line item is
+                    # trafficked now (#2381); the ad server answers whether it is already on
+                    # that line item. A creative under review is trafficked when the seller
+                    # approves it, on a buy in a status the approve route acts on (#1713); a
+                    # buy not yet booked, when it is executed. The buy-owner condition is
+                    # reporting only: the push refuses another principal's buy by itself, and
+                    # this keeps such an assignment in assigned_to (#2417's current behavior)
+                    # instead of assignment_errors. It goes when #2417 scopes the package lookup.
+                    if (
+                        creative_row.status in CLEARED_TO_SERVE
+                        and db_media_buy.principal_id == principal_id
+                        and stored_line_item_id(db_package)
+                    ):
+                        ad_server_pushes.setdefault((creative_id, media_buy_id), []).append(actual_package_id)
+
             # core/product.json format_options: "the selected creative set MUST cover every
             # included placement; uncovered inventory MUST be rejected or refined, never
             # silently omitted". Asked of each package's WHOLE set -- the creatives already
@@ -441,6 +459,45 @@ def _process_assignments(
                     uow.media_buys.update_status(mb_id, PersistedMediaBuyStatus.PENDING_CREATIVES)
                     logger.info(f"[SYNC_CREATIVES] Media buy {mb_id} transitioned from draft to pending_creatives")
                 advance_past_pending_creatives(uow.media_buys, assignment_repo, mb_id)
+
+            if ad_server_pushes:
+
+                def _traffic_assignments() -> None:
+                    """Push each committed assignment to the ad server, after this unit has closed.
+
+                    sync-creatives-response.json @ 3.1.1: ``assigned_to`` lists the packages a
+                    creative was "successfully assigned to", so a package the ad server did not
+                    take moves to ``assignment_errors``. A dry_run rolls back and never gets here.
+                    """
+                    from src.core.helpers.adapter_helpers import get_adapter_class_for_tenant
+                    from src.core.tools.media_buy_create import push_creative_to_existing_buy
+
+                    if not get_adapter_class_for_tenant(tenant).capabilities.supports_creative_trafficking:
+                        return
+                    for (creative_id, media_buy_id), package_ids in ad_server_pushes.items():
+                        # When update_media_buy is the caller (inline creatives), this unit is its
+                        # unit joined, so this runs once that unit has committed and closed.
+                        # structural-guard: nested-unit-of-work - after_commit runs this once the unit that committed has closed
+                        ok, err = push_creative_to_existing_buy(
+                            creative_id=creative_id,
+                            media_buy_id=media_buy_id,
+                            tenant_id=tenant.tenant_id,
+                            package_ids=package_ids,
+                        )
+                        if ok:
+                            continue
+                        logger.error(
+                            log_safe(f"Creative {creative_id} not trafficked to media buy {media_buy_id}: {err}")
+                        )
+                        # The assignment rows stay: the buyer's re-send is pushed again.
+                        for package_id in package_ids:
+                            assignments_by_creative[creative_id].remove(package_id)
+                            assignment_errors_by_creative[creative_id][package_id] = (
+                                f"The ad server did not accept creative {creative_id} for package {package_id}"
+                            )
+
+                assert uow.creatives is not None
+                uow.creatives.after_commit(_traffic_assignments, label="assignment_ad_server_push")
 
             # An owned UoW commits on clean exit; a caller-supplied one is the
             # caller's to dispose of (rolled back under dry_run).

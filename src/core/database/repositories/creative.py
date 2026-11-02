@@ -39,9 +39,11 @@ logger = logging.getLogger(__name__)
 #: enums/creative-status.json is where the value lives.
 ARCHIVED_STATUS = CreativeStatus.archived.value
 
-#: Creative statuses a buy can serve. ``approved`` is read off the pinned enum
-#: (enums/creative-status.json: "eligible for delivery"). ``active`` is not a pinned creative
-#: status and no writer in src/ sets it; it is kept so the approval gate's answer is unchanged.
+#: The statuses of a creative cleared to serve: what the approval gate requires, what a created
+#: buy's status reads, what the sync trafficking gate admits and what the push to the ad server
+#: accepts. ``approved`` is read off the pinned enum (enums/creative-status.json: "eligible for
+#: delivery"). ``active`` is not a pinned creative status and no writer in src/ sets it; it is
+#: kept so the approval gate's answer is unchanged.
 CLEARED_TO_SERVE = frozenset({CreativeStatus.approved.value, "active"})
 
 

@@ -17,17 +17,8 @@ Two stand-ins, one network:
 ``serve_gam_report`` configures a ``stub_gam_client``'s ``ReportService`` to run one report
 job, and returns the report body Google's report host serves (``gam_report_csv_dump``).
 
-The adapter has no dry-run mode: every read and write it makes is a GAM call. It used
-to fabricate its own test data when ``dry_run`` was set — ``_get_line_item_info``
-returned a line item map naming "mock_package" / "package_1" / "test_package" with
-invented ``creativePlaceholders`` — so the creative-size check compared a test's
-creative against sizes production itself made up.
-
-That branch is STILL PRESENT in ``src/adapters/gam/managers/creatives.py`` (the ``else``
-of ``if line_item_service:``); only the ``dry_run`` half of its guard was removed, and
-GH #2245 tracks deleting it. It is unreachable — ``add_creative_assets`` always passes
-the service it just asked the client manager for — so nothing here may depend on it: a
-test that needs a line item states one.
+The adapter has no dry-run mode: every read and write it makes is a GAM call, so a test
+that needs a line item states one.
 """
 
 from __future__ import annotations
@@ -102,7 +93,9 @@ def stub_gam_client(
       ``network_fault``, an ``ApiError`` reason such as ``"QuotaError.EXCEEDED_QUOTA"``, it
       refuses instead, raising what googleads raises for a SOAP fault: a
       ``GoogleAdsServerFault`` carrying GAM's ``[<reason> @ ]`` text.
-    * ``LineItemService.getLineItemsByStatement`` answers ``line_items``.
+    * ``LineItemService.getLineItemsByStatement`` answers the line items the network holds,
+      read at call time: ``client.line_items`` (seeded from ``line_items``; a test adds held
+      line items there), then the line items it created.
     * ``OrderService.performOrderAction`` answers ``numChanges: 1``, so the adapter's
       in-request approval takes its success branch (``approve_order``).
     * The ``create*`` methods in ``GAM_CREATE_METHODS`` answer each sent object with a copy
@@ -113,12 +106,13 @@ def stub_gam_client(
       objects are not mutated. GAM keys a line item creative association by its line item
       and creative and gives it no id; the id this stand-in adds to one is its own, and
       nothing should read it.
+    * ``LineItemCreativeAssociationService.getLineItemCreativeAssociationsByStatement``
+      answers the associations the network created, read at call time.
 
     Ceilings:
 
-    * ``getLineItemsByStatement`` answers the configured line items; it does not evaluate
-      PQL against what was created. A test that needs GAM to read back a line item states
-      it with ``line_items=``.
+    * ``getLineItemsByStatement`` and ``getLineItemCreativeAssociationsByStatement`` answer
+      every line item and every association the network holds; they do not evaluate PQL.
     * A test must not drive the adapter's background approval path
       (``google_ad_manager.py`` starts it when the in-request approval fails): its daemon
       thread polls for minutes and can construct a client after the test has released the
@@ -127,6 +121,8 @@ def stub_gam_client(
     """
     ids = itertools.count(9000001)
     created: dict[tuple[str, str], list[SoapObject]] = {}
+    client = MagicMock()
+    client.line_items = list(line_items)
 
     def _creates(service: str, method: str) -> Callable[..., list[SoapObject]]:
         def _answer(objects: list[Any], *_args: Any, **_kwargs: Any) -> list[SoapObject]:
@@ -138,7 +134,11 @@ def stub_gam_client(
 
     services: dict[str, MagicMock] = {
         "LineItemService": MagicMock(
-            getLineItemsByStatement=MagicMock(return_value=SoapObject(results=list(line_items)))
+            getLineItemsByStatement=MagicMock(
+                side_effect=lambda *_args: SoapObject(
+                    results=[*client.line_items, *created.get(("LineItemService", "createLineItems"), [])]
+                )
+            )
         ),
         "OrderService": MagicMock(performOrderAction=MagicMock(return_value=SoapObject(numChanges=1))),
         "NetworkService": MagicMock(
@@ -152,8 +152,13 @@ def stub_gam_client(
     }
     for service, method in GAM_CREATE_METHODS:
         setattr(services.setdefault(service, MagicMock()), method, MagicMock(side_effect=_creates(service, method)))
+    lica = "LineItemCreativeAssociationService"
+    services[lica].getLineItemCreativeAssociationsByStatement = MagicMock(
+        side_effect=lambda *_args: SoapObject(
+            results=list(created.get((lica, "createLineItemCreativeAssociations"), []))
+        )
+    )
 
-    client = MagicMock()
     client.GetService.side_effect = lambda name, *_args, **_kwargs: services.setdefault(name, MagicMock())
     client.created_objects = created
     return client

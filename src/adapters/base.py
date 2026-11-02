@@ -163,6 +163,9 @@ class AdapterCapabilities:
     supports_webhooks: bool = False  # Supports webhook notifications
     supports_realtime_reporting: bool = False  # Supports real-time delivery reporting
 
+    # Creatives: sync_creatives pushes an approved creative assigned to a booked package
+    supports_creative_trafficking: bool = False
+
 
 class BaseConnectionConfig(BaseModel):
     """Base schema for adapter connection configuration."""
