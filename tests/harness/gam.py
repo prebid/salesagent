@@ -21,6 +21,10 @@ GAM_CLIENT_PATCH: dict[str, str] = {
     "gam_client": "src.adapters.gam.client.ad_manager.AdManagerClient",
 }
 
+#: The trafficker and ad unit a GAM seller has when the scenario does not name them.
+DEFAULT_GAM_TRAFFICKER_ID = "2000001"
+DEFAULT_GAM_AD_UNIT_ID = "4000001"
+
 
 class GamSellerMixin:
     """Mixes a Google Ad Manager seller into an env: the setup, and readers of what GAM received.
@@ -63,10 +67,10 @@ class GamSellerMixin:
     def sell_through_gam(
         self,
         *,
-        trafficker_id: str,
         advertiser_id: str,
-        ad_unit_id: str,
         products: Iterable[Any],
+        trafficker_id: str = DEFAULT_GAM_TRAFFICKER_ID,
+        ad_unit_id: str = DEFAULT_GAM_AD_UNIT_ID,
         network_time_zone: str | None = None,
         network_fault: str | None = None,
     ) -> None:

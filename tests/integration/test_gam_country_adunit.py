@@ -11,6 +11,7 @@ import unittest.mock
 import pytest
 
 from src.adapters.gam_reporting_service import GAMReportingService
+from tests.helpers.gam_client import gam_report_csv_dump, serve_gam_report, stub_gam_client
 
 
 def mock_requests_get(url, **kwargs):
@@ -23,10 +24,6 @@ def mock_requests_get(url, **kwargs):
     and the seam raises on a non-2xx rather than handing back something to
     call raise_for_status() on.
     """
-    import csv
-    import gzip
-    import io
-
     # Generate mock CSV data with country and ad unit info
     rows = []
     countries = ["United States", "Canada", "United Kingdom", "Germany", "France"]
@@ -52,52 +49,17 @@ def mock_requests_get(url, **kwargs):
                 }
             )
 
-    # Create gzipped CSV data
-    csv_buffer = io.StringIO()
-    writer = csv.DictWriter(csv_buffer, fieldnames=rows[0].keys())
-    writer.writeheader()
-    writer.writerows(rows)
-
-    # Gzip the CSV data
-    gz_buffer = io.BytesIO()
-    with gzip.open(gz_buffer, "wt", newline="") as gz_file:
-        gz_file.write(csv_buffer.getvalue())
-
     # OutboundResult-shaped double: production reads result.content directly
     mock_result = unittest.mock.Mock()
-    mock_result.content = gz_buffer.getvalue()
+    mock_result.content = gam_report_csv_dump(rows)
     return mock_result
 
 
 def create_mock_gam_client():
-    """Create a mock GAM client for testing"""
-
-    class MockGAMClient:
-        def GetService(self, service_name):
-            if service_name == "ReportService":
-                return MockReportService()
-            elif service_name == "NetworkService":
-                return MockNetworkService()
-            return None
-
-    class MockNetworkService:
-        def getCurrentNetwork(self):
-            class Network:
-                timeZone = "America/New_York"
-
-            return Network()
-
-    class MockReportService:
-        def runReportJob(self, job):
-            return {"id": "test_report_123"}
-
-        def getReportJobStatus(self, job_id):
-            return "COMPLETED"
-
-        def getReportDownloadURL(self, job_id, format_type):
-            return "https://storage.googleapis.com/gam-reports/mock-report.csv.gz"
-
-    return MockGAMClient()
+    """Create a mock GAM client whose report job finishes"""
+    client = stub_gam_client()
+    serve_gam_report(client)
+    return client
 
 
 @pytest.mark.requires_db

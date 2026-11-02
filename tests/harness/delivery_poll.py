@@ -1,6 +1,8 @@
 """DeliveryPollEnv — integration test environment for _get_media_buy_delivery_impl.
 
-Patches: get_adapter ONLY (external ad server).
+Patches: get_adapter, and Google's GAM SOAP client and report download for a GAM seller.
+``report_through_gam`` (``GamSellerMixin.sell_through_gam``) turns the adapter patch into
+production's ``get_adapter``, so a GAM seller runs the real ``GoogleAdManager`` adapter.
 Real: MediaBuyUoW, _get_pricing_options (all hit real DB).
 
 Requires: integration_db fixture (creates test PostgreSQL DB).
@@ -19,7 +21,9 @@ Usage::
             assert response.aggregated_totals.impressions == 5000.0
 
 Available mocks via env.mock:
-    "adapter"    -- get_adapter mock (only external mock)
+    "adapter"             -- get_adapter mock
+    "gam_client"          -- Google's AdManagerClient (``stub_gam_client``)
+    "gam_report_download" -- the GAM report download from Google's report host
 """
 
 from __future__ import annotations
@@ -29,13 +33,16 @@ from typing import Any
 from src.core.schemas import AdapterGetMediaBuyDeliveryResponse, GetMediaBuyDeliveryResponse
 from tests.harness._base import IntegrationEnv
 from tests.harness._mixins import DeliveryPollMixin
+from tests.harness.gam import GAM_CLIENT_PATCH, GamSellerMixin
 from tests.harness.transport import DeliverResult
+from tests.helpers.gam_client import GAM_REPORT_DOWNLOAD_TARGET, serve_gam_report
 
 
-class DeliveryPollEnv(DeliveryPollMixin, IntegrationEnv):
+class DeliveryPollEnv(GamSellerMixin, DeliveryPollMixin, IntegrationEnv):
     """Integration test environment for _get_media_buy_delivery_impl.
 
-    Only mocks the adapter (external ad server). Everything else is real:
+    Only mocks the adapter (external ad server), or, for a GAM seller, Google's SOAP client
+    and report download under the real GoogleAdManager adapter. Everything else is real:
     - Real MediaBuyUoW -> real DB queries
     - The principal comes off the identity; nothing looks one up
     - Real _get_pricing_options -> real DB queries
@@ -68,6 +75,10 @@ class DeliveryPollEnv(DeliveryPollMixin, IntegrationEnv):
 
     EXTERNAL_PATCHES = {
         "adapter": "src.core.tools.media_buy_delivery.get_adapter",
+        **GAM_CLIENT_PATCH,
+        # Inert unless the tenant is a GAM seller. The egress gateway's own handling of this
+        # download is graded in test_vendor_egress.py.
+        "gam_report_download": GAM_REPORT_DOWNLOAD_TARGET,
     }
     REST_ENDPOINT = "/api/v1/media-buys/delivery"
 
@@ -77,6 +88,40 @@ class DeliveryPollEnv(DeliveryPollMixin, IntegrationEnv):
 
     def _configure_mocks(self) -> None:
         self._configure_adapter_mock()
+        self._configure_gam_client()
+
+    def report_through_gam(
+        self,
+        *,
+        advertiser_id: str,
+        impressions: int | None = None,
+        spend: float | None = None,
+        job_status: str = "COMPLETED",
+    ) -> None:
+        """Make the tenant a GAM seller whose network reports for the buyer's *advertiser_id*.
+
+        GAM's report job ends in *job_status*. When *impressions* and *spend* are given, the
+        finished report holds one row with them, keyed by GAM's own column names; spend is in
+        currency, and GAM reports revenue in micros. Without them the report has no rows: GAM
+        has reported nothing yet.
+        """
+        self.sell_through_gam(advertiser_id=advertiser_id, products=())
+        rows = []
+        if impressions is not None and spend is not None:
+            rows.append(
+                {
+                    "Dimension.DATE": "2025-01-15",
+                    "Dimension.ADVERTISER_ID": advertiser_id,
+                    "Dimension.ORDER_ID": "5000001",
+                    "Dimension.LINE_ITEM_ID": "6000001",
+                    "Column.AD_SERVER_IMPRESSIONS": impressions,
+                    "Column.AD_SERVER_CLICKS": 0,
+                    "Column.AD_SERVER_CPM_AND_CPC_REVENUE": round(spend * 1_000_000),
+                }
+            )
+        self.mock["gam_report_download"].return_value = serve_gam_report(
+            self.mock["gam_client"].return_value, rows=rows, job_status=job_status
+        )
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Convert kwargs to GetMediaBuyDeliveryBody shape for REST POST."""

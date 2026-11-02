@@ -35,7 +35,7 @@ from adcp.types.domains.media_buy.get_media_buy_delivery_response import (
 # The legacy arm from the module that contains only it — see the note in ``_base.py``.
 from adcp.types.legacy import LegacyGetCreativeDeliveryResponse as LibraryGetCreativeDeliveryResponse
 from adcp.types.legacy import LegacyGetMediaBuyDeliveryResponse as LibraryGetMediaBuyDeliveryResponse
-from pydantic import ConfigDict, Field
+from pydantic import AwareDatetime, ConfigDict, Field
 
 from src.core.config import get_pydantic_extra_mode
 from src.core.schemas._base import BuyerRequest, NestedModelSerializerMixin, SalesAgentAdcpResponse, SalesAgentBaseModel
@@ -334,6 +334,9 @@ class AdapterGetMediaBuyDeliveryResponse(NestedModelSerializerMixin, SalesAgentB
     by_package: list[AdapterPackageDelivery]
     currency: str
     daily_breakdown: list[dict] | None = None  # Optional day-by-day delivery metrics
+    # Set when the ad server has not finished reporting the period: when its figures are
+    # expected complete. totals/by_package are what it has reported so far.
+    expected_availability: AwareDatetime | None = None
 
 
 # ---------------------------------------------------------------------------

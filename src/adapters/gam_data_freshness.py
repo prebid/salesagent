@@ -149,37 +149,3 @@ class GAMDataFreshnessValidator:
 
         # For other reasons, retry in 1 hour
         return (True, now + timedelta(hours=1))
-
-
-def validate_and_log_freshness(
-    reporting_data,
-    media_buy_id: str,
-    target_date: datetime | None = None,
-) -> bool:
-    """Validate data freshness and log the result.
-
-    Convenience function for use in webhook scheduler.
-
-    Args:
-        reporting_data: ReportingData from GAMReportingService
-        media_buy_id: Media buy ID for logging context
-        target_date: Date we want data for
-
-    Returns:
-        True if data is fresh enough to send
-    """
-    validator = GAMDataFreshnessValidator()
-    is_fresh, reason = validator.is_data_fresh_for_webhook(reporting_data, target_date)
-
-    if is_fresh:
-        logger.info(f"Data is fresh for media buy {media_buy_id}: {reason}")
-        return True
-    else:
-        logger.warning(f"Data not fresh for media buy {media_buy_id}: {reason}")
-
-        # Check if we should retry
-        should_retry, retry_at = validator.should_retry_later(reporting_data, target_date or datetime.now(UTC))
-        if should_retry and retry_at:
-            logger.info(f"Will retry media buy {media_buy_id} at {retry_at}")
-
-        return False
