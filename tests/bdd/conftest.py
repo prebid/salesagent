@@ -74,6 +74,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc002_v31_request",
     "tests.bdd.steps.domain.uc002_v31_proposal_targeting",
     "tests.bdd.steps.domain.uc002_invariants",
+    "tests.bdd.steps.domain.gam_seller",
     "tests.bdd.steps.domain.uc003_update_media_buy",
     "tests.bdd.steps.domain.uc003_ext_error_scenarios",
     "tests.bdd.steps.domain.uc003_storyboard_generic_client",
@@ -7161,6 +7162,11 @@ ENV_ROUTES: list[EnvRoute] = [
                 # the record is with the _UC002_VALIDATION_XFAIL block.
                 or "T-UC-002-partition-creative-asset" in m
                 or "T-UC-002-boundary-creative-asset" in m
+                # Every scenario of local-gam-seller.feature needs exactly this row: the
+                # create chain, and dispatch_mode="create" so the shared When dispatches the
+                # request the Givens built. The row claims that feature's tag prefix once, so
+                # a new GAM scenario joins it without editing this predicate.
+                or any(t.startswith("T-UC-002-local-gam-") for t in m)
             ),
         ),
         env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),

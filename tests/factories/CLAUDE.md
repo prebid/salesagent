@@ -32,7 +32,8 @@ Some state is only true when several rows agree: an `Account` plus its `AgentAcc
 join, because resolution is access-scoped; a tenant plus a principal plus a credential whose
 hash matches; the rows a setup gate grades. Those live in one helper —
 [tests/helpers/account_seeding.py](../helpers) for the account pair,
-[tests/utils/tenant_setup.py](../utils) for the checklist rows and `seed_gam_tenant` — and
+[tests/utils/tenant_setup.py](../utils) for the checklist rows, `seed_gam_tenant` and the GAM
+onboarding rows (`onboard_gam`) — and
 every suite calls the same one. Ten hand-rolled copies of a pair, each with its own
 signature, is how one of them comes to seed the row without the join.
 

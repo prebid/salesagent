@@ -1,7 +1,10 @@
 """MediaBuyCreateEnv — integration test environment for _create_media_buy_impl.
 
-Patches: adapter, audit logger, slack notifier, context manager.
+Patches: adapter, audit logger, slack notifier, context manager, Google's GAM SOAP client.
 Real: get_db_session, MediaBuyRepository, all validation (all hit real DB).
+``GamSellerMixin.sell_through_gam`` (``tests/harness/gam.py``) turns the adapter patch into
+production's ``get_adapter``, so a GAM seller runs the real ``GoogleAdManager`` adapter over
+the stand-in SOAP client.
 
 Requires: integration_db fixture.
 
@@ -22,6 +25,7 @@ from src.core.schemas._base import CreateMediaBuyResult
 from tests.factories.mint import mint
 from tests.harness._base import IntegrationEnv, json_safe
 from tests.harness._realize import realize_e2e
+from tests.harness.gam import GAM_CLIENT_PATCH, GamSellerMixin
 from tests.harness.peer_agent import PeerCreativeAgentMixin
 from tests.harness.transport import DeliverResult
 
@@ -175,7 +179,7 @@ def _restore_creative_ids(req: CreateMediaBuyRequest, flat: dict[str, Any]) -> N
             flat_pkgs[i]["creative_ids"] = cids
 
 
-class MediaBuyCreateEnv(PeerCreativeAgentMixin, IntegrationEnv):
+class MediaBuyCreateEnv(GamSellerMixin, PeerCreativeAgentMixin, IntegrationEnv):
     """Integration test environment for _create_media_buy_impl.
 
     Mocks external services (adapter, audit, slack, context manager).
@@ -192,6 +196,7 @@ class MediaBuyCreateEnv(PeerCreativeAgentMixin, IntegrationEnv):
         "slack": "src.core.tools.media_buy_create.get_slack_notifier",
         "context_mgr": "src.core.tools.media_buy_create.get_context_manager",
         "format_spec": "src.core.tools.media_buy_create._get_format_spec_sync",
+        **GAM_CLIENT_PATCH,
     }
     REST_ENDPOINT = "/api/v1/media-buys"
 
@@ -482,6 +487,8 @@ class MediaBuyCreateEnv(PeerCreativeAgentMixin, IntegrationEnv):
         # The replay and adapter-rejection paths return before a WorkflowStep is
         # linked to a media buy, so no real ObjectWorkflowMapping FK row is needed.
         self.mock["context_mgr"].return_value = self._build_mock_context_manager(tool_name="create_media_buy")
+
+        self._configure_gam_client()
 
         # Setup checklist: pass by default
 
