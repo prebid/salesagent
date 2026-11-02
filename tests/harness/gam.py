@@ -2,16 +2,23 @@
 
 ``GamSellerMixin.sell_through_gam`` makes the env's tenant a GAM seller: from then on the
 tool's adapter is production's ``GoogleAdManager``, built from the seeded rows, and the only
-stand-in under it is Google's SOAP client (``stub_gam_client``).
+stand-in under it is Google's SOAP client (``stub_gam_client``). ``sell_through_tenant_adapter``
+is the step it ends in, on its own: for a scenario that needs the tenant's real adapter
+without making the tenant a GAM seller.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any
 
 from tests.harness._realize import e2e_unsupported, realize_e2e
-from tests.helpers.gam_client import STAND_IN_NETWORK_TIME_ZONE, stub_gam_client
+from tests.helpers.gam_client import (
+    GAM_REPORT_DOWNLOAD_TARGET,
+    STAND_IN_NETWORK_TIME_ZONE,
+    serve_gam_report,
+    stub_gam_client,
+)
 
 if TYPE_CHECKING:
     from unittest.mock import MagicMock
@@ -19,11 +26,19 @@ if TYPE_CHECKING:
 GAM_CLIENT_PATCH: dict[str, str] = {
     # Google's SOAP client on googleads' module, where GAMClientManager constructs it.
     "gam_client": "src.adapters.gam.client.ad_manager.AdManagerClient",
+    # The download of a finished GAM report from Google's report host. Inert unless the
+    # tenant is a GAM seller. The egress gateway's own handling of this download is graded
+    # in test_vendor_egress.py.
+    "gam_report_download": GAM_REPORT_DOWNLOAD_TARGET,
 }
 
 #: The trafficker and ad unit a GAM seller has when the scenario does not name them.
 DEFAULT_GAM_TRAFFICKER_ID = "2000001"
 DEFAULT_GAM_AD_UNIT_ID = "4000001"
+
+
+def _live_server_builds_its_own_adapter(self: Any) -> None:
+    """The live server has no adapter patch: it builds every tenant's adapter with ``get_adapter``."""
 
 
 class GamSellerMixin:
@@ -50,13 +65,41 @@ class GamSellerMixin:
 
         def _commit_factory_data(self) -> None: ...
 
-    def _configure_gam_client(self) -> None:
+    def _configure_gam_client(self, **network_answers: Any) -> None:
         """Every ``AdManagerClient(...)`` built during the scenario is the same stand-in client.
 
         The adapter's, a health check's, the approval and sync services': one scenario has
-        one GAM network.
+        one GAM network. A seller whose scenario states no report reads a finished, empty one.
+        *network_answers* are ``stub_gam_client``'s keywords.
         """
-        self.mock["gam_client"].return_value = stub_gam_client()
+        self.mock["gam_client"].return_value = stub_gam_client(**network_answers)
+        self.serve_gam_report_rows(())
+
+    def serve_gam_report_rows(self, rows: Iterable[Mapping[str, object]], *, job_status: str = "COMPLETED") -> None:
+        """GAM's report job ends in *job_status*, and the finished report holds *rows*.
+
+        Rows are keyed by GAM's own column names (``Dimension.*``, ``Column.*``), as
+        ``serve_gam_report`` writes them.
+        """
+        self.mock["gam_report_download"].return_value = serve_gam_report(
+            self.mock["gam_client"].return_value, rows=list(rows), job_status=job_status
+        )
+
+    @realize_e2e(_live_server_builds_its_own_adapter)
+    def sell_through_tenant_adapter(self) -> None:
+        """From here on the tool's adapter is production's, built by ``get_adapter`` from the tenant's rows.
+
+        For the harness tenant that is the real Mock adapter (``MockAdServer``), which is
+        what the live server runs for it, so the in-process transports run the adapter code
+        e2e does. ``sell_through_gam`` ends here after making the tenant a GAM seller.
+
+        Ceiling: once this runs, a Given that configures the ``MagicMock`` adapter
+        (``self.mock["adapter"].return_value``, the adapter error and rejection injections)
+        does nothing, because the patch delegates to production.
+        """
+        from src.core.helpers.adapter_helpers import get_adapter
+
+        self.mock["adapter"].side_effect = get_adapter
 
     @realize_e2e(
         e2e_unsupported(
@@ -83,27 +126,26 @@ class GamSellerMixin:
         from those rows. Read what the seller sent GAM with ``gam_objects_sent`` and what GAM
         created with ``gam_objects_created``.
 
-        Ceiling: once this runs, a Given that configures the ``MagicMock`` adapter
-        (``self.mock["adapter"].return_value``, the adapter error and rejection injections)
-        does nothing, because the patch delegates to production. A GAM scenario states GAM's
-        answers through the stand-in client, and does not combine with those Givens.
+        Ceiling: the one ``sell_through_tenant_adapter`` states. A GAM scenario states GAM's
+        answers through the stand-in client, and does not combine with the Givens that
+        configure the ``MagicMock`` adapter.
 
         ``network_time_zone`` is the GAM network's own zone (``Network.timeZone``), and
         ``network_fault`` the ``ApiError`` reason with which the network refuses to name it
         (``stub_gam_client``). Given either, they replace the default stand-in network that
-        ``_configure_gam_client`` built; omitted, the default network
-        (``STAND_IN_NETWORK_TIME_ZONE``) stays. Either way the network is in place before any
-        client is constructed, because nothing builds a GAM client until this method makes the
-        tenant a GAM seller. A later network answer a scenario needs is another keyword of this
-        method passed to the same ``stub_gam_client(...)`` call, so one call carries every
-        answer a scenario states.
+        ``_configure_gam_client`` built, through ``_configure_gam_client``, so the replacement
+        also serves the finished, empty report; a report the scenario states comes after this
+        method. Omitted, the default network (``STAND_IN_NETWORK_TIME_ZONE``) stays. Either way
+        the network is in place before any client is constructed, because nothing builds a GAM
+        client until this method makes the tenant a GAM seller. A later network answer a
+        scenario needs is another keyword of this method passed to the same
+        ``_configure_gam_client(...)`` call, so one call carries every answer a scenario states.
         """
-        from src.core.helpers.adapter_helpers import get_adapter
         from tests.factories import GAMInventoryFactory
         from tests.utils.tenant_setup import onboard_gam
 
         if network_time_zone is not None or network_fault is not None:
-            self.mock["gam_client"].return_value = stub_gam_client(
+            self._configure_gam_client(
                 network_time_zone=network_time_zone or STAND_IN_NETWORK_TIME_ZONE, network_fault=network_fault
             )
         tenant, principal = self.setup_default_data()
@@ -116,7 +158,7 @@ class GamSellerMixin:
         for product in products:
             self._sell_product_through_gam(product, ad_unit_id)
         self._commit_factory_data()
-        self.mock["adapter"].side_effect = get_adapter
+        self.sell_through_tenant_adapter()
 
     def _sell_product_through_gam(self, product: Any, ad_unit_id: str) -> None:
         """Configure *product* for GAM on one ad unit.

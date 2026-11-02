@@ -198,6 +198,30 @@ def gam_report_csv_dump(rows: Sequence[Mapping[str, object]]) -> bytes:
     return gzip.compress(text.getvalue().encode())
 
 
+def gam_delivery_row(
+    *,
+    advertiser_id: str,
+    order_id: str,
+    line_item_id: str,
+    impressions: int,
+    spend: float,
+    date: str = "2025-01-15",
+) -> dict[str, object]:
+    """One row of a GAM delivery report, keyed by GAM's own column names.
+
+    *spend* is in currency; GAM reports revenue in micros, so the row carries it that way.
+    """
+    return {
+        "Dimension.DATE": date,
+        "Dimension.ADVERTISER_ID": advertiser_id,
+        "Dimension.ORDER_ID": order_id,
+        "Dimension.LINE_ITEM_ID": line_item_id,
+        "Column.AD_SERVER_IMPRESSIONS": impressions,
+        "Column.AD_SERVER_CLICKS": 0,
+        "Column.AD_SERVER_CPM_AND_CPC_REVENUE": round(spend * 1_000_000),
+    }
+
+
 def serve_gam_report(
     client: MagicMock,
     *,

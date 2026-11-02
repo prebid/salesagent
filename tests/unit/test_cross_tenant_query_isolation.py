@@ -312,18 +312,3 @@ class TestAdminDeliveryTenantIsolation:
 
     # NOTE: _get_media_buy_delivery_impl MediaPackage query is NOT tested here because
     # MediaPackage has no tenant_id column. Tenant isolation via media_buy_id FK is sufficient.
-
-    def test_get_pricing_options_scopes_by_tenant(self):
-        """ProductRepository.get_all_pricing_options PricingOption query must include tenant_id."""
-        selects = _extract_select_calls(
-            "src/core/database/repositories/product.py",
-            "get_all_pricing_options",
-        )
-
-        pricing_selects = [s for s in selects if s["model"] == "PricingOption"]
-        assert pricing_selects, "Expected at least one PricingOption select() call"
-
-        for s in pricing_selects:
-            assert s["has_tenant_filter"], (
-                f"PricingOption query at product.py:{s['lineno']} is missing tenant_id filter. "
-            )
