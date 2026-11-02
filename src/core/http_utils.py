@@ -155,6 +155,11 @@ def hostname_of(host: str) -> str:
     return urlsplit(f"//{host}").hostname or host
 
 
+def same_hostname(a: str, b: str) -> bool:
+    """Whether *a* and *b* name one host, whatever their case, port or trailing dot."""
+    return hostname_of(a).removesuffix(".") == hostname_of(b).removesuffix(".")
+
+
 def path_from_asgi_scope(scope: Mapping[str, Any]) -> str:
     """The request path with any ASGI ``root_path`` mount prefix stripped.
 

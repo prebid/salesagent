@@ -20,14 +20,15 @@ resolved once by the boundary and carried on the identity.
 """
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
 # Import existing tenant lookup functions from config_loader
 # This ensures all servers (MCP, Admin, A2A) use the same lookup logic
-from src.core.config_loader import get_tenant_by_virtual_host
+from src.core.config_loader import get_tenant_by_virtual_host, tenant_id_for
 from src.core.domain_config import get_sales_agent_domain, is_admin_domain
-from src.core.http_utils import requested_host
+from src.core.http_utils import requested_host, same_hostname
 
 # A DNS hostname: 1-253 characters of dot-separated labels, each 1-63 of [a-z0-9-] with no
 # leading or trailing hyphen. No port, no wildcard, no path. ``re.ASCII`` keeps IGNORECASE
@@ -51,6 +52,27 @@ class RoutingResult:
     type: Literal["custom_domain", "admin", "unknown"]
     tenant: dict | None
     effective_host: str
+
+
+def _route_host[T](
+    host: str, find_tenant: Callable[[str], T | None]
+) -> tuple[Literal["admin", "custom_domain"], T | None]:
+    """Which kind of host *host* is, and what *find_tenant* holds for it.
+
+    The caller says how much of the tenant it needs: the landing page hydrates the row, and the
+    on-demand TLS gate asks only whether one exists.
+    """
+    # Admin domain check - uses is_admin_domain() which validates against the
+    # configured admin domain. This prevents spoofing via malicious domains that
+    # start with 'admin.' but aren't our legitimate admin domain
+    # (e.g., admin.sales-agent.example.com is valid, admin.malicious.com is not)
+    if is_admin_domain(host):
+        return "admin", None
+
+    # ONE lookup: the host a tenant declares it is served at. Every host reaches it, under
+    # SALES_AGENT_DOMAIN or not — a branch on the domain would be a second derivation of
+    # the same fact.
+    return "custom_domain", find_tenant(host)
 
 
 def route_landing_page(request_headers: dict) -> RoutingResult:
@@ -98,21 +120,11 @@ def route_landing_page(request_headers: dict) -> RoutingResult:
     if not effective_host:
         return RoutingResult("unknown", None, "")
 
-    # Admin domain check - uses is_admin_domain() which validates against the
-    # configured admin domain. This prevents spoofing via malicious domains that
-    # start with 'admin.' but aren't our legitimate admin domain
-    # (e.g., admin.sales-agent.example.com is valid, admin.malicious.com is not)
-    if is_admin_domain(effective_host):
-        return RoutingResult("admin", None, effective_host)
-
-    # ONE lookup: the host a tenant declares it is served at. Every host reaches it, under
-    # SALES_AGENT_DOMAIN or not — a branch on the domain would be a second derivation of
-    # the same fact.
-    tenant = get_tenant_by_virtual_host(effective_host)
+    kind, tenant = _route_host(effective_host, get_tenant_by_virtual_host)
     # ``custom_domain`` even when no tenant matched: the caller distinguishes "a host asking
     # for a tenant we do not serve" (it can offer signup) from "no host at all" (the generic
     # fallback above). Which of those to show is the caller's decision, not this function's.
-    return RoutingResult("custom_domain", tenant, effective_host)
+    return RoutingResult(kind, tenant, effective_host)
 
 
 def normalize_hostname(host: str) -> str | None:
@@ -135,13 +147,15 @@ def is_served_host(host: str) -> bool:
     served at ``acme.<SALES_AGENT_DOMAIN>`` declares that as its ``virtual_host``.
 
     The endpoint asking this is unauthenticated, so a malformed host is refused before any
-    query; the rest cost one lookup on the unique ``virtual_host_name`` index.
+    query; the rest cost one lookup of one column on the unique ``virtual_host_name`` index.
+    A tenant is identified here, never loaded, so a stored secret that no longer decrypts
+    does not cost it its certificate.
     """
     normalized = normalize_hostname(host)
     if normalized is None:
         return False
-    # ``normalized`` is never empty, so an unset domain matches nothing here.
-    if normalized == (get_sales_agent_domain() or "").lower():
+    apex = get_sales_agent_domain()
+    if apex and same_hostname(normalized, apex):
         return True
-    routed = route_landing_page({"Host": normalized})
-    return routed.type == "admin" or routed.tenant is not None
+    kind, tenant_id = _route_host(normalized, lambda name: tenant_id_for(virtual_host=name))
+    return kind == "admin" or tenant_id is not None

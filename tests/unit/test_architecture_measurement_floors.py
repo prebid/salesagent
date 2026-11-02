@@ -80,6 +80,8 @@ EXPECTED_WIRED_ROUTES: frozenset[str] = frozenset(
         # through `env.fetch_agent_card` rather than `call_via`.
         "agentcard",
         "tenantid",
+        # The on-demand TLS gate is a root endpoint too, reached through `env.ask_tls_gate`.
+        "tlsask",
         # A publisher's adagents.json naming this agent, graded through the three admin
         # actions that read it. Pinned in the change that registered the route.
         "pubauth",
