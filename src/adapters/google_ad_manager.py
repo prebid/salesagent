@@ -34,7 +34,7 @@ from src.adapters.base import (
 )
 
 # Import modular components
-from src.adapters.gam.client import GAMClientManager
+from src.adapters.gam.client import GAMClientManager, current_network_time_zone
 from src.adapters.gam.managers import (
     GAMCreativesManager,
     GAMInventoryManager,
@@ -621,11 +621,13 @@ class GoogleAdManager(AdServerAdapter):
         # Calculate total budget from package budgets (AdCP v2.2.0)
         total_budget_amount = request.total_budget
 
+        # The flight is written in the network's own zone. Asked before the order exists, so a
+        # refused lookup leaves nothing behind in GAM.
+        flight_time_zone = current_network_time_zone(self.client_manager.get_client())
+
         order_id = self.orders_manager.create_order(
             order_name=order_name,
             total_budget=total_budget_amount,
-            start_time=start_time,
-            end_time=end_time,
             currency=order_currency,
         )
 
@@ -669,6 +671,7 @@ class GoogleAdManager(AdServerAdapter):
                 packages=packages,
                 start_time=start_time,
                 end_time=end_time,
+                network_time_zone=flight_time_zone,
                 products_map=products_map,
                 log_func=self.log,
                 tenant_id=self.tenant_id,

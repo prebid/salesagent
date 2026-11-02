@@ -34,6 +34,8 @@ from collections.abc import Callable
 from typing import Any
 from unittest.mock import MagicMock
 
+from googleads.errors import GoogleAdsServerFault
+
 
 class SoapObject(dict):
     """A GAM (Zeep) object stand-in: production reads these by key AND by attribute."""
@@ -68,13 +70,30 @@ GAM_CREATE_METHODS: frozenset[tuple[str, str]] = frozenset(
 )
 
 
-def stub_gam_client(*, line_items: tuple[SoapObject, ...] | list[SoapObject] = ()) -> MagicMock:
+#: The stand-in network's time zone when a test states none. Neither UTC nor America/New_York,
+#: so a test that does not state a zone cannot pass by matching a hard-coded label or an
+#: unconverted UTC wall clock.
+STAND_IN_NETWORK_TIME_ZONE = "America/Los_Angeles"
+
+
+def stub_gam_client(
+    *,
+    line_items: tuple[SoapObject, ...] | list[SoapObject] = (),
+    network_time_zone: str = STAND_IN_NETWORK_TIME_ZONE,
+    network_fault: str | None = None,
+) -> MagicMock:
     """An ``AdManagerClient`` stand-in: one recorded GAM network.
 
     ``GetService(name)`` returns the same stand-in for a name for the life of the client,
     so a call on a service nobody configured is still recorded on it and readable
     afterwards. Configured answers:
 
+    * ``NetworkService.getCurrentNetwork`` answers a network whose ``timeZone`` is
+      ``network_time_zone``. Any other network field raises ``AttributeError``, so a new
+      reader of the network record fails loudly instead of reading a ``MagicMock``. Given
+      ``network_fault``, an ``ApiError`` reason such as ``"QuotaError.EXCEEDED_QUOTA"``, it
+      refuses instead, raising what googleads raises for a SOAP fault: a
+      ``GoogleAdsServerFault`` carrying GAM's ``[<reason> @ ]`` text.
     * ``LineItemService.getLineItemsByStatement`` answers ``line_items``.
     * ``OrderService.performOrderAction`` answers ``numChanges: 1``, so the adapter's
       in-request approval takes its success branch (``approve_order``).
@@ -114,6 +133,14 @@ def stub_gam_client(*, line_items: tuple[SoapObject, ...] | list[SoapObject] = (
             getLineItemsByStatement=MagicMock(return_value=SoapObject(results=list(line_items)))
         ),
         "OrderService": MagicMock(performOrderAction=MagicMock(return_value=SoapObject(numChanges=1))),
+        "NetworkService": MagicMock(
+            getCurrentNetwork=MagicMock(
+                return_value=SoapObject(timeZone=network_time_zone),
+                side_effect=None
+                if network_fault is None
+                else GoogleAdsServerFault(None, message=f"[{network_fault} @ ]"),
+            )
+        ),
     }
     for service, method in GAM_CREATE_METHODS:
         setattr(services.setdefault(service, MagicMock()), method, MagicMock(side_effect=_creates(service, method)))
