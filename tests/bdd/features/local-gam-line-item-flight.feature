@@ -3,7 +3,7 @@
 # LOCALLY-ADDED (survives BR-*.feature regeneration).
 #
 # What it grades: the flight a Google Ad Manager seller writes on the line item it books for a
-# buyer's create_media_buy. AdCP 3.1.1 create_media_buy.mdx (request table) defines start_time
+# buyer's create_media_buy. AdCP 3.2.7 create_media_buy.mdx (request table) defines start_time
 # as "asap" or an ISO 8601 date-time and end_time as an ISO 8601 date-time, "UTC unless timezone
 # specified"; core/start-timing.json defines "asap" as "Start campaign as soon as possible".
 # Both name absolute instants, so the line item must serve exactly those instants.
@@ -30,10 +30,10 @@
 # Transports: a2a, mcp and rest. The live server has no stand-in GAM network, so the setup
 # declares itself unrealizable on e2e (GamSellerMixin.sell_through_gam).
 #
-# @source repo=adcp ref=v3.1.1 path=docs/media-buy/task-reference/create_media_buy.mdx
-# @source repo=adcp ref=v3.1.1 path=static/schemas/source/core/start-timing.json
-# @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/specialisms/sales-non-guaranteed/index.yaml pointer=/phases/create_buy
-# @source repo=adcp ref=v3.1.1 path=static/schemas/source/enums/error-code.json
+# @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/create_media_buy.mdx
+# @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/start-timing.json
+# @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/specialisms/sales-non-guaranteed/index.yaml pointer=/phases/create_buy
+# @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json
 Feature: A Google Ad Manager seller books the buyer's flight in the network's time zone (local)
 
   @T-UC-002-local-gam-flight @extension

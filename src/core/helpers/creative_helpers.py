@@ -866,7 +866,7 @@ def _media_asset_candidates(
 def extract_html_markup(creative_data: dict[str, Any]) -> str | None:
     """The ``content`` of the creative's ``html`` asset, or ``None`` when it has none.
 
-    AdCP 3.1.1 core/assets/html-asset.json: an html asset is discriminated by
+    AdCP 3.2.7 core/assets/html-asset.json: an html asset is discriminated by
     ``asset_type: "html"`` and carries its markup in ``content``.
     """
     for asset in (creative_data.get("assets") or {}).values():

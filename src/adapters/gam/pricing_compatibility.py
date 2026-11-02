@@ -126,7 +126,7 @@ class PricingCompatibility:
         options its configured type cannot book. And a share-of-voice type takes only a
         DAILY goal of a percentage of impressions: that bounds a flat-rate package, whose
         price is fixed, but not a CPM, vCPM or CPC package, whose budget would reach GAM in
-        no form (AdCP 3.1.1 pricing-models.mdx: the budget is the buyer's cost).
+        no form (AdCP 3.2.7 pricing-models.mdx: the budget is the buyer's cost).
 
         Args:
             pricing_model: AdCP pricing model (cpm, vcpm, cpc, flat_rate)

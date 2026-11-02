@@ -2161,10 +2161,10 @@ Feature: BR-UC-003 Update Media Buy
     # LOCALLY-ADDED beside the generated targeting-overlay outlines, whose
     # `the result should be <outcome>` grades only the code and the suggestion.
     # Inclusion fields combine with AND (docs/reference/migration/geo-targeting.mdx at
-    # v3.1.1); an overlay whose inclusion fields have no place in common can never
-    # deliver, and it is refused on update as on create (BR-UC-002
-    # @T-UC-002-ext-f-geo-disjoint), with each field and code in details.problems
-    # (field, rejected_value).
+    # v3.2.7); an overlay whose inclusion fields have no place in common can never
+    # deliver. The pin does not state this case. It is refused on update as on create
+    # (BR-UC-002 @T-UC-002-ext-f-geo-disjoint), with each field and code in
+    # details.problems (field, rejected_value).
 
   @T-UC-003-partition-start-time @partition @start_time
   Scenario Outline: Start time partition validation - <partition>

@@ -346,10 +346,13 @@ Feature: BR-UC-002 Create Media Buy
       | region outside country | {"geo_countries": ["CA"], "geo_regions": ["US-NY"]}                                     | [{"field": "geo_regions", "rejected_value": "US-NY"}] |
       | DMA outside country    | {"geo_countries": ["CA"], "geo_metros": [{"system": "nielsen_dma", "values": ["501"]}]} | [{"field": "geo_metros", "rejected_value": "501"}]    |
     # LOCALLY-ADDED beside the generated ext-f-geo. Inclusion fields combine with AND
-    # (docs/reference/migration/geo-targeting.mdx at v3.1.1); an overlay whose inclusion
-    # fields have no place in common can never deliver. The spec is silent on this case;
-    # it is refused like the same-value overlap above (targeting.mdx, Exclusion
-    # Semantics), with each field and code in details.problems (field, rejected_value).
+    # (docs/reference/migration/geo-targeting.mdx at v3.2.7); an overlay whose inclusion
+    # fields have no place in common can never deliver. The pin does not state this case:
+    # the same-value overlap above (targeting.mdx, Exclusion Semantics) covers one value in
+    # an inclusion and an exclusion, and targeting.mdx's "A supported create-time selection
+    # with no executable inventory produces `PRODUCT_UNAVAILABLE`" names another code. It is
+    # refused like the overlap, with each field and code in details.problems (field,
+    # rejected_value).
     # --- ext-g: Creative Validation Failure ---
 
   @T-UC-002-ext-g @extension @ext-g @error @post-f1 @post-f2 @post-f3

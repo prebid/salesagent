@@ -3,11 +3,11 @@
 # LOCALLY-ADDED (survives BR-*.feature regeneration).
 #
 # What it grades: a buyer's get_media_buy_delivery for a buy a Google Ad Manager seller
-# booked, while GAM has not finished reporting the period. AdCP 3.1.1
-# get_media_buy_delivery.mdx line 15: "If delivery data for a buy is genuinely unavailable
+# booked, while GAM has not finished reporting the period. AdCP 3.2.7
+# get_media_buy_delivery.mdx line 19: "If delivery data for a buy is genuinely unavailable
 # (e.g., the ad server has not yet reported a flight), the seller returns the buy in
-# `media_buy_deliveries` with zero or partial metrics; the seller does not omit it". Line 67
-# and line 609 scope `reporting_delayed` to webhook context, and
+# `media_buy_deliveries` with zero or partial metrics; the seller does not omit it". Line 148
+# and line 659 scope `reporting_delayed` to webhook context, and
 # get-media-buy-delivery-response.json defines `expected_availability` as "only present when
 # status is reporting_delayed", so a buyer's pull carries the buy's lifecycle status and no
 # `expected_availability`. The same schema's `errors` holds "reporting platform issues", so a
@@ -22,8 +22,8 @@
 # Transports: a2a, mcp and rest. The live server has no stand-in GAM network, so the setup
 # declares itself unrealizable on e2e (GamSellerMixin.sell_through_gam).
 #
-# @source repo=adcp ref=v3.1.1 path=docs/media-buy/task-reference/get_media_buy_delivery.mdx
-# @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/protocols/media-buy/scenarios/delivery_reporting.yaml pointer=/phases/simulate_and_verify
+# @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/get_media_buy_delivery.mdx
+# @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/protocols/media-buy/scenarios/delivery_reporting.yaml pointer=/phases/simulate_and_verify
 Feature: get_media_buy_delivery reports a Google Ad Manager buy while GAM has not finalised the period (local)
 
   # The requests name no dates, so their window ends now: a period GAM has not finalised.
@@ -55,4 +55,4 @@ Feature: get_media_buy_delivery reports a Google Ad Manager buy while GAM has no
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-001"]
     Then the response is compliant with the get_media_buy_delivery spec
     And the response errors include code "SERVICE_UNAVAILABLE" for media buy "mb-001"
-    # Whether the buy is also returned in media_buy_deliveries with zero metrics (line 15) is #2404.
+    # Whether the buy is also returned in media_buy_deliveries with zero metrics (line 19) is #2404.

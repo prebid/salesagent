@@ -1242,7 +1242,7 @@ def _build_adapter_asset_from_creative(
         "name": creative.name or f"Creative {creative.creative_id}",
     }
     if markup:
-        # An html asset is delivered as its markup (AdCP 3.1.1 core/assets/html-asset.json,
+        # An html asset is delivered as its markup (AdCP 3.2.7 core/assets/html-asset.json,
         # ``content``), never as the URL of a page that renders it.
         asset.update(snippet=markup, snippet_type="html")
     else:

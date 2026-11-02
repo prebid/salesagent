@@ -5,14 +5,15 @@
 # What it grades: the type, priority and goal of each line item a Google Ad Manager seller
 # books for a buyer's create_media_buy, on the create path and on the seller's approval.
 #
-# AdCP 3.1.1 create_media_buy.mdx, Package Object: every package carries its own
-# `pricing_option_id` ("Pricing option ID from product's pricing_options array") and its own
-# `budget` ("Budget in currency specified by pricing option"), and an auction package its
-# `bid_price`. pricing-models.mdx: CPM is the "Cost per 1,000 impressions", and "Budgets are
-# always denominated at the fixed_price level ... that €10,000 is the buyer's cost". So a
-# per-unit package's volume is its own budget at its selected option's unit price, and a
-# flat-rate package is a "Fixed cost for the entire campaign period regardless of delivery
-# volume".
+# AdCP 3.2.7 create_media_buy.mdx, Package Object: every package carries its own
+# `pricing_option_id` ("Pricing option ID from product's `pricing_options` array") and its own
+# `budget` ("Hard lifetime package spend cap in the media-buy currency"), and an auction package
+# its bid, in `bidding` or the deprecated `bid_price` ("During 3.2, sellers accept either
+# canonical `bidding` or one legacy representation on an effective package").
+# pricing-models.mdx: CPM is the "Cost per 1,000 impressions", and "Budgets are always
+# denominated at the `fixed_price` level ... that €10,000 is the buyer's cost". So a per-unit
+# package's volume is its own budget at its selected option's unit price, and a flat-rate
+# package is a "Fixed cost for the entire campaign period regardless of delivery volume".
 #
 # Google Ad Manager API (LineItem.priority, Goal.goalType, Goal.units): a line item books its
 # type's default priority (SPONSORSHIP 4; STANDARD 8; NETWORK, BULK and PRICE_PRIORITY 12;
@@ -23,16 +24,20 @@
 # vCPM. The line item is billed at the selected option's unit price (LineItem.costType and
 # costPerUnit); a flat-rate price is billed per day (CPD) over the flight's days.
 #
-# The sales-guaranteed storyboard's create_media_buy step sends two packages with different
-# budgets and validates only the response schema, so these scenarios grade the booking
-# in-process: the real GoogleAdManager adapter runs, and only Google's SOAP client is stood in.
+# The sales-non-guaranteed storyboard's create_media_buy step sends two packages with different
+# budgets and checks the response schema, `packages[0].package_id`, `media_buy_status` and
+# `upstream_traffic`. The sales-guaranteed storyboard's step sends one package and grades the
+# submitted task. Neither reads a line item's type, priority or goal, so these scenarios grade
+# the booking in-process: the real GoogleAdManager adapter runs, and only Google's SOAP client
+# is stood in.
 #
 # Transports: a2a, mcp and rest. The live server has no stand-in GAM network, so the setup
 # declares itself unrealizable on e2e (GamSellerMixin.sell_through_gam).
 #
-# @source repo=adcp ref=v3.1.1 path=docs/media-buy/task-reference/create_media_buy.mdx
-# @source repo=adcp ref=v3.1.1 path=docs/media-buy/advanced-topics/pricing-models.mdx
-# @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/specialisms/sales-guaranteed/index.yaml pointer=/phases/create_buy
+# @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/create_media_buy.mdx
+# @source repo=adcp ref=v3.2.7 path=docs/media-buy/advanced-topics/pricing-models.mdx
+# @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/specialisms/sales-non-guaranteed/index.yaml pointer=/phases/create_buy
+# @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/specialisms/sales-guaranteed/index.yaml pointer=/phases/create_buy_submitted
 Feature: A Google Ad Manager seller books each package's own volume, type, priority and goal (local)
 
   @T-UC-002-local-gam-goal-per-package @extension

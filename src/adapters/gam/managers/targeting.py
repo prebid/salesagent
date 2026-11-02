@@ -691,7 +691,7 @@ class GAMTargetingManager:
 
         Every code of all six fields is mapped first, so a code GAM has no location for is
         refused even where the AND would drop it. Inclusion fields AND
-        (docs/reference/migration/geo-targeting.mdx at v3.1.1) and GAM ORs one location
+        (docs/reference/migration/geo-targeting.mdx at v3.2.7) and GAM ORs one location
         list, so ``targetedLocations`` is the finest inclusion field present, cut to the
         listed countries by the core ``geo_inclusion_cut``. Exclusions AND NOT, which is
         what GAM's ``excludedLocations`` does with any listed location.

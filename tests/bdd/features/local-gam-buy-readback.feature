@@ -3,25 +3,29 @@
 # LOCALLY-ADDED (survives BR-*.feature regeneration).
 #
 # What it grades: get_media_buy_delivery for a buy a Google Ad Manager seller just created.
-# AdCP 3.1.1 media-buy/get-media-buy-delivery-response.json: `by_package[].package_id` is the
+# AdCP 3.2.7 media-buy/get-media-buy-delivery-response.json: `by_package[].package_id` is the
 # "Seller's package identifier", the one create_media_buy returned in `packages[].package_id`;
-# `by_package[].rate` is, for fixed-rate pricing, "the agreed rate". pricing-options/cpm-option.json:
-# `pricing_option_id` is "Unique identifier for this pricing option within the product", so two
-# products may each have an option with the same id at different rates. A GAM package's delivery
-# is its line item's: GAM's report rows carry the line item id.
+# `by_package[].rate` is, for fixed-rate pricing, "the agreed currency-denominated unit rate".
+# pricing-options/cpm-option.json: `pricing_option_id` is "Unique identifier for this pricing
+# option within the product", so two products may each have an option with the same id at
+# different rates. A GAM package's delivery is its line item's: GAM's report rows carry the line
+# item id.
 #
-# The delivery_reporting storyboard's get_delivery step checks the response schema and the
-# presence of `media_buy_deliveries`; no storyboard step correlates `by_package[].package_id`
-# with the create response or grades per-package figures. These scenarios grade that, with
-# the real GoogleAdManager adapter and only Google's SOAP client and report download stood in.
-# The buyer observes the outcome on the get_media_buy_delivery response.
+# The delivery_reporting storyboard's get_delivery step checks the response schema, the
+# presence of `media_buy_deliveries` and `totals.spend`, and that `by_package[*].package_id`
+# contains both packages the create returned (DR-0001). It runs against the Mock adapter and
+# reads no package's figures, and no storyboard reads `by_package[].rate`. These scenarios grade
+# the ids and the figures for a GAM seller, with the real GoogleAdManager adapter and only
+# Google's SOAP client and report download stood in. The buyer observes the outcome on the
+# get_media_buy_delivery response.
 #
 # Transports: a2a, mcp and rest. The live server has no stand-in GAM network, so the setup
 # declares itself unrealizable on e2e (GamSellerMixin.sell_through_gam).
 #
-# @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/media-buy/get-media-buy-delivery-response.json
-# @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/pricing-options/cpm-option.json pointer=/properties/pricing_option_id
-# @source repo=adcp ref=v3.1.1 path=docs/media-buy/task-reference/get_media_buy_delivery.mdx
+# @source repo=adcp ref=v3.2.7 path=dist/schemas/3.2.7/media-buy/get-media-buy-delivery-response.json
+# @source repo=adcp ref=v3.2.7 path=dist/schemas/3.2.7/pricing-options/cpm-option.json pointer=/properties/pricing_option_id
+# @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/get_media_buy_delivery.mdx
+# @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/protocols/media-buy/scenarios/delivery_reporting.yaml pointer=/phases/simulate_and_verify
 Feature: get_media_buy_delivery reports each package of a Google Ad Manager buy as created (local)
 
   Background:

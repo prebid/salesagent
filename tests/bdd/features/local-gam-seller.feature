@@ -3,7 +3,7 @@
 # LOCALLY-ADDED (survives BR-*.feature regeneration).
 #
 # What it grades: the objects a Google Ad Manager seller sends its ad server when a buyer's
-# create_media_buy succeeds. AdCP 3.1.1 create_media_buy.mdx requires a seller to return
+# create_media_buy succeeds. AdCP 3.2.7 create_media_buy.mdx requires a seller to return
 # synchronous success with a seller-issued media_buy_id when every product is
 # non_guaranteed. The sales-non-guaranteed storyboard's create_media_buy step carries the
 # `upstream_traffic` check ("a real non-guaranteed buy creates line items / orders /
@@ -18,8 +18,8 @@
 # Transports: a2a, mcp and rest. The live server has no stand-in GAM network, so the
 # setup declares itself unrealizable on e2e (GamSellerMixin.sell_through_gam).
 #
-# @source repo=adcp ref=v3.1.1 path=docs/media-buy/task-reference/create_media_buy.mdx
-# @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/specialisms/sales-non-guaranteed/index.yaml pointer=/phases/create_buy
+# @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/create_media_buy.mdx
+# @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/specialisms/sales-non-guaranteed/index.yaml pointer=/phases/create_buy
 Feature: A Google Ad Manager seller books the buyer's media buy in Google Ad Manager (local)
 
   @T-UC-002-local-gam-order @extension

@@ -4,24 +4,45 @@
 #
 # What it grades: the geo targeting a Google Ad Manager seller books on the line item for a
 # package's targeting_overlay, and the geo codes and systems the seller refuses before it
-# creates anything in GAM. AdCP 3.1.1:
+# creates anything in GAM. AdCP 3.2.7:
 # - core/targeting.json: each geo field "Restrict[s] delivery" to the listed places, so a
-#   code dropped on the way to the ad server widens the buy;
+#   code dropped on the way to the ad server widens the buy. On geo_regions: "At create or
+#   update, sellers MUST reject unsupported identifiers and MUST NOT silently widen, drop, or
+#   partially apply the list";
 # - docs/reference/migration/geo-targeting.mdx: "Inclusion fields are combined with AND
 #   logic"; exclusion fields "act as AND NOT";
-# - docs/media-buy/advanced-topics/targeting.mdx (Exclusion Semantics, Capabilities) and
-#   docs/protocol/get_adcp_capabilities.mdx: a seller "MUST return a validation error for
-#   unsupported fields rather than silently ignoring them"; targeting.mdx: "Not all
-#   geographic granularities are supported by all publishers";
+# - docs/media-buy/advanced-topics/targeting.mdx (Exclusion Semantics, Capabilities): "If a
+#   seller does not support a requested direction, it MUST return a validation error rather
+#   than silently ignore the field"; docs/protocol/get_adcp_capabilities.mdx states the same
+#   for a seller that "only supports one direction"; targeting.mdx: "Not all geographic
+#   granularities are supported by all publishers";
+# - targeting.mdx (geo_regions): "At create or update, unsupported dimensions, countries, or
+#   values outside Product `overlay_support` produce `UNSUPPORTED_FEATURE`";
 # - docs/building/by-layer/L3/error-handling.mdx (Server-narrowed public elements): a value
-#   the public schema accepts and this seller cannot place is UNSUPPORTED_FEATURE.
-# An overlay whose inclusion fields share no place is refused INVALID_REQUEST
-# (details.problems) before any adapter runs. The spec is silent on that case; it is the same
-# class as targeting.mdx's same-value overlap ("Sellers SHOULD reject ... and return a
-# descriptive error"), graded for every adapter by BR-UC-002 @T-UC-002-ext-f-geo-disjoint
-# and BR-UC-003 @T-UC-003-ext-geo-disjoint.
+#   the public schema accepts and this seller rejects on its private state is
+#   `POLICY_VIOLATION` or `UNSUPPORTED_FEATURE`, never `VALIDATION_ERROR` against the public
+#   schema.
 #
-# Ungraded by the 3.1.1 storyboards: no file under dist/compliance/3.1.1/ names a geo field.
+# A seller can state the regions it sells: core/geo-region-support.json lists exact values per
+# country, and targeting.mdx says "A seller that cannot honor every protocol-valid value MUST
+# return structured country/value Product support instead". This seller declares
+# `geo_regions: true`, which targeting.mdx calls "a coarse, informative rollup", refuses the
+# regions outside its geo data, and carries no `overlay_support` on any product, so a buyer
+# cannot read those refusals from a declaration.
+#
+# An overlay whose inclusion fields share no place is refused INVALID_REQUEST
+# (details.problems) before any adapter runs. The pin does not state that case. Its nearest
+# clauses are targeting.mdx's same-value overlap ("Sellers SHOULD reject ... and return a
+# descriptive error"), which covers one value in an inclusion and an exclusion, and "A
+# supported create-time selection with no executable inventory produces
+# `PRODUCT_UNAVAILABLE`", which names another code. Graded for every adapter by BR-UC-002
+# @T-UC-002-ext-f-geo-disjoint and BR-UC-003 @T-UC-003-ext-geo-disjoint.
+#
+# Storyboards at the pin do grade regions: dist/compliance/3.2.7/domains/media-buy/scenarios/
+# geo_region_targeting.yaml, geo_region_all_values_support.yaml and
+# geo_region_exclusion_support.yaml. Each requires a structured declaration (for example
+# media_buy.execution.targeting.geo_regions.countries.FR.values), so none applies to a seller
+# declaring `geo_regions: true`, and none observes a GAM line item.
 #
 # The expected ids are the scenario's literals, never read from the seller's data files.
 # Country and region ids are rows of Google's published geo target file
@@ -31,11 +52,13 @@
 # Transports: a2a, mcp and rest. The live server has no stand-in GAM network, so the
 # setup declares itself unrealizable on e2e (GamSellerMixin.sell_through_gam).
 #
-# @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/targeting.json
-# @source repo=adcp ref=v3.1.1 path=docs/reference/migration/geo-targeting.mdx
-# @source repo=adcp ref=v3.1.1 path=docs/media-buy/advanced-topics/targeting.mdx
-# @source repo=adcp ref=v3.1.1 path=docs/protocol/get_adcp_capabilities.mdx
-# @source repo=adcp ref=v3.1.1 path=docs/building/by-layer/L3/error-handling.mdx
+# @source repo=adcp ref=v3.2.7 path=dist/schemas/3.2.7/core/targeting.json
+# @source repo=adcp ref=v3.2.7 path=dist/schemas/3.2.7/core/geo-region-support.json
+# @source repo=adcp ref=v3.2.7 path=docs/reference/migration/geo-targeting.mdx
+# @source repo=adcp ref=v3.2.7 path=docs/media-buy/advanced-topics/targeting.mdx
+# @source repo=adcp ref=v3.2.7 path=docs/protocol/get_adcp_capabilities.mdx
+# @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L3/error-handling.mdx
+# @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/domains/media-buy/scenarios/geo_region_targeting.yaml
 Feature: A Google Ad Manager seller books exactly the geo the buyer's targeting overlay names (local)
 
   @T-UC-002-local-gam-geo-booked @extension

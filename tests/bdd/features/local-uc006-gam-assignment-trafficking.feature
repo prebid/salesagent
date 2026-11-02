@@ -7,13 +7,13 @@
 # approval of the creative, once; and an assignment GAM cannot take is reported as an
 # assignment error. local-gam-seller.feature grades a buy booked at create.
 #
-# AdCP 3.1.1:
+# AdCP 3.2.7:
 # - creative/sync-creatives-response.json: assigned_to lists "Package IDs this creative was
 #   successfully assigned to"; assignment_errors holds "Assignment errors by package ID".
 # - docs/creative/task-reference/sync_creatives.mdx: "Assignments are at the request level,
 #   mapping creative IDs to package IDs. Standalone creative agents that do not manage media
-#   buys ignore this field" (a sales agent acts on them); dry_run previews changes "without
-#   applying them".
+#   buys ignore this field" (a sales agent acts on them); dry_run is "rehearse this exact sync
+#   operation without applying it".
 # - core/assets/html-asset.json: "Inline HTML content asset", the markup in `content`. GAM
 #   serves markup as a ThirdPartyCreative's `snippet`.
 # Ungraded by the storyboard runner.
@@ -22,8 +22,8 @@
 # client. The live server has no stand-in GAM network, so the setup declares itself
 # unrealizable on e2e (GamSellerMixin.sell_through_gam).
 #
-# @source repo=adcp ref=v3.1.1 path=docs/creative/task-reference/sync_creatives.mdx
-# @source repo=adcp ref=v3.1.1 path=static/schemas/source/creative/sync-creatives-response.json
+# @source repo=adcp ref=v3.2.7 path=docs/creative/task-reference/sync_creatives.mdx
+# @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/sync-creatives-response.json
 Feature: UC-006 a Google Ad Manager seller traffics assigned creatives onto its booked line items (local)
 
   Background:

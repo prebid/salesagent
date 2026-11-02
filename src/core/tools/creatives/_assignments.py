@@ -465,7 +465,7 @@ def _process_assignments(
                 def _traffic_assignments() -> None:
                     """Push each committed assignment to the ad server, after this unit has closed.
 
-                    sync-creatives-response.json @ 3.1.1: ``assigned_to`` lists the packages a
+                    sync-creatives-response.json @ 3.2.7: ``assigned_to`` lists the packages a
                     creative was "successfully assigned to", so a package the ad server did not
                     take moves to ``assignment_errors``. A dry_run rolls back and never gets here.
                     """

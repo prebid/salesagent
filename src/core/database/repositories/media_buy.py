@@ -614,13 +614,13 @@ class MediaBuyRepository:
         buyer-visible and write-once, while a missing one is corrected by the next
         genuine commit.
 
-        Pinned contract: ``create-media-buy-response.json`` @ 3.1.1 branch0 types
+        Pinned contract: ``create-media-buy-response.json`` @ 3.2.7 branch0 types
         ``confirmed_at`` ["string","null"], lists it in ``required``, and describes it
-        as "the moment the seller committed... May be null in deferred or
-        manual-approval flows until seller commitment occurs" -- an event, in the
-        spec's own words. Its one hard constraint is that a null value forbids
-        ``status == "active"``, which holds: ACTIVE is only ever reached through a
-        writer that commits.
+        as "ISO 8601 timestamp when this media buy was committed by the seller... May
+        be null in deferred or manual-approval flows until seller commitment occurs" --
+        an event, in the spec's own words. Its constraint on the status is that a null
+        value forbids ``media_buy_status == "active"``, which holds: ACTIVE is only ever
+        reached through a writer that commits.
 
         Graded by @T-UC-002-v31-success-revision-and-actions (the auto-approval branch,
         which requires a timestamp) and by the approval-route integration tests (the

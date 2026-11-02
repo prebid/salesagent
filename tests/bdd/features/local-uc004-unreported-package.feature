@@ -3,26 +3,32 @@
 # LOCALLY-ADDED (survives BR-*.feature regeneration).
 #
 # What it grades: the terms get_media_buy_delivery prices each package of a buy at.
-# media-buy/get-media-buy-delivery-response.json: `by_package[].rate` is, for fixed-rate
-# pricing, "the agreed rate". pricing-options/cpc-option.json: `pricing_option_id` is unique
-# only within its product. So a package's clicks are priced at the rate agreed for that
-# package: not at its own product's option as the seller has since repriced it, and not at
-# another product's option that shares the id.
+# AdCP 3.2.7 media-buy/get-media-buy-delivery-response.json: `by_package[].rate` is, for
+# fixed-rate pricing, "the agreed currency-denominated unit rate".
+# pricing-options/cpc-option.json: `pricing_option_id` is unique only within its product. So a
+# package's clicks are priced at the rate agreed for that package: not at its own product's
+# option as the seller has since repriced it, and not at another product's option that shares
+# the id.
 #
 # A package stored without its terms has no agreed rate to report. The response schema
 # requires `pricing_model`, `rate` and `currency` on every `by_package` entry, so the seller
 # refuses the request with INTERNAL_ERROR, naming the package (#2130); it does not price the
-# package from the catalog's option under its id. The pin does not say whether the refusal
-# covers the whole request or only that buy; the last scenario asserts the request-wide
-# answer the seller gives today.
+# package from the catalog's option under its id. The pin names no code for this refusal:
+# enums/error-code.json has no INTERNAL_ERROR, and L3/error-handling.mdx says "The catalog has
+# no generic `INTERNAL_ERROR` code by design" and "sellers MAY return platform-specific codes".
+# The pin does not say whether the refusal covers the whole request or only that buy; the last
+# scenario asserts the request-wide answer the seller gives today.
 #
-# Ungraded by storyboard: delivery_reporting's get_delivery step validates the response
-# schema and the presence of `media_buy_deliveries`, not per-package figures.
+# Ungraded by storyboard: delivery_reporting's get_delivery step checks the response schema,
+# `media_buy_deliveries`, `totals.spend` and the package ids in `by_package`, and no storyboard
+# reads `by_package[].rate`.
 #
 # Transports: a2a, mcp, rest and e2e_rest.
 #
-# @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/media-buy/get-media-buy-delivery-response.json
-# @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/pricing-options/cpc-option.json pointer=/properties/pricing_option_id
+# @source repo=adcp ref=v3.2.7 path=dist/schemas/3.2.7/media-buy/get-media-buy-delivery-response.json
+# @source repo=adcp ref=v3.2.7 path=dist/schemas/3.2.7/pricing-options/cpc-option.json pointer=/properties/pricing_option_id
+# @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L3/error-handling.mdx
+# @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/protocols/media-buy/scenarios/delivery_reporting.yaml pointer=/phases/simulate_and_verify
 Feature: get_media_buy_delivery prices each package at the terms agreed for it (local)
 
   @T-UC-004-local-unreported-package-cpc-own-rate @extension
