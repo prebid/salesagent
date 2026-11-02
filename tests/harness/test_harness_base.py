@@ -499,11 +499,11 @@ class TestPartialEnterUnwind:
         Runs only in a ``finally``, after every observation has been captured
         into locals, so it can never mask the leak it exists to clean up. It is
         here because a RED run of these tests genuinely leaks a live TLS server
-        thread, a settings patch and an environment variable into the rest of the session.
+        thread, a settings patch and two environment variables into the rest of the session.
         """
         from contextlib import suppress
 
-        for name in ("_fast_backoff", "_egress_hatches", "_ssl_cert_file"):
+        for name in ("_fast_backoff", "_egress_hatches", "_egress_hatches_env", "_ssl_cert_file"):
             resource = getattr(env, name, None)
             if resource is None:
                 continue
@@ -631,6 +631,7 @@ class TestPartialEnterUnwind:
 
                 leaked_ssl_cert_file = os.environ.get("SSL_CERT_FILE")
                 leaked_allow_private = get_settings().limits.adcp_outbound_allow_private
+                leaked_allow_private_env = os.environ.get(ALLOW_PRIVATE_ENV)
                 origin = getattr(env, "_origin", None)
                 origin_still_listening = origin is not None and self._origin_is_listening(origin)
             finally:
@@ -640,6 +641,10 @@ class TestPartialEnterUnwind:
                 f"adcp_outbound_allow_private={leaked_allow_private!r} survived a failed __enter__ -- "
                 f"the private-egress hatch is now open for the rest of this worker, and every "
                 f"later scenario grading a private-address refusal is disarmed"
+            )
+            assert leaked_allow_private_env is None, (
+                f"{ALLOW_PRIVATE_ENV}={leaked_allow_private_env!r} survived a failed __enter__ -- "
+                f"the next settings rebuild on this worker opens the private-egress hatch"
             )
             assert leaked_ssl_cert_file is None, (
                 f"SSL_CERT_FILE={leaked_ssl_cert_file!r} survived a failed __enter__ -- "
