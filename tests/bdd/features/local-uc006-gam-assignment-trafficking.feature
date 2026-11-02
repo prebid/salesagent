@@ -79,6 +79,31 @@ Feature: UC-006 a Google Ad Manager seller traffics assigned creatives onto its 
     Then creative "cr-banner" reports package "pkg-leader" in assignment_errors and not in assigned_to
     And Google Ad Manager associated that creative with line items "5000001"
 
+  # One buy, two packages, two line items on one order. A sync is pushed once per buy with
+  # the packages it names.
+  @T-UC-006-local-gam-two-packages-one-sync
+  Scenario: One sync assigning a creative to two packages of a buy creates it once and places it on both line items
+    Given the buyer holds a buy booked in Google Ad Manager as order "6000007" whose package "pkg-two-a" is line item "5000007" accepting 300x250 and package "pkg-two-b" is line item "5000008" accepting 300x250
+    And the buyer syncs a 300x250 image creative "cr-banner" showing "https://example.com/banner.png" assigned to packages "pkg-two-a, pkg-two-b"
+    When the Buyer Agent syncs the creative with assignments
+    Then creative "cr-banner" is assigned to packages "pkg-two-a, pkg-two-b"
+    And Google Ad Manager created one image creative for advertiser "3000001" showing "https://example.com/banner.png"
+    And Google Ad Manager associated that creative with line items "5000007, 5000008"
+
+  # The refused assignment keeps its row, so the buyer can send it again. A sync that names
+  # the buy's other package pushes that package only: the refused one is not sent with it.
+  @T-UC-006-local-gam-sync-pushes-named-packages-only
+  Scenario: A sync naming one package of a buy does not push the sibling package GAM refused earlier
+    Given the buyer holds a buy booked in Google Ad Manager as order "6000008" whose package "pkg-two-banner" is line item "5000009" accepting 300x250 and package "pkg-two-leader" is line item "5000010" accepting 728x90
+    And the buyer syncs a 300x250 image creative "cr-banner" showing "https://example.com/banner.png" assigned to package "pkg-two-leader"
+    When the Buyer Agent syncs the creative with assignments
+    Then creative "cr-banner" reports package "pkg-two-leader" in assignment_errors and not in assigned_to
+    And Google Ad Manager created no creative
+    When the Buyer Agent references library creative "cr-banner", without resending it, assigned to package "pkg-two-banner"
+    Then creative "cr-banner" is assigned to package "pkg-two-banner"
+    And Google Ad Manager created one image creative for advertiser "3000001" showing "https://example.com/banner.png"
+    And Google Ad Manager associated that creative with line items "5000009"
+
   # A creative id is the buyer's own choice, unique only among that buyer's creatives.
   @T-UC-006-local-gam-other-buyers-creative-id
   Scenario: Another buyer's creative under the same id is not the one sent to GAM

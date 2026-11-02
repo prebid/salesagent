@@ -9,7 +9,7 @@ without making the tenant a GAM seller.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from tests.harness._realize import e2e_unsupported, realize_e2e
@@ -172,9 +172,7 @@ class GamSellerMixin:
     def book_in_gam(
         self,
         *,
-        package_id: str,
-        line_item_id: str,
-        size: tuple[int, int],
+        line_items: Sequence[tuple[str, str, tuple[int, int]]],
         order_id: str,
         product: Any,
         status: str,
@@ -182,27 +180,33 @@ class GamSellerMixin:
     ) -> Any:
         """A buy the seller already booked in GAM as order *order_id*: the env's buyer's, unless *principal* names another.
 
-        The rows the create path leaves: one package on *product*, whose ``package_config``
-        carries the order id and its line item id. The stand-in network holds that line
-        item, accepting creatives of *size*.
+        The rows the create path leaves: one package on *product* for each (package id, line
+        item id, creative size) of *line_items*, whose ``package_config`` carries the order
+        id and that line item id. The stand-in network holds each line item, accepting
+        creatives of its size.
         """
         from datetime import UTC, datetime
 
         from tests.helpers.gam_client import gam_line_item
 
         media_buy = self._seed_buy(
-            package_id=package_id, product=product, principal=principal, status=status, confirmed_at=datetime.now(UTC)
+            package_ids=[package_id for package_id, _, _ in line_items],
+            product=product,
+            principal=principal,
+            status=status,
+            confirmed_at=datetime.now(UTC),
         )
-        (package,) = media_buy.packages
-        package.package_config = {
-            **package.package_config,
-            "platform_order_id": order_id,
-            "platform_line_item_id": line_item_id,
-        }
+        packages = {package.package_id: package for package in media_buy.packages}
+        for package_id, line_item_id, size in line_items:
+            packages[package_id].package_config = {
+                **packages[package_id].package_config,
+                "platform_order_id": order_id,
+                "platform_line_item_id": line_item_id,
+            }
+            self.mock["gam_client"].return_value.line_items.append(
+                gam_line_item(package_id, item_id=line_item_id, sizes=(size,))
+            )
         self._commit_factory_data()
-        self.mock["gam_client"].return_value.line_items.append(
-            gam_line_item(package_id, item_id=line_item_id, sizes=(size,))
-        )
         return media_buy
 
     def hold_unbooked_buy(self, *, package_id: str, product: Any, status: str) -> Any:
@@ -211,12 +215,12 @@ class GamSellerMixin:
         Its package stores no order id and no line item id, and the stand-in network holds
         no line item for it.
         """
-        media_buy = self._seed_buy(package_id=package_id, product=product, status=status)
+        media_buy = self._seed_buy(package_ids=[package_id], product=product, status=status)
         self._commit_factory_data()
         return media_buy
 
-    def _seed_buy(self, *, package_id: str, product: Any, principal: Any = None, **buy: Any) -> Any:
-        """The rows a create stores for a buy with one package on *product*, the env's buyer's or *principal*'s."""
+    def _seed_buy(self, *, package_ids: Sequence[str], product: Any, principal: Any = None, **buy: Any) -> Any:
+        """The rows a create stores for a buy with those packages on *product*, the env's buyer's or *principal*'s."""
         from datetime import UTC, datetime
 
         from tests.factories import MediaBuyFactory
@@ -231,7 +235,9 @@ class GamSellerMixin:
             start_time=datetime(2025, 1, 1, tzinfo=UTC),
             end_time=datetime(2027, 12, 31, 23, 59, 59, tzinfo=UTC),
             raw_request={
-                "packages": [request_package(product_id=product.product_id, package_id=package_id)],
+                "packages": [
+                    request_package(product_id=product.product_id, package_id=package_id) for package_id in package_ids
+                ],
                 "account": {"account_id": DEFAULT_TEST_ACCOUNT_ID},
             },
             **buy,

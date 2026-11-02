@@ -1255,11 +1255,11 @@ def then_creatives_entry_assigned_to_package(ctx: dict, creative_id: str) -> Non
     then_creative_assigned_to_package(ctx, creative_id, ctx["package"].package_id)
 
 
-@then(parsers.parse('creative "{creative_id}" is assigned to package "{package_id}"'))
-def then_creative_assigned_to_package(ctx: dict, creative_id: str, package_id: str) -> None:
-    """The wire entry selected by creative_id lists exactly that package in ``assigned_to``."""
+@then(parsers.re(r'creative "(?P<creative_id>[^"]+)" is assigned to packages? "(?P<package_ids>[^"]+)"$'))
+def then_creative_assigned_to_package(ctx: dict, creative_id: str, package_ids: str) -> None:
+    """The wire entry selected by creative_id lists exactly those packages, in that order, in ``assigned_to``."""
     entry = _wire_creatives_entry(ctx, creative_id)
-    expected = [package_id]
+    expected = [package_id.strip() for package_id in package_ids.split(",")]
     assert entry.get("assigned_to") == expected, (
         f"expected the entry for {creative_id!r} to carry assigned_to={expected}, got {entry.get('assigned_to')!r}"
     )

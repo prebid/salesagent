@@ -25,6 +25,7 @@ sent the stand-in network, and the approval's result.
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -572,18 +573,18 @@ def given_creative_agent_serves_reference_formats(ctx: dict) -> None:
     ctx["env"].serve_reference_formats()
 
 
+_BOOKED_PACKAGE = r'package "([^"]+)" is line item "(\d+)" accepting (\d+)x(\d+)'
+
+
 @given(
     parsers.re(
         r"(?P<owner>the buyer|another buyer of the seller) holds a buy booked in Google Ad Manager as "
         r'order "(?P<order_id>\d+)"'
-        r'(?: in status "(?P<status>[^"]+)")? whose package "(?P<package>[^"]+)" is line item '
-        r'"(?P<line_item>\d+)" accepting (?P<width>\d+)x(?P<height>\d+)$'
+        rf'(?: in status "(?P<status>[^"]+)")? whose (?P<packages>{_BOOKED_PACKAGE}(?: and {_BOOKED_PACKAGE})*)$'
     )
 )
-def given_buyer_holds_booked_buy(
-    ctx: dict, owner: str, order_id: str, status: str | None, package: str, line_item: str, width: str, height: str
-) -> None:
-    """A buy booked in GAM, the buyer's or a second GAM advertiser's: its one package is the stated line item."""
+def given_buyer_holds_booked_buy(ctx: dict, owner: str, order_id: str, status: str | None, packages: str) -> None:
+    """A buy booked in GAM, the buyer's or a second GAM advertiser's: each package is its stated line item of the order."""
     from tests.factories import PrincipalFactory
 
     principal = None
@@ -594,9 +595,10 @@ def given_buyer_holds_booked_buy(
         )
     ctx["env"].book_in_gam(
         principal=principal,
-        package_id=package,
-        line_item_id=line_item,
-        size=(int(width), int(height)),
+        line_items=[
+            (package, line_item, (int(width), int(height)))
+            for package, line_item, width, height in re.findall(_BOOKED_PACKAGE, packages)
+        ],
         order_id=order_id,
         product=ctx["default_product"],
         status=status or "pending_creatives",
@@ -618,36 +620,37 @@ def given_buyer_holds_unbooked_buy(ctx: dict, held: str, package: str) -> None:
 def _image_creative(creative_id: str, url: str) -> dict[str, Any]:
     """A 300x250 image creative as the buyer sends it, in the reference format the GAM product sells."""
     from src.core.format_cache import DEFAULT_AGENT_URL
-    from tests.factories.creative_asset import build_assets, image_spec
+    from tests.factories.creative_asset import named_format_assets
     from tests.factories.request import CreativeAssetRequestFactory
 
     return CreativeAssetRequestFactory.payload(
         creative_id=creative_id,
         name=f"Creative {creative_id}",
         format_id={"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250_image"},
-        assets=build_assets(image_spec("banner_image", url=url)),
+        assets=named_format_assets("display_300x250_image", media_url=url),
     )
 
 
 @given(
     parsers.re(
         r'the buyer (?P<tense>syncs|synced) a 300x250 image creative "(?P<creative_id>[^"]+)" showing '
-        r'"(?P<url>[^"]+)" assigned to package "(?P<package>[^"]+)"'
+        r'"(?P<url>[^"]+)" assigned to packages? "(?P<packages>[^"]+)"'
         r"(?: with weight (?P<weight>\d+))?(?P<dry_run> as a dry run)?$"
     )
 )
 def given_buyer_syncs_image_creative(
-    ctx: dict, tense: str, creative_id: str, url: str, package: str, weight: str | None, dry_run: str | None
+    ctx: dict, tense: str, creative_id: str, url: str, packages: str, weight: str | None, dry_run: str | None
 ) -> None:
-    """The buyer's sync of one image creative assigned to one package: sent now ("synced"), or by the When.
+    """The buyer's sync of one image creative assigned to the stated packages: sent now ("synced"), or by the When.
 
     A sync sent now goes through the scenario's transport like the When's, and must have
     succeeded, so a later step grades what the seller did with it rather than a refusal.
     """
     ctx["creatives"] = [_image_creative(creative_id, url)]
-    ctx["assignments"] = {creative_id: [package]}
+    ctx["assignments"] = {creative_id: [package.strip() for package in packages.split(",")]}
     if weight is not None:
-        _ask_assignment_terms(ctx, creative_id, package, weight=int(weight))
+        for package in ctx["assignments"][creative_id]:
+            _ask_assignment_terms(ctx, creative_id, package, weight=int(weight))
     if dry_run:
         ctx["dry_run"] = True
     if tense == "synced":
