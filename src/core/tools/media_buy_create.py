@@ -37,6 +37,7 @@ from rich.console import Console
 
 from src.core.database.integrity import is_constraint_violation
 from src.core.database.repositories.creative import CLEARED_CREATIVE_STATUSES, CreativeRepository
+from src.core.database.repositories.media_buy import RequestedPackage
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPAuthorizationError,
@@ -87,7 +88,6 @@ from src.core.audit_logger import get_audit_logger
 from src.core.context_manager import get_context_manager
 from src.core.database.models import AdapterConfig, CurrencyLimit, MediaBuy, PersistedMediaBuyStatus, Tenant
 from src.core.database.models import Creative as DBCreative
-from src.core.database.models import MediaPackage as DBMediaPackage
 from src.core.database.models import Product as ModelProduct
 from src.core.database.models import Product as ProductModel
 from src.core.helpers import log_tool_activity
@@ -335,6 +335,30 @@ def _legacy_formats_to_provide(
     if snapshots:
         return list(snapshot_legacy_arm(snapshots)) or None
     return getattr(request_package, "format_ids", None)
+
+
+def _requested_package(
+    request: PackageRequest,
+    snapshots: Sequence[LibraryPackageFormatSnapshot],
+    *,
+    package_id: str,
+    pricing_info: dict[str, Any] | None,
+    paused: bool,
+) -> RequestedPackage:
+    """What one package's row records, on either create path.
+
+    The two format checklists are derived here once, from the snapshots of the declaration the
+    package's selector selected. ``minItems: 1`` on ``formats_to_provide`` is why an empty
+    selection records None.
+    """
+    return RequestedPackage(
+        package_id=package_id,
+        request=request,
+        pricing_info=pricing_info,
+        paused=paused,
+        formats_to_provide=list(snapshots) or None,
+        format_ids_to_provide=_legacy_formats_to_provide(snapshots, request),
+    )
 
 
 def _merge_creative_enrichment(existing_data: dict | None, status: AssetStatus) -> dict:
@@ -3490,25 +3514,35 @@ async def _create_media_buy_impl(
             # are task_id and a message — so no package of this branch's making reaches a
             # buyer, and everything else about a package is read off `req.packages` where
             # the buyer wrote it.
-            package_id_map: dict[int, str] = {}  # 0-based index → package_id
-
             # req.packages validated earlier in _create_media_buy_impl
             assert req.packages is not None, "packages required - validated earlier"
-            for idx, pkg in enumerate(req.packages):
-                # Format: pkg_{product_id}_{timestamp_part}_{1-based index}
-                package_id_map[idx] = f"pkg_{pkg.product_id}_{secrets.token_hex(4)}_{idx + 1}"
-
-            # Remap package_pricing_info from index-based keys to actual package IDs
-            package_pricing_info: dict[str, dict[str, Any]] = {}
-            for pkg_idx, mapped_package_id in package_id_map.items():
-                if pkg_idx in package_pricing_info_by_index:
-                    package_pricing_info[mapped_package_id] = package_pricing_info_by_index[pkg_idx]
-                else:
+            # Format: pkg_{product_id}_{random part}_{1-based index}
+            minted_package_ids = [
+                f"pkg_{pkg.product_id}_{secrets.token_hex(4)}_{idx + 1}" for idx, pkg in enumerate(req.packages)
+            ]
+            for pkg_idx in range(len(req.packages)):
+                if pkg_idx not in package_pricing_info_by_index:
                     logger.warning(f"No pricing info found for package index {pkg_idx}")
-            logger.debug(f"[PRICING] Mapped {len(package_pricing_info)} package pricing info")
 
-            # Create media buy record in the database with permanent ID
-            # Status is "pending_approval" but the ID is final
+            # ``paused`` is what the buyer ASKED for. Nothing is on the ad server yet, so the
+            # row is the only place the ask can survive until ``execute_approved_media_buy``
+            # rebuilds the carrier from it. The snapshots are read from the one resolution that
+            # admitted the request, not re-resolved: a parked buy has the longest window between
+            # create and execution, which is when an operator can republish the product's
+            # declarations.
+            pending_packages = [
+                _requested_package(
+                    req_pkg,
+                    _package_format_snapshots(selector_resolutions.get(idx), product_id=req_pkg.product_id),
+                    package_id=minted_id,
+                    pricing_info=package_pricing_info_by_index.get(idx),
+                    paused=bool(req_pkg.paused),
+                )
+                for idx, (minted_id, req_pkg) in enumerate(zip(minted_package_ids, req.packages, strict=True))
+            ]
+
+            # Create media buy record in the database with permanent ID, and its packages
+            # from the request in the same flush. Status is "pending_approval" but the IDs are final.
             # Repository handles raw_request serialization + package_id injection at the DB boundary
             try:
                 with MediaBuyUoW(tenant.tenant_id) as pending_uow:
@@ -3524,7 +3558,7 @@ async def _create_media_buy_impl(
                         end_time=end_time,
                         status=PersistedMediaBuyStatus.PENDING_APPROVAL,
                         order_name=f"{media_buy_id} - {start_time.strftime('%Y-%m-%d')}",
-                        package_id_map=package_id_map,
+                        packages=pending_packages,
                         by_alias=True,
                         account_id=identity.account.account_id,
                         created_at=datetime.now(UTC),
@@ -3576,109 +3610,6 @@ async def _create_media_buy_impl(
             except Exception as e:
                 logger.warning(f"Failed to log media buy pending approval to audit log: {e}")
 
-            # Create MediaPackage records for structured querying
-            # This enables the UI to display packages and creative assignments to work properly
-            with MediaBuyUoW(tenant.tenant_id) as pkg_uow:
-                # FIXME(#1788): package creation should use repository methods
-                assert pkg_uow.session is not None
-                session = pkg_uow.session
-                for idx, req_pkg in enumerate(req.packages):
-                    mapped_package_id = package_id_map[idx]
-                    pricing_info_for_package = package_pricing_info.get(mapped_package_id)
-
-                    # Serialize budget: normalize to object format for database storage
-                    # ADCP 2.5.0 sends flat numbers, but we normalize to object with currency for DB
-                    budget_value: dict[str, Any] | None = None
-                    if req_pkg.budget is not None:
-                        if isinstance(req_pkg.budget, (int, float)):
-                            # ADCP 2.5.0 flat format: normalize to object with currency from pricing
-                            package_currency = request_currency  # Use request-level currency
-                            if pricing_info_for_package:
-                                package_currency = pricing_info_for_package.get("currency", request_currency)
-                            budget_value = {
-                                "total": float(req_pkg.budget),
-                                "currency": package_currency,
-                            }
-                        else:
-                            # ADCP 2.3 object format or other: _pydantic_json_serializer handles it
-                            budget_value = req_pkg.budget
-
-                    # The declaration this package's selector SELECTED, from the one
-                    # resolution that ran above this branch. Work item C7 on the path that
-                    # needs it most: ``core/package.json`` requires a package to "retain and
-                    # return this checklist" and says "the live Product is never substituted
-                    # for the package snapshot", and a buy parked for a human has by
-                    # construction the LONGEST window between create and execution -- the
-                    # window in which an operator can republish the product's declarations.
-                    # It was the one path recording neither canonical field, so a
-                    # canonical-only buyer's parked buy recorded nothing at all about what
-                    # creative it needs (salesagent-1dcfo).
-                    #
-                    # Read, not re-resolved: ``_resolve_package_selectors`` already answered
-                    # for every package, and a second resolution could disagree with the one
-                    # that admitted the request.
-                    pending_snapshots = _package_format_snapshots(
-                        selector_resolutions.get(idx), product_id=req_pkg.product_id
-                    )
-
-                    # _pydantic_json_serializer on the engine handles Pydantic models,
-                    # AnyUrl, enums, and datetimes in JSONType columns automatically
-                    package_config = {
-                        "package_id": mapped_package_id,
-                        # What the buyer ASKED for. Nothing is on the ad server yet — this
-                        # arm is a buy parked for a human decision — so the record is the
-                        # only place the ask can survive until ``execute_approved_media_buy``
-                        # rebuilds the carrier from it.
-                        # This was a hardcoded ``False`` with a comment asserting "a newly
-                        # created package is not paused", which made the ask unrecoverable.
-                        "paused": bool(req_pkg.paused),
-                        "product_id": req_pkg.product_id,
-                        "pricing_option_id": req_pkg.pricing_option_id,
-                        "budget": budget_value,
-                        "targeting_overlay": req_pkg.targeting_overlay,
-                        "creative_ids": _get_creative_ids(req_pkg),
-                        "format_ids": req_pkg.format_ids,
-                        "catalogs": req_pkg.catalogs,
-                        # The same two fields the auto path records, from the same source and
-                        # through the same helper -- so a parked buy and an executed one
-                        # answer one obligation rather than two. ``minItems: 1`` on
-                        # ``formats_to_provide`` is why an empty selection records None.
-                        "formats_to_provide": list(pending_snapshots) or None,
-                        "format_ids_to_provide": _legacy_formats_to_provide(pending_snapshots, req_pkg),
-                        "pricing_info": pricing_info_for_package,  # Store pricing info for UI display
-                        "impressions": getattr(req_pkg, "impressions", None),  # legacy field, for display
-                    }
-
-                    # Extract pricing fields for dual-write
-                    budget_total = None
-                    if budget_value:
-                        if isinstance(budget_value, dict):
-                            budget_total = budget_value.get("total")
-                        elif isinstance(budget_value, (int, float)):
-                            budget_total = float(budget_value)
-
-                    bid_price_value = None
-                    pacing_value = None
-                    if pricing_info_for_package:
-                        bid_price_value = pricing_info_for_package.get("bid_price")
-                    if budget_value and isinstance(budget_value, dict):
-                        pacing_value = budget_value.get("pacing")
-
-                    # Create MediaPackage with dual-write: dedicated columns + JSON
-                    db_package = DBMediaPackage(
-                        media_buy_id=media_buy_id,
-                        package_id=mapped_package_id,
-                        package_config=package_config,
-                        # Dual-write: populate dedicated columns
-                        budget=Decimal(str(budget_total)) if budget_total is not None else None,
-                        bid_price=Decimal(str(bid_price_value)) if bid_price_value is not None else None,
-                        pacing=pacing_value,
-                    )
-                    session.add(db_package)
-
-                # UoW auto-commits on clean exit
-                logger.info(f"✅ Created {len(package_id_map)} MediaPackage records")
-
             # Link the workflow step to the media buy so the approval button shows in UI
             ctx_manager.link_workflow_to_object(
                 step_id=step.step_id,
@@ -3719,15 +3650,9 @@ async def _create_media_buy_impl(
                     # (shared with the auto path) — before any state was persisted.
 
                     # Create assignments for each package
-                    for i, package in enumerate(req.packages):
+                    for pkg_id, package in zip(minted_package_ids, req.packages, strict=True):
                         pkg_cids = _get_creative_ids(package)
                         if pkg_cids:
-                            # The ID generated for this package above
-                            pkg_id: str | None = package_id_map.get(i)
-                            if not pkg_id:
-                                logger.error(f"Cannot assign creatives: No package_id for package {i}")
-                                continue
-
                             logger.info(
                                 log_safe(
                                     f"[CREATIVE_ASSIGN_DEBUG] Creating assignments for package {pkg_id}, "
@@ -4238,8 +4163,31 @@ async def _create_media_buy_impl(
             f"has_creatives={has_creatives}, creatives_approved={creatives_approved} → status={media_buy_status}"
         )
 
-        # Store the media buy in database (context_id is NULL for synchronous operations)
-        # Repository handles raw_request serialization at the DB boundary
+        # The packages as the buyer requested them, each with the package_id and paused state
+        # the adapter reported for it, paired by position as the creative assignments and the
+        # create response pair them below. The adapter decides nothing else about a package
+        # row (AdCP 3.2.7 get-media-buys-response.json: sellers MUST echo the request
+        # package's product_id). The snapshots come from the index the package loop recorded:
+        # the response below reports the same ones, and a later read has to answer with them.
+        assert req.packages is not None, "packages required - validated earlier"
+        if len(response.packages) != len(req.packages):
+            logger.error(f"Adapter returned {len(response.packages)} packages for {len(req.packages)} requested")
+            raise AdCPAdapterError()
+        requested_packages = [
+            _requested_package(
+                req_pkg,
+                snapshots,
+                package_id=resp_package.package_id,
+                pricing_info=package_pricing_info.get(resp_package.package_id),
+                paused=bool(resp_package.paused),
+            )
+            for req_pkg, resp_package, snapshots in zip(
+                req.packages, response.packages, format_snapshots_by_index, strict=True
+            )
+        ]
+
+        # Store the media buy and its packages in the database (context_id is NULL for
+        # synchronous operations). Repository handles raw_request serialization at the DB boundary
         try:
             with MediaBuyUoW(tenant.tenant_id) as create_uow:
                 assert create_uow.media_buys is not None
@@ -4263,7 +4211,19 @@ async def _create_media_buy_impl(
                     kpi_goal=getattr(req, "kpi_goal", "") or "",
                     account_id=identity.account.account_id,
                     creative_deadline=response.creative_deadline,
+                    packages=requested_packages,
                 )
+                # Persist adapter IDs to package_config: platform_order_id on every package,
+                # platform_line_item_id where the adapter maps one. Writes package_config
+                # only, so the revision read below is the buy's as created.
+                if response.media_buy_id:
+                    _persist_adapter_package_ids(
+                        create_uow.media_buys,
+                        media_buy_id=response.media_buy_id,
+                        platform_order_id=str(response.media_buy_id),
+                        platform_line_item_ids=response.platform_line_item_ids or None,
+                        log_label="CREATE",
+                    )
                 # Read the two columns the REPOSITORY owns, inside the UoW while the
                 # row is still attached. The response reports what was persisted; it
                 # does not mint its own (see CreateMediaBuySuccess: both fields lost
@@ -4281,133 +4241,6 @@ async def _create_media_buy_impl(
                 req=req,
                 media_buy_id=response.media_buy_id,
             )
-
-        # Populate media_packages table for structured querying
-        # This enables creative_assignments to work properly
-        if req.packages or (response.packages and len(response.packages) > 0):
-            with MediaBuyUoW(tenant.tenant_id) as auto_pkg_uow:
-                # FIXME(#1788): package creation should use repository methods
-                assert auto_pkg_uow.session is not None
-                session = auto_pkg_uow.session
-                # Use response packages if available (has package_ids), otherwise generate from request
-                packages_to_save = response.packages if response.packages else []
-                logger.info(f"[DEBUG] Saving {len(packages_to_save)} packages to media_packages table")
-
-                for i, resp_package in enumerate(packages_to_save):
-                    # Extract package_id from response - MUST be present, no fallback allowed
-                    resp_package_id: str | None = resp_package.package_id
-
-                    if not resp_package_id:
-                        error_msg = (
-                            f"Adapter did not return package_id for package {i}. This is a critical bug in the adapter."
-                        )
-                        logger.error(error_msg)
-                        raise AdCPAdapterError()
-
-                    # Store full package config as JSON
-                    # Get paused state from adapter response (the pinned SDK: replaced status enum with paused bool)
-                    paused = getattr(resp_package, "paused", False)  # Default to False (not paused) if not present
-
-                    # Get pricing info for this package if available
-                    pricing_info_for_package = package_pricing_info.get(resp_package_id)
-
-                    # Get impressions from request package if available (legacy field)
-                    request_pkg = req.packages[i] if req.packages and i < len(req.packages) else None
-                    impressions = getattr(request_pkg, "impressions", None) if request_pkg else None
-
-                    # C7: the snapshot recorded at accept, PERSISTED. ``core/package.json``
-                    # calls ``formats_to_provide`` the package's "immutable canonical
-                    # creative contracts" and requires a package to "retain and return this
-                    # checklist", so it has to survive the response -- a later read has to
-                    # answer from the row, and the pin forbids answering from the live
-                    # product instead ("the live Product is never substituted for the package
-                    # snapshot"). Read from the index recorded in the package loop rather than
-                    # off ``resp_package``: this loop walks the ADAPTER's packages, which know
-                    # nothing about the buyer's selector.
-                    pkg_snapshots = format_snapshots_by_index[i] if i < len(format_snapshots_by_index) else ()
-                    # The MODELS go in, not dicts. The JSONType column serializes through the
-                    # engine's own pydantic serializer (``database_session.py``), which is the
-                    # persistence edge; a ``model_dump`` here would be a second serializer.
-                    package_config = {
-                        "package_id": resp_package_id,
-                        "name": getattr(resp_package, "name", None),  # Include package name from adapter response
-                        "product_id": getattr(resp_package, "product_id", None),
-                        # The option the buyer selected, so update_media_buy's
-                        # affected_packages can report it (core/package.json
-                        # pricing_option_id); the adapter's package does not carry it.
-                        "pricing_option_id": request_pkg.pricing_option_id if request_pkg else None,
-                        "budget": getattr(resp_package, "budget", None),
-                        # The buyer's overlay, as the pending path records it. The adapter's
-                        # package carries none (``_build_package_responses`` sets only id and
-                        # paused), so reading it there stored None for every auto-approved buy,
-                        # and readback lost the overlay core/package.json says the seller MUST
-                        # echo -- an applied package frequency_cap among it.
-                        "targeting_overlay": request_pkg.targeting_overlay if request_pkg else None,
-                        "creative_ids": getattr(resp_package, "creative_ids", None),
-                        "creative_assignments": getattr(resp_package, "creative_assignments", None),
-                        # The buyer's catalogs, recorded so a later update_media_buy can
-                        # report them: its affected_packages are "full Package objects
-                        # showing complete post-update state" (media-buy/
-                        # update-media-buy-response.json), and an update that does not name
-                        # catalogs leaves them as created (media-buy/package-update.json:
-                        # "Omit to leave catalogs unchanged").
-                        "catalogs": request_pkg.catalogs if request_pkg else None,
-                        "formats_to_provide": list(pkg_snapshots) or None,
-                        "format_ids_to_provide": _legacy_formats_to_provide(pkg_snapshots, request_pkg),
-                        "paused": paused,  # Store paused state
-                        "pricing_info": pricing_info_for_package,  # Store pricing info for UI display
-                        "impressions": impressions,  # Store impressions for display
-                    }
-
-                    # Extract pricing fields for dual-write from adapter response
-                    budget_total = None
-                    budget_data = getattr(resp_package, "budget", None)
-                    if budget_data:
-                        if isinstance(budget_data, dict):
-                            budget_total = budget_data.get("total")
-                        elif isinstance(budget_data, (int, float)):
-                            budget_total = float(budget_data)
-
-                    bid_price_value = None
-                    pacing_value = None
-                    if pricing_info_for_package:
-                        bid_price_value = pricing_info_for_package.get("bid_price")
-                    if budget_data and isinstance(budget_data, dict):
-                        pacing_value = budget_data.get("pacing")
-
-                    # Create MediaPackage with dual-write: dedicated columns + JSON
-                    db_package = DBMediaPackage(
-                        media_buy_id=response.media_buy_id,
-                        package_id=resp_package_id,
-                        package_config=package_config,
-                        # Dual-write: populate dedicated columns
-                        budget=Decimal(str(budget_total)) if budget_total is not None else None,
-                        bid_price=Decimal(str(bid_price_value)) if bid_price_value is not None else None,
-                        pacing=pacing_value,
-                    )
-                    session.add(db_package)
-
-                session.flush()  # Flush so packages are visible for line_item_id queries below
-                logger.info(
-                    f"Saved {len(packages_to_save)} packages to media_packages table for media_buy {response.media_buy_id}"
-                )
-
-                # Persist adapter IDs to package_config.
-                # platform_order_id is per-buy — always write to all packages; platform_line_item_id
-                # is per-package and conditional on the adapter providing the mapping.
-                platform_line_item_ids = response.platform_line_item_ids
-
-                if response.media_buy_id:
-                    assert auto_pkg_uow.media_buys is not None
-                    _persist_adapter_package_ids(
-                        auto_pkg_uow.media_buys,
-                        media_buy_id=response.media_buy_id,
-                        platform_order_id=str(response.media_buy_id),
-                        platform_line_item_ids=platform_line_item_ids or None,
-                        log_label="DEBUG",
-                    )
-                else:
-                    logger.info("[DEBUG] Adapter returned no media_buy_id — skipping ID persistence")
 
         # Handle creative_ids in packages if provided (immediate association)
         if req.packages:
@@ -4730,15 +4563,14 @@ async def _create_media_buy_impl(
             # above; the adapter decides ``package_id`` and ``paused``, and the two format
             # checklists come from the declaration the selector SELECTED rather than from
             # anything the buyer sent -- which is what makes them readable as a checklist.
-            pkg_snapshots = format_snapshots_by_index[i] if i < len(format_snapshots_by_index) else ()
             response_packages.append(
                 Package.echoing(
                     package,
                     package_id=adapter_package_id,
                     paused=adapter_paused,
                     creative_assignments=assigned.get(adapter_package_id),
-                    formats_to_provide=list(pkg_snapshots) or None,
-                    format_ids_to_provide=_legacy_formats_to_provide(pkg_snapshots, package),
+                    formats_to_provide=requested_packages[i].formats_to_provide,
+                    format_ids_to_provide=requested_packages[i].format_ids_to_provide,
                 )
             )
 
