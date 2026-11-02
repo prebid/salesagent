@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import os
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -38,6 +39,7 @@ from src.services.webhook_delivery_service import (
     WebhookDeliveryService,
 )
 from tests.harness._realize import e2e_unsupported, realize_e2e
+from tests.helpers.egress_hatches import egress_hatch_env
 from tests.helpers.local_http_origin import (
     LocalOrigin,
     OriginRequest,
@@ -1070,9 +1072,12 @@ class LocalOriginMixin:
 
         self._origin = start_tls_origin(self._guard, "local_origin")
 
-        # On the settings object, the one the seam reads at call time. The base composed the
-        # app before this hook, so the settings may already be built and an environment
-        # patch would not reach them.
+        # Both halves. The base composed the app before this hook, so the settings may already
+        # be built, and the settings object is what the seam reads. The environment is what a
+        # rebuild of the settings reads, which a step dropping the cached object causes.
+        self._egress_hatches_env = patch.dict(os.environ, egress_hatch_env(private=True))
+        self._egress_hatches_env.start()
+        self._guard("egress_hatches_env", self._egress_hatches_env.stop)
         self._egress_hatches = patch.object(get_settings().limits, "adcp_outbound_allow_private", True)
         self._egress_hatches.start()
         self._guard("egress_hatches", self._egress_hatches.stop)
