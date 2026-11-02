@@ -1048,7 +1048,7 @@ class TestAsapStartTimingObligations:
             packages=[
                 {
                     "product_id": "prod_1",
-                    "budget": 7000.0,
+                    "budget": 3500.0,
                     "pricing_option_id": "cpm_usd_fixed",
                 },
             ],
@@ -1056,7 +1056,8 @@ class TestAsapStartTimingObligations:
 
         with MediaBuyCreateEnv() as env:
             tenant, _principal = env.setup_default_data()
-            # $7000/~14 days ~= $500/day -> $1500 cap should pass.
+            # $3500/~14 days ~= $250/day -> $1500 cap should pass. A flight read as one day
+            # would be refused. The budget stays under the mock ad server's impression ceiling.
             tenant.currency_limits[0].max_daily_package_spend = 1500
             env.setup_product_chain(tenant)
             result = env.call_impl(req=req)

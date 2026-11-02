@@ -1222,7 +1222,9 @@ def given_pricing_option_configuration(ctx: dict, config: str) -> None:
 
     elif config.startswith("floor_price="):
         floor = float(config.split("=")[1])
-        _setup_auction_pricing(ctx, floor=floor, bid=floor + 1.0)
+        # Any bid above the floor is valid. This one keeps the request's budget under the mock
+        # ad server's 1,000,000-impression ceiling, since a package's volume is budget at its bid.
+        _setup_auction_pricing(ctx, floor=floor, bid=floor + 9.0)
 
     else:
         raise ValueError(f"Unknown pricing option configuration: {config}")
