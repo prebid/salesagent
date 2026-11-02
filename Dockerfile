@@ -6,9 +6,9 @@ ARG PYTHON_BASE_DIGEST=sha256:423ed6ab25b1921a477529254bfeeabf5855151dc2c3141699
 # Consumed by BuildKit for reproducible layer timestamps (PR 6 release pipeline).
 ARG SOURCE_DATE_EPOCH=0
 # Canonical uv version: .uv-version (CI reads the file; guard keeps this ARG in sync).
-ARG UV_VERSION=0.11.15
-# Manifest-list digest for uv 0.11.15 (resolves per TARGETPLATFORM; do not pin a single-arch manifest).
-ARG UV_IMAGE_DIGEST=sha256:e590846f4776907b254ac0f44b5b380347af5d90d668138ca7938d1b0c2f98d3
+ARG UV_VERSION=0.13.4
+# Manifest-list digest for uv 0.13.4 (resolves per TARGETPLATFORM; do not pin a single-arch manifest).
+ARG UV_IMAGE_DIGEST=sha256:9f130421e930bfbdc563c00740466603f8723158e90297d07957c2294640262b
 
 FROM --platform=$TARGETPLATFORM ghcr.io/astral-sh/uv:${UV_VERSION}@${UV_IMAGE_DIGEST} AS uv
 
@@ -99,11 +99,16 @@ WORKDIR /app
 ARG CACHE_BUST=2026-02-27-GAM-API-BUMP
 RUN echo "Cache bust: $CACHE_BUST"
 
+# Non-root runtime user (D34 — issue #1234 PR 5), created before the COPYs below so
+# they can set ownership with --chown. A `chown -R` in a later RUN would rewrite every
+# file into a new layer, storing /app and /opt/venv in the image twice.
+RUN groupadd -r -g 1001 app && useradd -r -u 1001 -g app -s /usr/sbin/nologin app
+
 # Copy application code
-COPY . .
+COPY --chown=app:app . .
 
 # Copy pre-built virtual environment from builder stage (contains all compiled deps)
-COPY --from=builder /opt/venv /opt/venv
+COPY --chown=app:app --from=builder /opt/venv /opt/venv
 
 # Copy nginx configs - run_all_services.py selects based on ADCP_MULTI_TENANT
 # Default: single-tenant (path-based routing, localhost upstreams)
@@ -113,7 +118,7 @@ COPY config/nginx/nginx-single-tenant.conf /etc/nginx/nginx-single-tenant.conf
 COPY config/nginx/nginx-multi-tenant.conf /etc/nginx/nginx-multi-tenant.conf
 COPY config/nginx/nginx-development.conf /etc/nginx/nginx-development.conf
 
-# Non-root runtime user (D34 — issue #1234 PR 5)
+# /app itself predates the COPYs (WORKDIR), so it is chowned here, non-recursively.
 # /etc/nginx/nginx.conf is chowned too: run_all_services.py overwrites it at startup
 # with the selected single-/multi-tenant config, and the apt-installed file is
 # root-owned by default — without this, that write fails under the non-root user.
@@ -121,9 +126,9 @@ COPY config/nginx/nginx-development.conf /etc/nginx/nginx-development.conf
 # -P mode never follows a symlink argument into its target, so chowning /var/run only
 # relabels the symlink itself and leaves the real directory (where nginx writes its
 # pidfile) root-owned.
-RUN groupadd -r -g 1001 app && useradd -r -u 1001 -g app -s /usr/sbin/nologin app && \
-    mkdir -p /var/log/nginx /var/run && \
-    chown -R app:app /app /opt/venv /var/log/nginx /var/lib/nginx /run /etc/nginx/nginx.conf
+RUN mkdir -p /var/log/nginx /var/run && \
+    chown app:app /app /opt/venv && \
+    chown -R app:app /var/log/nginx /var/lib/nginx /run /etc/nginx/nginx.conf
 
 # Venv on PATH; PYTHONPATH points at bind-mounted source in dev compose
 ENV PATH="/opt/venv/bin:$PATH"
