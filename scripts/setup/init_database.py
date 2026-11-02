@@ -121,7 +121,7 @@ def init_db(exit_on_error=False):
                 ad_server="mock",
                 enable_axe_signals=True,
                 human_review_required=True,
-                auto_approve_format_ids=["display_300x250", "display_728x90", "display_320x50"],
+                auto_approve_format_ids=["display_300x250_image", "display_728x90_image", "display_320x50_image"],
                 brand_manifest_policy="public",  # Allow unauthenticated discovery for quick start
                 created_at=now,
                 updated_at=now,
@@ -170,7 +170,7 @@ def init_db(exit_on_error=False):
                     format_ids=[
                         {
                             "agent_url": "https://creative.adcontextprotocol.org",
-                            "id": "display_300x250",
+                            "id": "display_300x250_image",
                         }
                     ],
                     targeting_template={"geo_countries": ["US"]},
@@ -191,7 +191,7 @@ def init_db(exit_on_error=False):
                     format_ids=[
                         {
                             "agent_url": "https://creative.adcontextprotocol.org",
-                            "id": "video_preroll",
+                            "id": "video_standard_30s",
                         }
                     ],
                     targeting_template={"content_cat_any_of": ["sports"]},
@@ -268,7 +268,7 @@ def init_db(exit_on_error=False):
                         "formats": [
                             {
                                 "agent_url": "https://creative.adcontextprotocol.org",
-                                "id": "display_300x250",
+                                "id": "display_300x250_image",
                             }
                         ],
                         "targeting_template": {
@@ -293,7 +293,7 @@ def init_db(exit_on_error=False):
                         "formats": [
                             {
                                 "agent_url": "https://creative.adcontextprotocol.org",
-                                "id": "display_728x90",
+                                "id": "display_728x90_image",
                             }
                         ],
                         "targeting_template": {"geo_countries": ["US", "CA"]},

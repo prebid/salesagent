@@ -22,7 +22,7 @@ def create_tenant(args):
     subdomain = args.subdomain or tenant_id
 
     # Extract configuration values
-    auto_approve_format_ids = ["display_300x250", "display_728x90"]
+    auto_approve_format_ids = ["display_300x250_image", "display_728x90_image"]
     human_review_required = not args.auto_approve_all
 
     # Process access control options

@@ -28,6 +28,7 @@ import sys
 from pathlib import Path
 
 from count_ratchet import (
+    iter_python_sources,
     json_baseline_io,
     parse_ratchet_args,
     resolve_ratchet_paths,
@@ -89,9 +90,9 @@ def count_raw_session_usage(repo_root: Path) -> dict[str, int]:
     session?" — into a reviewable list rather than a regex nobody re-reads.
     """
     counts = dict.fromkeys(KEYS, 0)
-    for path in sorted((repo_root / ADMIN_DIR).rglob("*.py")):
+    for path, text in iter_python_sources(repo_root / ADMIN_DIR):
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
+            tree = ast.parse(text)
         except SyntaxError:  # pragma: no cover - a broken tree fails elsewhere, loudly
             continue
         for node in ast.walk(tree):

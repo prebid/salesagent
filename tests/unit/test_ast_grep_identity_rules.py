@@ -4,8 +4,11 @@ The ENFORCEMENT is the rule file, run by ``make quality-ci`` as ``ast-grep scan 
 sgconfig.yml``. This module stands to those rules as ``test_ruff_boundary_bans.py`` stands to
 ``ruff-boundary.toml``: a rule that is misspelled, filed outside ``ruleDirs``, or scoped by a
 ``files:`` glob that never matches reads exactly like a rule nobody violates, so each is
-proven here against a known-bad and a known-good snippet written INTO the tree it scans.
-Every case shells out to the real ast-grep with the real project config.
+proven here against a known-bad and a known-good snippet written at the path the rule's
+``files:`` glob covers, under a staged copy of the project config — never into the live
+tree, where a probe is a file every other guard's scan can list and fail to read once this
+case deletes it (``stage_ast_grep_root``). Every case shells out to the real ast-grep with
+the real project config.
 """
 
 from __future__ import annotations
@@ -13,12 +16,11 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-import uuid
 from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import repo_root
+from tests.unit._architecture_helpers import stage_ast_grep_root, write_ast_grep_probe
 
 # (rule id, directory the rule's ``files:`` covers, known-bad source, known-good source)
 _RULES: tuple[tuple[str, str, str, str], ...] = (
@@ -44,15 +46,15 @@ _RULES: tuple[tuple[str, str, str, str], ...] = (
 )
 
 
-def _scan(rule_id: str, rel_path: str) -> list[dict]:
-    """Run the real ast-grep, project config, one rule, one file; return its matches."""
+def _scan(root: Path, rule_id: str, rel_path: str) -> list[dict]:
+    """Run the real ast-grep from the staged *root*, project config, one rule, one file; return its matches."""
     binary = Path(sys.executable).parent / "ast-grep"
     assert binary.exists(), f"{binary} missing: ast-grep-cli is not installed in this venv"
     proc = subprocess.run(
         [str(binary), "scan", "--config", "sgconfig.yml", "--filter", f"^{rule_id}$", rel_path, "--json=compact"],
         capture_output=True,
         text=True,
-        cwd=repo_root(),
+        cwd=root,
         check=False,
     )
     # 0 is clean, 1 is violations; anything else means the rule did not run (3: filter
@@ -65,15 +67,11 @@ def _scan(rule_id: str, rel_path: str) -> list[dict]:
 
 @pytest.mark.arch_guard
 @pytest.mark.parametrize(("rule_id", "rel_dir", "bad", "good"), _RULES, ids=[r[0] for r in _RULES])
-def test_rule_fires_on_bad_and_not_on_good(rule_id: str, rel_dir: str, bad: str, good: str) -> None:
+def test_rule_fires_on_bad_and_not_on_good(tmp_path: Path, rule_id: str, rel_dir: str, bad: str, good: str) -> None:
+    root = stage_ast_grep_root(tmp_path)
     for label, source, expect_hit in (("bad", bad, True), ("good", good, False)):
-        rel_path = f"{rel_dir}/_synthetic_identity_probe_{uuid.uuid4().hex}.py"
-        path = repo_root() / rel_path
-        path.write_text(source)
-        try:
-            matches = _scan(rule_id, rel_path)
-        finally:
-            path.unlink(missing_ok=True)
+        rel_path = write_ast_grep_probe(root, rel_dir, source, stem="_synthetic_identity_probe")
+        matches = _scan(root, rule_id, rel_path)
         assert bool(matches) is expect_hit, (
             f"[{label}] {rule_id} {'did not flag' if expect_hit else 'flagged'}:\n{source}\nmatches={matches}"
         )

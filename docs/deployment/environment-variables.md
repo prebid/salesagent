@@ -185,12 +185,14 @@ The SSO requirement varies based on deployment mode:
 | `ENVIRONMENT` | `development` | `development` or `production` |
 | `PRODUCTION` | `false` | Set to `true` for production deployments |
 | `FLY_APP_NAME` | unset | Set by Fly.io; its presence also marks the deployment as production |
+| `PUBLISHER_AUTO_VERIFY` | derived | `false` checks each publisher partner's adagents.json before verifying it; `true` verifies partners without reading the file. Unset, it is `true` outside production and `false` in production. Leave it unset unless a non-production deployment must run the check |
+| `ADMIN_UI_URL` | `http://localhost:8001` | Public URL for the Admin UI (used in notifications) |
 
 Any one of `PRODUCTION=true`, `ENVIRONMENT=production` or a `FLY_APP_NAME` makes the
 deployment production, and every production-dependent behaviour reads that one answer:
 lenient request validation, structured JSON logging, secure session cookies, the trust in
-proxy headers, and the absence of verbose auth logging.
-| `ADMIN_UI_URL` | `http://localhost:8001` | Public URL for the Admin UI (used in notifications) |
+proxy headers, the absence of verbose auth logging, and (unless `PUBLISHER_AUTO_VERIFY`
+says otherwise) checking a publisher partner's adagents.json.
 
 ### Demo data
 
@@ -233,7 +235,7 @@ proxy headers, and the absence of verbose auth logging.
 | `ADCP_SALES_PORT` | `8080` | Port the unified application listens on (nginx proxies to it) |
 | `ADCP_SALES_HOST` | `0.0.0.0` | Bind address for `scripts/run_server.py` (production always binds all interfaces) |
 | `SKIP_NGINX` | `false` | Skip nginx in deployment scripts |
-| `SKIP_CRON` | `false` | Skip cron job scheduling |
+| `SKIP_CRON` | `false` | Skip cron job scheduling. The scheduled GAM inventory sync authenticates with `SYNC_API_KEY` and exits with an error when it is unset |
 
 Every variable above is read once, by `src/core/config.py`, when a process is composed; an
 empty value means unset. Knobs that only the repo's own scripts read (`ADCP_HOME`,

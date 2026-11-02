@@ -68,9 +68,9 @@ def init_db(exit_on_error=False):
                     ad_server="mock",
                     enable_axe_signals=True,
                     auto_approve_format_ids=[
-                        "display_300x250",
-                        "display_728x90",
-                        "video_30s",
+                        "display_300x250_image",
+                        "display_728x90_image",
+                        "video_standard_30s",
                     ],
                     human_review_required=False,
                     auth_setup_mode=False,  # Disable setup mode for demo (simulates SSO configured)
@@ -258,7 +258,7 @@ def init_db(exit_on_error=False):
                         "formats": [
                             {
                                 "agent_url": "https://creative.adcontextprotocol.org",
-                                "id": "display_300x250",
+                                "id": "display_300x250_image",
                             }
                         ],
                         "targeting_template": {
@@ -282,7 +282,7 @@ def init_db(exit_on_error=False):
                         "formats": [
                             {
                                 "agent_url": "https://creative.adcontextprotocol.org",
-                                "id": "display_728x90",
+                                "id": "display_728x90_image",
                             }
                         ],
                         "targeting_template": {

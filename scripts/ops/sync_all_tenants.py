@@ -13,7 +13,6 @@ import requests
 # Add parent directory to path to import modules
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.admin.sync_api import initialize_superadmin_api_key
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AdapterConfig, Tenant
@@ -21,11 +20,17 @@ from src.core.database.models import AdapterConfig, Tenant
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+#: The sync API's trigger route (the blueprint is registered at /api/sync in src/admin/app.py).
+SYNC_TRIGGER_PATH = "/api/sync/trigger/{tenant_id}"
+
 
 def sync_all_gam_tenants():
     """Sync all tenants that have Google Ad Manager configured."""
-    # Get API key
-    api_key = initialize_superadmin_api_key()
+    # The sync API stores only a digest of a minted key, so the job sends the configured one.
+    api_key = get_settings().auth.sync_api_key
+    if not api_key:
+        logger.error("SYNC_API_KEY is not set; the scheduled sync cannot authenticate")
+        sys.exit(1)
 
     # Get all GAM tenants from database using ORM
     with get_db_session() as session:
@@ -57,7 +62,7 @@ def sync_all_gam_tenants():
         try:
             # Call sync API
             response = requests.post(
-                f"http://localhost:{get_settings().runtime.adcp_sales_port}/api/v1/sync/trigger/{tenant_id}",
+                f"http://localhost:{get_settings().runtime.adcp_sales_port}{SYNC_TRIGGER_PATH.format(tenant_id=tenant_id)}",
                 headers={"X-API-Key": api_key},
                 json={"sync_type": "full"},
                 timeout=300,  # 5 minute timeout per tenant

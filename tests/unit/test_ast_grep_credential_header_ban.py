@@ -70,14 +70,11 @@ import json
 import re
 import subprocess
 import sys
-import uuid
-from collections.abc import Iterator
-from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import repo_root
+from tests.unit._architecture_helpers import repo_root, stage_ast_grep_root, write_ast_grep_probe
 
 # The rule's id, and the path it is committed at. Both are pinned so that a
 # rule filed under another name fails with a path in the message rather than a
@@ -89,12 +86,13 @@ RULE_FILE = f".ast-grep/rules/{RULE_ID}.yml"
 # pyproject pins. See TestExemptionForm for why an upgrade cannot be silent.
 _MEASURED_VERSION = "0.45.3"
 
-# Synthetic probes are written INTO the scanned tree, because ast-grep scan has
-# no `--stdin-filename`: the rule's `files:` glob can only be graded by a real
-# path. The stem is excluded from the live-tree scan so a probe from a parallel
-# xdist worker cannot make case (f) fail.
+# Synthetic probes are written at a real path under a STAGED project root
+# (``stage_ast_grep_root`` copies sgconfig.yml and the rules next to it), because
+# ast-grep scan has no `--stdin-filename`: the rule's `files:` glob can only be
+# graded by a real path. Never into the live tree, where a probe is a file every
+# other guard's scan can list and then fail to read once its case deletes it —
+# under xdist a race between workers.
 _PROBE_STEM = "_synthetic_credential_probe"
-_PROBE_EXCLUDE_GLOB = f"!**/{_PROBE_STEM}_*.py"
 
 # Files allowed to build a credential header inline. Each carries a suppression
 # comment naming RULE_ID and a reason, on the line above the construction --
@@ -187,9 +185,12 @@ def _ast_grep_bin() -> Path:
 
 
 def _scan(
-    *paths: str, rule_args: tuple[str, ...] = ("--rule", RULE_FILE), globs: tuple[str, ...] = ()
+    *paths: str,
+    rule_args: tuple[str, ...] = ("--rule", RULE_FILE),
+    globs: tuple[str, ...] = (),
+    cwd: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """Run the real ast-grep over *paths* from the repo root.
+    """Run the real ast-grep over *paths* from the repo root, or from a staged *cwd*.
 
     The single helper every case goes through (DRY): same binary, same rule
     file, same output format — so a passing case proves the REAL gate line
@@ -202,7 +203,7 @@ def _scan(
         cmd,
         capture_output=True,
         text=True,
-        cwd=repo_root(),
+        cwd=cwd or repo_root(),
         check=False,
     )
 
@@ -232,16 +233,15 @@ def _matches(proc: subprocess.CompletedProcess[str]) -> list[dict]:
         ) from exc
 
 
-@contextmanager
-def _probe(rel_dir: str, source: str) -> Iterator[str]:
-    """Write *source* at a unique path under *rel_dir* and yield it, then remove it."""
-    rel_path = f"{rel_dir}/{_PROBE_STEM}_{uuid.uuid4().hex}.py"
-    path = repo_root() / rel_path
-    path.write_text(source)
-    try:
-        yield rel_path
-    finally:
-        path.unlink(missing_ok=True)
+@pytest.fixture
+def staged_root(tmp_path: Path) -> Path:
+    """The staged project root this case's probes are written into."""
+    return stage_ast_grep_root(tmp_path)
+
+
+def _probe(root: Path, rel_dir: str, source: str) -> str:
+    """Write *source* at a unique path under *rel_dir* inside *root*; return it relative to *root*."""
+    return write_ast_grep_probe(root, rel_dir, source, stem=_PROBE_STEM)
 
 
 def _sites(matches: list[dict]) -> list[str]:
@@ -256,10 +256,9 @@ class TestBanFiresOnEveryCredentialShape:
         _CREDENTIAL_SHAPES,
         ids=[label for label, _ in _CREDENTIAL_SHAPES],
     )
-    def test_credential_shape_is_flagged(self, label: str, source: str) -> None:
-        with _probe("tests/unit", source) as rel_path:
-            proc = _scan(rel_path)
-            matches = _matches(proc)
+    def test_credential_shape_is_flagged(self, staged_root: Path, label: str, source: str) -> None:
+        proc = _scan(_probe(staged_root, "tests/unit", source), cwd=staged_root)
+        matches = _matches(proc)
         assert matches, (
             f"[{label}] {RULE_ID} did not flag:\n{source}\n"
             f"--- rc={proc.returncode} stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}"
@@ -272,9 +271,8 @@ class TestBanFiresOnEveryCredentialShape:
 class TestBanFailsTheBuild:
     """(b) `severity: error` — a match is a non-zero exit, not a printed note."""
 
-    def test_known_bad_file_exits_non_zero(self) -> None:
-        with _probe("tests/unit", _KNOWN_BAD) as rel_path:
-            proc = _scan(rel_path)
+    def test_known_bad_file_exits_non_zero(self, staged_root: Path) -> None:
+        proc = _scan(_probe(staged_root, "tests/unit", _KNOWN_BAD), cwd=staged_root)
         assert proc.returncode == 1, (
             f"expected exit 1 from a known-bad file, got {proc.returncode}. Without "
             f"`severity: error` ast-grep prints its matches and exits 0, so the rule "
@@ -286,10 +284,9 @@ class TestBanFailsTheBuild:
 class TestCleanCodePasses:
     """(c) A non-credential header is not flagged — and the rule file loads."""
 
-    def test_clean_snippet_is_not_flagged(self) -> None:
-        with _probe("tests/unit", _CLEAN) as rel_path:
-            proc = _scan(rel_path)
-            matches = _matches(proc)
+    def test_clean_snippet_is_not_flagged(self, staged_root: Path) -> None:
+        proc = _scan(_probe(staged_root, "tests/unit", _CLEAN), cwd=staged_root)
+        matches = _matches(proc)
         # rc == 0 is the load proof: ast-grep exits 6 when --rule names a file
         # it cannot read, so a missing/broken rule fails here, not vacuously.
         assert proc.returncode == 0, (
@@ -303,10 +300,9 @@ class TestCleanCodePasses:
 class TestBanIsScopedToTests:
     """(d) `files: ["tests/**/*.py"]` — production is out of scope by construction."""
 
-    def test_identical_source_under_src_is_not_flagged(self) -> None:
-        with _probe("src/core", _KNOWN_BAD) as rel_path:
-            proc = _scan(rel_path)
-            matches = _matches(proc)
+    def test_identical_source_under_src_is_not_flagged(self, staged_root: Path) -> None:
+        proc = _scan(_probe(staged_root, "src/core", _KNOWN_BAD), cwd=staged_root)
+        matches = _matches(proc)
         assert matches == [] and proc.returncode == 0, (
             "the rule flagged a file under src/. Production owns two legitimate outbound "
             "credential producers (property_list_resolver.py, security/webhook_egress.py); "
@@ -318,10 +314,10 @@ class TestBanIsScopedToTests:
 class TestBanIsReachableThroughProjectConfig:
     """(e) The rule is committed under a `ruleDirs` entry sgconfig.yml discovers."""
 
-    def test_rule_id_resolves_under_sgconfig(self) -> None:
-        with _probe("tests/unit", _KNOWN_BAD) as rel_path:
-            proc = _scan(rel_path, rule_args=("--filter", f"^{re.escape(RULE_ID)}$"))
-            matches = _matches(proc)
+    def test_rule_id_resolves_under_sgconfig(self, staged_root: Path) -> None:
+        rel_path = _probe(staged_root, "tests/unit", _KNOWN_BAD)
+        proc = _scan(rel_path, rule_args=("--filter", f"^{re.escape(RULE_ID)}$"), cwd=staged_root)
+        matches = _matches(proc)
         assert matches, (
             f"`ast-grep scan --filter ^{RULE_ID}$` found nothing: the rule is not in a "
             f"ruleDirs entry of sgconfig.yml, so the project-wide scan and the pre-commit "
@@ -334,7 +330,7 @@ class TestLiveTreeAndExemptions:
     """(f) The tree is clean, and every exemption is a live violation."""
 
     def test_tests_tree_has_no_unexempted_credential_construction(self) -> None:
-        proc = _scan("tests/", globs=(_PROBE_EXCLUDE_GLOB,))
+        proc = _scan("tests/")
         matches = _matches(proc)
         assert matches == [], (
             f"{len(matches)} inline credential-header constructions remain in tests/. Route "
@@ -364,14 +360,14 @@ class TestLiveTreeAndExemptions:
             f"{sorted(set(_RECORDED_EXEMPTIONS) - found)}"
         )
 
-    def test_each_exemption_is_a_real_violation_without_its_suppression(self) -> None:
+    def test_each_exemption_is_a_real_violation_without_its_suppression(self, staged_root: Path) -> None:
         directive = re.compile(r"#\s*ast-grep-ignore:[^\n]*")
         vacuous: list[str] = []
         for rel in sorted(_RECORDED_EXEMPTIONS):
             source = (repo_root() / rel).read_text(encoding="utf-8")
-            with _probe("tests/unit", directive.sub("", source)) as probe_path:
-                if not _matches(_scan(probe_path)):
-                    vacuous.append(rel)
+            probe_path = _probe(staged_root, "tests/unit", directive.sub("", source))
+            if not _matches(_scan(probe_path, cwd=staged_root)):
+                vacuous.append(rel)
         assert vacuous == [], (
             "these files are exempted but do not violate the rule once their suppression "
             f"comment is removed — the exemption is prose, delete it: {vacuous}"
@@ -398,18 +394,17 @@ class TestExemptionForm:
             "directive form in use silently un-suppresses every exemption."
         )
 
-    def test_reason_on_the_directive_line_suppresses(self) -> None:
+    def test_reason_on_the_directive_line_suppresses(self, staged_root: Path) -> None:
         """The convention: one line, `# ast-grep-ignore: <id> - <why>`."""
         source = (
             "def build(token):\n"
             f"    # ast-grep-ignore: {RULE_ID} - outbound webhook credential\n"
             '    return {"Authorization": f"Bearer {token}"}\n'
         )
-        with _probe("tests/unit", source) as rel_path:
-            matches = _matches(_scan(rel_path))
+        matches = _matches(_scan(_probe(staged_root, "tests/unit", source), cwd=staged_root))
         assert matches == [], f"the documented exemption form did not suppress: {_sites(matches)}"
 
-    def test_reason_on_the_preceding_line_also_suppresses(self) -> None:
+    def test_reason_on_the_preceding_line_also_suppresses(self, staged_root: Path) -> None:
         """The two-line form works too, so an existing comment above a directive is safe."""
         source = (
             "def build(token):\n"
@@ -417,6 +412,5 @@ class TestExemptionForm:
             f"    # ast-grep-ignore: {RULE_ID}\n"
             '    return {"Authorization": f"Bearer {token}"}\n'
         )
-        with _probe("tests/unit", source) as rel_path:
-            matches = _matches(_scan(rel_path))
+        matches = _matches(_scan(_probe(staged_root, "tests/unit", source), cwd=staged_root))
         assert matches == [], f"the two-line exemption form did not suppress: {_sites(matches)}"

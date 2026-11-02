@@ -259,7 +259,7 @@ def seed_storyboard_tenant() -> str:
                     policy_settings=None,
                     signals_agent_config=None,
                     ai_policy=None,
-                    auto_approve_format_ids=["display_300x250", "display_728x90", "video_30s"],
+                    auto_approve_format_ids=["display_300x250_image", "display_728x90_image", "video_standard_30s"],
                     human_review_required=False,
                     auth_setup_mode=False,
                     created_at=now,
@@ -396,8 +396,8 @@ def seed_storyboard_tenant() -> str:
                 "name": "Premium Display Advertising",
                 "description": "High-impact display ads across premium content",
                 "formats": [
-                    {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
-                    {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_728x90"},
+                    {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
+                    {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_728x90_image"},
                 ],
                 "targeting_template": {"geo": ["US"], "device_type": "any"},
                 "delivery_type": "guaranteed",
@@ -408,7 +408,7 @@ def seed_storyboard_tenant() -> str:
                 "name": "Premium Video Advertising",
                 "description": "Pre-roll video ads with guaranteed completion rates",
                 "formats": [
-                    {"agent_url": "https://creative.adcontextprotocol.org", "id": "video_30s"},
+                    {"agent_url": "https://creative.adcontextprotocol.org", "id": "video_standard_30s"},
                 ],
                 "targeting_template": {"geo": ["US"], "device_type": "any"},
                 "delivery_type": "guaranteed",

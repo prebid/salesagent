@@ -178,7 +178,7 @@ def provision_tenant():
                 # Configuration
                 enable_axe_signals=True,
                 human_review_required=True,
-                auto_approve_format_ids=["display_300x250", "display_728x90"],
+                auto_approve_format_ids=["display_300x250_image", "display_728x90_image"],
                 # Access control
                 authorized_emails=[user_email.lower()],
                 authorized_domains=[email_domain] if email_domain else None,

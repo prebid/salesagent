@@ -489,3 +489,21 @@ class TrustRootUoW(BaseUoW):
         "signing_keys": SigningKeyRepository,
         "authorized_properties": AuthorizedPropertyRepository,
     }
+
+
+class AuthorizedPropertyUoW(BaseUoW):
+    """Unit of Work for verifying this tenant's authorized properties.
+
+    One unit per property verification: the read, the adagents.json check and the
+    status write share a session that nothing else opens. A bulk run reads the
+    pending properties in one unit, closes it, then opens one unit per property, so no
+    unit is ever nested in another (the shared scoped session would detach the
+    outer unit's rows, see #1644).
+
+    Args:
+        tenant_id: Tenant scope for all repository queries.
+    """
+
+    authorized_properties: AuthorizedPropertyRepository | None
+
+    _REPOSITORIES: ClassVar[Mapping[str, type]] = {"authorized_properties": AuthorizedPropertyRepository}

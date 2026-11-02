@@ -24,6 +24,7 @@ from pathlib import Path
 
 from count_ratchet import (
     int_baseline_io,
+    iter_python_sources,
     parse_ratchet_args,
     resolve_ratchet_paths,
     run_count_ratchet,
@@ -41,12 +42,8 @@ def count_type_ignores(src_path: Path) -> int:
     count = 0
     pattern = re.compile(r"#\s*type:\s*ignore")
 
-    for py_file in src_path.rglob("*.py"):
-        try:
-            content = py_file.read_text(encoding="utf-8")
-            count += len(pattern.findall(content))
-        except Exception as e:
-            print(f"Warning: Could not read {py_file}: {e}", file=sys.stderr)
+    for _path, content in iter_python_sources(src_path):
+        count += len(pattern.findall(content))
 
     return count
 

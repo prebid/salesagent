@@ -34,7 +34,7 @@ _AGENT_URL = "https://creative.adcontextprotocol.org"
 # and the roundtrip obligation could not be graded through it.
 #
 # That is a CATALOG-vs-PIN gap (the fixture was captured from the reference agent
-# after the pin; 45 of its 57 formats carry pixel_tracker), owned by #1998. It is not
+# after the pin; 45 of its 71 formats carry pixel_tracker), owned by #1998. It is not
 # a defect in format_id resolution, and it must not cost us the grading of format_id
 # resolution — which is what xfailing this scenario did. Seeding one of the 12
 # pin-expressible formats keeps the storyboard obligation live on all three

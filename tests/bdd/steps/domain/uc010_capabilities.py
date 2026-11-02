@@ -290,7 +290,7 @@ def given_publisher_partnerships(ctx: dict, domains: str) -> None:
 
     parsed = _quoted_list(domains)
     for domain in parsed:
-        PublisherPartnerFactory(tenant=ctx["tenant"], publisher_domain=domain)
+        PublisherPartnerFactory(tenant=ctx["tenant"], publisher_domain=ctx["env"].publisher_address(domain))
 
 
 @given("the adapter provides targeting capabilities including geo")
