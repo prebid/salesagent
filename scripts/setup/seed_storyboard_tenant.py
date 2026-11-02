@@ -263,7 +263,7 @@ def seed_storyboard_tenant() -> str:
     print(f"Inventory from the pinned bundle's {STORYBOARD_TEST_KIT}: {len(domains)} properties")
     print(f"Accounts derived from the bundle's storyboards: {len(accounts)}")
     print(f"account.sandbox from {STORYBOARD_TEST_KIT}: {account_sandbox}")
-    print(f"Runner passthrough-only from {BILLING_GATE_TEST_KIT}: {passthrough_only}")
+    print(f"Runner passthrough-only: {passthrough_only}")
     print("=" * 60)
 
     with get_db_session() as session:
