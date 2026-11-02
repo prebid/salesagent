@@ -493,6 +493,12 @@ def given_catalog_reprices_package_option(ctx: dict, pkg_id: str, pricing_model:
     priced_product(ctx["db_tenant"], pricing_options=[option])
 
 
+@given(parsers.parse('package "{pkg_id}" was stored with fixed-price terms that omit their rate'))
+def given_package_stored_without_rate(ctx: dict, pkg_id: str) -> None:
+    """The seeded buy's package row carries fixed-price terms with no ``rate``."""
+    _seed_package_terms(ctx, pkg_id, pricing_model="cpm", rate=None, currency="USD", is_fixed=True, bid_price=None)
+
+
 @given(parsers.parse('package "{pkg_id}" was stored without its pricing terms'))
 def given_package_stored_without_terms(ctx: dict, pkg_id: str) -> None:
     """The seeded buy's package row carries no ``pricing_info``.

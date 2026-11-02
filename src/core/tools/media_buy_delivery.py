@@ -17,9 +17,10 @@ from pydantic import RootModel
 from rich.console import Console
 
 from src.core.errors.codes import AppErrorCode, ErrorCode
-from src.core.errors.details import EntityRefDetails
+from src.core.errors.details import ConfigurationDetails, EntityRefDetails
 from src.core.exceptions import (
     AdCPInternalError,
+    AdCPPersistedStateError,
     AdCPSalesAgentError,
     AdCPValidationError,
 )
@@ -942,11 +943,15 @@ def _package_pricing(package_id: str, pricing_info: dict[str, Any] | None) -> di
     delivery report that cannot state them is not a delivery report. They are read from
     ``MediaPackage.package_config["pricing_info"]``: the terms the seller stored for THIS
     package at create (both create paths write it), and ``by_package[].rate`` is "the
-    agreed rate". An auction package's terms carry no ``rate``, so its report is refused (#2229).
+    agreed rate".
 
     Raises rather than defaulting. A package without its terms cannot state what it cost,
     and a seller that cannot say what a package cost must say so (GH #2130), not emit a
-    report that looks complete. No pricing option is looked up instead: a
+    report that looks complete. That row is a defect in the seller's store: the buyer cannot
+    fix it and a retry reads the same row, so it is ``CONFIGURATION_ERROR``, terminal. An
+    auction package's terms are complete without a ``rate``, because its rate is the
+    effective rate from actual delivery. This report does not derive that yet, so it is
+    refused separately (#2229). No pricing option is looked up instead: a
     ``pricing_option_id`` is unique only within its product (pricing-options/*.json), so a
     lookup by that id prices a package from whichever product's option shares it (#2377).
     """
@@ -958,4 +963,6 @@ def _package_pricing(package_id: str, pricing_info: dict[str, Any] | None) -> di
         )
         if model is not None and rate is not None and currency is not None:
             return {"pricing_model": model, "rate": float(rate), "currency": currency}
-    raise AdCPInternalError(details=EntityRefDetails(package_id=package_id))
+        if pricing_info.get("is_fixed") is False:
+            raise AdCPInternalError(details=EntityRefDetails(package_id=package_id))
+    raise AdCPPersistedStateError(details=ConfigurationDetails(package_id=package_id), field="pricing_info")

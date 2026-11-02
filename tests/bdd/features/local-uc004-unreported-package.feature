@@ -12,12 +12,17 @@
 #
 # A package stored without its terms has no agreed rate to report. The response schema
 # requires `pricing_model`, `rate` and `currency` on every `by_package` entry, so the seller
-# refuses the request with INTERNAL_ERROR, naming the package (#2130); it does not price the
-# package from the catalog's option under its id. The pin names no code for this refusal:
-# enums/error-code.json has no INTERNAL_ERROR, and L3/error-handling.mdx says "The catalog has
-# no generic `INTERNAL_ERROR` code by design" and "sellers MAY return platform-specific codes".
-# The pin does not say whether the refusal covers the whole request or only that buy; the last
-# scenario asserts the request-wide answer the seller gives today.
+# refuses the request with CONFIGURATION_ERROR, naming the package (#2130); it does not price
+# the package from the catalog's option under its id. enums/error-code.json: "the buyer cannot
+# fix it, retrying will not help, and reporting to the seller's operator is the only
+# remediation", recovery terminal. L3/error-handling.mdx: "The catalog has no generic
+# `INTERNAL_ERROR` code by design, and `CONFIGURATION_ERROR` is deliberately narrower — it
+# covers the actionable slice where the remediation is "report this to the seller's operator.""
+# The code's examples are deployment settings; the pin does not name a stored row, and this
+# seller reads the row as the same defect, because only its operator can repair it.
+# The refusal covers the whole request, in the raised lane. enums/error-code.json on this code:
+# "The deployment cannot produce a success artifact, so sellers MUST flip transport-level failure
+# markers", so it cannot travel as an advisory in `errors[]` beside the other buys' figures.
 #
 # Ungraded by storyboard: delivery_reporting's get_delivery step checks the response schema,
 # `media_buy_deliveries`, `totals.spend` and the package ids in `by_package`, and no storyboard
@@ -42,6 +47,16 @@ Feature: get_media_buy_delivery prices each package at the terms agreed for it (
       | package | impressions | spend | pricing_model | rate | clicks |
       | pkg_cpc | 1000        | 10.00 | cpc           | 0.50 | 20     |
 
+  @T-UC-004-local-unreported-package-incomplete-stored-terms @extension
+  Scenario: A fixed-price package stored with terms that omit their rate is refused as the seller's store defect
+    Given a media buy "mb-001" owned by "buyer-001" with status "active"
+    And package "pkg_001" was stored with fixed-price terms that omit their rate
+    And the ad server adapter reports 1000 impressions and 10.00 spend for "pkg_001"
+    When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-001"]
+    Then the response contains error code CONFIGURATION_ERROR
+    And the error recovery should be "terminal"
+    And the wire error details should include package_id "pkg_001"
+
   @T-UC-004-local-unreported-package-no-stored-terms @extension
   Scenario: A package stored without its pricing terms is refused, not priced from the catalog's options under its id
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
@@ -49,5 +64,6 @@ Feature: get_media_buy_delivery prices each package at the terms agreed for it (
     And the seller's catalog now prices package "pkg_001"'s pricing_option_id at cpm rate 2.00, on the package's own product and on another product
     And the ad server adapter reports 1000 impressions and 10.00 spend for "pkg_001"
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-001"]
-    Then the response contains error code INTERNAL_ERROR
+    Then the response contains error code CONFIGURATION_ERROR
+    And the error recovery should be "terminal"
     And the wire error details should include package_id "pkg_001"
