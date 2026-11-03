@@ -577,6 +577,7 @@ def classify_xpassed(
     *,
     force_confirm: bool = False,
     ledger_bases: set[str] | None = None,
+    nodeid_outcomes: Sequence[tuple[str, str]] | None = None,
 ) -> XpassBuckets:
     """Classify xpassed scenario bases into graduate / confirm / partial.
 
@@ -597,7 +598,8 @@ def classify_xpassed(
 
     Returns ``XpassBuckets(graduate, confirm, partial_passing, partial_missing)``.
     """
-    nodeid_outcomes = [(t["nodeid"], graded_outcome(t)) for t in all_tests]
+    if nodeid_outcomes is None:
+        nodeid_outcomes = [(t["nodeid"], graded_outcome(t)) for t in all_tests]
     xpassed_bases = {extract_scenario_base(nodeid) for nodeid, outcome in nodeid_outcomes if outcome == "xpassed"}
     graduate: set[str] = set()
     confirm: set[str] = set()
@@ -830,8 +832,9 @@ def main() -> None:
     print(f"Parsing {', '.join(str(path) for path in json_paths)}...", file=sys.stderr)
     loaded = cli_load_or_exit(json_paths)
     all_tests = cast(list[TestReportEntry], loaded.tests)
-    xfailed_tests = [t for t in all_tests if graded_outcome(t) == "xfailed"]
-    xpassed_tests = [t for t in all_tests if graded_outcome(t) == "xpassed"]
+    graded = loaded.nodeid_outcomes
+    xfailed_tests = [t for t, (_, outcome) in zip(all_tests, graded, strict=True) if outcome == "xfailed"]
+    xpassed_tests = [t for t, (_, outcome) in zip(all_tests, graded, strict=True) if outcome == "xpassed"]
     print(
         f"  Parsed {len(all_tests)} tests ({len(xfailed_tests)} xfailed, {len(xpassed_tests)} xpassed)",
         file=sys.stderr,
@@ -849,7 +852,12 @@ def main() -> None:
 
     # Step 4: Classify xpassed tests (needs full suite for present-transport set)
     print("Classifying xpassed tests...", file=sys.stderr)
-    buckets = classify_xpassed(all_tests, force_confirm=force_confirm, ledger_bases=ledger_bases)
+    buckets = classify_xpassed(
+        all_tests,
+        force_confirm=force_confirm,
+        ledger_bases=ledger_bases,
+        nodeid_outcomes=loaded.nodeid_outcomes,
+    )
     print(
         f"  {len(buckets.graduate)} pass all present transports (graduation candidates)",
         file=sys.stderr,
