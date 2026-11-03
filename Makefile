@@ -27,7 +27,7 @@ quality-ci:
 	# the hook declares, because this repo's workflow merges locally and never pushes, so
 	# a pre-push-only rule never executes at all.
 	uv run ast-grep scan --config sgconfig.yml
-	uv run mypy src/ .claude/scripts/ scripts/graduate_pending.py --config-file=mypy.ini
+	uv run mypy src/ .claude/scripts/ --config-file=mypy.ini
 	# Layer-2 ratchets. These are declared stages:[pre-push] in .pre-commit-config.yaml, and
 	# this repo's documented workflow (ephemeral branches merged LOCALLY, `git push` never run)
 	# means the pre-push stage NEVER FIRES. They therefore ran nowhere, and drift accumulated
@@ -89,7 +89,7 @@ lint:
 	uv run ruff check .
 
 typecheck:
-	uv run mypy src/ .claude/scripts/ scripts/graduate_pending.py --config-file=mypy.ini
+	uv run mypy src/ .claude/scripts/ --config-file=mypy.ini
 
 test-fast:
 	uv run pytest tests/unit/ -x

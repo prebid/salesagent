@@ -1,8 +1,8 @@
 """Shared helpers for BDD audit meta-tooling scripts.
 
 Used by ``bdd_full_audit.py``, ``audit_xfails.py``, ``cross_reference_audit.py``,
-``salvage_audit_output.py``, and ``scripts/graduate_pending.py`` so transport /
-scenario / UC parsing and graduation bucketing cannot drift apart.
+and ``salvage_audit_output.py`` so transport / scenario / UC parsing and
+graduation bucketing cannot drift apart.
 
 Transport vocabulary mirrors ``tests/bdd/conftest.py`` parametrize ids after
 #1417: ``a2a`` / ``mcp`` / ``rest``, plus ``e2e_rest`` when in-network is
@@ -14,12 +14,9 @@ transports are not silently dropped from coverage.
 Report-bucket vocabulary (intentional split, same underlying coverage grade):
 ``bdd_full_audit`` labels partial xpass as ``PARTIAL_XPASS`` / full as
 ``GRADUATE`` / confirm as ``GRADUATE_CONFIRM``; ``audit_xfails`` keeps
-``PARTIAL_PASS`` / ``STALE`` / ``STALE_CONFIRM``; ``graduate_pending`` uses
-``graduate_all`` / ``graduate_confirm`` / ``graduate_partial`` for the same
-three ``grade_base`` buckets (apply/report dialect, not a fourth grade). Do
-not unify the report tokens without a deliberate cross-script rename. The
-shared ``grade_base`` helper owns the confirmation gate so classifiers cannot
-drift.
+``PARTIAL_PASS`` / ``STALE`` / ``STALE_CONFIRM``. Do not unify the report
+tokens without a deliberate cross-script rename. The shared ``grade_base``
+helper owns the confirmation gate so classifiers cannot drift.
 
 Canonical conftest tag parsing lives here as ``parse_conftest_xfail_tags``
 (``tag → TagReason``). Callers that only need reasons use
@@ -31,7 +28,7 @@ from __future__ import annotations
 import json
 import re
 import sys
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Literal, NamedTuple, TypedDict
 
@@ -298,40 +295,89 @@ class EmptyArtifactError(Exception):
         self.message = message
 
 
+class ArtifactRootMismatchError(Exception):
+    """Raised when concatenated artifact files do not share one root."""
+
+    MESSAGE = "ERROR: artifact files do not share one root — pass files from one run."
+
+    def __init__(self, message: str = MESSAGE) -> None:
+        super().__init__(message)
+        self.message = message
+
+
 FORCE_CONFIRM_WARNING = "WARNING: e2e_rest appears for no base — every graduation routes to confirm."
 
 
-def load_bdd_artifact(path: Path) -> LoadedArtifact:
-    """Load bdd.json with the shared empty-artifact guard and transport census.
+def graded_outcome(test: Mapping[str, Any]) -> str:
+    """Outcome classifiers should grade, not the raw json-report field.
 
-    Empty ``{"tests": []}`` is indistinguishable from a clean run — raise
-    ``EmptyArtifactError`` (CLI edge exits via ``cli_load_or_exit``). When
-    ``e2e_rest`` is absent from the whole artifact, ``force_confirm`` is True
-    on the returned record; stderr warning is CLI-only.
+    A strict xpass is stored as ``outcome: failed`` with ``[XPASS(strict)]``
+    in ``call.longrepr``. Reading the raw field makes that row a failure and
+    a firm GRADUATE unreachable.
     """
-    data = json.loads(path.read_text(encoding="utf-8"))
-    tests = list(data.get("tests") or [])
+    outcome = str(test.get("outcome") or "")
+    if outcome != "failed":
+        return outcome
+    call = test.get("call")
+    longrepr = ""
+    if isinstance(call, dict):
+        longrepr = str(call.get("longrepr") or "")
+    if "XPASS(strict)" in longrepr:
+        return "xpassed"
+    return outcome
+
+
+def _artifact_paths(paths: Path | Sequence[Path]) -> list[Path]:
+    """One Path is one file. A Path is iterable, so it must not be unpacked."""
+    if isinstance(paths, Path):
+        return [paths]
+    return [Path(path) for path in paths]
+
+
+def load_bdd_artifact(paths: Path | Sequence[Path]) -> LoadedArtifact:
+    """Load one or more bdd.json files from a single run.
+
+    Tests are concatenated and the transport census is taken over the union,
+    so a split ``bdd_inprocess`` + ``bdd_e2e`` pair grades together. Files
+    whose ``root`` differs are refused (two runs can both say ``/app``).
+    Empty input raises ``EmptyArtifactError``. ``nodeid_outcomes`` uses
+    ``graded_outcome``. When ``e2e_rest`` is absent from the union,
+    ``force_confirm`` is True; the stderr warning is CLI-only.
+    """
+    path_list = _artifact_paths(paths)
+    blobs: list[dict[str, Any]] = []
+    roots: list[str | None] = []
+    for path in path_list:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            data = {}
+        blobs.append(data)
+        root = data.get("root")
+        roots.append(root if isinstance(root, str) else None)
+    if len(set(roots)) > 1:
+        raise ArtifactRootMismatchError()
+
+    tests: list[Any] = []
+    for data in blobs:
+        tests.extend(list(data.get("tests") or []))
     if not tests:
         raise EmptyArtifactError()
 
-    nodeid_outcomes = [(t["nodeid"], t["outcome"]) for t in tests]
+    nodeid_outcomes = [(t["nodeid"], graded_outcome(t)) for t in tests]
     census = artifact_transport_census(nodeid_outcomes)
-    force_confirm = census.incomplete_e2e
-    root = data.get("root")
-    artifact_root = root if isinstance(root, str) else None
     return LoadedArtifact(
         tests=tests,
         nodeid_outcomes=nodeid_outcomes,
-        force_confirm=force_confirm,
-        artifact_root=artifact_root,
+        force_confirm=census.incomplete_e2e,
+        artifact_root=roots[0] if roots else None,
     )
 
 
-def cli_load_or_exit(path: Path) -> LoadedArtifact:
-    """CLI edge: load artifact or print canonical empty message and exit 2."""
+def cli_load_or_exit(paths: Path | Sequence[Path]) -> LoadedArtifact:
+    """CLI edge: load artifact files or print the refusal and exit 2."""
     try:
-        loaded = load_bdd_artifact(path)
-    except EmptyArtifactError as exc:
+        loaded = load_bdd_artifact(paths)
+    except (EmptyArtifactError, ArtifactRootMismatchError) as exc:
         print(exc.message, file=sys.stderr)
         raise SystemExit(2) from exc
     if loaded.force_confirm:

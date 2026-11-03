@@ -16,7 +16,7 @@ import argparse
 import json
 import re
 import sys
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any, TextIO, TypedDict
 
@@ -120,10 +120,16 @@ def _normalize_step(step: dict[str, Any], fallback_name: str = "") -> StepRecord
     }
 
 
-def _store_key(kind: str, step: StepRecord, fallback_name: str = "") -> str:
-    """Kind-scoped dedupe key so triage and deep traces do not collide."""
-    name = step["function_name"] or fallback_name
-    return f"{kind}:{name}:{step['line_number']}"
+def _store_key(kind: str, step: Mapping[str, Any], fallback_name: str = "") -> str:
+    """Kind-scoped key. Occurrence distinguishes two steps that share a name.
+
+    A capture only has a function name, and ``step_lookup`` is also keyed by
+    name, so line number cannot tell ``then_no_errors_field`` [COSMETIC] from
+    [MISSING]. ``#N`` is that name's occurrence within the pass.
+    """
+    name = str(step.get("function_name") or fallback_name)
+    occurrence = int(step.get("occurrence") or 1)
+    return f"{kind}:{name}#{occurrence}"
 
 
 def _placeholder_step(func_name: str) -> StepRecord:
@@ -151,7 +157,10 @@ def _load_existing_keys(store_path: Path) -> set[str]:
         step = obj.get("step", {})
         if not isinstance(step, dict):
             step = {}
-        existing_keys.add(_store_key(str(obj.get("kind")), _normalize_step(step)))
+        normalized = dict(_normalize_step(step))
+        if step.get("occurrence") is not None:
+            normalized["occurrence"] = step.get("occurrence")
+        existing_keys.add(_store_key(str(obj.get("kind")), normalized))
     return existing_keys
 
 
@@ -162,10 +171,13 @@ def _append_if_new(
     step_lookup: dict[str, StepRecord],
     existing_keys: set[str],
     record: dict[str, Any],
+    *,
+    occurrence: int,
 ) -> bool:
     """Write ``record`` once per kind-scoped key. Returns True if written."""
     func_name = r["func_name"]
-    step_info = step_lookup.get(func_name, _placeholder_step(func_name))
+    step_info = dict(step_lookup.get(func_name, _placeholder_step(func_name)))
+    step_info["occurrence"] = occurrence
     key = _store_key(kind, step_info, func_name)
     if key in existing_keys:
         return False
@@ -198,9 +210,18 @@ def write_to_store(parsed: ParsedOutput, store_path: Path, step_index_path: Path
     new_triage = 0
     new_deep = 0
 
+    def _occurrences(rows: list[ParsedRow]) -> list[int]:
+        counts: dict[str, int] = {}
+        numbered: list[int] = []
+        for row in rows:
+            name = str(row["func_name"])
+            counts[name] = counts.get(name, 0) + 1
+            numbered.append(counts[name])
+        return numbered
+
     store_path.parent.mkdir(parents=True, exist_ok=True)
     with open(store_path, "a") as f:
-        for r in parsed["pass1"]:
+        for r, occurrence in zip(parsed["pass1"], _occurrences(parsed["pass1"]), strict=True):
             if _append_if_new(
                 f,
                 "triage",
@@ -212,10 +233,11 @@ def write_to_store(parsed: ParsedOutput, store_path: Path, step_index_path: Path
                     "reason": "salvaged from raw output (original reason lost)",
                     "source": "pass1",
                 },
+                occurrence=occurrence,
             ):
                 new_triage += 1
 
-        for r in parsed["pass2"]:
+        for r, occurrence in zip(parsed["pass2"], _occurrences(parsed["pass2"]), strict=True):
             if _append_if_new(
                 f,
                 "deep",
@@ -228,6 +250,7 @@ def write_to_store(parsed: ParsedOutput, store_path: Path, step_index_path: Path
                     "recommendation": "salvaged — see full report for details",
                     "severity": r["severity"],
                 },
+                occurrence=occurrence,
             ):
                 new_deep += 1
 

@@ -209,7 +209,13 @@ def generate_report(
 def main():
     parser = argparse.ArgumentParser(description="Cross-reference inspector flags with test results")
     parser.add_argument("--inspector", "-i", required=True, help="Inspector JSON report path")
-    parser.add_argument("--results", "-r", required=True, help="bdd.json test results path")
+    parser.add_argument(
+        "--results",
+        "-r",
+        required=True,
+        nargs="+",
+        help="bdd.json files from one run (same root). Pass split halves together.",
+    )
     parser.add_argument("--output", "-o", default=".claude/reports/cross-reference-audit.md", help="Output path")
     args = parser.parse_args()
 
@@ -218,8 +224,8 @@ def main():
     print(f"  {len(flags)} flags", file=sys.stderr)
 
     print("Parsing test results...", file=sys.stderr)
-    loaded = cli_load_or_exit(Path(args.results))
-    outcomes = parse_test_results(Path(args.results), loaded=loaded)
+    loaded = cli_load_or_exit([Path(path) for path in args.results])
+    outcomes = parse_test_results(Path(args.results[0]), loaded=loaded)
     print(f"  Parsed {len(outcomes)} tests", file=sys.stderr)
 
     print("Generating cross-reference...", file=sys.stderr)
