@@ -41,14 +41,7 @@ tests/harness/
 └── admin_tenant_scoping.py          # AdminTenantScopingEnv (AdminAccountEnv subclass)
 
 tests/helpers/
-├── admin_session.py                   # admin_auth_session() for the Flask client
-└── admin_tenant_scoping_contract.py   # #2203 contract classes, written once
-
-tests/admin/
-└── test_tenant_scoped_routes_auth.py  # collects them in-process
-
-tests/e2e/
-└── test_admin_tenant_scoping_e2e.py   # the same classes over the live stack (non-BDD)
+└── admin_session.py                 # admin_auth_session() for the Flask client
 ```
 
 `BR-ADMIN-TENANT-SCOPING` is claimed by a predicate `ENV_ROUTES` row ahead of the
@@ -57,12 +50,10 @@ it needs its own harness. Like `BR-ADMIN-ACCOUNTS`, it runs on both admin transp
 its builder, `_build_admin_tenant_scoping_env`, returns the in-process env through
 `AdminTenantScopingEnv.integration()` for `admin_integration` and the live-stack env at
 `e2e_config.base_url` for `e2e_admin`. `tests/unit/test_bdd_admin_transport_parametrization.py`
-checks every admin builder on both transports.
-
-The `tests/e2e` module above is a separate, non-BDD run of the contract classes, written
-before `AdminTransport.E2E` existed. It now overlaps the BDD `e2e_admin` leg; deleting it,
-as BR-ADMIN-ACCOUNTS' own `test_admin_bdd_e2e.py` was deleted, is
-https://github.com/prebid/salesagent/issues/2235.
+checks every admin builder on both transports. The feature file is the one statement of
+the contract: the pytest twins that once ran the same assertions in-process and against the
+Docker stack were deleted once `AdminTransport.E2E` carried the Gherkin, as
+BR-ADMIN-ACCOUNTS' own `test_admin_bdd_e2e.py` had been.
 
 ## Add an admin feature
 

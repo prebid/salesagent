@@ -19,10 +19,10 @@ real branch, and the target tenant's ``User`` row is the only thing that decides
 outcome, so a rejection here is the real membership check, on the same branch of the
 decorator in-process as on the stack.
 
-The module-level helpers (route table, case expansion, seeding, state snapshot, assertion
-helpers) are shared by the contract classes in
-``tests/helpers/admin_tenant_scoping_contract.py`` and the BDD steps, so the three layers
-grade one contract.
+The contract itself is stated once, in ``tests/bdd/features/BR-ADMIN-TENANT-SCOPING.feature``,
+and runs on both transports through ``_build_admin_tenant_scoping_env`` in tests/bdd/conftest.py.
+The module-level helpers (route table, seeding, state snapshot, expected bodies) are what the
+step definitions in tests/bdd/steps/domain/admin_tenant_scoping.py read.
 """
 
 from __future__ import annotations
@@ -66,20 +66,6 @@ ROUTES: dict[str, TenantScopedRoute] = {
     "product suggestions API": TenantScopedRoute("/api/tenant/{tenant_id}/products/suggestions", ("GET",), True),
     "policy rules page": TenantScopedRoute("/tenant/{tenant_id}/policy/rules", ("GET", "POST"), False),
 }
-
-
-#: ``pytest.mark.parametrize`` argnames for the rows ``route_cases()`` returns.
-ROUTE_CASE_PARAMS = "method,route,api_mode"
-
-
-def route_cases() -> tuple[list[str], list[tuple[str, str, bool]]]:
-    """``(ids, rows)`` for ``parametrize(ROUTE_CASE_PARAMS, rows, ids=ids)``: one row per route and method."""
-    cases = [
-        (f"{name}-{method}", (method, name, route.api_mode))
-        for name, route in ROUTES.items()
-        for method in route.methods
-    ]
-    return [case[0] for case in cases], [case[1] for case in cases]
 
 
 class TargetTenant(NamedTuple):
@@ -166,28 +152,6 @@ def expected_suggestions_body() -> dict[str, Any]:
     }
 
 
-def assert_anonymous_rejected(response: Any, api_mode: bool, tenant_id: str) -> None:
-    """What ``require_tenant_access`` answers when there is no session.
-
-    For the HTML route the target path is pinned on purpose: ``require_auth`` sends anonymous
-    callers to the generic ``/login``, and with no decorator at all the handler's own redirect
-    to ``policy.index`` would answer. Only the tenant login page means the tenant check ran.
-    """
-    if api_mode:
-        assert response.status_code == 401
-        assert response.get_json() == {"error": "Authentication required"}
-        return
-    assert response.status_code == 302
-    assert redirect_path(response) == f"/tenant/{tenant_id}/login"
-
-
-def assert_membership_rejected(response: Any, api_mode: bool) -> None:
-    """What ``require_tenant_access`` answers when the session user is not an active member."""
-    assert response.status_code == 403
-    if api_mode:
-        assert response.get_json() == {"error": "Access denied"}
-
-
 class AdminTenantScopingEnv(AdminAccountEnv):
     """Test environment for the tenant-scoping scenarios of #2203.
 
@@ -208,8 +172,8 @@ class AdminTenantScopingEnv(AdminAccountEnv):
         ``MEMBER_EMAIL`` lives at ``example.com``; an inherited ``SUPER_ADMIN_DOMAINS=example.com``
         would turn every rejection case into a super-admin pass. The stack's environment is the
         server's own (docker-compose.e2e.yml forwards ``SUPER_ADMIN_EMAILS`` only), so this is the
-        one transport the test process controls, and both places that build the in-process env
-        (tests/admin/conftest.py, tests/bdd/conftest.py) come through here.
+        one transport the test process controls, and ``_build_admin_tenant_scoping_env``
+        (tests/bdd/conftest.py) builds the in-process env through here.
         """
         with mock.patch.dict(os.environ):
             os.environ.pop("SUPER_ADMIN_DOMAINS", None)

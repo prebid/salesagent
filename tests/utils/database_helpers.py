@@ -192,8 +192,8 @@ def production_db_pointed_at(url: str):
     the test (a Then step's read-back, a harness seeding through ``get_engine()``) would
     otherwise use a different database than the one the server reads. Repoints
     ``DATABASE_URL`` and resets the cached engine on entry, restores both on exit
-    (mirrors tests/conftest_db.py). Shared by the BDD e2e_rest scope and
-    ``admin_stack_env`` in tests/e2e/conftest.py.
+    (mirrors tests/conftest_db.py). Entered by ``_db_scope_for`` in tests/bdd/conftest.py
+    for every ``e2e_``-prefixed transport, ``e2e_admin`` included.
     """
     import os
 
