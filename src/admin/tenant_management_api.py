@@ -78,6 +78,7 @@ def list_tenants():
     with get_db_session() as db_session:
         try:
             # Query with left join and group by
+            # FIXME(#1119): raw select on Tenant outside a repository
             stmt = (
                 select(
                     Tenant.tenant_id,

@@ -243,6 +243,7 @@ class PropertyDiscoveryService:
 
         with get_db_session() as session:
             if not publisher_domains:
+                # FIXME(#1119): raw select on AuthorizedProperty outside a repository
                 stmt = (
                     select(AuthorizedProperty.publisher_domain)
                     .where(AuthorizedProperty.tenant_id == tenant_id)
