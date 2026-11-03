@@ -691,8 +691,15 @@ class GAMOrdersManager:
                             placeholder_width = placeholder.get("size", {}).get("width")
                             placeholder_height = placeholder.get("size", {}).get("height")
 
-                            # 1x1 placeholders are special (templates, native) - always include
-                            if placeholder_width == 1 and placeholder_height == 1:
+                            # Native and template placeholders have no real pixel size
+                            # (GAM labels them 1x1 by convention), so they can never
+                            # match a creative by dimensions - always include them.
+                            # A plain PIXEL placeholder that happens to be 1x1 (e.g. a
+                            # tracking-pixel size synced from an ad unit) is NOT special
+                            # and must match an actual creative like any other size.
+                            is_native = placeholder.get("creativeSizeType") == "NATIVE"
+                            has_template = placeholder.get("creativeTemplateId") is not None
+                            if is_native or has_template:
                                 filtered_placeholders.append(placeholder)
                             # Include if we have creatives of this size
                             elif (placeholder_width, placeholder_height) in creative_sizes:
