@@ -490,39 +490,25 @@ def pytest_testnodedown(node: Any, error: Any) -> None:
 #: The transport names an observation records for the in-process transports.
 _IN_PROCESS_NAMES = frozenset(t.value for t in BDD_IN_PROCESS_TRANSPORTS)
 
-#: Per-session artifact files live beside the merged one. Two shards are two
-#: SEPARATE pytest sessions, so both wrote the single merged path and the last
-#: one won -- see `_run_scope`'s `target`.
-_SESSIONS_DIRNAME = "liveness-sessions"
-
 #: Where the per-session files live. Named by the runner so the directory is
 #: PER RUN, exactly as `PYTEST_COLLECTION_MANIFEST` is: `artifact_path()` points
 #: at a stable top-level file, so deriving the directory from it alone leaves
 #: yesterday's sessions sitting beside today's, where they satisfy the coverage
 #: check and get merged into the measurement. One resolver, used by the writer
-#: and by every reader, so the two cannot disagree about which run is being read.
+#: and by every reader, so the two cannot disagree about which run is being read. Unset
+#: means no per-session copy: no reader can use one, since `sessions_dir` refuses to guess.
 SESSIONS_ENV_VAR = "BDD_LIVENESS_SESSIONS"
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def _write_sessions_dir() -> Path:
-    """Where THIS session writes its file. Falls back, because writing is harmless."""
-    override = os.environ.get(SESSIONS_ENV_VAR)
-    return Path(override) if override else artifact_path().parent / _SESSIONS_DIRNAME
-
-
 def sessions_dir() -> Path:
     """Where a READER finds this run's sessions. Refuses to guess.
 
-    Deliberately asymmetric with `_write_sessions_dir` above, and the asymmetry
-    is the point. A writer that falls back to the shared top-level directory
-    costs nothing. A READER that falls back silently grades whatever previous
-    runs left there — which is exactly how this went unnoticed once already:
-    `BDD_LIVENESS_SESSIONS` was absent from docker-compose's curated env block,
-    the resolver fell back, and run innet_020926_1010 read a shared directory
-    while appearing to honour a per-run one. Raising makes that misconfiguration
-    a failure instead of a quietly weaker measurement.
+    A reader that falls back silently grades whatever previous runs left there, which is
+    how this went unnoticed once already: `BDD_LIVENESS_SESSIONS` was absent from
+    docker-compose's curated env block, the resolver fell back, and run innet_020926_1010
+    read a shared directory while appearing to honour a per-run one.
 
     Mirrors `tests/_collection_manifest.manifest_dir()`, which refuses the same
     way for the same reason.
@@ -630,7 +616,9 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
     # gate. Every session writes the per-session copy, which is what `load_run` folds.
     if shard_split.targets_cover_suite("bdd", artifact["run"]["target"], repo_root=_REPO_ROOT):
         write_artifact(artifact_path(), body)
-    write_artifact(_write_sessions_dir() / _session_filename(artifact["run"]), body)
+    sessions = os.environ.get(SESSIONS_ENV_VAR)
+    if sessions:
+        write_artifact(Path(sessions) / _session_filename(artifact["run"]), body)
 
 
 class IncompleteLivenessRun(RuntimeError):

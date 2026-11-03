@@ -115,6 +115,17 @@ def test_a_session_handed_a_file_list_stays_off_the_shared_path(liveness_paths: 
     assert written["run"]["target"] == ["tests/bdd/test_uc005_discover_creative_formats.py"]
 
 
+def test_no_sessions_directory_means_no_session_copy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A nested or ad-hoc session has no run to publish into, and no reader could use the copy."""
+    shared = tmp_path / "liveness.json"
+    monkeypatch.setenv("BDD_LIVENESS_ARTIFACT", str(shared))
+    monkeypatch.delenv("BDD_LIVENESS_SESSIONS", raising=False)
+
+    scenario_liveness.pytest_sessionfinish(_finished_session(_BDD_TREE))
+
+    assert [path.name for path in tmp_path.rglob("*") if path.is_file()] == [shared.name]
+
+
 def test_unpublished_env_drops_only_what_names_the_runs_directories() -> None:
     env = {"PYTEST_COLLECTION_MANIFEST": "m", "BDD_LIVENESS_SESSIONS": "s", "BDD_LIVENESS_ARTIFACT": "a", "X": "1"}
 
