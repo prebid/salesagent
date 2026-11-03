@@ -121,7 +121,10 @@ class GAMImplementationConfig(BaseModel):
     )
 
     # Native ad settings
-    native_style_id: str | None = Field(None, description="GAM native style ID if using native ads")
+    native_style_id: str | None = Field(
+        None,
+        description="GAM creative template id (TemplateCreative.creativeTemplateId) that native creatives of this product are built against",
+    )
 
     # Creative-level placement targeting
     placement_targeting: list[PlacementTargeting] = Field(

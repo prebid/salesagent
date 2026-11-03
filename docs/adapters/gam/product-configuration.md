@@ -238,6 +238,14 @@ The authoritative field list is the `GAMImplementationConfig` schema in `src/ada
 - **Values**: `automatic` (instant activation), `confirmation_required` (human approval, then automatic activation), `manual` (a human handles all steps)
 - **Defaults**: `manual` for guaranteed, `confirmation_required` for non-guaranteed
 
+#### Native style (creative template)
+
+- **Field**: `native_style_id` (optional)
+- **Type**: String. The numeric id of the GAM creative template that native creatives of this product are built against (`TemplateCreative.creativeTemplateId`).
+- **Status**: **Not yet active.** The creative push currently sends every creative as an image, hosted-asset or third-party creative; the `TemplateCreative` path is wired but unreachable until the asset builder carries a creative's template variables ([#2446](https://github.com/prebid/salesagent/issues/2446)). The rest of this entry describes that path.
+- **Behavior**: A native creative is built against one template, resolved from two sources that must agree: the `creativeTemplateId` GAM reports on the line item's native placeholder (set from the format's `creative_placeholder.creative_template_id`; a placeholder built from `creative_placeholders` with `is_native: true` carries none), and this field. GAM's placeholder settles a product that does not set this field; this field settles a placeholder that carries no template; a typo in either shows as a disagreement. No template from either source, or two different ones (a creative assigned to packages of several products needs every one of them to name the same template), fails that creative's upload with a `CONFIGURATION_ERROR` naming `native_style_id`: nothing is sent to GAM for it, the media buy itself completes, and the seller log carries the creative id and the field. The same resolution runs on all three push paths: the create-time inline upload, the manual-approval execution, and the retroactive push when a creative is approved later.
+- **How to set it**: Neither the product form nor the GAM product configuration page has an input for this field. Write it into the product's `implementation_config` JSON (the product row) on every product that accepts native formats.
+
 ## Testing
 
 ### Test the configuration UI
@@ -369,7 +377,7 @@ Response:
 
 - Match the product's formats exactly.
 - Set `expected_creative_count` to the number of creatives you expect per size.
-- Set `is_native: true` for native formats.
+- Set `is_native: true` for native formats. Such a placeholder carries no creative template, so the product's `native_style_id` is what a native creative pushed into it will be built against once that path is active (see [Native style](#native-style-creative-template)).
 
 ### Frequency caps
 
