@@ -369,6 +369,26 @@ def import_map(relpath: str, tree: ast.Module) -> dict[str, tuple[str, str]]:
     return mapping
 
 
+#: The models module's dotted name: what an ORM-class import binding must come from.
+ORM_MODELS_MODULE = module_name_for(str(MODELS_MODULE.relative_to(REPO_ROOT)))
+
+
+def orm_bindings(relpath: str, tree: ast.Module) -> dict[str, str]:
+    """Local name -> ORM class name, for every name *tree* imports from ``models.py``.
+
+    ``from src.core.database.models import User as DBUser`` -> ``{"DBUser": "User"}``;
+    an unaliased import maps to itself. A guard that grades a call against the mapper
+    resolves the callee through this map rather than by bare name: a Pydantic
+    ``Product`` is then never graded as the ORM one, and an alias cannot hide a model
+    (four raw selects did until #2128). Relative imports resolve through ``import_map``.
+    """
+    return {
+        local: original
+        for local, (module, original) in import_map(relpath, tree).items()
+        if module == ORM_MODELS_MODULE
+    }
+
+
 def parse_sources(sources: dict[str, str]) -> tuple[dict[str, ast.Module], dict[str, list[str]]]:
     """Parse a {relpath: source} dict once, returning (trees, split lines).
 
@@ -783,19 +803,13 @@ def find_raw_select_violations(
         # ModelTenant` then `select(ModelTenant)` reads as a name no model set contains, so
         # four raw selects in one function went unseen and its allowlist row looked fixed.
         # Resolve the local name back to the imported one before judging it (#2128).
-        aliased: dict[str, str] = {
-            alias.asname: alias.name
-            for imp in ast.walk(tree)
-            if isinstance(imp, ast.ImportFrom)
-            for alias in imp.names
-            if alias.asname
-        }
+        bindings = orm_bindings(rel_path, tree)
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             for call in iter_call_expressions(node):
                 model_name = select_call_model_name(call)
-                model_name = aliased.get(model_name, model_name) if model_name else model_name
+                model_name = bindings.get(model_name, model_name) if model_name else model_name
                 if model_name and model_name in model_names:
                     violations.append((rel_path, node.name, model_name, call.lineno))
                     break  # One violation per function is enough

@@ -22,9 +22,9 @@ from pathlib import Path
 from sqlalchemy.orm import class_mapper
 
 from src.core.database.models import Base
+from tests.unit._architecture_helpers import orm_bindings
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-MODELS_MODULE = "src.core.database.models"
 
 # (file, class, kwarg) triples permitted to violate — shrink-only.
 ALLOWLIST: set[tuple[str, str]] = set()
@@ -41,20 +41,11 @@ def _mapped_attrs() -> dict[str, set[str]]:
     return out
 
 
-def _orm_bindings(tree: ast.AST) -> dict[str, str]:
-    """Local name -> ORM class name, for names imported from models.py."""
-    bindings: dict[str, str] = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module == MODELS_MODULE:
-            for alias in node.names:
-                bindings[alias.asname or alias.name] = alias.name
-    return bindings
-
-
 def _scan_file(path: Path, mapped: dict[str, set[str]]) -> list[tuple[str, str, list[str], int]]:
     """Return (rel_path, class_name, bad_kwargs, lineno) for each violating call."""
     tree = ast.parse(path.read_text())
-    bindings = _orm_bindings(tree)
+    rel = str(path.relative_to(REPO_ROOT))
+    bindings = orm_bindings(rel, tree)
     violations = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
@@ -64,7 +55,7 @@ def _scan_file(path: Path, mapped: dict[str, set[str]]) -> list[tuple[str, str, 
             continue
         bad = [kw.arg for kw in node.keywords if kw.arg and kw.arg not in mapped[orm_name]]
         if bad:
-            violations.append((str(path.relative_to(REPO_ROOT)), orm_name, bad, node.lineno))
+            violations.append((rel, orm_name, bad, node.lineno))
     return violations
 
 
