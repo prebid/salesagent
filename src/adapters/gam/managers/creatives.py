@@ -84,7 +84,7 @@ def _extract_product_id_from_package(package_id: str) -> str | None:
     return None
 
 
-def _get_attr(obj: Any, name: str, default: Any = None) -> Any:
+def _get_attr(obj: object, name: str, default: object = None) -> object:
     """Read a field off a GAM object: a Zeep object in production, a dict in tests."""
     if isinstance(obj, dict):
         return obj.get(name, default)
