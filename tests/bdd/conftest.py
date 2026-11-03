@@ -101,6 +101,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.security_wire_safety",
     "tests.bdd.steps.domain.security_tenant_isolation",
     "tests.bdd.steps.domain.database_fail_fast",
+    "tests.bdd.steps.domain.local_media_buy_status_sweep",
     "tests.bdd.steps.domain.protocol_version_negotiation",
 ]
 
@@ -6126,6 +6127,14 @@ ENV_ROUTES: list[EnvRoute] = [
         # BR-SECURITY-002's two-tenant seeding and dispatches get_products like it does.
         when=lambda m: any(t.startswith("T-DBFAILFAST") for t in m),
         env_builder=_build_product_env,
+    ),
+    EnvRoute(
+        tag="media-buy-status-sweep",
+        # The status sweep runs in the test process. get_media_buys is the read a buyer
+        # makes, so the scenario takes the UC-019 list env and crosses transports there.
+        when=lambda m: any(t.startswith("T-SWEEP") for t in m),
+        env_builder=_build_media_buy_list_env,
+        seed=_seed_tenant_and_principal,
     ),
     EnvRoute(
         tag="protocol-version-negotiation",

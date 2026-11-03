@@ -20,6 +20,7 @@ from typing import Any, cast
 
 from src.core.schemas._base import GetMediaBuysRequest, GetMediaBuysResponse
 from tests.harness._base import IntegrationEnv
+from tests.harness.database_faults import DatabaseFaultMixin
 from tests.harness.transport import DeliverResult
 
 
@@ -198,7 +199,7 @@ class MediaBuyListDispatchMixin:
         return cast("GetMediaBuysResponse", GetMediaBuysResponse.revive(data))
 
 
-class MediaBuyListEnv(MediaBuyListDispatchMixin, IntegrationEnv):
+class MediaBuyListEnv(DatabaseFaultMixin, MediaBuyListDispatchMixin, IntegrationEnv):
     """Integration test environment for _get_media_buys_impl.
 
     No patches — list is read-only, no external service calls.

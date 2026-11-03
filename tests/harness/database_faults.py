@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING
 
 import psycopg2
@@ -158,6 +158,58 @@ class DatabaseFaultMixin:
         self._guard("db_fault:seller_fail_fast", self._clear_seller_fail_fast)
         self._guard("db_fault:connections", self.accept_new_connections)
         self._set_allow_connections(False)
+
+    def poison_media_buy_status_writes(self, media_buy_ids: Sequence[str], *, terminate: bool) -> None:
+        """Make the database fail an UPDATE of these media buys and no others.
+
+        A BEFORE UPDATE trigger raises, or terminates the backend, when the new
+        row's ``media_buy_id`` is one of *media_buy_ids* and ``status`` changes.
+        A confirmation stamp that leaves status alone is not a status write.
+        Installed before the rows are inserted so a live scheduler cannot flip them
+        first. Cleanup drops the trigger and the function.
+        """
+        if not media_buy_ids:
+            raise ValueError("poison_media_buy_status_writes requires at least one media_buy_id")
+        self._commit_factory_data()
+        url = self._fault_target_url()
+        admin = _connect(url, autocommit=True)
+        try:
+            cur = admin.cursor()
+            literals: list[str] = []
+            for media_buy_id in media_buy_ids:
+                cur.execute("SELECT quote_literal(%s)", (media_buy_id,))
+                literals.append(cur.fetchone()[0])
+            listed = ", ".join(literals)
+            action = "PERFORM pg_terminate_backend(pg_backend_pid());" if terminate else "RAISE EXCEPTION 'poison';"
+            cur.execute(
+                f"""
+                CREATE OR REPLACE FUNCTION poison_media_buy_status_write() RETURNS trigger
+                LANGUAGE plpgsql AS $fn$
+                BEGIN
+                  IF NEW.media_buy_id IN ({listed}) AND NEW.status IS DISTINCT FROM OLD.status THEN
+                    {action}
+                  END IF;
+                  RETURN NEW;
+                END
+                $fn$;
+                DROP TRIGGER IF EXISTS poison_media_buy_status_write ON media_buys;
+                CREATE TRIGGER poison_media_buy_status_write
+                BEFORE UPDATE ON media_buys
+                FOR EACH ROW EXECUTE FUNCTION poison_media_buy_status_write();
+                """
+            )
+        finally:
+            admin.close()
+        self._guard("db_fault:poison_status", self._drop_media_buy_status_poison)
+
+    def _drop_media_buy_status_poison(self) -> None:
+        admin = _connect(self._fault_target_url(), autocommit=True)
+        try:
+            cur = admin.cursor()
+            cur.execute("DROP TRIGGER IF EXISTS poison_media_buy_status_write ON media_buys")
+            cur.execute("DROP FUNCTION IF EXISTS poison_media_buy_status_write()")
+        finally:
+            admin.close()
 
     def accept_new_connections(self) -> None:
         """Let the database accept connections again. Idempotent; also the refusal's cleanup."""
