@@ -23,7 +23,9 @@ from src.core.database.repositories.authorized_property import AuthorizedPropert
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.principal import PrincipalRepository
 from src.core.helpers.publisher_property_helpers import (
+    PreselectedChoices,
     id_selection,
+    preselected_choices,
     publisher_tag_selection,
 )
 from src.core.schemas import Format
@@ -661,7 +663,6 @@ def _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_d
         Rendered template response
     """
     from src.core.database.models import (
-        AuthorizedProperty,
         GAMInventory,
         InventoryProfile,
         PropertyTag,
@@ -669,21 +670,9 @@ def _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_d
     )
 
     with get_db_session() as db_session:
-        # Load authorized properties (all statuses - verification can take time)
-        authorized_properties_query = db_session.scalars(
-            select(AuthorizedProperty).filter_by(tenant_id=tenant_id).order_by(AuthorizedProperty.name)
-        ).all()
-        properties_list = [
-            {
-                "property_id": p.property_id,
-                "name": p.name,
-                "property_type": p.property_type,
-                "tags": p.tags or [],
-                "verification_status": p.verification_status,
-                "publisher_domain": p.publisher_domain,
-            }
-            for p in authorized_properties_query
-        ]
+        # The verified properties: a pending one cannot be selected until its publisher is seen
+        # to authorize this agent, so it is not offered.
+        properties_list = AuthorizedPropertyRepository(db_session, tenant_id).list_refs()
 
         # Load property tags
         property_tags = db_session.scalars(
@@ -1352,6 +1341,12 @@ def edit_product(tenant_id, product_id):
                 product.description = form_data.get("description", product.description)
 
                 # Handle inventory profile association (optional)
+                # What the page pre-checked, read before this save changes what the product resolves to.
+                verified_properties = AuthorizedPropertyRepository(db_session, tenant_id).list_refs()
+                preselected = preselected_choices(
+                    product.resolve_publisher_properties(verified_properties), verified_properties
+                )
+
                 # Check for inventory_profile_id directly (no need for inventory_mode radio button)
                 inventory_profile_id = form_data.get("inventory_profile_id", "").strip()
                 if inventory_profile_id:
@@ -1424,8 +1419,14 @@ def edit_product(tenant_id, product_id):
                 # Handle publisher properties (AdCP requirement)
                 property_mode = form_data.get("property_mode", "tags")
                 if property_mode in _SELECTION_FIELDS:
-                    # An empty selection leaves the stored one as it is.
-                    if request.form.getlist(_SELECTION_FIELDS[property_mode]):
+                    # An empty selection leaves the stored one as it is, and so does the selection
+                    # the page pre-checked: the boxes cannot express every stored selection, so
+                    # writing them back would rewrite what a save never touched.
+                    posted = PreselectedChoices(
+                        tags=frozenset(request.form.getlist("selected_property_tags")),
+                        property_ids=frozenset(request.form.getlist("selected_property_ids")),
+                    )
+                    if request.form.getlist(_SELECTION_FIELDS[property_mode]) and posted != preselected:
                         selectors, refusal = _selectors_from_product_form(db_session, tenant_id, property_mode)
                         if refusal:
                             flash(refusal, "error")
@@ -1835,29 +1836,10 @@ def edit_product(tenant_id, product_id):
             principals = PrincipalRepository(db_session, tenant_id).list_all()
             principals_list = [{"principal_id": p.principal_id, "name": p.name} for p in principals]
 
-            # Get authorized properties for publisher properties selector
-            from src.core.database.models import AuthorizedProperty
-
-            authorized_properties_query = db_session.scalars(
-                select(AuthorizedProperty).filter_by(tenant_id=tenant_id).order_by(AuthorizedProperty.name)
-            ).all()
-            authorized_properties_list = [
-                {
-                    "property_id": p.property_id,
-                    "name": p.name,
-                    "property_type": p.property_type,
-                    "tags": p.tags or [],
-                    "verification_status": p.verification_status,
-                    "publisher_domain": p.publisher_domain,
-                }
-                for p in authorized_properties_query
-            ]
-
-            # Pre-select what the product sells: its selectors resolved against the VERIFIED
-            # properties, as list_products and get_products resolve them.
-            selected_publisher_properties = product.resolve_publisher_properties(
-                AuthorizedPropertyRepository(db_session, tenant_id).list_refs()
-            )
+            # Offer the VERIFIED properties and pre-select what the product sells: its selectors
+            # resolved against them, as list_products and get_products resolve them.
+            authorized_properties_list = AuthorizedPropertyRepository(db_session, tenant_id).list_refs()
+            selected_publisher_properties = product.resolve_publisher_properties(authorized_properties_list)
 
             # Show adapter-specific form
             if adapter_type == "google_ad_manager":
@@ -1946,6 +1928,7 @@ def edit_product(tenant_id, product_id):
                     principals=principals_list,
                     authorized_properties=authorized_properties_list,
                     selected_publisher_properties=selected_publisher_properties,
+                    preselected=preselected_choices(selected_publisher_properties, authorized_properties_list),
                 )
             else:
                 # For non-GAM adapters - use unified edit template
@@ -1961,6 +1944,7 @@ def edit_product(tenant_id, product_id):
                     principals=principals_list,
                     authorized_properties=authorized_properties_list,
                     selected_publisher_properties=selected_publisher_properties,
+                    preselected=preselected_choices(selected_publisher_properties, authorized_properties_list),
                 )
 
     except Exception as e:

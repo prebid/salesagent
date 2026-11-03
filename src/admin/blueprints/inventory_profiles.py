@@ -24,14 +24,13 @@ from src.admin.utils.operator_errors import safe_error_message
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import (
-    AuthorizedProperty,
     InventoryProfile,
     Product,
     PropertyTag,
     Tenant,
 )
 from src.core.database.repositories.authorized_property import AuthorizedPropertyRepository
-from src.core.helpers.publisher_property_helpers import id_selection, tag_selection
+from src.core.helpers.publisher_property_helpers import id_selection, profile_form_prefill, tag_selection
 
 logger = logging.getLogger(__name__)
 
@@ -62,9 +61,9 @@ def _selectors_from_form(session: Session, tenant_id: str, property_mode: str) -
     Each selector names the publisher whose verified authorized properties it matches,
     never the tenant's own host: a tenant is a seller representing many publishers (#1845),
     and AdCP 3.1.1 ``core/publisher-property-selector.json`` makes property IDs
-    publisher-scoped. A pending property is not selectable, because a product would not
-    sell it (``AuthorizedPropertyRepository.list_refs``). The product forms validate through
-    the same ``tag_selection`` / ``id_selection``.
+    publisher-scoped. A pending property is not offered, and is refused if submitted anyway,
+    because a product would not sell it (``AuthorizedPropertyRepository.list_refs``). The
+    product forms validate through the same ``tag_selection`` / ``id_selection``.
 
     Returns ``(selectors, None)``, or ``([], message)`` when the selection is unusable.
     """
@@ -318,10 +317,8 @@ def add_inventory_profile(tenant_id: str):
     with get_db_session() as session:
         tenant = session.get(Tenant, tenant_id)
 
-        # Get authorized properties for property selection
-        authorized_properties = session.scalars(
-            select(AuthorizedProperty).where(AuthorizedProperty.tenant_id == tenant_id)
-        ).all()
+        # The verified properties: a pending one is not selectable
+        authorized_properties = AuthorizedPropertyRepository(session, tenant_id).list_refs()
 
         # Get property tags (as PropertyTag objects, not strings)
         property_tags_list: Sequence[PropertyTag] = session.scalars(
@@ -452,19 +449,20 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
         # GET: Show form with existing data
         tenant = session.get(Tenant, tenant_id)
 
-        authorized_properties = session.scalars(
-            select(AuthorizedProperty).where(AuthorizedProperty.tenant_id == tenant_id)
-        ).all()
+        authorized_properties = AuthorizedPropertyRepository(session, tenant_id).list_refs()
 
         property_tags_list: Sequence[PropertyTag] = session.scalars(
             select(PropertyTag).where(PropertyTag.tenant_id == tenant_id).order_by(PropertyTag.tag_id)
         ).all()
+
+        prefill = profile_form_prefill(profile.publisher_properties, authorized_properties)
 
     return render_template(
         "edit_inventory_profile.html",
         tenant_id=tenant_id,
         tenant=tenant,
         profile=profile,
+        prefill=prefill,
         authorized_properties=authorized_properties,
         property_tags=property_tags_list,
         active_tab="inventory_profiles",

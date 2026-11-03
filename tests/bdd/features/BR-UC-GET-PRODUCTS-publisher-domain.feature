@@ -22,15 +22,27 @@ Feature: A product names the publishers whose inventory it sells
   # been seen to authorize this agent, and the capabilities portfolio names verified
   # publishers only (AuthorizedPropertyRepository._verified), so a product naming a
   # pending publisher would send the buyer to a file that refuses it. A selector the
-  # product or its inventory profile stores explicitly is held to the same rule.
+  # product or its inventory profile stores explicitly is held to the same rule per
+  # publisher: it stays whole when its publisher has a verified property, because the
+  # verification fetches the publisher's file, and the seller's rows need not list every
+  # id or tag that file declares.
   #
   # core/product.json requires publisher_properties with minItems 1, so a product no
   # verified property backs has nothing it may truthfully claim and is not offered.
   #
-  # all_inventory is the SELLER's tag. A buyer resolves a by_tag selector against the
-  # publisher's own adagents.json ("Selects properties from a publisher's adagents.json",
-  # core/publisher-property-selector.json), where that tag names nothing, so selecting it
-  # selects each publisher whole.
+  # all_inventory is the seller's default tag, on every property row the admin forms store,
+  # so a row carrying it says nothing about the publisher's own adagents.json: a publisher
+  # following docs/deployment/vm.md declares it there, and another need not. Selecting it is
+  # announced as selection_type "all" on every path, stored selectors included. "all" claims
+  # "all properties from each addressed publisher" (core/publisher-property-selector.json),
+  # which under property_tags or property_ids authorization includes properties outside the
+  # authorized scope; AdCP 3.1.1 does not say how a buyer treats that.
+  #
+  # A verified publisher is named by the host its row names (lower-case, no scheme, path or
+  # trailing dot), as the capabilities portfolio names it, because core/product.json's
+  # publisher_domain pattern admits nothing else. A row no such spelling can satisfy (a port)
+  # costs that publisher: the other publishers stay, and a product naming only that one is
+  # not offered.
   #
   # The by-id grouping is graded through an inventory profile the operator saves with
   # the admin form (AdminInventoryProfileEnv): a product's own property_ids column is
@@ -108,3 +120,29 @@ Feature: A product names the publishers whose inventory it sells
     And product "home_package" linked to that inventory profile with pricing
     When the buyer requests products
     Then product "home_package" announces publisher_properties [{"publisher_domain": "news.example", "property_ids": ["news_home"], "selection_type": "by_id"}, {"publisher_domain": "weather.example", "property_ids": ["weather_home"], "selection_type": "by_id"}]
+
+  @T-UC-GET-PRODUCTS-publisher-all-inventory-stored @publisher_domain_resolution @requires_db
+  Scenario: a stored by_tag selector of the seller's all_inventory tag names its publisher whole
+    Given the seller offers product "stored_whole" naming publisher_properties [{"publisher_domain": "news.example", "property_tags": ["all_inventory"], "selection_type": "by_tag"}]
+    When the buyer requests products
+    Then product "stored_whole" announces publisher_properties [{"publisher_domain": "news.example", "selection_type": "all"}]
+
+  @T-UC-GET-PRODUCTS-publisher-canonical-domain @publisher_domain_resolution @requires_db
+  Scenario: a verified publisher stored in another spelling is named by its host
+    Given the seller is authorized for property "mixed_case_home" of publisher "Mixed.Example.com" tagged "cased"
+    And the seller is authorized for property "dotted_home" of publisher "https://Dotted.Example.com./" tagged "cased"
+    And the seller offers product "cased" selecting property tags "cased"
+    And the seller offers product "stored_cased" naming publisher_properties [{"publisher_domain": "Mixed.Example.com", "selection_type": "all"}]
+    When the buyer requests products
+    Then product "cased" announces publisher_properties [{"publisher_domain": "dotted.example.com", "property_tags": ["cased"], "selection_type": "by_tag"}, {"publisher_domain": "mixed.example.com", "property_tags": ["cased"], "selection_type": "by_tag"}]
+    And product "stored_cased" announces publisher_properties [{"publisher_domain": "mixed.example.com", "selection_type": "all"}]
+
+  @T-UC-GET-PRODUCTS-publisher-rejected-domain @publisher_domain_resolution @requires_db
+  Scenario: a verified publisher no canonical spelling can name costs that publisher, not the catalog
+    Given the seller is authorized for property "ported_home" of publisher "news.example:8443" tagged "premium"
+    And the seller is authorized for property "only_ported_home" of publisher "other.example:8443" tagged "ported"
+    And the seller offers product "premium" selecting property tags "premium"
+    And the seller offers product "ported" selecting property tags "ported"
+    When the buyer requests products
+    Then the buyer receives exactly the products "premium"
+    And product "premium" announces publisher_properties [{"publisher_domain": "news.example", "property_tags": ["premium"], "selection_type": "by_tag"}, {"publisher_domain": "sports.example", "property_tags": ["premium"], "selection_type": "by_tag"}]

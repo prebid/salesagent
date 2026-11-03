@@ -350,6 +350,11 @@ Then, in the Admin UI, add the publisher's properties (**Authorized Properties**
 Verification fetches the publisher's `adagents.json` and looks for the tenant's agent URL. Repeat
 both for every publisher site the tenant sells.
 
+A product selecting `all_inventory` announces each publisher with `selection_type: "all"`, which
+claims every property the publisher lists. If the publisher authorizes this agent for a tag or for
+property IDs and lists properties outside that scope, sell those products by a narrower tag or by
+property IDs instead, because a buyer may refuse a claim wider than the authorization.
+
 ## Backups
 
 `backup.sh` writes `backups/salesagent-<UTC>.sql.gz` and deletes dumps older than 14 days

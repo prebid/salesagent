@@ -14,13 +14,16 @@ speaks for the properties on THAT host and no others.
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 
 from sqlalchemy import ColumnElement, select
 from sqlalchemy.orm import Session
 
 from src.core.database.models import AuthorizedProperty
-from src.core.helpers.publisher_property_helpers import AuthorizedPropertyRef
+from src.core.helpers.publisher_property_helpers import AuthorizedPropertyRef, publisher_domain_on_wire
+
+logger = logging.getLogger(__name__)
 
 
 class AuthorizedPropertyRepository:
@@ -110,18 +113,33 @@ class AuthorizedPropertyRepository:
         property from the add form or an upload is not sold until its publisher is seen to
         authorize this agent. Values rather than rows because ``get_products`` reads them
         again after its session has closed.
+
+        A ref names the host its row names (``publisher_domain_on_wire``). A row no such name
+        exists for (a port, an empty domain) is logged and left out, so it costs that publisher
+        and not every read of the catalog; a product naming no other publisher is then not
+        offered.
         """
-        stmt = (
-            select(AuthorizedProperty)
-            .where(*self._verified())
-            .order_by(AuthorizedProperty.publisher_domain.asc(), AuthorizedProperty.property_id.asc())
-        )
-        return [
-            AuthorizedPropertyRef(
-                property_id=row.property_id, publisher_domain=row.publisher_domain, tags=tuple(row.tags or ())
+        refs = []
+        for row in self._session.scalars(select(AuthorizedProperty).where(*self._verified())):
+            domain = publisher_domain_on_wire(row.publisher_domain)
+            if domain is None:
+                logger.warning(
+                    "Authorized property %s of tenant %s is not offered: %r is not a publisher domain",
+                    row.property_id,
+                    self._tenant_id,
+                    row.publisher_domain,
+                )
+                continue
+            refs.append(
+                AuthorizedPropertyRef(
+                    property_id=row.property_id,
+                    publisher_domain=domain,
+                    tags=tuple(row.tags or ()),
+                    name=row.name,
+                    property_type=row.property_type,
+                )
             )
-            for row in self._session.scalars(stmt)
-        ]
+        return sorted(refs, key=lambda ref: (ref.publisher_domain, ref.property_id))
 
     def list_verified_publisher_domains(self) -> list[str]:
         """The distinct publisher domains of this tenant's verified properties, sorted."""

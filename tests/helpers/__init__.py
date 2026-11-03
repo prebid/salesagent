@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 
-def assert_effective_properties_normalized(
+def assert_selectors_normalized(
     effective: list[dict],
     raw: list[dict],
     expected_selection_type: str,
 ) -> None:
-    """Assert effective_properties is a non-destructive superset of raw profile data.
+    """Assert ``resolve_publisher_properties`` kept *raw* whole and added its discriminator.
+
+    For selectors whose publishers are all authorized: a selector naming another publisher
+    is dropped, which is what the length check would then report.
 
     Verifies:
     1. Every key/value from the raw profile dict is preserved in the output
     2. selection_type was added with the expected value
-    3. Length matches (no entries dropped or added)
+    3. Length matches
     """
     assert len(effective) == len(raw), f"Length mismatch: {len(effective)} != {len(raw)}"
     for i, (eff, orig) in enumerate(zip(effective, raw, strict=True)):

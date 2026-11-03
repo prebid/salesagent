@@ -713,8 +713,9 @@ def given_package_budget_set_to(ctx: dict, value: str) -> None:
 
 
 @given(parsers.parse('a package references product_id "{product_id}" which does not exist'))
+@given(parsers.parse('a package references the unoffered product "{product_id}"'))
 def given_nonexistent_product(ctx: dict, product_id: str) -> None:
-    """Override first package to reference a nonexistent product."""
+    """Override first package to reference a product absent from the catalog."""
     kwargs = _ensure_request_defaults(ctx)
     assert kwargs.get("packages"), (
         "No packages in request — step claims 'a package references product_id' "

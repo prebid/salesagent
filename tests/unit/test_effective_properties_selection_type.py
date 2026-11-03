@@ -5,7 +5,7 @@ publisher_properties lack the discriminator required by AdCP 2.13.0+.
 
 These tests construct ORM model instances in memory (no database) and verify
 the resolution returns normalized publisher_properties. A profile's selectors name their
-own publishers, so no authorized property is consulted and none is passed.
+own publishers and are kept only for a verified one, so each call passes that publisher.
 """
 
 from unittest.mock import MagicMock

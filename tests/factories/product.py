@@ -17,7 +17,13 @@ from tests.factories.request import _RequestFactory
 def authorized_refs(*domains: str) -> tuple[AuthorizedPropertyRef, ...]:
     """One verified untagged property per publisher domain, as ``list_refs`` returns them."""
     return tuple(
-        AuthorizedPropertyRef(property_id=domain.replace(".", "_").replace("-", "_"), publisher_domain=domain, tags=())
+        AuthorizedPropertyRef(
+            property_id=domain.replace(".", "_").replace("-", "_"),
+            publisher_domain=domain,
+            tags=(),
+            name=domain,
+            property_type="website",
+        )
         for domain in domains
     )
 

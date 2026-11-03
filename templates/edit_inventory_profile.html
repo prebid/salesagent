@@ -114,7 +114,7 @@
             <label>Property Selection Method *</label>
             <div class="form-group">
                 <label>
-                    <input type="radio" name="property_mode" value="tags" checked onchange="togglePropertyMode()">
+                    <input type="radio" name="property_mode" value="tags" {% if prefill.property_mode == 'tags' %}checked{% endif %} onchange="togglePropertyMode()">
                     Use Property Tags (Recommended)
                 </label>
                 <small style="display: block; color: #666; margin-left: 1.5rem;">Assign tags that group related properties. Simple and flexible - buyers fetch property details via list_authorized_properties.</small>
@@ -122,7 +122,7 @@
 
             <div class="form-group" style="margin-top: 0.5rem;">
                 <label>
-                    <input type="radio" name="property_mode" value="property_ids" onchange="togglePropertyMode()">
+                    <input type="radio" name="property_mode" value="property_ids" {% if prefill.property_mode == 'property_ids' %}checked{% endif %} onchange="togglePropertyMode()">
                     Select Specific Properties (by ID)
                 </label>
                 <small style="display: block; color: #666; margin-left: 1.5rem;">Choose exact properties from your authorized inventory. Provides precise property-level control.</small>
@@ -130,7 +130,7 @@
 
             <div class="form-group" style="margin-top: 0.5rem;">
                 <label>
-                    <input type="radio" name="property_mode" value="full" onchange="togglePropertyMode()">
+                    <input type="radio" name="property_mode" value="full" {% if prefill.property_mode == 'full' %}checked{% endif %} onchange="togglePropertyMode()">
                     Specify Full Properties (Legacy)
                 </label>
                 <small style="display: block; color: #666; margin-left: 1.5rem;">Include complete property objects - for backward compatibility only.</small>
@@ -141,7 +141,7 @@
         <div id="property-tags-section" style="margin-top: 1rem;">
             <div class="form-group">
                 <label for="property_tags">Property Tags *</label>
-                <input type="text" id="property_tags" name="property_tags" placeholder="e.g., all_inventory, premium, sports">
+                <input type="text" id="property_tags" name="property_tags" value="{{ prefill.property_tags }}" placeholder="e.g., all_inventory, premium, sports">
                 <small style="color: #666;">Comma-separated list of tags. Example: all_inventory, premium, homepage. Each publisher whose authorized properties carry one of the tags is selected under its own domain.</small>
             </div>
         </div>
@@ -157,7 +157,7 @@
                     <label style="display: block; padding: 0.5rem; border-bottom: 1px solid #eee; cursor: pointer; transition: background 0.2s;"
                            onmouseover="this.style.background='#f0f7ff'"
                            onmouseout="this.style.background='transparent'">
-                        <input type="checkbox" name="selected_property_ids" value="{{ prop.property_id }}" style="margin-right: 0.5rem;">
+                        <input type="checkbox" name="selected_property_ids" value="{{ prop.property_id }}" {% if prop.property_id in prefill.property_ids %}checked{% endif %} style="margin-right: 0.5rem;">
                         <strong>{{ prop.name or prop.property_id }}</strong>
                         <span style="color: #666; font-size: 0.9em;">({{ prop.property_type }})</span>
                         {% if prop.tags %}
@@ -172,9 +172,9 @@
                 </div>
                 {% else %}
                 <div class="alert" style="background: #fff3cd; border: 1px solid #ffc107; padding: 1rem; border-radius: 4px;">
-                    <strong>⚠️ No publisher properties found</strong><br>
+                    <strong>⚠️ No verified publisher properties found</strong><br>
                     <small style="display: block; margin-top: 0.5rem;">
-                        You need to add publisher partnerships first.
+                        You need to add publisher partnerships and verify their properties first.
                         <a href="{{ url_for('inventory.inventory_browser', tenant_id=tenant_id) }}#publishers-tab" style="color: #856404; text-decoration: underline;">Go to Inventory → Publishers & Properties →</a>
                     </small>
                 </div>
@@ -191,7 +191,7 @@
                 <label for="publisher_properties">Publisher Properties (JSON) *</label>
                 <textarea id="publisher_properties" name="publisher_properties" rows="8"
                           placeholder='[{"publisher_domain": "example.com", "property_tags": ["all_inventory"]}]'
-                          style="font-family: monospace; font-size: 0.9rem;"></textarea>
+                          style="font-family: monospace; font-size: 0.9rem;">{{ prefill.publisher_properties }}</textarea>
                 <small style="color: #666;">
                     AdCP-compliant publisher properties structure. Each entry must include:
                     <ul style="margin-top: 0.5rem; margin-bottom: 0;">
@@ -210,7 +210,7 @@
             <label for="targeting_template">Targeting Template (JSON)</label>
             <textarea id="targeting_template" name="targeting_template" rows="6"
                       placeholder='{"geo_countries": ["US"], "device_type_any_of": ["desktop", "mobile"]}'
-                      style="font-family: monospace; font-size: 0.9rem;"></textarea>
+                      style="font-family: monospace; font-size: 0.9rem;">{{ prefill.publisher_properties }}</textarea>
             <small style="color: #666;">Optional. Products using this profile can inherit or override these targeting rules.</small>
         </div>
 
@@ -231,7 +231,6 @@ let allFormats = [];
 const existingProfile = {
     inventory_config: {{ profile.inventory_config | tojson | safe }},
     formats: {{ profile.format_ids | tojson | safe }},
-    publisher_properties: {{ profile.publisher_properties | tojson | safe }},
     targeting_template: {{ profile.targeting_template | tojson | safe if profile.targeting_template else 'null' }}
 };
 
@@ -267,37 +266,8 @@ function prePopulateData() {
         });
     }
 
-    // Pre-populate publisher properties - detect mode and populate appropriate field
-    if (existingProfile.publisher_properties && existingProfile.publisher_properties.length > 0) {
-        const firstProp = existingProfile.publisher_properties[0];
-
-        // Detect property selection mode based on fields present
-        if (firstProp.property_ids && Array.isArray(firstProp.property_ids)) {
-            // by_id mode: has property_ids array
-            document.querySelector('input[name="property_mode"][value="property_ids"]').checked = true;
-            togglePropertyMode();
-
-            // Check the appropriate checkboxes
-            firstProp.property_ids.forEach(propId => {
-                const checkbox = document.querySelector(`input[name="selected_property_ids"][value="${propId}"]`);
-                if (checkbox) checkbox.checked = true;
-            });
-        } else if (firstProp.property_tags && Array.isArray(firstProp.property_tags)) {
-            // by_tag mode: has property_tags array
-            document.querySelector('input[name="property_mode"][value="tags"]').checked = true;
-            togglePropertyMode();
-
-            // Populate tags input
-            document.getElementById('property_tags').value = firstProp.property_tags.join(', ');
-        } else {
-            // Legacy full mode: has other fields (like 'properties')
-            document.querySelector('input[name="property_mode"][value="full"]').checked = true;
-            togglePropertyMode();
-
-            // Populate JSON textarea
-            document.getElementById('publisher_properties').value = JSON.stringify(existingProfile.publisher_properties, null, 2);
-        }
-    }
+    // The server rendered the property selection (profile_form_prefill); show its section.
+    togglePropertyMode();
 
     // Pre-populate targeting template
     if (existingProfile.targeting_template) {

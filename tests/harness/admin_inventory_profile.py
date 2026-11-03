@@ -22,12 +22,32 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from bs4 import BeautifulSoup
+
 from src.core.database.models import InventoryProfile, Product
 from tests.harness.admin_client import AdminClient, AdminResponse, guarded_admin_client
 from tests.harness.product import ProductEnv
 
 #: A format the profile form requires. Any id serves: the form stores it verbatim.
 _PROFILE_FORMATS = json.dumps([{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"}])
+
+
+def rendered_selection(page: AdminResponse) -> dict[str, Any]:
+    """The property selection *page* submits when saved as it rendered: what a browser posts."""
+    assert page.status_code == 200, f"the form answered {page.status_code}"
+    soup = BeautifulSoup(page.data, "html.parser")
+    selection: dict[str, Any] = {
+        "property_mode": soup.find("input", {"name": "property_mode", "checked": True})["value"]
+    }
+    for field in ("selected_property_tags", "selected_property_ids"):
+        selection[field] = [box["value"] for box in soup.find_all("input", {"name": field, "checked": True})]
+    tags = soup.find("input", {"name": "property_tags"})
+    if tags is not None:
+        selection["property_tags"] = tags.get("value", "")
+    selectors = soup.find("textarea", {"name": "publisher_properties"})
+    if selectors is not None:
+        selection["publisher_properties"] = selectors.get_text()
+    return selection
 
 
 class AdminInventoryProfileEnv(ProductEnv):
@@ -54,6 +74,18 @@ class AdminInventoryProfileEnv(ProductEnv):
     def edit_product(self, product_id: str, **selection: Any) -> AdminResponse:
         """POST the edit form of the stored product *product_id* with a new *selection*."""
         return self._admin_request(f"products/{product_id}/edit", self._product_form(product_id, **selection))
+
+    def rename_product_through_its_form(self, product_id: str) -> AdminResponse:
+        """Open the product's edit page and save it with only the name changed, as a browser does."""
+        page = self.admin_page(f"products/{product_id}/edit")
+        return self.edit_product(product_id, name=f"Renamed {product_id}", **rendered_selection(page))
+
+    def rename_profile_through_its_form(self, profile_id: str) -> AdminResponse:
+        """Open the profile's edit page and save it with only the name changed, as a browser does."""
+        stored = self.stored_inventory_profile(profile_id)
+        assert stored is not None, f"no inventory profile {profile_id!r} to edit"
+        page = self.admin_page(f"inventory-profiles/{stored.id}/edit")
+        return self.edit_inventory_profile(profile_id, name=f"Renamed {profile_id}", **rendered_selection(page))
 
     def admin_page(self, path: str) -> AdminResponse:
         """GET ``/tenant/<tenant>/<path>``."""

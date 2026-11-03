@@ -9,10 +9,16 @@ This module provides ensure_selection_type() to normalize on read.
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
+
+from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import PublisherDomain
+from pydantic import ValidationError
+
+from src.core.http_utils import canonical_publisher_domain
 
 _PROPERTY_ID_PATTERN = re.compile(r"^[a-z0-9_]+$")
 _PROPERTY_TAG_PATTERN = re.compile(r"^[a-z0-9_]+$")
@@ -70,10 +76,15 @@ def ensure_selection_type(properties: list[dict]) -> list[dict] | None:
 # ---------------------------------------------------------------------------
 
 #: The seller's default property tag. Its stored description is "Default tag that applies to
-#: all properties". It is the SELLER's tag, not one a publisher declares: AdCP 3.1.1
+#: all properties", and the admin forms put it on every property row, so a row carrying it
+#: says nothing about the publisher's own adagents.json: a publisher following
+#: ``docs/deployment/vm.md`` declares it there, and another need not. AdCP 3.1.1
 #: ``core/publisher-property-selector.json`` "Selects properties from a publisher's
-#: adagents.json", so a buyer resolves a ``by_tag`` selector against the publisher's own file,
-#: where ``all_inventory`` names nothing. Selecting it selects each publisher whole.
+#: adagents.json", so ``by_tag`` would name nothing at a publisher that does not declare it.
+#: Selecting it therefore selects each publisher whole, on every path. ``all`` claims "all
+#: properties from each addressed publisher": under ``property_tags`` or ``property_ids``
+#: authorization that includes properties outside the authorized scope, and the spec does not
+#: say how a buyer treats them.
 ALL_INVENTORY_TAG = "all_inventory"
 
 
@@ -95,12 +106,29 @@ class AuthorizedPropertyRef:
     """An authorized property as a value, so it outlives the session that read it.
 
     ``get_products`` converts dynamic variants after its unit of work has closed, where an
-    ORM row would raise on its first attribute read.
+    ORM row would raise on its first attribute read. ``name`` and ``property_type`` are what
+    the admin forms show of it.
     """
 
     property_id: str
     publisher_domain: str
     tags: tuple[str, ...]
+    name: str
+    property_type: str
+
+
+def publisher_domain_on_wire(stored: str) -> str | None:
+    """The host *stored* names, or ``None`` when AdCP's ``publisher_domain`` pattern refuses it.
+
+    An admin path stores a domain as typed. AdCP 3.1.1 ``core/product.json`` admits only the
+    pattern, which a port, an empty domain or an underscore cannot meet.
+    """
+    domain = canonical_publisher_domain(stored)
+    try:
+        PublisherDomain(root=domain)
+    except ValidationError:
+        return None
+    return domain
 
 
 def _by_publisher(properties: Iterable[SelectableProperty]) -> dict[str, list[SelectableProperty]]:
@@ -182,14 +210,81 @@ def authorized_selectors(selectors: list[dict] | None, properties: Iterable[Sele
     (AdCP 3.1.1 ``governance/property/authorized-properties.mdx``). So a selector is kept
     only for a publisher the seller holds a verified property of -- a row the old profile
     form stored with the seller's own host, or a publisher whose property was never
-    verified, is not offered (#1845).
+    verified, is not offered (#1845). The check is per publisher: the ids and tags inside a
+    kept selector are not checked, because verification fetches the publisher's file and the
+    seller's rows need not list everything it declares.
+
+    A kept selector names its publisher canonically, as *properties* do, and one selecting
+    :data:`ALL_INVENTORY_TAG` selects the publisher whole, as :func:`by_tag_selectors` does.
     """
     domains = {p.publisher_domain for p in properties}
-    return [
-        selector
-        for selector in ensure_selection_type(selectors or []) or []
-        if selector.get("publisher_domain") in domains
-    ]
+    kept = []
+    for selector in ensure_selection_type(selectors or []) or []:
+        domain = canonical_publisher_domain(str(selector.get("publisher_domain") or ""))
+        if domain not in domains:
+            continue
+        if ALL_INVENTORY_TAG in (selector.get("property_tags") or ()):
+            kept.append({"publisher_domain": domain, "selection_type": "all"})
+        else:
+            kept.append({**selector, "publisher_domain": domain})
+    return kept
+
+
+@dataclass(frozen=True)
+class PreselectedChoices:
+    """The boxes a product edit page pre-checks: ``domain:tag`` values and property ids."""
+
+    tags: frozenset[str]
+    property_ids: frozenset[str]
+
+
+def preselected_choices(selectors: Iterable[dict], authorized: Iterable[SelectableProperty]) -> PreselectedChoices:
+    """The boxes the product edit page checks for *selectors*, among those it offers.
+
+    It offers the *authorized* (verified) properties, and the boxes cannot express every
+    stored selection: a legacy column, a pending publisher's selector, ``all``. So a form that
+    posts exactly these boxes has changed nothing, whatever it would regenerate.
+    """
+    authorized = list(authorized)
+    tags, property_ids = set(), set()
+    for selector in selectors:
+        offered = [p for p in authorized if p.publisher_domain == selector["publisher_domain"]]
+        carried = {tag for p in offered for tag in p.tags or ()}
+        tags |= {
+            f"{selector['publisher_domain']}:{tag}" for tag in selector.get("property_tags") or () if tag in carried
+        }
+        property_ids |= {p.property_id for p in offered if p.property_id in (selector.get("property_ids") or ())}
+    return PreselectedChoices(frozenset(tags), frozenset(property_ids))
+
+
+@dataclass(frozen=True)
+class ProfileFormPrefill:
+    """What the inventory-profile edit page renders for a profile's stored selectors."""
+
+    property_mode: str
+    property_tags: str = ""
+    property_ids: frozenset[str] = field(default_factory=frozenset)
+    publisher_properties: str = ""
+
+
+def profile_form_prefill(selectors: list[dict] | None, authorized: Sequence[SelectableProperty]) -> ProfileFormPrefill:
+    """The mode and values that save *selectors* back exactly as they are stored.
+
+    A tags or property-ids pre-fill is used only when submitting it regenerates *selectors*.
+    Anything else (a pending publisher's selector, a mix of modes, ``all``, a legacy row) is
+    shown whole as JSON, the one mode that can hold it, so saving the page cannot lose it.
+    """
+    if not selectors:
+        return ProfileFormPrefill("tags")
+    # The JSON mode stores whatever parses, so an entry need not be a selector.
+    well_formed = [s for s in selectors if isinstance(s, dict)]
+    tags = list(dict.fromkeys(tag for s in well_formed for tag in s.get("property_tags") or ()))
+    property_ids = [property_id for s in well_formed for property_id in s.get("property_ids") or ()]
+    if tag_selection(tags, authorized) == (selectors, None):
+        return ProfileFormPrefill("tags", property_tags=", ".join(tags))
+    if id_selection(property_ids, authorized) == (selectors, None):
+        return ProfileFormPrefill("property_ids", property_ids=frozenset(property_ids))
+    return ProfileFormPrefill("full", publisher_properties=json.dumps(selectors, indent=2))
 
 
 def refuse_property_tag(tag: str) -> str | None:

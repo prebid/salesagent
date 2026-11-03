@@ -19,9 +19,9 @@ from tests.bdd.steps.generic._table import comma_list
 from tests.factories import AuthorizedPropertyFactory, InventoryProfileFactory, PricingOptionFactory, ProductFactory
 
 
-def _offer(ctx: dict, product_id: str, property_tags: list[str]) -> None:
-    """Store a priced product selecting its properties by the legacy ``property_tags`` column."""
-    product = ProductFactory(tenant=ctx["tenant"], product_id=product_id, property_tags=property_tags)
+def _offer(ctx: dict, product_id: str, **legacy_selection: list[str]) -> None:
+    """Store a priced product selecting its properties by a legacy ``property_tags`` / ``property_ids`` column."""
+    product = ProductFactory(tenant=ctx["tenant"], product_id=product_id, **legacy_selection)
     PricingOptionFactory(product=product)
 
 
@@ -52,10 +52,21 @@ def given_product_by_tags(ctx: dict, product_id: str, tags: str) -> None:
     _offer(ctx, product_id, property_tags=comma_list(tags))
 
 
+@given(parsers.parse('the seller offers product "{product_id}" selecting property ids "{property_ids}"'))
+def given_product_by_ids(ctx: dict, product_id: str, property_ids: str) -> None:
+    # An empty tag list because ck_product_properties_xor wants one of properties / property_tags.
+    _offer(ctx, product_id, property_ids=comma_list(property_ids), property_tags=[])
+
+
 @given(parsers.parse('the seller offers product "{product_id}" selecting no properties'))
 def given_product_selecting_nothing(ctx: dict, product_id: str) -> None:
     # An empty tag list is how the admin form stores "nothing selected".
     _offer(ctx, product_id, property_tags=[])
+
+
+@given(parsers.parse('the tenant also holds product "{product_id}" that no verified property backs'))
+def given_unoffered_product(ctx: dict, product_id: str) -> None:
+    _offer(ctx, product_id, property_tags=["no_verified_property_carries_this"])
 
 
 @given(parsers.parse('the seller offers product "{product_id}" naming publisher_properties {selectors}'))

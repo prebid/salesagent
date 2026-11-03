@@ -34,6 +34,11 @@ def given_profile_exists(ctx: dict, profile_id: str) -> None:
     InventoryProfileFactory(tenant=ctx["tenant"], profile_id=profile_id)
 
 
+@given(parsers.parse('an inventory profile "{profile_id}" storing publisher_properties {selectors}'))
+def given_profile_storing(ctx: dict, profile_id: str, selectors: str) -> None:
+    InventoryProfileFactory(tenant=ctx["tenant"], profile_id=profile_id, publisher_properties=json.loads(selectors))
+
+
 # ── When steps ──────────────────────────────────────────────────────
 
 
@@ -84,6 +89,27 @@ def when_edit_product_by_ids(ctx: dict, product_id: str, property_ids: str) -> N
     )
 
 
+@when(parsers.parse('the operator renames product "{product_id}" through its edit form, changing nothing else'))
+def when_rename_product(ctx: dict, product_id: str) -> None:
+    env = _env(ctx)
+    ctx["selection_before_save"] = _product_selection(env.stored_product(product_id))
+    ctx["admin_page"] = env.rename_product_through_its_form(product_id)
+
+
+@when(
+    parsers.parse('the operator renames inventory profile "{profile_id}" through its edit form, changing nothing else')
+)
+def when_rename_profile(ctx: dict, profile_id: str) -> None:
+    env = _env(ctx)
+    ctx["selection_before_save"] = _profile_selection(env.stored_inventory_profile(profile_id))
+    ctx["admin_page"] = env.rename_profile_through_its_form(profile_id)
+
+
+@when("the operator opens the add product form")
+def when_open_add_product_form(ctx: dict) -> None:
+    ctx["admin_page"] = _env(ctx).admin_page("products/add")
+
+
 @when(parsers.parse('the operator opens the edit form of product "{product_id}"'))
 def when_open_product_edit_form(ctx: dict, product_id: str) -> None:
     ctx["admin_page"] = _env(ctx).admin_page(f"products/{product_id}/edit")
@@ -110,6 +136,21 @@ def when_open_products_page(ctx: dict) -> None:
 # ── Then steps ──────────────────────────────────────────────────────
 
 
+def _product_selection(row: Any) -> str:
+    """Every column a product's selection is stored in, as the bytes a comparison can hold."""
+    return json.dumps([row.properties, row.property_tags, row.property_ids])
+
+
+def _profile_selection(row: Any) -> str:
+    return json.dumps(row.publisher_properties)
+
+
+def _assert_renamed_with_selection_unchanged(ctx: dict, row: Any, renamed: str, selection: str) -> None:
+    """The save landed (the name changed), and the selection is what it was before the save."""
+    assert row.name == renamed, f"the save did not land: the name is {row.name!r}"
+    assert selection == ctx["selection_before_save"], f"stored {selection}, was {ctx['selection_before_save']}"
+
+
 def _assert_stored_selectors(ctx: dict, row: Any, field: str, expected: str) -> None:
     """*row*'s selector column *field* equals the *expected* JSON, the row having been stored."""
     page = _require_admin_page(ctx)
@@ -128,6 +169,18 @@ def then_product_stores(ctx: dict, product_id: str, expected: str) -> None:
     _assert_stored_selectors(ctx, _env(ctx).stored_product(product_id), "properties", expected)
 
 
+@then(parsers.parse('product "{product_id}" is renamed and its stored selection is unchanged'))
+def then_product_renamed_unchanged(ctx: dict, product_id: str) -> None:
+    row = _env(ctx).stored_product(product_id)
+    _assert_renamed_with_selection_unchanged(ctx, row, f"Renamed {product_id}", _product_selection(row))
+
+
+@then(parsers.parse('inventory profile "{profile_id}" is renamed and its stored selection is unchanged'))
+def then_profile_renamed_unchanged(ctx: dict, profile_id: str) -> None:
+    row = _env(ctx).stored_inventory_profile(profile_id)
+    _assert_renamed_with_selection_unchanged(ctx, row, f"Renamed {profile_id}", _profile_selection(row))
+
+
 @then(parsers.parse('no product "{product_id}" is stored'))
 def then_product_not_stored(ctx: dict, product_id: str) -> None:
     assert _env(ctx).stored_product(product_id) is None, f"product {product_id!r} was stored"
@@ -141,6 +194,21 @@ def then_form_preselects(ctx: dict, property_ids: str) -> None:
     assert checkboxes, "the form offers no property checkboxes"
     checked = {value for value, attributes in checkboxes if re.search(r"\bchecked\b", attributes)}
     assert checked == set(comma_list(property_ids)), f"the form preselects {sorted(checked)}"
+
+
+@then(parsers.parse('the form offers exactly the properties "{property_ids}"'))
+def then_form_offers(ctx: dict, property_ids: str) -> None:
+    page = _require_admin_page(ctx)
+    assert page.status_code == 200, f"the form answered {page.status_code}"
+    offered = set(re.findall(r'<input[^>]*name="selected_property_ids" value="([^"]+)"', page.data.decode()))
+    assert offered == set(comma_list(property_ids)), f"the form offers {sorted(offered)}"
+
+
+@then(parsers.parse('the form offers no choice of publisher "{domain}"'))
+def then_form_offers_no_choice_of(ctx: dict, domain: str) -> None:
+    page = _require_admin_page(ctx)
+    assert page.status_code == 200, f"the form answered {page.status_code}"
+    assert domain not in page.data.decode(), f"the form offers a choice of {domain!r}"
 
 
 @then(parsers.parse('no inventory profile "{profile_id}" is stored'))
