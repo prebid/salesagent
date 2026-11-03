@@ -327,6 +327,20 @@ class MediaBuyCreateEnv(PeerCreativeAgentMixin, IntegrationEnv):
             )
         return product, pricing_option
 
+    def _persist_product_format_ids(self, product_id: str, format_ids: list[dict[str, str]]) -> None:
+        """Change the real catalog row every transport reads, the live server included."""
+        from src.core.database.models import Product
+
+        product = self._session.get(Product, (self._tenant_id, product_id))
+        assert product is not None, f"Product {product_id} was not seeded"
+        product.format_ids = format_ids
+        self._commit_factory_data()
+
+    @realize_e2e(_persist_product_format_ids)
+    def set_product_format_ids(self, product_id: str, format_ids: list[dict[str, str]]) -> None:
+        """Declare *format_ids* as the product's legacy formats, in-process and on the live server alike."""
+        self._persist_product_format_ids(product_id, format_ids)
+
     def _build_mock_context_manager(self, tool_name: str) -> MagicMock:
         """Mock context manager that delegates create_context / create_workflow_step /
         link_workflow_to_object to the REAL one.

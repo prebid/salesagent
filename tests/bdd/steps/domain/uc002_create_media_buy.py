@@ -640,6 +640,36 @@ def given_package_format_id_unregistered_agent(ctx: dict) -> None:
     pkg["format_ids"] = [{"agent_url": "https://unregistered-agent.example.com", "id": "banner_300x250"}]
 
 
+@given("a package requests a valid format followed by an unknown format on the registered default agent")
+def given_package_unknown_format(ctx: dict) -> None:
+    """A served format the product declares, then an id the reference agent does not serve."""
+    from tests.factories import FormatIdFactory
+
+    pkg = _first_package(ctx)
+    pkg["format_ids"] = [
+        FormatIdFactory(agent_url="https://creative.adcontextprotocol.org", id=format_id).model_dump(mode="json")
+        for format_id in ("display_300x250_image", "missing-format-1933")
+    ]
+
+
+@given(parsers.parse('the package requests format "{format_id}" from "{agent_url}" supported by its product'))
+def given_package_known_format(ctx: dict, format_id: str, agent_url: str) -> None:
+    """The package names one reference, and the product declares exactly that reference."""
+    from tests.factories import FormatIdFactory
+
+    pkg = _first_package(ctx)
+    pkg["format_ids"] = [FormatIdFactory(agent_url=agent_url, id=format_id).model_dump(mode="json")]
+    ctx["env"].set_product_format_ids(ctx["default_product"].product_id, pkg["format_ids"])
+
+
+@then("the format selection creates a completed media buy")
+def then_format_selection_creates_buy(ctx: dict) -> None:
+    assert wire_field(ctx, "status") == "completed"
+    media_buy_id = wire_field(ctx, "media_buy_id")
+    assert isinstance(media_buy_id, str) and media_buy_id
+    assert len(wire_field(ctx, "packages")) == 1
+
+
 @given(parsers.parse('a package has two catalogs both with type "{catalog_type}"'))
 def given_package_duplicate_catalog_types(ctx: dict, catalog_type: str) -> None:
     """Attach two catalogs of the same type to one package.

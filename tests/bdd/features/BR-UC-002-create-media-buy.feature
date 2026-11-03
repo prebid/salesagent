@@ -411,6 +411,8 @@ Feature: BR-UC-002 Create Media Buy
     And the operation should fail
     And the error code should be "UNSUPPORTED_FEATURE"
     And the error should include "suggestion" field
+    And the response error field is packages[0].format_ids
+    And no media buy is persisted for the tenant
     # A legacy format_id the seller cannot normalize, or one that resolves and satisfies
     # nothing the product declares, is coded by the package selector contract:
     # UNSUPPORTED_FEATURE in both cases. REFERENCE_NOT_FOUND is the generic fallback "when
@@ -419,6 +421,35 @@ Feature: BR-UC-002 Create Media Buy
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/description
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/properties/format_ids/description
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/REFERENCE_NOT_FOUND
+
+  @T-UC-002-ext-h-manual @extension @ext-h @error
+  Scenario: A format the agent does not serve is refused before manual approval
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And the tenant requires manual approval
+    But a package requests a valid format followed by an unknown format on the registered default agent
+    When the Buyer Agent sends the create_media_buy request
+    Then the error code should be "UNSUPPORTED_FEATURE"
+    And the response error field is packages[0].format_ids
+    And no media buy is persisted for the tenant
+    # Each format_id is its own route, resolved independently, so one served reference does
+    # not admit the package past an unresolved one. The refusal answers the request: a
+    # manually approved buy is not created and parked for the operator.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/description
+
+  @T-UC-002-ext-h-valid @extension @ext-h
+  Scenario Outline: A format reference the product declares creates a media buy
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And the package requests format "<format_id>" from "<agent_url>" supported by its product
+    When the Buyer Agent sends the create_media_buy request
+    Then the format selection creates a completed media buy
+
+    Examples:
+      | agent_url                              | format_id             |
+      | https://creative.adcontextprotocol.org | display_300x250_image |
+      | broadstreet://format-source-tenant     | broadstreet_static    |
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/properties/format_ids/description
     # --- ext-i: Authentication Error ---
 
   @T-UC-002-ext-i @extension @ext-i @error @post-f1 @post-f2 @post-f3
