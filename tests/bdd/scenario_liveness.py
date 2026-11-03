@@ -66,7 +66,13 @@ from pytest_bdd.scenario import get_step_function
 
 from scripts.audit import storyboard_spec
 from scripts.ci import shard_split
-from tests._collection_manifest import read_artifacts, relative_target, required_dir, scope_fingerprint, write_artifact
+from tests._collection_manifest import (
+    read_artifacts,
+    relative_target,
+    required_dir,
+    scope_fingerprint,
+    write_artifact,
+)
 from tests.harness.transport import BDD_IN_PROCESS_TRANSPORTS
 from tests.helpers.ledger import load_ledger_nodeids
 from tests.helpers.marker_names import derive_marker_names
@@ -618,10 +624,12 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
     artifact = {"run": _run_scope(session), "scenarios": [_SHARDS[k] for k in sorted(_SHARDS)]}
     body = json.dumps(artifact, indent=2, sort_keys=False) + "\n"
 
-    # ALSO write a per-session copy, so a second session cannot silently replace
-    # this measurement with its own. The merged path is kept as-is because other
-    # consumers read it by name; the directory is what `load_run` folds.
-    write_artifact(artifact_path(), body)
+    # A session handed a file list (a shard, or `pytest tests/bdd/test_x.py`) measured part
+    # of the suite, so it stays off the shared path the unit env and the audit scripts read
+    # by name: `load_artifact` refuses that scope, and one narrow run would red the next
+    # gate. Every session writes the per-session copy, which is what `load_run` folds.
+    if shard_split.targets_cover_suite("bdd", artifact["run"]["target"], repo_root=_REPO_ROOT):
+        write_artifact(artifact_path(), body)
     write_artifact(_write_sessions_dir() / _session_filename(artifact["run"]), body)
 
 

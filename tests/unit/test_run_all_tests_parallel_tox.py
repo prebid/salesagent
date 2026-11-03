@@ -330,7 +330,7 @@ def _published_run(tmp_path: Path) -> Path:
 @pytest.mark.slow
 def test_the_fast_path_publishes_its_shards_as_one_bdd_inprocess(tmp_path):
     """Every reader keys on one report per suite, and `.suites` must name what is published."""
-    proc, docker_log = _run_with_stubbed_docker(tmp_path, E2E_WORKERS="2")
+    proc, docker_log = _run_with_stubbed_docker(tmp_path, E2E_WORKERS="2", BDD_SHARD_XDIST_N="")
 
     assert proc.returncode == 0, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
     shard_envs = [f"bdd-inprocess-s{shard}" for shard in range(1, SHARD_COUNTS["bdd"] + 1)]
@@ -350,15 +350,13 @@ def test_the_fast_path_publishes_its_shards_as_one_bdd_inprocess(tmp_path):
 
 @pytest.mark.slow
 @pytest.mark.parametrize(
-    ("budget", "per_shard"),
-    [
-        ({"E2E_WORKERS": "8"}, 8 // SHARD_COUNTS["bdd"]),
-        ({"E2E_WORKERS": "8", "BDD_XDIST_N": "16"}, 16 // SHARD_COUNTS["bdd"]),
-    ],
+    ("bdd_xdist_n", "per_shard"),
+    [("", 8 // SHARD_COUNTS["bdd"]), ("16", 16 // SHARD_COUNTS["bdd"])],
 )
-def test_the_shards_divide_the_callers_worker_budget(tmp_path, budget, per_shard):
+def test_the_shards_divide_the_callers_worker_budget(tmp_path, bdd_xdist_n, per_shard):
     """cassini asks for BDD_XDIST_N=16. Ignoring it would halve the box's BDD workers."""
-    proc, _ = _run_with_stubbed_docker(tmp_path, **budget)
+    # Both named explicitly: this suite itself runs inside a shard-aware runner's env.
+    proc, _ = _run_with_stubbed_docker(tmp_path, E2E_WORKERS="8", BDD_XDIST_N=bdd_xdist_n, BDD_SHARD_XDIST_N="")
 
     assert f"BDD_SHARD_XDIST_N={per_shard} " in proc.stdout, proc.stdout
 

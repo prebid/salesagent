@@ -71,6 +71,7 @@ import hashlib
 import json
 import os
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -145,6 +146,19 @@ def required_dir(variable: str, refusal: type[Exception], consequence: str) -> P
     if not directory:
         raise refusal(f"{variable} is unset, so {consequence}")
     return Path(directory)
+
+
+def unpublished_env(env: Mapping[str, str] | None = None) -> dict[str, str]:
+    """An environment for a pytest a test starts, which publishes nothing into the run.
+
+    Such a session is the parent test's fixture rather than part of the run, and it
+    inherits the variables naming the run's directories, so it would add a narrow slice to
+    the records ``load`` and ``load_run`` fold. There is no way to tell from inside: pytest's
+    own PYTEST_CURRENT_TEST is set at import by tests/conftest_db.py and inherited by every
+    xdist worker. ``test_collection_manifest_scope.py`` grades a real run for strays.
+    """
+    source = os.environ if env is None else env
+    return {k: v for k, v in source.items() if k not in ("PYTEST_COLLECTION_MANIFEST", "BDD_LIVENESS_SESSIONS")}
 
 
 def scope_fingerprint(*scope: Any) -> str:

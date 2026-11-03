@@ -31,6 +31,8 @@ from typing import Any, NamedTuple
 
 import yaml
 
+from tests._collection_manifest import unpublished_env
+
 # ---------------------------------------------------------------------------
 # Repo-root anchor
 # ---------------------------------------------------------------------------
@@ -1752,7 +1754,7 @@ def collect_bdd_node_ids_with_e2e_enabled(
             "-n0",
         ],
         cwd=repo_root(),
-        env={**os.environ, "BDD_E2E_ENABLED": "true", "BDD_XDIST_N": "0"},
+        env={**unpublished_env(), "BDD_E2E_ENABLED": "true", "BDD_XDIST_N": "0"},
         capture_output=True,
         text=True,
         timeout=timeout,

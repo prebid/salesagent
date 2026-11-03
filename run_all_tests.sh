@@ -244,6 +244,9 @@ mkdir -p "$RESULTS_DIR"
 # now, so that what is found after the suites ran is this run's or nothing: a storyboard
 # env that died before publishing must read as "no summary", not as last week's score.
 rm -f test-results/storyboard_summary_*.json
+# Same for the liveness artifact: the sharded path does not write it, so a copy on disk is
+# some earlier run's, and the unit env would read that as this run's measurement.
+rm -f test-results/bdd_scenario_liveness.json
 
 # What this run's sessions COLLECTED, published so the observers of a collection
 # do not each have to re-collect it in a subprocess. Unconditional because
