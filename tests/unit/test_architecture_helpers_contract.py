@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from tests.unit._architecture_helpers import (
+    all_suites_from_runner,
     assert_anchor_consistency,
     assert_violations_match_allowlist,
     find_step,
@@ -119,6 +120,14 @@ def test_find_step_index_matches_the_whole_uses_value() -> None:
     steps = [{"name": "a"}, {"name": "free", "uses": "./.github/actions/_free-disk"}]
     assert find_step_index(steps, uses_equals="./.github/actions/_free-disk") == (1, steps[1])
     assert find_step_index(steps, uses_equals="evil-org/_free-disk-action@v1") is None
+
+
+@pytest.mark.arch_guard
+def test_all_suites_from_runner_reads_tox_env_list(tmp_path: Path) -> None:
+    """tox.ini env_list is the suite list. The shell assignment is a copy of it."""
+    (tmp_path / "tox.ini").write_text("env_list = unit, integration\n", encoding="utf-8")
+    (tmp_path / "run_all_tests.sh").write_text('ALL_SUITES="storyboard"\n', encoding="utf-8")
+    assert all_suites_from_runner(tmp_path) == ("unit", "integration")
 
 
 @pytest.mark.arch_guard

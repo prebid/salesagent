@@ -3,7 +3,7 @@
 Regression cover for #2048. Over the e2e_rest transport the test
 runner and the live server share ONE database, so ``_reset_e2e_db`` runs
 concurrently with the server's background scheduler sweeps
-(``delivery_webhook_scheduler`` every 5s under run_all_tests.sh,
+(``delivery_webhook_scheduler`` at the interval ``docker-compose.e2e.yml`` sets,
 ``media_buy_status_scheduler`` every 60s). Each sweep reads ``media_buys`` first
 and a second table later in the SAME transaction; the reset used to TRUNCATE,
 taking AccessExclusiveLock on the same relations in ``pg_tables`` order. Opposite

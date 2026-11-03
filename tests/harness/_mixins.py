@@ -264,6 +264,33 @@ def _e2e_delivery_attempts(env: Any) -> int:
 #: the 1s doubling step, so it can never let one rung of the schedule pass for the next.
 _RECEIPT_GAP_SLOP_SECONDS = 0.75
 
+_SWEEP_INTERVAL_DEFAULT = "${DELIVERY_WEBHOOK_INTERVAL:-"
+
+
+def delivery_sweep_interval_seconds() -> int:
+    """Seconds the e2e server waits between delivery sweeps.
+
+    ``docker-compose.e2e.yml`` is the only writer. ``adcp-server`` and the
+    ``tests`` service both interpolate ``${DELIVERY_WEBHOOK_INTERVAL:-N}``,
+    and this returns ``N``.
+    """
+    from scripts.ci.workflow_helpers import load_yaml_mapping
+    from tests.unit._architecture_helpers import compose_service_environment, repo_root
+
+    compose = load_yaml_mapping(repo_root() / "docker-compose.e2e.yml")
+    parsed: list[int] = []
+    for service in ("adcp-server", "tests"):
+        raw = compose_service_environment(compose, service).get("DELIVERY_WEBHOOK_INTERVAL", "")
+        if not raw.startswith(_SWEEP_INTERVAL_DEFAULT) or not raw.endswith("}"):
+            raise ValueError(f"{service} DELIVERY_WEBHOOK_INTERVAL must be a compose default, got {raw!r}")
+        number = raw[len(_SWEEP_INTERVAL_DEFAULT) : -1]
+        if not number.isdecimal():
+            raise ValueError(f"{service} sweep default is not an integer: {raw!r}")
+        parsed.append(int(number))
+    if parsed[0] != parsed[1]:
+        raise ValueError(f"adcp-server and tests disagree on the sweep interval: {parsed[0]} vs {parsed[1]}")
+    return parsed[0]
+
 
 def _e2e_assert_retry_backoff_schedule(env: Any, *, expected_sleeps: int = 2, grade_jitter_draws: bool = False) -> None:
     """E2E realization of :meth:`assert_retry_backoff_schedule`, read off the WIRE.
@@ -282,8 +309,9 @@ def _e2e_assert_retry_backoff_schedule(env: Any, *, expected_sleeps: int = 2, gr
     that jittered outside ``uniform(0, 1)``, lands outside its window.
 
     THE GAPS ARE TAKEN WITHIN ONE DELIVERY, not across the window. The background sweep
-    runs every 5s against a ~4s ladder, so a second delivery of the same row lands among the
-    first one's retries; :func:`_e2e_attempts_at_one_delivery` separates them by body bytes,
+    runs at :func:`delivery_sweep_interval_seconds` against a ~4s ladder, so a second
+    delivery of the same row lands among the first one's retries;
+    :func:`_e2e_attempts_at_one_delivery` separates them by body bytes,
     which retries share by signature necessity. Without that, a correct 3-attempt ladder
     (``max_attempts=3``, TOTAL attempts) presents as four receipts and the count is wrong
     for a reason that has nothing to do with backoff.
@@ -305,6 +333,7 @@ def _e2e_assert_retry_backoff_schedule(env: Any, *, expected_sleeps: int = 2, gr
     """
     from tests.helpers.backoff_assertions import BR_RULE_029_BASE_DELAYS
 
+    sweep_interval = delivery_sweep_interval_seconds()
     receipts = [entry.get("received_at") for entry in _e2e_attempts_at_one_delivery(env)]
     missing = [index for index, value in enumerate(receipts) if not isinstance(value, int | float)]
     assert not missing, (
@@ -337,7 +366,8 @@ def _e2e_assert_retry_backoff_schedule(env: Any, *, expected_sleeps: int = 2, gr
             f"it on the {rung:.0f}s rung of the exponential schedule plus jitter in [0, 1), so "
             f"the wire window is [{rung:.0f}, {ceiling:.2f}). A gap below the rung means the "
             "wait was skipped or shortened; above it means the schedule stopped doubling, the "
-            "jitter range grew, or a background sweep delivery landed inside the ladder."
+            "jitter range grew, or a background sweep delivery "
+            f"(every {sweep_interval}s) landed inside the ladder."
         )
 
 

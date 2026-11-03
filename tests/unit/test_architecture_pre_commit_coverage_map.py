@@ -115,12 +115,9 @@ def _schema_contract_pytest_paths(workflow: dict[str, Any] | None = None) -> lis
 
 
 def _gate_env_runs_in_the_full_suite(repo: Path, env_name: str) -> bool:
-    """True when *env_name* is a real tox env AND the gate actually runs it."""
+    """True when *env_name* has a tox section and ``env_list`` names it."""
     tox_body = (repo / TOX_PATH).read_text(encoding="utf-8")
     if f"[testenv:{env_name}]" not in tox_body:
-        return False
-    env_list = re.search(r"^env_list\s*=\s*(.+)$", tox_body, re.MULTILINE)
-    if not env_list or env_name not in {part.strip() for part in env_list.group(1).split(",")}:
         return False
     from tests.unit._architecture_helpers import all_suites_from_runner
 

@@ -1339,16 +1339,17 @@ _PRE_COMMIT_CONFIG_PATH = Path(".pre-commit-config.yaml")
 
 
 def all_suites_from_runner(repo: Path | None = None) -> tuple[str, ...]:
-    """The suite names in ``run_all_tests.sh`` ``ALL_SUITES``, in file order.
+    """Suite names from ``tox.ini`` ``env_list``, in file order.
 
-    One reader for every guard. A re-quoted assignment fails every caller
-    together instead of leaving two of three green.
+    ``tox.ini`` is the canonical list. ``run_all_tests.sh`` ``ALL_SUITES`` is a
+    copy, and ``test_six_suite_list_is_single_sourced`` is the check that the
+    copy still matches this tuple.
     """
     root = repo or repo_root()
-    text = (root / "run_all_tests.sh").read_text(encoding="utf-8")
-    match = re.search(r'ALL_SUITES="([^"]+)"', text)
+    text = (root / "tox.ini").read_text(encoding="utf-8")
+    match = re.search(r"^env_list\s*=\s*(.+)$", text, re.MULTILINE)
     if match is None:
-        raise ValueError("run_all_tests.sh must define ALL_SUITES")
+        raise ValueError("tox.ini must define env_list")
     return tuple(part.strip() for part in match.group(1).split(",") if part.strip())
 
 

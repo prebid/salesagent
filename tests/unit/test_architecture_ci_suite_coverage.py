@@ -11,7 +11,7 @@ YAML data and the job graph is inspected. It is NOT a source-code AST scan.
 
 Documented Summary exclusions (``ui``, ``quality``, ``storyboard``) are
 ratcheted via ``test_local_suites_map_or_explicit_exclusion``. Every
-locally-run suite in ``run_all_tests.sh`` ALL_SUITES must map to a summary
+locally-run suite in ``tox.ini`` ``env_list`` must map to a summary
 gate or appear in ``UNGATED_LOCAL_SUITES`` as an ``UngatedSuite`` record.
 CI-only gates (smoke, bdd-in-network) are listed separately.
 """
@@ -35,7 +35,7 @@ from tests.unit._architecture_helpers import (
     steps_text,
 )
 
-# Local suite → summary.needs job. Derived from run_all_tests.sh ALL_SUITES;
+# Local suite → summary.needs job. Derived from tox.ini env_list;
 # unmapped suites must be listed in UNGATED_LOCAL_SUITES with a documented reason.
 _LOCAL_SUITE_TO_SUMMARY_GATE: dict[str, str] = {
     "unit": "unit-tests",
@@ -340,14 +340,14 @@ class TestCISuiteCoverage:
         assert not missing, "CI jobs missing hygiene fields:\n" + "\n".join(f"  - {m}" for m in missing)
 
     def test_local_suites_map_or_explicit_exclusion(self):
-        """ALL_SUITES must map to summary gates or UNGATED_LOCAL_SUITES (no silent drops)."""
+        """tox.ini env_list must map to summary gates or UNGATED_LOCAL_SUITES (no silent drops)."""
         suites = set(all_suites_from_runner())
-        assert "ui" in suites, "run_all_tests.sh ALL_SUITES must still list ui (exclusion is at the gate map)"
+        assert "ui" in suites, "tox.ini env_list must still list ui (exclusion is at the gate map)"
         # Stale map keys only. A growth check here cannot fail: the intersection
-        # of the map with ALL_SUITES is a subset of the map.
+        # of the map with env_list is a subset of the map.
         missing_from_runner = [suite for suite in _LOCAL_SUITE_TO_SUMMARY_GATE if suite not in suites]
         assert not missing_from_runner, (
-            "_LOCAL_SUITE_TO_SUMMARY_GATE names a suite ALL_SUITES no longer lists: "
+            "_LOCAL_SUITE_TO_SUMMARY_GATE names a suite tox.ini env_list no longer lists: "
             f"{missing_from_runner}. Drop the map entry in the same change, or restore the suite."
         )
         unmapped = {suite for suite in suites if suite not in _LOCAL_SUITE_TO_SUMMARY_GATE}
@@ -463,6 +463,23 @@ class TestCISuiteCoverage:
             assert environment.get("DELIVERY_WEBHOOK_INTERVAL") == _WEBHOOK_INTERVAL, (
                 f"{service} must interpolate {_WEBHOOK_INTERVAL}."
             )
+
+    def test_harness_reads_the_compose_sweep_interval(self):
+        """The harness takes the sweep cadence from compose, not from a copied ``5``."""
+        from tests.harness._mixins import delivery_sweep_interval_seconds
+
+        compose = load_yaml_mapping(repo_root() / "docker-compose.e2e.yml")
+        defaults = []
+        for service in ("adcp-server", "tests"):
+            raw = compose_service_environment(compose, service)["DELIVERY_WEBHOOK_INTERVAL"]
+            prefix = "${DELIVERY_WEBHOOK_INTERVAL:-"
+            assert raw.startswith(prefix) and raw.endswith("}"), f"{service} default is {raw!r}"
+            defaults.append(int(raw[len(prefix) : -1]))
+        assert defaults[0] == defaults[1]
+        assert delivery_sweep_interval_seconds() == defaults[0]
+        mixin = (repo_root() / "tests/harness/_mixins.py").read_text(encoding="utf-8")
+        assert "every 5s" not in mixin
+        assert "DELIVERY_WEBHOOK_INTERVAL=5" not in mixin
 
     @pytest.mark.parametrize("job_name", _jobs_that_run_the_runner())
     def test_runner_jobs_reclaim_disk_before_the_run(self, job_name: str):
