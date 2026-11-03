@@ -707,7 +707,7 @@ async def test_savepoint_release_failure_not_counted_processed_and_warns(integra
     assert len(warning_msgs) == 1
     assert "0 updated, 3 errors" in warning_msgs[0]
     assert info_msgs == []
-    # on_success must not claim flips that rolled back at SAVEPOINT release.
+    # A release-time rollback must not log a flip.
     updated_lines = summary_lines(mock_info, STATUS_BATCH_SUMMARY_PREFIX, needle="Updated media buy ")
     assert updated_lines == []
 
@@ -717,7 +717,8 @@ async def test_savepoint_release_failure_not_counted_processed_and_warns(integra
 async def test_invalidated_connection_propagates_without_arming_fail_fast(integration_db):
     """A discarded connection stops the tick and leaves the fail-fast unarmed.
 
-    ``get_db_session`` trips ``_is_healthy`` only when the server never answered.
+    The next ``get_db_session()`` opens. Only a connect the server never answered
+    makes that call raise.
     A ``connection_invalidated`` error still has to propagate: the session's
     connection is gone, so later buys in the tick must not run.
     """
@@ -726,9 +727,9 @@ async def test_invalidated_connection_propagates_without_arming_fail_fast(integr
         invalidated_operational_error,
     )
 
-    tenant_id = _create_test_tenant("tenant_isolation_breaker_1714")
+    tenant_id = _create_test_tenant("tenant_isolation_fail_fast_1714")
     principal_id = _create_test_principal(tenant_id)
-    buy_ids = ["mb_breaker_a", "mb_breaker_b"]
+    buy_ids = ["mb_fail_fast_a", "mb_fail_fast_b"]
 
     seed_active_expired_buys(
         _create_media_buy,
@@ -741,7 +742,7 @@ async def test_invalidated_connection_propagates_without_arming_fail_fast(integr
         MediaBuyStatusScheduler(),
         invalidated_operational_error(),
         tenant_id=tenant_id,
-        arms_breaker=False,
+        trips_fail_fast=False,
         buy_count=len(buy_ids),
     )
 
@@ -775,7 +776,7 @@ async def test_invalidated_dbapi_subclasses_propagate_without_arming_fail_fast(i
         MediaBuyStatusScheduler(),
         invalidated_dbapi_error(exc_type),
         tenant_id=tenant_id,
-        arms_breaker=False,
+        trips_fail_fast=False,
         buy_count=len(buy_ids),
     )
 
@@ -789,9 +790,9 @@ async def test_invalidated_interface_error_propagates_without_arming_fail_fast(i
         invalidated_interface_error,
     )
 
-    tenant_id = _create_test_tenant("tenant_isolation_ie_breaker_1714")
+    tenant_id = _create_test_tenant("tenant_isolation_ie_fail_fast_1714")
     principal_id = _create_test_principal(tenant_id)
-    buy_ids = ["mb_ie_breaker_a", "mb_ie_breaker_b"]
+    buy_ids = ["mb_ie_fail_fast_a", "mb_ie_fail_fast_b"]
 
     seed_active_expired_buys(
         _create_media_buy,
@@ -804,7 +805,7 @@ async def test_invalidated_interface_error_propagates_without_arming_fail_fast(i
         MediaBuyStatusScheduler(),
         invalidated_interface_error(),
         tenant_id=tenant_id,
-        arms_breaker=False,
+        trips_fail_fast=False,
         buy_count=len(buy_ids),
     )
 
@@ -833,7 +834,7 @@ async def test_server_never_answered_arms_fail_fast_and_stops_batch(integration_
         MediaBuyStatusScheduler(),
         server_never_answered_error(),
         tenant_id=tenant_id,
-        arms_breaker=True,
+        trips_fail_fast=True,
         buy_count=len(buy_ids),
     )
 
@@ -847,7 +848,7 @@ async def test_disconnection_error_propagates_while_statement_failure_isolates(i
     the fail-fast stays unarmed. ``DisconnectionError`` is a dropped connection:
     it propagates, later buys do not run, and the fail-fast stays unarmed.
     """
-    import src.core.database.database_session as db_session_mod
+    from src.core.database.database_session import get_db_session, reset_health_state
     from tests.helpers.scheduler_isolation import (
         assert_propagated_failure_stops_batch,
         bare_disconnection_error,
@@ -876,27 +877,40 @@ async def test_disconnection_error_propagates_while_statement_failure_isolates(i
             raise statement_failure()
         return real_compute(media_buy, now_arg, session)
 
-    db_session_mod.reset_health_state()
+    reset_health_state()
     try:
-        assert db_session_mod._is_healthy is True
         with patch.object(scheduler, "_compute_new_status", side_effect=_raise_statement_timeout):
             await scheduler._update_statuses()
-        assert db_session_mod._is_healthy is True
+        with get_db_session() as session:
+            session.connection()
     finally:
-        db_session_mod.reset_health_state()
+        reset_health_state()
     assert set(processed) == set(buy_ids)
     assert read_media_buy_state(tenant_id, "mb_de_a").status == "completed"
     assert read_media_buy_state(tenant_id, "mb_de_b").status == "active"
     assert read_media_buy_state(tenant_id, "mb_de_c").status == "completed"
     assert counter_value("media_buy_status", tenant_id, "db_error") == metric_before + 1
 
+    # The first half already completed two of these buys. A second tick on the
+    # same rows would have one eligible buy, so "visited exactly one" would
+    # pass whether or not the loop stopped. Seed a fresh set that is all still
+    # eligible.
+    stop_ids = ["mb_de_stop_a", "mb_de_stop_b", "mb_de_stop_c"]
+    seed_active_expired_buys(
+        _create_media_buy,
+        tenant_id=tenant_id,
+        principal_id=principal_id,
+        buy_ids=stop_ids,
+    )
     await assert_propagated_failure_stops_batch(
         scheduler,
         bare_disconnection_error(),
         tenant_id=tenant_id,
-        arms_breaker=False,
-        buy_count=len(buy_ids),
+        trips_fail_fast=False,
+        buy_count=len(stop_ids),
     )
+    for media_buy_id in stop_ids:
+        assert read_media_buy_state(tenant_id, media_buy_id).status == "active"
 
 
 # =============================================================================

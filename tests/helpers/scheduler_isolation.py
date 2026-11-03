@@ -90,7 +90,7 @@ INVALIDATED_ESCAPE_ERROR_TYPES: tuple[type[DBAPIError], ...] = (
 
 
 def invalidated_interface_error() -> InterfaceError:
-    """Connection-invalidated InterfaceError used by breaker-arm oracles."""
+    """Connection-invalidated InterfaceError used by fail-fast oracles."""
     return InterfaceError("SELECT 1", {}, Exception("gone"), connection_invalidated=True)
 
 
@@ -99,22 +99,31 @@ def bare_disconnection_error() -> DisconnectionError:
     return DisconnectionError("connection closed")
 
 
-async def assert_propagated_session_error(run, *, arms_breaker: bool) -> None:
+async def assert_propagated_session_error(run, *, trips_fail_fast: bool) -> None:
     """Run ``run`` through the real ``get_db_session`` and check the fail-fast.
 
-    A propagated error reaches that context manager. Only a connect the server
-    never answered sets ``_is_healthy`` false. A dropped connection propagates
-    and leaves the fail-fast unarmed.
+    The oracle is the next ``get_db_session()`` call. Only a connect the server
+    never answered makes that call raise. A dropped connection propagates and
+    the next session still opens.
     """
-    import src.core.database.database_session as db_session_mod
+    from src.core.database.database_session import get_db_session, reset_health_state
 
-    db_session_mod.reset_health_state()
-    assert db_session_mod._is_healthy is True
+    reset_health_state()
     try:
         await run()
-        assert db_session_mod._is_healthy is (not arms_breaker)
+        if trips_fail_fast:
+            try:
+                with get_db_session():
+                    pass
+            except RuntimeError as exc:
+                assert "failing fast" in str(exc)
+            else:
+                raise AssertionError("the next get_db_session() opened after an unanswered connect")
+        else:
+            with get_db_session() as session:
+                session.connection()
     finally:
-        db_session_mod.reset_health_state()
+        reset_health_state()
 
 
 async def assert_propagated_failure_stops_batch(
@@ -122,14 +131,14 @@ async def assert_propagated_failure_stops_batch(
     exc: BaseException,
     *,
     tenant_id: str,
-    arms_breaker: bool,
+    trips_fail_fast: bool,
     buy_count: int,
 ) -> None:
     """A propagated DB error stops the tick and reaches ``get_db_session``.
 
-    ``buy_count`` is how many eligible buys the caller seeded. The tick visits
-    exactly one of them. ``arms_breaker`` is true only for a connect the server
-    never answered, which is what sets ``_is_healthy`` false.
+    ``buy_count`` is how many eligible buys the caller seeded, and every one of
+    them must still be eligible. The tick visits exactly one. ``trips_fail_fast``
+    is true only for a connect the server never answered.
     """
     assert buy_count >= 2, "seed at least two buys so a continued batch is visible"
     metric_before = counter_value("media_buy_status", tenant_id, "db_error")
@@ -143,7 +152,7 @@ async def assert_propagated_failure_stops_batch(
         with patch.object(scheduler, "_compute_new_status", side_effect=_raise):
             await scheduler._update_statuses()
 
-    await assert_propagated_session_error(_run, arms_breaker=arms_breaker)
+    await assert_propagated_session_error(_run, trips_fail_fast=trips_fail_fast)
     assert len(processed) == 1
     assert counter_value("media_buy_status", tenant_id, "db_error") == metric_before
 
@@ -157,6 +166,7 @@ def mock_savepoint_session(*, release_exc: Exception | None = None) -> MagicMock
     hand-built at every isolation-adoption call site.
     """
     session = MagicMock()
+    session.info = {}
     nested = MagicMock()
     session.begin_nested.return_value = nested
     nested.__enter__ = MagicMock(return_value=nested)

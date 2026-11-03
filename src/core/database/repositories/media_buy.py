@@ -24,11 +24,12 @@ from src.core.database.models import (
     MediaPackage,
     PersistedMediaBuyStatus,
 )
+from src.core.database.repositories.effects import SessionEffectsMixin
 from src.core.errors.details import EntityRefDetails
 from src.core.idempotency_canonical import canonical_request_hash
 
 
-class MediaBuyRepository:
+class MediaBuyRepository(SessionEffectsMixin):
     """Tenant-scoped data access for MediaBuy and MediaPackage.
 
     All queries filter by tenant_id automatically. Callers cannot bypass
