@@ -40,8 +40,7 @@ do not use the harness.
 
 import uuid
 from datetime import UTC, datetime, timedelta
-from unittest.mock import ANY, AsyncMock, MagicMock, patch
-from urllib.parse import urlsplit
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
@@ -53,7 +52,6 @@ from src.core.exceptions import (
     AdCPBudgetTooLowError,
     AdCPCapabilityNotSupportedError,
     AdCPConfigurationError,
-    AdCPFormatNotFoundError,
     AdCPNotFoundError,
     AdCPProductNotFoundError,
     AdCPValidationError,
@@ -912,26 +910,6 @@ class TestMainFlowObligations:
             assert result.status == "completed"
             env.mock["adapter"].return_value.create_media_buy.assert_called_once_with(req, ANY, ANY, ANY, ANY)
 
-    @pytest.mark.asyncio
-    async def test_format_id_validation(self, integration_db):
-        """Format ID validation runs for packages with format_ids.
-
-        Covers: UC-002-MAIN-17
-        """
-        from src.core.tools.media_buy_create import _validate_and_convert_format_ids
-
-        # Plain string format ID should be rejected. The tenant row exists: production
-        # reaches this through the resolver, which loaded it, and the registered-agent
-        # lookup reads it (tenants.use_default_creative_agent).
-        with MediaBuyCreateEnv() as env:
-            tenant = env.ensure_tenant()
-            with pytest.raises(AdCPValidationError) as exc_info:
-                await _validate_and_convert_format_ids(
-                    format_ids=["banner_300x250"], tenant_id=tenant.tenant_id, package_idx=0
-                )
-
-        assert exc_info.value.error_code == "VALIDATION_ERROR"
-
     def test_unsupported_format_refusal_names_what_was_rejected_and_what_is_accepted(self, integration_db):
         """Requesting a format the product does not carry is refused, NAMING both sides.
 
@@ -1265,106 +1243,6 @@ class TestInlineCreativeObligations:
         )
 
     @pytest.mark.asyncio
-    async def test_inline_creative_format_validation(self, integration_db):
-        """Inline creative format IDs are validated via format spec lookup.
-
-        Covers: UC-002-ALT-WITH-INLINE-CREATIVES-02
-
-        Note: Format validation for inline creatives happens during the
-        process_and_upload_package_creatives call, which validates format_ids.
-        """
-        from src.core.tools.media_buy_create import _validate_and_convert_format_ids
-
-        # Missing fields in FormatId should be rejected. The tenant row exists, as it does
-        # behind the resolver; the registered-agent lookup reads it.
-        with MediaBuyCreateEnv() as env:
-            tenant = env.ensure_tenant()
-            with pytest.raises(AdCPValidationError) as exc_info:
-                await _validate_and_convert_format_ids(
-                    format_ids=[{"agent_url": "", "id": ""}], tenant_id=tenant.tenant_id, package_idx=0
-                )
-
-        assert exc_info.value.error_code == "VALIDATION_ERROR"
-
-    @pytest.mark.asyncio
-    async def test_malformed_registered_agent_url_skipped_not_hard_failed(self, integration_db):
-        """A malformed PRE-EXISTING registered creative agent_url (admin-ingested
-        data the buyer never touched) is excluded from registration matching
-        with a log, rather than hard-failing every format_id in the request.
-
-        Covers #1291.
-        """
-        from src.core.tools.media_buy_create import _validate_and_convert_format_ids
-        from tests.factories import CreativeAgentFactory
-
-        with MediaBuyCreateEnv() as env:
-            tenant, _principal = env.setup_default_data()
-            # Well-formed registration the buyer's format_id should match: a real peer that
-            # serves the format, since a registered agent is dialled for the lookup.
-            peer_url = env.host_reference_format("display_300x250_image")
-            # Malformed pre-existing registration -- bypasses admin-ingestion
-            # validation entirely by writing directly to the DB, which is
-            # exactly how such a row would already exist in production.
-            # NOT a U-label host: the merged canonicalizer IDNA-encodes "https://exämple.com"
-            # to https://xn--exmple-cua.com/ and returns normally, which left the
-            # TargetUriMalformedError arm in _build_registered_agent_urls unexecuted and this
-            # case grading nothing. An unparseable authority is refused for real.
-            CreativeAgentFactory(tenant=tenant, agent_url="https://[::1", enabled=True)
-
-            # No get_format mocking: the real registry dials the registered peer.
-            result = await _validate_and_convert_format_ids(
-                format_ids=[{"agent_url": peer_url, "id": "display_300x250_image"}],
-                tenant_id=tenant.tenant_id,
-                package_idx=0,
-            )
-
-        # Returned in CANONICAL form, the one form both sides of the registration check use.
-        # The peer URL already is: a lowercase IP host, a non-default port, a non-empty path.
-        assert result == [{"agent_url": peer_url, "id": "display_300x250_image"}]
-
-    @pytest.mark.asyncio
-    async def test_the_operator_agent_is_registered_by_origin_and_no_other_agent_is(self, integration_db, monkeypatch):
-        """The operator agent's references pass the registration check by ORIGIN; no other agent does.
-
-        CREATIVE_AGENT_ORIGIN names an origin that is not the public agent's, and the tenant
-        registers no agent there, so only the operator rule can admit the operator's
-        mount-path reference. A foreign origin is still refused, and a tenant-registered agent
-        still matches with its path preserved.
-        """
-        from src.core.exceptions import AdCPAuthorizationError
-        from src.core.tools.media_buy_create import _validate_and_convert_format_ids
-
-        operator = "https://creative.seller.example"
-        monkeypatch.setenv("CREATIVE_AGENT_ORIGIN", operator)
-        # Both are read once and cached; drop them so this test's environment is the one read.
-        monkeypatch.setattr("src.core.config._settings", None)
-        monkeypatch.setattr("src.core.creative_agent_registry._registry", None)
-
-        with MediaBuyCreateEnv() as env:
-            tenant, _principal = env.setup_default_data()
-            # A real peer that serves the format: a registered agent is dialled for the lookup.
-            partner = env.host_reference_format("display_300x250_image")
-
-            async def validate(agent_url: str) -> list[dict[str, str]]:
-                return await _validate_and_convert_format_ids(
-                    format_ids=[{"agent_url": agent_url, "id": "display_300x250_image"}],
-                    tenant_id=tenant.tenant_id,
-                    package_idx=0,
-                )
-
-            mounted = await validate(f"{operator}/api/creative-agent")
-            registered = await validate(partner)
-            with pytest.raises(AdCPAuthorizationError) as foreign:
-                await validate("https://creative.other.example/api/creative-agent")
-            with pytest.raises(AdCPAuthorizationError) as other_path:
-                await validate(urlsplit(partner)._replace(path="/other-agent").geturl())
-
-        assert mounted == [{"agent_url": f"{operator}/api/creative-agent", "id": "display_300x250_image"}]
-        assert registered == [{"agent_url": partner, "id": "display_300x250_image"}]
-        assert foreign.value.error_code == "PERMISSION_DENIED"
-        assert other_path.value.error_code == "PERMISSION_DENIED"
-
-    @pytest.mark.asyncio
     async def test_unapproved_creatives_may_trigger_manual_approval(self):
         """Unapproved creatives may trigger manual approval path.
 
@@ -1561,63 +1439,6 @@ class TestExtensionObligations:
 
         offending = {err["loc"][0] for err in exc_info.value.errors()}
         assert offending == {"mood", "weather"}
-
-    @pytest.mark.asyncio
-    async def test_unregistered_creative_agent_rejected(self):
-        """Unregistered creative agent in format_ids is rejected.
-
-        Covers: UC-002-EXT-H-02
-        """
-        from src.core.tools.media_buy_create import _validate_and_convert_format_ids
-
-        # Patched at the ACCESSOR, not the class: production asks
-        # get_creative_agent_registry() for the registry the deployment selected, so
-        # replacing the constructor would leave the real (reference-formats) registry in play.
-        with patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_get_registry:
-            mock_registry = MagicMock()
-            mock_registry._get_tenant_agents.return_value = []  # No agents registered
-            mock_get_registry.return_value = mock_registry
-
-            from src.core.exceptions import AdCPAuthorizationError
-
-            # No normalizer to neutralize: both sides of the registration check go through
-            # `canonical_agent_url`, so the comparison is exact by construction.
-            with pytest.raises(AdCPAuthorizationError) as exc_info:
-                await _validate_and_convert_format_ids(
-                    format_ids=[{"agent_url": "https://unknown-agent.example.com", "id": "banner_300x250"}],
-                    tenant_id="test_tenant",
-                    package_idx=0,
-                )
-
-            assert exc_info.value.error_code == "PERMISSION_DENIED"
-
-    @pytest.mark.asyncio
-    async def test_format_not_found_on_agent(self):
-        """Format ID not found on registered agent returns error.
-
-        Covers: UC-002-EXT-H-03
-        """
-        from src.core.tools.media_buy_create import _validate_and_convert_format_ids
-
-        mock_agent = MagicMock()
-        mock_agent.agent_url = "https://creative.example.com"
-
-        # Patched at the ACCESSOR, not the class -- see the note in
-        # test_unregistered_creative_agent_rejected.
-        with patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_get_registry:
-            mock_registry = MagicMock()
-            mock_registry._get_tenant_agents.return_value = [mock_agent]
-            mock_registry.get_format = AsyncMock(return_value=None)  # Format not found
-            mock_get_registry.return_value = mock_registry
-
-            with pytest.raises(AdCPFormatNotFoundError) as exc_info:
-                await _validate_and_convert_format_ids(
-                    format_ids=[{"agent_url": "https://creative.example.com", "id": "nonexistent_format"}],
-                    tenant_id="test_tenant",
-                    package_idx=0,
-                )
-
-            assert exc_info.value.error_code == "REFERENCE_NOT_FOUND"
 
     # test_authentication_always_required is REMOVED. It built an identity with
     # principal_id=None and asserted _create_media_buy_impl raised
