@@ -34,7 +34,13 @@ class TlsGateEnv(DatabaseFaultMixin, IntegrationEnv):
 
     @realize_e2e(_domain_already_on_the_live_stack)
     def answer_on_domain(self, domain: str) -> None:
-        """Make *domain* this deployment's own, with the admin domain derived from it."""
+        """Make *domain* this deployment's own, with the admin domain derived from it.
+
+        The app is composed first: importing ``src.app`` calls ``load_settings()``, which
+        replaces the cached settings, so a field patched before the first import in a worker
+        is patched on an object no reader consults any more.
+        """
+        self.get_rest_client()
         for field, value in (("sales_agent_domain", domain), ("admin_domain", None)):
             patcher = patch.object(get_settings().runtime, field, value)
             patcher.start()
