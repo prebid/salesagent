@@ -185,15 +185,11 @@ class MediaBuyStatusScheduler:
                         seller_committed=new_status == PersistedMediaBuyStatus.ACTIVE,
                     )
                     if updated is None:
-                        # Unreachable: media_buy_id is the sole primary key and the
-                        # row is already loaded in this transaction, so the
-                        # tenant-filtered re-fetch cannot miss. Never fall through
-                        # silently — a sweep must not report an update it did not make.
-                        logger.error(
-                            f"Media buy {media_buy_id} vanished from its own tenant "
-                            f"{tenant_id!r} mid-sweep; status left at {old_status}"
-                        )
-                        old_status = None
+                        # The repository declined the write. Raising inside the
+                        # savepoint rolls this buy back and counts it on the one
+                        # isolation path. Clearing old_status would report a no-op
+                        # for a row the sweep tried to move.
+                        raise LookupError(media_buy_id)
         except Exception as exc:
             if _propagates_to_session(exc):
                 raise
@@ -211,7 +207,9 @@ class MediaBuyStatusScheduler:
                 )
             except Exception as handler_exc:
                 logger.error(
-                    f"Status isolation error handler failed (media_buy_id={media_buy_id}): {handler_exc}",
+                    f"Status isolation error handler failed "
+                    f"(tenant_id={tenant_id}, principal_id={principal_id}, "
+                    f"media_buy_id={media_buy_id}): {handler_exc}",
                     exc_info=True,
                 )
             return _BuyOutcome.ISOLATED

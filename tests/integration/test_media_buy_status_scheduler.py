@@ -9,8 +9,6 @@ based on flight dates:
 Uses real PostgreSQL database via integration_db fixture.
 """
 
-import logging
-import re
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
@@ -1007,14 +1005,13 @@ async def test_scheduler_idempotent(integration_db):
 
 @pytest.mark.requires_db
 @pytest.mark.asyncio
-async def test_sweep_does_not_count_a_write_the_repository_declined(integration_db, caplog):
-    """A ``None`` from ``update_status`` must be reported, not counted.
+async def test_sweep_does_not_count_a_write_the_repository_declined(integration_db):
+    """A ``None`` from ``update_status`` is an isolated error, not a flip.
 
     ``MediaBuyRepository.update_status`` returns ``None`` when the row is not
-    found within the repository's tenant. The sweep is cross-tenant while the
-    repository is tenant-scoped, so the sweep MUST read that return: counting the
-    row anyway would make the run report ``Updated 1 media buy status(es)`` for a
-    row whose status never moved — a sweep silently lying about its own work.
+    found within the repository's tenant. The sweep raises inside the savepoint
+    so the buy rolls back, the batch summary reports ``0 updated, 1 errors``,
+    and the isolation counter increments with ``error_type`` ``other``.
     """
     tenant_id = _create_test_tenant("tenant_declined_write")
     principal_id = _create_test_principal(tenant_id)
@@ -1036,10 +1033,13 @@ async def test_sweep_does_not_count_a_write_the_repository_declined(integration_
     assert before.status == "scheduled"
 
     scheduler = MediaBuyStatusScheduler()
+    metric_before = counter_value("media_buy_status", tenant_id, "other")
 
     with (
         patch.object(MediaBuyRepository, "update_status", return_value=None) as mock_update,
-        caplog.at_level(logging.INFO, logger="src.services.media_buy_status_scheduler"),
+        patch.object(status_scheduler_mod.logger, "error") as mock_error,
+        patch.object(status_scheduler_mod.logger, "info") as mock_info,
+        patch.object(status_scheduler_mod.logger, "warning") as mock_warning,
     ):
         await scheduler._update_statuses()
 
@@ -1049,27 +1049,16 @@ async def test_sweep_does_not_count_a_write_the_repository_declined(integration_
     # claiming the commitment could put a schema-invalid document on the wire.
     mock_update.assert_called_once_with(media_buy_id, PersistedMediaBuyStatus.ACTIVE, seller_committed=True)
 
-    messages = [record.getMessage() for record in caplog.records]
+    assert summary_lines(mock_info, STATUS_BATCH_SUMMARY_PREFIX, needle="Updated media buy ") == []
+    warning_msgs = summary_lines(mock_warning, STATUS_BATCH_SUMMARY_PREFIX)
+    assert warning_msgs == [f"{STATUS_BATCH_SUMMARY_PREFIX}: 0 updated, 1 errors"]
+    assert counter_value("media_buy_status", tenant_id, "other") == metric_before + 1
 
-    # (a) The declined write is not counted: neither the per-row transition line
-    #     nor the run total may claim an update happened.
-    assert not [m for m in messages if m.startswith(f"Updated media buy {media_buy_id} status:")], (
-        f"sweep logged a transition for a write the repository declined: {messages}"
-    )
-    assert not [m for m in messages if re.fullmatch(r"Updated \d+ media buy status\(es\)", m)], (
-        f"sweep reported a non-zero updated count for a write the repository declined: {messages}"
-    )
-
-    # (b) It is reported rather than swallowed.
-    errors = [
-        record.getMessage()
-        for record in caplog.records
-        if record.levelno == logging.ERROR and "vanished from its own tenant" in record.getMessage()
-    ]
-    assert len(errors) == 1, f"expected exactly one 'vanished from its own tenant' ERROR, got: {messages}"
-    assert media_buy_id in errors[0] and repr(tenant_id) in errors[0], (
-        f"the error must name the row and the tenant it was scoped to, got: {errors[0]}"
-    )
+    assert mock_error.call_count == 1
+    err_msg = mock_error.call_args.args[0]
+    assert f"tenant_id={tenant_id}" in err_msg
+    assert f"principal_id={principal_id}" in err_msg
+    assert f"media_buy_id={media_buy_id}" in err_msg
 
     # (c) The row itself is untouched — status, and the bookkeeping a real move carries.
     after = read_media_buy_state(tenant_id, media_buy_id)
