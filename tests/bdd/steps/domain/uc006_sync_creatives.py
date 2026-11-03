@@ -753,7 +753,7 @@ def _readback(ctx: dict) -> Iterator[Session]:
     under test actually writes: the per-test base in process, and the live
     server's own base over e2e_rest (the env's factories write there, and
     ``_db_scope_for`` points production's cached engine at the same URL for the
-    scenario duration — ``_production_db_pointed_at``, tests/bdd/conftest.py).
+    scenario duration — ``production_db_pointed_at``, tests/utils/database_helpers.py).
     A read-back therefore needs no transport branch, which is why the skip this
     replaced was never the right primitive.
 

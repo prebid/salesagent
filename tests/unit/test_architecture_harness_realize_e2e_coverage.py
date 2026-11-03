@@ -25,7 +25,7 @@ why):
     already correct in both in-process and e2e mode; no branch needed.
   * ``ALLOWLIST_NOT_WIRE_DISPATCHED`` -- the env's call path never crosses
     the wire (TRANSPORT-BYPASS, documented at tests/bdd/conftest.py
-    ``_production_db_pointed_at``) so an in-process mock is correct in every
+    ``_db_scope_for``) so an in-process mock is correct in every
     parametrized "transport" row.
   * ``ALLOWLIST_NOT_BDD_REACHABLE`` -- no BDD Given step calls this method at
     all (verified by grep against tests/bdd/steps/), so it's never dispatched
@@ -119,7 +119,7 @@ ALLOWLIST_NOT_WIRE_DISPATCHED: frozenset[tuple[str, str]] = frozenset(
         # CircuitBreakerEnv.call_send+call_deliver invoke production functions
         # (deliver_webhook_with_retry, WebhookDeliveryService methods) DIRECTLY
         # in-process, never through call_via/dispatch_request -- confirmed via
-        # tests/bdd/conftest.py's "_production_db_pointed_at" docstring, which
+        # tests/bdd/conftest.py's "_db_scope_for" docstring, which
         # documents this as the accommodated "TRANSPORT-BYPASS Given calling an
         # _impl" case. The mock takes effect identically in every parametrized
         # "transport" row because the call itself never leaves the process, so

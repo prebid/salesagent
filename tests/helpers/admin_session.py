@@ -53,6 +53,15 @@ def _session_payload(tenant_id: str, *, auth_method: str | None = None) -> dict[
     return payload
 
 
+def member_session_payload(email: str, tenant_id: str) -> dict[str, Any]:
+    """The session an OIDC login writes for a caller who is NOT a super admin.
+
+    No ``test_user`` key, so ``require_tenant_access`` takes its real branch: the caller's
+    ``User`` row in the requested tenant is the only thing that decides the outcome.
+    """
+    return {"authenticated": True, "user": {"email": email}, "email": email, "tenant_id": tenant_id}
+
+
 def admin_session_cookie(tenant_id: str, *, auth_method: str | None = None, secret_key: str | None = None) -> str:
     """A signed Flask session cookie for an authenticated super admin.
 
@@ -63,6 +72,11 @@ def admin_session_cookie(tenant_id: str, *, auth_method: str | None = None, secr
     *secret_key* defaults to ``FLASK_SECRET_KEY`` from the environment, then to
     :data:`TEST_FLASK_SECRET_KEY` — the value the test compose stacks set.
     """
+    return sign_session(_session_payload(tenant_id, auth_method=auth_method), secret_key=secret_key)
+
+
+def sign_session(payload: dict[str, Any], *, secret_key: str | None = None) -> str:
+    """*payload* as a Flask session cookie, signed the way the test stacks' server signs its own."""
     from flask import Flask
     from flask.sessions import SecureCookieSessionInterface
 
@@ -70,7 +84,7 @@ def admin_session_cookie(tenant_id: str, *, auth_method: str | None = None, secr
     app.secret_key = secret_key or os.environ.get("FLASK_SECRET_KEY") or TEST_FLASK_SECRET_KEY
     serializer = SecureCookieSessionInterface().get_signing_serializer(app)
     assert serializer is not None, "Flask refused to build a session serializer without a secret key"
-    return serializer.dumps(_session_payload(tenant_id, auth_method=auth_method))
+    return serializer.dumps(payload)
 
 
 def authenticate_http_session(session: Any, base_url: str, tenant_id: str, *, auth_method: str | None = None) -> Any:
