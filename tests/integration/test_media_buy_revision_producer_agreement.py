@@ -103,6 +103,15 @@ def _create_kwargs(product: Any, *, domain: str) -> dict[str, Any]:
     }
 
 
+def _end_after_create(*, days_from_now: int) -> str:
+    """An update end_time that stays after ``_create_kwargs``'s start (now + 30 days).
+
+    A fixed December date falls before that start once the calendar passes
+    the start of November, and the tool rejects it as ``end_time``.
+    """
+    return (datetime.now(UTC) + timedelta(days=days_from_now)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 # The two campaign-level toggles the tool serves from ONE construction site (the
 # ``req.paused is not None`` branch), with the persisted status each one is legal
 # from (adcp.server.helpers.MEDIA_BUY_STATE_MACHINE: "active" -> pause, "paused"
@@ -214,7 +223,7 @@ def test_update_responses_and_get_media_buys_report_the_same_revision(integratio
                 account={"account_id": "acct_test"},
                 idempotency_key=fresh_idempotency_key(),
                 media_buy_id=media_buy_id,
-                end_time="2026-12-01T00:00:00Z",
+                end_time=_end_after_create(days_from_now=45),
             ),
         )
         second = env.call_via(
@@ -223,7 +232,7 @@ def test_update_responses_and_get_media_buys_report_the_same_revision(integratio
                 account={"account_id": "acct_test"},
                 idempotency_key=fresh_idempotency_key(),
                 media_buy_id=media_buy_id,
-                end_time="2026-12-15T00:00:00Z",
+                end_time=_end_after_create(days_from_now=75),
             ),
         )
         listed = env.call_via(transport, req=GetMediaBuysRequest(media_buy_ids=[media_buy_id]))
@@ -336,7 +345,7 @@ def test_update_raises_media_buy_not_found_when_the_row_vanishes_mid_transaction
                     account={"account_id": "acct_test"},
                     idempotency_key=fresh_idempotency_key(),
                     media_buy_id=media_buy_id,
-                    end_time="2026-12-01T00:00:00Z",
+                    end_time=_end_after_create(days_from_now=45),
                 ),
             )
 
