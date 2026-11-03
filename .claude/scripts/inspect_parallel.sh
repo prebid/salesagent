@@ -15,8 +15,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 # Prefer repo-local inspector; allow override for plugin/vendored copies.
+# A vendored copy must not import bdd_audit_common (that import is gone).
 INSPECTOR="${INSPECT_BDD_STEPS:-$SCRIPT_DIR/inspect_bdd_steps.py}"
-FEATURES_DIR="$PROJECT_ROOT/tests/bdd/features"STEPS_DIR="$PROJECT_ROOT/tests/bdd/steps"
+STEPS_DIR="$PROJECT_ROOT/tests/bdd/steps"
 
 if [ ! -f "$INSPECTOR" ]; then
     echo "ERROR: inspector not found: $INSPECTOR" >&2
@@ -41,29 +42,33 @@ echo "Output:    $OUTPUT_DIR"
 echo "Work root: $WORK_ROOT"
 echo ""
 
-# Define slices: name → list of step files
-declare -A SLICES
-SLICES[uc002-create]="$STEPS_DIR/domain/uc002_create_media_buy.py"
-SLICES[uc003]="$STEPS_DIR/domain/uc003_update_media_buy.py $STEPS_DIR/domain/uc003_ext_error_scenarios.py"
-SLICES[uc004]="$STEPS_DIR/domain/uc004_delivery.py"
-SLICES[uc005-uc006]="$STEPS_DIR/domain/uc005_creative_formats.py $STEPS_DIR/domain/uc006_sync_creatives.py"
-SLICES[uc011]="$STEPS_DIR/domain/uc011_accounts.py"
-SLICES[uc019]="$STEPS_DIR/domain/uc019_query_media_buys.py"
-SLICES[uc026]="$STEPS_DIR/domain/uc026_package_media_buy.py"
-SLICES[generic]="$STEPS_DIR/domain/admin_accounts.py $STEPS_DIR/domain/uc002_nfr.py $STEPS_DIR/domain/uc002_task_query.py $(ls $STEPS_DIR/generic/*.py 2>/dev/null | grep -v __pycache__ | grep -v __init__ | tr '\n' ' ')"
+# name|files entries. bash 3.2 (macOS /bin/bash) has no declare -A.
+GENERIC_FILES="$(ls "$STEPS_DIR"/generic/*.py 2>/dev/null | grep -v __pycache__ | grep -v __init__ | tr '\n' ' ' || true)"
+SLICES=(
+    "uc002-create|$STEPS_DIR/domain/uc002_create_media_buy.py"
+    "uc003|$STEPS_DIR/domain/uc003_update_media_buy.py $STEPS_DIR/domain/uc003_ext_error_scenarios.py"
+    "uc004|$STEPS_DIR/domain/uc004_delivery.py"
+    "uc005-uc006|$STEPS_DIR/domain/uc005_creative_formats.py $STEPS_DIR/domain/uc006_sync_creatives.py"
+    "uc011|$STEPS_DIR/domain/uc011_accounts.py"
+    "uc019|$STEPS_DIR/domain/uc019_query_media_buys.py"
+    "uc026|$STEPS_DIR/domain/uc026_package_media_buy.py"
+    "generic|$STEPS_DIR/domain/admin_accounts.py $STEPS_DIR/domain/uc002_nfr.py $STEPS_DIR/domain/uc002_task_query.py $GENERIC_FILES"
+)
 
 # Prepare temp dirs and launch
 PIDS=()
-for name in "${!SLICES[@]}"; do
+for entry in "${SLICES[@]}"; do
+    name="${entry%%|*}"
+    files="${entry#*|}"
     slice_dir="$WORK_ROOT/inspect-slice-$name"
     mkdir -p "$slice_dir"
 
     # Copy files into slice dir
-    for f in ${SLICES[$name]}; do
+    for f in $files; do
         [ -f "$f" ] && cp "$f" "$slice_dir/"
     done
 
-    file_count=$(ls "$slice_dir"/*.py 2>/dev/null | wc -l | tr -d ' ')
+    file_count=$(find "$slice_dir" -name '*.py' -type f | wc -l | tr -d ' ')
     echo "Launching $name ($file_count files)..."
 
     # Use --timeout=600 (no sed patch) so concurrent runs share one inspector.
@@ -101,7 +106,8 @@ echo ""
 echo "=== Combined Summary ==="
 TOTAL_STEPS=0
 TOTAL_FLAGGED=0
-for name in "${!SLICES[@]}"; do
+for entry in "${SLICES[@]}"; do
+    name="${entry%%|*}"
     if [ -f "$OUTPUT_DIR/$name.md" ]; then
         steps=$(grep "Steps scanned" "$OUTPUT_DIR/$name.md" 2>/dev/null | grep -o "[0-9]*" || echo 0)
         flagged=$(grep "Flagged for deep" "$OUTPUT_DIR/$name.md" 2>/dev/null | grep -o "[0-9]*" || echo 0)

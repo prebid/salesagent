@@ -15,17 +15,9 @@ import ast
 import os
 import subprocess
 import sys
-from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, cast
-
-_SCRIPTS_DIR = Path(__file__).resolve().parent
-if str(_SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(_SCRIPTS_DIR))
-
-from bdd_audit_common import STEP_RECORD_KEYS, StepRecord  # noqa: E402
 
 STEP_DECORATOR_NAMES = {"given", "when", "then"}
 
@@ -34,11 +26,7 @@ STEP_DECORATOR_NAMES = {"given", "when", "then"}
 
 @dataclass
 class BddStepInfo:
-    """Thin adapter over ``bdd_audit_common.StepRecord`` (JSONL store shape).
-
-    Fields mirror ``STEP_RECORD_KEYS``; ``to_record`` / ``from_record`` iterate
-    that key set so adding or renaming a field cannot drift silently.
-    """
+    """One BDD step function found by the inspector."""
 
     file_path: str
     line_number: int
@@ -46,17 +34,6 @@ class BddStepInfo:
     step_text: str
     function_name: str
     source_text: str
-
-    def to_record(self) -> StepRecord:
-        """Serialize to the canonical StepRecord TypedDict via STEP_RECORD_KEYS."""
-        return cast(StepRecord, {key: getattr(self, key) for key in STEP_RECORD_KEYS})
-
-    @classmethod
-    def from_record(cls, record: StepRecord) -> BddStepInfo:
-        """Build from a StepRecord (e.g. JSONL store entry) via STEP_RECORD_KEYS."""
-        # Cast through Mapping so mypy accepts dynamic TypedDict key iteration.
-        raw: Mapping[str, Any] = cast(Mapping[str, Any], record)
-        return cls(**{key: raw[key] for key in STEP_RECORD_KEYS})
 
 
 @dataclass

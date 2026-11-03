@@ -65,6 +65,7 @@ from bdd_audit_common import (  # noqa: E402
     extract_transport,
     extract_uc,
     grade_base,
+    graded_outcome,
     load_bdd_artifact,
     load_e2e_rest_known_failure_bases,
     parse_conftest_xfail_tags,
@@ -226,10 +227,11 @@ def _iter_phase_dicts(test: TestReportEntry) -> Iterator[PhaseResult]:
 
 
 def _crash_reason_text(test: TestReportEntry) -> str:
-    """Read xfail/failure reason from setup/call crash.message (or longrepr).
+    """Read the reason from crash.message, then from a non-passing longrepr.
 
-    pytest-json-report does not emit ``wasxfail``; real artifacts carry the
-    reason on ``setup.crash.message`` / ``call.crash.message``.
+    pytest-json-report does not emit ``wasxfail``. On an xdist artifact the
+    passing setup phase's ``longrepr`` is the worker banner (``[gw…] linux
+    -- Python…``). That banner must not win over ``call.crash.message``.
     """
     for ph in _iter_phase_dicts(test):
         crash_raw = ph.get("crash") or {}
@@ -237,6 +239,9 @@ def _crash_reason_text(test: TestReportEntry) -> str:
             message = crash_raw.get("message")
             if message:
                 return str(message)
+    for ph in _iter_phase_dicts(test):
+        if ph.get("outcome") == "passed":
+            continue
         longrepr = ph.get("longrepr")
         if longrepr:
             return str(longrepr)
@@ -343,8 +348,8 @@ def parse_test_results(json_path: Path) -> ParsedTestResults:
     """
     loaded = load_bdd_artifact(json_path)
     all_tests: list[TestReportEntry] = cast(list[TestReportEntry], loaded.tests)
-    xfailed = [t for t in all_tests if t["outcome"] == "xfailed"]
-    xpassed = [t for t in all_tests if t["outcome"] == "xpassed"]
+    xfailed = [t for t in all_tests if graded_outcome(t) == "xfailed"]
+    xpassed = [t for t in all_tests if graded_outcome(t) == "xpassed"]
     return ParsedTestResults(
         xfailed=xfailed,
         xpassed=xpassed,
@@ -592,12 +597,12 @@ def classify_xpassed(
 
     Returns ``XpassBuckets(graduate, confirm, partial_passing, partial_missing)``.
     """
-    xpassed_bases = {extract_scenario_base(t["nodeid"]) for t in all_tests if t.get("outcome") == "xpassed"}
+    nodeid_outcomes = [(t["nodeid"], graded_outcome(t)) for t in all_tests]
+    xpassed_bases = {extract_scenario_base(nodeid) for nodeid, outcome in nodeid_outcomes if outcome == "xpassed"}
     graduate: set[str] = set()
     confirm: set[str] = set()
     partial_passing: dict[str, set[str]] = {}
     partial_missing: dict[str, set[str]] = {}
-    nodeid_outcomes = [(t["nodeid"], t["outcome"]) for t in all_tests]
     ledger = ledger_bases or set()
     for base in xpassed_bases:
         grade = grade_base(
@@ -774,7 +779,11 @@ def main() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(description="Deterministic BDD xfail audit")
-    parser.add_argument("json_path", help="Path to bdd.json test results")
+    parser.add_argument(
+        "json_paths",
+        nargs="+",
+        help="bdd.json files from one run (same root). Pass split halves together.",
+    )
     parser.add_argument("--output", "-o", help="Output markdown path", default=None)
     parser.add_argument(
         "--conftest",
@@ -798,7 +807,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    json_path = Path(args.json_path)
+    json_paths = [Path(path) for path in args.json_paths]
     conftest_path = Path(args.conftest)
     steps_dir = Path(args.steps_dir)
     host_root = Path(args.repo_root)
@@ -818,11 +827,11 @@ def main() -> None:
     )
 
     # Step 3: Parse test results (shared empty guard + census; CLI exit edge)
-    print(f"Parsing {json_path}...", file=sys.stderr)
-    loaded = cli_load_or_exit(json_path)
+    print(f"Parsing {', '.join(str(path) for path in json_paths)}...", file=sys.stderr)
+    loaded = cli_load_or_exit(json_paths)
     all_tests = cast(list[TestReportEntry], loaded.tests)
-    xfailed_tests = [t for t in all_tests if t["outcome"] == "xfailed"]
-    xpassed_tests = [t for t in all_tests if t["outcome"] == "xpassed"]
+    xfailed_tests = [t for t in all_tests if graded_outcome(t) == "xfailed"]
+    xpassed_tests = [t for t in all_tests if graded_outcome(t) == "xpassed"]
     print(
         f"  Parsed {len(all_tests)} tests ({len(xfailed_tests)} xfailed, {len(xpassed_tests)} xpassed)",
         file=sys.stderr,

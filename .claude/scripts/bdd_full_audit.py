@@ -38,6 +38,7 @@ from bdd_audit_common import (  # noqa: E402
     extract_transport,
     extract_uc,
     grade_base,
+    graded_outcome,
     load_bdd_artifact,
     load_e2e_rest_known_failure_bases,
     phase_dict,
@@ -64,7 +65,6 @@ INSPECTOR_DIR = PROJECT_ROOT / ".claude" / "reports" / "inspect-all-steps"
 
 # FIX_NOW: test infrastructure we control
 FIX_NOW = {
-    "STALE_STRICT_XFAIL": "Test passes but strict xfail tag rejects it — remove tag",
     "GRADUATE": "All present transports pass — remove xfail tag",
     "GRADUATE_CONFIRM": (
         "All present transports pass, but the set is single-transport or "
@@ -119,7 +119,7 @@ def _test_entry_from_raw(t: dict) -> TestEntry:
     longrepr = phase_dict(t, "call").get("longrepr") or ""
     return TestEntry(
         nodeid=t["nodeid"],
-        outcome=t["outcome"],
+        outcome=graded_outcome(t),
         keywords=t.get("keywords", []),
         error=extract_longrepr_e_line(longrepr),
         longrepr=longrepr[:1000],
@@ -165,8 +165,7 @@ def parse_inspector_reports() -> list[InspectorFlag]:
 # ── Classification ───────────────────────────────────────────────────
 #
 # Decision tree for failed tests:
-#   1. XPASS(strict)? → FIX_NOW:STALE_STRICT_XFAIL (remove tag)
-#   2. Fixture not populated? → FIX_NOW:FIXTURE_GAP (fix factory)
+#   1. Fixture not populated? → FIX_NOW:FIXTURE_GAP (fix factory)
 #   3. Production crashes/errors on valid input? → XFAIL_IT:PROD_BUG
 #   4. Production accepts input spec says invalid? → XFAIL_IT:PROD_BEHAVIOR
 #   5. Production rejects input spec says valid? → check if spec is obviously
@@ -180,15 +179,11 @@ def classify_failure(entry: TestEntry) -> tuple[str, str, str]:
 
     bucket: FIX_NOW | XFAIL_IT | FEATURE_FIX
 
-    STALE_STRICT_XFAIL keys on ``XPASS(strict)`` in longrepr (not a dead
-    conftest-tag scan).
+    A strict xpass is not a failure. ``graded_outcome`` reads it as
+    ``xpassed`` and ``main`` routes that row through ``classify_xpass``.
     """
     error = entry.error
     longrepr = entry.longrepr
-
-    # ── FIX_NOW: stale strict xfail (reachable via XPASS(strict) in longrepr) ─
-    if "XPASS(strict)" in longrepr or "XPASS(strict)" in error:
-        return "FIX_NOW", "STALE_STRICT_XFAIL", "Remove strict xfail tag"
 
     # ── FIX_NOW: fixture not populated ───────────────────────────────
     if "is not None" in longrepr and ("has no" in error or "not None" in error):
@@ -606,7 +601,11 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="Full BDD audit")
-    parser.add_argument("json_path", help="Path to bdd.json test results")
+    parser.add_argument(
+        "json_paths",
+        nargs="+",
+        help="bdd.json files from one run (same root). Pass split halves together.",
+    )
     parser.add_argument("--output", "-o", help="Output markdown file path")
     parser.add_argument(
         "--conftest",
@@ -620,12 +619,12 @@ def main():
     )
     args = parser.parse_args()
 
-    json_path = Path(args.json_path)
+    json_paths = [Path(path) for path in args.json_paths]
     output_path = Path(args.output) if args.output else None
     conftest_path = Path(args.conftest)
 
     print("Parsing test results...", file=sys.stderr)
-    loaded = cli_load_or_exit(json_path)
+    loaded = cli_load_or_exit(json_paths)
     entries = [_test_entry_from_raw(t) for t in loaded.tests]
     summary = Counter(e.outcome for e in entries)
     print(f"  Parsed {len(entries)} tests: {dict(summary)}", file=sys.stderr)

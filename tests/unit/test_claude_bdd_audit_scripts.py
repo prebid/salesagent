@@ -9,6 +9,8 @@ from __future__ import annotations
 import ast
 import importlib.util
 import json
+import os
+import subprocess
 import sys
 import textwrap
 from pathlib import Path
@@ -139,31 +141,6 @@ def audit_xfails(request, bdd_audit_common):
 @pytest.fixture(scope="module")
 def cross_reference_audit(request, bdd_audit_common):
     return _load("cross_reference_audit", request)
-
-
-@pytest.fixture(scope="module")
-def graduate_pending(request, bdd_audit_common):
-    """Load scripts/graduate_pending.py (sibling of .claude/scripts)."""
-    path = REPO_ROOT / "scripts" / "graduate_pending.py"
-    if not path.exists():
-        pytest.fail(f"missing script: {path}")
-    scripts_dir = str(SCRIPTS)
-    if scripts_dir not in sys.path:
-        sys.path.insert(0, scripts_dir)
-    name = "graduate_pending"
-    if name in sys.modules:
-        return sys.modules[name]
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-
-    def _teardown() -> None:
-        sys.modules.pop(name, None)
-
-    request.addfinalizer(_teardown)
-    return module
 
 
 def _premature_source() -> str:
@@ -661,6 +638,25 @@ class TestCrashMessageClassification:
         entry = audit_xfails.classify_xfail(test, {}, [])
         assert entry.category == "MISSING_STEP"
 
+    def test_xdist_banner_does_not_hide_call_crash_message(self, audit_xfails) -> None:
+        """A passing setup longrepr is the xdist worker banner, not the reason."""
+        test = {
+            "nodeid": "t::s[a2a]",
+            "keywords": [],
+            "outcome": "xfailed",
+            "setup": {
+                "outcome": "passed",
+                "longrepr": "[gw0] linux -- Python 3.12.0",
+            },
+            "call": {
+                "outcome": "skipped",
+                "crash": {"path": "/tmp/x.py", "lineno": 1, "message": "StepDefinitionNotFoundError"},
+            },
+        }
+        entry = audit_xfails.classify_xfail(test, {}, [])
+        assert entry.category == "MISSING_STEP"
+        assert "linux -- Python" not in entry.reason
+
     def test_missing_step_from_bare_error_type(self, audit_xfails) -> None:
         # Pin the load-bearing disjunct alone: no "Step definition not found"
         # human phrase anywhere in the message, only the bare error type name.
@@ -840,56 +836,41 @@ class TestSalvageDedupe:
         salvage_audit.write_to_store(parsed, store, None)
         records = [json.loads(line) for line in store.read_text().splitlines() if line.strip()]
         triage = [r for r in records if r["kind"] == "triage"]
-        assert len(triage) == 1
+        assert len(triage) == 2
+        assert sorted(r["step"]["occurrence"] for r in triage) == [1, 2]
 
-    def test_store_key_line_number_distinguishes_same_name(self, salvage_audit, tmp_path: Path) -> None:
-        """Pre-seeded store at line 7 + step index at line 42 for same name."""
+    def test_same_name_conflicting_rows_survive_indexed_then_bare(self, salvage_audit, tmp_path, monkeypatch) -> None:
+        """Two deep rows named then_no_errors_field keep both severities across a re-run."""
+        raw = tmp_path / "raw.txt"
+        raw.write_text("[1/2] then_no_errors_field... [COSMETIC]\n[2/2] then_no_errors_field... [MISSING]\n")
         store = tmp_path / "store.jsonl"
-        store.write_text(
-            json.dumps(
-                {
-                    "kind": "triage",
-                    "verdict": "FLAG",
-                    "step": {
-                        "file_path": "a.py",
-                        "line_number": 7,
-                        "step_type": "then",
-                        "step_text": "a",
-                        "function_name": "then_a",
-                        "source_text": "pass",
-                    },
-                }
-            )
-            + "\n"
-        )
-        step_index = tmp_path / "steps.jsonl"
-        step_index.write_text(
+        index = tmp_path / "steps.jsonl"
+        index.write_text(
             json.dumps(
                 {
                     "step": {
-                        "file_path": "a.py",
-                        "line_number": 42,
+                        "file_path": "tests/bdd/steps/a.py",
+                        "line_number": 10,
                         "step_type": "then",
-                        "step_text": "a",
-                        "function_name": "then_a",
+                        "step_text": "no errors",
+                        "function_name": "then_no_errors_field",
                         "source_text": "pass",
                     }
                 }
             )
             + "\n"
         )
-        parsed = {
-            "pass1": [{"index": 1, "func_name": "then_a", "verdict": "FLAG"}],
-            "pass2": [],
-            "pass1_total": 1,
-            "pass2_total": 0,
-            "pass2_crashed_at": 0,
-        }
-        salvage_audit.write_to_store(parsed, store, step_index)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["salvage", str(raw), "--store", str(store), "--step-index", str(index)],
+        )
+        salvage_audit.main()
+        monkeypatch.setattr(sys, "argv", ["salvage", str(raw), "--store", str(store)])
+        salvage_audit.main()
         records = [json.loads(line) for line in store.read_text().splitlines() if line.strip()]
-        triage = [r for r in records if r["kind"] == "triage"]
-        lines = sorted(r["step"]["line_number"] for r in triage)
-        assert lines == [7, 42]
+        deep = [r for r in records if r["kind"] == "deep"]
+        assert [(r["severity"], r["step"]["occurrence"]) for r in deep] == [("COSMETIC", 1), ("MISSING", 2)]
 
     def test_step_index_normalizes_real_lines_and_dedupes(self, salvage_audit, tmp_path: Path) -> None:
         store = tmp_path / "store.jsonl"
@@ -939,10 +920,12 @@ class TestSalvageDedupe:
         salvage_audit.write_to_store(parsed, store, step_index)
         records = [json.loads(line) for line in store.read_text().splitlines() if line.strip()]
         triage = [r for r in records if r["kind"] == "triage"]
-        assert len(triage) == 2
-        by_name = {r["step"]["function_name"]: r["step"] for r in triage}
-        assert by_name["then_a"]["line_number"] == 42
-        assert by_name["then_b"]["line_number"] == 99
+        assert len(triage) == 3
+        then_a = [r["step"] for r in triage if r["step"]["function_name"] == "then_a"]
+        then_b = [r["step"] for r in triage if r["step"]["function_name"] == "then_b"]
+        assert sorted(step["occurrence"] for step in then_a) == [1, 2]
+        assert all(step["line_number"] == 42 for step in then_a)
+        assert then_b[0]["line_number"] == 99
 
     def test_non_numeric_line_number_degrades_instead_of_raising(self, salvage_audit) -> None:
         """iter_jsonl_records tolerates corrupt JSONL; _normalize_step must too.
@@ -1159,105 +1142,149 @@ class TestArtifactCensusAndLedger:
         assert grade.needs_confirmation is False
 
 
-class TestGraduatePendingAnalyze:
-    """Pin graduate_pending.analyze three-way split + empty refusal."""
+def _write_artifact(path: Path, tests: list[dict], root: str = "/app") -> None:
+    path.write_text(json.dumps({"root": root, "tests": tests}))
 
-    def test_empty_artifact_exits_2(self, graduate_pending, bdd_audit_common, tmp_path: Path) -> None:
-        report = tmp_path / "empty.json"
-        report.write_text(json.dumps({"tests": []}))
-        with pytest.raises(bdd_audit_common.EmptyArtifactError):
-            graduate_pending.analyze(str(report))
-        with pytest.raises(SystemExit) as exc:
-            bdd_audit_common.cli_load_or_exit(report)
-        assert exc.value.code == 2
 
-    def test_three_way_split_and_ledger(self, graduate_pending, tmp_path: Path) -> None:
-        report = tmp_path / "bdd.json"
-        report.write_text(
-            json.dumps(
-                {
-                    "tests": [
-                        # firm graduate (3 transports, not ledger)
-                        {"nodeid": "tests/bdd/test_uc004.py::test_full[a2a]", "outcome": "xpassed", "keywords": []},
-                        {"nodeid": "tests/bdd/test_uc004.py::test_full[mcp]", "outcome": "xpassed", "keywords": []},
-                        {"nodeid": "tests/bdd/test_uc004.py::test_full[rest]", "outcome": "xpassed", "keywords": []},
-                        # confirm via single transport
-                        {"nodeid": "tests/bdd/test_uc004.py::test_one[a2a]", "outcome": "xpassed", "keywords": []},
-                        # partial
-                        {"nodeid": "tests/bdd/test_uc004.py::test_part[a2a]", "outcome": "xpassed", "keywords": []},
-                        {"nodeid": "tests/bdd/test_uc004.py::test_part[mcp]", "outcome": "xfailed", "keywords": []},
-                    ]
-                }
-            )
+def _row(nodeid: str, outcome: str, *, longrepr: str = "") -> dict:
+    row: dict = {"nodeid": nodeid, "outcome": outcome, "keywords": []}
+    if longrepr:
+        row["call"] = {"outcome": "failed", "longrepr": longrepr}
+    return row
+
+
+def _run_full_audit(bdd_full_audit, monkeypatch, tmp_path: Path, paths: list[Path], ledger: Path) -> str:
+    out = tmp_path / "report.md"
+    monkeypatch.setattr(bdd_full_audit, "INSPECTOR_DIR", tmp_path / "no-inspector")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "bdd_full_audit",
+            *[str(path) for path in paths],
+            "--output",
+            str(out),
+            "--conftest",
+            str(tmp_path / "missing-conftest.py"),
+            "--e2e-ledger",
+            str(ledger),
+        ],
+    )
+    bdd_full_audit.main()
+    return out.read_text()
+
+
+class TestBddFullAuditMain:
+    """Drive bdd_full_audit.main through sys.argv. These pins used to live on graduate_pending."""
+
+    def test_e2e_less_confirms_and_split_pair_graduates(self, bdd_full_audit, monkeypatch, tmp_path: Path) -> None:
+        base = "tests/bdd/test_uc004.py::test_full"
+        half = tmp_path / "inprocess.json"
+        e2e = tmp_path / "e2e.json"
+        _write_artifact(
+            half,
+            [_row(f"{base}[{transport}]", "xpassed") for transport in ("a2a", "mcp", "rest")],
         )
+        _write_artifact(e2e, [_row("tests/bdd/test_other.py::test_e[e2e_rest]", "passed")])
         ledger = tmp_path / "ledger.txt"
-        ledger.write_text("")  # empty ledger
-        analysis = graduate_pending.analyze(str(report), ledger_path=ledger)
-        assert analysis["force_confirm"] is True  # no e2e_rest in artifact
-        # force_confirm routes all graduates to confirm
-        assert analysis["graduate_all"] == []
-        confirm_bases = {base for _, base in analysis["graduate_confirm"]}
-        assert "tests/bdd/test_uc004.py::test_full" in confirm_bases
-        assert "tests/bdd/test_uc004.py::test_one" in confirm_bases
-        partial_bases = {base for _, base, _ in analysis["graduate_partial"]}
-        assert "tests/bdd/test_uc004.py::test_part" in partial_bases
+        ledger.write_text("")
+        alone = _run_full_audit(bdd_full_audit, monkeypatch, tmp_path, [half], ledger)
+        assert "Graduate needs confirmation" in alone
+        assert "Graduate (all" not in alone
+        together = _run_full_audit(bdd_full_audit, monkeypatch, tmp_path, [half, e2e], ledger)
+        assert "Graduate (all 3 present)" in together
 
-    def test_ledger_routes_to_confirm_when_e2e_present(self, graduate_pending, tmp_path: Path) -> None:
+    def test_ledger_member_confirms_when_e2e_is_present(self, bdd_full_audit, monkeypatch, tmp_path: Path) -> None:
         base = "tests/bdd/test_uc004.py::test_s"
         report = tmp_path / "bdd.json"
-        report.write_text(
-            json.dumps(
-                {
-                    "tests": [
-                        {"nodeid": f"{base}[a2a]", "outcome": "xpassed", "keywords": []},
-                        {"nodeid": f"{base}[mcp]", "outcome": "xpassed", "keywords": []},
-                        {"nodeid": f"{base}[rest]", "outcome": "xpassed", "keywords": []},
-                        # e2e_rest present elsewhere so force_confirm is False
-                        {"nodeid": "tests/bdd/test_other.py::test_e[e2e_rest]", "outcome": "passed", "keywords": []},
-                    ]
-                }
-            )
+        _write_artifact(
+            report,
+            [_row(f"{base}[{transport}]", "xpassed") for transport in ("a2a", "mcp", "rest")]
+            + [_row("tests/bdd/test_other.py::test_e[e2e_rest]", "passed")],
         )
         ledger = tmp_path / "ledger.txt"
-        ledger.write_text(f"{base}\n")
-        analysis = graduate_pending.analyze(str(report), ledger_path=ledger)
-        assert analysis["force_confirm"] is False
-        assert analysis["graduate_all"] == []
-        confirm_bases = {b for _, b in analysis["graduate_confirm"]}
-        assert base in confirm_bases
+        ledger.write_text(base + "\n")
+        text = _run_full_audit(bdd_full_audit, monkeypatch, tmp_path, [report], ledger)
+        assert "Graduate needs confirmation" in text
+        assert "Graduate (all" not in text
 
-    def test_non_ledger_base_firm_graduates_when_e2e_present(self, graduate_pending, tmp_path: Path) -> None:
-        """graduate_all must be non-empty for the case it exists to hold.
-
-        Multi-transport, not on the ledger, and e2e_rest present in the
-        artifact so force_confirm is False — this base must firm-graduate,
-        not route to confirm. Reverting the firm-graduate routing in
-        ``graduate_pending.analyze`` (or the ledger/force_confirm gates)
-        must move this base out of ``graduate_all``.
-        """
+    def test_non_ledger_base_firm_graduates_when_e2e_present(self, bdd_full_audit, monkeypatch, tmp_path: Path) -> None:
         base = "tests/bdd/test_uc004.py::test_firm"
         report = tmp_path / "bdd.json"
-        report.write_text(
-            json.dumps(
-                {
-                    "tests": [
-                        {"nodeid": f"{base}[a2a]", "outcome": "xpassed", "keywords": []},
-                        {"nodeid": f"{base}[mcp]", "outcome": "xpassed", "keywords": []},
-                        {"nodeid": f"{base}[rest]", "outcome": "xpassed", "keywords": []},
-                        # e2e_rest present elsewhere so force_confirm is False
-                        {"nodeid": "tests/bdd/test_other.py::test_e[e2e_rest]", "outcome": "passed", "keywords": []},
-                    ]
-                }
-            )
+        _write_artifact(
+            report,
+            [_row(f"{base}[{transport}]", "xpassed") for transport in ("a2a", "mcp", "rest")]
+            + [_row("tests/bdd/test_other.py::test_e[e2e_rest]", "passed")],
         )
         ledger = tmp_path / "ledger.txt"
-        ledger.write_text("")  # base is not a ledger member
-        analysis = graduate_pending.analyze(str(report), ledger_path=ledger)
-        assert analysis["force_confirm"] is False
-        graduate_bases = {b for _, b in analysis["graduate_all"]}
-        confirm_bases = {b for _, b in analysis["graduate_confirm"]}
-        assert base in graduate_bases
-        assert base not in confirm_bases
+        ledger.write_text("")
+        text = _run_full_audit(bdd_full_audit, monkeypatch, tmp_path, [report], ledger)
+        assert "Graduate (all 3 present)" in text
+        assert "needs confirmation" not in text
+
+    def test_strict_xpass_graduates_and_partial_stays_partial(
+        self, bdd_full_audit, monkeypatch, tmp_path: Path
+    ) -> None:
+        strict = "[gw0] linux -- Python 3.12.0\n[XPASS(strict)] unexpected pass"
+        firm = "tests/bdd/test_uc004.py::test_strict_ok"
+        partial = "tests/bdd/test_uc004.py::test_strict_partial"
+        report = tmp_path / "bdd.json"
+        _write_artifact(
+            report,
+            [_row(f"{firm}[{transport}]", "failed", longrepr=strict) for transport in ("a2a", "mcp", "rest")]
+            + [
+                _row(f"{partial}[a2a]", "failed", longrepr=strict),
+                _row(f"{partial}[mcp]", "xfailed"),
+                _row("tests/bdd/test_other.py::test_e[e2e_rest]", "passed"),
+            ],
+        )
+        ledger = tmp_path / "ledger.txt"
+        ledger.write_text("")
+        text = _run_full_audit(bdd_full_audit, monkeypatch, tmp_path, [report], ledger)
+        assert "Graduate (all 3 present)" in text
+        assert "Partial xpass" in text
+        assert "Remove strict xfail tag" not in text
+
+    def test_refuses_files_with_different_roots(self, bdd_audit_common, tmp_path: Path) -> None:
+        one = tmp_path / "one.json"
+        two = tmp_path / "two.json"
+        _write_artifact(one, [_row("t::s[a2a]", "xpassed")], root="/app")
+        _write_artifact(two, [_row("t::s[mcp]", "xpassed")], root="/other")
+        with pytest.raises(bdd_audit_common.ArtifactRootMismatchError):
+            bdd_audit_common.load_bdd_artifact([one, two])
+
+
+class TestInspectParallel:
+    """The wrapper must launch every slice. Reading the script cannot see a glued assignment."""
+
+    def test_every_slice_launches_with_steps_dir_and_timeout(self, tmp_path: Path) -> None:
+        argv_dir = tmp_path / "argv"
+        argv_dir.mkdir()
+        stub = tmp_path / "inspect_stub.py"
+        stub.write_text(
+            "import os, sys\n"
+            "from pathlib import Path\n"
+            "Path(os.environ['ARGV_DIR'], str(os.getpid())).write_text('\\n'.join(sys.argv))\n"
+        )
+        out = tmp_path / "out"
+        env = os.environ.copy()
+        env["INSPECT_BDD_STEPS"] = str(stub)
+        env["ARGV_DIR"] = str(argv_dir)
+        script = REPO_ROOT / ".claude" / "scripts" / "inspect_parallel.sh"
+        result = subprocess.run(
+            ["/bin/bash", str(script), str(out)],
+            cwd=REPO_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr + result.stdout
+        chunks = [path.read_text() for path in argv_dir.iterdir()]
+        assert len(chunks) == 8
+        for chunk in chunks:
+            assert "--steps-dir" in chunk
+            assert "--timeout\n600" in chunk
 
 
 class TestGradeResultNamedFields:
@@ -1317,13 +1344,11 @@ class TestSurvivingMechanismArms:
         )
         assert entry.category == "PRODUCTION_GAP"
 
-    def test_stale_strict_via_xpass_strict_longrepr(self, bdd_full_audit) -> None:
-        entry = bdd_full_audit.TestEntry(
-            nodeid="t::s[a2a]",
-            outcome="failed",
-            longrepr="[XPASS(strict)] unexpected pass",
-            error="",
+    def test_strict_xpass_is_graded_xpassed(self, bdd_audit_common) -> None:
+        outcome = bdd_audit_common.graded_outcome(
+            {
+                "outcome": "failed",
+                "call": {"longrepr": "[gw0] linux -- Python 3.12.0\n[XPASS(strict)] unexpected pass"},
+            }
         )
-        bucket, cat, _ = bdd_full_audit.classify_failure(entry)
-        assert bucket == "FIX_NOW"
-        assert cat == "STALE_STRICT_XFAIL"
+        assert outcome == "xpassed"
