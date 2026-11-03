@@ -48,7 +48,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from scripts.audit import storyboard_spec
-from tests.bdd.scenario_liveness import load_run, sessions_dir
+from tests.bdd.scenario_liveness import _IN_PROCESS_NAMES, load_run, sessions_dir
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FEATURES_DIR = REPO_ROOT / "tests" / "bdd" / "features"
@@ -80,14 +80,14 @@ def _measured_scenarios() -> dict[str, dict]:
 def _graded(measured: Mapping[str, dict], scenario_id: str) -> dict:
     """One scenario's projection, with the cardinality floor applied.
 
-    Without the floor an empty projection would satisfy every ``all(...)`` below
-    vacuously. The floor is "at least one in-process transport" and not "all three": a
-    ledgered scenario whose xfail reason lacks ``scope=per-transport`` is deselected down
-    to a2a, which ``test_architecture_bdd_xfail_reason_tokens.py`` grades.
+    Without it an empty projection would satisfy every ``all(...)`` below vacuously, so a
+    scenario must have run on every in-process transport: not silently zero, not silently
+    one. The transport names come from the plugin's own projection.
     """
     record = measured.get(scenario_id)
     assert record is not None, f"{scenario_id} was not measured by the real run at all"
-    assert record["observations"], f"{scenario_id} has no in-process observation in the real run's artifact"
+    ran_on = {o["transport"] for o in record["observations"]}
+    assert ran_on == _IN_PROCESS_NAMES, f"{scenario_id} ran in-process only on {sorted(ran_on)}"
     return record
 
 

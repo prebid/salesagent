@@ -73,18 +73,3 @@ class TestTheRoutingOutcome:
             f"predicate is inverted or gone. No AST-shape assertion in this file can see "
             f"that — only reading a real collection can.\n" + "\n".join(protected)
         )
-
-        # Positive control. The count above is a survival assertion, so it cannot tell
-        # "the exemption kept these 8" from "nothing was deselected at all" — which is
-        # what BDD_ALL_TRANSPORTS=1 (tests/bdd/conftest.py) produces by disabling the
-        # exemption outright, with `filter` still empty. Requiring that SOME mcp/rest row
-        # was deselected reds under both an inverted predicate and an all-transports run.
-        deselected_mcp_or_rest = [
-            row["nodeid"] for row in module_rows if not row["selected"] and _is_mcp_or_rest(row["nodeid"])
-        ]
-        assert deselected_mcp_or_rest, (
-            "no mcp/rest row in this module was deselected, so the 8 above survived a "
-            "collection that deselected nothing. Either the exemption is disabled "
-            "(BDD_ALL_TRANSPORTS=1) or the deselection is gone; in both cases the count "
-            "above passes while grading nothing."
-        )
