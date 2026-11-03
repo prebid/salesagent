@@ -1108,13 +1108,15 @@ class LocalOriginMixin:
 
         self._origin = start_tls_origin(self._guard, "local_origin")
 
-        # Both halves. The base composed the app before this hook, so the settings may already
-        # be built, and the settings object is what the seam reads. The environment is what a
-        # rebuild of the settings reads, which a step dropping the cached object causes.
+        # Both halves. The settings object is what the seam reads. The environment is what a
+        # rebuild of the settings reads, which a step dropping the cached object causes. Read
+        # the settings before patching the environment: an object first built under the patch
+        # would take the hatch as its own value, and releasing the patch would restore that.
+        limits = get_settings().limits
         self._egress_hatches_env = patch.dict(os.environ, egress_hatch_env(private=True))
         self._egress_hatches_env.start()
         self._guard("egress_hatches_env", self._egress_hatches_env.stop)
-        self._egress_hatches = patch.object(get_settings().limits, "adcp_outbound_allow_private", True)
+        self._egress_hatches = patch.object(limits, "adcp_outbound_allow_private", True)
         self._egress_hatches.start()
         self._guard("egress_hatches", self._egress_hatches.stop)
 
