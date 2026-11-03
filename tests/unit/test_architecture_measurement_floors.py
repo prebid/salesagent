@@ -95,6 +95,9 @@ EXPECTED_WIRED_ROUTES: frozenset[str] = frozenset(
         "security-wire-error-safety",
         "security-tenant-isolation",
         "database-fail-fast",
+        # The status sweep runs in-process. get_media_buys is the read, so the
+        # scenarios take the list env. Pinned in the change that registered the route.
+        "media-buy-status-sweep",
         "uc002-account",
         "uc002-ext",
         "uc002-idempotency",
