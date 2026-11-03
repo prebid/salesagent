@@ -3,7 +3,7 @@
 All five tenant-scoped routes must return JSON 401/403 from
 ``require_tenant_access(api_mode=True)``. Rejected mutations must not
 alter stored partners. Authorized same-tenant members (active ``User``
-row, not the super-admin/test-mode bypass) continue to succeed.
+row, not the super-admin/setup-mode bypass) continue to succeed.
 
 Uses factory-boy factories per ``tests/CLAUDE.md`` — no inline
 ``session.add()`` / ``get_db_session()`` in test bodies.
@@ -13,10 +13,8 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from typing import Any
-from unittest.mock import patch
 
 import pytest
-from adcp.exceptions import AdagentsNotFoundError
 from flask.testing import FlaskClient
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -24,6 +22,7 @@ from sqlalchemy.orm import Session
 from src.admin.app import create_app
 from src.core.database.models import PublisherPartner
 from tests.factories import PublisherPartnerFactory, TenantFactory, UserFactory
+from tests.helpers.admin_session import admin_member_session
 
 app = create_app()
 
@@ -49,19 +48,6 @@ def client() -> Iterator[FlaskClient]:
     app.config["SESSION_COOKIE_PATH"] = "/"
     with app.test_client() as test_client:
         yield test_client
-
-
-def _member_session(client: FlaskClient, tenant_id: str, email: str) -> None:
-    """Authenticated session for a normal tenant member.
-
-    Omits ``test_user`` / ``test_user_role`` so ``require_tenant_access``
-    uses the ``User`` membership lookup instead of the test-mode bypass.
-    """
-    with client.session_transaction() as sess:
-        sess["authenticated"] = True
-        sess["user"] = {"email": email, "is_super_admin": False}
-        sess["email"] = email
-        sess["tenant_id"] = tenant_id
 
 
 def _partners_url(tenant_id: str, suffix: str = "") -> str:
@@ -99,8 +85,9 @@ def _partner_snapshot(session: Session, partner_id: int) -> tuple[Any, ...] | No
 
 
 def _seed_target_tenant(factory_session: Session) -> tuple[str, int, int, tuple[Any, ...] | None]:
-    """Create a tenant with one partner. Returns ids plus a stored-data snapshot."""
+    """Create a tenant with one partner and an active bystander member."""
     tenant = TenantFactory()
+    UserFactory(tenant=tenant)
     partner = PublisherPartnerFactory(tenant=tenant, publisher_domain="existing.example")
     tenant_id = tenant.tenant_id
     partner_id = partner.id
@@ -119,10 +106,6 @@ def _assert_partners_unchanged(
     factory_session.expire_all()
     assert _partner_count(factory_session, tenant_id) == count
     assert _partner_snapshot(factory_session, partner_id) == snapshot
-    added = factory_session.scalars(
-        select(PublisherPartner).filter_by(tenant_id=tenant_id, publisher_domain=CREATE_PAYLOAD["publisher_domain"])
-    ).first()
-    assert added is None
 
 
 def _route_url(tenant_id: str, suffix_template: str, partner_id: int) -> str:
@@ -167,7 +150,37 @@ class TestPublisherPartnersOtherTenantDenied:
         tenant_id, partner_id, count, snapshot = _seed_target_tenant(factory_session)
         other_tenant = TenantFactory()
         other_user = UserFactory(tenant=other_tenant)
-        _member_session(client, other_tenant.tenant_id, other_user.email)
+        admin_member_session(client, other_tenant.tenant_id, other_user.email)
+
+        response = _dispatch(client, method, _route_url(tenant_id, suffix, partner_id), payload)
+
+        assert response.status_code == 403
+        assert response.get_json() == {"error": "Access denied"}
+        _assert_partners_unchanged(factory_session, tenant_id, partner_id, count, snapshot)
+
+
+class TestPublisherPartnersInactiveMemberDenied:
+    """A deactivated employee whose session still names the tenant is refused."""
+
+    @pytest.mark.parametrize("route_id,method,suffix,payload", _ROUTES, ids=[r[0] for r in _ROUTES])
+    def test_inactive_member_receives_json_403(
+        self,
+        client: FlaskClient,
+        factory_session: Session,
+        route_id: str,
+        method: str,
+        suffix: str,
+        payload: dict[str, str] | None,
+    ) -> None:
+        tenant = TenantFactory()
+        UserFactory(tenant=tenant)
+        inactive = UserFactory(tenant=tenant, is_active=False)
+        partner = PublisherPartnerFactory(tenant=tenant, publisher_domain="existing.example")
+        tenant_id = tenant.tenant_id
+        partner_id = partner.id
+        count = _partner_count(factory_session, tenant_id)
+        snapshot = _partner_snapshot(factory_session, partner_id)
+        admin_member_session(client, tenant_id, inactive.email)
 
         response = _dispatch(client, method, _route_url(tenant_id, suffix, partner_id), payload)
 
@@ -183,7 +196,7 @@ class TestPublisherPartnersAuthorizedMember:
         tenant = TenantFactory()
         partner = PublisherPartnerFactory(tenant=tenant, publisher_domain="listed.example")
         user = UserFactory(tenant=tenant)
-        _member_session(client, tenant.tenant_id, user.email)
+        admin_member_session(client, tenant.tenant_id, user.email)
 
         response = client.get(_partners_url(tenant.tenant_id))
 
@@ -196,7 +209,7 @@ class TestPublisherPartnersAuthorizedMember:
     def test_post_creates_partner(self, client: FlaskClient, factory_session: Session) -> None:
         tenant = TenantFactory()
         user = UserFactory(tenant=tenant)
-        _member_session(client, tenant.tenant_id, user.email)
+        admin_member_session(client, tenant.tenant_id, user.email)
 
         response = client.post(
             _partners_url(tenant.tenant_id),
@@ -218,7 +231,7 @@ class TestPublisherPartnersAuthorizedMember:
         partner = PublisherPartnerFactory(tenant=tenant, publisher_domain="doomed.example")
         partner_id = partner.id
         user = UserFactory(tenant=tenant)
-        _member_session(client, tenant.tenant_id, user.email)
+        admin_member_session(client, tenant.tenant_id, user.email)
 
         response = client.delete(_partners_url(tenant.tenant_id, f"/{partner_id}"))
 
@@ -227,37 +240,45 @@ class TestPublisherPartnersAuthorizedMember:
         factory_session.expire_all()
         assert factory_session.get(PublisherPartner, partner_id) is None
 
-    def test_sync_is_not_auth_rejected(self, client: FlaskClient, factory_session: Session) -> None:
+    def test_sync_with_no_partners_reports_nothing_to_sync(self, client: FlaskClient, factory_session: Session) -> None:
         tenant = TenantFactory()
         user = UserFactory(tenant=tenant)
-        _member_session(client, tenant.tenant_id, user.email)
+        admin_member_session(client, tenant.tenant_id, user.email)
 
         response = client.post(_partners_url(tenant.tenant_id, "/sync"))
 
-        assert response.status_code not in (401, 403)
         assert response.status_code == 200
         assert response.get_json() == {"message": "No publishers to sync"}
 
-    def test_get_properties_is_not_auth_rejected(self, client: FlaskClient, factory_session: Session) -> None:
-        tenant = TenantFactory()
-        partner = PublisherPartnerFactory(tenant=tenant, publisher_domain="props.example")
-        user = UserFactory(tenant=tenant)
-        _member_session(client, tenant.tenant_id, user.email)
+    def test_get_properties_reports_granted_authorization(self, integration_db: object) -> None:
+        """A granted member sees authorization data only a 200 from the view returns."""
+        from tests.harness.publisher_authorization import PublisherAuthorizationEnv
 
-        with (
-            patch(
-                "src.admin.blueprints.publisher_partners.get_tenant_url",
-                return_value="https://agent.example",
-            ),
-            patch(
-                "src.admin.blueprints.publisher_partners.fetch_adagents",
-                side_effect=AdagentsNotFoundError("missing"),
-            ),
-        ):
-            response = client.get(_partners_url(tenant.tenant_id, f"/{partner.id}/properties"))
+        with PublisherAuthorizationEnv() as env:
+            tenant = env._tenant()
+            publisher = "props.example"
+            address = env.publisher_address(publisher)
+            PublisherPartnerFactory(tenant=tenant, publisher_domain=address)
+            env.adagents_document(publisher)["properties"].append(
+                {
+                    "property_id": "front_page",
+                    "property_type": "website",
+                    "name": "Front page",
+                    "identifiers": [{"type": "domain", "value": address}],
+                }
+            )
+            env.adagents_document(publisher)["authorized_agents"].append(
+                {
+                    "url": tenant.agent_url,
+                    "authorized_for": "Display inventory",
+                    "authorization_type": "property_ids",
+                    "property_ids": ["front_page"],
+                }
+            )
 
-        assert response.status_code == 200
-        body = response.get_json()
-        assert body["is_authorized"] is False
-        assert body.get("error") != "Authentication required"
-        assert body.get("error") != "Access denied"
+            response = env.open_partner_properties(publisher)
+            assert response.status_code == 200
+            body = response.get_json()
+            assert body["is_authorized"] is True
+            assert body["property_ids"] == ["front_page"]
+            assert body["domain"] == address

@@ -35,6 +35,7 @@ _LAZY_EXPORTS: dict[str, str] = {
     "SIGNATURE_HEADER": "tests.helpers.hmac_assertions",
     "TIMESTAMP_HEADER": "tests.helpers.hmac_assertions",
     "admin_auth_session": "tests.helpers.admin_session",
+    "admin_member_session": "tests.helpers.admin_session",
     "assert_backoff_schedule": "tests.helpers.backoff_assertions",
     "assert_envelope_shape": "tests.helpers.envelope_assertions",
     "assert_no_marker_in_envelope": "tests.helpers.envelope_assertions",
@@ -90,6 +91,7 @@ def __dir__() -> list[str]:
 __all__ = [
     # Admin blueprint session helper
     "admin_auth_session",
+    "admin_member_session",
     # Backoff schedule assertions
     "assert_backoff_schedule",
     # In-process request-construction assertions

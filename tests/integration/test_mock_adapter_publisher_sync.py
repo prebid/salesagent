@@ -8,9 +8,12 @@ verified publishers but no properties, causing the product creation UI
 to show empty property/tag lists.
 """
 
+from unittest.mock import patch
+
 import pytest
 from sqlalchemy import select
 
+from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
     AdapterConfig,
@@ -19,6 +22,17 @@ from src.core.database.models import (
     PublisherPartner,
     Tenant,
 )
+from tests.factories import UserFactory
+from tests.helpers.admin_session import admin_member_session, admin_test_app
+
+
+def _sync(tenant_id: str, email: str):
+    """POST /tenant/<id>/publisher-partners/sync as an active member."""
+    app = admin_test_app()
+    with app.test_client() as client:
+        admin_member_session(client, tenant_id, email)
+        with patch.object(type(get_settings()), "publisher_auto_verify_allowed", property(lambda _self: True)):
+            return client.post(f"/tenant/{tenant_id}/publisher-partners/sync")
 
 
 @pytest.mark.requires_db
@@ -91,26 +105,19 @@ class TestMockAdapterPublisherSync:
 
             return partner.id
 
-    def test_sync_creates_property_tag(self, mock_tenant, publisher_partner):
+    @pytest.fixture
+    def member_email(self, mock_tenant, factory_session):
+        """Active same-tenant member; factory email, not SUPER_ADMIN_EMAILS."""
+        tenant = factory_session.scalars(select(Tenant).filter_by(tenant_id=mock_tenant)).one()
+        return UserFactory(tenant=tenant).email
+
+    def test_sync_creates_property_tag(self, mock_tenant, publisher_partner, member_email):
         """Test that sync creates 'all_inventory' PropertyTag for mock tenants."""
-        from unittest.mock import patch
-
-        from src.admin.app import create_app
-        from src.admin.blueprints.publisher_partners import sync_publisher_partners
-        from src.core.config import get_settings
-
-        # Auto-verify is a NAMED allowance on the settings -- "anywhere that is not
-        # production" -- read per call; the AppConfig object with an ``environment``
-        # string this used to build is gone, and nothing compares that string any more.
-        app = create_app()
-
-        with app.test_request_context():
-            with patch.object(type(get_settings()), "publisher_auto_verify_allowed", property(lambda _self: True)):
-                response = sync_publisher_partners(mock_tenant)
-                data = response.get_json()
-
-                assert data["verified"] == 1
-                assert data.get("tags_created", 0) >= 0  # May be 0 if tag already exists
+        response = _sync(mock_tenant, member_email)
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data["verified"] == 1
+        assert data["tags_created"] == 1
 
         # Verify PropertyTag was created
         with get_db_session() as session:
@@ -121,23 +128,13 @@ class TestMockAdapterPublisherSync:
             assert tag is not None, "all_inventory PropertyTag should be created"
             assert tag.name == "All Inventory"
 
-    def test_sync_creates_authorized_property(self, mock_tenant, publisher_partner):
+    def test_sync_creates_authorized_property(self, mock_tenant, publisher_partner, member_email):
         """Test that sync creates AuthorizedProperty for each publisher domain."""
-        from unittest.mock import patch
-
-        from src.admin.app import create_app
-        from src.admin.blueprints.publisher_partners import sync_publisher_partners
-        from src.core.config import get_settings
-
-        app = create_app()
-
-        with app.test_request_context():
-            with patch.object(type(get_settings()), "publisher_auto_verify_allowed", property(lambda _self: True)):
-                response = sync_publisher_partners(mock_tenant)
-                data = response.get_json()
-
-                assert data["verified"] == 1
-                assert data.get("properties_created", 0) >= 1
+        response = _sync(mock_tenant, member_email)
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data["verified"] == 1
+        assert data["properties_created"] == 1
 
         # Verify AuthorizedProperty was created
         with get_db_session() as session:
@@ -152,23 +149,17 @@ class TestMockAdapterPublisherSync:
             assert example_prop.property_type == "website"
             assert "all_inventory" in (example_prop.tags or [])
 
-    def test_sync_property_has_verified_status(self, mock_tenant, publisher_partner):
+    def test_sync_property_has_verified_status(self, mock_tenant, publisher_partner, member_email):
         """Test that created properties have verification_status='verified'.
 
         This is critical because the product creation UI only shows properties
         with verification_status='verified'.
         """
-        from unittest.mock import patch
-
-        from src.admin.app import create_app
-        from src.admin.blueprints.publisher_partners import sync_publisher_partners
-        from src.core.config import get_settings
-
-        app = create_app()
-
-        with app.test_request_context():
-            with patch.object(type(get_settings()), "publisher_auto_verify_allowed", property(lambda _self: True)):
-                sync_publisher_partners(mock_tenant)
+        response = _sync(mock_tenant, member_email)
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data["verified"] == 1
+        assert data["properties_created"] == 1
 
         # Verify all properties have verified status
         with get_db_session() as session:
@@ -180,21 +171,14 @@ class TestMockAdapterPublisherSync:
                     f"got '{prop.verification_status}'"
                 )
 
-    def test_sync_is_idempotent(self, mock_tenant, publisher_partner):
+    def test_sync_is_idempotent(self, mock_tenant, publisher_partner, member_email):
         """Test that running sync multiple times doesn't create duplicate records."""
-        from unittest.mock import patch
-
-        from src.admin.app import create_app
-        from src.admin.blueprints.publisher_partners import sync_publisher_partners
-        from src.core.config import get_settings
-
-        app = create_app()
-
-        # Run sync twice
-        with app.test_request_context():
-            with patch.object(type(get_settings()), "publisher_auto_verify_allowed", property(lambda _self: True)):
-                sync_publisher_partners(mock_tenant)
-                sync_publisher_partners(mock_tenant)
+        first = _sync(mock_tenant, member_email)
+        second = _sync(mock_tenant, member_email)
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert first.get_json()["verified"] == 1
+        assert second.get_json()["verified"] == 1
 
         # Verify no duplicates
         with get_db_session() as session:

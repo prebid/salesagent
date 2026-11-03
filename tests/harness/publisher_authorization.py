@@ -147,6 +147,24 @@ def _auto_verify_off_on_the_live_stack(env: PublisherAuthorizationEnv) -> None:
     """
 
 
+#: Domain an active member creates; refused callers must leave it absent.
+CREATED_PARTNER_DOMAIN = "created-by-caller.example"
+
+_CALLERS = frozenset({"member", "anonymous", "outsider", "inactive"})
+
+
+def _record_caller(env: PublisherAuthorizationEnv, caller: str) -> None:
+    """Both transports: membership is applied later on AdminClient.
+
+    ``authenticate_as_member`` already signs the Flask session in process and the
+    cookie against the live server. This method only records which caller
+    ``_bind_caller`` will apply on the next request.
+    """
+    if caller not in _CALLERS:
+        raise AssertionError(f"unknown caller {caller!r}")
+    env._caller = caller
+
+
 class PublisherAuthorizationEnv(PublisherAdagentsMixin, IntegrationEnv):
     """Drive the three admin actions that read a publisher's file, and read what they wrote."""
 
@@ -155,6 +173,14 @@ class PublisherAuthorizationEnv(PublisherAdagentsMixin, IntegrationEnv):
         self._admin: AdminClient | None = None
         # None drives the admin app in this process; a URL drives that live server.
         self._admin_base_url: str | None = e2e_config.base_url if e2e_config is not None else None
+        # Membership is the default so existing PUBAUTH sync/view scenarios grade
+        # admission instead of the super-admin setup-mode shortcut.
+        self._caller: str = "member"
+        self._member_email: str | None = None
+        self._outsider_tenant_id: str | None = None
+        self._outsider_email: str | None = None
+        self._inactive_email: str | None = None
+        self._partner_rows_before: list[tuple[Any, ...]] | None = None
 
     # ── seller and tenant state ───────────────────────────────────────────
 
@@ -190,6 +216,33 @@ class PublisherAuthorizationEnv(PublisherAdagentsMixin, IntegrationEnv):
 
     # ── the operator's actions ────────────────────────────────────────────
 
+    @realize_e2e(_record_caller)
+    def set_caller(self, caller: str) -> None:
+        """Choose who the next admin action runs as.
+
+        ``member`` (default), ``anonymous``, ``outsider``, or ``inactive``.
+        """
+        _record_caller(self, caller)
+
+    def list_publisher_partners(self) -> AdminResponse:
+        return self._admin_request("get", "publisher-partners")
+
+    def create_publisher_partner(
+        self,
+        *,
+        publisher_domain: str = CREATED_PARTNER_DOMAIN,
+        display_name: str = "Created by caller",
+    ) -> AdminResponse:
+        return self._admin_request(
+            "post",
+            "publisher-partners",
+            json={"publisher_domain": publisher_domain, "display_name": display_name},
+        )
+
+    def delete_publisher_partner(self, publisher: str) -> AdminResponse:
+        partner = self.partner(publisher)
+        return self._admin_request("delete", f"publisher-partners/{partner.id}")
+
     def sync_publisher_partners(self) -> AdminResponse:
         return self._admin_request("post", "publisher-partners/sync")
 
@@ -205,6 +258,26 @@ class PublisherAuthorizationEnv(PublisherAdagentsMixin, IntegrationEnv):
     def partner(self, publisher: str) -> PublisherPartner:
         (partner,) = self._fresh(PublisherPartner, publisher_domain=self.publisher_address(publisher))
         return partner
+
+    def partner_rows(self) -> list[tuple[Any, ...]]:
+        """Comparable partner state for rejected-write assertions."""
+        rows = self._fresh(PublisherPartner)
+        return sorted(
+            (p.id, p.publisher_domain, p.display_name, p.is_verified, p.sync_status, p.sync_error) for p in rows
+        )
+
+    def partner_rows_before_request(self) -> list[tuple[Any, ...]]:
+        assert self._partner_rows_before is not None, "no admin request has run"
+        return self._partner_rows_before
+
+    def has_partner_domain(self, publisher_domain: str) -> bool:
+        return any(p.publisher_domain == publisher_domain for p in self._fresh(PublisherPartner))
+
+    def stored_partner(self, publisher_domain: str) -> PublisherPartner:
+        """The persisted row for *publisher_domain*, re-read after the request committed."""
+        rows = self._fresh(PublisherPartner, publisher_domain=publisher_domain)
+        assert len(rows) == 1, f"expected one partner {publisher_domain!r}, found {len(rows)}"
+        return rows[0]
 
     def properties_from(self, publisher: str) -> list[AuthorizedProperty]:
         return self._fresh(AuthorizedProperty, publisher_domain=self.publisher_address(publisher))
@@ -224,14 +297,56 @@ class PublisherAuthorizationEnv(PublisherAdagentsMixin, IntegrationEnv):
         self.get_session().expire_all()
         return self.query(model, tenant_id=self._tenant_id, **filters)
 
-    def _admin_request(self, method: str, path: str) -> AdminResponse:
-        """One authenticated request to the tenant's admin route at *path*, on either transport."""
+    def _admin_request(self, method: str, path: str, *, json: dict[str, Any] | None = None) -> AdminResponse:
+        """One request to the tenant's admin route at *path*, on either transport.
+
+        The caller is the one :meth:`set_caller` chose (member by default). Auth is
+        restated on every request so a scenario can switch callers.
+        """
+        self._ensure_caller_rows()
         self._commit_factory_data()
         self.serve_adagents()
+        self._partner_rows_before = self.partner_rows()
         if self._admin is None:
             # Opened on the first action, after every Given: the in-process app is composed
             # under the settings a Given chose.
             self._admin = AdminClient(self._admin_base_url)
             self._guard("admin_client", self._admin.close)
-            self._admin.authenticate(self._tenant_id)
-        return self._admin.request(method, f"/tenant/{self._tenant_id}/{path}")
+        self._bind_caller()
+        return self._admin.request(method, f"/tenant/{self._tenant_id}/{path}", json=json)
+
+    def _ensure_caller_rows(self) -> None:
+        """Seed the User rows the chosen caller needs before the request is signed."""
+        from tests.factories import TenantFactory, UserFactory
+
+        tenant = self._tenant()
+        if self._member_email is None:
+            self._member_email = UserFactory(tenant=tenant).email
+        if self._caller in {"outsider", "inactive"}:
+            # Active bystander on the URL tenant: 403 must be "wrong email /
+            # inactive", not "this tenant has no members". A lookup that dropped
+            # ``email=`` would admit this row.
+            UserFactory(tenant=tenant)
+        if self._caller == "outsider":
+            other = TenantFactory()
+            self._outsider_tenant_id = other.tenant_id
+            self._outsider_email = UserFactory(tenant=other).email
+        if self._caller == "inactive":
+            # Session names THIS tenant; the email is the deactivated row.
+            self._inactive_email = UserFactory(tenant=tenant, is_active=False).email
+
+    def _bind_caller(self) -> None:
+        assert self._admin is not None
+        if self._caller == "anonymous":
+            self._admin.clear_auth()
+            return
+        if self._caller == "outsider":
+            assert self._outsider_tenant_id is not None and self._outsider_email is not None
+            self._admin.authenticate_as_member(self._outsider_tenant_id, self._outsider_email)
+            return
+        if self._caller == "inactive":
+            assert self._inactive_email is not None
+            self._admin.authenticate_as_member(self._tenant_id, self._inactive_email)
+            return
+        assert self._member_email is not None
+        self._admin.authenticate_as_member(self._tenant_id, self._member_email)

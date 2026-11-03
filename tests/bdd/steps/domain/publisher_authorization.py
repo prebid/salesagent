@@ -18,6 +18,7 @@ from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps.domain.admin_accounts import _require_admin_page
 from tests.bdd.steps.domain.uc010_capabilities import _quoted_list
+from tests.harness.publisher_authorization import CREATED_PARTNER_DOMAIN
 
 if TYPE_CHECKING:
     from tests.harness.publisher_authorization import PublisherAuthorizationEnv
@@ -38,6 +39,30 @@ def _spell(template: str, agent_url: str) -> str:
 @given("the seller does not auto-verify publisher partners")
 def given_no_publisher_auto_verify(ctx: dict) -> None:
     _env(ctx).disable_publisher_auto_verify()
+
+
+def _choose_caller(ctx: dict, caller: str) -> None:
+    _env(ctx).set_caller(caller)
+
+
+@given("the caller has no session")
+def given_anonymous_caller(ctx: dict) -> None:
+    _choose_caller(ctx, "anonymous")
+
+
+@given("the caller has no active membership")
+def given_outsider_caller(ctx: dict) -> None:
+    _choose_caller(ctx, "outsider")
+
+
+@given("the caller is an inactive member of this tenant")
+def given_inactive_caller(ctx: dict) -> None:
+    _choose_caller(ctx, "inactive")
+
+
+@given("the caller is an active member")
+def given_member_caller(ctx: dict) -> None:
+    _choose_caller(ctx, "member")
 
 
 @given(parsers.parse('the tenant runs the "{adapter_type}" ad server'))
@@ -77,6 +102,21 @@ def given_pending_property(ctx: dict, property_id: str, publisher: str) -> None:
 
 
 # ── When ──────────────────────────────────────────────────────────────────
+
+
+@when("the operator lists publisher partners")
+def when_list(ctx: dict) -> None:
+    ctx["admin_page"] = _env(ctx).list_publisher_partners()
+
+
+@when("the operator creates a publisher partner")
+def when_create(ctx: dict) -> None:
+    ctx["admin_page"] = _env(ctx).create_publisher_partner()
+
+
+@when(parsers.parse('the operator deletes the partnership with "{publisher}"'))
+def when_delete(ctx: dict, publisher: str) -> None:
+    ctx["admin_page"] = _env(ctx).delete_publisher_partner(publisher)
 
 
 @when("the operator syncs publisher partners")
@@ -168,3 +208,54 @@ def then_view_not_authorized(ctx: dict) -> None:
     body = _admin_body(ctx)
     agent_url = ctx["tenant"].agent_url
     assert body == {"error": f"Agent {agent_url} is not authorized by this publisher", "is_authorized": False}, body
+
+
+@then(parsers.parse('the admin route answers JSON {code:d} "{message}"'))
+def then_admin_json_error(ctx: dict, code: int, message: str) -> None:
+    response = _require_admin_page(ctx)
+    assert response.status_code == code, f"the admin route answered {response.status_code}: {response.data[:300]!r}"
+    assert response.get_json() == {"error": message}
+
+
+@then("the publisher partners are unchanged")
+def then_partners_unchanged(ctx: dict) -> None:
+    env = _env(ctx)
+    assert env.partner_rows() == env.partner_rows_before_request()
+    assert env.has_partner_domain(CREATED_PARTNER_DOMAIN) is False
+
+
+@then(parsers.parse('the listed partners include "{publisher}"'))
+def then_listed_includes(ctx: dict, publisher: str) -> None:
+    body = _admin_body(ctx)
+    env = _env(ctx)
+    address = env.publisher_address(publisher)
+    listed = next((partner for partner in body["partners"] if partner["publisher_domain"] == address), None)
+    assert listed is not None, (
+        f"listed domains {[partner['publisher_domain'] for partner in body['partners']]} do not include {address!r}"
+    )
+    persisted = env.partner(publisher)
+    assert listed["id"] == persisted.id
+
+
+@then(parsers.parse('the publisher "{publisher}" is a partner'))
+def then_is_partner(ctx: dict, publisher: str) -> None:
+    response = _require_admin_page(ctx)
+    assert response.status_code == 201, f"the admin route answered {response.status_code}: {response.data[:300]!r}"
+    env = _env(ctx)
+    domain = publisher if publisher == CREATED_PARTNER_DOMAIN else env.publisher_address(publisher)
+    body = response.get_json()
+    persisted = env.stored_partner(domain)
+    assert body["publisher_domain"] == domain
+    assert body["id"] == persisted.id
+    assert persisted.display_name == "Created by caller"
+
+
+@then(parsers.parse('the publisher "{publisher}" is not a partner'))
+def then_is_not_partner(ctx: dict, publisher: str) -> None:
+    response = _require_admin_page(ctx)
+    assert response.status_code == 200, f"the admin route answered {response.status_code}: {response.data[:300]!r}"
+    assert response.get_json() == {"message": "Publisher deleted successfully"}
+    env = _env(ctx)
+    assert env.has_partner_domain(env.publisher_address(publisher)) is False, (
+        f"{publisher!r} is still stored as a partner"
+    )

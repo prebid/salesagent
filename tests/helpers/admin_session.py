@@ -53,6 +53,35 @@ def _session_payload(tenant_id: str, *, auth_method: str | None = None) -> dict[
     return payload
 
 
+def _member_session_payload(tenant_id: str, email: str, *, name: str | None = None) -> dict[str, Any]:
+    """The session a production OIDC/OAuth login writes for a tenant member.
+
+    ``user`` is a bare email string (``oidc.py``, ``auth.py``). There is no ``test_user``
+    key, so ``require_tenant_access`` cannot take the setup-mode shortcut and must find
+    an active ``User`` row. ``email`` must not be the default ``SUPER_ADMIN_EMAILS``
+    value (``test@example.com``), or ``is_super_admin`` skips that lookup too.
+    """
+    return {
+        "authenticated": True,
+        "user": email,
+        "user_name": name or email,
+        "tenant_id": tenant_id,
+        "auth_method": "oidc",
+    }
+
+
+def _sign_session_payload(payload: dict[str, Any], *, secret_key: str | None = None) -> str:
+    """Sign *payload* the way Flask signs its own session cookie."""
+    from flask import Flask
+    from flask.sessions import SecureCookieSessionInterface
+
+    app = Flask(__name__)
+    app.secret_key = secret_key or os.environ.get("FLASK_SECRET_KEY") or TEST_FLASK_SECRET_KEY
+    serializer = SecureCookieSessionInterface().get_signing_serializer(app)
+    assert serializer is not None, "Flask refused to build a session serializer without a secret key"
+    return serializer.dumps(payload)
+
+
 def admin_session_cookie(tenant_id: str, *, auth_method: str | None = None, secret_key: str | None = None) -> str:
     """A signed Flask session cookie for an authenticated super admin.
 
@@ -63,14 +92,12 @@ def admin_session_cookie(tenant_id: str, *, auth_method: str | None = None, secr
     *secret_key* defaults to ``FLASK_SECRET_KEY`` from the environment, then to
     :data:`TEST_FLASK_SECRET_KEY` — the value the test compose stacks set.
     """
-    from flask import Flask
-    from flask.sessions import SecureCookieSessionInterface
+    return _sign_session_payload(_session_payload(tenant_id, auth_method=auth_method), secret_key=secret_key)
 
-    app = Flask(__name__)
-    app.secret_key = secret_key or os.environ.get("FLASK_SECRET_KEY") or TEST_FLASK_SECRET_KEY
-    serializer = SecureCookieSessionInterface().get_signing_serializer(app)
-    assert serializer is not None, "Flask refused to build a session serializer without a secret key"
-    return serializer.dumps(_session_payload(tenant_id, auth_method=auth_method))
+
+def admin_member_session_cookie(tenant_id: str, email: str, *, secret_key: str | None = None) -> str:
+    """A signed Flask session cookie for an active tenant member."""
+    return _sign_session_payload(_member_session_payload(tenant_id, email), secret_key=secret_key)
 
 
 def authenticate_http_session(session: Any, base_url: str, tenant_id: str, *, auth_method: str | None = None) -> Any:
@@ -91,6 +118,20 @@ def authenticate_http_session(session: Any, base_url: str, tenant_id: str, *, au
     than one that does not, and because a future scheme- or host-specific rule belongs here.
     """
     session.cookies.set("session", admin_session_cookie(tenant_id, auth_method=auth_method), path="/")
+    return session
+
+
+def authenticate_http_member_session(session: Any, base_url: str, tenant_id: str, email: str) -> Any:
+    """Give a ``requests.Session`` a production-shaped member cookie, for any host.
+
+    Replaces any previously stated session cookie so a caller who was a super admin
+    cannot keep that grant. *base_url* is taken for the same reason
+    :func:`authenticate_http_session` takes it.
+    """
+    for cookie in list(session.cookies):
+        if cookie.name == "session":
+            session.cookies.clear(cookie.domain, cookie.path, cookie.name)
+    session.cookies.set("session", admin_member_session_cookie(tenant_id, email), path="/")
     return session
 
 
@@ -149,3 +190,14 @@ def admin_auth_session(client: Any, tenant_id: str, *, auth_method: str | None =
     """
     with client.session_transaction() as sess:
         sess.update(_session_payload(tenant_id, auth_method=auth_method))
+
+
+def admin_member_session(client: Any, tenant_id: str, email: str) -> None:
+    """Populate a production-shaped member session on a Flask test client.
+
+    Clears first so leftover ``test_user*`` keys from a super-admin helper cannot
+    reopen the setup-mode grant.
+    """
+    with client.session_transaction() as sess:
+        sess.clear()
+        sess.update(_member_session_payload(tenant_id, email))
