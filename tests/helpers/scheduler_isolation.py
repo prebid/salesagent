@@ -102,26 +102,23 @@ def bare_disconnection_error() -> DisconnectionError:
 async def assert_propagated_session_error(run, *, trips_fail_fast: bool) -> None:
     """Run ``run`` through the real ``get_db_session`` and check the fail-fast.
 
-    The oracle is the next ``get_db_session()`` call. Only a connect the server
-    never answered makes that call raise. A dropped connection propagates and
-    the next session still opens.
+    The oracle is the next session open, through ``check_database_health``.
+    Only a connect the server never answered makes that call report the
+    fail-fast. A dropped connection propagates and the next session still opens.
     """
-    from src.core.database.database_session import get_db_session, reset_health_state
+    from src.core.database.database_session import check_database_health, reset_health_state
 
     reset_health_state()
     try:
         await run()
+        # check_database_health opens the next session through get_db_session.
+        # A test must not call get_db_session itself.
+        healthy, message = check_database_health(force=True)
         if trips_fail_fast:
-            try:
-                with get_db_session():
-                    pass
-            except RuntimeError as exc:
-                assert "failing fast" in str(exc)
-            else:
-                raise AssertionError("the next get_db_session() opened after an unanswered connect")
+            assert not healthy, message
+            assert "failing fast" in message
         else:
-            with get_db_session() as session:
-                session.connection()
+            assert healthy, message
     finally:
         reset_health_state()
 
