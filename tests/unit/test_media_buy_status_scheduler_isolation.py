@@ -1,4 +1,4 @@
-"""Unit tests: status scheduler per-buy SAVEPOINT isolation and breaker escape.
+"""Unit tests: status scheduler per-buy savepoint isolation and fail-fast escape.
 
 Durable-commit and sibling-survival guarantees are graded by the real-Postgres
 twin ``test_raising_buy_does_not_abort_remaining_status_flips``
@@ -32,7 +32,7 @@ from tests.helpers.scheduler_isolation import (
 
 @pytest.mark.asyncio
 async def test_savepoint_release_failure_counts_as_isolated_not_flipped():
-    """R10-1.4 unit twin: release-time DataError is ISOLATED, not FLIPPED."""
+    """A release-time DataError is isolated, not counted as a flip."""
     from sqlalchemy.exc import DataError
 
     buys = [mock_media_buy(media_buy_id=f"mb_{i}", tenant_id=f"t{i}") for i in range(3)]
@@ -77,7 +77,7 @@ async def test_status_scheduler_connection_failure_reraises(escaped):
     This unit test pins the re-raise half via the outer log, not the per-item
     isolate log.
     """
-    buy = mock_media_buy(media_buy_id="mb1", tenant_id="t-breaker")
+    buy = mock_media_buy(media_buy_id="mb1", tenant_id="t-fail-fast")
     session = mock_savepoint_session()
     cm = mock_get_db_session_cm(session)
 
@@ -87,7 +87,7 @@ async def test_status_scheduler_connection_failure_reraises(escaped):
         raise escaped
 
     scheduler_isolation_errors.clear()
-    metric_before = counter_value("media_buy_status", "t-breaker", "db_error")
+    metric_before = counter_value("media_buy_status", "t-fail-fast", "db_error")
 
     with (
         patch("src.services.media_buy_status_scheduler.get_db_session", return_value=cm),
@@ -103,7 +103,7 @@ async def test_status_scheduler_connection_failure_reraises(escaped):
     error_msgs = [str(c.args[0]) for c in mock_error.call_args_list if c.args]
     assert any("Failed to update media buy statuses" in msg for msg in error_msgs)
     assert not any("Error updating media buy status" in msg for msg in error_msgs)
-    assert counter_value("media_buy_status", "t-breaker", "db_error") == metric_before
+    assert counter_value("media_buy_status", "t-fail-fast", "db_error") == metric_before
 
 
 @pytest.mark.asyncio
@@ -151,7 +151,7 @@ async def test_status_isolates_one_failure_and_meters_once():
 
 @pytest.mark.asyncio
 async def test_batch_summary_warns_when_every_visited_buy_fails():
-    """A1: ``errors == seen`` must log WARNING (not INFO)."""
+    """Every visited buy failing logs WARNING, not INFO."""
     buys = [mock_media_buy(media_buy_id=f"mb_{i}", tenant_id=f"t{i}") for i in range(3)]
     session = mock_savepoint_session()
     cm = mock_get_db_session_cm(session)
@@ -179,10 +179,10 @@ async def test_batch_summary_warns_when_every_visited_buy_fails():
 
 @pytest.mark.asyncio
 async def test_batch_summary_info_when_noop_plus_one_raiser():
-    """R10-2: mid-flight NOOPs + one ISOLATED must INFO, not WARNING.
+    """Mid-flight no-ops plus one isolated buy log INFO, not WARNING.
 
-    Discriminates ``errors == seen`` from the pre-seen rule
-    ``errors and not updated_count`` (which would false-page every 60s).
+    The warning fires when every visited buy failed. One failure among
+    no-ops must not page on the 60-second tick.
     """
     buys = [mock_media_buy(media_buy_id=f"mb_{i}", tenant_id=f"t{i}") for i in range(5)]
     session = mock_savepoint_session()
@@ -213,7 +213,7 @@ async def test_batch_summary_info_when_noop_plus_one_raiser():
 
 @pytest.mark.asyncio
 async def test_lazy_id_failure_isolates_and_siblings_still_flip():
-    """R10-3a: id reads inside the per-buy try keep a lazy-id failure contained."""
+    """A failure reading one buy's id is isolated, and the other buys still flip."""
 
     class _LazyIdBuy:
         media_buy_id = "mb_lazy"
@@ -260,7 +260,7 @@ async def test_lazy_id_failure_isolates_and_siblings_still_flip():
 
 @pytest.mark.asyncio
 async def test_nested_handler_failure_stays_isolated():
-    """R10-3b: handler boom must not escape the per-buy iteration."""
+    """A failure inside the isolation handler stays on that buy."""
     buys = [
         mock_media_buy(media_buy_id="mb_fail", tenant_id="t-fail"),
         mock_media_buy(media_buy_id="mb_ok", tenant_id="t-ok"),
@@ -300,7 +300,7 @@ async def test_nested_handler_failure_stays_isolated():
 
 @pytest.mark.asyncio
 async def test_batch_summary_warns_on_escape_with_only_prior_errors():
-    """R10-5: escape after isolations (zero flips) must WARNING, not INFO."""
+    """An escape after isolated buys, with no flips, logs WARNING."""
     buys = [
         mock_media_buy(media_buy_id="mb_a", tenant_id="t-a"),
         mock_media_buy(media_buy_id="mb_b", tenant_id="t-b"),
@@ -335,7 +335,7 @@ async def test_batch_summary_warns_on_escape_with_only_prior_errors():
 
 @pytest.mark.asyncio
 async def test_batch_summary_suppresses_all_quiet_tick():
-    """A5: no flips and no errors → no summary line."""
+    """A tick with no flips and no errors logs no summary."""
     buys = [mock_media_buy(media_buy_id="mb_noop", tenant_id="t1")]
     session = mock_savepoint_session()
     cm = mock_get_db_session_cm(session)
@@ -359,7 +359,7 @@ async def test_batch_summary_suppresses_all_quiet_tick():
 
 @pytest.mark.asyncio
 async def test_batch_summary_reports_pending_flips_when_commit_fails():
-    """A2: failed terminal commit must not claim N updated."""
+    """A failed commit does not log the flips it did not persist."""
     buys = [mock_media_buy(media_buy_id="mb_a", tenant_id="t1")]
     session = mock_savepoint_session()
     session.commit = MagicMock(side_effect=RuntimeError("commit boom"))
@@ -383,11 +383,12 @@ async def test_batch_summary_reports_pending_flips_when_commit_fails():
     assert "0 persisted" in warn_lines[0]
     assert "1 pending flips lost" in warn_lines[0]
     assert summary_lines(mock_info, STATUS_BATCH_SUMMARY_PREFIX) == []
+    assert summary_lines(mock_info, STATUS_BATCH_SUMMARY_PREFIX, needle="Updated media buy ") == []
 
 
 @pytest.mark.asyncio
 async def test_batch_summary_survives_dead_connection_escape():
-    """A3: escape mid-loop still emits summary for prior pending flips."""
+    """An escape mid-loop still emits the summary, and does not log the uncommitted flip."""
     buys = [
         mock_media_buy(media_buy_id="mb_ok", tenant_id="t-ok"),
         mock_media_buy(media_buy_id="mb_dead", tenant_id="t-dead"),
@@ -418,3 +419,4 @@ async def test_batch_summary_survives_dead_connection_escape():
     assert "0 persisted" in warn_lines[0]
     assert "1 pending flips lost" in warn_lines[0]
     assert summary_lines(mock_info, STATUS_BATCH_SUMMARY_PREFIX) == []
+    assert summary_lines(mock_info, STATUS_BATCH_SUMMARY_PREFIX, needle="Updated media buy ") == []

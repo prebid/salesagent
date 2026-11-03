@@ -122,37 +122,30 @@ class MediaBuyStatusScheduler:
                 # Wait before next check
                 await asyncio.sleep(self._check_interval_seconds)
 
-    def _process_one_media_buy(self, media_buy: MediaBuy, now: datetime, session: Session) -> _BuyOutcome:
-        """Run one buy's status check inside its own SAVEPOINT; isolate DB errors.
+    def _process_one_media_buy(
+        self, media_buy: MediaBuy, now: datetime, session: Session, flip_lines: list[str]
+    ) -> _BuyOutcome:
+        """Run one buy inside a repository savepoint and isolate a statement failure.
 
-        Ids are captured into plain locals *inside* the per-buy ``try`` and
-        *before* the SAVEPOINT opens — under production ``autoflush=True`` a
-        flush failure expires ORM attributes, so reading ``media_buy.tenant_id``
-        after the fact can raise ``PendingRollbackError`` and hide the original
-        exception. Capturing inside the ``try`` also keeps a lazy-id failure
-        from aborting the rest of the tick (the #1714 containment unit is one
-        iteration, not only the SAVEPOINT body). A release-time flush failure
-        counts as an error, not a success. A dropped connection or a connect
-        the server never answered is *not* isolated — it re-raises so
-        ``get_db_session`` rolls the session back and, for an unanswered
-        connect, trips the fail-fast. A per-buy data or statement failure
-        is isolated and does not.
+        ``tenant_id``, ``principal_id``, and ``media_buy_id`` are columns the
+        listing query already loaded. They are copied to locals before the
+        savepoint so the error log names the buy, and so a failure cannot be
+        metered as ``tenant_id=""``. A statement that fails before the savepoint
+        aborts the PostgreSQL transaction, so that copy must not issue SQL.
 
-        Status writes go through ``MediaBuyRepository.update_status`` (tenant-scoped
-        seam + revision / ``confirmed_at`` bookkeeping from upstream), not a raw
-        ``media_buy.status`` assignment. Self-transitions are already refused by
-        ``_compute_new_status`` (``if target == current: return None``), so this
-        method does not re-check ``new_status != media_buy.status``.
+        A dropped connection or a connect the server never answered re-raises
+        so ``get_db_session`` rolls the session back and, for an unanswered
+        connect, trips the fail-fast. A per-buy data or statement failure is
+        isolated. A declined write raises ``LookupError`` inside the savepoint
+        and takes that same path. A flip line is appended to ``flip_lines`` and
+        logged only after the tick commits.
 
-        A flush failure at SAVEPOINT release (for example a ``DataError`` /
-        ``IntegrityError`` raised while releasing after an on-enum write) counts
-        as an isolated error, not a flip — the same path as a body-time DB error.
-
-        Returns :class:`_BuyOutcome` — ``FLIPPED`` / ``ISOLATED`` / ``NOOP``.
+        Status writes go through ``MediaBuyRepository.update_status``.
+        Self-transitions are already refused by ``_compute_new_status``.
         """
-        tenant_id = ""
-        principal_id = ""
-        media_buy_id = ""
+        tenant_id: str | None = None
+        principal_id: str | None = None
+        media_buy_id: str | None = None
         new_status: PersistedMediaBuyStatus | None = None
         old_status: str | None = None
 
@@ -160,7 +153,8 @@ class MediaBuyStatusScheduler:
             tenant_id = media_buy.tenant_id
             principal_id = media_buy.principal_id
             media_buy_id = media_buy.media_buy_id
-            with session.begin_nested():
+            repo = MediaBuyRepository(session, tenant_id)
+            with repo.savepoint():
                 new_status = self._compute_new_status(media_buy, now, session)
                 if new_status:
                     old_status = media_buy.status
@@ -168,7 +162,7 @@ class MediaBuyStatusScheduler:
                     # tenant-scoped, so build it from this row's own tenant. That
                     # keeps every write inside the isolation the class enforces
                     # rather than widening it with a cross-tenant write method.
-                    updated = MediaBuyRepository(session, tenant_id).update_status(
+                    updated = repo.update_status(
                         media_buy_id,
                         new_status,
                         # The sweep does not itself commit anything -- commitment
@@ -200,11 +194,12 @@ class MediaBuyStatusScheduler:
                     f"media_buy_id={media_buy_id}): {exc}",
                     exc_info=True,
                 )
-                record_scheduler_isolation_error(
-                    scheduler="media_buy_status",
-                    tenant_id=tenant_id,
-                    error_type=_classify_scheduler_error(exc),
-                )
+                if tenant_id:
+                    record_scheduler_isolation_error(
+                        scheduler="media_buy_status",
+                        tenant_id=tenant_id,
+                        error_type=_classify_scheduler_error(exc),
+                    )
             except Exception as handler_exc:
                 logger.error(
                     f"Status isolation error handler failed "
@@ -216,28 +211,24 @@ class MediaBuyStatusScheduler:
 
         if not new_status or old_status is None:
             return _BuyOutcome.NOOP
-        logger.info(f"Updated media buy {media_buy_id} status: {old_status} -> {new_status}")
+        flip_lines.append(f"Updated media buy {media_buy_id} status: {old_status} -> {new_status}")
         return _BuyOutcome.FLIPPED
 
     async def _update_statuses(self) -> None:
         """Check and update media buy statuses based on flight dates.
 
-        Per-buy work runs inside a status-local ``with session.begin_nested():``
-        SAVEPOINT (precedent: ``src/core/tools/creatives/_sync.py``) so a DB
-        error on one buy rolls back only that buy; siblings still reach the
-        terminal ``session.commit()`` — see :meth:`_process_one_media_buy` for
-        the pre-capture / isolation / propagate contract. The
-        ``updated_count``/``errors`` tally is applied only *after* the SAVEPOINT
-        releases cleanly. Batch summary runs in an outer ``finally`` so a
-        propagated connection failure mid-loop still emits the tally, and the
-        summary keys severity on whether the loop ``reached_end`` (successful
-        terminal path), not on a derived ``committed`` flag.
+        Per-buy work runs inside ``MediaBuyRepository.savepoint()`` so a
+        statement error on one buy rolls back only that buy. Siblings still
+        reach the terminal ``session.commit()``. Flip lines are logged after
+        that commit. The batch summary runs in an outer ``finally`` and keys
+        its severity on whether the loop reached that commit.
         """
         now = datetime.now(UTC)
         updated_count = 0
         errors = 0
         seen = 0
         reached_end = False
+        flip_lines: list[str] = []
 
         try:
             with get_db_session() as session:
@@ -250,7 +241,7 @@ class MediaBuyStatusScheduler:
 
                 for media_buy in media_buys:
                     seen += 1
-                    result = self._process_one_media_buy(media_buy, now, session)
+                    result = self._process_one_media_buy(media_buy, now, session, flip_lines)
                     if result is _BuyOutcome.FLIPPED:
                         updated_count += 1
                     elif result is _BuyOutcome.ISOLATED:
@@ -258,6 +249,8 @@ class MediaBuyStatusScheduler:
 
                 if updated_count > 0:
                     session.commit()
+                for line in flip_lines:
+                    logger.info(line)
                 reached_end = True
 
         except Exception as e:
@@ -297,7 +290,9 @@ class MediaBuyStatusScheduler:
         else:
             logger.info(summary)
 
-    def _compute_new_status(self, media_buy: MediaBuy, now: datetime, session) -> PersistedMediaBuyStatus | None:
+    def _compute_new_status(
+        self, media_buy: MediaBuy, now: datetime, session: Session
+    ) -> PersistedMediaBuyStatus | None:
         """The status this sweep should write, or ``None`` to leave the row alone.
 
         The flight-window rule itself lives in
@@ -330,7 +325,7 @@ class MediaBuyStatusScheduler:
 
         return None
 
-    def _are_creatives_approved(self, media_buy: MediaBuy, session) -> bool:
+    def _are_creatives_approved(self, media_buy: MediaBuy, session: Session) -> bool:
         """Check if all creatives for a media buy are approved.
 
         Returns:
