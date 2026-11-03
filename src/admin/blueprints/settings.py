@@ -307,16 +307,6 @@ def update_general(tenant_id):
                     )
                     db_session.add(limit)
 
-            if "enable_axe_signals" in request.form:
-                tenant.enable_axe_signals = request.form.get("enable_axe_signals") == "on"
-            else:
-                tenant.enable_axe_signals = False
-
-            if "human_review_required" in request.form:
-                tenant.human_review_required = request.form.get("human_review_required") == "on"
-            else:
-                tenant.human_review_required = False
-
             tenant.updated_at = datetime.now(UTC)
             db_session.commit()
 
