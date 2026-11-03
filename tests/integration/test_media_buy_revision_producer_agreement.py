@@ -92,7 +92,12 @@ _SEEDED_REVISION = 7
 
 
 def _create_kwargs(product: Any, *, domain: str) -> dict[str, Any]:
-    """A minimal, fully-valid create for the seeded product chain."""
+    """A minimal, fully-valid create for the seeded product chain.
+
+    The flight runs from 30 to 60 days out, so an update's ``end_time`` must come from
+    the same clock (``env.clock.future_iso``): a literal date falls before the start once the
+    calendar reaches it, and the update is refused instead of graded.
+    """
     now = datetime.now(UTC)
     return {
         "brand": {"domain": domain},
@@ -214,7 +219,7 @@ def test_update_responses_and_get_media_buys_report_the_same_revision(integratio
                 account={"account_id": "acct_test"},
                 idempotency_key=fresh_idempotency_key(),
                 media_buy_id=media_buy_id,
-                end_time="2026-12-01T00:00:00Z",
+                end_time=env.clock.future_iso(70),
             ),
         )
         second = env.call_via(
@@ -223,7 +228,7 @@ def test_update_responses_and_get_media_buys_report_the_same_revision(integratio
                 account={"account_id": "acct_test"},
                 idempotency_key=fresh_idempotency_key(),
                 media_buy_id=media_buy_id,
-                end_time="2026-12-15T00:00:00Z",
+                end_time=env.clock.future_iso(80),
             ),
         )
         listed = env.call_via(transport, req=GetMediaBuysRequest(media_buy_ids=[media_buy_id]))
@@ -336,7 +341,7 @@ def test_update_raises_media_buy_not_found_when_the_row_vanishes_mid_transaction
                     account={"account_id": "acct_test"},
                     idempotency_key=fresh_idempotency_key(),
                     media_buy_id=media_buy_id,
-                    end_time="2026-12-01T00:00:00Z",
+                    end_time=env.clock.future_iso(70),
                 ),
             )
 
@@ -381,7 +386,7 @@ def test_pause_resume_response_reports_the_rows_revision_and_agrees_with_get_med
                 account={"account_id": "acct_test"},
                 idempotency_key=fresh_idempotency_key(),
                 media_buy_id=buy.media_buy_id,
-                end_time="2026-12-01T00:00:00Z",
+                end_time=env.clock.future_iso(70),
             ),
         )
         toggled = env.call_via(

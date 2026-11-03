@@ -17,7 +17,7 @@ protocol still derives the sections it discards. Discovery is not a hot path.
 
 import dataclasses
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 from typing import Any, NamedTuple
 
@@ -50,7 +50,7 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     PublisherDomain,
     Targeting,
 )
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from src.adapters.base import TargetingCapabilities
 from src.core.agent_identity import AGENT_ENDPOINT_PATHS, brand_json_url, canonical_agent_url, jwks_origin
@@ -63,6 +63,7 @@ from src.core.helpers.adapter_helpers import (
     get_adapter_class_for_tenant,
 )
 from src.core.helpers.channel_helpers import effective_channel_names
+from src.core.http_utils import canonical_publisher_domain
 from src.core.resolved_identity import PublicIdentity
 from src.core.schemas import Error
 from src.core.schemas.capability_declarations import (
@@ -113,8 +114,9 @@ def _record_degradation(advisories: list[Error], what: str, exc: Exception) -> N
     """Log a discovery degradation AND surface it to the buyer as an advisory.
 
     ONE helper for EVERY degradation site in :func:`describe_seller` — the discovery
-    lookups routed through :func:`_resolve_or_degrade`, and the two reads inside the
-    ``TrustRootUoW`` block that need their own terminal-error posture.
+    lookups routed through :func:`_resolve_or_degrade`, the two reads inside the
+    ``TrustRootUoW`` block that need their own terminal-error posture, and a stored
+    publisher domain the pinned pattern rejects (:func:`_publisher_domains_on_wire`).
     A site that only logs and falls through to a default leaves the response
     silently carrying a placeholder (or an omission), with no way for the buyer to
     tell "this seller has none" from "the lookup failed" — the quiet-failure class
@@ -137,6 +139,21 @@ def _record_degradation(advisories: list[Error], what: str, exc: Exception) -> N
             details=CapabilityRefusalDetails(capability=what),
         )
     )
+
+
+def _publisher_domains_on_wire(stored: Iterable[str], advisories: list[Error]) -> list[PublisherDomain]:
+    """The distinct publisher domains a buyer can be sent to, from the rows as stored.
+
+    A row the pattern still rejects after canonicalization (a port, an empty domain) costs
+    that row and records an advisory; the other publishers stay on the wire.
+    """
+    named: list[PublisherDomain] = []
+    for domain in sorted({canonical_publisher_domain(row) for row in stored}):
+        try:
+            named.append(PublisherDomain(root=domain))
+        except ValidationError as e:
+            _record_degradation(advisories, "publisher domains", e)
+    return named
 
 
 def _resolve_or_degrade[T](advisories: list[Error], what: str, resolve: Callable[[], T], *, default: T) -> T:
@@ -584,11 +601,11 @@ def describe_seller(identity: PublicIdentity) -> SellerCapabilities:
                 # superset of the other, so both are read and unioned. Unverified rows are
                 # left out: claiming a publisher whose authorization was never seen sends the
                 # buyer to a file that does not list this agent.
-                domains = set(authorized_properties.list_verified_publisher_domains())
-                domains.update(
+                stored = set(authorized_properties.list_verified_publisher_domains())
+                stored.update(
                     partner.publisher_domain for partner in tenant_config.list_publisher_partners(verified=True)
                 )
-                return [PublisherDomain(root=domain) for domain in sorted(domains)]
+                return _publisher_domains_on_wire(stored, advisories)
 
             publisher_domains = _resolve_or_degrade(
                 advisories, "publisher domains", _resolve_publisher_domains, default=[]
