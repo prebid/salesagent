@@ -3167,9 +3167,9 @@ async def _create_media_buy_impl(
                     break
 
             if not pkg_product:
-                # Defensive: the primary product-existence check above
-                # (AdCPProductNotFoundError) catches missing products first, so this
-                # per-package branch is suite-invisible — typed for guard parity.
+                # The product row exists (the check above reads the table), but the
+                # catalog leaves it out: it names no verified publisher, so buyers are
+                # not offered it (#1845). Graded by @T-UC-002-ext-unoffered-product.
                 raise AdCPProductNotFoundError(
                     details=ProductRefDetails(package_index=idx, product_id=pkg_product_id),
                     field=package_field_path("product_id", pkg_index),
