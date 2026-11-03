@@ -349,6 +349,21 @@ def test_the_fast_path_publishes_its_shards_as_one_bdd_inprocess(tmp_path):
 
 
 @pytest.mark.slow
+@pytest.mark.parametrize(
+    ("budget", "per_shard"),
+    [
+        ({"E2E_WORKERS": "8"}, 8 // SHARD_COUNTS["bdd"]),
+        ({"E2E_WORKERS": "8", "BDD_XDIST_N": "16"}, 16 // SHARD_COUNTS["bdd"]),
+    ],
+)
+def test_the_shards_divide_the_callers_worker_budget(tmp_path, budget, per_shard):
+    """cassini asks for BDD_XDIST_N=16. Ignoring it would halve the box's BDD workers."""
+    proc, _ = _run_with_stubbed_docker(tmp_path, **budget)
+
+    assert f"BDD_SHARD_XDIST_N={per_shard} " in proc.stdout, proc.stdout
+
+
+@pytest.mark.slow
 def test_a_dead_shard_fails_the_run_and_publishes_no_merged_suite(tmp_path):
     """A survivor published alone would be internally consistent and go green."""
     proc, _ = _run_with_stubbed_docker(tmp_path, E2E_WORKERS="2", DOCKER_STUB_DEAD_SUITE="bdd-inprocess-s2")

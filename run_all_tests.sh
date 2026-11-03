@@ -196,10 +196,15 @@ if [ "${E2E_WORKERS:-0}" -gt 0 ] 2>/dev/null; then
     # PYTEST_XDIST_AUTO_NUM_WORKERS, which docker-compose.e2e.yml pins to 1 for
     # BDD's own benefit -- so `auto` meant ONE worker for every caller that does
     # not separately export that variable, and the ~23m->~3.5m in-process win
-    # silently never landed. E2E_WORKERS divided across the shards keeps the TOTAL
-    # worker count at what the memory tiering above already sized; the override
-    # form is what lets a measurement harness pin it.
-    _shard_workers=$(( E2E_WORKERS / _BDD_SHARDS ))
+    # silently never landed. BDD_XDIST_N is the whole in-process budget a caller
+    # asks for (cassini's box profile asks for 16), and without one E2E_WORKERS is
+    # what the memory tiering above already sized. Dividing it across the shards
+    # keeps the TOTAL worker count there; the override form is what lets a
+    # measurement harness pin the per-shard number.
+    case "${BDD_XDIST_N:-}" in
+        ''|*[!0-9]*) _shard_workers=$(( E2E_WORKERS / _BDD_SHARDS )) ;;
+        *) _shard_workers=$(( BDD_XDIST_N / _BDD_SHARDS )) ;;
+    esac
     export BDD_SHARD_XDIST_N="${BDD_SHARD_XDIST_N:-$(( _shard_workers > 0 ? _shard_workers : 1 ))}"
     _shard_envs=""
     for _shard in $(seq 1 "$_BDD_SHARDS"); do

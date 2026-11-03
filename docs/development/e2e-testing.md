@@ -309,7 +309,8 @@ Two related settings are required for correctness:
 - `BDD_SHARD_XDIST_N` must **derive from** `E2E_WORKERS`; never set it directly.
   When `E2E_WORKERS > 0`, `run_all_tests.sh` swaps the serial `bdd`
   environment for the `bdd-inprocess-s*,bdd_e2e` split, exports
-  `BDD_SHARD_XDIST_N` as `E2E_WORKERS` divided across the in-process shards, and
+  `BDD_SHARD_XDIST_N` as the in-process worker budget (`BDD_XDIST_N`, else
+  `E2E_WORKERS`) divided across the shards, and
   provisions `E2E_WORKERS` isolated per-worker stacks — one `adcp-server`
   container plus one TLS sidecar per xdist worker, each on its own database
   (`adcp_gwN`, cloned from a migrated template) — then runs `bdd_e2e` with
