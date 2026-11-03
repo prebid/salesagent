@@ -639,22 +639,43 @@ class TestCrashMessageClassification:
         assert entry.category == "MISSING_STEP"
 
     def test_xdist_banner_does_not_hide_call_crash_message(self, audit_xfails) -> None:
-        """A passing setup longrepr is the xdist worker banner, not the reason."""
+        """A passing setup longrepr is the xdist worker banner, not the reason.
+
+        The setup longrepr and call crash message are copied from a real
+        in-process artifact (root ``/app``). The banner also prefixes
+        ``call.longrepr``.
+        """
+        message = (
+            "pytest_bdd.exceptions.StepDefinitionNotFoundError: Step definition is not found: "
+            'Given "a seller with formats declaring various disclosure persistence capabilities". '
+            'Line 809 in scenario "Disclosure persistence filter partition - all_modes" in the '
+            'feature "/app/tests/bdd/features/BR-UC-005-discover-creative-formats.feature"'
+        )
+        banner = "[gw6] linux -- Python 3.12.14 /app/.tox/bdd_inprocess/bin/python"
         test = {
-            "nodeid": "t::s[a2a]",
+            "nodeid": (
+                "tests/bdd/test_uc005_discover_creative_formats.py::"
+                "test_disclosure_persistence_filter_partition__partition[a2a-all_modes-valid]"
+            ),
             "keywords": [],
             "outcome": "xfailed",
-            "setup": {
-                "outcome": "passed",
-                "longrepr": "[gw0] linux -- Python 3.12.0",
-            },
+            "setup": {"outcome": "passed", "longrepr": banner},
             "call": {
                 "outcome": "skipped",
-                "crash": {"path": "/tmp/x.py", "lineno": 1, "message": "StepDefinitionNotFoundError"},
+                "longrepr": (
+                    f"{banner}\nE   {message}\n"
+                    "All traceback entries are hidden. Pass `--full-trace` to see hidden and internal frames."
+                ),
+                "crash": {
+                    "path": "/app/.tox/bdd_inprocess/lib/python3.12/site-packages/_pytest/python.py",
+                    "lineno": 166,
+                    "message": message,
+                },
             },
         }
         entry = audit_xfails.classify_xfail(test, {}, [])
         assert entry.category == "MISSING_STEP"
+        assert entry.reason == message
         assert "linux -- Python" not in entry.reason
 
     def test_missing_step_from_bare_error_type(self, audit_xfails) -> None:
