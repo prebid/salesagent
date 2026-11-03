@@ -449,12 +449,7 @@ def test_provenance_tag_is_a_recorded_field_not_a_collection_filter(tmp_path: Pa
 # Scoped budget, NOT a global relaxation. Every other test here shells out to ONE
 # nested pytest session; this one shells out to TWO (serial, then ``-n 2``) plus
 # xdist's worker bootstrap, and that is irreducible — the comparison IS the
-# grader. Measured: 37.2s (M-series laptop) / 49.1s (x86 Linux CI box) here,
-# against 20.7s/19.3s/10.0s and 25.0s/24.0s/14.3s for its single-run siblings. It
-# is the only test in this module that crosses the 60s budget CI's integration job
-# passes (``.github/workflows/ci.yml`` ``--timeout=60``) once a GitHub-hosted
-# runner's slower cores are applied — exactly what fork run 32152198573 measured
-# ("Failed: Timeout (>60.0s)") while the siblings passed.
+# grader.
 #
 # The alternative the design considered — shrinking the measured slice — was
 # rejected: the slice's 8 scenarios x 3 in-process transports = 24 items under
@@ -462,10 +457,11 @@ def test_provenance_tag_is_a_recorded_field_not_a_collection_filter(tmp_path: Pa
 # scenario ids PLUS per-scenario observation counts is the whole assertion.
 # Trading that for speed would buy a green mark with a weaker grader.
 #
-# 300s is ~8x the measured cost, leaves the job's 25-minute budget untouched, and
-# the marker overrides the CLI ``--timeout`` for this item only (pytest-timeout
+# 600s is the sum of the two sessions' own limits: ``_run_bdd_slice`` allows each one
+# 300s, so a smaller budget here can stop a run that neither session's limit would.
+# The marker overrides the CLI ``--timeout`` for this item only (pytest-timeout
 # precedence: marker > CLI > ini), so no other test's budget moves.
-@pytest.mark.timeout(300)
+@pytest.mark.timeout(600)
 def test_liveness_artifact_is_identical_under_xdist_and_serial(tmp_path: Path) -> None:
     """A sharded run must publish the same measurement a serial run does.
 
