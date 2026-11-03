@@ -58,6 +58,7 @@ from src.core.exceptions import (
     AdCPValidationError,
 )
 from src.core.schemas import (
+    AssetStatus,
     CreateMediaBuyRequest,
     CreateMediaBuyResult,
     CreateMediaBuySubmitted,
@@ -351,6 +352,47 @@ class TestCreativeMissingUrl:
             assert exc_info.value.error_code == "VALIDATION_ERROR"
 
 
+#: A creative with no platform_creative_id: the one state in which create_media_buy uploads.
+_UNPUSHED_CREATIVE_ID = "creative_no_platform"
+
+
+def _request_naming_the_unpushed_creative() -> CreateMediaBuyRequest:
+    """One package carrying ``creative_ids``, which is what reaches the inline upload path."""
+    return _make_request(
+        packages=[
+            {
+                "product_id": "prod_1",
+                "budget": 5000.0,
+                "pricing_option_id": "cpm_usd_fixed",
+                "creative_ids": [_UNPUSHED_CREATIVE_ID],
+            },
+        ]
+    )
+
+
+def _seed_unpushed_creative(tenant, principal) -> None:
+    """A creative the upload path will try to push: approved, with no platform_creative_id.
+
+    Extractable url/dimensions, so _build_adapter_asset_from_creative succeeds and the
+    upload runs. status matters: media_buy_create.py holds pending_review creatives back
+    from the adapter upload (#1038), so the upload only runs for a creative that is NOT
+    pending_review. It used to run by accident — CreativeFactory defaulted to the
+    non-spec "pending", which fell through to the upload branch. Now that the factory
+    writes a real AdCP status, the state has to be stated (salesagent-zm5l).
+    """
+    from tests.factories import CreativeFactory
+
+    CreativeFactory(
+        tenant=tenant,
+        principal=principal,
+        creative_id=_UNPUSHED_CREATIVE_ID,
+        format="display_300x250",
+        agent_url="https://creative.adcontextprotocol.org",
+        status="approved",
+        data={"url": "https://example.com/ad.jpg", "width": 300, "height": 250},
+    )
+
+
 class TestCreativeUploadFailure:
     """GAP-004: Creative upload failure raises CREATIVE_UPLOAD_FAILED.
 
@@ -369,40 +411,12 @@ class TestCreativeUploadFailure:
 
         Anchors: media_buy_create.py:3162-3168
         """
-        # Request with a package that has creative_ids (triggers the creative upload path)
-        req = _make_request(
-            packages=[
-                {
-                    "product_id": "prod_1",
-                    "budget": 5000.0,
-                    "pricing_option_id": "cpm_usd_fixed",
-                    "creative_ids": ["creative_no_platform"],
-                },
-            ]
-        )
+        req = _request_naming_the_unpushed_creative()
 
         with MediaBuyCreateEnv() as env:
-            from tests.factories import CreativeFactory
-
             tenant, principal = env.setup_default_data()
             env.setup_product_chain(tenant)
-            # Creative exists, no platform_creative_id, with extractable url/dimensions
-            # so _build_adapter_asset_from_creative succeeds and the upload runs.
-            # status is load-bearing: media_buy_create.py holds pending_review creatives
-            # back from the adapter upload (#1038), so the upload this test exercises only
-            # runs for a creative that is NOT pending_review. It used to run by accident —
-            # CreativeFactory defaulted to the non-spec "pending", which fell through to
-            # the upload branch. Now that the factory writes a real AdCP status, the state
-            # this test needs has to be stated (salesagent-zm5l).
-            CreativeFactory(
-                tenant=tenant,
-                principal=principal,
-                creative_id="creative_no_platform",
-                format="display_300x250",
-                agent_url="https://creative.adcontextprotocol.org",
-                status="approved",
-                data={"url": "https://example.com/ad.jpg", "width": 300, "height": 250},
-            )
+            _seed_unpushed_creative(tenant, principal)
 
             # Adapter create succeeds; the creative upload raises a generic exception.
             mock_adapter = env.mock["adapter"].return_value
@@ -413,6 +427,37 @@ class TestCreativeUploadFailure:
 
             assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
             assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
+
+    def test_failed_upload_status_leaves_no_platform_creative_id(self, integration_db):
+        """An AssetStatus of ``failed`` is a refusal, not a creative (GH #1516).
+
+        The GAM creatives manager reports a creative it could not build (a native creative
+        with no template, say) as ``status="failed"`` rather than raising. The buy still
+        completes, but nothing was created in GAM, so the row must keep no
+        ``platform_creative_id``: that field is what the next approval reads to decide
+        between pushing the creative and associating an id GAM never minted.
+        """
+        from src.core.database.repositories.uow import CreativeUoW
+
+        req = _request_naming_the_unpushed_creative()
+
+        with MediaBuyCreateEnv() as env:
+            tenant, principal = env.setup_default_data()
+            env.setup_product_chain(tenant)
+            _seed_unpushed_creative(tenant, principal)
+            env.mock["adapter"].return_value.add_creative_assets.return_value = [
+                AssetStatus(creative_id=_UNPUSHED_CREATIVE_ID, status="failed", message="no native template")
+            ]
+
+            env.call_impl(req=req)
+
+            with CreativeUoW(tenant.tenant_id) as uow:
+                assert uow.creatives is not None
+                row = uow.creatives.get_by_id(_UNPUSHED_CREATIVE_ID, principal.principal_id)
+                assert row is not None, "the seeded creative row is missing"
+                assert "platform_creative_id" not in (row.data or {}), (
+                    f"a failed push must not record a platform id; persisted data: {row.data}"
+                )
 
 
 # ===========================================================================

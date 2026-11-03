@@ -67,8 +67,10 @@ def _create_media_buy_for(*products: Mock) -> tuple[Mock, dict]:
     mock_adapter._requires_manual_approval = Mock(return_value=False)
     mock_adapter._validate_targeting = Mock(return_value=[])
     mock_adapter._check_order_has_guaranteed_items = Mock(return_value=(False, []))
-    mock_adapter._placement_targeting_map = {}
-    mock_adapter._native_template_ids = {}
+    # Left over from a previous order on the same instance: create_media_buy clears both
+    # maps before refilling them, which the equality assertions on them grade.
+    mock_adapter._placement_targeting_map = {"plc_stale": "stale_targeting"}
+    mock_adapter._native_template_ids = {"pkg_stale_001": "000000"}
     mock_adapter._order_name_template = None
     mock_adapter._line_item_name_template = None
     mock_adapter.targeting_manager = Mock()
@@ -175,22 +177,59 @@ def test_native_style_id_is_collected_only_for_packages_whose_product_names_one(
     assert adapter._native_template_ids == {"pkg_prod_native_001": "987654"}
 
 
-def test_add_creative_assets_forwards_the_native_template_map():
-    """The per-order maps built by create_media_buy reach the creatives manager by keyword."""
+def test_create_media_buy_resets_the_per_order_maps():
+    """A reused adapter must not carry a previous order's templates or placement targeting."""
+    adapter, _products_map = _create_media_buy_for(_mock_product("prod_plain", {"targeted_ad_unit_ids": ["12345"]}))
+
+    assert adapter._native_template_ids == {}
+    assert adapter._placement_targeting_map == {}
+
+
+_TODAY = datetime(2024, 1, 1, tzinfo=UTC)
+_ASSETS = [{"creative_id": "cr_1", "package_assignments": ["pkg_prod_abc_001"]}]
+
+
+def _adapter_holding_the_per_order_maps() -> Mock:
+    """A GAM adapter stand-in after create_media_buy filled its two per-order maps."""
     adapter = Mock(spec=GoogleAdManager)
     adapter.creatives_manager = Mock()
+    adapter._require_creatives_manager = Mock(return_value=adapter.creatives_manager)
     adapter._requires_manual_approval = Mock(return_value=False)
     adapter._placement_targeting_map = {"plc_1": "targeting_1"}
     adapter._native_template_ids = {"pkg_prod_abc_001": "987654"}
-    today = datetime(2024, 1, 1, tzinfo=UTC)
-    assets = [{"creative_id": "cr_1", "package_assignments": ["pkg_prod_abc_001"]}]
+    return adapter
 
-    GoogleAdManager.add_creative_assets(adapter, "9000001", assets, today)
+
+def test_push_creative_assets_forwards_the_per_order_maps():
+    """The maps built by create_media_buy reach the creatives manager by keyword."""
+    adapter = _adapter_holding_the_per_order_maps()
+
+    GoogleAdManager.push_creative_assets(adapter, "9000001", _ASSETS, _TODAY)
 
     adapter.creatives_manager.add_creative_assets.assert_called_once_with(
         "9000001",
-        assets,
-        today,
+        _ASSETS,
+        _TODAY,
         placement_targeting_map={"plc_1": "targeting_1"},
         native_template_ids={"pkg_prod_abc_001": "987654"},
     )
+
+
+def test_push_creative_assets_prefers_the_map_handed_in():
+    """The retroactive push runs on a fresh adapter and hands in the map it derived from the products."""
+    adapter = _adapter_holding_the_per_order_maps()
+
+    GoogleAdManager.push_creative_assets(adapter, "9000001", _ASSETS, _TODAY, native_template_ids={"pkg_x": "1"})
+
+    adapter.creatives_manager.add_creative_assets.assert_called_once_with(
+        "9000001", _ASSETS, _TODAY, placement_targeting_map={"plc_1": "targeting_1"}, native_template_ids={"pkg_x": "1"}
+    )
+
+
+def test_add_creative_assets_routes_through_the_same_push():
+    """Automatic mode is the gated front of push_creative_assets, so the two cannot forward differently."""
+    adapter = _adapter_holding_the_per_order_maps()
+
+    GoogleAdManager.add_creative_assets(adapter, "9000001", _ASSETS, _TODAY)
+
+    adapter.push_creative_assets.assert_called_once_with("9000001", _ASSETS, _TODAY)

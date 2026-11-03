@@ -89,7 +89,7 @@ class TestExecuteApprovedPendingReviewFilter:
         # the BOUNDARY rather than on the creative upload is what makes this real — the
         # upload is downstream of a call that never happens.
         adapter_boundary.assert_not_called()
-        mock_adapter.creatives_manager.add_creative_assets.assert_not_called()
+        mock_adapter.push_creative_assets.assert_not_called()
 
 
 class TestPersistAdapterPackageIds:

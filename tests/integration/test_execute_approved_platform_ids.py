@@ -252,7 +252,7 @@ def _run_execute_approved(media_buy_id, tenant_id, adapter_response):
         ),
         patch("src.core.tools.media_buy_create._validate_creatives_before_adapter_call"),
         patch(
-            "src.core.helpers.adapter_helpers.get_adapter",
+            "src.core.tools.media_buy_create.get_adapter",
             return_value=type("MockAdapter", (), {"orders_manager": None})(),
         ),
     ):
@@ -286,7 +286,7 @@ class TestExecuteApprovedPlatformIds:
             ),
             patch("src.core.tools.media_buy_create._validate_creatives_before_adapter_call"),
             patch(
-                "src.core.helpers.adapter_helpers.get_adapter",
+                "src.core.tools.media_buy_create.get_adapter",
                 return_value=type("MockAdapter", (), {"orders_manager": None})(),
             ),
         ):
@@ -544,11 +544,11 @@ class TestExecuteApprovedEnrichesSellerConcept:
         produced = self._produce_gam_status(gam_order_id, creative_id, tenant_id)
 
         # (2) ...fed through the REAL execute_approved_media_buy writeback. The adapter
-        # response carries the GAM order id; the adapter itself is a stand-in whose
-        # creatives_manager returns the real producer's output.
+        # response carries the GAM order id; the adapter itself is a stand-in whose push
+        # returns the real producer's output.
         adapter_response = AdapterCreateResult(media_buy_id=gam_order_id, packages=[])
         mock_adapter = MagicMock()
-        mock_adapter.creatives_manager.add_creative_assets.return_value = produced
+        mock_adapter.push_creative_assets.return_value = produced
         mock_adapter.orders_manager.approve_order.return_value = True
         valid_asset = {
             "creative_id": creative_id,
@@ -570,12 +570,12 @@ class TestExecuteApprovedEnrichesSellerConcept:
                 "src.core.tools.media_buy_create._build_adapter_asset_from_creative",
                 return_value=(valid_asset, None),
             ),
-            patch("src.core.helpers.adapter_helpers.get_adapter", return_value=mock_adapter),
+            patch("src.core.tools.media_buy_create.get_adapter", return_value=mock_adapter),
         ):
             result = run_approval(media_buy_id, tenant_id)
 
         assert result.ok, f"execute_approved_media_buy failed: {result.error_msg}"
-        mock_adapter.creatives_manager.add_creative_assets.assert_called_once_with(gam_order_id, ANY, ANY)
+        mock_adapter.push_creative_assets.assert_called_once_with(gam_order_id, ANY, ANY)
 
         # (3) The concept is PERSISTED to the creative's data blob (the Finding 1 fix —
         # without the writeback wiring, these keys are absent).

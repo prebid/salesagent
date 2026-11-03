@@ -26,9 +26,10 @@ import pytest
 from src.adapters.google_ad_manager import GoogleAdManager
 from src.core.schemas import CreateMediaBuyRequest
 from src.services.gam_product_config_service import GAMProductConfigService
-from tests.factories import PricingOptionFactory, ProductFactory
+from tests.factories import CreativeFactory, PricingOptionFactory, ProductFactory
 from tests.factories.core import PropertyTagFactory
 from tests.harness.media_buy_create import MediaBuyCreateEnv
+from tests.helpers.media_buy_approval import uploadable_creative
 
 _TENANT_ID = "gam-autocfg-tenant"
 _PRINCIPAL_ID = "gam-autocfg-principal"
@@ -38,13 +39,16 @@ def _future(days: int) -> str:
     return (datetime.now(UTC) + timedelta(days=days)).isoformat()
 
 
-def _make_request(product_id: str) -> CreateMediaBuyRequest:
+def _make_request(product_id: str, *, creative_ids: list[str] | None = None) -> CreateMediaBuyRequest:
+    package: dict = {"product_id": product_id, "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"}
+    if creative_ids:
+        package["creative_ids"] = creative_ids
     return CreateMediaBuyRequest(
         account={"account_id": "acct_test"},
         brand={"domain": "testbrand.com"},
         start_time=_future(1),
         end_time=_future(8),
-        packages=[{"product_id": product_id, "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"}],
+        packages=[package],
         idempotency_key=f"gam-autoconfig-{product_id}",
     )
 
@@ -101,15 +105,25 @@ def test_create_media_buy_builds_one_adapter_per_request(integration_db):
     ``_native_template_ids``) that add_creative_assets reads back on the same object. A
     second get_adapter call between the two hands the upload an instance whose maps are
     empty, so the inline path must reuse the adapter it already built.
+
+    The package names an approved creative with no platform id, so the upload RUNS: the
+    two call counts on the one instance are what make the adapter count an assertion
+    about both halves rather than about the order alone.
     """
     with MediaBuyCreateEnv(tenant_id=_TENANT_ID, principal_id=_PRINCIPAL_ID) as env:
-        tenant, _principal = env.setup_default_data()
+        tenant, principal = env.setup_default_data()
         PropertyTagFactory(tenant=tenant, tag_id="all_inventory", name="All Inventory")
         product = ProductFactory(tenant=tenant, product_id="prod_one", property_tags=["all_inventory"])
         PricingOptionFactory(product=product, pricing_model="cpm", currency="USD", is_fixed=True)
+        uploadable_creative(
+            CreativeFactory, tenant=tenant, principal=principal, creative_id="cr_one", status="approved"
+        )
 
-        env.call_impl(req=_make_request("prod_one"))
+        env.call_impl(req=_make_request("prod_one", creative_ids=["cr_one"]))
 
+        adapter = env.mock["adapter"].return_value
+        assert adapter.create_media_buy.call_count == 1
+        assert adapter.add_creative_assets.call_count == 1, "the creative never reached the adapter"
         adapters_built = env.mock["adapter"].call_count
         assert adapters_built == 1, (
             f"create_media_buy built {adapters_built} adapters; the order and its creatives must share one"

@@ -84,6 +84,28 @@ def _extract_product_id_from_package(package_id: str) -> str | None:
     return None
 
 
+def _get_attr(obj: Any, name: str, default: Any = None) -> Any:
+    """Read a field off a GAM object: a Zeep object in production, a dict in tests."""
+    if isinstance(obj, dict):
+        return obj.get(name, default)
+    return getattr(obj, name, default)
+
+
+def _placeholders_for(package_id: str, creative_placeholders: dict[str, list]) -> list:
+    """The creative placeholders of the line item a package maps to.
+
+    Keyed by line item name first, then by the product id the package id carries
+    (``pkg_prod_XXXXXX_YYYYYYYY_N`` -> ``prod_XXXXXX``), which is how ``_get_line_item_info``
+    also keys a line item named ``... - prod_XXXXXX``.
+    """
+    placeholders = creative_placeholders.get(package_id, [])
+    if not placeholders:
+        product_id = _extract_product_id_from_package(package_id)
+        if product_id:
+            placeholders = creative_placeholders.get(product_id, [])
+    return placeholders
+
+
 class GAMCreativesManager:
     """Manages creative operations for Google Ad Manager."""
 
@@ -209,12 +231,11 @@ class GAMCreativesManager:
                 created_asset_statuses.append(_approved(asset["creative_id"]))
                 continue
 
-            # Get placeholders for this asset's package assignments
-            # Use helper to extract package IDs (supports both legacy string and new dict format)
+            # The placeholders of the line items this asset's packages map to: a native one
+            # carries the creative template the asset is built against.
             asset_placeholders = []
             for pkg_id in _get_package_ids(asset.get("package_assignments", [])):
-                if pkg_id in creative_placeholders:
-                    asset_placeholders.extend(creative_placeholders[pkg_id])
+                asset_placeholders.extend(_placeholders_for(pkg_id, creative_placeholders))
 
             # Create GAM creative object
             try:
@@ -521,13 +542,6 @@ class GAMCreativesManager:
         """
         validation_errors = []
 
-        # Helper function to safely get attribute from dict or object
-        def _get_attr(obj, name, default=None):
-            """Get attribute from dict or object."""
-            if isinstance(obj, dict):
-                return obj.get(name, default)
-            return getattr(obj, name, default)
-
         # Get asset dimensions
         try:
             asset_width, asset_height = self._get_creative_dimensions(asset, None)
@@ -544,20 +558,7 @@ class GAMCreativesManager:
 
         matching_placeholders_found = False
         for package_id in package_ids:
-            # Try direct lookup first (for backward compatibility with line item names)
-            placeholders = creative_placeholders.get(package_id, [])
-
-            # If not found, try matching by product ID extracted from package_id
-            # Package IDs are like "pkg_prod_XXXXXX_YYYYYYYY_N", extract "prod_XXXXXX"
-            if not placeholders and package_id.startswith("pkg_prod_"):
-                # Extract product ID: "pkg_prod_2215c038_63e4864a_1" -> "prod_2215c038"
-                parts = package_id.split("_")
-                if len(parts) >= 3:  # pkg_prod_XXXXXX_...
-                    product_id = f"prod_{parts[2]}"
-                    placeholders = creative_placeholders.get(product_id, [])
-                    if placeholders:
-                        logger.info(f"[DEBUG] Matched package {package_id} to product ID {product_id}")
-            for placeholder in placeholders:
+            for placeholder in _placeholders_for(package_id, creative_placeholders):
                 # Placeholder can be a Zeep object or dict (in tests)
                 placeholder_size = _get_attr(placeholder, "size", None)
                 if not placeholder_size:
@@ -593,16 +594,7 @@ class GAMCreativesManager:
         if not matching_placeholders_found:
             available_sizes = []
             for package_id in package_ids:
-                # Try direct lookup first
-                placeholders = creative_placeholders.get(package_id, [])
-
-                # If not found, try matching by product ID extracted from package_id
-                if not placeholders and package_id.startswith("pkg_prod_"):
-                    parts = package_id.split("_")
-                    if len(parts) >= 3:
-                        product_id = f"prod_{parts[2]}"
-                        placeholders = creative_placeholders.get(product_id, [])
-                for placeholder in placeholders:
+                for placeholder in _placeholders_for(package_id, creative_placeholders):
                     # Placeholder can be a Zeep object or dict (in tests)
                     size = _get_attr(placeholder, "size", None)
                     if size:
@@ -629,7 +621,8 @@ class GAMCreativesManager:
         Args:
             asset: Creative asset dictionary
             creative_type: Type of creative to create
-            placeholders: List of creative placeholders for validation
+            placeholders: The creative placeholders of the asset's line items, as GAM reports
+                them; a native one carries the creative template its creatives use
             native_template_ids: package_id → GAM creative template id (the product's
                 ``native_style_id``); consulted only for a native asset
 
@@ -639,7 +632,9 @@ class GAMCreativesManager:
         if creative_type == "third_party_tag":
             return self._create_third_party_creative(asset)
         elif creative_type == "native":
-            return self._create_native_creative(asset, self._get_native_template_id(asset, native_template_ids))
+            return self._create_native_creative(
+                asset, self._get_native_template_id(asset, placeholders, native_template_ids)
+            )
         elif creative_type == "html5":
             return self._create_html5_creative(asset)
         elif creative_type == "hosted_asset":
@@ -885,17 +880,28 @@ class GAMCreativesManager:
         else:
             return "image"
 
-    def _get_native_template_id(self, asset: dict[str, Any], native_template_ids: dict[str, str] | None) -> str:
+    def _get_native_template_id(
+        self,
+        asset: dict[str, Any],
+        placeholders: list[Any] | None,
+        native_template_ids: dict[str, str] | None,
+    ) -> str:
         """Resolve the GAM creative template a native asset is built against.
 
-        The id is the product's ``implementation_config.native_style_id``, carried here per
-        package by the adapter (``GoogleAdManager.create_media_buy`` builds the map and
-        ``GoogleAdManager.add_creative_assets`` forwards it). One GAM creative carries one
-        template and serves every package it is assigned to, so each of those packages must
-        name the same one. A package with no template, or two packages with different
-        templates, is a seller misconfiguration the buyer cannot correct: CONFIGURATION_ERROR,
-        terminal (AdCP 3.1.1, ``docs/building/by-layer/L3/error-handling.mdx``). There is no
-        fallback id.
+        Two sources, which must agree. GAM's own: the ``creativeTemplateId`` a native line
+        item's placeholder carries (set from the format's
+        ``creative_placeholder.creative_template_id`` when the line item was created; a
+        programmatic 1x1 placeholder carries none). The seller's: the product's
+        ``implementation_config.native_style_id``, carried here per package by the adapter
+        (``GoogleAdManager.create_media_buy`` builds the map, ``push_creative_assets`` forwards
+        it). GAM's answer settles a package the seller left unconfigured, the seller's settles
+        a placeholder that carries none, and a typo in either shows as a disagreement. One GAM
+        creative carries one template and serves every package it is assigned to, so every
+        source must name the same one.
+
+        No template from either source, or two different ones, is a seller misconfiguration
+        the buyer cannot correct: CONFIGURATION_ERROR, terminal (AdCP 3.1.1,
+        ``docs/building/by-layer/L3/error-handling.mdx``). There is no fallback id.
 
         On this surface the error classifies an internal failure that ``add_creative_assets``
         reports per asset (``AssetStatus.message``); it is never emitted as an AdCP error
@@ -904,16 +910,20 @@ class GAMCreativesManager:
         """
         package_ids = _get_package_ids(asset.get("package_assignments", []))
         configured = {pkg: (native_template_ids or {}).get(pkg) for pkg in package_ids}
-        missing = [pkg for pkg, value in configured.items() if not value]
-        template_ids = sorted({value for value in configured.values() if value})
+        from_gam = [str(t) for t in (_get_attr(p, "creativeTemplateId") for p in placeholders or []) if t]
+        # A package without a configured template is only a gap when GAM names none either.
+        missing = [] if from_gam else [pkg for pkg, value in configured.items() if not value]
+        # Deduped in order of appearance, then sorted so rejected_value reads the same whatever
+        # the package order.
+        template_ids = sorted(dict.fromkeys([*from_gam, *(value for value in configured.values() if value)]))
         if not missing and len(template_ids) == 1:
             return template_ids[0]
         raise AdCPConfigurationError(
             field="native_style_id",
             details=ConfigurationDetails(
                 creative_id=asset.get("creative_id"),
-                # The first package whose product names no template; None when every package
-                # names one and they disagree. rejected_value carries whatever WAS configured.
+                # The first package whose product names no template; None when every source
+                # names one and they disagree. rejected_value carries whatever WAS named.
                 package_id=missing[0] if missing else None,
                 rejected_value=template_ids or None,
             ),

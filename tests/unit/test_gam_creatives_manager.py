@@ -12,7 +12,7 @@ import pytest
 
 from src.adapters.gam.managers.creatives import GAMCreativesManager, _extract_product_id_from_package
 from src.core.exceptions import AdCPConfigurationError
-from tests.helpers.gam_client import gam_line_item, stub_gam_client_manager
+from tests.helpers.gam_client import SoapObject, gam_line_item, stub_gam_client_manager
 
 
 def test_1x1_placeholder_accepts_any_creative_size_native_template():
@@ -409,7 +409,9 @@ def test_missing_native_style_id_raises_configuration_error(native_template_ids)
 def test_packages_that_disagree_on_the_template_raise_configuration_error():
     """One GAM creative carries one template, so two configured templates cannot both be honoured.
 
-    The inputs are deliberately out of order so the assertion pins the sorted ``rejected_value``.
+    The inputs are deliberately out of order: the ids are deduped in package order before the
+    sort, so without the sort ``rejected_value`` is ``["222", "111"]`` on every run and the
+    assertion pins the sort rather than a hash order.
     """
     with pytest.raises(AdCPConfigurationError) as excinfo:
         _manager()._create_gam_creative(
@@ -437,14 +439,78 @@ def test_package_without_a_template_beside_a_configured_one_raises_configuration
     assert err.details.rejected_value == ["111"]
 
 
-def _manager_over_a_native_line_item() -> tuple[GAMCreativesManager, MagicMock]:
+def _native_placeholder(template_id: int | None = None) -> SoapObject:
+    """A 1x1 placeholder as GAM reports it off a line item: native with its template, or programmatic without."""
+    placeholder = SoapObject(size=SoapObject(width=1, height=1), creativeSizeType="NATIVE" if template_id else "PIXEL")
+    if template_id is not None:
+        placeholder["creativeTemplateId"] = template_id
+    return placeholder
+
+
+@pytest.mark.parametrize(
+    ("asset", "placeholders", "native_template_ids"),
+    [
+        pytest.param(_native_asset(), [_native_placeholder(987654)], None, id="gam-only"),
+        pytest.param(
+            _native_asset(), [_native_placeholder(987654)], {_NATIVE_PACKAGE: "987654"}, id="gam-and-config-agree"
+        ),
+        pytest.param(_native_asset(), [_native_placeholder(987654), _native_placeholder()], {}, id="gam-beside-a-1x1"),
+        pytest.param(
+            _native_asset(), [_native_placeholder()], {_NATIVE_PACKAGE: "987654"}, id="config-covers-a-bare-1x1"
+        ),
+        pytest.param(
+            _native_asset("pkg_a", "pkg_b"),
+            [_native_placeholder(987654)],
+            {"pkg_a": "987654"},
+            id="gam-settles-an-unconfigured-package",
+        ),
+    ],
+)
+def test_the_template_gam_reports_on_the_placeholder_is_honoured(asset, placeholders, native_template_ids):
+    """GAM's own answer, the placeholder's creativeTemplateId (an int off the SOAP object), resolves the template."""
+    creative = _manager()._create_gam_creative(asset, "native", placeholders, native_template_ids=native_template_ids)
+
+    assert creative is not None
+    assert creative["creativeTemplateId"] == "987654"
+
+
+def test_placeholder_and_configured_templates_that_disagree_raise_configuration_error():
+    """A typo in native_style_id is caught against the template GAM reports, not by GAM at createCreatives."""
+    with pytest.raises(AdCPConfigurationError) as excinfo:
+        _manager()._create_gam_creative(
+            _native_asset(), "native", [_native_placeholder(111)], native_template_ids={_NATIVE_PACKAGE: "222"}
+        )
+
+    err = excinfo.value
+    assert err.field == "native_style_id"
+    assert err.details is not None
+    assert err.details.rejected_value == ["111", "222"]
+    assert err.details.package_id is None
+
+
+def _manager_over_a_native_line_item(*, template_id: int | None = None) -> tuple[GAMCreativesManager, MagicMock]:
     """A manager over a stand-in GAM client whose order holds one 1x1 (native) line item.
 
     The line item is named after the package's product, which is how association finds it.
+    ``template_id`` is what GAM reports on the placeholder, when the line item carries one.
     The returned CreativeService stand-in is what the payload assertions read.
     """
-    client_manager = stub_gam_client_manager(line_items=(gam_line_item("prod_native", sizes=((1, 1),)),))
+    line_item = gam_line_item("prod_native", sizes=((1, 1),))
+    if template_id is not None:
+        line_item["creativePlaceholders"][0]["creativeTemplateId"] = template_id
+    client_manager = stub_gam_client_manager(line_items=(line_item,))
     return GAMCreativesManager(client_manager, "adv-1"), client_manager.get_service("CreativeService")
+
+
+_TEMPLATE_CREATIVE_987654 = {
+    "xsi_type": "TemplateCreative",
+    "name": "Native 1",
+    "advertiserId": "adv-1",
+    "creativeTemplateId": "987654",
+    "creativeTemplateVariableValues": [
+        {"uniqueName": "headline", "value": {"xsi_type": "StringCreativeTemplateVariableValue", "value": "Buy now"}}
+    ],
+}
 
 
 def test_add_creative_assets_builds_the_template_creative_from_the_configured_id():
@@ -455,22 +521,17 @@ def test_add_creative_assets_builds_the_template_creative_from_the_configured_id
     )
 
     assert [status.status for status in statuses] == ["approved"]
-    creative_service.createCreatives.assert_called_once_with(
-        [
-            {
-                "xsi_type": "TemplateCreative",
-                "name": "Native 1",
-                "advertiserId": "adv-1",
-                "creativeTemplateId": "987654",
-                "creativeTemplateVariableValues": [
-                    {
-                        "uniqueName": "headline",
-                        "value": {"xsi_type": "StringCreativeTemplateVariableValue", "value": "Buy now"},
-                    }
-                ],
-            }
-        ]
-    )
+    creative_service.createCreatives.assert_called_once_with([_TEMPLATE_CREATIVE_987654])
+
+
+def test_add_creative_assets_builds_the_template_creative_from_the_line_item_placeholder():
+    """The placeholder reaches the native builder: looked up by the product id the package id carries."""
+    manager, creative_service = _manager_over_a_native_line_item(template_id=987654)
+
+    statuses = manager.add_creative_assets("9000001", [_native_asset()], datetime.now(UTC))
+
+    assert [status.status for status in statuses] == ["approved"]
+    creative_service.createCreatives.assert_called_once_with([_TEMPLATE_CREATIVE_987654])
 
 
 def test_add_creative_assets_reports_the_missing_native_style_id_on_the_status():

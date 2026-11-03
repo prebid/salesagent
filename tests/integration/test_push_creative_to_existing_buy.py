@@ -28,7 +28,7 @@ session, so a test that stubbed it would grade nothing.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
@@ -44,8 +44,11 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 PLATFORM_CONCEPT_ID = "gam-order-90210"
 
 
-def _seed_live_buy_with_assigned_creative():
+def _seed_live_buy_with_assigned_creative(*, native_style_id: int | None = None):
     """A creative approved but not yet pushed, assigned to a package on a LIVE buy.
+
+    ``native_style_id`` seeds the package's product with that GAM native template; without
+    it the package names a product that does not exist, which the push tolerates.
 
     Returns (tenant_id, creative_id, media_buy_id, principal_id) -- the principal because
     the buyer-path repository read used for the assertion is principal-scoped.
@@ -56,11 +59,14 @@ def _seed_live_buy_with_assigned_creative():
         MediaBuyFactory,
         MediaPackageFactory,
         PrincipalFactory,
+        ProductFactory,
         TenantFactory,
     )
 
     tenant = TenantFactory(ad_server="mock")
     principal = PrincipalFactory(tenant=tenant)
+    if native_style_id is not None:
+        ProductFactory(tenant=tenant, product_id="prod_001", implementation_config={"native_style_id": native_style_id})
     # ``uploadable_creative`` supplies the format + assets that get through
     # ``_build_adapter_asset_from_creative``; the factory defaults do not.
     creative = uploadable_creative(
@@ -82,9 +88,9 @@ def _seed_live_buy_with_assigned_creative():
 
 
 def _adapter_reporting(creative_id: str) -> MagicMock:
-    """An adapter whose creatives_manager accepts the asset and reports enrichment back."""
+    """An adapter whose push accepts the asset and reports enrichment back."""
     adapter = MagicMock()
-    adapter.creatives_manager.add_creative_assets.return_value = [
+    adapter.push_creative_assets.return_value = [
         AssetStatus(
             creative_id=creative_id,
             status="active",
@@ -94,6 +100,12 @@ def _adapter_reporting(creative_id: str) -> MagicMock:
         )
     ]
     return adapter
+
+
+def _push(adapter: MagicMock, *, creative_id: str, media_buy_id: str, tenant_id: str) -> tuple[bool, str | None]:
+    """Run the push with ``adapter`` standing in for the ad server it builds."""
+    with patch("src.core.tools.media_buy_create.get_adapter", return_value=adapter):
+        return push_creative_to_existing_buy(creative_id=creative_id, media_buy_id=media_buy_id, tenant_id=tenant_id)
 
 
 def _persisted_creative_data(tenant_id: str, creative_id: str, principal_id: str) -> dict:
@@ -122,15 +134,9 @@ def test_push_persists_the_adapter_enrichment(integration_db, factory_session):
     """The enrichment the adapter reported is on the ROW after the push returns."""
     tenant_id, creative_id, media_buy_id, principal_id = _seed_live_buy_with_assigned_creative()
 
-    with patch(
-        "src.core.tools.media_buy_create.get_adapter",
-        return_value=_adapter_reporting(creative_id),
-    ):
-        ok, err = push_creative_to_existing_buy(
-            creative_id=creative_id,
-            media_buy_id=media_buy_id,
-            tenant_id=tenant_id,
-        )
+    ok, err = _push(
+        _adapter_reporting(creative_id), creative_id=creative_id, media_buy_id=media_buy_id, tenant_id=tenant_id
+    )
 
     assert (ok, err) == (True, None), f"push failed: {err}"
 
@@ -143,4 +149,24 @@ def test_push_persists_the_adapter_enrichment(integration_db, factory_session):
     assert data.get("platform_creative_id") == creative_id, (
         "platform_creative_id is what the function's own re-approval guard reads; without "
         "it a second approval pushes this creative to the ad server again"
+    )
+
+
+def test_push_hands_the_product_native_template_to_the_fresh_adapter(integration_db, factory_session):
+    """The native template reaches a push that runs on an adapter create_media_buy never filled (GH #1516).
+
+    GAM keeps the per-order template map on the adapter instance that placed the order;
+    this push runs later, in another process, on a fresh one. So the function re-derives
+    the map from the products the buy's packages name -- keyed by package, as the string
+    the creatives manager compares -- and hands it to ``push_creative_assets``, the entry
+    past the adapter's manual-approval gate (the buy is already approved).
+    """
+    tenant_id, creative_id, media_buy_id, _principal_id = _seed_live_buy_with_assigned_creative(native_style_id=987654)
+    adapter = _adapter_reporting(creative_id)
+
+    ok, err = _push(adapter, creative_id=creative_id, media_buy_id=media_buy_id, tenant_id=tenant_id)
+
+    assert (ok, err) == (True, None), f"push failed: {err}"
+    adapter.push_creative_assets.assert_called_once_with(
+        "gam_order_777", ANY, ANY, native_template_ids={"pkg_live": "987654"}
     )

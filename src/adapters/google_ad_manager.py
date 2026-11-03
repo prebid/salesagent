@@ -858,16 +858,32 @@ class GoogleAdManager(AdServerAdapter):
                 return asset_statuses
 
         # Automatic mode - process creatives directly
-        # Pass the per-order creative maps built by create_media_buy: placement targeting
-        # (adcp#208) and the native creative template per package (GH #1516)
-        placement_targeting_map = getattr(self, "_placement_targeting_map", None)
-        native_template_ids = getattr(self, "_native_template_ids", None)
-        return self.creatives_manager.add_creative_assets(
+        return self.push_creative_assets(media_buy_id, assets, today)
+
+    def push_creative_assets(
+        self,
+        media_buy_id: str,
+        assets: list[dict[str, Any]],
+        today: datetime,
+        *,
+        native_template_ids: dict[str, str] | None = None,
+    ) -> list[AssetStatus]:
+        """Create the creatives in GAM and associate them: add_creative_assets past its approval gate.
+
+        The two approval-side push paths call this rather than add_creative_assets, whose
+        manual-approval gate would queue the push again: the manual-approval execution (the
+        buy IS the approval) and the retroactive push of a creative approved later. Forwards
+        the per-order maps this instance built in create_media_buy: placement targeting
+        (adcp#208) and the native creative template per package (GH #1516). The retroactive
+        push runs on a fresh instance in a later process, so it hands in the native template
+        map it re-derived from the products.
+        """
+        return self._require_creatives_manager().add_creative_assets(
             media_buy_id,
             assets,
             today,
-            placement_targeting_map=placement_targeting_map,
-            native_template_ids=native_template_ids,
+            placement_targeting_map=self._placement_targeting_map,
+            native_template_ids=self._native_template_ids if native_template_ids is None else native_template_ids,
         )
 
     def associate_creatives(self, line_item_ids: list[str], platform_creative_ids: list[str]) -> list[dict[str, Any]]:

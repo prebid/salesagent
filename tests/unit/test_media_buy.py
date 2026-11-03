@@ -1292,28 +1292,26 @@ class TestCreateMediaBuyAdapterInteraction:
         mock_adapter = MagicMock()
         mock_adapter.create_media_buy.side_effect = RuntimeError("GAM API timeout")
 
-        # Two signature changes, both from the adapter-contract split (ecfdd7771 and
-        # a1b79d22d): the adapters read an AdapterCreateRequest projected from the buyer's
-        # DTO through one of its two constructors — nothing builds one by hand — and the
-        # function takes the one ResolvedIdentity rather than a loose principal, so the
-        # tenant and the principal cannot be handed over as a mismatched pair.
-        with patch("src.core.tools.media_buy_create.get_adapter", return_value=mock_adapter):
-            with pytest.raises(RuntimeError, match="GAM API timeout"):
-                _execute_adapter_media_buy_creation(
-                    request=AdapterCreateRequest.from_buyer_request(_make_request()),
-                    packages=[],
-                    start_time=datetime.now(UTC),
-                    end_time=datetime.now(UTC) + timedelta(days=7),
-                    package_pricing_info={},
-                    identity=_make_identity(),
-                )
+        # Two signature changes: the adapters read an AdapterCreateRequest projected from the
+        # buyer's DTO through one of its two constructors (ecfdd7771) — nothing builds one by
+        # hand — and the function takes the caller's adapter rather than an identity to build
+        # one from (GH #1516), so there is nothing to patch here.
+        with pytest.raises(RuntimeError, match="GAM API timeout"):
+            _execute_adapter_media_buy_creation(
+                request=AdapterCreateRequest.from_buyer_request(_make_request()),
+                packages=[],
+                start_time=datetime.now(UTC),
+                end_time=datetime.now(UTC) + timedelta(days=7),
+                package_pricing_info={},
+                adapter=mock_adapter,
+            )
 
     def test_uses_the_adapter_it_is_given(self):
-        """The adapter that places the order is the caller's instance, not a fresh one.
+        """The adapter that places the order is the caller's instance.
 
         GAM builds per-order state in create_media_buy (its placement targeting and native
-        template maps) that add_creative_assets reads back on the same object, so a caller
-        that already holds an adapter hands it in and the helper must not build another.
+        template maps) that the creative push reads back on the same object, so the adapter
+        is a required parameter rather than something the helper builds (GH #1516).
         """
         from src.core.tools.media_buy_create import _execute_adapter_media_buy_creation
 
@@ -1321,12 +1319,8 @@ class TestCreateMediaBuyAdapterInteraction:
         request = AdapterCreateRequest.from_buyer_request(_make_request())
         start, end = datetime.now(UTC), datetime.now(UTC) + timedelta(days=7)
 
-        with patch("src.core.tools.media_buy_create.get_adapter") as get_adapter:
-            response = _execute_adapter_media_buy_creation(
-                request, [], start, end, {}, _make_identity(), adapter=mock_adapter
-            )
+        response = _execute_adapter_media_buy_creation(request, [], start, end, {}, mock_adapter)
 
-        get_adapter.assert_not_called()
         mock_adapter.create_media_buy.assert_called_once_with(request, [], start, end, {})
         assert response is mock_adapter.create_media_buy.return_value
 

@@ -201,7 +201,7 @@ class TestExecuteApprovedStatusUpdate:
                 return_value=adapter_response,
             ),
             patch("src.core.tools.media_buy_create._validate_creatives_before_adapter_call"),
-            patch("src.core.helpers.adapter_helpers.get_adapter", return_value=mock_adapter),
+            patch("src.core.tools.media_buy_create.get_adapter", return_value=mock_adapter),
             # The creative gate is a separate concern with its own tests; this buy has
             # nothing outstanding, so the run reaches the adapter and the status write.
             patch.object(CreativeAssignmentRepository, "unapproved_creative_ids", return_value=[]),
