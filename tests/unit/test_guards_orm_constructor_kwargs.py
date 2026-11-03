@@ -21,8 +21,7 @@ from pathlib import Path
 
 from sqlalchemy.orm import class_mapper
 
-from src.core.database.models import Base
-from tests.unit._architecture_helpers import orm_bindings
+from tests.unit._architecture_helpers import orm_bindings, orm_classes
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -32,13 +31,10 @@ ALLOWLIST: set[tuple[str, str]] = set()
 
 def _mapped_attrs() -> dict[str, set[str]]:
     """ORM class name -> settable attribute names (columns, relationships, descriptors)."""
-    out: dict[str, set[str]] = {}
-    for mapper in Base.registry.mappers:
-        cls = mapper.class_
-        attrs = {a.key for a in class_mapper(cls).attrs}
-        attrs |= {k for k in vars(cls) if not k.startswith("_")}
-        out[cls.__name__] = attrs
-    return out
+    return {
+        name: {a.key for a in class_mapper(cls).attrs} | {k for k in vars(cls) if not k.startswith("_")}
+        for name, cls in orm_classes().items()
+    }
 
 
 def _scan_file(path: Path, mapped: dict[str, set[str]]) -> list[tuple[str, str, list[str], int]]:

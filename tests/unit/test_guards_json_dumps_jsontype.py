@@ -24,8 +24,7 @@ from pathlib import Path
 from sqlalchemy.orm import class_mapper
 
 from src.core.database.json_type import JSONType
-from src.core.database.models import Base
-from tests.unit._architecture_helpers import orm_bindings
+from tests.unit._architecture_helpers import orm_bindings, orm_classes
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -36,15 +35,14 @@ ALLOWLIST: set[tuple[str, str]] = set()
 def _jsontype_cols_by_class() -> dict[str, set[str]]:
     """ORM class name -> attribute names of its JSONType columns."""
     out: dict[str, set[str]] = {}
-    for mapper in Base.registry.mappers:
-        cls = mapper.class_
+    for name, cls in orm_classes().items():
         cols = {
             attr.key
             for attr in class_mapper(cls).column_attrs
             if any(isinstance(c.type, JSONType) for c in attr.columns)
         }
         if cols:
-            out[cls.__name__] = cols
+            out[name] = cols
     return out
 
 
