@@ -114,12 +114,16 @@ class InspectorFlag:
 # ── Parsing ──────────────────────────────────────────────────────────
 
 
-def _test_entry_from_raw(t: dict) -> TestEntry:
-    """Build a TestEntry from one bdd.json test dict (null-safe longrepr)."""
+def _test_entry_from_raw(t: dict, *, outcome: str | None = None) -> TestEntry:
+    """Build a TestEntry from one bdd.json test dict (null-safe longrepr).
+
+    ``outcome`` is the value from ``LoadedArtifact.nodeid_outcomes``. Callers
+    that already loaded the artifact pass it so a strict xpass is not graded twice.
+    """
     longrepr = phase_dict(t, "call").get("longrepr") or ""
     return TestEntry(
         nodeid=t["nodeid"],
-        outcome=graded_outcome(t),
+        outcome=graded_outcome(t) if outcome is None else outcome,
         keywords=t.get("keywords", []),
         error=extract_longrepr_e_line(longrepr),
         longrepr=longrepr[:1000],
@@ -129,7 +133,10 @@ def _test_entry_from_raw(t: dict) -> TestEntry:
 def parse_test_results(json_path: Path) -> list[TestEntry]:
     """Parse bdd.json into TestEntry list via shared ``load_bdd_artifact``."""
     loaded = load_bdd_artifact(json_path)
-    return [_test_entry_from_raw(t) for t in loaded.tests]
+    return [
+        _test_entry_from_raw(t, outcome=outcome)
+        for t, (_, outcome) in zip(loaded.tests, loaded.nodeid_outcomes, strict=True)
+    ]
 
 
 def parse_inspector_reports() -> list[InspectorFlag]:
@@ -625,7 +632,10 @@ def main():
 
     print("Parsing test results...", file=sys.stderr)
     loaded = cli_load_or_exit(json_paths)
-    entries = [_test_entry_from_raw(t) for t in loaded.tests]
+    entries = [
+        _test_entry_from_raw(t, outcome=outcome)
+        for t, (_, outcome) in zip(loaded.tests, loaded.nodeid_outcomes, strict=True)
+    ]
     summary = Counter(e.outcome for e in entries)
     print(f"  Parsed {len(entries)} tests: {dict(summary)}", file=sys.stderr)
 
