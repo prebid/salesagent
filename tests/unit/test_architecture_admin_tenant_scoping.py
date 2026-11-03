@@ -16,7 +16,8 @@ guarded, or disappears, fails as stale. The set may only shrink.
 
 Seeded from the measurement on ``main`` @ fd90b69a — 178 rules carry ``<tenant_id>``, 141
 go through ``require_tenant_access``, 37 do not — minus the four routes #2203 itself guards,
-so 33 rows remain. The set only shrinks.
+so 33 rows remained; ``main`` then guarded ``auth.gam_authorize`` (#2234), leaving 32. The
+set only shrinks.
 """
 
 from __future__ import annotations
