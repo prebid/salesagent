@@ -352,8 +352,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     # tests/integration/test_targeting_validation_chain.py
     ("tests/integration/test_targeting_validation_chain.py", "targeting_tenant"),
     # tests/integration/test_targeting_values_endpoint.py
-    ("tests/integration/test_targeting_values_endpoint.py", "test_get_targeting_values_endpoint"),
-    ("tests/integration/test_targeting_values_endpoint.py", "test_get_targeting_values_empty_result"),
     ("tests/integration/test_targeting_values_endpoint.py", "test_get_targeting_values_tenant_isolation"),
     ("tests/integration/test_targeting_values_endpoint.py", "test_get_targeting_values_requires_auth"),
     # tests/integration/test_tenant_dashboard.py
@@ -1214,8 +1212,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_targeting_overlay_roundtrip.py", "test_collection_list_roundtrips_through_postgres"),
     ("tests/integration/test_targeting_overlay_roundtrip.py", "test_property_list_roundtrips_through_postgres"),
     ("tests/integration/test_targeting_validation_chain.py", "targeting_tenant"),
-    ("tests/integration/test_targeting_values_endpoint.py", "test_get_targeting_values_empty_result"),
-    ("tests/integration/test_targeting_values_endpoint.py", "test_get_targeting_values_endpoint"),
     ("tests/integration/test_targeting_values_endpoint.py", "test_get_targeting_values_requires_auth"),
     ("tests/integration/test_targeting_values_endpoint.py", "test_get_targeting_values_tenant_isolation"),
     ("tests/integration/test_tenant_dashboard.py", "test_dashboard_metrics_calculation"),
