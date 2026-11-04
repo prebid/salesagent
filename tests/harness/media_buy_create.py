@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import MagicMock
 
@@ -431,6 +431,16 @@ class MediaBuyCreateEnv(GamSellerMixin, PeerCreativeAgentMixin, IntegrationEnv):
         return MediaBuyRepository(self.get_session(), self._tenant_id).list_by_statuses(
             [PersistedMediaBuyStatus.PENDING_APPROVAL]
         )
+
+    def move_pending_flight_back(self, days: int) -> None:
+        """Move the flight of the one media buy awaiting approval *days* into the past."""
+        (media_buy,) = self.media_buys_awaiting_approval()
+        shift = timedelta(days=days)
+        media_buy.start_date -= shift
+        media_buy.end_date -= shift
+        media_buy.start_time -= shift
+        media_buy.end_time -= shift
+        self.get_session().commit()
 
     def approve_pending_media_buy(self) -> ApprovalResult:
         """Approve the one media buy of this env's tenant that awaits approval, as an Admin UI route does.

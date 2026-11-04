@@ -6,8 +6,9 @@ for Google Ad Manager orders.
 """
 
 import logging
+import math
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from googleads import ad_manager
@@ -468,7 +469,10 @@ class GAMOrdersManager:
             line_item_name_template = "{product_name}"
 
         created_line_item_ids: list[str] = []
-        flight_duration_days = max((end_time - start_time).days, 1)
+        # The line item serves from this instant, so its per-day figures are sized from it too. Part
+        # of a day counts as a day: rounding down would spread more than was sold over the days served.
+        serving_start = max(start_time, datetime.now(UTC))
+        flight_duration_days = max(math.ceil((end_time - serving_start) / timedelta(days=1)), 1)
 
         for package_index, package in enumerate(packages, start=1):
             # Get product-specific configuration
@@ -921,7 +925,7 @@ class GAMOrdersManager:
                 "primaryGoal": goal,
                 "creativeRotationType": impl_config.get("creative_rotation_type", "EVEN"),
                 "deliveryRateType": impl_config.get("delivery_rate_type", "EVENLY"),
-                **_line_item_flight(start_time, end_time, network_time_zone),
+                **_line_item_flight(serving_start, end_time, network_time_zone),
                 # READY = ready to serve once creatives are added; PAUSED = created held,
                 # which is what media-buy/package-request.json's create-time ``paused``
                 # means ("Paused packages do not deliver impressions"). Reporting the ask

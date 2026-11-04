@@ -488,6 +488,12 @@ def given_pending_buy_without_pricing_info(ctx: dict) -> None:
     ctx["env"]._commit_factory_data()
 
 
+@when(parsers.parse("{days:d} days pass before the seller approves the media buy"))
+def when_days_pass_before_approval(ctx: dict, days: int) -> None:
+    """Move the awaiting buy's stored flight back, which is what the days passing does to it."""
+    ctx["env"].move_pending_flight_back(days)
+
+
 @when("the seller approves the media buy")
 def when_seller_approves_media_buy(ctx: dict) -> None:
     """The seller approves the one buy awaiting approval, as every Admin UI approval route does."""
@@ -724,6 +730,21 @@ def then_one_line_item_flight(ctx: dict, start: str | None, end: str, zone: str)
     expected = [{**expected_start, "endDateTime": _gam_datetime(end, zone)}]
     flights = _flights(ctx, "LineItemService", "createLineItems")
     assert flights == expected, f"expected GAM to create one line item with flight {expected}; it created {flights}"
+
+
+@then(
+    parsers.re(
+        r"Google Ad Manager received one line item, which starts serving (?P<starts>immediately|at its scheduled start)$"
+    )
+)
+def then_one_line_item_starts(ctx: dict, starts: str) -> None:
+    """GAM created one line item whose start is IMMEDIATELY, or an explicit ``startDateTime`` and no start type."""
+    (flight,) = _flights(ctx, "LineItemService", "createLineItems")
+    start_keys = {key: value for key, value in flight.items() if key.startswith("startDateTime")}
+    if starts == "immediately":
+        assert start_keys == {"startDateTimeType": "IMMEDIATELY"}, f"expected an immediate start; GAM received {flight}"
+    else:
+        assert set(start_keys) == {"startDateTime"}, f"expected an explicit start; GAM received {flight}"
 
 
 @then("Google Ad Manager received one order, carrying no flight dates of its own")

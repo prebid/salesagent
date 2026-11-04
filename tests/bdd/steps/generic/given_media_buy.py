@@ -71,8 +71,9 @@ def _future(days: int = 1) -> datetime:
 
 def _set_flight_days(kwargs: dict[str, Any], days: int) -> None:
     """Set the request's flight to start tomorrow and run exactly ``days`` days."""
-    kwargs["start_time"] = _future(1).isoformat()
-    kwargs["end_time"] = _future(1 + days).isoformat()
+    start = _future(1)
+    kwargs["start_time"] = start.isoformat()
+    kwargs["end_time"] = mint(start + timedelta(days=days)).isoformat()
 
 
 def _ensure_request_defaults(ctx: dict) -> dict[str, Any]:

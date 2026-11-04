@@ -31,6 +31,7 @@
 # declares itself unrealizable on e2e (GamSellerMixin.sell_through_gam).
 #
 # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/create_media_buy.mdx
+# @source repo=adcp ref=v3.2.7 path=docs/media-buy/advanced-topics/pricing-models.mdx
 # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/start-timing.json
 # @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/specialisms/sales-non-guaranteed/index.yaml pointer=/phases/create_buy
 # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json
@@ -66,6 +67,42 @@ Feature: A Google Ad Manager seller books the buyer's flight in the network's ti
     When the Buyer Agent sends the create_media_buy request
     Then the response should succeed
     And Google Ad Manager received one line item, starting immediately and ending at "2099-06-30 16:59:59" in time zone "America/Los_Angeles"
+
+  # A buy the seller approves after its start serves over the days it has left. AdCP 3.2.7
+  # pricing-models.mdx: a flat rate is a "Fixed cost for the entire campaign period", and
+  # create_media_buy.mdx: a package's budget is a "Hard lifetime package spend cap". Spreading
+  # either over the flight's original days would deliver or bill less than was sold, and rounding
+  # the days left down would spread more than was sold, so they round up. Eleven days remain in
+  # the rows that pass four: 7000.00 is billed at 636.363636 a day, and 140000 impressions at
+  # 12727 a day. Nobody has confirmed how real GAM bills CPD for a partial day.
+  @T-UC-002-local-gam-approved-after-start @extension
+  Scenario Outline: A buy the seller approves after its start sizes its per-day figures over the days it still serves - <case>
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And the seller's <delivery> product has pricing options:
+      | product_id | pricing_option_id | pricing_model | fixed_price | floor_price |
+      | prod_a     | <option>          | <model>       | <fixed>     | <floor>     |
+    And the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001", with product settings '<settings>'
+    And the tenant requires manual approval
+    And the buyer's packages, over a 14-day flight, are:
+      | product_id | pricing_option_id | budget   | bid_price |
+      | prod_a     | <option>          | <budget> | <bid>     |
+    When the Buyer Agent sends the create_media_buy request
+    Then the response status should be "submitted"
+    When <passed> days pass before the seller approves the media buy
+    And the seller approves the media buy
+    Then the seller's approval books the media buy
+    And Google Ad Manager received one line item, which starts serving <starts>
+    And Google Ad Manager received these line items, in package order:
+      | lineItemType | priority   | costType   | costPerUnitMicros | goalType   | unitType    | units   |
+      | <type>       | <priority> | <costType> | <micros>          | <goalType> | IMPRESSIONS | <units> |
+
+    Examples:
+      | case                     | passed | delivery       | option                    | model     | fixed   | floor | settings                       | budget | bid  | starts                 | type           | priority | costType | micros    | goalType | units |
+      | flat rate before start   | 0      | guaranteed     | flat_rate_usd_sponsorship | flat_rate | 7000.00 |       | {"line_item_type": "STANDARD"} | 7000   |      | at its scheduled start | SPONSORSHIP    | 4        | CPD      | 500000000 | DAILY    | 100   |
+      | flat rate after start    | 4      | guaranteed     | flat_rate_usd_sponsorship | flat_rate | 7000.00 |       | {"line_item_type": "STANDARD"} | 7000   |      | immediately            | SPONSORSHIP    | 4        | CPD      | 636363636 | DAILY    | 100   |
+      | daily goal before start  | 0      | non-guaranteed | cpm_usd_auction           | cpm       |         | 1.00  | {"primary_goal_type": "DAILY"} | 560    | 4.00 | at its scheduled start | PRICE_PRIORITY | 12       | CPM      | 4000000   | DAILY    | 10000 |
+      | daily goal after start   | 4      | non-guaranteed | cpm_usd_auction           | cpm       |         | 1.00  | {"primary_goal_type": "DAILY"} | 560    | 4.00 | immediately            | PRICE_PRIORITY | 12       | CPM      | 4000000   | DAILY    | 12727 |
 
   @T-UC-002-local-gam-flight-zone-refused @extension
   Scenario Outline: A network that refuses to name its time zone gets no order, and the buyer reads the classified fault
