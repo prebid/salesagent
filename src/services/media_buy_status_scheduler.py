@@ -128,10 +128,11 @@ class MediaBuyStatusScheduler:
         """Run one buy inside a repository savepoint and isolate a statement failure.
 
         ``tenant_id``, ``principal_id``, and ``media_buy_id`` are columns the
-        listing query already loaded. They are copied to locals before the
-        savepoint so the error log names the buy, and so a failure cannot be
-        metered as ``tenant_id=""``. A statement that fails before the savepoint
-        aborts the PostgreSQL transaction, so that copy must not issue SQL.
+        listing query already loaded. They are bound above the ``try``, which
+        encloses only the savepoint, so an isolated failure is always metered
+        with the buy's tenant. A failure reading those ids aborts the tick.
+        That copy must not issue SQL: a statement that fails before the
+        savepoint aborts the PostgreSQL transaction.
 
         A dropped connection or a connect the server never answered re-raises
         so ``get_db_session`` rolls the session back and, for an unanswered
@@ -143,17 +144,14 @@ class MediaBuyStatusScheduler:
         Status writes go through ``MediaBuyRepository.update_status``.
         Self-transitions are already refused by ``_compute_new_status``.
         """
-        tenant_id: str | None = None
-        principal_id: str | None = None
-        media_buy_id: str | None = None
+        tenant_id = media_buy.tenant_id
+        principal_id = media_buy.principal_id
+        media_buy_id = media_buy.media_buy_id
         new_status: PersistedMediaBuyStatus | None = None
         old_status: str | None = None
+        repo = MediaBuyRepository(session, tenant_id)
 
         try:
-            tenant_id = media_buy.tenant_id
-            principal_id = media_buy.principal_id
-            media_buy_id = media_buy.media_buy_id
-            repo = MediaBuyRepository(session, tenant_id)
             with repo.savepoint():
                 new_status = self._compute_new_status(media_buy, now, session)
                 if new_status:
@@ -194,12 +192,11 @@ class MediaBuyStatusScheduler:
                     f"media_buy_id={media_buy_id}): {exc}",
                     exc_info=True,
                 )
-                if tenant_id:
-                    record_scheduler_isolation_error(
-                        scheduler="media_buy_status",
-                        tenant_id=tenant_id,
-                        error_type=_classify_scheduler_error(exc),
-                    )
+                record_scheduler_isolation_error(
+                    scheduler="media_buy_status",
+                    tenant_id=tenant_id,
+                    error_type=_classify_scheduler_error(exc),
+                )
             except Exception as handler_exc:
                 logger.error(
                     f"Status isolation error handler failed "

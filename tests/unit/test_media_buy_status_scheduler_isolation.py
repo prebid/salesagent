@@ -212,8 +212,8 @@ async def test_batch_summary_info_when_noop_plus_one_raiser():
 
 
 @pytest.mark.asyncio
-async def test_lazy_id_failure_isolates_and_siblings_still_flip():
-    """A failure reading one buy's id is isolated, and the other buys still flip."""
+async def test_id_read_failure_stops_the_tick():
+    """A failure reading a buy's id is outside the savepoint, so the tick stops."""
 
     class _LazyIdBuy:
         media_buy_id = "mb_lazy"
@@ -251,11 +251,11 @@ async def test_lazy_id_failure_isolates_and_siblings_still_flip():
         await scheduler._update_statuses()
 
     err_msgs = [str(c.args[0]) for c in mock_error.call_args_list if c.args]
-    assert any("Error updating media buy status" in msg for msg in err_msgs)
-    assert not any("Failed to update media buy statuses" in msg for msg in err_msgs)
-    session.commit.assert_called_once_with()
+    assert any("Failed to update media buy statuses" in msg for msg in err_msgs)
+    assert not any("Error updating media buy status" in msg for msg in err_msgs)
+    session.commit.assert_not_called()
     flip_lines = summary_lines(mock_info, STATUS_BATCH_SUMMARY_PREFIX, needle="Updated media buy ")
-    assert len(flip_lines) == 2
+    assert flip_lines == []
 
 
 @pytest.mark.asyncio

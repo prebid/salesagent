@@ -848,8 +848,9 @@ async def test_disconnection_error_propagates_while_statement_failure_isolates(i
     the fail-fast stays unarmed. ``DisconnectionError`` is a dropped connection:
     it propagates, later buys do not run, and the fail-fast stays unarmed.
     """
-    from src.core.database.database_session import check_database_health, reset_health_state
+    from src.core.database.database_session import reset_health_state
     from tests.helpers.scheduler_isolation import (
+        assert_next_session,
         assert_propagated_failure_stops_batch,
         bare_disconnection_error,
         statement_failure,
@@ -881,8 +882,7 @@ async def test_disconnection_error_propagates_while_statement_failure_isolates(i
     try:
         with patch.object(scheduler, "_compute_new_status", side_effect=_raise_statement_timeout):
             await scheduler._update_statuses()
-        healthy, message = check_database_health(force=True)
-        assert healthy, message
+        assert_next_session(trips_fail_fast=False)
     finally:
         reset_health_state()
     assert set(processed) == set(buy_ids)

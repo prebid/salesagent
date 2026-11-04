@@ -7,19 +7,17 @@ the rows exist, so a live scheduler cannot flip them first.
 
 from __future__ import annotations
 
-import asyncio
-import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from pytest_bdd import given, parsers, then, when
 
-from src.core.metrics import get_metrics_text
-from src.services.media_buy_status_scheduler import STATUS_BATCH_SUMMARY_PREFIX, MediaBuyStatusScheduler
+from src.services.media_buy_status_scheduler import STATUS_BATCH_SUMMARY_PREFIX
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories.principal import plaintext_token_for
 from tests.helpers.credentials import credential_headers
+from tests.helpers.metrics import samples_with
 
 _PAST = "past_pending"
 _MID = "mid_flight"
@@ -104,17 +102,22 @@ def _flush(ctx: dict) -> None:
 
 
 def _isolation_count(tenant_id: str, error_type: str) -> float:
-    """The scrape value of the isolation counter for one tenant and error type."""
-    total = 0.0
-    for line in get_metrics_text().splitlines():
-        if not line.startswith("scheduler_isolation_errors_total{"):
-            continue
-        if f'tenant_id="{tenant_id}"' not in line or f'error_type="{error_type}"' not in line:
-            continue
-        if 'scheduler="media_buy_status"' not in line:
-            continue
-        total += float(line.rsplit(" ", 1)[-1])
-    return total
+    """The isolation counter for one tenant and error type."""
+    return sum(
+        samples_with(
+            "scheduler_isolation_errors_total",
+            scheduler="media_buy_status",
+            tenant_id=tenant_id,
+            error_type=error_type,
+        ).values()
+    )
+
+
+def _poison(ctx: dict, ids: list[str], *, terminate: bool) -> None:
+    ctx.setdefault("sweep_poisoned", []).extend(ids)
+    ctx["env"].poison_media_buy_status_writes(ids, terminate=terminate)
+    _flush(ctx)
+    _snapshot(ctx)
 
 
 def _snapshot(ctx: dict) -> None:
@@ -139,41 +142,25 @@ def given_one_past_pending(ctx: dict, tenant: str) -> None:
 
 @given(parsers.parse('the database will fail the status write for tenant "{tenant}" buy {slot:d}'))
 def given_fail_status_write(ctx: dict, tenant: str, slot: int) -> None:
-    media_buy_id = ctx["sweep_ids"][tenant][slot]
-    ctx.setdefault("sweep_poisoned", []).append(media_buy_id)
-    ctx["env"].poison_media_buy_status_writes([media_buy_id], terminate=False)
-    _flush(ctx)
-    _snapshot(ctx)
+    _poison(ctx, [ctx["sweep_ids"][tenant][slot]], terminate=False)
 
 
 @given(
     parsers.parse('the database will drop the connection serving the status write for tenant "{tenant}" buy {slot:d}')
 )
 def given_drop_status_write(ctx: dict, tenant: str, slot: int) -> None:
-    media_buy_id = ctx["sweep_ids"][tenant][slot]
-    ctx.setdefault("sweep_poisoned", []).append(media_buy_id)
-    ctx["env"].poison_media_buy_status_writes([media_buy_id], terminate=True)
-    _flush(ctx)
-    _snapshot(ctx)
+    _poison(ctx, [ctx["sweep_ids"][tenant][slot]], terminate=True)
 
 
 @given("three buys whose status writes all fail")
 def given_all_writes_fail(ctx: dict) -> None:
-    ids = _plan(ctx, "A", 3, _PAST)
-    ctx.setdefault("sweep_poisoned", []).extend(ids)
-    ctx["env"].poison_media_buy_status_writes(ids, terminate=False)
-    _flush(ctx)
-    _snapshot(ctx)
+    _poison(ctx, _plan(ctx, "A", 3, _PAST), terminate=False)
 
 
 @given("four mid-flight buys and one failing buy")
 def given_noops_and_one_failure(ctx: dict) -> None:
     _plan(ctx, "A", 4, _MID)
-    failing = _plan(ctx, "A", 1, _PAST)
-    ctx.setdefault("sweep_poisoned", []).extend(failing)
-    ctx["env"].poison_media_buy_status_writes(failing, terminate=False)
-    _flush(ctx)
-    _snapshot(ctx)
+    _poison(ctx, _plan(ctx, "A", 1, _PAST), terminate=False)
 
 
 @given("one mid-flight buy with nothing to change")
@@ -181,34 +168,15 @@ def given_quiet_tick(ctx: dict) -> None:
     _plan(ctx, "A", 1, _MID)
 
 
-class _Capture(logging.Handler):
-    def __init__(self) -> None:
-        super().__init__()
-        self.records: list[logging.LogRecord] = []
-
-    def emit(self, record: logging.LogRecord) -> None:
-        self.records.append(record)
-
-
 @when("the status sweep runs")
 def when_status_sweep_runs(ctx: dict) -> None:
     _flush(ctx)
     if "sweep_metric_before" not in ctx:
         _snapshot(ctx)
-    logger = logging.getLogger("src.services.media_buy_status_scheduler")
-    handler = _Capture()
-    previous = logger.level
-    logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
-    try:
-        asyncio.run(MediaBuyStatusScheduler()._update_statuses())
-    finally:
-        logger.removeHandler(handler)
-        logger.setLevel(previous)
-    ctx["sweep_records"] = handler.records
+    ctx["sweep_records"] = ctx["env"].run_status_sweep()
 
 
-def _status(ctx: dict, tenant_key: str, media_buy_id: str) -> str:
+def _read_status(ctx: dict, tenant_key: str, media_buy_id: str) -> str:
     party = ctx["sweep_parties"][tenant_key]
     dispatch_request(
         ctx,
@@ -224,21 +192,30 @@ def _status(ctx: dict, tenant_key: str, media_buy_id: str) -> str:
     return status.value if hasattr(status, "value") else str(status)
 
 
+@when("the buyer reads the swept buys")
+def when_buyer_reads_swept_buys(ctx: dict) -> None:
+    statuses: dict[str, str] = {}
+    for tenant_key, ids in ctx["sweep_ids"].items():
+        for media_buy_id in ids:
+            statuses[media_buy_id] = _read_status(ctx, tenant_key, media_buy_id)
+    ctx["sweep_statuses"] = statuses
+
+
 @then(parsers.parse('tenant "{tenant}" buy {slot:d} reads "{status}" from get_media_buys'))
 def then_one_buy_reads(ctx: dict, tenant: str, slot: int, status: str) -> None:
     media_buy_id = ctx["sweep_ids"][tenant][slot]
-    assert _status(ctx, tenant, media_buy_id) == status
+    assert ctx["sweep_statuses"][media_buy_id] == status
 
 
 @then('the other tenant "A" buys and the tenant "B" buy read "active"')
 def then_siblings_read_active(ctx: dict) -> None:
     poisoned = set(ctx.get("sweep_poisoned", []))
     checked = 0
-    for tenant_key, ids in ctx["sweep_ids"].items():
+    for ids in ctx["sweep_ids"].values():
         for media_buy_id in ids:
             if media_buy_id in poisoned:
                 continue
-            assert _status(ctx, tenant_key, media_buy_id) == "active", media_buy_id
+            assert ctx["sweep_statuses"][media_buy_id] == "active", media_buy_id
             checked += 1
     assert checked >= 1, "the scenario has no sibling buy to grade"
 
@@ -246,7 +223,7 @@ def then_siblings_read_active(ctx: dict) -> None:
 @then('all three buys read "pending_start" from get_media_buys')
 def then_all_three_still_pending(ctx: dict) -> None:
     for media_buy_id in ctx["sweep_ids"]["A"]:
-        assert _status(ctx, "A", media_buy_id) == "pending_start", media_buy_id
+        assert ctx["sweep_statuses"][media_buy_id] == "pending_start", media_buy_id
 
 
 @then(parsers.parse('the isolation error count for tenant "{tenant}" rose by {delta:d} with error_type "{error_type}"'))
@@ -266,7 +243,7 @@ def then_isolation_unchanged(ctx: dict, tenant: str) -> None:
 
 def _summary_lines(ctx: dict) -> list[tuple[str, str]]:
     lines = []
-    for record in ctx.get("sweep_records", []):
+    for record in ctx["sweep_records"]:
         message = record.getMessage()
         if STATUS_BATCH_SUMMARY_PREFIX in message:
             lines.append((record.levelname, message))

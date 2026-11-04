@@ -46,6 +46,18 @@ from unittest.mock import patch
 from adcp import get_adcp_spec_version
 
 from tests.helpers.credentials import credential_headers
+from tests.helpers.metrics import (
+    assert_counter_delta as assert_counter_delta,
+)
+from tests.helpers.metrics import (
+    counter_samples as counter_samples,
+)
+from tests.helpers.metrics import (
+    counter_total as counter_total,
+)
+from tests.helpers.metrics import (
+    samples_with as samples_with,
+)
 from tests.helpers.webhook_wire import CapturedWebhook
 
 # An RFC 9421 signature base: the canonicalized component list joined by LF with
@@ -1149,52 +1161,6 @@ def _unescape_label_value(value: str) -> str:
     for escaped, literal in _SCRAPED_UNESCAPES:
         value = value.replace(escaped, literal)
     return value
-
-
-def counter_samples(sample_name: str) -> dict[tuple[tuple[str, str], ...], float]:
-    """All Prometheus samples named *sample_name*, keyed by their label set."""
-    from prometheus_client import REGISTRY
-
-    out: dict[tuple[tuple[str, str], ...], float] = {}
-    for family in REGISTRY.collect():
-        for sample in family.samples:
-            if sample.name == sample_name:
-                out[tuple(sorted(sample.labels.items()))] = sample.value
-    return out
-
-
-@contextmanager
-def assert_counter_delta(metric: str, expected: int, *, why: str = "") -> Iterator[None]:
-    """Assert *metric* moved by exactly *expected* across the block.
-
-    The before/after counter-delta idiom was open-coded at six sites across three
-    signing test modules, each re-deriving the same two reads and the same
-    message (salesagent-z6nr.40's DRY finding). One helper so a seventh cannot
-    drift: the reads are always the same distance apart, and the failure message
-    always names the metric and both values.
-
-    ``expected=0`` is a first-class case, not a degenerate one — "production did
-    NOT count this" is exactly as much of an observable as "it counted once", and
-    is what distinguishes a mechanism that declined to engage from one that never
-    ran.
-    """
-    before = counter_total(metric)
-    yield
-    after = counter_total(metric)
-    detail = f" {why}" if why else ""
-    assert after == before + expected, (
-        f"{metric} must move by {expected} across this block; it went {before} -> {after}.{detail}"
-    )
-
-
-def counter_total(sample_name: str) -> float:
-    return sum(counter_samples(sample_name).values())
-
-
-def samples_with(sample_name: str, **labels: str) -> dict[tuple[tuple[str, str], ...], float]:
-    """Samples of *sample_name* whose labels are a superset of *labels*."""
-    wanted = labels.items()
-    return {key: value for key, value in counter_samples(sample_name).items() if wanted <= dict(key).items()}
 
 
 # ---------------------------------------------------------------------------

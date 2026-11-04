@@ -106,21 +106,30 @@ async def assert_propagated_session_error(run, *, trips_fail_fast: bool) -> None
     Only a connect the server never answered makes that call report the
     fail-fast. A dropped connection propagates and the next session still opens.
     """
-    from src.core.database.database_session import check_database_health, reset_health_state
+    from src.core.database.database_session import reset_health_state
 
     reset_health_state()
     try:
         await run()
-        # check_database_health opens the next session through get_db_session.
-        # A test must not call get_db_session itself.
-        healthy, message = check_database_health(force=True)
-        if trips_fail_fast:
-            assert not healthy, message
-            assert "failing fast" in message
-        else:
-            assert healthy, message
+        assert_next_session(trips_fail_fast=trips_fail_fast)
     finally:
         reset_health_state()
+
+
+def assert_next_session(*, trips_fail_fast: bool) -> None:
+    """The next session open, through ``check_database_health``.
+
+    A test must not call ``get_db_session`` itself. Only a connect the server
+    never answered makes this report the fail-fast.
+    """
+    from src.core.database.database_session import check_database_health
+
+    healthy, message = check_database_health(force=True)
+    if trips_fail_fast:
+        assert not healthy, message
+        assert "failing fast" in message
+    else:
+        assert healthy, message
 
 
 async def assert_propagated_failure_stops_batch(
