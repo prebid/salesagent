@@ -342,6 +342,29 @@ class FormatTemplatePicker {
     }
 
     /**
+     * Replace inventory-derived sizes with the given set.
+     * Called whenever the inventory selection changes so the selected sizes
+     * always equal the union of sizes across the currently selected ad units
+     * and placements. Sizes no longer present are removed; new ones are added.
+     */
+    setSizesFromInventory(sizes) {
+        const next = new Set(
+            (Array.isArray(sizes) ? sizes : []).filter(s => typeof s === 'string' && s.includes('x'))
+        );
+
+        // Remove sizes that were derived from inventory but are no longer in the union
+        for (const sizeStr of this.inventorySizes) {
+            if (next.has(sizeStr)) continue;
+            this.inventorySizes.delete(sizeStr);
+            for (const [, templateSizes] of this.selectedTemplates) {
+                templateSizes.delete(sizeStr);
+            }
+        }
+
+        this.addSizesFromInventory(Array.from(next));
+    }
+
+    /**
      * Clear inventory-derived sizes.
      */
     clearInventorySizes() {

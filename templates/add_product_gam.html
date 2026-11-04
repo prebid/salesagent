@@ -720,11 +720,13 @@ async function extractSizesFromInventory() {
     updateSizeChipsPanel();
     updateFormatMatchIndicators();
 
-    // Pass extracted sizes to format template picker (AdCP 2.5 parameterized formats)
-    if (window.formatPickerIntegration && inventoryCache && inventoryCache.extractedSizes.size > 0) {
+    // Sync extracted sizes to format template picker (AdCP 2.5 parameterized formats).
+    // Always sync (even when empty) so sizes track the union of the current selection:
+    // removing an ad unit drops sizes that no other selected inventory provides.
+    if (window.formatPickerIntegration && inventoryCache) {
         const sizesArray = Array.from(inventoryCache.extractedSizes);
-        console.log('[FormatPicker] Auto-selecting sizes from inventory:', sizesArray);
-        window.formatPickerIntegration.addSizesFromInventory(sizesArray);
+        console.log('[FormatPicker] Syncing sizes from inventory:', sizesArray);
+        window.formatPickerIntegration.setSizesFromInventory(sizesArray);
     }
 }
 
@@ -1883,6 +1885,11 @@ addPricingOption();
         addSizesFromInventory: function(sizes) {
             if (formatPicker && sizes && sizes.length > 0) {
                 formatPicker.addSizesFromInventory(sizes);
+            }
+        },
+        setSizesFromInventory: function(sizes) {
+            if (formatPicker) {
+                formatPicker.setSizesFromInventory(sizes || []);
             }
         },
         clearInventorySizes: function() {
