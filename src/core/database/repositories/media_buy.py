@@ -406,7 +406,7 @@ class MediaBuyRepository:
             "principal_id": principal_id,
             "idempotency_key": getattr(req, "idempotency_key", None),
             "order_name": order_name or getattr(req, "po_number", None) or f"Order-{media_buy_id}",
-            "name": req.name,
+            "name": getattr(req, "name", None),
             "advertiser_name": advertiser_name,
             "budget": budget,
             "currency": currency,
