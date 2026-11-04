@@ -5550,6 +5550,7 @@ def _uc010_wired_tags() -> frozenset[str]:
             # left, so it must join this set or it would xfail as "not yet wired" rather
             # than run.
             "T-UC-010-v31-request-signing-legacy-digest",
+            "T-UC-010-v31-request-signing-migrated-digest",
             "T-UC-010-v31-request-signing-subset",
             "T-UC-010-v31-webhook-signing",
         }

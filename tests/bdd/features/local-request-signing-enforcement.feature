@@ -119,6 +119,29 @@ Feature: Inbound request-signature enforcement on an AdCP operation (local)
     # is not the same place on every transport: the env puts it where each transport's
     # production code READS it. That difference is the point — see the a2a result.
 
+  @T-UC-006-local-signing-upgraded-legacy-digest @request-signing @error-path @invariant @boundary
+  Scenario Outline: a seller upgraded from a legacy digest posture still refuses what a required posture refuses
+    Given a creative with a known format_id
+    And the Buyer Agent has published a signing key the seller can resolve
+    And the seller stored the legacy digest posture "<digest>" before this upgrade
+    And the upgrade has rewritten stored digest postures
+    And <request>
+    When the Buyer Agent syncs the creative
+    Then the seller answers with the request-signature challenge "<code>" and recovery "<recovery>"
+    # A posture this pin refuses to read fell back to the unsupported posture, so the same
+    # requests were accepted with nothing enforced. get-adcp-capabilities-response.json
+    # (v3.2.7) pins covers_content_digest to "required" when supported is true; the revision
+    # rewrites the stored value to that, and verification then runs as for any such tenant.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/request_signing/properties/covers_content_digest
+    # @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx pointer=L1709-L1712
+
+    Examples:
+      | digest    | request                                                         | code                          | recovery    |
+      | either    | the request registers a webhook whose authentication carries credentials | request_signature_required    | correctable |
+      | forbidden | the request registers a webhook whose authentication carries credentials | request_signature_required    | correctable |
+      | either    | the Buyer Agent signs under a key its trust root does not publish | request_signature_key_unknown | terminal    |
+      | forbidden | the Buyer Agent signs under a key its trust root does not publish | request_signature_key_unknown | terminal    |
+
   @T-UC-006-local-signing-malformed-every-bucket @request-signing @error-path @invariant @boundary
   Scenario Outline: a present-but-malformed signature is refused in every bucket the seller declares
     Given a creative with a known format_id

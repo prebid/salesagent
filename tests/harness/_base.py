@@ -1402,8 +1402,12 @@ class BaseTestEnv:
         required_for: Sequence[str] = (),
         bucket: str | None = None,
         operations: Sequence[str] = (),
+        covers_content_digest: str | None = None,
     ) -> None:
         """Store this seller's REAL ``request_signing`` declaration on its tenant.
+
+        *covers_content_digest* adds that field to the stored declaration verbatim, for a
+        scenario about a posture stored under an earlier pin.
 
         The Given side of every enforcement scenario: production then does the rest
         for real — ``CapabilityDeclarations.from_tenant`` parses and relation-checks
@@ -1504,6 +1508,8 @@ class BaseTestEnv:
             declaration = bucketed_declaration("required", *required_for)
         else:
             declaration = {"supported": True, "required_for": []}
+        if covers_content_digest is not None:
+            declaration = {**declaration, "covers_content_digest": covers_content_digest}
         session = self._session
         assert session is not None, "declare_request_signing() must be called inside the env's `with` block"
         ensure_declarable_identity_host(self)
@@ -1520,6 +1526,31 @@ class BaseTestEnv:
         # previous leg recorded is already in the baseline, and only what THIS seller
         # refuses lands after it.
         self.__dict__[_SIGNATURE_FAILURE_WINDOW] = self._signature_failure_counts()
+
+    def run_stored_digest_posture_upgrade(self) -> None:
+        """Run the real revision's rewrite against this seller's database.
+
+        Through the env's OWN session, bound to the live server's database on e2e, for the
+        same reason as :meth:`declare_request_signing`. The schema under the harness comes
+        from ``create_all``, so no upgrade has run; this applies the one data step a scenario
+        about a stored legacy posture needs.
+        """
+        import importlib.util
+        from pathlib import Path
+
+        session = self._session
+        assert session is not None, "run_stored_digest_posture_upgrade() must be called inside the env's `with` block"
+        path = (
+            Path(__file__).resolve().parents[2]
+            / "alembic/versions/e3a1c7d95b20_stored_digest_postures_become_required.py"
+        )
+        spec = importlib.util.spec_from_file_location("e3a1c7d95b20", path)
+        assert spec is not None and spec.loader is not None
+        revision = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(revision)
+        revision.rewrite_stored_digest_postures(session.connection())
+        session.commit()
+        session.expire_all()
 
     def _realize_e2e_signature_verifications(self) -> int:
         """The same claim and the SAME EVENT, read across a process boundary.
@@ -2596,9 +2627,11 @@ class BaseTestEnv:
           ORIGINAL bytes returned. Well-formed headers, real crypto, and a
           ``content-digest`` that covers a body the wire does not carry: a CHECKLIST
           failure rather than a header rejection, which is the distinction the narrowed
-          ``none`` bucket turns on.
+          ``none`` bucket turns on;
+        * ``"unknown_key"`` — a real signature over exactly the bytes returned, under a
+          ``keyid`` the trust root does not publish.
 
-        Rule 2 above holds for all four: the credential and the tenant hint are carried
+        Rule 2 above holds for all of them: the credential and the tenant hint are carried
         whether or not a signature is, so a realization is the ONLY variable.
         Everything else about the request is byte-identical to the ``True`` control.
 
@@ -2656,7 +2689,7 @@ class BaseTestEnv:
             path=path,
             body=signed_over,
             extra=merged,
-            key_id=capability.key_id,
+            key_id=f"{capability.key_id}-unpublished" if signed == "unknown_key" else capability.key_id,
             origin=origin or WIRE_ORIGIN,
         )
 

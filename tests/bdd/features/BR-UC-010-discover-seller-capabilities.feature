@@ -1312,6 +1312,30 @@ Feature: BR-UC-010 Discover Seller Capabilities
       | unsupported_either_refused supported=false covers_content_digest=either | supported=false covers_content_digest=either   | rejected naming request_signing.covers_content_digest   |
       | unsupported_forbidden_refused supported=false covers_content_digest=forbidden | supported=false covers_content_digest=forbidden | rejected naming request_signing.covers_content_digest |
 
+  @T-UC-010-v31-request-signing-migrated-digest @v31 @invariant @boundary @post-s23
+  Scenario Outline: request-signing-migrated-digest — the upgrade makes a stored legacy digest posture one the pin admits
+    Given a tenant is resolvable from the request context
+    And the tenant declares request_signing posture <posture>
+    And the upgrade has rewritten stored digest postures
+    When the Buyer Agent calls get_adcp_capabilities
+    Then the response is compliant with the get_adcp_capabilities spec
+    And request_signing.supported should equal <supported>
+    And request_signing.covers_content_digest should be <expected_digest>
+    # The same stored documents the refusal outline above reads, after the revision that
+    # rewrites them: the refusal is for a posture authored now, and an earlier pin accepted
+    # these. supported=true becomes the const the allOf if/then pins. supported=false loses
+    # the field, since the description's MUST NOT has no exception for it and a seller that
+    # verifies nothing has no digest policy to state.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/request_signing/properties/covers_content_digest
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/allOf/11
+
+    Examples:
+      | posture                                        | supported | expected_digest     |
+      | supported=true covers_content_digest=either    | true      | equal to "required" |
+      | supported=true covers_content_digest=forbidden | true      | equal to "required" |
+      | supported=false covers_content_digest=either   | false     | absent or equal to "required" |
+      | supported=false covers_content_digest=forbidden | false    | absent or equal to "required" |
+
   @T-UC-010-v31-request-signing-subset @v31 @invariant @boundary
   Scenario: request-signing-subset — required_for must be a subset of supported_for
     Given a tenant is resolvable from the request context

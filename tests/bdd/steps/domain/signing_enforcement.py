@@ -181,6 +181,29 @@ def given_seller_grades_nothing(ctx: dict) -> None:
     ctx["env"].declare_request_signing(bucket="narrowed_none")
 
 
+@given(parsers.parse('the seller stored the legacy digest posture "{digest}" before this upgrade'))
+def given_seller_stored_legacy_digest_posture(ctx: dict, digest: str) -> None:
+    """Store ``{supported: true, required_for: [], covers_content_digest: <digest>}``.
+
+    A value the previous pin accepted and this one refuses to read, and the shape of the
+    pinned vector 027's ``verifier_capability`` otherwise, so the credential escalation is
+    the only thing that can refuse an unsigned registration.
+    """
+    ctx["env"].declare_request_signing(covers_content_digest=digest)
+
+
+@given("the upgrade has rewritten stored digest postures")
+def given_upgrade_rewrote_stored_digest_postures(ctx: dict) -> None:
+    """Run the real revision's rewrite against the seller's real database."""
+    ctx["env"].run_stored_digest_posture_upgrade()
+
+
+@given("the Buyer Agent signs under a key its trust root does not publish")
+def given_buyer_signs_under_unpublished_key(ctx: dict) -> None:
+    """Ask for a real signature whose ``keyid`` the seller cannot find (the env's realization)."""
+    ctx["signed"] = "unknown_key"
+
+
 @given("the Buyer Agent sends a signature the seller cannot parse")
 def given_buyer_sends_malformed_signature(ctx: dict) -> None:
     """Ask for the MALFORMED realization: both headers present, neither parseable.
