@@ -50,8 +50,9 @@ from src.core.tools.media_buy_create import execute_approved_media_buy, push_cre
 
 logger = logging.getLogger(__name__)
 
-# Buy statuses where the order is live in the ad server (retroactive creative push, #1038)
-_LIVE_BUY_STATUSES: frozenset[str] = frozenset({"active", "scheduled", "paused"})
+# Buy statuses where the order is live in the ad server (retroactive creative push, #1038).
+# pending_start is booked and has not started: a change approved now reaches GAM before it serves.
+_LIVE_BUY_STATUSES: frozenset[str] = frozenset({"active", "scheduled", "paused", "pending_start"})
 
 # Create Blueprint
 creatives_bp = Blueprint("creatives", __name__)

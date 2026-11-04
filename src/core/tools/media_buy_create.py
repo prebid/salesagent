@@ -392,7 +392,8 @@ def _merge_creative_enrichment(existing_data: dict | None, status: AssetStatus) 
     """Merge an adapter's push result into a creative's ``data`` blob.
 
     Returns a new dict; does not mutate the input. Two enrichments are folded in,
-    both fill-only-when-absent so an existing value is never overwritten:
+    both fill-only-when-absent so an existing value is never overwritten, and an answered
+    push clears ``ad_server_creative_outdated``:
 
     - ``ad_server_creative_id`` — the id the ad server gave the creative it created, used
       to associate it with further line items instead of creating it again. Rows written
@@ -408,6 +409,9 @@ def _merge_creative_enrichment(existing_data: dict | None, status: AssetStatus) 
     data = dict(existing_data or {})
     if status.platform_creative_id and not data.get("ad_server_creative_id"):
         data["ad_server_creative_id"] = status.platform_creative_id
+    if status.platform_creative_id:
+        # The ad server answered for this content, so it holds no older content any more.
+        data.pop("ad_server_creative_outdated", None)
     if status.concept_id and not data.get("concept_id"):
         data["concept_id"] = status.concept_id
         data["concept_name"] = status.concept_name
@@ -1235,6 +1239,8 @@ def _build_adapter_asset_from_creative(
         "creative_id": creative.creative_id,
         # A creative the ad server already holds is placed on the line items, not created again
         "platform_creative_id": creative_data.get("ad_server_creative_id"),
+        # ...unless its content changed since: the ad server's copy is updated, keeping its id
+        "platform_creative_outdated": bool(creative_data.get("ad_server_creative_outdated")),
         "package_assignments": package_assignments,
         "width": width,
         "height": height,
@@ -2014,7 +2020,8 @@ def push_creative_to_existing_buy(
     sync_creatives for an approved creative assigned to a booked package (#2381).
     Local approval has already committed — failures here are non-fatal and logged.
     A creative the ad server already holds (``ad_server_creative_id`` set) is not created
-    again: it is associated with those of the packages' line items it is not on yet.
+    again: it is updated if its content changed since (``ad_server_creative_outdated``), and
+    associated with those of the packages' line items it is not on yet.
 
     ``package_ids`` limits the push to those of the creative's packages on the buy;
     ``None`` pushes to every package the creative is assigned to there.

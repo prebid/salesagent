@@ -296,6 +296,10 @@ class GamSellerMixin:
         """The stand-in GAM network refuses creative associations on *line_item_id*, with this ``ApiError`` reason."""
         self.mock["gam_client"].return_value.refused_line_items[line_item_id] = reason
 
+    def refuse_gam_creative_updates(self, reason: str | None) -> None:
+        """The stand-in GAM network refuses creative updates with this ``ApiError`` reason; None takes them again."""
+        self.mock["gam_client"].return_value.creative_update_fault = reason
+
     def refuse_gam_line_item_read(self, reason: str) -> None:
         """The stand-in GAM network refuses to read line items, with this ``ApiError`` reason."""
         from tests.helpers.gam_client import gam_fault

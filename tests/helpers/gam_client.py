@@ -111,6 +111,12 @@ def stub_gam_client(
       and creative and gives it no id; the id this stand-in adds to one is its own, and
       nothing should read it. A line item in ``client.refused_line_items`` (line item id ->
       ``ApiError`` reason; a test adds them) refuses its association with ``gam_fault``.
+    * ``CreativeService.updateCreatives`` replaces each sent creative in
+      ``client.created_objects``, by the ``id`` GAM requires on an update, and answers it. An id
+      the network does not hold raises ``gam_fault``. Given a reason in
+      ``client.creative_update_fault`` it refuses instead, with ``gam_fault``. Ceiling: nobody has
+      tried this call against real GAM; the stand-in does not model which fields GAM lets an
+      update change (``Creative.size`` is read-only after creation).
     * ``LineItemCreativeAssociationService.getLineItemCreativeAssociationsByStatement``
       answers the associations the network created, read at call time.
 
@@ -129,6 +135,7 @@ def stub_gam_client(
     client = MagicMock()
     client.line_items = list(line_items)
     client.refused_line_items = {}
+    client.creative_update_fault = None
 
     def _creates(service: str, method: str) -> Callable[..., list[SoapObject]]:
         def _answer(objects: list[Any], *_args: Any, **_kwargs: Any) -> list[SoapObject]:
@@ -156,6 +163,21 @@ def stub_gam_client(
     }
     for service, method in GAM_CREATE_METHODS:
         setattr(services.setdefault(service, MagicMock()), method, MagicMock(side_effect=_creates(service, method)))
+
+    def _update_creatives(objects: list[Any], *_args: Any, **_kwargs: Any) -> list[SoapObject]:
+        if client.creative_update_fault is not None:
+            raise gam_fault(client.creative_update_fault)
+        held = created.setdefault(("CreativeService", "createCreatives"), [])
+        answered = []
+        for obj in objects:
+            index = next((i for i, creative in enumerate(held) if creative["id"] == obj["id"]), None)
+            if index is None:
+                raise gam_fault("CommonError.NOT_FOUND")
+            held[index] = SoapObject(obj)
+            answered.append(held[index])
+        return answered
+
+    services["CreativeService"].updateCreatives = MagicMock(side_effect=_update_creatives)
     lica = "LineItemCreativeAssociationService"
     _associate = _creates(lica, "createLineItemCreativeAssociations")
 

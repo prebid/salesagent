@@ -700,6 +700,18 @@ def given_gam_refuses_association(ctx: dict, line_item: str, reason: str) -> Non
     ctx["env"].refuse_gam_association(line_item, reason)
 
 
+@given(parsers.parse('Google Ad Manager refuses to update creatives with "{reason}"'))
+def given_gam_refuses_creative_updates(ctx: dict, reason: str) -> None:
+    """GAM refuses creative updates with a SOAP fault, until it takes them again."""
+    ctx["env"].refuse_gam_creative_updates(reason)
+
+
+@when("Google Ad Manager takes creative updates again")
+def when_gam_takes_creative_updates(ctx: dict) -> None:
+    """The fault has cleared."""
+    ctx["env"].refuse_gam_creative_updates(None)
+
+
 @given(parsers.parse('Google Ad Manager refuses to read the order\'s line items with "{reason}"'))
 def given_gam_refuses_line_item_read(ctx: dict, reason: str) -> None:
     """GAM refuses the read every push starts with, with a SOAP fault."""
@@ -806,6 +818,24 @@ def then_creative_failed_with(ctx: dict, creative_id: str, code: str, recovery: 
     errors = wire_entry_errors(ctx, "creatives", creative_id=creative_id)
     reported = (entry.get("action"), [(error.get("code"), error.get("recovery")) for error in errors])
     assert reported == ("failed", [(code, recovery)]), f"expected {code} {recovery} on a failed entry; got {entry}"
+
+
+@then(parsers.parse('Google Ad Manager holds one creative, showing "{url}"'))
+def then_gam_holds_one_creative(ctx: dict, url: str) -> None:
+    """Of everything the seller sent, GAM holds exactly one creative, and it shows *url*."""
+    (held,) = _creatives_created(ctx)
+    assert held.get("imageUrl") == url, f"expected GAM to hold the creative showing {url}; it holds {held}"
+
+
+@then(parsers.parse('Google Ad Manager updated that creative, once, to show "{url}"'))
+def then_gam_updated_that_creative(ctx: dict, url: str) -> None:
+    """GAM got one update naming the one creative it created, and still holds that one creative, showing *url*."""
+    sent = ctx["env"].gam_objects_sent("CreativeService", "createCreatives")
+    assert len(sent) == 1, f"expected GAM to be asked to create one creative; it was asked for {sent}"
+    (held,) = _creatives_created(ctx)
+    updated = [(c["id"], c.get("imageUrl")) for c in ctx["env"].gam_objects_sent("CreativeService", "updateCreatives")]
+    assert updated == [(held["id"], url)], f"expected one update of creative {held['id']} to {url}; got {updated}"
+    assert held.get("imageUrl") == url, f"expected GAM to hold the creative showing {url}; it holds {held}"
 
 
 @then("Google Ad Manager updated no creative")

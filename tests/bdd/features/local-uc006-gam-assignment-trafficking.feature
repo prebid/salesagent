@@ -156,6 +156,70 @@ Feature: UC-006 a Google Ad Manager seller traffics assigned creatives onto its 
       | before start   | auto-approve  | pending_start     | left   |
       | no creatives   | require-human | pending_creatives | left   |
 
+  # sync_creatives.mdx: "A different revision with changed content enters review", and "prior
+  # approval does not transfer to changed content". The content the seller approved is what goes
+  # to GAM, into the creative GAM already holds on that line item (CreativeService.updateCreatives;
+  # Creative.id "is required for updates"): no second creative and no second association. Approving
+  # it again sends nothing more. Nobody has tried updateCreatives against real GAM.
+  @T-UC-006-local-gam-approved-change-updates-in-place
+  Scenario Outline: Approving a changed creative updates the creative GAM holds, in place - <state>
+    Given the buyer holds a buy booked in Google Ad Manager as order "6000005" in status "<status>" whose package "pkg-live" is line item "5000005" accepting 300x250
+    And the buyer synced a 300x250 image creative "cr-banner" showing "https://example.com/banner.png" assigned to package "pkg-live"
+    And the buyer has <paused> package "pkg-live" of the buy
+    And the tenant has approval_mode "require-human"
+    And the buyer synced a 300x250 image creative "cr-banner" showing "https://example.com/banner-v2.png" assigned to package "pkg-live"
+    When the seller approves creative "cr-banner"
+    Then Google Ad Manager updated that creative, once, to show "https://example.com/banner-v2.png"
+    And Google Ad Manager associated that creative with line items "5000005"
+    When the seller approves creative "cr-banner"
+    Then Google Ad Manager updated that creative, once, to show "https://example.com/banner-v2.png"
+
+    Examples:
+      | state          | status        | paused |
+      | paused package | active        | paused |
+      | paused buy     | paused        | left   |
+      | before start   | pending_start | left   |
+
+  # Under review, the change has not gone anywhere: sync_creatives.mdx, "prior approval does not
+  # transfer", so the seller's approval is what sends it. Known gap: GAM keeps the old content on
+  # the line item meanwhile, so a pending_start buy that reaches its start during re-review serves
+  # it, where sync_creatives.mdx says "The prior revision is not kept serving during review."
+  @T-UC-006-local-gam-change-under-review-held
+  Scenario: A changed creative under the seller's review sends nothing to GAM
+    Given the buyer holds a buy booked in Google Ad Manager as order "6000005" in status "pending_start" whose package "pkg-live" is line item "5000005" accepting 300x250
+    And the buyer synced a 300x250 image creative "cr-banner" showing "https://example.com/banner.png" assigned to package "pkg-live"
+    And the tenant has approval_mode "require-human"
+    And the buyer syncs a 300x250 image creative "cr-banner" showing "https://example.com/banner-v2.png" assigned to package "pkg-live"
+    When the Buyer Agent syncs the creative with assignments
+    Then Google Ad Manager updated no creative
+
+  # An auto-approving seller clears the change at sync, so the sync that carries the assignment sends it.
+  @T-UC-006-local-gam-auto-approved-change-updates-in-place
+  Scenario: A changed creative an auto-approving seller clears at sync updates the creative GAM holds, in place
+    Given the buyer holds a buy booked in Google Ad Manager as order "6000005" in status "pending_start" whose package "pkg-live" is line item "5000005" accepting 300x250
+    And the buyer synced a 300x250 image creative "cr-banner" showing "https://example.com/banner.png" assigned to package "pkg-live"
+    And the buyer syncs a 300x250 image creative "cr-banner" showing "https://example.com/banner-v2.png" assigned to package "pkg-live"
+    When the Buyer Agent syncs the creative with assignments
+    Then creative "cr-banner" is assigned to package "pkg-live"
+    And Google Ad Manager updated that creative, once, to show "https://example.com/banner-v2.png"
+    And Google Ad Manager associated that creative with line items "5000005"
+
+  # The update GAM refused is still owed: the next push sends it, once GAM takes updates again.
+  @T-UC-006-local-gam-refused-update-sent-again
+  Scenario: An update GAM refuses leaves the package in assignment_errors, and is sent again on the re-send
+    Given the buyer holds a buy booked in Google Ad Manager as order "6000005" in status "pending_start" whose package "pkg-live" is line item "5000005" accepting 300x250
+    And the buyer synced a 300x250 image creative "cr-banner" showing "https://example.com/banner.png" assigned to package "pkg-live"
+    And Google Ad Manager refuses to update creatives with "QuotaError.EXCEEDED_QUOTA"
+    And the buyer syncs a 300x250 image creative "cr-banner" showing "https://example.com/banner-v2.png" assigned to package "pkg-live"
+    When the Buyer Agent syncs the creative with assignments
+    Then creative "cr-banner" reports package "pkg-live" in assignment_errors and not in assigned_to
+    And Google Ad Manager holds one creative, showing "https://example.com/banner.png"
+    When Google Ad Manager takes creative updates again
+    And the Buyer Agent references library creative "cr-banner", without resending it, assigned to package "pkg-live"
+    Then creative "cr-banner" is assigned to package "pkg-live"
+    And Google Ad Manager holds one creative, showing "https://example.com/banner-v2.png"
+    And Google Ad Manager associated that creative with line items "5000005"
+
   # An assignment on another buyer's buy reaches no ad server (#2417), so nothing is delivering it.
   @T-UC-006-local-gam-active-delivery-other-buyers-package
   Scenario: A content change to a creative assigned only to another buyer's active package is accepted
@@ -315,6 +379,7 @@ Feature: UC-006 a Google Ad Manager seller traffics assigned creatives onto its 
     Then creative "cr-banner" is assigned to package "pkg-banner-a"
     And Google Ad Manager created one image creative for advertiser "3000001" showing "https://example.com/banner.png"
     And Google Ad Manager associated that creative with line items "5000001"
+    And Google Ad Manager updated no creative
 
   # The assignment was stored while the creative was under review, so nothing was sent for it.
   # GAM holds the creative from another package; that does not place it on this one.

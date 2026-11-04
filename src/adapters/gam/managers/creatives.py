@@ -74,7 +74,8 @@ class GAMCreativesManager:
             assets: List of creative asset dictionaries (each may contain placement_ids
                 from creative assignments for placement targeting). An asset carrying
                 ``platform_creative_id`` names a creative GAM already holds: it is
-                associated with the line items it is not on yet, and not created again.
+                associated with the line items it is not on yet, and not created again. If it also
+                carries ``platform_creative_outdated``, GAM's copy is updated with its content first.
             today: Current datetime
             placement_targeting_map: Optional map of placement_id → targeting_name for
                 creative-level targeting. Built from product impl_config.placement_targeting.
@@ -171,9 +172,12 @@ class GAMCreativesManager:
 
             # Create GAM creative object
             try:
-                # A creative GAM already holds is only placed on the line items, not created again
+                # A creative GAM already holds is placed on the line items, not created again. If
+                # its content changed since, GAM's copy is updated first, keeping its id and its
+                # associations. Nobody has tried updateCreatives against real GAM. Creative.size
+                # is read-only after creation, so a changed size is not expected to take effect.
                 gam_creative_id = asset.get("platform_creative_id")
-                if not gam_creative_id:
+                if not gam_creative_id or asset.get("platform_creative_outdated"):
                     creative = self._create_gam_creative(asset, creative_type, asset_placeholders)
                     if not creative:
                         logger.warning(
@@ -182,19 +186,25 @@ class GAMCreativesManager:
                         created_asset_statuses.append(AssetStatus(creative_id=asset["creative_id"], status="failed"))
                         continue
 
-                    # Create the creative in GAM
-                    # DEBUG: Log the exact creative being sent to GAM
-                    logger.info(f"[DEBUG] Creating creative with fields: {list(creative.keys())}")
-                    logger.info(f"[DEBUG] Creative type: {creative.get('xsi_type')}")
-                    logger.info(f"[DEBUG] Creative data: {creative}")
-                    created_creatives = creative_service.createCreatives([creative])
-                    if not created_creatives:
-                        logger.error(f"Failed to create creative {asset['creative_id']} - no creatives returned")
-                        created_asset_statuses.append(AssetStatus(creative_id=asset["creative_id"], status="failed"))
-                        continue
+                    if gam_creative_id:
+                        creative_service.updateCreatives([{**creative, "id": int(gam_creative_id)}])
+                        logger.info(f"✓ Updated GAM Creative ID: {gam_creative_id}")
+                    else:
+                        # Create the creative in GAM
+                        # DEBUG: Log the exact creative being sent to GAM
+                        logger.info(f"[DEBUG] Creating creative with fields: {list(creative.keys())}")
+                        logger.info(f"[DEBUG] Creative type: {creative.get('xsi_type')}")
+                        logger.info(f"[DEBUG] Creative data: {creative}")
+                        created_creatives = creative_service.createCreatives([creative])
+                        if not created_creatives:
+                            logger.error(f"Failed to create creative {asset['creative_id']} - no creatives returned")
+                            created_asset_statuses.append(
+                                AssetStatus(creative_id=asset["creative_id"], status="failed")
+                            )
+                            continue
 
-                    gam_creative_id = created_creatives[0]["id"]
-                    logger.info(f"✓ Created GAM Creative ID: {gam_creative_id}")
+                        gam_creative_id = created_creatives[0]["id"]
+                        logger.info(f"✓ Created GAM Creative ID: {gam_creative_id}")
 
                 # Associate creative with line items (includes placement targeting if configured)
                 self._associate_creative_with_line_items(
