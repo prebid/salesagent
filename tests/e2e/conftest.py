@@ -329,7 +329,6 @@ def docker_services_e2e(request):
         os.environ["POSTGRES_PORT"] = str(postgres_port)
         os.environ["ADCP_TLS_PORT"] = str(tls_port)
         os.environ["WEBHOOK_CAPTURE_PORT"] = str(webhook_capture_port)
-        os.environ.setdefault("WEBHOOK_CAPTURE_HOST", "127.0.0.1")
 
         env = os.environ.copy()
         # Ensure ADCP_TESTING is passed to Docker containers (for test mode validation)

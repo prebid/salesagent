@@ -2,6 +2,11 @@ name: Free disk space
 description: >-
   Reclaim ubuntu-latest headroom before heavy Docker/compose builds
   (unused preinstalled toolchains + Docker builder cache).
+inputs:
+  min-free-gib:
+    description: Fail when free space after reclaim is below this many GiB.
+    required: false
+    default: "8"
 runs:
   using: composite
   steps:
@@ -11,6 +16,11 @@ runs:
         # -x traces the reclaim. pipefail matches the other shell bodies under .github/.
         set -euo pipefail
         set -x
+        min_gib="${{ inputs.min-free-gib }}"
+        if ! [[ "$min_gib" =~ ^[0-9]+$ ]]; then
+          echo "min-free-gib must be a non-negative integer, got: ${min_gib}" >&2
+          exit 1
+        fi
         avail() { df -B1 --output=avail / | tail -1; }
         before="$(avail)"
         sudo rm -rf \
@@ -23,11 +33,12 @@ runs:
           || true
         docker builder prune -af 2>/dev/null || true
         after="$(avail)"
-        # Fresh ubuntu-latest. The full list frees about 25 GiB. /usr/share/dotnet
-        # alone frees about 2 GiB, which stays under this floor.
-        min=$((8 * 1024 * 1024 * 1024))
-        gained=$((after - before))
-        if (( gained < min )); then
-          echo "reclaimed ${gained} bytes, below ${min}" >&2
+        # Gate on space left, not bytes deleted. A runner that was already
+        # roomy reclaims little and must still pass; one left under the floor
+        # must fail even if the rm list deleted a lot.
+        min=$((min_gib * 1024 * 1024 * 1024))
+        echo "free ${before} -> ${after} bytes, floor ${min}" >&2
+        if (( after < min )); then
+          echo "free space ${after} bytes, below ${min}" >&2
           exit 1
         fi
