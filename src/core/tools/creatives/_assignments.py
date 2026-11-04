@@ -136,6 +136,74 @@ def assignments_by_package(rows: Iterable[CreativeAssignment]) -> dict[str, list
     return by_package
 
 
+def _assignment_terms(assignments: dict | list | None) -> dict | None:
+    """*assignments* as ``{creative_id: {package_id: (weight, placement_ids)}}``, or None.
+
+    AdCP v3 spec defines assignments as list[{creative_id, package_id, weight?, placement_ids?}].
+    A caller still handing over the older {creative_id: [package_ids]} map asks for the default
+    terms on every entry.
+    """
+    if assignments and isinstance(assignments, list):
+        return _normalise_assignments(assignments) or None
+    if assignments and isinstance(assignments, dict):
+        return {
+            creative_id: dict.fromkeys(package_ids, (None, None)) for creative_id, package_ids in assignments.items()
+        }
+    return None
+
+
+def refuse_formats_the_products_do_not_take(
+    assignments: dict | list | None,
+    results: list[SyncCreativeResult],
+    uow: CreativeUoW,
+    principal_id: str,
+) -> None:
+    """Refuse an assignment whose format its product does not take, before anything is saved.
+
+    Validate first, save second: the creatives are flushed and not committed when this runs, so
+    the refusal rolls them back with it and leaves no creative stored
+    (sync-creatives-request.json: "'strict' fails entire sync on any validation error"). It runs
+    in the sync's own transaction on every path, whichever disposes of it: its own commit, a
+    preview's rollback, or a joined caller's decision.
+
+    Only this refusal. A creative whose own sync failed is reported on its creatives[] entry and
+    skipped here; a missing creative or package is left to :func:`_process_assignments`.
+    """
+    terms = _assignment_terms(assignments)
+    if not terms:
+        return
+    assert uow.assignments is not None
+    repo = uow.assignments
+    failed = {r.creative_id for r in results if getattr(r, "action", None) == "failed"}
+    for creative_id, terms_by_package in terms.items():
+        creative_row = (
+            None if creative_id in failed else _resolve_creative_for_assignment(repo, creative_id, principal_id)
+        )
+        if creative_row is None:
+            continue
+        for package_id in terms_by_package:
+            package_row = repo.find_package_with_media_buy(package_id)
+            config = (package_row[0].package_config or {}) if package_row else {}
+            product = repo.get_product_by_id(config["product_id"]) if config.get("product_id") else None
+            if product is None:
+                continue
+            # THE ONE creative validator, which the two create gates and update_media_buy also
+            # ask -- so no two of the four can disagree about whether a creative satisfies what
+            # the product declares, its manifest included (creative-manifests.mdx § Validation:
+            # "Sellers perform final acceptance during sync_creatives").
+            verdict = creative_satisfies(creative_row, product.format_contract)
+            if verdict:
+                continue
+            if verdict.creative_coded:
+                raise creative_refusal(verdict, creative_id=creative_id, package_id=package_id)
+            # A legacy format the product does not take at all. Reverses #1417, which routed this
+            # to CREATIVE_REJECTED: adcp 3.1.1's enum reserves that for "Creative failed content
+            # policy review". Converged with the create and update paths. The verdict's accepted
+            # set, joined: the pin-canonical `accepted_values` is an array, and this wire has
+            # always carried the whole supported list as its single entry.
+            raise AdCPValidationError(details=ValidationDetails(accepted_values=[", ".join(verdict.accepted_values)]))
+
+
 def _process_assignments(
     assignments: dict | list | None,
     results: list[SyncCreativeResult],
@@ -177,17 +245,7 @@ def _process_assignments(
     # request's assignments are in place.
     packages_to_cover: dict[tuple[str, str], Any] = {}
 
-    # AdCP v3 spec defines assignments as list[{creative_id, package_id, weight?,
-    # placement_ids?}]; normalise to {creative_id: {package_id: (weight, placement_ids)}}
-    # for internal processing. A caller still handing over the older {creative_id:
-    # [package_ids]} map asks for the default terms on every entry.
-    if assignments and isinstance(assignments, list):
-        coerced = _normalise_assignments(assignments)
-        assignments = coerced if coerced else None
-    elif assignments and isinstance(assignments, dict):
-        assignments = {
-            creative_id: dict.fromkeys(package_ids, (None, None)) for creative_id, package_ids in assignments.items()
-        }
+    assignments = _assignment_terms(assignments)
 
     # Creatives whose sync failed were never persisted; we must not attempt to
     # assign them (the creative_assignments FK would crash the request). Their
@@ -275,36 +333,11 @@ def _process_assignments(
                             details=EntityRefDetails(creative_id=creative_id, package_id=package_id)
                         )
 
-                    # Validate creative format against package product formats.
-                    # creative_row was fetched once above (guaranteed non-None here).
-                    db_creative_result = creative_row
-
+                    # The format itself was graded before these creatives were committed
+                    # (refuse_formats_the_products_do_not_take).
                     # Get product_id from package_config
                     product_id = db_package.package_config.get("product_id") if db_package.package_config else None
                     product = assignment_repo.get_product_by_id(product_id) if product_id else None
-
-                    if db_creative_result and product_id:
-                        if product:
-                            # THE ONE creative validator, which the two create gates and
-                            # update_media_buy also ask -- so no two of the four can disagree
-                            # about whether a creative satisfies what the product declares,
-                            # its manifest included (creative-manifests.mdx § Validation:
-                            # "Sellers perform final acceptance during sync_creatives").
-                            verdict = creative_satisfies(db_creative_result, product.format_contract)
-
-                            if not verdict:
-                                if verdict.creative_coded:
-                                    raise creative_refusal(verdict, creative_id=creative_id, package_id=package_id)
-                                # A legacy format the product does not take at all. Reverses
-                                # #1417, which routed this to CREATIVE_REJECTED: adcp 3.1.1's
-                                # enum reserves that for "Creative failed content policy
-                                # review". Converged with the create and update paths.
-                                raise AdCPValidationError(
-                                    # The verdict's accepted set, joined: the pin-canonical
-                                    # `accepted_values` is an array, and this wire has always
-                                    # carried the whole supported list as its single entry.
-                                    details=ValidationDetails(accepted_values=[", ".join(verdict.accepted_values)]),
-                                )
 
                     # actual_package_id is always set when media_buy_id is set (guard above)
                     assert actual_package_id is not None

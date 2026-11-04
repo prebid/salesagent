@@ -3058,6 +3058,16 @@ def _stored_synced_creative_column(ctx: dict, column: str) -> Any:
     return stored_creative_column(ctx, _SYNC_CREATIVE_ID, column)
 
 
+@then(parsers.parse("the buyer is refused {code:w} and the creative library holds nothing for that creative"))
+def then_refused_nothing_stored_at_assignment(ctx: dict, code: str) -> None:
+    """The whole request's refusal, and the row's absence: the wire alone cannot show the write."""
+    ctx["result"].assert_wire_error(code)
+    from src.core.database.models import Creative
+
+    stored = ctx["env"].query(Creative, creative_id=_SYNC_CREATIVE_ID)
+    assert stored == [], f"the request was refused and left {[row.creative_id for row in stored]} stored"
+
+
 @then("the buyer is refused UNSUPPORTED_FEATURE and nothing is stored")
 def then_refused_and_nothing_stored(ctx: dict) -> None:
     """The refusal AND the absence of the row, because the wire alone cannot show the write.

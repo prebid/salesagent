@@ -1396,6 +1396,36 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     When the Buyer Agent assigns it to that package
     Then the buyer is refused UNSUPPORTED_FEATURE
 
+  # Validate first, save second. sync-creatives-request.json (v3.2.7): "'strict' fails entire sync
+  # on any validation error", and the error arm is "operation failed completely, no creatives
+  # were processed". The creative used to commit before the assignment stage refused it. Only
+  # this refusal moves: a per-item failure of the creative itself stays action failed, which
+  # storyboards with no validation_mode grade for provenance, revision and localization.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/sync-creatives-request.json pointer=/properties/validation_mode
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/sync-creatives-response.json
+  # @source repo=adcp ref=v3.2.7 path=docs/creative/task-reference/sync_creatives.mdx
+  @T-UC-FORMAT-SATISFACTION-sync-refusal-stores-nothing @format_satisfaction_sync @requires_db
+  Scenario Outline: a format the product does not take leaves no creative stored - <arm>
+    Given a packaged product <product>
+    And the buyer syncs a creative identified by <creative>
+    When the Buyer Agent assigns it to that package
+    Then the buyer is refused <code> and the creative library holds nothing for that creative
+
+    Examples:
+      | arm        | product                                              | creative                      | code                |
+      | canonical  | declaring a canonical image option fixed at 300x250  | canonical kind "video_hosted" | UNSUPPORTED_FEATURE |
+      | deprecated | declaring only the deprecated format_ids             | format_id "video_1280x720"    | VALIDATION_ERROR    |
+
+  # The control. The same creative and the same request shape with a format the product takes
+  # stores the row, so "nothing stored" above is not satisfied by a sync that stores nothing.
+  @T-UC-FORMAT-SATISFACTION-sync-acceptance-stores @format_satisfaction_sync @requires_db
+  Scenario: a format the product takes is stored and assigned in one request
+    Given a packaged product declaring a canonical image option fixed at 300x250
+    And the buyer syncs a canonical "image" creative carrying the "image_300x250" manifest
+    When the Buyer Agent assigns it to that package
+    Then the assignment is recorded with no assignment error
+    And the creative is stored carrying canonical kind "image"
+
   @T-UC-FORMAT-SATISFACTION-sync-lenient-canonical @format_satisfaction_sync @requires_db
   Scenario: lenient validation is refused before the assignment is reached
     Given a packaged product declaring a canonical image option fixed at 300x250

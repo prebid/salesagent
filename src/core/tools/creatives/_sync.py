@@ -23,7 +23,7 @@ from src.core.validation_helpers import format_validation_error
 from src.core.webhook_validator import webhook_url_for_log
 from src.core.webhooks.registration import accept_push_notification_config
 
-from ._assignments import _process_assignments
+from ._assignments import _process_assignments, refuse_formats_the_products_do_not_take
 from ._processing import _create_new_creative, _failed_sync_result, _update_existing_creative, incoming_identity_of
 from ._validation import (
     _get_field,
@@ -514,6 +514,10 @@ def sync_creatives(
                 )
 
             creative_repo.after_commit(_notify, label="creative_approval_slack")
+
+        # Validate first, save second: a format a product does not take is refused here, while
+        # the creatives can still be rolled back, on every path below.
+        refuse_formats_the_products_do_not_take(req.assignments, results, uow, principal_id)
 
         # LIVE: close (and so commit) the creatives transaction here, exactly as
         # the implicit block exit did before — the assignment stage then opens
