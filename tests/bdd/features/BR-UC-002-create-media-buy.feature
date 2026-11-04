@@ -595,6 +595,20 @@ Feature: BR-UC-002 Create Media Buy
       | geo_countries     |
       | geo_regions       |
 
+  # package-request.json (v3.2.7) forbids the pair (`not: {required: [bidding, bid_price]}`) and
+  # its bidding text says "Sellers MUST reject ... with AMBIGUOUS_BIDDING_POLICY". The rule is
+  # the update tool's, and it answers ahead of the refusal bidding alone would get.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/properties/bidding
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/AMBIGUOUS_BIDDING_POLICY
+  @T-UC-002-ambiguous-bidding @extension
+  Scenario: A package carrying bidding beside bid_price is refused as ambiguous
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And the package carries both bidding and bid_price
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer is refused AMBIGUOUS_BIDDING_POLICY naming the package itself
+    And no media buy is persisted for the tenant
+
   @T-UC-002-package-performance-standards @extension
   Scenario: Proposed performance standards are rejected as terms this seller cannot honor
     Given a valid create_media_buy request

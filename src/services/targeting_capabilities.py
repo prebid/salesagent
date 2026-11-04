@@ -33,9 +33,14 @@ from pydantic import BaseModel
 
 from src.core.enum_helpers import enum_value
 from src.core.errors.codes import ErrorCode
-from src.core.errors.details import CapabilityRefusalDetails, ValidationDetails
-from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPInvalidRequestError, AdCPValidationError
-from src.core.schemas import AnyTargeting, Error, Targeting
+from src.core.errors.details import CapabilityRefusalDetails, EntityRefDetails, ValidationDetails
+from src.core.exceptions import (
+    AdCPAmbiguousBiddingPolicyError,
+    AdCPCapabilityNotSupportedError,
+    AdCPInvalidRequestError,
+    AdCPValidationError,
+)
+from src.core.schemas import AdCPPackageUpdate, AnyTargeting, Error, Targeting
 from src.core.validation_helpers import PACKAGES_FIELD, campaign_interval_violated, package_field_path
 
 if TYPE_CHECKING:
@@ -96,6 +101,24 @@ def refuse_unsupported_package_members(packages: Sequence[Any] | None, names: Se
         for name in names:
             if getattr(package, name) is not None:
                 raise _unsupported_package_member(name, name, index)
+
+
+def refuse_ambiguous_bidding(packages: Sequence[Any] | None) -> None:
+    """Refuse a package carrying a non-null ``bidding`` object beside ``bid_price``.
+
+    ``enums/error-code.json`` AMBIGUOUS_BIDDING_POLICY: "Sellers MUST reject rather than
+    choosing a winner." Both tools raise it ahead of their unapplied-field refusal, which
+    would otherwise answer UNSUPPORTED_FEATURE for either member alone and hide the more
+    specific refusal. ``bidding: null`` beside ``bid_price`` is allowed by the pin and reads
+    as ``None`` here, so it passes. The members are read by attribute with no default, so a
+    pin that renames one fails loudly here instead of never matching.
+    """
+    for index, package in enumerate(packages or ()):
+        if all(getattr(package, name) is not None for name in AdCPPackageUpdate.AMBIGUOUS_BIDDING_MEMBERS):
+            raise AdCPAmbiguousBiddingPolicyError(
+                details=EntityRefDetails(package_id=getattr(package, "package_id", None), package_index=index),
+                field=f"packages[{index}]",
+            )
 
 
 def unapplied_fields(model: type[BaseModel], *handled: Collection[str]) -> tuple[str, ...]:

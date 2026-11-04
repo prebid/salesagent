@@ -725,6 +725,20 @@ def given_package_overlay_dimension(ctx: dict, dimension: str) -> None:
     _first_package(ctx)["targeting_overlay"] = {dimension: OVERLAY_DIMENSIONS[dimension]}
 
 
+@given("the package carries both bidding and bid_price")
+def given_package_ambiguous_bidding(ctx: dict) -> None:
+    """The pair the pin's root ``not`` forbids."""
+    package = _first_package(ctx)
+    package["bidding"] = {"automatic": True}
+    package["bid_price"] = 6.0
+
+
+@then("the buyer is refused AMBIGUOUS_BIDDING_POLICY naming the package itself")
+def then_refused_ambiguous_bidding(ctx: dict) -> None:
+    """Neither member alone is at fault, so ``field`` is the package object."""
+    ctx["result"].assert_wire_error("AMBIGUOUS_BIDDING_POLICY", field="packages[0]")
+
+
 @given("the package proposes performance standards")
 def given_package_performance_standards(ctx: dict) -> None:
     """One well-formed proposed standard (core/performance-standard.json)."""

@@ -146,6 +146,7 @@ from src.services.gam_product_config_service import GAMProductConfigService
 from src.services.targeting_capabilities import (
     property_list_unsupported_advisories,
     raise_if_property_targeting_violations,
+    refuse_ambiguous_bidding,
     refuse_invalid_package_overlays,
     refuse_unapplied_request_fields,
     refuse_unsupported_package_members,
@@ -2618,6 +2619,7 @@ async def _create_media_buy_impl(
     # Capability refusal, above any write: the pin puts it "before any mutation". A request
     # naming a proposal is answered PROPOSAL_NOT_FOUND below, whatever else it carries.
     if req.proposal_id is None:
+        refuse_ambiguous_bidding(req.packages)
         refuse_unapplied_request_fields(req, _UNAPPLIED_REQUEST_FIELDS)
         refuse_unsupported_package_members(req.packages, _UNAPPLIED_PACKAGE_FIELDS)
 
