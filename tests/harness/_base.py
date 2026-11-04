@@ -2629,7 +2629,9 @@ class BaseTestEnv:
           failure rather than a header rejection, which is the distinction the narrowed
           ``none`` bucket turns on;
         * ``"unknown_key"`` — a real signature over exactly the bytes returned, under a
-          ``keyid`` the trust root does not publish.
+          ``keyid`` the trust root does not publish;
+        * ``"wrong_key"`` — a signature over exactly the bytes returned, under the published
+          ``keyid``, by a private key other than the published one.
 
         Rule 2 above holds for all of them: the credential and the tenant hint are carried
         whether or not a signature is, so a realization is the ONLY variable.
@@ -2642,6 +2644,7 @@ class BaseTestEnv:
         from tests.helpers.signing import (
             MALFORMED_SIGNATURE_HEADERS,
             WIRE_ORIGIN,
+            keypair_for,
             realization,
             request_headers,
             signed_headers,
@@ -2681,7 +2684,7 @@ class BaseTestEnv:
         # the mismatch would not be attributable to the body.
         signed_over = tampered_signing_body(raw) if signed == "tampered" else raw
         return raw, signed_headers(
-            capability.private_key,
+            keypair_for(f"{capability.key_id}-other")[0] if signed == "wrong_key" else capability.private_key,
             token,
             # ``@method`` is inside the signature base, so a signature made as
             # POST and sent as GET is refused as request_signature_invalid.

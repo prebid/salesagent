@@ -61,7 +61,7 @@ from adcp.types import ErrorCode
 from adcp.validation.version import resolve_bundle_key
 
 from src.core.errors._entry import CodeEntry, CodeGroup, Recovery
-from src.core.errors.signature_codes import SIGNATURE_CODE_TABLE, SignatureErrorCode
+from src.core.errors.signature_codes import SIGNATURE_MESSAGES, SIGNATURE_STATUS, SignatureErrorCode
 
 __all__ = [
     "CODE_BY_VALUE",
@@ -259,23 +259,25 @@ def _load_published_codes() -> Mapping[str, _PublishedCode]:
     between SDK releases would take the application down with it.
     """
     bundle_key = resolve_bundle_key(get_adcp_spec_version())
-    schema = files("adcp") / "_schemas" / bundle_key / "enums" / "error-code.json"
-    document = json.loads(schema.read_text(encoding="utf-8"))
-    metadata = document["enumMetadata"]
-    descriptions = document["enumDescriptions"]
-
+    enums = files("adcp") / "_schemas" / bundle_key / "enums"
     published: dict[str, _PublishedCode] = {}
-    for code in document["enum"]:
-        if code not in metadata or code not in descriptions:
-            raise RuntimeError(
-                f"The pinned AdCP schema lists {code} in its enum but describes it in neither "
-                f"enumMetadata nor enumDescriptions. The installed adcp wheel is inconsistent."
+    # Two files, because the pin publishes the request-signature family apart from the rest.
+    for filename in ("error-code.json", "request-signing-error-code.json"):
+        document = json.loads((enums / filename).read_text(encoding="utf-8"))
+        metadata = document["enumMetadata"]
+        descriptions = document["enumDescriptions"]
+
+        for code in document["enum"]:
+            if code not in metadata or code not in descriptions:
+                raise RuntimeError(
+                    f"The pinned AdCP schema lists {code} in its enum but describes it in neither "
+                    f"enumMetadata nor enumDescriptions. The installed adcp wheel is inconsistent."
+                )
+            published[code] = _PublishedCode(
+                recovery=Recovery(metadata[code]["recovery"]),
+                suggestion=metadata[code]["suggestion"],
+                description=descriptions[code],
             )
-        published[code] = _PublishedCode(
-            recovery=Recovery(metadata[code]["recovery"]),
-            suggestion=metadata[code]["suggestion"],
-            description=descriptions[code],
-        )
     return MappingProxyType(published)
 
 
@@ -461,23 +463,14 @@ _HTTP_STATUS: Final[Mapping[ErrorCode, int]] = MappingProxyType(
 def _build_code_table() -> dict[ErrorCodeT, CodeEntry]:
     """Assemble the SDK's codes and this platform's own into one table.
 
-    TWO SOURCES, not three. A code is either the SDK's or this application's, and the
-    signature family is the SDK's: :class:`SignatureErrorCode` is generated from
-    ``adcp.signing.errors.REQUEST_TO_WEBHOOK_CODE``, not authored here.
-
-    What the signature family lacks is METADATA. ``enums/error-code.json`` carries
-    ``enumMetadata`` for the codes it publishes, and at it publishes none of
-    the 28 (adcontextprotocol/adcp#7642), so their recovery/suggestion/message are
-    transcribed in :mod:`src.core.errors.signature_codes` from the spec's own prose.
-    That is a different SOURCE OF METADATA, not a different source of codes — so it is
-    a fallback inside this loop rather than a third pass after it.
-
-    Why that matters at the next pin bump: adcontextprotocol/adcp#7647 publishes the
-    vocabulary upstream. When a version carrying it is pinned, ``published`` starts
-    answering for these codes and the transcription stops being consulted — one
-    conditional flips, and ``_SIGNATURE_METADATA`` becomes deletable. Under the old
-    three-pass build the same bump produced two entries for one code and let write
-    order decide, silently.
+    TWO SOURCES. A code is either the SDK's or this application's, and the signature family is
+    the SDK's: :class:`SignatureErrorCode` is generated from
+    ``adcp.signing.errors.REQUEST_TO_WEBHOOK_CODE``, and the pin publishes its recovery and
+    suggestion in ``enums/request-signing-error-code.json``. A code in neither file is a
+    KeyError here, which is the right failure: it means the SDK grew a code nothing describes.
+    That family keeps its 401, its group, and a class-level message, because the pin's
+    descriptions of it name which verification step refused
+    (:data:`~src.core.errors.signature_codes.SIGNATURE_MESSAGES`).
 
     A message comes from the first source that has one: authored here, then the pinned
     schema's own prose. Every code resolves to text, so no code can reach a buyer with
@@ -487,20 +480,25 @@ def _build_code_table() -> dict[ErrorCodeT, CodeEntry]:
     published = _load_published_codes()
     table: dict[ErrorCodeT, CodeEntry] = {}
 
-    for code in (*ErrorCode, *SignatureErrorCode):
-        spec = published.get(code.value)
-        if spec is None:
-            # The pin publishes no metadata for this code, so the transcription answers.
-            # A code in neither is a KeyError here, which is the right failure: it means
-            # the SDK grew a code nothing describes.
-            table[code] = SIGNATURE_CODE_TABLE[code]
-            continue
+    for code in ErrorCode:
+        spec = published[code.value]
         table[code] = CodeEntry(
             recovery=spec.recovery,
             suggestion=spec.suggestion,
             message=(_AUTHORED_SPEC_MESSAGES.get(code) or _message_from_prose(spec.description)),
             status=_HTTP_STATUS.get(code, _UNCLASSIFIED_STATUS),
-            group=SIGNATURE_CODE_TABLE[code].group if code in SIGNATURE_CODE_TABLE else CodeGroup.GENERAL,
+        )
+    for signature_code in SignatureErrorCode:
+        spec = published[signature_code.value]
+        table[signature_code] = CodeEntry(
+            recovery=spec.recovery,
+            suggestion=spec.suggestion,
+            message=SIGNATURE_MESSAGES[spec.recovery],
+            status=SIGNATURE_STATUS,
+            # What makes these different from every other code, declared once, here.
+            # ``AuthChallengeResponder`` asks the table rather than holding its own list:
+            # see CodeGroup for why the fact lives on the code and not on the renderer.
+            group=CodeGroup.SIGNATURE,
         )
 
     # Each member carries its own entry, so there is nothing to reconcile: a code

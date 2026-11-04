@@ -204,6 +204,12 @@ def given_buyer_signs_under_unpublished_key(ctx: dict) -> None:
     ctx["signed"] = "unknown_key"
 
 
+@given("the Buyer Agent signs with a key other than the one it published")
+def given_buyer_signs_with_another_key(ctx: dict) -> None:
+    """Ask for a signature under the published ``keyid`` that its public key does not verify."""
+    ctx["signed"] = "wrong_key"
+
+
 @given("the Buyer Agent sends a signature the seller cannot parse")
 def given_buyer_sends_malformed_signature(ctx: dict) -> None:
     """Ask for the MALFORMED realization: both headers present, neither parseable.
