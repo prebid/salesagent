@@ -14,15 +14,13 @@ from src.core.errors.details import CreativeRefDetails, EntityRefDetails, Valida
 from src.core.exceptions import (
     AdCPCreativeNotFoundError,
     AdCPPackageNotFoundError,
-    AdCPSalesAgentError,
     AdCPValidationError,
 )
-from src.core.format_satisfaction import FormatRefusal, creative_refusal, creative_satisfies, require_covered
+from src.core.format_satisfaction import creative_refusal, creative_satisfies, require_covered
 from src.core.logging_config import log_safe
 from src.core.schemas import SyncCreativeResult
 from src.core.tenant_context import TenantContext
 from src.core.tools._media_buy_transitions import advance_past_pending_creatives
-from src.core.tools.creatives._processing import _failed_sync_result
 
 logger = logging.getLogger(__name__)
 
@@ -142,7 +140,6 @@ def _process_assignments(
     assignments: dict | list | None,
     results: list[SyncCreativeResult],
     tenant: TenantContext,
-    validation_mode: str,
     principal_id: str,
     uow: CreativeUoW | None = None,
 ) -> list:
@@ -154,7 +151,7 @@ def _process_assignments(
     and ``assignment_errors`` on matching ``SyncCreativeResult`` entries.
 
     ONE write path. There is no preview branch here: the same resolution,
-    validation, strict-raise, upsert, weight normalization and media-buy status
+    validation, raise, upsert, weight normalization and media-buy status
     transition run for every caller.
 
     ``uow`` lets the caller supply an ALREADY-OPEN unit of work to join instead
@@ -174,8 +171,6 @@ def _process_assignments(
     # Track assignments per creative for response population
     assignments_by_creative: dict[str, list[str]] = {}  # creative_id -> [package_ids]
     assignment_errors_by_creative: dict[str, dict[str, str]] = {}  # creative_id -> {package_id: error}
-    not_found_creative_ids: set[str] = set()  # creative_ids whose library lookup returned None
-    packages_not_found_by_creative: dict[str, set[str]] = {}  # creative_id -> package_ids that do not exist
     media_buys_with_new_assignments: dict[str, Any] = {}  # media_buy_id -> MediaBuy object
     # (media_buy_id, package_id) -> the package's product, for every package this request
     # assigned to: its whole creative set is graded for placement coverage once the
@@ -245,25 +240,18 @@ def _process_assignments(
                 # via assignment_errors (same convention as package-not-found below).
                 creative_row = _resolve_creative_for_assignment(assignment_repo, creative_id, principal_id)
                 if creative_row is None:
-                    error_msg = f"Creative not found: {creative_id}"
-                    not_found_creative_ids.add(creative_id)
-                    for package_id in package_ids:
-                        assignment_errors_by_creative[creative_id][package_id] = error_msg
-                    if validation_mode == "strict":
-                        # Entity-specific spec code (pinned enum: CREATIVE_NOT_FOUND,
-                        # correctable, MANDATED uniformly for unowned creative_ids) —
-                        # parity with the PACKAGE_NOT_FOUND branch below (#1430 review).
-                        # The id is echoed back because the caller supplied it verbatim,
-                        # which 3.1.1 L3/error-handling.mdx permits; every unresolvable
-                        # id reads identically, so the uniformity the enum mandates holds.
-                        # No index is available here (the list is normalised to a dict
-                        # above), so `field` names the array parameter itself.
-                        raise AdCPCreativeNotFoundError(
-                            details=CreativeRefDetails(creative_id=creative_id),
-                            field="assignments",
-                        )
-                    logger.warning(log_safe(f"Skipping assignments for unknown creative {creative_id}: {error_msg}"))
-                    continue
+                    # Entity-specific spec code (pinned enum: CREATIVE_NOT_FOUND,
+                    # correctable, MANDATED uniformly for unowned creative_ids) —
+                    # parity with the PACKAGE_NOT_FOUND branch below (#1430 review).
+                    # The id is echoed back because the caller supplied it verbatim,
+                    # which 3.1.1 L3/error-handling.mdx permits; every unresolvable
+                    # id reads identically, so the uniformity the enum mandates holds.
+                    # No index is available here (the list is normalised to a dict
+                    # above), so `field` names the array parameter itself.
+                    raise AdCPCreativeNotFoundError(
+                        details=CreativeRefDetails(creative_id=creative_id),
+                        field="assignments",
+                    )
 
                 for package_id, (requested_weight, placement_ids) in terms_by_package.items():
                     # Find which media buy this package belongs to
@@ -277,25 +265,15 @@ def _process_assignments(
                         actual_package_id = db_package.package_id
 
                     if not media_buy_id:
-                        # Package not found - record error
-                        error_msg = f"Package not found: {package_id}"
-                        assignment_errors_by_creative[creative_id][package_id] = error_msg
-                        packages_not_found_by_creative.setdefault(creative_id, set()).add(package_id)
-
-                        # Skip if in lenient mode, error if strict
-                        if validation_mode == "strict":
-                            # Use the specific subclass so the wire code is PACKAGE_NOT_FOUND
-                            # (STANDARD); the base AdCPNotFoundError would emit INVALID_REQUEST
-                            # via the wire-safe translation and lose buyer-facing specificity.
-                            # WHICH package travels in details: a sync may name many, and the
-                            # message is a function of the code, so without this the buyer
-                            # learns that a package was not found and not which one.
-                            raise AdCPPackageNotFoundError(
-                                details=EntityRefDetails(creative_id=creative_id, package_id=package_id)
-                            )
-                        else:
-                            logger.warning(log_safe(f"Package not found during assignment: {package_id}, skipping"))
-                            continue
+                        # Use the specific subclass so the wire code is PACKAGE_NOT_FOUND
+                        # (STANDARD); the base AdCPNotFoundError would emit INVALID_REQUEST
+                        # via the wire-safe translation and lose buyer-facing specificity.
+                        # WHICH package travels in details: a sync may name many, and the
+                        # message is a function of the code, so without this the buyer
+                        # learns that a package was not found and not which one.
+                        raise AdCPPackageNotFoundError(
+                            details=EntityRefDetails(creative_id=creative_id, package_id=package_id)
+                        )
 
                     # Validate creative format against package product formats.
                     # creative_row was fetched once above (guaranteed non-None here).
@@ -315,40 +293,18 @@ def _process_assignments(
                             verdict = creative_satisfies(db_creative_result, product.format_contract)
 
                             if not verdict:
-                                error_msg = (
-                                    f"Creative {creative_id} {verdict.summary} "
-                                    f"(product '{product.name}', package {package_id})"
+                                if verdict.creative_coded:
+                                    raise creative_refusal(verdict, creative_id=creative_id, package_id=package_id)
+                                # A legacy format the product does not take at all. Reverses
+                                # #1417, which routed this to CREATIVE_REJECTED: adcp 3.1.1's
+                                # enum reserves that for "Creative failed content policy
+                                # review". Converged with the create and update paths.
+                                raise AdCPValidationError(
+                                    # The verdict's accepted set, joined: the pin-canonical
+                                    # `accepted_values` is an array, and this wire has always
+                                    # carried the whole supported list as its single entry.
+                                    details=ValidationDetails(accepted_values=[", ".join(verdict.accepted_values)]),
                                 )
-                                assignment_errors_by_creative[creative_id][package_id] = error_msg
-
-                                # A canonical refusal -- the closed set, or a manifest that
-                                # does not satisfy the declaration it selects -- is raised in
-                                # BOTH validation modes: lenient means "skip a creative this
-                                # product will not take", and the pin says a seller must "not
-                                # silently relax the target contract", so there is no partial
-                                # assignment to fall back to. The legacy lane keeps its
-                                # lenient skip, which scenarios grade, whichever code strict
-                                # mode would give it.
-                                if (
-                                    validation_mode == "strict"
-                                    or verdict.refusal is not FormatRefusal.LEGACY_NOT_ACCEPTED
-                                ):
-                                    if verdict.creative_coded:
-                                        raise creative_refusal(verdict, creative_id=creative_id, package_id=package_id)
-                                    # A legacy format the product does not take at all. Reverses
-                                    # #1417, which routed this to CREATIVE_REJECTED: adcp 3.1.1's
-                                    # enum reserves that for "Creative failed content policy
-                                    # review". Converged with the create and update paths.
-                                    raise AdCPValidationError(
-                                        # The verdict's accepted set, joined: the pin-canonical
-                                        # `accepted_values` is an array, and this wire has always
-                                        # carried the whole supported list as its single entry.
-                                        details=ValidationDetails(accepted_values=[", ".join(verdict.accepted_values)]),
-                                    )
-                                logger.warning(
-                                    log_safe(f"Creative format mismatch during assignment, skipping: {error_msg}")
-                                )
-                                continue
 
                     # actual_package_id is always set when media_buy_id is set (guard above)
                     assert actual_package_id is not None
@@ -429,8 +385,6 @@ def _process_assignments(
             # silently omitted". Asked of each package's WHOLE set -- the creatives already
             # assigned and the ones this request added, each with the placement_ids that
             # routes it -- because coverage is a property of the set, not of one creative.
-            # Raised in both validation modes, for the reason the canonical refusal above
-            # gives: there is no partial assignment that would leave the inventory served.
             for (mb_id, pkg_id), pkg_product in packages_to_cover.items():
                 require_package_covered(assignment_repo, mb_id, pkg_id, pkg_product, field="assignments")
 
@@ -457,69 +411,22 @@ def _process_assignments(
             if errors:
                 sync_result.assignment_errors = errors
 
-    # Referenced-but-unsynced creatives (assignment-only references to existing
-    # library creatives, or ids that don't exist at all) have NO entry in
-    # `results` — synthesize one so their recorded outcome reaches the buyer.
-    # The spec's success branch FORBIDS a response-level errors array; per-item
-    # failures ride creatives[] with action='failed' (errors[] required, status
-    # omitted), and BR-RULE-033 INV-4 pins that assignment errors are always
-    # recorded in the response. Without this, creatives=[] + assignments
-    # returned bare success and the buyer never learned the assignment was
-    # skipped (#1430: orphan-assignment visibility fix).
+    # Referenced-but-unsynced creatives (assignment-only references to existing library
+    # creatives) have NO entry in `results` — synthesize one so their outcome reaches the
+    # buyer. 'unchanged': the sync didn't modify them.
     present_ids = {r.creative_id for r in results}
-    for creative_id in sorted(assignments_by_creative.keys() | assignment_errors_by_creative.keys()):
-        if creative_id in present_ids:
+    for creative_id in sorted(assignments_by_creative.keys()):
+        assigned = assignments_by_creative[creative_id]
+        if creative_id in present_ids or not assigned:
             continue
-        assigned = assignments_by_creative.get(creative_id) or []
-        errors = assignment_errors_by_creative.get(creative_id) or {}
-        if not assigned and not errors:
-            continue
-        if assigned:
-            # Existing library creative referenced only via assignments: the
-            # sync didn't modify it — 'unchanged', with its assignment outcome
-            # (and any partial failures) attached.
-            entry = SyncCreativeResult(
+        results.append(
+            SyncCreativeResult(
                 creative_id=creative_id,
                 action="unchanged",
                 status=None,
                 platform_id=None,
                 assigned_to=assigned,
-                assignment_errors=errors or None,
             )
-        else:
-            # Nothing assigned: every referenced package failed. Buyer-correctable.
-            #
-            # A creative-not-found entry carries CREATIVE_NOT_FOUND, the same code the
-            # strict-mode raise above emits, so the two validation modes agree on this
-            # condition. The ``continue`` in the not-found branch means such an entry can
-            # never also carry package causes, which is what keeps the two exclusive.
-            #
-            # A package-not-found entry carries PACKAGE_NOT_FOUND for the same reason: the
-            # strict path raises AdCPPackageNotFoundError for this condition, and the
-            # pinned enum defines the code, so the lenient advisory names the same thing.
-            # Only when EVERY package the entry names was not found -- a mixed entry (one
-            # package missing, another refusing the format) is a validation failure, and
-            # ``assignment_errors`` spells out each package's cause.
-            #
-            # ``assignment_errors`` is NOT duplicated into details: the line below sets
-            # it on the result entry, which is the buyer's path to it. Two copies of one
-            # fact is what this migration removes. Each code carries its own details
-            # shape — the exception class declares which one it accepts.
-            cause: AdCPSalesAgentError
-            missing_packages = packages_not_found_by_creative.get(creative_id, set())
-            if creative_id in not_found_creative_ids:
-                cause = AdCPCreativeNotFoundError(details=CreativeRefDetails(creative_id=creative_id))
-            elif missing_packages and set(errors) == missing_packages:
-                cause = AdCPPackageNotFoundError(
-                    details=EntityRefDetails(
-                        creative_id=creative_id,
-                        package_id=next(iter(missing_packages)) if len(missing_packages) == 1 else None,
-                    )
-                )
-            else:
-                cause = AdCPValidationError(details=ValidationDetails(creative_id=creative_id))
-            entry = _failed_sync_result(creative_id, cause)
-            entry.assignment_errors = errors
-        results.append(entry)
+        )
 
     return assignment_list

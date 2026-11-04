@@ -223,7 +223,6 @@ def _case_existing_valid_assignment(ctx: dict):
     return {
         "creatives": payload,
         "assignments": _assignments_for_the_wire(ctx["assignments"]),
-        "validation_mode": "lenient",
     }, expect
 
 
@@ -239,7 +238,6 @@ def _case_new_creative_assigned(ctx: dict):
     return {
         "creatives": payload,
         "assignments": _assignments_for_the_wire(ctx["assignments"]),
-        "validation_mode": "lenient",
     }, expect
 
 
@@ -261,37 +259,6 @@ def _case_format_update_and_assignment(ctx: dict):
     return {
         "creatives": payload,
         "assignments": _assignments_for_the_wire(ctx["assignments"]),
-        "validation_mode": "lenient",
-    }, expect
-
-
-def _case_package_not_found_lenient(ctx: dict):
-    ctx["assignments"] = {"asg_c": ["pkg_void_c"]}
-    payload = [_creative(ctx, "asg_c", "Orphaned")]
-
-    def expect(live: TransportResult) -> None:
-        assert "pkg_void_c" in (_entry(live, "asg_c").get("assignment_errors") or {}), _entry(live, "asg_c")
-
-    return {
-        "creatives": payload,
-        "assignments": _assignments_for_the_wire(ctx["assignments"]),
-        "validation_mode": "lenient",
-    }, expect
-
-
-def _case_assignment_only_missing_creative(ctx: dict):
-    ctx["assignments"] = {"asg_d_ghost": ["pkg_asg_d"]}
-    payload = [_creative(ctx, "c_sync_anchor", "Anchor")]
-
-    def expect(live: TransportResult) -> None:
-        ghost = _entry(live, "asg_d_ghost")
-        assert ghost.get("action") == "failed", ghost
-        assert "pkg_asg_d" in (ghost.get("assignment_errors") or {}), ghost
-
-    return {
-        "creatives": payload,
-        "assignments": _assignments_for_the_wire(ctx["assignments"]),
-        "validation_mode": "lenient",
     }, expect
 
 
@@ -310,23 +277,6 @@ def _case_strict_package_not_found(ctx: dict):
     }, expect
 
 
-def _case_format_mismatch_lenient(ctx: dict):
-    pkg = _seed_package(ctx, product_format_id=_OTHER_FORMAT_ID)
-    ctx["assignments"] = {"asg_f": [pkg]}
-    payload = [_creative(ctx, "asg_f", "Wrong Format")]
-
-    def expect(live: TransportResult) -> None:
-        entry = _entry(live, "asg_f")
-        assert not entry.get("assigned_to"), entry
-        assert pkg in (entry.get("assignment_errors") or {}), entry
-
-    return {
-        "creatives": payload,
-        "assignments": _assignments_for_the_wire(ctx["assignments"]),
-        "validation_mode": "lenient",
-    }, expect
-
-
 _CASES: dict[str, Callable[[dict], tuple[dict, Callable[[TransportResult], None]]]] = {
     "two identical entries on one id": _case_two_identical,
     "two entries on one id that differ": _case_two_differ,
@@ -338,10 +288,7 @@ _CASES: dict[str, Callable[[dict], tuple[dict, Callable[[TransportResult], None]
     "existing creative with a valid assignment": _case_existing_valid_assignment,
     "new creative synced and assigned in one payload": _case_new_creative_assigned,
     "format update and assignment in one payload": _case_format_update_and_assignment,
-    "package not found in lenient mode": _case_package_not_found_lenient,
-    "assignment-only reference to a missing creative": _case_assignment_only_missing_creative,
     "strict package not found refuses both arms": _case_strict_package_not_found,
-    "format mismatch in lenient mode": _case_format_mismatch_lenient,
 }
 
 

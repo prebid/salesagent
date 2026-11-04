@@ -3594,6 +3594,17 @@ def then_no_creative_persisted_for_tenant(ctx: dict) -> None:
     request added nothing.
     """
     _assert_success_response(ctx)
+    _assert_library_unchanged(ctx)
+
+
+@then("the creative library is unchanged")
+def then_creative_library_unchanged(ctx: dict) -> None:
+    """A refused request wrote nothing: read the rows, since the wire cannot show the write."""
+    _assert_library_unchanged(ctx)
+
+
+def _assert_library_unchanged(ctx: dict) -> None:
+    """The library against the set captured BEFORE the request."""
     before = ctx.get("pre_request_library", {})
     after = _persisted_creative_fingerprints(ctx)
     added = sorted(set(after) - set(before))
@@ -3609,8 +3620,8 @@ def then_no_creative_persisted_for_tenant(ctx: dict) -> None:
     # disappear today, so it guards against a future hard delete rather than
     # against delete_missing.
     assert added == [] and removed == [] and modified == [], (
-        f"dry_run wrote to the library — added {added}, removed {removed}, modified {modified}; "
-        "a preview must leave it exactly as it found it"
+        f"the request wrote to the library — added {added}, removed {removed}, modified {modified}; "
+        "it must leave it exactly as it found it"
     )
 
 
@@ -5939,7 +5950,6 @@ def when_sync_cross_principal_assignment(ctx: dict) -> None:
         ctx,
         creatives=[own_creative],
         assignments=[{"creative_id": "creative-xp", "package_id": pkg.package_id}],
-        validation_mode="lenient",
     )
 
 
@@ -6966,9 +6976,9 @@ def then_assignment_of_creative_carries_weight(ctx: dict, creative_id: str, pack
 def given_creatives_all_fail(ctx: dict, count: int) -> None:
     """Set up `count` creatives that each fail per-creative validation.
 
-    Empty name fails validation; under validation_mode='lenient' each failure
-    is reported as a per-creative result (action='failed') INSIDE the success
-    variant rather than collapsing the whole operation to the error variant.
+    Empty name fails validation; each failure is reported as a per-creative result
+    (action='failed') INSIDE the success variant rather than collapsing the whole
+    operation to the error variant.
     """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
@@ -6984,7 +6994,6 @@ def given_creatives_all_fail(ctx: dict, count: int) -> None:
                 assets=assets,
             )
         )
-    ctx["validation_mode"] = "lenient"
 
 
 @then("the response is the success variant carrying a creatives array")

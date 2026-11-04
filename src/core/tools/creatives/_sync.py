@@ -11,8 +11,8 @@ from adcp.types.legacy import LegacyCreativeAsset as CreativeAsset
 from pydantic import BaseModel
 
 from src.core.database.repositories.uow import CreativeUoW
-from src.core.errors.details import ValidationDetails
-from src.core.exceptions import AdCPSalesAgentError, adcp_error_for
+from src.core.errors.details import CapabilityRefusalDetails, ValidationDetails
+from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPSalesAgentError, adcp_error_for
 from src.core.format_resolver import seller_format_catalogue
 from src.core.helpers import enum_value, log_tool_activity
 from src.core.resolved_identity import AccountIdentity, ResolvedIdentity
@@ -111,7 +111,14 @@ def sync_creatives(
     dry_run = bool(req.dry_run)
     joined = uow is not None
     assert not (joined and dry_run), "a joined sync commits with its caller and cannot be a preview"
-    validation_mode = enum_value(req.validation_mode)
+    # Strict is the one mode this seller serves, and it is refused here, before anything is
+    # stored. sync-creatives-request.json: "'lenient' processes valid creatives and reports
+    # errors", which this seller does not implement (GH #2515).
+    if enum_value(req.validation_mode) == "lenient":
+        raise AdCPCapabilityNotSupportedError(
+            details=CapabilityRefusalDetails(capability="validation_mode", rejected_value="lenient"),
+            field="validation_mode",
+        )
 
     from pydantic import ValidationError
 
@@ -532,7 +539,6 @@ def sync_creatives(
             assignments=req.assignments,
             results=results,
             tenant=tenant,
-            validation_mode=validation_mode,
             principal_id=principal_id,
             uow=uow if keep_open else None,
         )

@@ -1188,9 +1188,8 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     When the Buyer Agent assigns it to that package
     Then the creatives are refused CREATIVE_VALIDATION_FAILED_GENERIC at "assignments" for leaving placement "satisfaction_leaderboard_slot" uncovered
 
-    # The pair differs only in the stored placements. The refusal is raised whatever the
-    # validation mode: lenient skips a creative the product will not take, and here every
-    # creative is one the product takes -- what fails is the package's set.
+    # The pair differs only in the stored placements. Every creative is one the product
+    # takes; what fails is the package's set.
 
   @T-UC-FORMAT-SATISFACTION-sync-unprojectable-placements-covered @format_satisfaction_sync @requires_db
   Scenario Outline: sync_creatives accepts a deprecated creative the SDK cannot project on placements that admit it - <placements>
@@ -1398,30 +1397,12 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     Then the buyer is refused UNSUPPORTED_FEATURE
 
   @T-UC-FORMAT-SATISFACTION-sync-lenient-canonical @format_satisfaction_sync @requires_db
-  Scenario: lenient validation does not soften a closed-set refusal
+  Scenario: lenient validation is refused before the assignment is reached
     Given a packaged product declaring a canonical image option fixed at 300x250
     And the buyer syncs a creative identified by canonical kind "video_hosted"
     And the buyer asks for lenient validation
     When the Buyer Agent assigns it to that package
-    Then the buyer is refused UNSUPPORTED_FEATURE
-
-    # THE ASYMMETRY, graded deliberately because it reads like a bug to anyone who meets it
-    # without this scenario. ``validation_mode: "lenient"`` means "skip an assignment this
-    # product will not take and record the reason", and the LEGACY lane still does exactly
-    # that -- the row below proves it. A CANONICAL refusal does not soften, because the
-    # product published a closed set and this creative is outside it: there is no partial
-    # assignment to fall back to, and core/product-format-declaration.json calls the
-    # closed-set rejection "structural, not negotiable". Without these two rows side by
-    # side the next person to read the raise site sees one branch ignoring validation_mode
-    # and "fixes" it.
-
-  @T-UC-FORMAT-SATISFACTION-sync-lenient-legacy @format_satisfaction_sync @requires_db
-  Scenario: lenient validation does soften a deprecated-arm refusal
-    Given a packaged product declaring only the deprecated format_ids
-    And the buyer syncs a creative identified by format_id "video_1280x720"
-    And the buyer asks for lenient validation
-    When the Buyer Agent assigns it to that package
-    Then the sync succeeds and records an assignment error for that package
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the request member "validation_mode"
 
   # ── The LIBRARY UPSERT path: a creative whose format resolves to no canonical kind ────
   #
@@ -1619,10 +1600,6 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     When the Buyer Agent syncs it into the library
     Then the creative is reported failed with REFERENCE_NOT_FOUND and nothing is stored
 
-    # The OTHER half of the asymmetry, and the control for the row above: same tool, same
-    # lenient mode, same "this product will not take this creative" condition -- and the
-    # legacy lane skips with a recorded error instead of refusing. Both rows are needed:
-    # either one alone is satisfied by a gate that treats every mode the same.
 
   @T-UC-FORMAT-SATISFACTION-sync-sized-conforming @format_satisfaction_sync @requires_db
   Scenario: a creative sized as the deprecated arm requires is accepted
