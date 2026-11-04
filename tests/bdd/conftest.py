@@ -105,6 +105,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.local_context_echo",
     "tests.bdd.steps.domain.tenant_identification",
     "tests.bdd.steps.domain.agent_card_discovery",
+    "tests.bdd.steps.domain.mcp_endpoint_paths",
     "tests.bdd.steps.domain.publisher_format_catalog",
     "tests.bdd.steps.domain.publisher_authorization",
     "tests.bdd.steps.domain.pre_dispatch_refusals",
@@ -6793,6 +6794,15 @@ ENV_ROUTES: list[EnvRoute] = [
     EnvRoute(
         tag="agentcard",
         when=lambda m: "agentcard" in m,
+        env_builder=_build_capabilities_env,
+        seed=_seed_tenant_and_principal,
+    ),
+    # ── @mcppath (local MCP endpoint paths feature) ─────────────────────────
+    # Unscoped for the reason the row above gives. No tool is dispatched: the env only supplies
+    # how a path is reached on this transport (``post_mcp_initialize``).
+    EnvRoute(
+        tag="mcppath",
+        when=lambda m: "mcppath" in m,
         env_builder=_build_capabilities_env,
         seed=_seed_tenant_and_principal,
     ),

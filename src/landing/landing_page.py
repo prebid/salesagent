@@ -192,8 +192,7 @@ def generate_tenant_landing_page(tenant_row: dict) -> str:
     # also publish from, so the copy a human reads here and the identity a machine matches on
     # cannot be spelled differently. A machine client reads the card, so a path spelled here
     # is copy for a human -- and a human copying the bare origin, where both endpoints answer
-    # under a path, gets sent somewhere that is not the endpoint. "/mcp" is reached through
-    # the mount's own 307 to "/mcp/", which every HTTP client and browser follows.
+    # under a path, gets sent somewhere that is not the endpoint.
     mcp_url = f"{base_url}{AGENT_ENDPOINT_PATHS['mcp']}"
     a2a_url = f"{base_url}{AGENT_ENDPOINT_PATHS['a2a']}"
     agent_card_url = f"{base_url}{AGENT_CARD_PATH}"

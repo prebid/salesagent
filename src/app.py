@@ -146,6 +146,36 @@ app = FastAPI(
 app.mount("/mcp", mcp_app)
 
 
+class _BareMcpPath:
+    """The exact path ``/mcp`` served by the MCP app, with no redirect.
+
+    A ``Mount`` answers ``/mcp/`` and below and only redirects ``/mcp``, and Starlette resolves a
+    full match before a slash redirect, so once the lifespan installs the admin catch-all it
+    answered the published path with a 404. security.mdx key discovery compares this string with
+    the trailing slash significant and specifies "no redirects", so it has to answer where it
+    is published (:data:`src.core.agent_identity.AGENT_ENDPOINT_PATHS`).
+
+    Builds the scope the mount would, and leaves ``raw_path`` alone: a signature covers the path
+    the client sent.
+    """
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        root_path = scope.get("root_path", "")
+        await mcp_app(
+            {
+                **scope,
+                "path": f"{scope['path']}/",
+                "root_path": f"{root_path}/mcp",
+                "app_root_path": scope.get("app_root_path", root_path),
+            },
+            receive,
+            send,
+        )
+
+
+app.router.routes.append(Route("/mcp", _BareMcpPath(), include_in_schema=False))
+
+
 # ---------------------------------------------------------------------------
 # AdCP exception handlers — translate typed exceptions to HTTP responses.
 # ---------------------------------------------------------------------------

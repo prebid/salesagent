@@ -2829,6 +2829,33 @@ class BaseTestEnv:
             return httpx.get(f"{self.e2e_config.base_url}{path}", headers=headers, timeout=30)
         return self.get_rest_client().get(path, headers=headers)
 
+    def post_mcp_initialize(self, path: str) -> Any:
+        """POST an MCP ``initialize`` to *path*, following no redirect, and return the response.
+
+        In-process through the real app WITH ITS LIFESPAN, which installs the admin catch-all
+        mount and starts the MCP session manager, so what answers is what a deployment serves.
+        On e2e, a real POST against the live stack.
+        """
+        body = _mcp_jsonrpc_request(
+            1,
+            "initialize",
+            {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "harness", "version": "0"}},
+        )
+        headers = {"accept": "application/json, text/event-stream"}
+        if self.is_e2e:
+            import httpx
+
+            assert self.e2e_config is not None, "post_mcp_initialize()'s e2e branch needs env.e2e_config"
+            return httpx.post(f"{self.e2e_config.base_url}{path}", json=body, headers=headers, timeout=30)
+
+        from starlette.testclient import TestClient
+
+        from src.app import app
+        from tests.helpers.app_state import preserved_global_app_state
+
+        with preserved_global_app_state(), TestClient(app, follow_redirects=False) as client:
+            return client.post(path, json=body, headers=headers)
+
     def list_mcp_tools(self) -> dict[str, str | None]:
         """Each MCP tool's advertised description, by name, as a client's ``tools/list`` answers.
 
