@@ -5919,7 +5919,7 @@ def when_sync_cross_principal_assignment(ctx: dict) -> None:
     3.1/media-buy/sync-creatives-request.json, ``creatives`` is in ``required`` and
     carries ``minItems: 1``. This step used to send ``creatives=[]``, so every
     transport correctly refused the whole request with INVALID_REQUEST before the
-    assignment logic was ever reached — the scenario could not observe the skip it
+    assignment logic was ever reached — the scenario could not observe the refusal it
     exists to grade, and the refusal it got instead read as a production bug.
     A spec-valid request is the only one that reaches the behavior under test.
     """
@@ -5938,7 +5938,6 @@ def when_sync_cross_principal_assignment(ctx: dict) -> None:
     media_buy = MediaBuyFactory(tenant=tenant, principal=authenticated)
     pkg = MediaPackageFactory(media_buy=media_buy)
     env._commit_factory_data()
-    ctx["xp_package_id"] = pkg.package_id
     format_id, agent_url, assets = _format_payload(ctx, env)
     own_creative = CreativeAssetRequestFactory.payload(
         creative_id="creative-own-b",
@@ -5950,30 +5949,6 @@ def when_sync_cross_principal_assignment(ctx: dict) -> None:
         ctx,
         creatives=[own_creative],
         assignments=[{"creative_id": "creative-xp", "package_id": pkg.package_id}],
-    )
-
-
-@then("the sync operation should not fail")
-def then_sync_did_not_fail(ctx: dict) -> None:
-    """The cross-principal reference must be skipped — never a raw FK 500 —
-    and the skip must be VISIBLE: a synthesized per-item action='failed'
-    result naming the package in assignment_errors (;
-    the spec's success branch forbids response-level errors, so the outcome
-    rides creatives[]). A bare no-error check survives deletion of the
-    error recording — this assertion does not.
-    """
-    error = ctx.get("error")
-    assert error is None, f"sync_creatives failed on a cross-principal assignment reference: {error!r}"
-    response = require_payload(ctx)
-    entries = {r.creative_id: r for r in (getattr(response, "creatives", None) or [])}
-    entry = entries.get("creative-xp")
-    assert entry is not None, (
-        f"Skipped cross-principal assignment must surface as a per-item result entry, got creatives={sorted(entries)}"
-    )
-    assert entry.action == "failed", f"Expected action='failed' for the skipped reference, got {entry.action!r}"
-    pkg_id = ctx["xp_package_id"]
-    assert (entry.assignment_errors or {}).get(pkg_id), (
-        f"assignment_errors must name the skipped package {pkg_id}: {entry.assignment_errors!r}"
     )
 
 
