@@ -20,6 +20,7 @@ from datetime import datetime
 from pathlib import Path
 
 STEP_DECORATOR_NAMES = {"given", "when", "then"}
+DEFAULT_CALL_TIMEOUT = 120
 
 # ── Data classes ────────────────────────────────────────────────────
 
@@ -176,7 +177,7 @@ def _format_steps_for_triage(steps: list[BddStepInfo]) -> str:
     return "\n".join(parts)
 
 
-def _run_claude(prompt: str, model: str = "sonnet", timeout: int = 120) -> str:
+def _run_claude(prompt: str, model: str = "sonnet", timeout: int = DEFAULT_CALL_TIMEOUT) -> str:
     """Run claude -p and return the text output."""
     env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
     result = subprocess.run(
@@ -193,7 +194,7 @@ def run_pass1_triage(
     steps: list[BddStepInfo],
     batch_size: int = 10,
     *,
-    timeout: int = 120,
+    timeout: int = DEFAULT_CALL_TIMEOUT,
 ) -> list[TriageResult]:
     """Run Pass 1 triage on steps, batched for efficiency."""
     results: list[TriageResult] = []
@@ -321,7 +322,7 @@ def _collect_context_for_step(step: BddStepInfo) -> str:
 def run_pass2_deep_trace(
     flagged: list[TriageResult],
     *,
-    timeout: int = 120,
+    timeout: int = DEFAULT_CALL_TIMEOUT,
 ) -> list[DeepTraceResult]:
     """Run Pass 2 deep trace on flagged steps with Opus."""
     results: list[DeepTraceResult] = []
@@ -485,8 +486,8 @@ def main() -> None:
     parser.add_argument(
         "--timeout",
         type=int,
-        default=120,
-        help="Per-claude-call timeout in seconds (default: 120; parallel slices use 600)",
+        default=DEFAULT_CALL_TIMEOUT,
+        help=f"Per-claude-call timeout in seconds (default: {DEFAULT_CALL_TIMEOUT}; parallel slices use 600)",
     )
     parser.add_argument(
         "--features-dir",

@@ -34,6 +34,7 @@ class ParsedRow(TypedDict, total=False):
     func_name: str
     verdict: str
     severity: str
+    occurrence: int
 
 
 class ParsedOutput(TypedDict):
@@ -68,6 +69,9 @@ def parse_raw_output(raw_path: Path) -> ParsedOutput:
         idx, func_name, severity = int(m.group(1)), m.group(2), m.group(3)
         pass2_results.append({"index": idx, "func_name": func_name, "severity": severity})
 
+    _number_occurrences(pass1_results)
+    _number_occurrences(pass2_results)
+
     # Extract totals
     pass1_total = 0
     pass2_total = 0
@@ -91,6 +95,15 @@ def parse_raw_output(raw_path: Path) -> ParsedOutput:
         "pass2_total": pass2_total,
         "pass2_crashed_at": len(pass2_results) + 1 if pass2_results else 0,
     }
+
+
+def _number_occurrences(rows: list[ParsedRow]) -> None:
+    """Number each function name within one pass, starting at 1."""
+    counts: dict[str, int] = {}
+    for row in rows:
+        name = str(row.get("func_name") or "")
+        counts[name] = counts.get(name, 0) + 1
+        row["occurrence"] = counts[name]
 
 
 def _as_int(value: Any) -> int:
@@ -120,15 +133,14 @@ def _normalize_step(step: dict[str, Any], fallback_name: str = "") -> StepRecord
     }
 
 
-def _store_key(kind: str, step: Mapping[str, Any], fallback_name: str = "") -> str:
-    """Kind-scoped key. Occurrence distinguishes two steps that share a name.
+def _store_key(kind: str, step: Mapping[str, Any], fallback_name: str = "", *, occurrence: int) -> str:
+    """Kind-scoped key. ``occurrence`` is that name's index within the pass.
 
     A capture only has a function name, and ``step_lookup`` is also keyed by
     name, so line number cannot tell ``then_no_errors_field`` [COSMETIC] from
-    [MISSING]. ``#N`` is that name's occurrence within the pass.
+    [MISSING].
     """
     name = str(step.get("function_name") or fallback_name)
-    occurrence = int(step.get("occurrence") or 1)
     return f"{kind}:{name}#{occurrence}"
 
 
@@ -157,10 +169,8 @@ def _load_existing_keys(store_path: Path) -> set[str]:
         step = obj.get("step", {})
         if not isinstance(step, dict):
             step = {}
-        normalized = dict(_normalize_step(step))
-        if step.get("occurrence") is not None:
-            normalized["occurrence"] = step.get("occurrence")
-        existing_keys.add(_store_key(str(obj.get("kind")), normalized))
+        normalized = _normalize_step(step)
+        existing_keys.add(_store_key(str(obj.get("kind")), normalized, occurrence=int(step.get("occurrence") or 1)))
     return existing_keys
 
 
@@ -171,20 +181,50 @@ def _append_if_new(
     step_lookup: dict[str, StepRecord],
     existing_keys: set[str],
     record: dict[str, Any],
-    *,
-    occurrence: int,
 ) -> bool:
     """Write ``record`` once per kind-scoped key. Returns True if written."""
     func_name = r["func_name"]
+    occurrence = int(r["occurrence"])
     step_info = dict(step_lookup.get(func_name, _placeholder_step(func_name)))
     step_info["occurrence"] = occurrence
-    key = _store_key(kind, step_info, func_name)
+    key = _store_key(kind, step_info, func_name, occurrence=occurrence)
     if key in existing_keys:
         return False
     payload = {**record, "kind": kind, "step": step_info}
     f.write(json.dumps(payload) + "\n")
     existing_keys.add(key)
     return True
+
+
+def _pass_record(kind: str, row: ParsedRow) -> dict[str, Any]:
+    """Payload fields for one salvaged pass. ``kind`` is ``triage`` or ``deep``."""
+    if kind == "triage":
+        return {
+            "verdict": row["verdict"],
+            "reason": "salvaged from raw output (original reason lost)",
+            "source": "pass1",
+        }
+    return {
+        "claims": "salvaged — see full report for details",
+        "actually_tests": "salvaged — see full report for details",
+        "recommendation": "salvaged — see full report for details",
+        "severity": row["severity"],
+    }
+
+
+def _write_pass(
+    f: TextIO,
+    kind: str,
+    rows: list[ParsedRow],
+    step_lookup: dict[str, StepRecord],
+    existing_keys: set[str],
+) -> int:
+    """Write one pass. Occurrence is already on each row."""
+    written = 0
+    for row in rows:
+        if _append_if_new(f, kind, row, step_lookup, existing_keys, _pass_record(kind, row)):
+            written += 1
+    return written
 
 
 def write_to_store(parsed: ParsedOutput, store_path: Path, step_index_path: Path | None) -> None:
@@ -207,52 +247,10 @@ def write_to_store(parsed: ParsedOutput, store_path: Path, step_index_path: Path
             if name:
                 step_lookup[str(name)] = _normalize_step(step)
 
-    new_triage = 0
-    new_deep = 0
-
-    def _occurrences(rows: list[ParsedRow]) -> list[int]:
-        counts: dict[str, int] = {}
-        numbered: list[int] = []
-        for row in rows:
-            name = str(row["func_name"])
-            counts[name] = counts.get(name, 0) + 1
-            numbered.append(counts[name])
-        return numbered
-
     store_path.parent.mkdir(parents=True, exist_ok=True)
     with open(store_path, "a") as f:
-        for r, occurrence in zip(parsed["pass1"], _occurrences(parsed["pass1"]), strict=True):
-            if _append_if_new(
-                f,
-                "triage",
-                r,
-                step_lookup,
-                existing_keys,
-                {
-                    "verdict": r["verdict"],
-                    "reason": "salvaged from raw output (original reason lost)",
-                    "source": "pass1",
-                },
-                occurrence=occurrence,
-            ):
-                new_triage += 1
-
-        for r, occurrence in zip(parsed["pass2"], _occurrences(parsed["pass2"]), strict=True):
-            if _append_if_new(
-                f,
-                "deep",
-                r,
-                step_lookup,
-                existing_keys,
-                {
-                    "claims": "salvaged — see full report for details",
-                    "actually_tests": "salvaged — see full report for details",
-                    "recommendation": "salvaged — see full report for details",
-                    "severity": r["severity"],
-                },
-                occurrence=occurrence,
-            ):
-                new_deep += 1
+        new_triage = _write_pass(f, "triage", parsed["pass1"], step_lookup, existing_keys)
+        new_deep = _write_pass(f, "deep", parsed["pass2"], step_lookup, existing_keys)
 
     print(f"Salvaged to {store_path}:", file=sys.stderr)
     print(f"  Pass 1: {new_triage} new triage results (of {len(parsed['pass1'])} total)", file=sys.stderr)

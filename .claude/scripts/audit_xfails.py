@@ -573,11 +573,10 @@ class XpassBuckets(NamedTuple):
 
 
 def classify_xpassed(
-    all_tests: list[TestReportEntry],
+    nodeid_outcomes: Sequence[tuple[str, str]],
     *,
     force_confirm: bool = False,
     ledger_bases: set[str] | None = None,
-    nodeid_outcomes: Sequence[tuple[str, str]] | None = None,
 ) -> XpassBuckets:
     """Classify xpassed scenario bases into graduate / confirm / partial.
 
@@ -598,8 +597,6 @@ def classify_xpassed(
 
     Returns ``XpassBuckets(graduate, confirm, partial_passing, partial_missing)``.
     """
-    if nodeid_outcomes is None:
-        nodeid_outcomes = [(t["nodeid"], graded_outcome(t)) for t in all_tests]
     xpassed_bases = {extract_scenario_base(nodeid) for nodeid, outcome in nodeid_outcomes if outcome == "xpassed"}
     graduate: set[str] = set()
     confirm: set[str] = set()
@@ -853,10 +850,9 @@ def main() -> None:
     # Step 4: Classify xpassed tests (needs full suite for present-transport set)
     print("Classifying xpassed tests...", file=sys.stderr)
     buckets = classify_xpassed(
-        all_tests,
+        loaded.nodeid_outcomes,
         force_confirm=force_confirm,
         ledger_bases=ledger_bases,
-        nodeid_outcomes=loaded.nodeid_outcomes,
     )
     print(
         f"  {len(buckets.graduate)} pass all present transports (graduation candidates)",
