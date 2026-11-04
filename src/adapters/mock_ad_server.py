@@ -1480,6 +1480,15 @@ class MockAdServer(AdServerAdapter):
           ``approve_order``, ``archive_order``) and ``update_package_impressions``, which
           the mock does not model — no package record changes, so ``[]``.
         """
+        # The ad server's own record of the call, written before the work can raise, as create's is.
+        self.audit_logger.log_operation(
+            operation="update_media_buy",
+            principal_name=self.principal.name,
+            principal_id=self.principal.principal_id,
+            adapter_id=self.adapter_principal_id or "unknown",
+            success=True,
+            details={"media_buy_id": media_buy_id, "action": action, "package_id": package_id},
+        )
         import logging
 
         from sqlalchemy.orm import attributes

@@ -1175,6 +1175,42 @@ Feature: BR-UC-003 Update Media Buy
   # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json pointer=/properties/daily_budget_cap
   # The one overlay refusal both tools share, on the update side.
   # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/targeting.json
+  # update_media_buy.mdx (v3.2.7): "One update_media_buy request is one atomic mutation."
+  # core/package.json requires a package's catalogs to be of distinct types. The refusal
+  # was right and came after the ad server had the new budget. The control is the same budget
+  # with one catalog, which does reach the ad server, so "no call" here is not vacuous.
+  # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/update_media_buy.mdx
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/package.json pointer=/properties/catalogs
+  @T-UC-003-duplicate-catalogs-atomic
+  Scenario: A budget beside duplicate catalog types reaches no ad server
+    Given the tenant is configured for auto-approval
+    And a valid update_media_buy request with:
+    | field        | value       |
+    | media_buy_id | mb_existing |
+    And the request includes 1 package update with:
+    | field      | value   |
+    | package_id | pkg_001 |
+    And the package "pkg_001" exists in the media buy
+    And the package update sets a new budget and catalogs of "duplicate" types
+    When the Buyer Agent sends the update_media_buy request
+    Then the buyer is refused VALIDATION_ERROR naming the package member "catalogs"
+    And the ad server received no update call
+
+  @T-UC-003-duplicate-catalogs-atomic
+  Scenario: A budget beside one catalog reaches the ad server
+    Given the tenant is configured for auto-approval
+    And a valid update_media_buy request with:
+    | field        | value       |
+    | media_buy_id | mb_existing |
+    And the request includes 1 package update with:
+    | field      | value   |
+    | package_id | pkg_001 |
+    And the package "pkg_001" exists in the media buy
+    And the package update sets a new budget and catalogs of "one" types
+    When the Buyer Agent sends the update_media_buy request
+    Then the response should succeed
+    And the ad server received an update_package_budget call
+
   @T-UC-003-unapplied-overlay-dimension
   Scenario Outline: An overlay dimension no adapter applies is refused on update - <dimension>
     Given the tenant is configured for auto-approval

@@ -2700,6 +2700,29 @@ def given_package_update_overlay_dimension(ctx: dict, dimension: str) -> None:
     ctx["update_kwargs"]["packages"][0]["targeting_overlay"] = {dimension: OVERLAY_DIMENSIONS[dimension]}
 
 
+@given(parsers.parse('the package update sets a new budget and catalogs of "{kind}" types'))
+def given_package_update_budget_and_catalogs(ctx: dict, kind: str) -> None:
+    """A budget change beside catalogs, ``duplicate`` being two of one type."""
+    catalogs = [{"type": "product", "catalog_id": "a"}, {"type": "product", "catalog_id": "b"}]
+    package = ctx["update_kwargs"]["packages"][0]
+    package["budget"] = 6000
+    package["catalogs"] = catalogs if kind == "duplicate" else catalogs[:1]
+
+
+@then("the ad server received no update call")
+def then_ad_server_no_update_call(ctx: dict) -> None:
+    """Read from the ad server's own record, on every transport (``adapter_update_actions``)."""
+    actions = ctx["env"].adapter_update_actions()
+    assert actions == [], f"the ad server was handed {actions} for a request the seller refused"
+
+
+@then("the ad server received an update_package_budget call")
+def then_ad_server_budget_call(ctx: dict) -> None:
+    """The control: this request does reach the ad server, so the no-call Then can fail."""
+    actions = ctx["env"].adapter_update_actions()
+    assert actions == ["update_package_budget"], f"the ad server was handed {actions}"
+
+
 @given(parsers.parse('the update sets its "{member}" member'))
 def given_update_sets_member(ctx: dict, member: str) -> None:
     """Set a valid value of a top-level field this seller does not apply, and note the revision."""

@@ -829,6 +829,11 @@ def _update_media_buy_impl(
     # puts this rejection "before any mutation", so no transaction may be open when it fires.
     refuse_ambiguous_bidding(req.packages)
     _refuse_unapplied_package_fields(req)
+    # A package's catalogs are required to be of distinct types (core/package.json), the same
+    # refusal create makes. Here rather than beside the catalog write, which runs after the
+    # pause and budget adapter calls of the same package.
+    for pkg_index, pkg_update in enumerate(req.packages or ()):
+        refuse_duplicate_catalog_types(pkg_update.catalogs, pkg_index)
     refuse_unapplied_request_fields(req, _UNAPPLIED_REQUEST_FIELDS)
     _refuse_unsupported_actions(req)
 
@@ -1604,9 +1609,6 @@ def _update_media_buy_impl(
                     if pkg_update.catalogs is not None:
                         if not pkg_update.package_id:
                             raise AdCPValidationError(field=package_field_path("package_id", pkg_index))
-                        # The replacement becomes the package's catalogs, which core/package.json
-                        # requires to be of distinct types -- the same refusal create makes.
-                        refuse_duplicate_catalog_types(pkg_update.catalogs, pkg_index)
                         catalog_pkg = uow.media_buys.get_package_or_raise(req.media_buy_id, pkg_update.package_id)
                         # Through the repository's own writer rather than a mutate +
                         # flag_modified pair: it replaces the document, bumps the buy's
