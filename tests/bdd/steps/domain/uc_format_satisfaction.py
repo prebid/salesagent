@@ -2791,6 +2791,14 @@ def given_selector_at_respelled_agent(ctx: dict, format_id: str, variant: str) -
     _put_selector(ctx, {"format_ids": [{"agent_url": _agent_url_spelled(variant), "id": format_id}]})
 
 
+@given("the buyer's package names a deprecated format at the agent that does not answer")
+def given_selector_at_unreachable_agent(ctx: dict) -> None:
+    """A legacy selector whose agent is the one ``configure_peer_agent`` left unreachable."""
+    _put_selector(
+        ctx, {"format_ids": [{"agent_url": ctx["env"].unreachable_creative_agent_url(), "id": "peer_format"}]}
+    )
+
+
 # ── Then steps ──────────────────────────────────────────────────────
 
 

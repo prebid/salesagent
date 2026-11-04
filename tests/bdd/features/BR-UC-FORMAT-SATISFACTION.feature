@@ -533,6 +533,29 @@ Feature: A format selector must satisfy the canonical declaration the product pu
       | exact_300x250      |
       | direct_plus_legacy |
 
+  # A legacy reference needs its agent's served declaration to project, and an outage of that
+  # agent says nothing about the request: enums/error-code.json classes UNSUPPORTED_FEATURE
+  # correctable and SERVICE_UNAVAILABLE transient, so the buyer retries rather than changes a
+  # valid selector. An agent the request does not name stays skipped, which is the control.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumMetadata/SERVICE_UNAVAILABLE
+  @T-UC-FORMAT-SATISFACTION-agent-outage @format_satisfaction @requires_db
+  Scenario: a selector naming a creative agent that does not answer is refused as transient
+    Given the seller declares a canonical format option "fixed_300x250"
+    And a creative agent the seller configured does not answer
+    And the buyer's package names a deprecated format at the agent that does not answer
+    When the Buyer Agent sends the create_media_buy request
+    Then the error code should be "SERVICE_UNAVAILABLE"
+    And the error recovery should be "transient"
+    And no media buy is persisted for the tenant
+
+  @T-UC-FORMAT-SATISFACTION-agent-outage @format_satisfaction @requires_db
+  Scenario: a creative agent that does not answer is skipped when no selector names it
+    Given the seller declares a canonical format option "fixed_300x250"
+    And a creative agent the seller configured does not answer
+    And the buyer's package selects "exact_300x250"
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer receives the media buy
+
   # The registry's format_id_glob entries are written in the reference agent's id namespace.
   # Another agent's id is that agent's own: registries/v1-canonical-mapping.json projects it
   # through the agent's served declaration or its slot shape, and with neither it fails

@@ -911,7 +911,8 @@ def _resolve_package_selectors(
         selector_routes,
     )
 
-    catalogue = seller_format_catalogue(tenant_id) if any(pkg.format_ids for pkg in req.packages or []) else []
+    references = [reference for pkg in req.packages or [] for reference in pkg.format_ids or []]
+    catalogue = seller_format_catalogue(tenant_id, references=references) if references else []
     resolutions: dict[int, SelectorResolution] = {}
     for pkg_index, pkg in enumerate(req.packages or []):
         # A package naming a product this tenant does not hold is already refused above by

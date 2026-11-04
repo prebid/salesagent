@@ -1554,7 +1554,17 @@ def fetch_format_spec(agent_url: str, format_id: str, *, provenance: UrlProvenan
         return None
 
 
-def seller_format_catalogue(tenant_id: str) -> list[Format]:
+def _names_agent_in(reference: FormatRef, origins: set[str | None]) -> bool:
+    """Whether *reference* names an agent at one of *origins*; a URL the canonicalization refuses names none."""
+    from src.core.creative_agent_registry import agent_origin
+
+    try:
+        return agent_origin(str(format_reference(reference).agent_url)) in origins
+    except TargetUriMalformedError:
+        return False
+
+
+def seller_format_catalogue(tenant_id: str, *, references: Iterable[FormatRef] = ()) -> list[Format]:
     """Every format a reference this seller receives is resolved against.
 
     The dialled creative agents PLUS the formats the tenant's own ad-server adapter serves.
@@ -1568,15 +1578,29 @@ def seller_format_catalogue(tenant_id: str) -> list[Format]:
 
     Fetched once per request and outside any transaction by its callers: the registry's
     async HTTP must not run inside a database savepoint.
+
+    An agent that did not answer is skipped, unless one of *references* names it: such a
+    reference cannot be resolved now and says nothing wrong, so the request is refused as
+    transient rather than graded against a catalogue missing that agent's formats.
+
+    Raises:
+        AdCPServiceUnavailableError: an agent a reference names did not answer.
     """
-    from src.core.creative_agent_registry import get_creative_agent_registry
+    from src.core.creative_agent_registry import agent_origin, get_creative_agent_registry
+    from src.core.errors.codes import AppErrorCode
+    from src.core.exceptions import AdCPServiceUnavailableError
     from src.core.helpers.adapter_helpers import adapter_served_creative_formats
 
     registry = get_creative_agent_registry()
-    return [
-        *run_async_in_sync_context(registry.list_all_formats(tenant_id=tenant_id)),
-        *adapter_served_creative_formats(tenant_id),
-    ]
+    fetched = run_async_in_sync_context(registry.list_all_formats_with_errors(tenant_id=tenant_id))
+    unreachable = {
+        agent_origin(agent_url)
+        for agent_url, error in zip(fetched.failed_agent_urls, fetched.errors, strict=True)
+        if error.code == AppErrorCode.AGENT_UNREACHABLE
+    }
+    if unreachable and any(_names_agent_in(reference, unreachable) for reference in references):
+        raise AdCPServiceUnavailableError()
+    return [*fetched.formats, *adapter_served_creative_formats(tenant_id)]
 
 
 def get_format(
