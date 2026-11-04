@@ -57,6 +57,8 @@ EXPECTED_WIRED_ROUTES: frozenset[str] = frozenset(
         "UC-026",
         "UC-GET-PRODUCTS",
         # literal ENV_ROUTES block
+        # Native task ownership is graded through real A2A HTTP requests.
+        "a2a-task-ownership",
         "codes-declared-code-reaches-buyer",
         # The context echo, graded on every outcome across all four transports. Three routes.
         # Two because the scenarios need both a read tool and a write tool: a schema rejection

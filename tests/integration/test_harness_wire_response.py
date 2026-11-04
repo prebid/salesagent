@@ -342,6 +342,14 @@ class TestHasWireIsDeclaredAtEveryConstructionSite:
             "REST DELIVER exception — no HTTP body existed at all, so nothing crossed the wire",
         ),
         # ── tests/harness/raw_wire.py — a document sent as written (REST goes through client.py) ──
+        ("raw_wire.py", "unwrap_a2a_native_response", 0): (
+            True,
+            "native A2A task refusal — the JSON-RPC error was received in a real HTTP response",
+        ),
+        ("raw_wire.py", "unwrap_a2a_native_response", 1): (
+            True,
+            "native A2A task success — the task body was received in a real HTTP response",
+        ),
         ("raw_wire.py", "_protocol_refusal", 0): (
             False,
             "the transport's own refusal (JSON-RPC error, MCP ToolError with no envelope) — no AdCP body "

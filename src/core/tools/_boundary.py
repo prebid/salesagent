@@ -242,6 +242,8 @@ async def serve(
     headers: Mapping[str, str],
     protocol: TransportProtocol,
     exchange: HttpExchange | None = None,
+    *,
+    on_resolved: Callable[[PublicIdentity], None] | None = None,
 ) -> AdcpResponse:
     """Answer one buyer payload. THE transport entry.
 
@@ -254,8 +256,13 @@ async def serve(
     where its raw bytes and raw path still existed, and handed over exactly as ``headers``
     are: sourced from the transport, never re-derived here. A transport that is not serving
     an HTTP request passes none, which is a request presenting no signature.
+
+    ``on_resolved`` receives the resolved caller before invocation, for transports that
+    retain a caller-owned handle. Validation/authentication failures publish no owner.
     """
-    return await invoke_tool(tool_name, validated_request(tool_name, raw, protocol), headers, protocol, exchange)
+    return await invoke_tool(
+        tool_name, validated_request(tool_name, raw, protocol), headers, protocol, exchange, on_resolved=on_resolved
+    )
 
 
 async def invoke_tool(
@@ -264,6 +271,8 @@ async def invoke_tool(
     headers: Mapping[str, str],
     protocol: TransportProtocol,
     exchange: HttpExchange | None = None,
+    *,
+    on_resolved: Callable[[PublicIdentity], None] | None = None,
 ) -> AdcpResponse:
     """Run the registry's tool named ``tool_name``, for the caller the request *headers* present.
 
@@ -365,9 +374,37 @@ async def invoke_tool(
     # no per-transport channel here, so no transport can hand an implementation a value the
     # others cannot.
     try:
+        # A transport may bind its retained handle to the caller already resolved here.
+        # Publish before invocation so failed and submitted outcomes retain the same owner.
+        # This is output only: it cannot replace the identity or bypass resolution.
+        if on_resolved is not None:
+            on_resolved(identity)
         return _served(echo, await _invoke(tool_name, spec.impl, req, identity))
     except Exception as exc:
         _failed(protocol, tool_name, exc, echo, identity)
+
+
+async def task_owner(
+    operation: str, headers: Mapping[str, str], exchange: HttpExchange | None = None
+) -> tuple[str, str]:
+    """Authenticate native A2A task access before the transport consults its task map.
+
+    Native GetTask/CancelTask have no AdCP DTO or registry row. They still use the
+    boundary's credential policy and signature prechecks, and its failure envelope.
+    A2A 1.0 §3.3.2 requires authentication and hides inaccessible tasks.
+    """
+    from src.core.resolved_identity import _resolve_identity
+
+    try:
+        identity = await asyncio.to_thread(
+            _resolve_identity,
+            headers,
+            require_valid_token=True,
+            signature_subject=SignatureSubject(operation=operation, registers_credentials=False, exchange=exchange),
+        )
+    except Exception as exc:
+        _failed(TransportProtocol.A2A, operation, exc, None)
+    return identity.tenant_id, identity.principal_id
 
 
 def _served[Served: AdcpResponse](echo: ContextObject | None, response: Served) -> Served:

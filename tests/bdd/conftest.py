@@ -55,6 +55,7 @@ if TYPE_CHECKING:
 # fixture lookup. Simple ``import`` is not enough — pytest only discovers
 # fixtures from conftest files and registered plugins.
 pytest_plugins = [
+    "tests.bdd.steps.domain.a2a_task_ownership",
     "tests.bdd.payload_capture",
     "tests.bdd.scenario_liveness",
     "tests.bdd.steps.generic.given_auth",
@@ -4538,6 +4539,7 @@ _TRANSPORT_SPECIFIC_TAGS = {"rest", "mcp", "a2a"}
 # escape-hatch detectors (GH #1892), whereas this keeps a real ``[a2a]`` test id
 # that ``--collect-only`` shows.
 _SINGLE_TRANSPORT_TAGS = {
+    "a2a-task-ownership": "A2A",
     "a2a_untyped_ingest": "A2A",
     # local-pre-dispatch-refusals.feature: the refused shape is the transport's own frame,
     # so each scenario names the one transport whose frame it sends.
@@ -5927,6 +5929,11 @@ _UC006_WIRED_SCENARIOS = frozenset(
 )
 
 ENV_ROUTES: list[EnvRoute] = [
+    EnvRoute(
+        tag="a2a-task-ownership",
+        when=lambda m: "a2a-task-ownership" in m,
+        env_builder=_env("tests.harness.a2a_task_ownership.A2ATaskOwnershipEnv"),
+    ),
     # ── @ctxecho (local context-echo-on-every-outcome feature) ──────────────
     # Same reason the @egress rows below are UNSCOPED `when` rows: these
     # scenarios carry T-CTXECHO-* identity tags, not T-UC-<n>, so
