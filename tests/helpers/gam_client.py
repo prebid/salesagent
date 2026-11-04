@@ -75,6 +75,11 @@ GAM_CREATE_METHODS: frozenset[tuple[str, str]] = frozenset(
 STAND_IN_NETWORK_TIME_ZONE = "America/Los_Angeles"
 
 
+def gam_fault(reason: str) -> GoogleAdsServerFault:
+    """What googleads raises for a SOAP fault: GAM's ``[<reason> @ ]`` text, for an ``ApiError`` reason."""
+    return GoogleAdsServerFault(None, message=f"[{reason} @ ]")
+
+
 def stub_gam_client(
     *,
     line_items: tuple[SoapObject, ...] | list[SoapObject] = (),
@@ -91,8 +96,7 @@ def stub_gam_client(
       ``network_time_zone``. Any other network field raises ``AttributeError``, so a new
       reader of the network record fails loudly instead of reading a ``MagicMock``. Given
       ``network_fault``, an ``ApiError`` reason such as ``"QuotaError.EXCEEDED_QUOTA"``, it
-      refuses instead, raising what googleads raises for a SOAP fault: a
-      ``GoogleAdsServerFault`` carrying GAM's ``[<reason> @ ]`` text.
+      refuses instead, raising ``gam_fault``.
     * ``LineItemService.getLineItemsByStatement`` answers the line items the network holds,
       read at call time: ``client.line_items`` (seeded from ``line_items``; a test adds held
       line items there), then the line items it created.
@@ -105,7 +109,8 @@ def stub_gam_client(
       ``str(created[0]["id"])`` and the approval path then does ``int(order_id)``. The sent
       objects are not mutated. GAM keys a line item creative association by its line item
       and creative and gives it no id; the id this stand-in adds to one is its own, and
-      nothing should read it.
+      nothing should read it. A line item in ``client.refused_line_items`` (line item id ->
+      ``ApiError`` reason; a test adds them) refuses its association with ``gam_fault``.
     * ``LineItemCreativeAssociationService.getLineItemCreativeAssociationsByStatement``
       answers the associations the network created, read at call time.
 
@@ -123,6 +128,7 @@ def stub_gam_client(
     created: dict[tuple[str, str], list[SoapObject]] = {}
     client = MagicMock()
     client.line_items = list(line_items)
+    client.refused_line_items = {}
 
     def _creates(service: str, method: str) -> Callable[..., list[SoapObject]]:
         def _answer(objects: list[Any], *_args: Any, **_kwargs: Any) -> list[SoapObject]:
@@ -144,15 +150,23 @@ def stub_gam_client(
         "NetworkService": MagicMock(
             getCurrentNetwork=MagicMock(
                 return_value=SoapObject(timeZone=network_time_zone),
-                side_effect=None
-                if network_fault is None
-                else GoogleAdsServerFault(None, message=f"[{network_fault} @ ]"),
+                side_effect=None if network_fault is None else gam_fault(network_fault),
             )
         ),
     }
     for service, method in GAM_CREATE_METHODS:
         setattr(services.setdefault(service, MagicMock()), method, MagicMock(side_effect=_creates(service, method)))
     lica = "LineItemCreativeAssociationService"
+    _associate = _creates(lica, "createLineItemCreativeAssociations")
+
+    def _associate_unless_refused(objects: list[Any], *args: Any, **kwargs: Any) -> list[SoapObject]:
+        for obj in objects:
+            reason = client.refused_line_items.get(str(obj["lineItemId"]))
+            if reason is not None:
+                raise gam_fault(reason)
+        return _associate(objects, *args, **kwargs)
+
+    services[lica].createLineItemCreativeAssociations = MagicMock(side_effect=_associate_unless_refused)
     services[lica].getLineItemCreativeAssociationsByStatement = MagicMock(
         side_effect=lambda *_args: SoapObject(
             results=list(created.get((lica, "createLineItemCreativeAssociations"), []))

@@ -129,13 +129,13 @@ def test_push_persists_the_adapter_enrichment(integration_db, factory_session):
         "src.core.tools.media_buy_create.get_adapter",
         return_value=_adapter_reporting(creative_id),
     ):
-        ok, err = push_creative_to_existing_buy(
+        failure = push_creative_to_existing_buy(
             creative_id=creative_id,
             media_buy_id=media_buy_id,
             tenant_id=tenant_id,
         )
 
-    assert (ok, err) == (True, None), f"push failed: {err}"
+    assert failure is None, f"push failed: {failure}"
 
     data = _persisted_creative_data(tenant_id, creative_id, principal_id)
     assert data.get("concept_id") == PLATFORM_CONCEPT_ID, (

@@ -60,6 +60,7 @@ from src.core.exceptions import (
     AdCPSalesAgentError,
     AdCPTermsRejectedError,
     AdCPValidationError,
+    adcp_error_for,
 )
 from src.core.helpers import enum_value
 from src.core.helpers.brand_key import brand_key_parts
@@ -1987,13 +1988,25 @@ def execute_approved_media_buy(
         return _mark_approval_failed(tenant_id, media_buy_id, error_msg)
 
 
+@dataclass(frozen=True)
+class CreativePushFailure:
+    """Why a push did not place a creative.
+
+    ``reason`` is for the seller's log and may quote the ad server. ``error`` is what the buyer
+    may read: what the ad server's failure classifies as, or None when no ad server call failed.
+    """
+
+    reason: str
+    error: AdCPSalesAgentError | None = None
+
+
 def push_creative_to_existing_buy(
     *,
     creative_id: str,
     media_buy_id: str,
     tenant_id: str,
     package_ids: list[str] | None = None,
-) -> tuple[bool, str | None]:
+) -> CreativePushFailure | None:
     """Push a single approved creative to an already-active ad server line item.
 
     Called from approve_creative when the buy is already live but this creative
@@ -2009,7 +2022,7 @@ def push_creative_to_existing_buy(
     The push acts as the buy's owner: it pushes that principal's creative, through that
     principal's assignment rows.
 
-    Returns (success, error_message). error_message is non-None only on failure.
+    Returns None on success, and the failure otherwise.
     """
     from src.core.database.repositories.uow import AdminCreativeUoW
 
@@ -2031,7 +2044,7 @@ def push_creative_to_existing_buy(
             assert buy_uow.media_buys is not None
             buy = buy_uow.media_buys.get_by_id(media_buy_id)
             if buy is None:
-                return False, f"Media buy {media_buy_id} not found"
+                return CreativePushFailure(f"Media buy {media_buy_id} not found")
             buy_principal_id = buy.principal_id
 
         # Nothing is open here. This is the whole point of the split. get_adapter reads the
@@ -2047,13 +2060,13 @@ def push_creative_to_existing_buy(
 
             tenant_obj = uow.tenant_config.get_tenant()
             if not tenant_obj:
-                return False, f"Tenant {tenant_id} not found"
+                return CreativePushFailure(f"Tenant {tenant_id} not found")
 
             creative = uow.creatives.get_by_id(creative_id, buy_principal_id)
             if not creative:
-                return False, f"Creative {creative_id} not found"
+                return CreativePushFailure(f"Creative {creative_id} not found")
             if creative.status not in CLEARED_TO_SERVE:
-                return False, f"Creative {creative_id} is not approved (status={creative.status})"
+                return CreativePushFailure(f"Creative {creative_id} is not approved (status={creative.status})")
 
             all_assignments = uow.assignments.get_by_creative(creative_id)
             matching = [
@@ -2064,21 +2077,23 @@ def push_creative_to_existing_buy(
                 and (package_ids is None or a.package_id in package_ids)
             ]
             if not matching:
-                return False, f"No assignment of creative {creative_id} to media buy {media_buy_id}"
+                return CreativePushFailure(f"No assignment of creative {creative_id} to media buy {media_buy_id}")
 
             # Resolved above, outside every unit. See the comment at the top of the try.
             if not (hasattr(adapter, "creatives_manager") and adapter.creatives_manager):
-                return False, "Adapter does not support creative upload"
+                return CreativePushFailure("Adapter does not support creative upload")
 
             packages = uow.media_buys.get_packages(media_buy_id)
             platform_order_id = _stored_order_id(packages)
             if not platform_order_id:
-                return False, f"Media buy {media_buy_id} has no platform_order_id — buy may not be live yet"
+                return CreativePushFailure(
+                    f"Media buy {media_buy_id} has no platform_order_id — buy may not be live yet"
+                )
 
             package_assignments = _package_assignments_by_creative(matching, packages)[creative_id]
             asset, build_err = _build_adapter_asset_from_creative(creative, package_assignments, tenant_id=tenant_id)
             if build_err:
-                return False, build_err
+                return CreativePushFailure(build_err)
             assert asset is not None
 
             try:
@@ -2092,12 +2107,12 @@ def push_creative_to_existing_buy(
                     log_safe(f"[GATE-PUSH] Adapter raised pushing creative {creative_id} to buy {media_buy_id}: {e}"),
                     exc_info=True,
                 )
-                return False, str(e)
+                return CreativePushFailure(str(e), adcp_error_for(e))
 
             for status in asset_statuses:
                 if status.creative_id == creative_id:
                     if status.status == "failed":
-                        return False, status.message or "Adapter reported upload failure"
+                        return CreativePushFailure(status.message or "Adapter reported upload failure", status.error)
                     merged_data = _apply_creative_enrichment(creative, status)
                     if merged_data is not None:
                         uow.creatives.update_data(creative, merged_data)
@@ -2107,15 +2122,15 @@ def push_creative_to_existing_buy(
                             f"{media_buy_id} (platform order {platform_order_id})"
                         )
                     )
-                    return True, None
-            return False, f"Adapter did not report status for creative {creative_id}"
+                    return None
+            return CreativePushFailure(f"Adapter did not report status for creative {creative_id}")
 
     except Exception as e:
         logger.error(
             log_safe(f"[GATE-PUSH] Unexpected error pushing creative {creative_id} to buy {media_buy_id}: {e}"),
             exc_info=True,
         )
-        return False, str(e)
+        return CreativePushFailure(str(e), adcp_error_for(e))
 
 
 #: Event-goal target kinds that aggregate conversion value, so a goal carrying one needs a

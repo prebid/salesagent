@@ -177,6 +177,7 @@ def _process_assignments(
     assignment_errors_by_creative: dict[str, dict[str, str]] = {}  # creative_id -> {package_id: error}
     not_found_creative_ids: set[str] = set()  # creative_ids whose library lookup returned None
     packages_not_found_by_creative: dict[str, set[str]] = {}  # creative_id -> package_ids that do not exist
+    ad_server_errors_by_creative: dict[str, AdCPSalesAgentError] = {}  # creative_id -> what the ad server's fault is
     media_buys_with_new_assignments: dict[str, Any] = {}  # media_buy_id -> MediaBuy object
     # (media_buy_id, package_id) -> the package's product, for every package this request
     # assigned to: its whole creative set is graded for placement coverage once the
@@ -478,17 +479,21 @@ def _process_assignments(
                         # When update_media_buy is the caller (inline creatives), this unit is its
                         # unit joined, so this runs once that unit has committed and closed.
                         # structural-guard: nested-unit-of-work - after_commit runs this once the unit that committed has closed
-                        ok, err = push_creative_to_existing_buy(
+                        failure = push_creative_to_existing_buy(
                             creative_id=creative_id,
                             media_buy_id=media_buy_id,
                             tenant_id=tenant.tenant_id,
                             package_ids=package_ids,
                         )
-                        if ok:
+                        if failure is None:
                             continue
                         logger.error(
-                            log_safe(f"Creative {creative_id} not trafficked to media buy {media_buy_id}: {err}")
+                            log_safe(
+                                f"Creative {creative_id} not trafficked to media buy {media_buy_id}: {failure.reason}"
+                            )
                         )
+                        if failure.error is not None:
+                            ad_server_errors_by_creative[creative_id] = failure.error
                         # The assignment rows stay: the buyer's re-send is pushed again.
                         for package_id in package_ids:
                             assignments_by_creative[creative_id].remove(package_id)
@@ -544,7 +549,7 @@ def _process_assignments(
                 assignment_errors=errors or None,
             )
         else:
-            # Nothing assigned: every referenced package failed. Buyer-correctable.
+            # Nothing assigned: every referenced package failed.
             #
             # A creative-not-found entry carries CREATIVE_NOT_FOUND, the same code the
             # strict-mode raise above emits, so the two validation modes agree on this
@@ -573,6 +578,10 @@ def _process_assignments(
                         package_id=next(iter(missing_packages)) if len(missing_packages) == 1 else None,
                     )
                 )
+            elif creative_id in ad_server_errors_by_creative:
+                # core/error.json: correctable is "fix the request and resend". The ad server's
+                # fault keeps its own code; the adapter's own refusal (a size) stays below.
+                cause = ad_server_errors_by_creative[creative_id]
             else:
                 cause = AdCPValidationError(details=ValidationDetails(creative_id=creative_id))
             entry = _failed_sync_result(creative_id, cause)

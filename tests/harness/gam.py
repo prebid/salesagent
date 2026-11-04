@@ -282,6 +282,17 @@ class GamSellerMixin:
             **implementation_config,
         }
 
+    def refuse_gam_association(self, line_item_id: str, reason: str) -> None:
+        """The stand-in GAM network refuses creative associations on *line_item_id*, with this ``ApiError`` reason."""
+        self.mock["gam_client"].return_value.refused_line_items[line_item_id] = reason
+
+    def refuse_gam_line_item_read(self, reason: str) -> None:
+        """The stand-in GAM network refuses to read line items, with this ``ApiError`` reason."""
+        from tests.helpers.gam_client import gam_fault
+
+        line_items = self.mock["gam_client"].return_value.GetService("LineItemService")
+        line_items.getLineItemsByStatement.side_effect = gam_fault(reason)
+
     def gam_objects_sent(self, service: str, method: str) -> list[Any]:
         """Every object the seller sent the stand-in GAM network through ``service.method``, in order.
 

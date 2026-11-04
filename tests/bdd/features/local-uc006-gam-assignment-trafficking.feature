@@ -24,6 +24,7 @@
 #
 # @source repo=adcp ref=v3.2.7 path=docs/creative/task-reference/sync_creatives.mdx
 # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/sync-creatives-response.json
+# @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/error.json
 Feature: UC-006 a Google Ad Manager seller traffics assigned creatives onto its booked line items (local)
 
   Background:
@@ -77,6 +78,39 @@ Feature: UC-006 a Google Ad Manager seller traffics assigned creatives onto its 
     Then creative "cr-banner" reports package "pkg-leader" in assignment_errors and not in assigned_to
     When the Buyer Agent references library creative "cr-banner", without resending it, assigned to package "pkg-leader"
     Then creative "cr-banner" reports package "pkg-leader" in assignment_errors and not in assigned_to
+    And creative "cr-banner" failed with error VALIDATION_ERROR and recovery correctable
+    And Google Ad Manager associated that creative with line items "5000001"
+
+  # A fault in GAM is not fixed by changing the request. core/error.json: correctable is "fix
+  # the request and resend (invalid field, budget too low, creative rejected)", and transient is
+  # "retry after delay (rate limit, service unavailable, timeout)". The size refusal above is the
+  # buyer's to fix, so it stays correctable. The refused package's row stays, and GAM keeps the
+  # association it made: a re-send pushes the same assignment again, and GAM is asked which it holds.
+  @T-UC-006-local-gam-refusal-keeps-its-code
+  Scenario Outline: GAM refusing one association answers its fault's own code, not a request error - <reason>
+    Given the buyer holds a buy booked in Google Ad Manager as order "6000007" whose package "pkg-two-a" is line item "5000007" accepting 300x250 and package "pkg-two-b" is line item "5000008" accepting 300x250
+    And the buyer synced a 300x250 image creative "cr-banner" showing "https://example.com/banner.png" assigned to package "pkg-banner-a"
+    And Google Ad Manager refuses associations on line item "5000008" with "<reason>"
+    When the Buyer Agent references library creative "cr-banner", without resending it, assigned to packages "pkg-two-a, pkg-two-b"
+    Then creative "cr-banner" reports package "pkg-two-a" in assignment_errors and not in assigned_to
+    And creative "cr-banner" reports package "pkg-two-b" in assignment_errors and not in assigned_to
+    And creative "cr-banner" failed with error <code> and recovery <recovery>
+    And Google Ad Manager associated that creative with line items "5000001, 5000007"
+
+    Examples:
+      | reason                                          | code                | recovery  |
+      | QuotaError.EXCEEDED_QUOTA                       | RATE_LIMITED        | transient |
+      | AuthenticationError.NETWORK_API_ACCESS_DISABLED | CONFIGURATION_ERROR | terminal  |
+
+  # Every push starts by reading the order's line items, ahead of the per-creative work.
+  @T-UC-006-local-gam-read-refusal-keeps-its-code
+  Scenario: GAM refusing the push's first read answers its fault's own code, not a request error
+    Given the buyer synced a 300x250 image creative "cr-banner" showing "https://example.com/banner.png" assigned to package "pkg-banner-a"
+    And the buyer holds a buy booked in Google Ad Manager as order "6000002" whose package "pkg-banner-b" is line item "5000002" accepting 300x250
+    And Google Ad Manager refuses to read the order's line items with "QuotaError.EXCEEDED_QUOTA"
+    When the Buyer Agent references library creative "cr-banner", without resending it, assigned to package "pkg-banner-b"
+    Then creative "cr-banner" reports package "pkg-banner-b" in assignment_errors and not in assigned_to
+    And creative "cr-banner" failed with error RATE_LIMITED and recovery transient
     And Google Ad Manager associated that creative with line items "5000001"
 
   # One buy, two packages, two line items on one order. A sync is pushed once per buy with

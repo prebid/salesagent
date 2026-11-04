@@ -36,6 +36,7 @@ from tests.bdd.steps._outcome_helpers import (
     assert_by_package_exactly,
     capture_created_media_buy,
     wire_entry,
+    wire_entry_errors,
     wire_field,
 )
 from tests.bdd.steps.domain.uc006_sync_creatives import _ask_assignment_terms, when_sync_creative_with_assignments
@@ -669,20 +670,33 @@ def given_buyer_syncs_image_creative(
 
 
 _REFERENCES_LIBRARY_CREATIVE = (
-    'references library creative "{creative_id}", without resending it, assigned to package "{package}"'
+    r'references library creative "(?P<creative_id>[^"]+)", without resending it, '
+    r'assigned to packages? "(?P<packages>[^"]+)"$'
 )
 
 
-@when(parsers.parse("the Buyer Agent " + _REFERENCES_LIBRARY_CREATIVE))
-def when_buyer_references_library_creative(ctx: dict, creative_id: str, package: str) -> None:
+@when(parsers.re("the Buyer Agent " + _REFERENCES_LIBRARY_CREATIVE))
+def when_buyer_references_library_creative(ctx: dict, creative_id: str, packages: str) -> None:
     """Sync an assignment of a library creative without resending its content.
 
     ``creatives`` is required (sync-creatives-request.json, minItems 1), so it carries one
     other creative, assigned nowhere.
     """
     ctx["creatives"] = [_image_creative(f"{creative_id}-unassigned", "https://example.com/unassigned.png")]
-    ctx["assignments"] = {creative_id: [package]}
+    ctx["assignments"] = {creative_id: [package.strip() for package in packages.split(",")]}
     when_sync_creative_with_assignments(ctx)
+
+
+@given(parsers.parse('Google Ad Manager refuses associations on line item "{line_item}" with "{reason}"'))
+def given_gam_refuses_association(ctx: dict, line_item: str, reason: str) -> None:
+    """GAM refuses this one line item's associations with a SOAP fault, and takes the others."""
+    ctx["env"].refuse_gam_association(line_item, reason)
+
+
+@given(parsers.parse('Google Ad Manager refuses to read the order\'s line items with "{reason}"'))
+def given_gam_refuses_line_item_read(ctx: dict, reason: str) -> None:
+    """GAM refuses the read every push starts with, with a SOAP fault."""
+    ctx["env"].refuse_gam_line_item_read(reason)
 
 
 @when(parsers.parse('the seller approves creative "{creative_id}"'))
@@ -776,6 +790,15 @@ def then_gam_created_image_creatives(ctx: dict, advertiser_id: str, urls: str) -
 def then_gam_created_one_third_party_creative(ctx: dict, advertiser_id: str, snippet: str) -> None:
     """GAM holds exactly one creative from this scenario: the markup itself, not a picture of a page."""
     _assert_creatives_created(ctx, [("ThirdPartyCreative", advertiser_id, None, snippet)])
+
+
+@then(parsers.parse('creative "{creative_id}" failed with error {code} and recovery {recovery}'))
+def then_creative_failed_with(ctx: dict, creative_id: str, code: str, recovery: str) -> None:
+    """The buyer's entry for the creative is ``failed``, and carries exactly this one code and recovery."""
+    entry = wire_entry(ctx, "creatives", creative_id=creative_id)
+    errors = wire_entry_errors(ctx, "creatives", creative_id=creative_id)
+    reported = (entry.get("action"), [(error.get("code"), error.get("recovery")) for error in errors])
+    assert reported == ("failed", [(code, recovery)]), f"expected {code} {recovery} on a failed entry; got {entry}"
 
 
 @then("Google Ad Manager created no creative")

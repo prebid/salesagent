@@ -15,6 +15,7 @@ from src.core.errors.details import CreativeRejectionDetails
 from src.core.exceptions import AdCPCreativeRejectedError, AdCPInternalError, AdCPSalesAgentError
 from src.core.schemas import AssetStatus
 
+from ..utils.error_handler import map_gam_exception
 from ..utils.validation import GAMValidator
 
 logger = logging.getLogger(__name__)
@@ -111,7 +112,10 @@ class GAMCreativesManager:
             )
 
         # Creative placeholders of the order's line items, keyed by line item id
-        creative_placeholders = self._get_line_item_placeholders(media_buy_id, line_item_service)
+        try:
+            creative_placeholders = self._get_line_item_placeholders(media_buy_id, line_item_service)
+        except Exception as fault:
+            raise map_gam_exception(fault) from fault
 
         # Check if any creatives have non-default weights
         # If so, update affected line items to use MANUAL rotation
@@ -214,8 +218,8 @@ class GAMCreativesManager:
                     e.details or {},
                     exc_info=True,
                 )
-                # AssetStatus has no structured slot, and this surface reports per-asset
-                # partial success, so the offending FIELD rides the status line — read from
+                # This surface reports per-asset partial success, and the error's own slot
+                # is off the wire, so the offending FIELD rides the status line — read from
                 # the typed ``field`` attribute, never by stringifying ``details``: that
                 # would put every key on the wire, including ones named after local
                 # variables, and hand-roll a serializer in the adapter layer.
@@ -224,12 +228,15 @@ class GAMCreativesManager:
                         creative_id=asset["creative_id"],
                         status="failed",
                         message=f"{e.message} (field: {e.field})" if e.field else e.message,
+                        error=e,
                     )
                 )
             except Exception as e:
                 logger.error(f"Error creating creative {asset['creative_id']}: {str(e)}")
                 created_asset_statuses.append(
-                    AssetStatus(creative_id=asset["creative_id"], status="failed", message=str(e))
+                    AssetStatus(
+                        creative_id=asset["creative_id"], status="failed", message=str(e), error=map_gam_exception(e)
+                    )
                 )
 
         return created_asset_statuses

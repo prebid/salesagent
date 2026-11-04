@@ -679,14 +679,15 @@ def approve_creative(tenant_id, creative_id, **kwargs):
 
         for buy_id in buys_to_push:
             logger.info(f"[CREATIVE APPROVAL] Retroactive push: creative {creative_id} → live buy {buy_id}")
-            push_success, push_err = push_creative_to_existing_buy(
+            push_failure = push_creative_to_existing_buy(
                 creative_id=creative_id,
                 media_buy_id=buy_id,
                 tenant_id=tenant_id,
             )
-            if not push_success:
+            if push_failure is not None:
                 logger.error(
-                    f"[CREATIVE APPROVAL] Retroactive push failed for creative {creative_id} → buy {buy_id}: {push_err}"
+                    f"[CREATIVE APPROVAL] Retroactive push failed for creative {creative_id} → buy {buy_id}: "
+                    f"{push_failure.reason}"
                 )
                 push_warnings.append(f"Creative push to buy {buy_id} failed — see server logs for details")
 
