@@ -257,8 +257,6 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
             policy_result = None
             logger.warning(f"Policy checks enabled but no usable AI configuration for tenant {tenant.tenant_id}")
         else:
-            # tenant_ai_config=, not the deprecated gemini_api_key=: that parameter pins
-            # provider and model instead of honouring the tenant's own.
             policy_service = PolicyCheckService(tenant_ai_config=tenant_ai_config)
 
             # Use advertising_policy settings for tenant-specific rules
