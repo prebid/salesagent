@@ -753,9 +753,7 @@ def _stated_constraints(accepted: Mapping[str, Any], claimed: Mapping[str, Any])
     """The constraints in *accepted* that *claimed* speaks to. The claim inherits the rest.
 
     For a claim that already NAMES its declaration -- an option ref, or a legacy reference
-    whose projection is compared under "v2 narrows v1" -- only what the claim states is
-    graded. ``canonical-formats.mdx`` § "Narrows" -- formal definition (normative): "when
-    v1 says nothing about a parameter but v2 specifies one ... v2 is ``narrowing``", so a
+    whose projection selects a declaration -- only what the claim states is graded. A
     constraint the claim leaves unstated is no conflict, unlike a bare kind, which proves
     nothing and owes every constraint (:func:`_graded`).
 
@@ -1826,7 +1824,7 @@ def _legacy_route(
     narrowing = [
         declaration
         for declaration in declarations
-        if _narrows(str(declaration.format_kind), _declared_params(declaration), kind, projected)
+        if _legacy_claim_satisfies(str(declaration.format_kind), _declared_params(declaration), kind, projected)
     ]
     if narrowing:
         return _selecting(narrowing, params, exact=True, manifest=manifest)
@@ -1839,16 +1837,17 @@ def _legacy_route(
     )
 
 
-def _narrows(
+def _legacy_claim_satisfies(
     declared_kind: str, declared_params: Mapping[str, Any], kind: str | None, projected: Mapping[str, Any]
 ) -> bool:
-    """Whether a declaration narrows a legacy reference that normalized to *kind* + *projected*.
+    """Whether a package's legacy reference, normalized to *kind* + *projected*, selects a declaration.
 
-    canonical-formats.mdx § "Narrows" -- formal definition (normative): every v2 parameter
-    must fall inside the matching v1 requirement, and "any v2 parameter value that falls
-    outside the corresponding v1 constraint is a *conflict*, not narrowing". A kind the
-    reference does not project to (``None``) and a parameter it does not state are open: the
-    v1 baseline says nothing there, so the declaration narrows into it.
+    canonical-formats.mdx § Format matching vs product satisfaction: this is PRODUCT
+    SATISFACTION, the request graded against what the product accepts, and "An exact value,
+    such as ``duration_ms_exact``, satisfies a range when that exact value falls inside the
+    accepted interval". So ``video_30s`` selects a product accepting 5 to 60 seconds, which is
+    the reverse of the dual-emission question :func:`declaration_narrows` asks. A kind the
+    reference does not project to (``None``) and a parameter it does not state are open.
     """
     return (kind is None or declared_kind == kind) and not _unsatisfied_params(
         projected, _stated_constraints(declared_params, projected)
@@ -1866,26 +1865,32 @@ def declaration_narrows(format_kind: Any, params: Any, reference: LibraryFormatI
     "A producer that cannot guarantee agreement MUST omit the legacy compatibility
     projection." ``format_resolver`` asks this of every asserted reference before projecting it.
 
-    The same rule the legacy selector route applies (:func:`_narrows`), so a reference the
-    product would not project is one the route would not select through the registry either.
-    The reference is normalized v1 -> v2 only, the direction the registry makes authoritative;
-    a reference that normalizes to nothing (a seller-bespoke id) states no constraint and is
-    taken as asserted.
+    canonical-formats.mdx § "Narrows" -- formal definition (normative), one-directional: "v2
+    narrows v1 (v2 is the stricter shape). The reverse (v1 narrows v2) is NOT how the
+    dual-emission contract is checked." So every v2 value must fall inside the reference's: a
+    range must lie within the exact duration it states, a dimension must equal it, and every
+    ``pixel_ratios`` entry must be one the reference accepts (:class:`CanonicalProjection`).
+    A parameter the reference does not state is open, and a parameter the declaration omits
+    inherits it. A reference that normalizes to nothing (a seller-bespoke id) states no
+    constraint and is taken as asserted.
 
     *format_kind* and *params* are read off a stored document or a validated model alike.
     """
-    from src.core.format_resolver import canonical_kind_for
+    from src.core.format_resolver import canonical_projection
 
     try:
-        kind: str | None = canonical_kind_for(reference)
+        baseline = canonical_projection(reference)
     except ValueError:
-        kind = None
+        return True
     declared = _plain(params)
-    return _narrows(
-        str(_plain(format_kind)),
-        declared if isinstance(declared, Mapping) else {},
-        kind,
-        _legacy_projection(reference),
+    if not isinstance(declared, Mapping):
+        declared = {}
+    duration = declared.get("duration_ms_exact")
+    v2 = {**declared, "duration_ms_exact": declared.get("duration_ms_range") if duration is None else duration}
+    return (
+        str(_plain(format_kind)) == baseline.kind
+        and not any(_range_unsatisfied(v2.get(name), v1, v1) for name, v1 in baseline.params.items())
+        and set(declared.get("pixel_ratios") or ()) <= set(baseline.pixel_ratios)
     )
 
 

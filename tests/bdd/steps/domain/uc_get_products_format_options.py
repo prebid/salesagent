@@ -212,6 +212,34 @@ def given_canonical_product_with_stated_params(ctx: dict, width: int, height: in
     )
 
 
+#: The declarations the narrowing rows name: (kind, params).
+_NAMED_DECLARATIONS: dict[str, tuple[str, dict[str, Any]]] = {
+    "video_exact_30s": ("video_hosted", {"duration_ms_exact": 30000}),
+    "video_range_30s_only": ("video_hosted", {"duration_ms_range": [30000, 30000]}),
+    "video_range_5s_to_60s": ("video_hosted", {"duration_ms_range": [5000, 60000]}),
+    "image_300x250_density_1": ("image", {"width": 300, "height": 250, "pixel_ratios": [1]}),
+    "image_300x250_density_2": ("image", {"width": 300, "height": 250, "pixel_ratios": [2]}),
+    "image_300x250_density_1_2": ("image", {"width": 300, "height": 250, "pixel_ratios": [1, 2]}),
+    "image_300x250_density_1_3": ("image", {"width": 300, "height": 250, "pixel_ratios": [1, 3]}),
+}
+
+
+@given(
+    parsers.parse(
+        'the seller stores a canonically-authored product declaring "{declaration}" '
+        'and asserting the v1_format_ref "{reference}"'
+    )
+)
+def given_canonical_product_with_named_declaration(ctx: dict, declaration: str, reference: str) -> None:
+    """A canonical-only product whose one declaration of the named shape asserts *reference*."""
+    kind, params = _NAMED_DECLARATIONS[declaration]
+    _store_product(
+        ctx,
+        [{"format_kind": kind, "params": dict(params), "v1_format_ref": [_ref(reference)]}],
+        with_legacy_arm=False,
+    )
+
+
 @given(
     parsers.parse(
         "the seller stores a canonically-authored product linked to an inventory profile whose "

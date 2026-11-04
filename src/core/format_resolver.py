@@ -180,10 +180,17 @@ _PROJECTED_SHAPE_PARAMS = ("width", "height", "duration_ms_exact")
 
 @dataclass(frozen=True, slots=True)
 class CanonicalProjection:
-    """The canonical shape a deprecated ``format_id`` projects to: its kind and stated params."""
+    """The canonical shape a deprecated ``format_id`` projects to: its kind and stated params.
+
+    *pixel_ratios* is the density set the reference accepts. canonical-formats.mdx § "Narrows":
+    "A parameterized legacy ``format_id.pixel_ratio`` projects to a single-element v2 set. An
+    omitted legacy ratio is 1x", and the registry states a density id's own set
+    (``display_300x250_image_2x`` is ``[2]``).
+    """
 
     kind: str
     params: dict[str, Any]
+    pixel_ratios: tuple[float, ...] = (1,)
 
 
 def canonical_projection(ref: FormatRef, *, spec: Format | None = None) -> CanonicalProjection:
@@ -235,7 +242,10 @@ def canonical_projection(ref: FormatRef, *, spec: Format | None = None) -> Canon
         )
     derived = projected.params or {}
     params = {name: derived[name] for name in _PROJECTED_SHAPE_PARAMS if derived.get(name) is not None}
-    return CanonicalProjection(kind=str(projected.format_kind), params={**params, **_stated_shape_params(upgraded)})
+    ratios = (upgraded.pixel_ratio,) if upgraded.pixel_ratio is not None else tuple(derived.get("pixel_ratios") or (1,))
+    return CanonicalProjection(
+        kind=str(projected.format_kind), params={**params, **_stated_shape_params(upgraded)}, pixel_ratios=ratios
+    )
 
 
 def _agent_declared_projection(ref: FormatRef, spec: Format) -> CanonicalProjection:
@@ -1067,7 +1077,7 @@ def _referenced(holders: Iterable[Any]) -> Iterator[tuple[Any, LibraryFormatId, 
     breaks that MUST, and serving the reference would be the dual emission
     canonical-formats.mdx calls "a contract violation": "A producer that cannot guarantee
     agreement MUST omit the legacy compatibility projection." The verdict is
-    ``format_satisfaction.declaration_narrows``, the rule the legacy selector route applies.
+    ``format_satisfaction.declaration_narrows``.
     """
     from src.core.format_satisfaction import declaration_narrows
 
