@@ -1550,6 +1550,13 @@ def given_legacy_only_product(ctx: dict) -> None:
     _store_product(ctx, "satisfaction_legacy_only", format_ids=list(_LEGACY_ARM), format_options=None)
 
 
+@given(parsers.parse('the seller publishes only another agent\'s deprecated format "{format_id}"'))
+def given_legacy_only_product_of_another_agent(ctx: dict, format_id: str) -> None:
+    """Store a legacy-only product naming an id of the reference namespace at another agent."""
+    arm = [{"agent_url": "https://another-creative-agent.example", "id": format_id}]
+    _store_product(ctx, "satisfaction_legacy_only", format_ids=arm, format_options=None)
+
+
 @given(
     parsers.parse(
         'the seller publishes only the deprecated 300x250 and 728x90 formats across placements "{placements}"'

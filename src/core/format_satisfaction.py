@@ -2142,10 +2142,17 @@ def _projected_declaration(reference: LibraryFormatId) -> LibraryFormatDeclarati
     SDK's agent comparison applies only part of ``docs/reference/url-canonicalization``.
     Read into the pinned union through ``from_attributes``, so a projected declaration is
     graded exactly as a published one is, defaults included.
+
+    ONLY AT THE REFERENCE AGENT (``names_reference_agent``), as ``canonical_projection`` is.
+    The SDK's catalog index matches a bare id with no ``agent_url``, so it answered for another
+    agent's ``display_300x250_image`` as if the reference agent served it, and this function
+    has no declaration of that agent to read.
     """
-    from src.core.format_resolver import canonically_addressed
+    from src.core.format_resolver import canonically_addressed, names_reference_agent
 
     try:
+        if not names_reference_agent(reference):
+            return None
         projected = project_legacy_format_id(
             canonically_addressed(reference), product_id="", field="format_ids"
         ).declaration

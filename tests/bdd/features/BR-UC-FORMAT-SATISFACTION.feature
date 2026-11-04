@@ -533,6 +533,25 @@ Feature: A format selector must satisfy the canonical declaration the product pu
       | exact_300x250      |
       | direct_plus_legacy |
 
+  # The registry's format_id_glob entries are written in the reference agent's id namespace.
+  # Another agent's id is that agent's own: registries/v1-canonical-mapping.json projects it
+  # through the agent's served declaration or its slot shape, and with neither it fails
+  # closed. So the same id at another agent gives this product no canonical shape, and a
+  # direct route that the reference agent's id satisfies (exact_300x250, accepted above)
+  # selects nothing here.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/registries/v1-canonical-mapping.json
+  @T-UC-FORMAT-SATISFACTION-legacy-only-another-agent @format_satisfaction @requires_db
+  Scenario Outline: a direct route against another agent's deprecated format id is refused - <format_id>
+    Given the seller publishes only another agent's deprecated format "<format_id>"
+    And the buyer's package selects "exact_300x250"
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the "format_kind" selector
+
+    Examples:
+      | format_id             |
+      | display_300x250       |
+      | display_300x250_image |
+
   @T-UC-FORMAT-SATISFACTION-legacy-only-direct-refused @format_satisfaction @requires_db
   Scenario Outline: a broad route against a legacy-only product's fixed-size format is refused - <selector>
     Given the seller publishes only the deprecated format_ids
