@@ -32,13 +32,13 @@ from bdd_audit_common import (  # noqa: E402
     CONFTEST_PATH,
     E2E_LEDGER_PATH,
     REPO_ROOT,
+    LoadedArtifact,
     cli_load_or_exit,
     extract_longrepr_e_line,
     extract_scenario_base,
     extract_transport,
     extract_uc,
     grade_base,
-    graded_outcome,
     load_bdd_artifact,
     load_e2e_rest_known_failure_bases,
     phase_dict,
@@ -114,29 +114,32 @@ class InspectorFlag:
 # ── Parsing ──────────────────────────────────────────────────────────
 
 
-def _test_entry_from_raw(t: dict, *, outcome: str | None = None) -> TestEntry:
+def _test_entry_from_raw(t: dict, *, outcome: str) -> TestEntry:
     """Build a TestEntry from one bdd.json test dict (null-safe longrepr).
 
-    ``outcome`` is the value from ``LoadedArtifact.nodeid_outcomes``. Callers
-    that already loaded the artifact pass it so a strict xpass is not graded twice.
+    ``outcome`` is the value from ``LoadedArtifact.nodeid_outcomes``.
     """
     longrepr = phase_dict(t, "call").get("longrepr") or ""
     return TestEntry(
         nodeid=t["nodeid"],
-        outcome=graded_outcome(t) if outcome is None else outcome,
+        outcome=outcome,
         keywords=t.get("keywords", []),
         error=extract_longrepr_e_line(longrepr),
         longrepr=longrepr[:1000],
     )
 
 
-def parse_test_results(json_path: Path) -> list[TestEntry]:
-    """Parse bdd.json into TestEntry list via shared ``load_bdd_artifact``."""
-    loaded = load_bdd_artifact(json_path)
+def entries_from_loaded(loaded: LoadedArtifact) -> list[TestEntry]:
+    """Build entries from the loader's tests and graded outcomes."""
     return [
         _test_entry_from_raw(t, outcome=outcome)
         for t, (_, outcome) in zip(loaded.tests, loaded.nodeid_outcomes, strict=True)
     ]
+
+
+def parse_test_results(json_path: Path) -> list[TestEntry]:
+    """Parse bdd.json into TestEntry list via shared ``load_bdd_artifact``."""
+    return entries_from_loaded(load_bdd_artifact(json_path))
 
 
 def parse_inspector_reports() -> list[InspectorFlag]:
@@ -632,10 +635,7 @@ def main():
 
     print("Parsing test results...", file=sys.stderr)
     loaded = cli_load_or_exit(json_paths)
-    entries = [
-        _test_entry_from_raw(t, outcome=outcome)
-        for t, (_, outcome) in zip(loaded.tests, loaded.nodeid_outcomes, strict=True)
-    ]
+    entries = entries_from_loaded(loaded)
     summary = Counter(e.outcome for e in entries)
     print(f"  Parsed {len(entries)} tests: {dict(summary)}", file=sys.stderr)
 

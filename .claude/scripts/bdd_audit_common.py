@@ -285,24 +285,27 @@ def load_e2e_rest_known_failure_bases(ledger_path: Path) -> set[str]:
     return bases
 
 
-class EmptyArtifactError(Exception):
+class ArtifactLoadError(Exception):
+    """Refusal from ``load_bdd_artifact``. Subclasses set ``MESSAGE`` only."""
+
+    MESSAGE = ""
+
+    def __init__(self, message: str | None = None) -> None:
+        text = self.MESSAGE if message is None else message
+        super().__init__(text)
+        self.message = text
+
+
+class EmptyArtifactError(ArtifactLoadError):
     """Raised when bdd.json has zero tests (library seam — no SystemExit)."""
 
     MESSAGE = 'ERROR: artifact contains 0 tests — refusing empty {"tests": []}.'
 
-    def __init__(self, message: str = MESSAGE) -> None:
-        super().__init__(message)
-        self.message = message
 
-
-class ArtifactRootMismatchError(Exception):
+class ArtifactRootMismatchError(ArtifactLoadError):
     """Raised when concatenated artifact files do not share one root."""
 
     MESSAGE = "ERROR: artifact files do not share one root — pass files from one run."
-
-    def __init__(self, message: str = MESSAGE) -> None:
-        super().__init__(message)
-        self.message = message
 
 
 FORCE_CONFIRM_WARNING = "WARNING: e2e_rest appears for no base — every graduation routes to confirm."
@@ -318,10 +321,7 @@ def graded_outcome(test: Mapping[str, Any]) -> str:
     outcome = str(test.get("outcome") or "")
     if outcome != "failed":
         return outcome
-    call = test.get("call")
-    longrepr = ""
-    if isinstance(call, dict):
-        longrepr = str(call.get("longrepr") or "")
+    longrepr = str(phase_dict(test, "call").get("longrepr") or "")
     if "XPASS(strict)" in longrepr:
         return "xpassed"
     return outcome
@@ -377,7 +377,7 @@ def cli_load_or_exit(paths: Path | Sequence[Path]) -> LoadedArtifact:
     """CLI edge: load artifact files or print the refusal and exit 2."""
     try:
         loaded = load_bdd_artifact(paths)
-    except (EmptyArtifactError, ArtifactRootMismatchError) as exc:
+    except ArtifactLoadError as exc:
         print(exc.message, file=sys.stderr)
         raise SystemExit(2) from exc
     if loaded.force_confirm:

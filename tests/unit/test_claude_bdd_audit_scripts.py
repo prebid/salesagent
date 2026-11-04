@@ -398,27 +398,32 @@ class TestClassifyXpass:
         assert "needs confirmation" not in items[0].title
 
 
+def _graded_pairs(tests: list[dict]) -> list[tuple[str, str]]:
+    """Outcomes the loader would hand to ``classify_xpassed``."""
+    return [(str(t["nodeid"]), str(t["outcome"])) for t in tests]
+
+
 class TestClassifyXpassedAudit:
     """audit_xfails.classify_xpassed uses the same present-transport rule."""
 
     def test_three_transport_xpass_is_stale_not_partial(self, audit_xfails) -> None:
         base = "tests/bdd/test_uc004.py::test_s"
         all_tests = _xpassed(base)
-        buckets = audit_xfails.classify_xpassed(all_tests)
+        buckets = audit_xfails.classify_xpassed(_graded_pairs(all_tests))
         assert buckets.graduate == {base}
         assert buckets.confirm == set()
 
     def test_e2e_rest_only_needs_confirmation_not_stale(self, audit_xfails) -> None:
         base = "tests/bdd/test_uc004.py::test_s"
         all_tests = [{"nodeid": f"{base}[e2e_rest]", "outcome": "xpassed"}]
-        buckets = audit_xfails.classify_xpassed(all_tests)
+        buckets = audit_xfails.classify_xpassed(_graded_pairs(all_tests))
         assert buckets.graduate == set()
         assert buckets.confirm == {base}
 
     def test_single_non_e2e_transport_needs_confirmation_not_stale(self, audit_xfails) -> None:
         base = "tests/bdd/test_uc004.py::test_s"
         all_tests = [{"nodeid": f"{base}[a2a]", "outcome": "xpassed"}]
-        buckets = audit_xfails.classify_xpassed(all_tests)
+        buckets = audit_xfails.classify_xpassed(_graded_pairs(all_tests))
         assert buckets.confirm == {base}
 
     def test_strict_subset_is_partial(self, audit_xfails) -> None:
@@ -428,7 +433,7 @@ class TestClassifyXpassedAudit:
             {"nodeid": f"{base}[mcp]", "outcome": "xfailed"},
             {"nodeid": f"{base}[rest]", "outcome": "xfailed"},
         ]
-        buckets = audit_xfails.classify_xpassed(all_tests)
+        buckets = audit_xfails.classify_xpassed(_graded_pairs(all_tests))
         assert buckets.partial_passing == {base: {"a2a"}}
         assert buckets.partial_missing == {base: {"mcp", "rest"}}
 
@@ -447,7 +452,7 @@ class TestClassifyXpassedAudit:
             {"nodeid": f"{base}[e2e_rest-ex1]", "outcome": o1},
             {"nodeid": f"{base}[e2e_rest-ex2]", "outcome": o2},
         ]
-        buckets = audit_xfails.classify_xpassed(all_tests)
+        buckets = audit_xfails.classify_xpassed(_graded_pairs(all_tests))
         assert buckets.graduate == set()
         assert buckets.confirm == set()
 
@@ -456,7 +461,7 @@ class TestClassifyXpassedAudit:
         base = "tests/bdd/test_uc004.py::test_outline"
         outline = _slice_entries(captured_bdd_slice, nodeid_contains="::test_outline[")
         assert {e["outcome"] for e in outline} >= {"skipped", "xpassed"}
-        buckets = audit_xfails.classify_xpassed(outline)
+        buckets = audit_xfails.classify_xpassed(_graded_pairs(outline))
         assert buckets.graduate == set()
         assert buckets.confirm == set()
         assert buckets.partial_passing.get(base, set()) == set()
@@ -470,7 +475,7 @@ class TestClassifyXpassedAudit:
             {"nodeid": f"{base}[a2a-ex2]", "outcome": "xpassed"},
             {"nodeid": f"{base}[mcp]", "outcome": "xfailed"},
         ]
-        buckets = audit_xfails.classify_xpassed(all_tests)
+        buckets = audit_xfails.classify_xpassed(_graded_pairs(all_tests))
         assert buckets.partial_passing == {base: set()}
         assert buckets.partial_missing == {base: {"a2a", "mcp"}}
         assert buckets.graduate == set()
@@ -478,7 +483,7 @@ class TestClassifyXpassedAudit:
     def test_e2e_rest_less_no_firm_graduate(self, audit_xfails) -> None:
         base = "tests/bdd/test_uc004.py::test_s"
         all_tests = _xpassed(base)
-        buckets = audit_xfails.classify_xpassed(all_tests, force_confirm=True)
+        buckets = audit_xfails.classify_xpassed(_graded_pairs(all_tests), force_confirm=True)
         assert buckets.graduate == set()
         assert buckets.confirm == {base}
 
@@ -486,7 +491,7 @@ class TestClassifyXpassedAudit:
         """Ledger-marked base with no e2e_rest row must confirm, not firm-graduate."""
         base = "tests/bdd/test_uc004.py::test_s"
         all_tests = _xpassed(base)
-        buckets = audit_xfails.classify_xpassed(all_tests, ledger_bases={base})
+        buckets = audit_xfails.classify_xpassed(_graded_pairs(all_tests), ledger_bases={base})
         assert buckets.graduate == set()
         assert buckets.confirm == {base}
 
@@ -549,6 +554,21 @@ class TestParseTestResultsCallSites:
         assert failed.transport == "mcp"
         assert failed.error == "ValueError: nope"
         assert failed.outcome == _slice_entry(captured_bdd_slice, nodeid_contains="test_longrepr_failed")["outcome"]
+
+    def test_cross_reference_grades_strict_xpass(self, cross_reference_audit, tmp_path: Path) -> None:
+        path = tmp_path / "bdd.json"
+        _write_artifact(
+            path,
+            [
+                _row(
+                    "t::s[a2a]",
+                    "failed",
+                    longrepr="[gw0] linux -- Python 3.12.0\n[XPASS(strict)] unexpected pass",
+                )
+            ],
+        )
+        outcomes = cross_reference_audit.parse_test_results(path)
+        assert [o.outcome for o in outcomes] == ["xpassed"]
 
     def test_audit_xfails_parse_round_trip(self, audit_xfails, captured_bdd_slice) -> None:
         xfailed, xpassed, all_tests, artifact_root = audit_xfails.parse_test_results(CAPTURED_SLICE)
@@ -818,8 +838,8 @@ class TestSalvageDedupe:
 
     def _parsed(self):
         return {
-            "pass1": [{"index": 1, "func_name": "then_a", "verdict": "FLAG"}],
-            "pass2": [{"index": 1, "func_name": "then_a", "severity": "WEAK"}],
+            "pass1": [{"index": 1, "func_name": "then_a", "verdict": "FLAG", "occurrence": 1}],
+            "pass2": [{"index": 1, "func_name": "then_a", "severity": "WEAK", "occurrence": 1}],
             "pass1_total": 1,
             "pass2_total": 1,
             "pass2_crashed_at": 2,
@@ -846,8 +866,8 @@ class TestSalvageDedupe:
         store = tmp_path / "store.jsonl"
         parsed = {
             "pass1": [
-                {"index": 1, "func_name": "then_a", "verdict": "FLAG"},
-                {"index": 2, "func_name": "then_a", "verdict": "FLAG"},
+                {"index": 1, "func_name": "then_a", "verdict": "FLAG", "occurrence": 1},
+                {"index": 2, "func_name": "then_a", "verdict": "FLAG", "occurrence": 2},
             ],
             "pass2": [],
             "pass1_total": 2,
@@ -929,9 +949,9 @@ class TestSalvageDedupe:
         )
         parsed = {
             "pass1": [
-                {"index": 1, "func_name": "then_a", "verdict": "FLAG"},
-                {"index": 2, "func_name": "then_a", "verdict": "FLAG"},
-                {"index": 3, "func_name": "then_b", "verdict": "PASS"},
+                {"index": 1, "func_name": "then_a", "verdict": "FLAG", "occurrence": 1},
+                {"index": 2, "func_name": "then_a", "verdict": "FLAG", "occurrence": 2},
+                {"index": 3, "func_name": "then_b", "verdict": "PASS", "occurrence": 1},
             ],
             "pass2": [],
             "pass1_total": 3,
@@ -978,7 +998,7 @@ class TestSalvageDedupe:
             + "\n"
         )
         parsed = {
-            "pass1": [{"index": 1, "func_name": "then_a", "verdict": "FLAG"}],
+            "pass1": [{"index": 1, "func_name": "then_a", "verdict": "FLAG", "occurrence": 1}],
             "pass2": [],
             "pass1_total": 1,
             "pass2_total": 0,
@@ -1304,6 +1324,38 @@ class TestInspectParallel:
         chunks = [path.read_text() for path in argv_dir.iterdir()]
         assert len(chunks) == 8
         for chunk in chunks:
+            assert "--steps-dir" in chunk
+            assert "--timeout\n600" in chunk
+
+    def test_default_inspector_path_runs_without_override(self, tmp_path: Path) -> None:
+        """#1664 defect 3: the wrapper's default inspector path must actually run."""
+        argv_dir = tmp_path / "argv"
+        argv_dir.mkdir()
+        bindir = tmp_path / "bin"
+        bindir.mkdir()
+        stub = bindir / "python3"
+        stub.write_text('#!/bin/sh\nprintf \'%s\\n\' "$@" > "$ARGV_DIR/$$"\n')
+        stub.chmod(0o755)
+        out = tmp_path / "out"
+        env = os.environ.copy()
+        env.pop("INSPECT_BDD_STEPS", None)
+        env["PATH"] = str(bindir) + os.pathsep + env.get("PATH", "")
+        env["ARGV_DIR"] = str(argv_dir)
+        script = REPO_ROOT / ".claude" / "scripts" / "inspect_parallel.sh"
+        result = subprocess.run(
+            ["/bin/bash", str(script), str(out)],
+            cwd=REPO_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr + result.stdout
+        inspector = str(REPO_ROOT / ".claude" / "scripts" / "inspect_bdd_steps.py")
+        chunks = [path.read_text() for path in argv_dir.iterdir()]
+        assert len(chunks) == 8
+        for chunk in chunks:
+            assert chunk.startswith(inspector + "\n")
             assert "--steps-dir" in chunk
             assert "--timeout\n600" in chunk
 

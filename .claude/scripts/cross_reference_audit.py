@@ -83,7 +83,7 @@ def parse_test_results(path: Path, *, loaded: LoadedArtifact | None = None) -> l
     """
     artifact = loaded if loaded is not None else load_bdd_artifact(path)
     outcomes = []
-    for t in artifact.tests:
+    for t, (_, outcome) in zip(artifact.tests, artifact.nodeid_outcomes, strict=True):
         nodeid = t["nodeid"]
         transport = extract_transport(nodeid)
 
@@ -93,7 +93,7 @@ def parse_test_results(path: Path, *, loaded: LoadedArtifact | None = None) -> l
         outcomes.append(
             TestOutcome(
                 nodeid=nodeid,
-                outcome=t["outcome"],
+                outcome=outcome,
                 transport=transport,
                 error=error,
             )
