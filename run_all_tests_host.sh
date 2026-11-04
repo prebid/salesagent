@@ -5,10 +5,14 @@
 #
 # Usage (host path — invoked directly, or reached via `./run_all_tests.sh quick`
 # and `./run_all_tests.sh ci <target>`, which delegate here):
-#   ./run_all_tests_host.sh           # Docker + all 6 suites via tox (default)
+#   ./run_all_tests_host.sh           # Docker + 8 suites via tox, all but `collection` (default)
 #   ./run_all_tests_host.sh quick     # No Docker: unit + integration
 #   ./run_all_tests_host.sh ci tests/integration/test_file.py -k test_name
 #   ./run_all_tests_host.sh ci tests/integration/ -m creative     # scoped by entity
+#
+# `collection` runs in-network and in CI, not here. Two of its tests read a record
+# of the whole BDD tree collected with BDD_E2E_ENABLED=true, and this runner's bdd
+# env runs under xdist, which refuses that setting, so no such record can exist.
 
 set -euo pipefail
 
@@ -25,14 +29,6 @@ PYTEST_ARGS="${@:3}"
 # from the same instant carry names two hours apart.
 RESULTS_DIR="$(pwd)/test-results/$(date -u +%d%m%y_%H%M)"
 mkdir -p "$RESULTS_DIR"
-
-# The `collection` env grades what a real session collected, so the sessions
-# that run before it have to publish that. Exported here rather than left to the
-# caller: this runner runs `tox -p -o`, which includes `collection`, and those
-# tests fail loudly on a missing artifact rather than skipping -- correctly, but
-# it means the runner cannot leave the variable unset.
-export PYTEST_COLLECTION_MANIFEST="${PYTEST_COLLECTION_MANIFEST:-$RESULTS_DIR/collection-manifest}"
-export BDD_LIVENESS_SESSIONS="${BDD_LIVENESS_SESSIONS:-$RESULTS_DIR/liveness-sessions}"
 
 # Keep only the last 10 result directories
 ls -dt "$(pwd)/test-results"/*/ 2>/dev/null | tail -n +11 | xargs rm -rf
@@ -62,7 +58,7 @@ from src.core.tools.media_buy_create import _create_media_buy_impl
 # Suite reports this script may publish. Named once so the pre-run purge and the
 # copy below cannot drift apart — a report present in one list and absent from
 # the other is how a stale file survives.
-_REPORT_SUITES="unit integration e2e admin bdd ui quality storyboard collection"
+_REPORT_SUITES="unit integration e2e admin bdd ui quality storyboard"
 
 purge_stale_reports() {
     # `.tox/` persists between invocations, so a suite that dies before writing
@@ -173,10 +169,10 @@ elif [ "$MODE" = "ci" ]; then
         set -eo pipefail
         [ "$TOX_RC" -ne 0 ] && FAILURES="targeted"
     else
-        echo -e "${BLUE}Running all 6 suites in parallel via tox...${NC}"
+        echo -e "${BLUE}Running 8 suites in parallel via tox, all but collection...${NC}"
         set +eo pipefail
         purge_stale_reports
-        tox -p -o > >(tee "$RESULTS_DIR/tox.log") 2>&1
+        tox -p -o --skip-env '^collection$' > >(tee "$RESULTS_DIR/tox.log") 2>&1
         TOX_RC=${PIPESTATUS[0]}
         set -eo pipefail
         collect_reports
@@ -201,7 +197,7 @@ elif [ "$MODE" = "ci" ]; then
     fi
 else
     echo "Usage: ./run_all_tests.sh [quick|ci]"
-    echo "  ci (default) — Docker + all 6 suites via tox"
+    echo "  ci (default) — Docker + 8 suites via tox, all but collection"
     echo "  quick        — no Docker: unit + integration"
     exit 1
 fi

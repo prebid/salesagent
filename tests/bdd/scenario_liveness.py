@@ -517,7 +517,7 @@ def sessions_dir() -> Path:
         SESSIONS_ENV_VAR,
         IncompleteLivenessRun,
         "there is no way to tell THIS run's liveness sessions from any other run's. "
-        "run_all_tests.sh and run_all_tests_host.sh export it per run; "
+        "run_all_tests.sh exports it per run; "
         "docker-compose.e2e.yml forwards it into the test container.",
     )
 

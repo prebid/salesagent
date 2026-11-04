@@ -92,7 +92,9 @@ def test_six_suite_list_is_single_sourced():
     """
     canonical = _tox_env_list()
     assert _runner_all_suites() == canonical, "run_all_tests.sh ALL_SUITES drifted from tox env_list"
-    assert _host_runner_collect_suites() == canonical, "run_all_tests_host.sh collect_reports drifted from tox env_list"
+    assert _host_runner_collect_suites() == canonical - {"collection"}, (
+        "run_all_tests_host.sh collect_reports drifted from tox env_list"
+    )
     assert {s.strip() for s in _ALL_SUITES.split(",")} == canonical, "_ALL_SUITES constant drifted from tox env_list"
 
 
