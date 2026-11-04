@@ -122,7 +122,11 @@ def _make_configured_product():
     product = Mock()
     product.product_id = "prod_test"
     product.implementation_config = {"targeted_ad_unit_ids": ["123456"]}
+    # The same .first() answers the adapter's TENANT lookup, so the tenant columns it reads
+    # are pinned to what an unconfigured tenant row holds; a Mock attribute there is a value
+    # PostgreSQL can never return, and TenantAIConfig.from_tenant refuses it.
     product.gemini_api_key = None
+    product.ai_config = None
     product.order_name_template = None
     return product
 
@@ -304,12 +308,7 @@ class TestGAMActivationWorkflowPath:
                 mock_db_session.return_value.__enter__.return_value = mock_session
 
                 # Create mock products with inventory targeting (required by validation)
-                mock_product = Mock()
-                mock_product.product_id = "prod_test"
-                mock_product.implementation_config = {"targeted_ad_unit_ids": ["123456"]}
-                # Prevent MagicMock auto-generation for tenant attributes
-                mock_product.gemini_api_key = None
-                mock_product.order_name_template = None
+                mock_product = _make_configured_product()
 
                 # Simpler approach: Always return mock_product for .first(), empty for .all()
                 mock_result = Mock()
@@ -384,12 +383,7 @@ class TestGAMSuccessPath:
                 mock_db_session.return_value.__enter__.return_value = mock_session
 
                 # Create mock products with inventory targeting (required by validation)
-                mock_product = Mock()
-                mock_product.product_id = "prod_test"
-                mock_product.implementation_config = {"targeted_ad_unit_ids": ["123456"]}
-                # Prevent MagicMock auto-generation for tenant attributes
-                mock_product.gemini_api_key = None
-                mock_product.order_name_template = None
+                mock_product = _make_configured_product()
 
                 # Simpler approach: Always return mock_product for .first(), empty for .all()
                 mock_result = Mock()
