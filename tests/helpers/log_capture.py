@@ -22,8 +22,10 @@ class LogCaptureHandler(logging.Handler):
     def __init__(self, level: int = logging.WARNING) -> None:
         super().__init__(level=level)
         self.records: list[str] = []
+        self.log_records: list[logging.LogRecord] = []
 
     def emit(self, record: logging.LogRecord) -> None:
+        self.log_records.append(record)
         self.records.append(self.format(record))
 
 

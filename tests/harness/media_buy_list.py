@@ -16,12 +16,35 @@ GH #1335, GH #1900
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from typing import Any, cast
 
 from src.core.schemas._base import GetMediaBuysRequest, GetMediaBuysResponse
+from src.services.media_buy_status_scheduler import MediaBuyStatusScheduler
 from tests.harness._base import IntegrationEnv
+from tests.harness._realize import realize_e2e
 from tests.harness.database_faults import DatabaseFaultMixin
 from tests.harness.transport import DeliverResult
+from tests.helpers.log_capture import capture_logs
+
+
+def _run_status_sweep(_env: object) -> list[logging.LogRecord]:
+    """One status-sweep tick, with the log records it produced.
+
+    In-process and e2e share this tick. The e2e server also runs its own
+    scheduler, so the scenario's summary line is what proves this tick did
+    the writes.
+    """
+    logger = logging.getLogger("src.services.media_buy_status_scheduler")
+    previous = logger.level
+    logger.setLevel(logging.INFO)
+    try:
+        with capture_logs(logger.name, level=logging.INFO) as captured:
+            asyncio.run(MediaBuyStatusScheduler()._update_statuses())
+        return list(captured.log_records)
+    finally:
+        logger.setLevel(previous)
 
 
 class MediaBuyListDispatchMixin:
@@ -253,3 +276,7 @@ class MediaBuyListEnv(DatabaseFaultMixin, MediaBuyListDispatchMixin, Integration
     def parse_rest_response(self, data: dict[str, Any]) -> GetMediaBuysResponse:
         """Parse REST response JSON."""
         return self._parse_list_rest_response(data)
+
+    @realize_e2e(_run_status_sweep)
+    def run_status_sweep(self) -> list[logging.LogRecord]:
+        return _run_status_sweep(self)
