@@ -151,20 +151,17 @@ def test_account_approval_mode_defaults_to_none_when_unset(integration_db):
 
 
 @pytest.mark.requires_db
-def test_ai_config_round_trips_through_both_tenant_projections(integration_db):
-    """ai_config and product_ranking_prompt survive every tenant projection.
+def test_the_ai_credential_stays_out_of_the_tenant_dict(integration_db):
+    """serialize_tenant_to_dict never carries the seller's AI configuration.
 
-    _get_products_impl resolves the tenant's AI configuration out of whatever shape the
-    tenant arrived in, so a field that the ORM model stores but a projection drops makes
-    ranking and policy checks silently fall back to the platform key. There are two
-    projections and they are maintained independently — serialize_tenant_to_dict (the
-    plain dict) and TenantContext — so both are graded here.
+    The dict reaches the Slack notifier and the audit path, and ai_config holds the
+    seller's api_key and logfire_token. TenantContext is the one projection that needs the
+    configuration, and it is built from the ORM row, so the dict has no reason to carry it.
     """
-    from src.core.tenant_context import TenantContext
     from tests.factories import TenantFactory
     from tests.harness._base import IntegrationEnv
 
-    ai_config = {"provider": "anthropic", "model": "claude-x", "api_key": "tenant-key"}
+    ai_config = {"provider": "anthropic", "model": "claude-x", "api_key": "tenant-key", "logfire_token": "lf-tok"}
 
     with IntegrationEnv(tenant_id="test_aicfg"):
         tenant = TenantFactory(
@@ -173,52 +170,53 @@ def test_ai_config_round_trips_through_both_tenant_projections(integration_db):
             product_ranking_prompt="rank by relevance to the brief",
         )
 
-        # 1. serialize_tenant_to_dict exposes both keys
         d = serialize_tenant_to_dict(tenant)
-        assert d["ai_config"] == ai_config
+
+        assert "ai_config" not in d
+        assert "tenant-key" not in repr(d)
+        assert "lf-tok" not in repr(d)
         assert d["product_ranking_prompt"] == "rank by relevance to the brief"
-
-        # 2. TenantContext.from_orm_model populates the fields
-        ctx = TenantContext.from_orm_model(tenant)
-        assert ctx.ai_config == ai_config
-        assert ctx.product_ranking_prompt == "rank by relevance to the brief"
-
-        # 3. Round-trip via from_dict preserves the values
-        ctx2 = TenantContext.from_dict(d)
-        assert ctx2.ai_config == ai_config
-        assert ctx2.product_ranking_prompt == "rank by relevance to the brief"
 
 
 @pytest.mark.requires_db
-def test_ai_config_survives_the_resolver_chain(integration_db):
-    """TenantContext.load carries ai_config through the chain the resolver walks.
+@pytest.mark.parametrize(
+    ("ai_config", "gemini_api_key", "expected"),
+    [
+        (
+            {"provider": "anthropic", "model": "claude-x", "api_key": "tenant-key"},
+            None,
+            {"provider": "anthropic", "model": "claude-x", "api_key": "tenant-key"},
+        ),
+        (None, "legacy-key", {"provider": "google", "model": "gemini-2.0-flash", "api_key": "legacy-key"}),
+    ],
+    ids=["ai_config", "legacy_gemini_api_key"],
+)
+def test_the_resolver_chain_carries_the_parsed_ai_config(integration_db, ai_config, gemini_api_key, expected):
+    """TenantContext.load carries the seller's AI configuration, parsed once and typed.
 
-    The resolver builds every request's tenant with ``TenantContext.load``:
-    get_tenant_by_id -> serialize_tenant_to_dict -> TenantContext.from_dict. This is the
-    assertion that fails if EITHER projection stops carrying ai_config, which would make
-    ranking and the policy gate silently fall back as if the seller had configured nothing.
+    The resolver builds every request's tenant with ``TenantContext.load``. Its
+    ``ai_config`` is what ``TenantAIConfig.from_tenant`` resolved from the row, the column
+    the Admin UI writes or the legacy gemini_api_key column, so ranking, the policy gate
+    and creative review read one typed value instead of re-parsing a dict at every use.
+    Missing it makes those features fall back as if the seller had configured nothing.
     """
     from src.core.tenant_context import TenantContext
     from src.services.ai.config import TenantAIConfig
     from tests.factories import TenantFactory
     from tests.harness._base import IntegrationEnv
 
-    ai_config = {"provider": "anthropic", "model": "claude-x", "api_key": "tenant-key"}
-
     with IntegrationEnv(tenant_id="test_aicfg_load"):
         TenantFactory(
             tenant_id="test_aicfg_load",
             ai_config=ai_config,
             product_ranking_prompt="rank by relevance to the brief",
+            gemini_api_key=gemini_api_key,
         )
 
         loaded = TenantContext.load("test_aicfg_load")
 
         assert loaded is not None
-        assert loaded.ai_config == ai_config
+        assert loaded.ai_config == TenantAIConfig(**expected)
         assert loaded.product_ranking_prompt == "rank by relevance to the brief"
-        # And the resolution rule reads it off the loaded projection unchanged, the shape
-        # ranking and the policy gate both consume.
-        assert TenantAIConfig.from_tenant(loaded) == TenantAIConfig(
-            provider="anthropic", model="claude-x", api_key="tenant-key"
-        )
+        assert TenantAIConfig.from_tenant(loaded) == TenantAIConfig(**expected)
+        assert expected["api_key"] not in repr(loaded)

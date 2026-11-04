@@ -23,6 +23,7 @@ from src.adapters.base import AdapterCreateResult
 from src.core.database.models import PersistedMediaBuyStatus
 from src.core.database.repositories.creative import CreativeAssignmentRepository
 from src.core.tools.media_buy_create import ApprovalOutcome
+from tests.factories import TenantFactory
 from tests.factories.principal import PrincipalFactory
 
 # Who approved, and when. Passed in by the caller and written by the same
@@ -186,8 +187,8 @@ class TestExecuteApprovedStatusUpdate:
         with (
             patch("src.core.database.repositories.MediaBuyUoW", side_effect=lambda _: next(uow_iter)),
             patch(
-                "src.core.config_loader.get_tenant_by_id",
-                return_value={"tenant_id": "tenant_1", "adapter_type": "mock"},
+                "src.core.config_loader.get_tenant_context",
+                return_value=TenantFactory.make_tenant(tenant_id="tenant_1", ad_server="mock"),
             ),
             # Resolution from the stored ids is the resolver's (``identity_of``), and it
             # reads the tenant and principal rows this unit test has no database for.
