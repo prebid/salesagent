@@ -35,7 +35,7 @@ from src.core.enum_helpers import enum_value
 from src.core.errors.codes import ErrorCode
 from src.core.errors.details import CapabilityRefusalDetails, ValidationDetails
 from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPInvalidRequestError, AdCPValidationError
-from src.core.schemas import AnyTargeting, Error
+from src.core.schemas import AnyTargeting, Error, Targeting
 from src.core.validation_helpers import PACKAGES_FIELD, campaign_interval_violated, package_field_path
 
 if TYPE_CHECKING:
@@ -373,25 +373,53 @@ def keyword_duplicate_pairs(targeting: AnyTargeting) -> list[dict[str, str]]:
     return [{"keyword": keyword, "match_type": match_type} for (keyword, match_type), n in pairs.items() if n > 1]
 
 
-#: Overlay dimensions this seller refuses wherever they are sent. Each one's pinned description
-#: (core/targeting.json) says "Seller must declare support in get_adcp_capabilities"; each is
-#: declared there under media_buy.execution.targeting
-#: (protocol/get-adcp-capabilities-response.json); this seller's capabilities builder emits none
-#: of them (src/services/seller_capabilities.py builds geo_countries, geo_regions,
-#: geo_metros and geo_postal_areas only, and no collection_list or collection_list_exclude
-#: flag); no product carries overlay_support; and no adapter under src/adapters reads them.
-#: Accepting one answers success for targeting nothing applies, which the same file's "A fresh
-#: create/update request MUST be applied exactly or rejected" forbids.
+#: The overlay dimensions this seller applies, explicitly: each has a reader under
+#: ``src/adapters`` that turns it into ad-server targeting, or that refuses it for that adapter.
+#: GAM applies the geo pairs, ``device_type_any_of`` / ``device_platform`` through
+#: ``Targeting.device_form_factors``, ``media_type_any_of``, ``custom`` and the AXE segments;
+#: Kevel adds keywords and audiences, and Triton content categories; GAM and the mock refuse
+#: ``os_any_of``, ``browser_any_of``, ``content_cat_any_of``, ``keywords_any_of``, the postal
+#: pair and audiences with their own UNSUPPORTED_FEATURE, which stays theirs. ``property_list``
+#: and ``store_catchments`` have their own gates below.
 #:
-#: A deliberate hand list with a known ceiling: when an adapter learns to apply one of these and
-#: the builder declares it (#1857), the refusal must consult that declaration instead.
-UNDECLARED_OVERLAY_DIMENSIONS: tuple[str, ...] = (
-    "geo_proximity",
-    "keyword_targets",
-    "negative_keywords",
-    "collection_list",
-    "collection_list_exclude",
+#: NOT the capabilities builder (``src/services/seller_capabilities.py``), which declares four
+#: geo fields and would refuse every other dimension here that an adapter applies.
+_APPLIED_OVERLAY_DIMENSIONS: frozenset[str] = frozenset(
+    {
+        "audiences_any_of",
+        "axe_exclude_segment",
+        "axe_include_segment",
+        "browser",
+        "browser_any_of",
+        "content_cat_any_of",
+        "custom",
+        "device_platform",
+        "device_type",
+        "device_type_any_of",
+        "frequency_cap",
+        "geo_countries",
+        "geo_countries_exclude",
+        "geo_metros",
+        "geo_metros_exclude",
+        "geo_postal_areas",
+        "geo_postal_areas_exclude",
+        "geo_regions",
+        "geo_regions_exclude",
+        "keywords_any_of",
+        "media_type_any_of",
+        "os_any_of",
+        "property_list",
+        "signals",
+        "store_catchments",
+    }
 )
+
+#: Every other overlay dimension: declared by the pin, read by nothing, DERIVED by subtraction so
+#: a dimension the pin adds is refused as soon as the SDK declares it. Accepting one answers
+#: success for targeting nothing applies, which core/targeting.json forbids: "A fresh
+#: create/update request MUST be applied exactly or rejected"; for ``geo_places``, "reject
+#: unsupported entries rather than silently dropping them".
+UNAPPLIED_OVERLAY_DIMENSIONS: tuple[str, ...] = unapplied_fields(Targeting, _APPLIED_OVERLAY_DIMENSIONS)
 
 
 def raise_if_undeclared_overlay_dimension(targeting: AnyTargeting, package_index: int) -> None:
@@ -401,7 +429,7 @@ def raise_if_undeclared_overlay_dimension(targeting: AnyTargeting, package_index
     the same targeting differently. ``field`` names the dimension on the package that sent it;
     ``details.capability`` names the declaration the seller lacks.
 
-    Two sources of "cannot apply": the :data:`UNDECLARED_OVERLAY_DIMENSIONS`, each its own
+    Two sources of "cannot apply": the :data:`UNAPPLIED_OVERLAY_DIMENSIONS`, each its own
     capability, and ``store_catchments`` while :data:`CATALOG_MANAGEMENT_SUPPORTED` is False.
     A store_catchments entry targets stores "from a synced store catalog", its ``catalog_id``
     being a "Synced store-type catalog ID from sync_catalogs" (core/targeting.json); with no
@@ -410,7 +438,7 @@ def raise_if_undeclared_overlay_dimension(targeting: AnyTargeting, package_index
     """
     refused = [
         (dimension, dimension)
-        for dimension in UNDECLARED_OVERLAY_DIMENSIONS
+        for dimension in UNAPPLIED_OVERLAY_DIMENSIONS
         if getattr(targeting, dimension) is not None
     ]
     if targeting.store_catchments and not CATALOG_MANAGEMENT_SUPPORTED:

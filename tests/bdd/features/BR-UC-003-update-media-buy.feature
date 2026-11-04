@@ -1173,6 +1173,27 @@ Feature: BR-UC-003 Update Media Buy
   # take the same refusal, under core/targeting.json's "applied exactly or rejected".
   # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json pointer=/properties/frequency_cap
   # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json pointer=/properties/daily_budget_cap
+  # The one overlay refusal both tools share, on the update side.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/targeting.json
+  @T-UC-003-unapplied-overlay-dimension
+  Scenario Outline: An overlay dimension no adapter applies is refused on update - <dimension>
+    Given the tenant is configured for auto-approval
+    And a valid update_media_buy request with:
+    | field        | value       |
+    | media_buy_id | mb_existing |
+    And the request includes 1 package update with:
+    | field      | value   |
+    | package_id | pkg_001 |
+    And the package "pkg_001" exists in the media buy
+    And the package update's overlay sets its "<dimension>" dimension
+    When the Buyer Agent sends the update_media_buy request
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the package member "targeting_overlay.<dimension>"
+
+    Examples:
+      | dimension             |
+      | geo_places            |
+      | property_list_exclude |
+
   @T-UC-003-unapplied-request-member
   Scenario Outline: A top-level update field this seller does not apply is refused before any change - <member>
     Given the tenant is configured for auto-approval

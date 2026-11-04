@@ -41,6 +41,37 @@ UPDATE_REQUEST_MEMBERS: dict[str, Any] = {
     "total_budget": {"amount": 5000, "currency": "USD"},
 }
 
+#: A valid value for each overlay dimension the scenarios send.
+_PLACE = [{"country": "US", "system": "geonames", "place_type": "city", "values": ["5128581"]}]
+_LIST = {"agent_url": "https://lists.example", "list_id": "blocked"}
+OVERLAY_DIMENSIONS: dict[str, Any] = {
+    "age_restriction": {"min": 18, "verification_required": False},
+    "audience_exclude": ["aud_1"],
+    "audience_include": ["aud_1"],
+    "audiences_none_of": ["aud_1"],
+    "browser_exclude": ["chrome"],
+    "browser_none_of": ["chrome"],
+    "collection_list": _LIST,
+    "collection_selection": {"mode": "default"},
+    "connection_type_any_of": [1],
+    "content_cat_none_of": ["IAB1"],
+    "daypart_targets": [{"days": ["monday"], "start_hour": 9, "end_hour": 17}],
+    "device_platform_exclude": ["ios"],
+    "device_type_exclude": ["mobile"],
+    "device_type_none_of": ["mobile"],
+    "geo_countries": ["US"],
+    "geo_places": _PLACE,
+    "geo_places_exclude": _PLACE,
+    "geo_regions": ["US-NY"],
+    "keywords_none_of": ["shoes"],
+    "language": ["en"],
+    "media_type_any_of": ["display"],
+    "media_type_none_of": ["video"],
+    "os_none_of": ["ios"],
+    "placement_selection": {"mode": "default"},
+    "property_list_exclude": _LIST,
+}
+
 CREATE_PACKAGE_MEMBERS: dict[str, Any] = {
     "audience_evidence_pins": [
         {"evidence_id": "e_1", "snapshot_id": "s_1", "version": "1", "content_digest": "sha256:" + "0" * 64}

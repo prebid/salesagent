@@ -27,7 +27,7 @@ from tests.bdd.steps._outcome_helpers import (
     wire_entry,
     wire_field,
 )
-from tests.bdd.steps.domain._unapplied_members import CREATE_PACKAGE_MEMBERS, CREATE_REQUEST_MEMBERS
+from tests.bdd.steps.domain._unapplied_members import CREATE_PACKAGE_MEMBERS, CREATE_REQUEST_MEMBERS, OVERLAY_DIMENSIONS
 from tests.bdd.steps.domain.uc002_task_query import assert_task_query_outcome, is_task_query_outcome
 from tests.bdd.steps.domain.uc002_v31_request import (
     assert_governance_skipped_outcome,
@@ -719,6 +719,12 @@ def given_package_sets_member(ctx: dict, member: str) -> None:
     _first_package(ctx)[member] = CREATE_PACKAGE_MEMBERS[member]
 
 
+@given(parsers.parse('the package overlay sets its "{dimension}" dimension'))
+def given_package_overlay_dimension(ctx: dict, dimension: str) -> None:
+    """Set a valid value of one overlay dimension."""
+    _first_package(ctx)["targeting_overlay"] = {dimension: OVERLAY_DIMENSIONS[dimension]}
+
+
 @given("the package proposes performance standards")
 def given_package_performance_standards(ctx: dict) -> None:
     """One well-formed proposed standard (core/performance-standard.json)."""
@@ -733,7 +739,7 @@ def then_refused_naming_request_member(ctx: dict, member: str) -> None:
     ctx["result"].assert_wire_error("UNSUPPORTED_FEATURE", field=member)
 
 
-@then(parsers.re(r'the buyer is refused (?P<code>[A-Z_]+) naming the package member "(?P<member>\w+)"'))
+@then(parsers.re(r'the buyer is refused (?P<code>[A-Z_]+) naming the package member "(?P<member>[\w.]+)"'))
 def then_refused_naming_package_member(ctx: dict, code: str, member: str) -> None:
     """The code, its pinned recovery and the indexed field, on the wire."""
     ctx["result"].assert_wire_error(code, field=f"packages[0].{member}")

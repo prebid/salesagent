@@ -539,6 +539,62 @@ Feature: BR-UC-002 Create Media Buy
       | pacing                         |
       | start_time                     |
 
+  # core/targeting.json (v3.2.7): "A fresh create/update request MUST be applied exactly or
+  # rejected"; for geo_places, "reject unsupported entries rather than silently dropping them".
+  # The refused set is the pin's targeting fields minus what an adapter here reads, so a buyer
+  # narrowing by place or excluding a property list no longer gets delivery as wide as the product.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/targeting.json
+  @T-UC-002-unapplied-overlay-dimension @extension
+  Scenario Outline: A targeting dimension no adapter applies is refused before any write - <dimension>
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And the package overlay sets its "<dimension>" dimension
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the package member "targeting_overlay.<dimension>"
+    And no media buy is persisted for the tenant
+
+    Examples:
+      | dimension               |
+      | age_restriction         |
+      | audience_exclude        |
+      | audience_include        |
+      | audiences_none_of       |
+      | browser_exclude         |
+      | browser_none_of         |
+      | collection_list         |
+      | collection_selection    |
+      | connection_type_any_of  |
+      | content_cat_none_of     |
+      | daypart_targets         |
+      | device_platform_exclude |
+      | device_type_exclude     |
+      | device_type_none_of     |
+      | geo_places              |
+      | geo_places_exclude      |
+      | keywords_none_of        |
+      | language                |
+      | media_type_none_of      |
+      | os_none_of              |
+      | placement_selection     |
+      | property_list_exclude   |
+
+  # An adapter reads these, so they keep working. media_type_any_of is GAM's (and Kevel's and
+  # Triton's), and the capabilities builder does not declare it, which is why that builder is
+  # not the refused set's other operand.
+  @T-UC-002-applied-overlay-dimension @extension
+  Scenario Outline: A targeting dimension an adapter applies keeps working - <dimension>
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And the package overlay sets its "<dimension>" dimension
+    When the Buyer Agent sends the create_media_buy request
+    Then the format selection creates a completed media buy
+
+    Examples:
+      | dimension         |
+      | media_type_any_of |
+      | geo_countries     |
+      | geo_regions       |
+
   @T-UC-002-package-performance-standards @extension
   Scenario: Proposed performance standards are rejected as terms this seller cannot honor
     Given a valid create_media_buy request
