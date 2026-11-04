@@ -90,7 +90,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.admin_accounts",
     "tests.bdd.steps.domain.uc_get_products_inventory",
     "tests.bdd.steps.domain.uc_get_products_pricing",
-    "tests.bdd.steps.domain.uc001_ai_ranking",
+    "tests.bdd.steps.domain.uc001_discovery",
     "tests.bdd.steps.domain.egress_ssrf",
     "tests.bdd.steps.domain.local_constraint_relaxations",
     "tests.bdd.steps.domain.local_context_echo",
@@ -5696,8 +5696,8 @@ _UC_BUCKET_ROUTES: dict[str, EnvRoute] = {
     # catch-all that exists for UCs whose harness does not exist yet, standing in
     # for a harness that has existed all along. Adding the row binds nothing on
     # its own: the generated BR-UC-001 feature carries 121 scenarios and NO
-    # `scenarios()` call anywhere binds it, so the only collected UC-001
-    # scenarios are the ones test_uc001_ai_ranking_tenant_config.py binds.
+    # `scenarios()` call binds it whole, so the only collected UC-001 scenarios
+    # are the ones test_uc001_discover_available_inventory.py binds by name.
     "UC-001": EnvRoute(tag="UC-001", env_builder=_build_product_env),
     "UC-GET-PRODUCTS": EnvRoute(tag="UC-GET-PRODUCTS", env_builder=_build_product_env),
     # UC-005 seeds the tenant on EVERY transport, not e2e only. The e2e-only row said
