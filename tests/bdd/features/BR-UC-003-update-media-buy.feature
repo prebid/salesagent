@@ -1181,7 +1181,7 @@ Feature: BR-UC-003 Update Media Buy
     | media_buy_id | mb_existing |
     And the update sets its "<member>" member
     When the Buyer Agent sends the update_media_buy request
-    Then the update is refused UNSUPPORTED_FEATURE naming the request member "<member>"
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the request member "<member>"
     And the media buy's persisted revision is unchanged
 
     Examples:

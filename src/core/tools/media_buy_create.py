@@ -4798,6 +4798,7 @@ async def _create_media_buy_impl(
         )
 
         modified_response.status = AdcpTaskStatus.completed.value
+        modified_response.name = req.name
         return modified_response
 
     except AdCPSalesAgentError as adcp_err:

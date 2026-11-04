@@ -83,6 +83,7 @@ class _MediaBuyData:
     """Plain data extracted from a MediaBuy ORM row."""
 
     media_buy_id: str
+    name: str | None
     currency: str | None
     budget: Decimal | None
     raw_request: dict | None
@@ -369,6 +370,7 @@ def _get_media_buys_impl(
         response_media_buys.append(
             GetMediaBuysMediaBuy(
                 media_buy_id=buy.media_buy_id,
+                name=buy.name,
                 buyer_campaign_ref=buyer_campaign_ref,
                 status=status,
                 valid_actions=seller_valid_actions(status.value),
@@ -571,6 +573,7 @@ def _fetch_target_media_buys(
         renderable.append(
             _MediaBuyData(
                 media_buy_id=buy.media_buy_id,
+                name=buy.name,
                 currency=buy.currency,
                 budget=buy.budget,
                 raw_request=buy.raw_request,

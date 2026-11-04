@@ -369,8 +369,8 @@ _UNAPPLIED_PACKAGE_FIELDS: tuple[str, ...] = unapplied_fields(
 #: The top-level fields this seller applies. ``new_packages`` and ``canceled`` are answered by
 #: their own branches. ``budget_allocation`` is applied in its fixed mode only
 #: (:func:`~src.services.targeting_capabilities.refuse_unapplied_request_fields`). ``name`` is
-#: not updated, which the field allows: "Sellers that cannot update name mid-flight SHOULD echo
-#: the prior unchanged value".
+#: not updated, which the field allows: "Sellers that cannot update name mid-flight" SHOULD echo
+#: the prior value, which this response does not yet do.
 _APPLIED_REQUEST_FIELDS: frozenset[str] = frozenset(
     {
         "budget_allocation",

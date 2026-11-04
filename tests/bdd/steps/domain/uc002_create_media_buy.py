@@ -670,6 +670,31 @@ def given_request_sets_member(ctx: dict, member: str) -> None:
     ctx["request_kwargs"][member] = CREATE_REQUEST_MEMBERS[member]
 
 
+@given(parsers.parse('the request names the media buy "{name}"'))
+def given_request_names_buy(ctx: dict, name: str) -> None:
+    """The display label the buyer chose."""
+    _first_package(ctx)
+    ctx["request_kwargs"]["name"] = name
+
+
+@then(parsers.parse('the created media buy\'s name on the wire is "{name}"'))
+def then_created_buy_name(ctx: dict, name: str) -> None:
+    """The create success response echoes the label unchanged."""
+    assert wire_field(ctx, "name") == name
+
+
+@then(parsers.parse('the read media buy\'s name on the wire is "{name}"'))
+def then_read_buy_name(ctx: dict, name: str) -> None:
+    """The get_media_buys read echoes the label unchanged."""
+    assert wire_field(ctx, "media_buys")[0]["name"] == name
+
+
+@then("the read media buy carries no name on the wire")
+def then_read_buy_no_name(ctx: dict) -> None:
+    """A buy the buyer did not name reports none, rather than a generated order name."""
+    assert "name" not in wire_field(ctx, "media_buys")[0]
+
+
 @given("the request asks for a seller-optimized budget allocation")
 def given_request_seller_optimized(ctx: dict) -> None:
     """The shape the seller_optimized_budget storyboard sends: a shared total and goals."""

@@ -468,6 +468,32 @@ Feature: BR-UC-002 Create Media Buy
       | pacing                 |
       | paused                 |
 
+  # create-media-buy-request.json (v3.2.7): "When supplied, the seller MUST persist it and echo it
+  # unchanged on the create success response and subsequent get_media_buys reads." Spelled with
+  # surrounding detail a generated order name could not produce, and read back from the wire on
+  # the same transport.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/create-media-buy-request.json pointer=/properties/name
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
+  @T-UC-002-media-buy-name @extension
+  Scenario: A media buy's name is persisted and echoed unchanged
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And the request names the media buy "Spring flight - Q2 / North"
+    When the Buyer Agent sends the create_media_buy request
+    Then the format selection creates a completed media buy
+    And the created media buy's name on the wire is "Spring flight - Q2 / North"
+    When the Buyer Agent reads the created media buy back with get_media_buys
+    Then the read media buy's name on the wire is "Spring flight - Q2 / North"
+
+  @T-UC-002-media-buy-name @extension
+  Scenario: A media buy created with no name reads back with none
+    Given a valid create_media_buy request
+    And the account exists and is active
+    When the Buyer Agent sends the create_media_buy request
+    Then the format selection creates a completed media buy
+    When the Buyer Agent reads the created media buy back with get_media_buys
+    Then the read media buy carries no name on the wire
+
   @T-UC-002-unapplied-budget-allocation @extension
   Scenario: A seller-optimized budget allocation is refused before any write
     Given a valid create_media_buy request

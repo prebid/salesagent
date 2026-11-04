@@ -2705,12 +2705,6 @@ def given_update_sets_member(ctx: dict, member: str) -> None:
     ctx["revision_before"] = _persisted_revision(ctx, kwargs["media_buy_id"])
 
 
-@then(parsers.parse('the update is refused UNSUPPORTED_FEATURE naming the request member "{member}"'))
-def then_update_refused_naming_request_member(ctx: dict, member: str) -> None:
-    """The code, its pinned recovery and the field, on the wire."""
-    ctx["result"].assert_wire_error("UNSUPPORTED_FEATURE", field=member)
-
-
 # ═══════════════════════════════════════════════════════════════════════
 # BR-RULE-215: revision as the buyer's optimistic-concurrency token
 # ═══════════════════════════════════════════════════════════════════════

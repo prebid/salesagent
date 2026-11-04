@@ -7216,7 +7216,7 @@ ENV_ROUTES: list[EnvRoute] = [
     # it used before the readback was added.
     EnvRoute(
         tag="uc002-inline-creatives-readback",
-        when=_uc("UC-002", lambda m: "T-UC-002-alt-creatives" in m),
+        when=_uc("UC-002", lambda m: "T-UC-002-alt-creatives" in m or "T-UC-002-media-buy-name" in m),
         env_builder=_env("tests.harness.media_buy_create_list.MediaBuyCreateListEnv"),
         seed=_seed_media_buy_chain_create_dispatch,
     ),
