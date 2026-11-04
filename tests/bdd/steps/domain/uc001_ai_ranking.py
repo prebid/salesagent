@@ -21,6 +21,7 @@ from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._outcome_helpers import wire_field
 from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.bdd.steps.generic._table import rows
 from tests.factories import PricingOptionFactory, ProductFactory
 
 # The ai_config a seller writes through the Admin UI. "gemini" rather than the
@@ -61,12 +62,6 @@ _UNUSABLE_CONFIGS: dict[str, dict[str, Any]] = {
 }
 
 
-def _rows(datatable: Sequence[Sequence[object]]) -> list[dict[str, str]]:
-    """Gherkin table -> list of {header: cell} dicts, header row consumed."""
-    headers = [str(cell) for cell in datatable[0]]
-    return [{headers[i]: str(cell) for i, cell in enumerate(row)} for row in datatable[1:]]
-
-
 def _wire_product_ids(ctx: dict) -> list[str]:
     """The product_ids of ``products[]`` in the order the buyer receives them."""
     products = wire_field(ctx, "products")
@@ -86,13 +81,13 @@ def given_catalog_in_order(ctx: dict, datatable: Sequence[Sequence[object]]) -> 
     here rather than silently grading a different baseline order.
     """
     tenant = ctx["tenant"]
-    rows = _rows(datatable)
-    product_ids = [row["product_id"] for row in rows]
+    catalog = rows(datatable)
+    product_ids = [row["product_id"] for row in catalog]
     assert product_ids == sorted(product_ids), (
         f"the table claims catalog order but product_ids {product_ids} are not sorted; "
         "ProductRepository.list_all orders by product_id, so the table must too"
     )
-    for row in rows:
+    for row in catalog:
         product = ProductFactory(tenant=tenant, product_id=row["product_id"], name=row["name"])
         PricingOptionFactory(product=product)
 
@@ -149,7 +144,7 @@ def given_ranking_scores(ctx: dict, datatable: Sequence[Sequence[object]]) -> No
     rather than in a Then step, because a Then would have to read in-process call
     arguments; see that method for why the swap is otherwise invisible.
     """
-    scores = {row["product_id"]: float(row["relevance_score"]) for row in _rows(datatable)}
+    scores = {row["product_id"]: float(row["relevance_score"]) for row in rows(datatable)}
     ctx["env"].set_ranking_scores(scores)
 
 
@@ -168,7 +163,7 @@ def when_request_products_with_brief(ctx: dict, brief: str) -> None:
 @then("the response products are exactly, in order:")
 def then_products_exactly_in_order(ctx: dict, datatable: Sequence[Sequence[object]]) -> None:
     """Assert products[] is exactly the listed ids, in the listed order."""
-    expected = [row["product_id"] for row in _rows(datatable)]
+    expected = [row["product_id"] for row in rows(datatable)]
     actual = _wire_product_ids(ctx)
     assert actual == expected, f"Expected products[] {expected}, got {actual}"
 

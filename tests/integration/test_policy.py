@@ -5,6 +5,7 @@ from unittest.mock import patch
 import pytest
 
 from src.core.schemas import GetProductsRequest
+from src.services.ai.config import DEFAULT_GOOGLE_MODEL, TenantAIConfig
 from src.services.policy_check_service import PolicyCheckResult, PolicyCheckService, PolicyStatus
 from tests.helpers.adcp_factories import create_test_brand_manifest, create_test_product
 
@@ -13,15 +14,9 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 @pytest.fixture
 def policy_service():
-    """Create a policy service without API key for basic testing."""
+    """Create a policy service without AI for basic testing."""
     # Service without AI will just allow everything with a warning
-    # Must clear GEMINI_API_KEY env var to ensure AI is truly disabled
-    with patch.dict("os.environ", {}, clear=False):
-        # Remove GEMINI_API_KEY if present
-        import os
-
-        os.environ.pop("GEMINI_API_KEY", None)
-        return PolicyCheckService(gemini_api_key=None)
+    return PolicyCheckService(tenant_ai_config=None)
 
 
 @pytest.fixture
@@ -29,9 +24,9 @@ def policy_service_with_ai():
     """Create a policy service with mocked AI via Pydantic AI."""
     # The service needs AI enabled. We'll patch the check_policy_compliance function
     # to return mock responses in each test.
-    with patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}):
-        service = PolicyCheckService()
-        return service
+    return PolicyCheckService(
+        tenant_ai_config=TenantAIConfig(provider="google", model=DEFAULT_GOOGLE_MODEL, api_key="test-key")
+    )
 
 
 class TestPolicyWithoutAI:

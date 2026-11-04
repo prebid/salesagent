@@ -26,7 +26,7 @@ from src.core.database.models import Tenant
 from src.core.database.repositories import TenantLookupRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.core.security.outbound_http import OutboundError
-from src.services.ai.config import uses_legacy_gemini_api_key
+from src.services.ai.config import DEFAULT_GOOGLE_MODEL, uses_legacy_gemini_api_key
 from src.services.approximated_client import (
     DomainNotOwned,
     OwnedDomain,
@@ -629,7 +629,7 @@ def test_ai_connection(tenant_id):
     try:
         data = request.get_json() or {}
         provider = data.get("provider", "gemini")
-        model = data.get("model", "gemini-2.0-flash")
+        model = data.get("model", DEFAULT_GOOGLE_MODEL)
         api_key = data.get("api_key", "").strip()
 
         # Build config for testing

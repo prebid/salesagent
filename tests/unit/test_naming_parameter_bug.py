@@ -16,10 +16,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.core.utils.naming import apply_naming_template, build_order_name_context
+from tests.helpers.settings_injection import PlatformAICredential
 
 
 @pytest.fixture(autouse=True)
-def _no_platform_ai_key(monkeypatch):
+def _no_platform_ai_key():
     """Keep these tests offline.
 
     tests/conftest.py sets GEMINI_API_KEY for every test, and is_ai_enabled() returns
@@ -29,8 +30,8 @@ def _no_platform_ai_key(monkeypatch):
     substitution - so the platform credential is removed and generate_auto_name takes
     its documented fallback branch.
     """
-    for var in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "PYDANTIC_AI_PROVIDER", "PYDANTIC_AI_MODEL"):
-        monkeypatch.delenv(var, raising=False)
+    with PlatformAICredential():
+        yield
 
 
 class TestBuildOrderNameContextParameters:

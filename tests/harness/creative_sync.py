@@ -56,11 +56,10 @@ Available mocks via env.mock:
 
 from __future__ import annotations
 
-import os
 import re
 from dataclasses import dataclass
 from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 from adcp.types import AccountReference
@@ -73,6 +72,7 @@ from tests.harness.egress import EgressHatchMixin
 from tests.harness.media_buy_create import OMIT_ACCOUNT, OMIT_IDEMPOTENCY_KEY
 from tests.harness.transport import DeliverResult
 from tests.helpers.creative_test_helpers import creative_payload
+from tests.helpers.settings_injection import PlatformAICredential
 
 # Kwargs ``IntegrationEnv._run_a2a_handler`` consumes itself (identity mock, protocol-level
 # push config, request model) rather than forwarding as skill parameters — see
@@ -348,25 +348,9 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         # by the first REST dispatch. The environment is what gets pinned, and the
         # settings are rebuilt from it on every change and again on release, which is
         # the contract load_settings() documents for a test that changes the environment.
-        self._gemini_env = patch.dict(os.environ)
-        self._gemini_env.start()
-        self._guard("gemini_api_key_env", self._release_gemini_env)
-        self._apply_gemini_api_key(None)
-
-    def _apply_gemini_api_key(self, value: str | None) -> None:
-        from src.core.config import load_settings
-
-        if value is None:
-            os.environ.pop("GEMINI_API_KEY", None)
-        else:
-            os.environ["GEMINI_API_KEY"] = value
-        load_settings()
-
-    def _release_gemini_env(self) -> None:
-        from src.core.config import load_settings
-
-        self._gemini_env.stop()
-        load_settings()
+        self._platform_ai_credential = PlatformAICredential()
+        self._platform_ai_credential.start()
+        self._guard("platform_ai_credential", self._platform_ai_credential.stop)
 
     def _observe_at_ai_review_submit(self, *args: Any, **kwargs: Any) -> MagicMock:
         """Stand in for ``_ai_review_executor.submit`` and record DB visibility.
@@ -844,9 +828,9 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         unconfigured server state. It cannot be realized (the key belongs to another
         process's configuration), so it says so rather than pretending.
         """
-        # The environment is under the patch.dict started in _configure_mocks, so this
-        # write lives exactly as long as the env and is undone with it.
-        self._apply_gemini_api_key(value)
+        # The credential was started in _configure_mocks, so this write lives exactly as
+        # long as the env and is undone with it.
+        self._platform_ai_credential.set(value)
 
     def set_run_async_result(self, formats: list[Any]) -> None:
         """Configure run_async_in_sync_context to return *formats*.

@@ -6,7 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, ValidationError
 
-from src.core.config import get_settings
+from src.core.config import DEFAULT_GOOGLE_MODEL, get_settings
 from src.core.logging_config import log_safe
 
 logger = logging.getLogger(__name__)
@@ -22,12 +22,6 @@ class ModelSettings(BaseModel):
 
 GOOGLE_PROVIDER_ALIASES: frozenset[str] = frozenset({"gemini", "google", "google-gla"})
 CANONICAL_GOOGLE_PROVIDER = "google"
-
-# The model that pairs with the Google provider. Named here because a provider and a
-# model must travel together: a model name is only meaningful to the vendor it belongs
-# to, so a Google client handed a "claude-*" name 404s on every call. This is the pin
-# src/services/policy_check_service.py hard-coded at its own call site.
-DEFAULT_GOOGLE_MODEL = "gemini-2.0-flash"
 
 
 def canonicalize_google_provider(provider: str) -> str:

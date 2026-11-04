@@ -24,6 +24,7 @@ import pytest
 
 from src.admin.blueprints.creatives import _tenant_ai_enabled, review_creatives
 from tests.factories import TenantFactory
+from tests.helpers.settings_injection import PlatformAICredential
 
 # A tenant configured the way the Admin UI writes it: provider, model and key on
 # `ai_config`, nothing in the legacy `gemini_api_key` column.
@@ -48,9 +49,9 @@ def _tenant_credentials_only(monkeypatch):
     """
     from cryptography.fernet import Fernet
 
-    for var in ("GEMINI_API_KEY", "ANTHROPIC_API_KEY", "PYDANTIC_AI_PROVIDER", "PYDANTIC_AI_MODEL"):
-        monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("ENCRYPTION_KEY", Fernet.generate_key().decode())
+    with PlatformAICredential():
+        yield
 
 
 def _render_page(tenant):

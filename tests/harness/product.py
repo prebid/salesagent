@@ -42,7 +42,6 @@ Transport support:
 from __future__ import annotations
 
 import asyncio
-import os
 from collections.abc import Mapping
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -53,13 +52,6 @@ from tests.harness._mixins import ProductMixin
 from tests.harness._realize import e2e_unsupported, realize_e2e
 from tests.harness.database_faults import DatabaseFaultMixin
 from tests.harness.egress import EgressHatchMixin
-
-# The environment variable the platform AI key is read from. Production spells it
-# once, as ``IntegrationSettings.gemini_api_key`` in ``src.core.config``, and that
-# spelling is not importable as a constant, so the name is repeated here and the
-# REMOVAL is verified through production's own ``is_ai_enabled`` rather than
-# trusted (see ``ProductEnv.set_tenant_ai_ranking``).
-_PLATFORM_AI_KEY_ENV = "GEMINI_API_KEY"
 
 
 class ProductEnv(DatabaseFaultMixin, ProductMixin, IntegrationEnv):
@@ -178,29 +170,21 @@ class ProductEnv(DatabaseFaultMixin, ProductMixin, IntegrationEnv):
             ranking_prompt: The tenant's ``product_ranking_prompt`` column value.
             gemini_api_key: The tenant's legacy ``gemini_api_key`` column value, or None.
         """
-        from src.core.config import load_settings
         from src.services.ai.factory import AIServiceFactory
+        from tests.helpers.settings_injection import PlatformAICredential
 
         self.set_tenant_ai_config(ai_config, gemini_api_key=gemini_api_key)
         self.configure_tenant_field("product_ranking_prompt", ranking_prompt)
         self._tenant_ranking_prompt = ranking_prompt
 
-        # The settings object is cached, so removing the variable takes a reload, and so
-        # does putting it back.
-        original = os.environ.pop(_PLATFORM_AI_KEY_ENV, None)
-        load_settings()
-        if original is not None:
-
-            def _restore() -> None:
-                os.environ[_PLATFORM_AI_KEY_ENV] = original
-                load_settings()
-
-            self._guard(f"env:{_PLATFORM_AI_KEY_ENV}", _restore)
+        credential = PlatformAICredential()
+        credential.start()
+        self._guard("platform_ai_credential", credential.stop)
 
         factory = AIServiceFactory()
         if factory.is_ai_enabled(None):
             raise RuntimeError(
-                f"set_tenant_ai_ranking() removed {_PLATFORM_AI_KEY_ENV} but production still reports "
+                "set_tenant_ai_ranking() removed the platform AI credential but production still reports "
                 "AI enabled with no tenant configuration, so the tenant's own config would not be what "
                 "makes ranking run and the scenario would pass with the fix reverted. Check "
                 "PYDANTIC_AI_PROVIDER and the other provider key environment variables."
