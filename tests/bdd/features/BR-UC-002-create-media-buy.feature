@@ -437,6 +437,94 @@ Feature: BR-UC-002 Create Media Buy
     # manually approved buy is not created and parked for the operator.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/description
 
+  # A field the pin declares and this seller does not apply is refused before any write.
+  # create-media-buy-request.json (v3.2.7): frequency_cap "otherwise sellers MUST reject with
+  # UNSUPPORTED_FEATURE before any mutation and MUST NOT silently drop, soften, or clamp the
+  # cap"; daily_budget_cap "otherwise rejected with UNSUPPORTED_FEATURE". core/targeting.json
+  # states the general rule for a fresh request, "applied exactly or rejected".
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/create-media-buy-request.json pointer=/properties/frequency_cap
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/create-media-buy-request.json pointer=/properties/daily_budget_cap
+  # @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/protocols/media-buy/scenarios/budget_cap_timezone_override_rejected.yaml
+  @T-UC-002-unapplied-request-member @extension
+  Scenario Outline: A request field this seller does not apply is refused before any write - <member>
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And the request sets its "<member>" member
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the request member "<member>"
+    And no media buy is persisted for the tenant
+
+    Examples:
+      | member                 |
+      | advertiser_industry    |
+      | artifact_webhook       |
+      | bidding                |
+      | budget_cap_timezone    |
+      | daily_budget_cap       |
+      | frequency_cap          |
+      | invoice_recipient      |
+      | io_acceptance          |
+      | opportunity            |
+      | pacing                 |
+      | paused                 |
+
+  @T-UC-002-unapplied-budget-allocation @extension
+  Scenario: A seller-optimized budget allocation is refused before any write
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And the request asks for a seller-optimized budget allocation
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the request member "budget_allocation"
+    And no media buy is persisted for the tenant
+    # media-buy/create-media-buy-request.json budget_allocation: omission means fixed, so a
+    # fixed allocation is what this seller applies; seller_optimized needs
+    # media_buy.features.seller_optimized_budget, which it does not advertise.
+    # @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/protocols/media-buy/scenarios/seller_optimized_budget.yaml
+
+  @T-UC-002-applied-budget-allocation @extension
+  Scenario: A fixed budget allocation is what this seller applies
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And the request asks for a fixed budget allocation
+    When the Buyer Agent sends the create_media_buy request
+    Then the format selection creates a completed media buy
+
+  @T-UC-002-unapplied-package-member @extension
+  Scenario Outline: A package field this seller does not apply is refused before any write - <member>
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And the package sets its "<member>" member
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the package member "<member>"
+    And no media buy is persisted for the tenant
+    # package-request.json (v3.2.7): daily_budget_cap "Requires advertised package budget-capping
+    # scope; otherwise rejected with UNSUPPORTED_FEATURE"; audience_evidence_pins "MUST reject
+    # ... missing snapshots".
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json
+
+    Examples:
+      | member                         |
+      | audience_evidence_pins         |
+      | audience_evidence_requirements |
+      | bidding                        |
+      | daily_budget_cap               |
+      | end_time                       |
+      | impressions                    |
+      | pacing                         |
+      | start_time                     |
+
+  @T-UC-002-package-performance-standards @extension
+  Scenario: Proposed performance standards are rejected as terms this seller cannot honor
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And the package proposes performance standards
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer is refused TERMS_REJECTED naming the package member "performance_standards"
+    And no media buy is persisted for the tenant
+    # package-request.json performance_standards: "Seller accepts, rejects with TERMS_REJECTED,
+    # or adjusts."
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/properties/performance_standards
+
   @T-UC-002-ext-h-valid @extension @ext-h
   Scenario Outline: A format reference the product declares creates a media buy
     Given a valid create_media_buy request
@@ -3158,14 +3246,15 @@ Feature: BR-UC-002 Create Media Buy
     # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
 
   @T-UC-002-v31-advertiser-industry-per-buy @v31 @advertiser-industry @post-s1
-  Scenario: v3.1 advertiser_industry on the request targets a single industry per buy
+  Scenario: v3.1 advertiser_industry on the request is refused by a seller that cannot map it
     Given the tenant is configured for auto-approval
     And a valid create_media_buy request with advertiser_industry "healthcare.wellness"
     And the account "acc-001" exists and is active
     When the Buyer Agent sends the create_media_buy request
-    Then the response is compliant with the create_media_buy success spec
-    And the response should succeed
-    And the response status should be "completed"
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the request member "advertiser_industry"
+    # create-media-buy-request.json: "Sellers map this to platform-native codes". No adapter
+    # here maps it, so accepting it would answer success for a classification that never
+    # reaches the ad server. Refused like any field accepted and not applied.
     # v3.1: a brand may operate across multiple industries; each media buy targets exactly one
     # Corrected to the pin. Two lines are deleted because nothing in this scenario can
     # establish or observe them:

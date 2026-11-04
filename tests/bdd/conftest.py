@@ -2016,12 +2016,9 @@ _UC002_UC003_LEDGER: tuple[_CatchallXfail, ...] = (
         "T-UC-002-inv-006-5",
         _dormant("given a package uses a bid-based auction pricing model with max_bid set to true"),
     ),
-    _X(
-        "T-UC-002-inv-214-8",
-        _dormant(
-            "given a create_media_buy request that carries an invoice_recipient overriding the account default billing entity"
-        ),
-    ),
+    # Graduated: T-UC-002-inv-214-8. Its Givens are bound (uc002_v31_request.py), the request
+    # carrying an invoice_recipient is refused before any write on every transport, and the
+    # Thens read the error spec and the absence of a booking.
     _X("T-UC-002-partition-catalog-distinct-type", _LEDGER_CATALOG_NOT_FOUND, rows=("catalog_not_found",)),
     _X(
         "T-UC-002-partition-optimization-goals",

@@ -1167,6 +1167,33 @@ Feature: BR-UC-003 Update Media Buy
     # implemented (salesagent-8qela.8 chose refusal over implementation), this reverts to
     # asserting acceptance and INV-3 becomes gradable again.
 
+  # update-media-buy-request.json (v3.2.7): daily_budget_cap "otherwise rejected with
+  # UNSUPPORTED_FEATURE"; frequency_cap "rejected atomically with UNSUPPORTED_FEATURE before any
+  # change; sellers MUST NOT clamp it". The rest of this seller's unapplied top-level fields
+  # take the same refusal, under core/targeting.json's "applied exactly or rejected".
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json pointer=/properties/frequency_cap
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json pointer=/properties/daily_budget_cap
+  @T-UC-003-unapplied-request-member
+  Scenario Outline: A top-level update field this seller does not apply is refused before any change - <member>
+    Given the tenant is configured for auto-approval
+    And a valid update_media_buy request with:
+    | field        | value       |
+    | media_buy_id | mb_existing |
+    And the update sets its "<member>" member
+    When the Buyer Agent sends the update_media_buy request
+    Then the update is refused UNSUPPORTED_FEATURE naming the request member "<member>"
+    And the media buy's persisted revision is unchanged
+
+    Examples:
+      | member              |
+      | bidding             |
+      | budget_cap_timezone |
+      | daily_budget_cap    |
+      | frequency_cap       |
+      | invoice_recipient   |
+      | pacing              |
+      | total_budget        |
+
   @T-UC-003-ext-r-cross-ok-2 @invariant @BR-RULE-083
   Scenario: Keyword operations -- negative_keywords_add with targeting_overlay.keyword_targets is valid
     Given the tenant is configured for auto-approval

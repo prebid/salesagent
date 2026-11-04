@@ -27,6 +27,7 @@ from tests.bdd.steps._outcome_helpers import (
     wire_entry,
     wire_field,
 )
+from tests.bdd.steps.domain._unapplied_members import CREATE_PACKAGE_MEMBERS, CREATE_REQUEST_MEMBERS
 from tests.bdd.steps.domain.uc002_task_query import assert_task_query_outcome, is_task_query_outcome
 from tests.bdd.steps.domain.uc002_v31_request import (
     assert_governance_skipped_outcome,
@@ -660,6 +661,57 @@ def given_package_known_format(ctx: dict, format_id: str, agent_url: str) -> Non
     pkg = _first_package(ctx)
     pkg["format_ids"] = [FormatIdFactory(agent_url=agent_url, id=format_id).model_dump(mode="json")]
     ctx["env"].set_product_format_ids(ctx["default_product"].product_id, pkg["format_ids"])
+
+
+@given(parsers.parse('the request sets its "{member}" member'))
+def given_request_sets_member(ctx: dict, member: str) -> None:
+    """Set a valid value of a top-level field this seller does not apply."""
+    _first_package(ctx)
+    ctx["request_kwargs"][member] = CREATE_REQUEST_MEMBERS[member]
+
+
+@given("the request asks for a seller-optimized budget allocation")
+def given_request_seller_optimized(ctx: dict) -> None:
+    """The shape the seller_optimized_budget storyboard sends: a shared total and goals."""
+    _first_package(ctx)
+    ctx["request_kwargs"]["total_budget"] = {"amount": _first_package(ctx)["budget"], "currency": "USD"}
+    ctx["request_kwargs"]["budget_allocation"] = {
+        "mode": "seller_optimized",
+        "optimization_goals": [{"kind": "metric", "metric": "clicks", "priority": 1}],
+    }
+
+
+@given("the request asks for a fixed budget allocation")
+def given_request_fixed_allocation(ctx: dict) -> None:
+    """Fixed is what omitting the field means, so sending it asks for what the seller does."""
+    _first_package(ctx)
+    ctx["request_kwargs"]["budget_allocation"] = {"mode": "fixed"}
+
+
+@given(parsers.parse('the package sets its "{member}" member'))
+def given_package_sets_member(ctx: dict, member: str) -> None:
+    """Set a valid value of a package field this seller does not apply."""
+    _first_package(ctx)[member] = CREATE_PACKAGE_MEMBERS[member]
+
+
+@given("the package proposes performance standards")
+def given_package_performance_standards(ctx: dict) -> None:
+    """One well-formed proposed standard (core/performance-standard.json)."""
+    _first_package(ctx)["performance_standards"] = [
+        {"metric": "viewability", "threshold": 0.7, "vendor": {"domain": "verifier.example"}}
+    ]
+
+
+@then(parsers.parse('the buyer is refused UNSUPPORTED_FEATURE naming the request member "{member}"'))
+def then_refused_naming_request_member(ctx: dict, member: str) -> None:
+    """The code, its pinned recovery and the field, on the wire."""
+    ctx["result"].assert_wire_error("UNSUPPORTED_FEATURE", field=member)
+
+
+@then(parsers.re(r'the buyer is refused (?P<code>[A-Z_]+) naming the package member "(?P<member>\w+)"'))
+def then_refused_naming_package_member(ctx: dict, code: str, member: str) -> None:
+    """The code, its pinned recovery and the indexed field, on the wire."""
+    ctx["result"].assert_wire_error(code, field=f"packages[0].{member}")
 
 
 @then("the format selection creates a completed media buy")

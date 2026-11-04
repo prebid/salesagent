@@ -26,8 +26,10 @@ the per-dimension table and the apply-exactly-or-reject decision it needs.
 """
 
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from typing import TYPE_CHECKING, Any, Final
+
+from pydantic import BaseModel
 
 from src.core.enum_helpers import enum_value
 from src.core.errors.codes import ErrorCode
@@ -94,6 +96,33 @@ def refuse_unsupported_package_members(packages: Sequence[Any] | None, names: Se
         for name in names:
             if getattr(package, name) is not None:
                 raise _unsupported_package_member(name, name, index)
+
+
+def unapplied_fields(model: type[BaseModel], *handled: Collection[str]) -> tuple[str, ...]:
+    """The fields *model* declares minus every field in *handled*, DERIVED by subtraction.
+
+    So a field the pin adds is refused the moment the SDK declares it, whether or not anybody
+    remembered to list it (``media_buy_update._UNAPPLIED_PACKAGE_FIELDS`` has the reasoning).
+    """
+    return tuple(name for name in model.model_fields if not any(name in names for names in handled))
+
+
+def refuse_unapplied_request_fields(request: Any, names: Sequence[str]) -> None:
+    """Refuse a request setting one of ``names``, a top-level field this seller cannot apply.
+
+    The aggregate counterpart of :func:`refuse_unsupported_package_members`, for the same
+    phase: callers raise it before anything is written. A field at its declared default asks
+    for nothing (``paused`` defaults to false). ``budget_allocation`` is applied only
+    in its fixed mode, which is what omitting it means ("Omission means fixed allocation");
+    ``seller_optimized`` needs ``media_buy.features.seller_optimized_budget``, which this
+    seller does not advertise.
+    """
+    declared = type(request).model_fields
+    refused = [name for name in names if getattr(request, name) != declared[name].default]
+    if request.budget_allocation is not None and enum_value(request.budget_allocation.mode) != "fixed":
+        refused.append("budget_allocation")
+    if refused:
+        raise AdCPCapabilityNotSupportedError(details=CapabilityRefusalDetails(capability=refused[0]), field=refused[0])
 
 
 # ─── property_list targeting helpers ────────────────────────────────────

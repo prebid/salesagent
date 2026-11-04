@@ -147,6 +147,9 @@ from src.services.targeting_capabilities import (
     property_list_unsupported_advisories,
     raise_if_property_targeting_violations,
     refuse_invalid_package_overlays,
+    refuse_unapplied_request_fields,
+    refuse_unsupported_package_members,
+    unapplied_fields,
     validate_property_targeting_allowed,
 )
 
@@ -2088,6 +2091,84 @@ def push_creative_to_existing_buy(
 _VALUE_TARGET_KINDS = frozenset({"per_ad_spend", "maximize_value"})
 
 
+#: The top-level fields this seller applies. ``budget_allocation`` is applied in its fixed mode
+#: only (:func:`~src.services.targeting_capabilities.refuse_unapplied_request_fields`), and a
+#: ``proposal_id`` is refused with its own code. ``agency_estimate_number`` "travels with the
+#: order": it is kept on the stored record, where the buy-level scenario reads it.
+_APPLIED_REQUEST_FIELDS: frozenset[str] = frozenset(
+    {
+        "agency_estimate_number",
+        "brand",
+        "budget_allocation",
+        "end_time",
+        "name",
+        "packages",
+        "po_number",
+        "proposal_id",
+        "push_notification_config",
+        "reporting_webhook",
+        "start_time",
+        "total_budget",
+    }
+)
+
+#: Not instructions. ``governance_context`` and the deprecated ``plan_id`` are opaque governance
+#: references for a governed account, which no account here is.
+_NON_INSTRUCTION_REQUEST_FIELDS: frozenset[str] = frozenset(
+    {
+        "account",
+        "adcp_major_version",
+        "adcp_version",
+        "context",
+        "ext",
+        "governance_context",
+        "idempotency_key",
+        "plan_id",
+    }
+)
+
+#: The package fields this seller reads. ``committed_metrics``, ``measurement_terms`` and
+#: ``performance_standards`` are negotiated, each answered by its own refusal when it proposes
+#: what this seller cannot honor. ``optimization_goals`` is validated and not otherwise applied:
+#: storyboards with no capability gate (``delivery_reporting``) require such a buy to succeed.
+_APPLIED_PACKAGE_FIELDS: frozenset[str] = frozenset(
+    {
+        "agency_estimate_number",
+        "bid_price",
+        "budget",
+        "catalogs",
+        "committed_metrics",
+        "creative_assignments",
+        "creative_ids",
+        "creatives",
+        "format_ids",
+        "format_kind",
+        "format_option_refs",
+        "measurement_terms",
+        "optimization_goals",
+        "params",
+        "paused",
+        "performance_standards",
+        "pricing_option_id",
+        "product_id",
+        "targeting_overlay",
+    }
+)
+_NON_INSTRUCTION_PACKAGE_FIELDS: frozenset[str] = frozenset({"adcp_major_version", "adcp_version", "context", "ext"})
+
+#: What this seller accepts because the pin declares it and cannot apply, DERIVED by
+#: subtraction as update's are. ``media-buy/create-media-buy-request.json``: ``frequency_cap``
+#: "otherwise sellers MUST reject with UNSUPPORTED_FEATURE before any mutation and MUST NOT
+#: silently drop, soften, or clamp the cap"; ``daily_budget_cap`` "otherwise rejected with
+#: UNSUPPORTED_FEATURE".
+_UNAPPLIED_REQUEST_FIELDS: tuple[str, ...] = unapplied_fields(
+    CreateMediaBuyRequest, _APPLIED_REQUEST_FIELDS, _NON_INSTRUCTION_REQUEST_FIELDS
+)
+_UNAPPLIED_PACKAGE_FIELDS: tuple[str, ...] = unapplied_fields(
+    PackageRequest, _APPLIED_PACKAGE_FIELDS, _NON_INSTRUCTION_PACKAGE_FIELDS
+)
+
+
 def _refuse_package_terms_it_cannot_honor(pkg_index: int, package: PackageRequest) -> None:
     """Refuse a package asking for something this seller cannot honor, before anything is read.
 
@@ -2135,6 +2216,12 @@ def _refuse_package_terms_it_cannot_honor(pkg_index: int, package: PackageReques
         raise AdCPTermsRejectedError(
             details=EntityRefDetails(package_index=pkg_index),
             field=package_field_path(f"measurement_terms.{proposed}", pkg_index),
+        )
+    # The same negotiation: "Seller accepts, rejects with TERMS_REJECTED, or adjusts".
+    if package.performance_standards:
+        raise AdCPTermsRejectedError(
+            details=EntityRefDetails(package_index=pkg_index),
+            field=package_field_path("performance_standards", pkg_index),
         )
 
 
@@ -2527,6 +2614,12 @@ async def _create_media_buy_impl(
             req.push_notification_config,
             field_prefix="push_notification_config",
         )
+
+    # Capability refusal, above any write: the pin puts it "before any mutation". A request
+    # naming a proposal is answered PROPOSAL_NOT_FOUND below, whatever else it carries.
+    if req.proposal_id is None:
+        refuse_unapplied_request_fields(req, _UNAPPLIED_REQUEST_FIELDS)
+        refuse_unsupported_package_members(req.packages, _UNAPPLIED_PACKAGE_FIELDS)
 
     # The tenant's readiness to serve REAL inventory is not a precondition for a SANDBOX
     # request, which serves simulated data and makes no real ad-platform call. Measured

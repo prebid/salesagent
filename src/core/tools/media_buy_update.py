@@ -104,7 +104,9 @@ from src.services.targeting_capabilities import (
     property_list_unsupported_advisories,
     raise_if_property_targeting_violations,
     refuse_invalid_package_overlays,
+    refuse_unapplied_request_fields,
     refuse_unsupported_package_members,
+    unapplied_fields,
     validate_property_targeting_allowed,
 )
 
@@ -360,10 +362,52 @@ _NON_INSTRUCTION_PACKAGE_FIELDS: frozenset[str] = frozenset({"package_id", "cont
 #: ``git grep overlay_support -- src/`` returns nothing, so this seller advertises no overlay
 #: support at all and never claimed keyword targeting. (It also understates the dimensions
 #: this seller DOES support, which is its own gap and not this refusal's business.)
-_UNAPPLIED_PACKAGE_FIELDS: tuple[str, ...] = tuple(
-    name
-    for name in AdCPPackageUpdate.model_fields
-    if name not in _APPLIED_PACKAGE_FIELDS and name not in _NON_INSTRUCTION_PACKAGE_FIELDS
+_UNAPPLIED_PACKAGE_FIELDS: tuple[str, ...] = unapplied_fields(
+    AdCPPackageUpdate, _APPLIED_PACKAGE_FIELDS, _NON_INSTRUCTION_PACKAGE_FIELDS
+)
+
+#: The top-level fields this seller applies. ``new_packages`` and ``canceled`` are answered by
+#: their own branches. ``budget_allocation`` is applied in its fixed mode only
+#: (:func:`~src.services.targeting_capabilities.refuse_unapplied_request_fields`). ``name`` is
+#: not updated, which the field allows: "Sellers that cannot update name mid-flight SHOULD echo
+#: the prior unchanged value".
+_APPLIED_REQUEST_FIELDS: frozenset[str] = frozenset(
+    {
+        "budget_allocation",
+        "canceled",
+        "end_time",
+        "media_buy_id",
+        "name",
+        "new_packages",
+        "packages",
+        "paused",
+        "push_notification_config",
+        "reporting_webhook",
+        "revision",
+        "start_time",
+    }
+)
+
+#: Not instructions. ``governance_context`` is an opaque token for a governed account, which no
+#: account here is. ``cancellation_reason`` is a "SHOULD store" note beside ``canceled``.
+_NON_INSTRUCTION_REQUEST_FIELDS: frozenset[str] = frozenset(
+    {
+        "account",
+        "adcp_major_version",
+        "adcp_version",
+        "cancellation_reason",
+        "context",
+        "ext",
+        "governance_context",
+        "idempotency_key",
+    }
+)
+
+#: The top-level update fields this seller accepts because the pin declares them and cannot
+#: apply. ``media-buy/update-media-buy-request.json`` refuses ``daily_budget_cap`` and
+#: ``frequency_cap`` by name ("rejected atomically with UNSUPPORTED_FEATURE before any change").
+_UNAPPLIED_REQUEST_FIELDS: tuple[str, ...] = unapplied_fields(
+    UpdateMediaBuyRequest, _APPLIED_REQUEST_FIELDS, _NON_INSTRUCTION_REQUEST_FIELDS
 )
 
 
@@ -803,6 +847,7 @@ def _update_media_buy_impl(
     # puts this rejection "before any mutation", so no transaction may be open when it fires.
     _refuse_ambiguous_bidding(req)
     _refuse_unapplied_package_fields(req)
+    refuse_unapplied_request_fields(req, _UNAPPLIED_REQUEST_FIELDS)
     _refuse_unsupported_actions(req)
 
     # ── Workflow-step bookkeeping fence ──────────────────────────────────

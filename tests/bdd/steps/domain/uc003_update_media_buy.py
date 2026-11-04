@@ -28,6 +28,7 @@ from tests.bdd.steps._outcome_helpers import (
     wire_field,
     wire_lookup,
 )
+from tests.bdd.steps.domain._unapplied_members import UPDATE_REQUEST_MEMBERS
 from tests.bdd.steps.generic._auth import authenticate_env_as
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic._table import as_bool, drop_header_if
@@ -2691,6 +2692,23 @@ def _ensure_update_defaults(ctx: dict) -> dict[str, Any]:
             "media_buy_id": mb.media_buy_id,
         }
     return apply_required_update_fields(ctx, ctx["update_kwargs"])
+
+
+@given(parsers.parse('the update sets its "{member}" member'))
+def given_update_sets_member(ctx: dict, member: str) -> None:
+    """Set a valid value of a top-level field this seller does not apply, and note the revision."""
+    from tests.bdd.steps.domain.local_constraint_relaxations import _persisted_revision
+
+    kwargs = _ensure_update_defaults(ctx)
+    kwargs[member] = UPDATE_REQUEST_MEMBERS[member]
+    ctx["update_target_id"] = kwargs["media_buy_id"]
+    ctx["revision_before"] = _persisted_revision(ctx, kwargs["media_buy_id"])
+
+
+@then(parsers.parse('the update is refused UNSUPPORTED_FEATURE naming the request member "{member}"'))
+def then_update_refused_naming_request_member(ctx: dict, member: str) -> None:
+    """The code, its pinned recovery and the field, on the wire."""
+    ctx["result"].assert_wire_error("UNSUPPORTED_FEATURE", field=member)
 
 
 # ═══════════════════════════════════════════════════════════════════════
