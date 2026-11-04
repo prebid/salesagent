@@ -1544,7 +1544,7 @@ def then_old_assignments_removed(ctx: dict, old_ids: str) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-def _inline_creative_payload(creative_id: str, name: str) -> dict[str, Any]:
+def _inline_creative_payload(creative_id: str, name: str, media_url: str | None = None) -> dict[str, Any]:
     """One valid inline display creative, as a package update's ``creatives`` item carries it.
 
     The ``asset_type`` discriminator comes from ``image_spec``: a hand-built asset map
@@ -1557,7 +1557,9 @@ def _inline_creative_payload(creative_id: str, name: str) -> dict[str, Any]:
         creative_id=creative_id,
         name=name,
         format_id={"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
-        assets=named_format_assets("display_300x250_image", media_url=f"https://example.com/{creative_id}.png"),
+        assets=named_format_assets(
+            "display_300x250_image", media_url=media_url or f"https://example.com/{creative_id}.png"
+        ),
     )
 
 
@@ -1606,6 +1608,13 @@ def given_earlier_inline_creative(ctx: dict, package_id: str, creative_id: str) 
     """The package's prior creative arrived inline, as in the pin's storyboard
     (inline_creatives_without_sync: an inline creative, then a replacement inline update)."""
     _send_earlier_update(ctx, package_id, creatives=[_inline_creative_payload(creative_id, "Earlier inline creative")])
+
+
+@given(parsers.parse('the package update sends inline creative "{creative_id}" showing "{media_url}"'))
+def given_package_update_inline_creative_showing(ctx: dict, creative_id: str, media_url: str) -> None:
+    """The first package update carries this one inline creative, with this image."""
+    kwargs = _ensure_update_defaults(ctx)
+    kwargs["packages"][0]["creatives"] = [_inline_creative_payload(creative_id, "Inline Creative", media_url)]
 
 
 @given(parsers.parse('an earlier update gave package "{package_id}" the targeting_overlay {overlay}'))

@@ -18,6 +18,7 @@
 # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/update_media_buy.mdx section="Package Update Object"
 # @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/protocols/media-buy/scenarios/inline_creatives_without_sync.yaml
 # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/media-buy-features.json pointer=/properties/inline_creative_management
+# @source repo=adcp ref=v3.2.7 path=docs/creative/task-reference/sync_creatives.mdx
 Feature: UC-003 update_media_buy — inline creatives replace the package's inline creatives (local)
 
   # BR-UC-003's Background, unchanged: these scenarios run in that flow, and its last Given
@@ -54,6 +55,26 @@ Feature: UC-003 update_media_buy — inline creatives replace the package's inli
     # says a seller declaring a feature "MUST honor requests using that feature". So the
     # inline creative the earlier update sent is no longer assigned, and the one this
     # update sent is: the record holds the replacement, not the union.
+
+  # docs/creative/task-reference/sync_creatives.mdx, best practice 6: "Creatives assigned to
+  # active, non-paused packages cannot be updated". The inline array reaches the same upsert, so
+  # the buyer reads the same code. The update is one atomic mutation and refuses as a whole.
+  @T-UC-003-local-inline-creatives-active-delivery @creatives-inline
+  Scenario: inline creative content changed on a delivering package refuses the update with INVALID_STATE
+    Given the tenant is configured for auto-approval
+    And a valid update_media_buy request with:
+    | field        | value       |
+    | media_buy_id | mb_existing |
+    And the request includes 1 package update with:
+    | field      | value   |
+    | package_id | pkg_001 |
+    And the package "pkg_001" exists in the media buy
+    And an earlier update gave package "pkg_001" the inline creative "cr_inline_before"
+    And the package update sends inline creative "cr_inline_before" showing "https://example.com/cr_inline_changed.png"
+    When the Buyer Agent sends the update_media_buy request
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
+    And the error code should be "INVALID_STATE"
 
   @T-UC-003-local-inline-creatives-keep-library @creatives-inline @post-s1 @post-s2
   Scenario: inline creatives on a package update leave the package's library creatives assigned

@@ -21,10 +21,16 @@ from adcp.types.domains.core.representation_selection import (
 )
 from adcp.types.legacy import LegacyCreativeAsset as CreativeAsset
 
-from src.core.errors.details import AdapterFailureDetails, ConfigurationDetails, CreativeRejectionDetails
+from src.core.errors.details import (
+    AdapterFailureDetails,
+    ConfigurationDetails,
+    CreativeRejectionDetails,
+    InvalidStateDetails,
+)
 from src.core.exceptions import (
     AdCPConfigurationError,
     AdCPCreativeRejectedError,
+    AdCPGoneError,
     AdCPSalesAgentError,
     AdCPServiceUnavailableError,
 )
@@ -41,6 +47,7 @@ from src.core.schemas import CreativeFormatIdentity, CreativeStatusEnum, SyncCre
 from src.core.schemas import Error as AdCPErrorDetail
 from src.core.security.outbound_http import OperatorEndpoint, OutboundError
 from src.core.tenant_context import TenantContext
+from src.core.tools._media_buy_status import resolve_canonical_status
 from src.core.validation_helpers import run_async_in_sync_context
 from src.services.ai.config import tenant_google_api_key
 
@@ -54,6 +61,7 @@ from ._assets import (
 
 if TYPE_CHECKING:
     from src.core.database.repositories.creative import CreativeRepository
+    from src.core.database.repositories.media_buy import MediaBuyRepository
     from src.core.schemas import Format
 
 logger = logging.getLogger(__name__)
@@ -711,10 +719,34 @@ def _apply_approval_mode(
     return True
 
 
+def _refuse_change_in_active_delivery(media_buys: MediaBuyRepository, creative_id: str, principal_id: str) -> None:
+    """Refuse a content change to a creative assigned to a package that is delivering.
+
+    docs/creative/task-reference/sync_creatives.mdx (v3.2.7), best practice 6: "Creatives
+    assigned to active, non-paused packages cannot be updated or deleted via
+    ``delete_missing``", and its error table names ``INVALID_STATE``, "Pause the package first,
+    or create a new creative version". ``AdCPGoneError`` is that code. It stops this creative
+    only: the savepoint per creative in ``sync_creatives`` undoes its writes.
+    """
+    today = datetime.now(UTC).date()
+    for buy, package in media_buys.buy_packages_of_creative(creative_id, principal_id):
+        status = resolve_canonical_status(buy, today)
+        if status == "active" and not (package.package_config or {}).get("paused"):
+            raise AdCPGoneError(
+                details=InvalidStateDetails(
+                    creative_id=creative_id,
+                    media_buy_id=buy.media_buy_id,
+                    package_id=package.package_id,
+                    current_status=status,
+                )
+            )
+
+
 def _update_existing_creative(
     creative: CreativeAsset,
     existing_creative: Any,
     creative_repo: CreativeRepository,
+    media_buys: MediaBuyRepository,
     format_value: Any,
     tenant: TenantContext,
     webhook_url: str | None,
@@ -733,6 +765,7 @@ def _update_existing_creative(
         creative: CreativeAsset model from the sync payload.
         existing_creative: Existing DBCreative model to update (mutated in-place).
         creative_repo: CreativeRepository for DB operations (flush, update_data).
+        media_buys: MediaBuyRepository, for the buys the creative is assigned to.
         format_value: Validated FormatId from Creative schema.
         tenant: The tenant; its approval_mode routes review (``_apply_approval_mode``).
         webhook_url: Push notification webhook URL for AI review callbacks.
@@ -789,6 +822,9 @@ def _update_existing_creative(
     # `changes` by construction instead of by a residual-divergence note.
     submitted = SubmittedUpsertFields.submitted_by(data)
     changes = update_changes(creative, prior, incoming_identity, submitted)
+    enters_review = prior.enters_review(creative, changes)
+    if enters_review:
+        _refuse_change_in_active_delivery(media_buys, existing_creative.creative_id, principal_id)
 
     # CHANGED CONTENT ENTERS REVIEW; AN UNCHANGED OR METADATA-ONLY RESYNC KEEPS ITS REVIEW
     # STATE. Decided on the content part of the one change list the result reports.
@@ -811,7 +847,7 @@ def _update_existing_creative(
             webhook_url=webhook_url,
             principal_id=principal_id,
         )
-        if prior.enters_review(creative, changes)
+        if enters_review
         else False
     )
 

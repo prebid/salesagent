@@ -209,6 +209,14 @@ class GamSellerMixin:
         self._commit_factory_data()
         return media_buy
 
+    def pause_booked_package(self, package_id: str) -> None:
+        """Pause *package_id* of the env's buyer's booked buy, in the column ``update_media_buy`` writes."""
+        from src.core.database.models import MediaPackage
+
+        package = self.get_one(MediaPackage, package_id=package_id)
+        package.package_config = {**package.package_config, "paused": True}
+        self._commit_factory_data()
+
     def hold_unbooked_buy(self, *, package_id: str, product: Any, status: str) -> Any:
         """A buy of the env's buyer, in *status*, that the seller has not booked: nothing of it is in GAM.
 
@@ -221,7 +229,7 @@ class GamSellerMixin:
 
     def _seed_buy(self, *, package_ids: Sequence[str], product: Any, principal: Any = None, **buy: Any) -> Any:
         """The rows a create stores for a buy with those packages on *product*, the env's buyer's or *principal*'s."""
-        from datetime import UTC, datetime
+        from datetime import UTC, date, datetime
 
         from tests.factories import MediaBuyFactory
         from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID
@@ -231,9 +239,11 @@ class GamSellerMixin:
         return MediaBuyFactory(
             tenant=tenant,
             principal=principal or buyer,
-            # The flight a create resolves and stores, on the factory's own flight dates.
+            # A flight that has started and does not end: a buy in a serving status is delivering.
+            start_date=date(2025, 1, 1),
+            end_date=date(2099, 12, 31),
             start_time=datetime(2025, 1, 1, tzinfo=UTC),
-            end_time=datetime(2027, 12, 31, 23, 59, 59, tzinfo=UTC),
+            end_time=datetime(2099, 12, 31, 23, 59, 59, tzinfo=UTC),
             raw_request={
                 "packages": [
                     request_package(product_id=product.product_id, package_id=package_id) for package_id in package_ids

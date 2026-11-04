@@ -113,6 +113,58 @@ Feature: UC-006 a Google Ad Manager seller traffics assigned creatives onto its 
     And creative "cr-banner" failed with error RATE_LIMITED and recovery transient
     And Google Ad Manager associated that creative with line items "5000001"
 
+  # AdCP 3.2.7 sync_creatives.mdx, best practice 6 (Active delivery protection): "Creatives
+  # assigned to active, non-paused packages cannot be updated or deleted via delete_missing."
+  # Its error table names INVALID_STATE for that, "Pause the package first, or create a new
+  # creative version". It does not say whether the refusal is per item or for the whole request.
+  # This seller answers per creative, and what it refuses is a content change.
+  @T-UC-006-local-gam-active-delivery-refused
+  Scenario: A content change to a creative on an active, non-paused package is refused on that creative and reaches no ad server
+    Given the buyer holds a buy booked in Google Ad Manager as order "6000005" in status "active" whose package "pkg-live" is line item "5000005" accepting 300x250
+    And the buyer synced a 300x250 image creative "cr-banner" showing "https://example.com/banner.png" assigned to package "pkg-live"
+    And the buyer syncs a 300x250 image creative "cr-banner" showing "https://example.com/banner-v2.png" assigned to package "pkg-live"
+    When the Buyer Agent syncs the creative with assignments
+    Then creative "cr-banner" failed with error INVALID_STATE and recovery correctable
+    And Google Ad Manager created one image creative for advertiser "3000001" showing "https://example.com/banner.png"
+    And Google Ad Manager associated that creative with line items "5000005"
+    And Google Ad Manager updated no creative
+
+  @T-UC-006-local-gam-active-delivery-unchanged
+  Scenario: Sending a creative on an active, non-paused package again with the same content is not refused
+    Given the buyer holds a buy booked in Google Ad Manager as order "6000005" in status "active" whose package "pkg-live" is line item "5000005" accepting 300x250
+    And the buyer synced a 300x250 image creative "cr-banner" showing "https://example.com/banner.png" assigned to package "pkg-live"
+    And the buyer syncs a 300x250 image creative "cr-banner" showing "https://example.com/banner.png" assigned to package "pkg-live"
+    When the Buyer Agent syncs the creative with assignments
+    Then creative "cr-banner" is assigned to package "pkg-live"
+
+  # The creative a pending_creatives buy waits for is under review, so the row holds it there:
+  # an approved creative on a booked buy moves the buy out of pending_creatives, by its flight.
+  @T-UC-006-local-gam-active-delivery-not-delivering
+  Scenario Outline: A content change to a creative on a package that is not delivering is accepted - <state>
+    Given the tenant has approval_mode "<mode>"
+    And the buyer holds a buy booked in Google Ad Manager as order "6000005" in status "<status>" whose package "pkg-live" is line item "5000005" accepting 300x250
+    And the buyer synced a 300x250 image creative "cr-banner" showing "https://example.com/banner.png" assigned to package "pkg-live"
+    And the buyer has <paused> package "pkg-live" of the buy
+    And the buyer syncs a 300x250 image creative "cr-banner" showing "https://example.com/banner-v2.png" assigned to package "pkg-live"
+    When the Buyer Agent syncs the creative with assignments
+    Then creative "cr-banner" is assigned to package "pkg-live"
+
+    Examples:
+      | state          | mode          | status            | paused |
+      | paused package | auto-approve  | active            | paused |
+      | paused buy     | auto-approve  | paused            | left   |
+      | before start   | auto-approve  | pending_start     | left   |
+      | no creatives   | require-human | pending_creatives | left   |
+
+  # An assignment on another buyer's buy reaches no ad server (#2417), so nothing is delivering it.
+  @T-UC-006-local-gam-active-delivery-other-buyers-package
+  Scenario: A content change to a creative assigned only to another buyer's active package is accepted
+    Given another buyer of the seller holds a buy booked in Google Ad Manager as order "6000006" in status "active" whose package "pkg-other-live" is line item "5000006" accepting 300x250
+    And the buyer synced a 300x250 image creative "cr-banner" showing "https://example.com/banner.png" assigned to package "pkg-other-live"
+    And the buyer syncs a 300x250 image creative "cr-banner" showing "https://example.com/banner-v2.png" assigned to package "pkg-other-live"
+    When the Buyer Agent syncs the creative with assignments
+    Then creative "cr-banner" is assigned to package "pkg-other-live"
+
   # One buy, two packages, two line items on one order. A sync is pushed once per buy with
   # the packages it names.
   @T-UC-006-local-gam-two-packages-one-sync

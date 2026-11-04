@@ -1430,7 +1430,9 @@ def given_assignment_already_exists(ctx: dict) -> None:
     fmt_entry = _product_format_entry(ctx, env)
 
     # Use UUID-based IDs for e2e_rest to avoid collisions with Docker's persistent DB.
-    mb_kwargs: dict = {"tenant": tenant, "principal": principal, "status": "active"}
+    # Not delivering: the seeded row's content differs from the payload, and a content change to
+    # a creative on an active package is refused (sync_creatives.mdx v3.2.7, best practice 6).
+    mb_kwargs: dict = {"tenant": tenant, "principal": principal, "status": "pending_start"}
     prod_kwargs: dict = {"tenant": tenant, "format_ids": [fmt_entry]}
     if is_e2e(ctx):
         mb_kwargs["media_buy_id"] = _e2e_unique_id("mb")
@@ -1512,7 +1514,9 @@ def given_creative_already_assigned_to_package(ctx: dict) -> None:
     if not ctx.get("creatives"):
         given_creative_with_format(ctx)
 
-    media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
+    # Not delivering: the seeded row's content differs from the payload, and a content change to
+    # a creative on an active package is refused (sync_creatives.mdx v3.2.7, best practice 6).
+    media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="pending_start")
     product = ProductFactory(tenant=tenant, format_ids=[_product_format_entry(ctx, env)])
     package = MediaPackageFactory(
         media_buy=media_buy,
@@ -6241,7 +6245,9 @@ def given_creative_already_assigned_to_package_partition(ctx: dict) -> None:
     tenant = ctx["tenant"]
     principal = ctx["principal"]
 
-    media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
+    # Not delivering: the seeded row's content differs from the payload, and a content change to
+    # a creative on an active package is refused (sync_creatives.mdx v3.2.7, best practice 6).
+    media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="pending_start")
     product = ProductFactory(
         tenant=tenant,
         format_ids=[_scenario_format_entry(ctx, env)],

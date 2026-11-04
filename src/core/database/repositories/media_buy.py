@@ -17,10 +17,11 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.orm import Session, joinedload
 
 from src.core.database.models import (
+    CreativeAssignment,
     MediaBuy,
     MediaPackage,
     PersistedMediaBuyStatus,
@@ -239,6 +240,28 @@ class MediaBuyRepository:
                 )
             ).all()
         )
+
+    def buy_packages_of_creative(self, creative_id: str, principal_id: str) -> list[tuple[MediaBuy, MediaPackage]]:
+        """Each package of the principal's own buys that the principal's creative is assigned to, with its buy."""
+        rows = self._session.execute(
+            select(MediaBuy, MediaPackage)
+            .join(MediaPackage, MediaPackage.media_buy_id == MediaBuy.media_buy_id)
+            .join(
+                CreativeAssignment,
+                and_(
+                    CreativeAssignment.tenant_id == MediaBuy.tenant_id,
+                    CreativeAssignment.principal_id == MediaBuy.principal_id,
+                    CreativeAssignment.media_buy_id == MediaBuy.media_buy_id,
+                    CreativeAssignment.package_id == MediaPackage.package_id,
+                ),
+            )
+            .where(
+                MediaBuy.tenant_id == self._tenant_id,
+                MediaBuy.principal_id == principal_id,
+                CreativeAssignment.creative_id == creative_id,
+            )
+        ).all()
+        return [(buy, package) for buy, package in rows]
 
     def get_package(self, media_buy_id: str, package_id: str) -> MediaPackage | None:
         """Get a specific package, verified to belong to this tenant."""

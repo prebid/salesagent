@@ -16,8 +16,8 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal
 
 from adcp.server.helpers import MEDIA_BUY_STATE_MACHINE, is_terminal_status
+from adcp.types import ErrorCode, MediaBuyStatus
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
-from adcp.types import MediaBuyStatus
 
 from src.core.tools._media_buy_status import UNSUPPORTED_ACTIONS, seller_valid_actions
 from src.core.tools._media_buy_transitions import advance_past_pending_creatives
@@ -1320,6 +1320,11 @@ def _update_media_buy_impl(
 
                         # Check for sync errors
                         failed_creatives = [r for r in sync_response.creatives if r.action == "failed"]
+                        # A creative in active delivery is the buyer's to pause or replace, not an
+                        # ad server failure to retry (sync_creatives.mdx v3.2.7, best practice 6).
+                        for r in failed_creatives:
+                            if any(err.code == ErrorCode.INVALID_STATE for err in r.errors or []):
+                                raise AdCPGoneError(details=InvalidStateDetails(creative_id=r.creative_id))
                         if failed_creatives:
                             raise AdCPAdapterError(
                                 # ``e.code`` rather than ``e.message``: the message is a

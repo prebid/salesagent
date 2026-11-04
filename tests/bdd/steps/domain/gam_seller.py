@@ -612,6 +612,13 @@ def given_buyer_holds_booked_buy(ctx: dict, owner: str, order_id: str, status: s
     )
 
 
+@given(parsers.re(r'the buyer has (?P<state>paused|left) package "(?P<package>[^"]+)" of the buy$'))
+def given_buyer_set_package_paused(ctx: dict, state: str, package: str) -> None:
+    """The package's stored ``paused``, as ``update_media_buy`` leaves it; "left" is a package not paused."""
+    if state == "paused":
+        ctx["env"].pause_booked_package(package)
+
+
 @given(
     parsers.re(
         r"the buyer holds a buy (?P<held>awaiting the seller's approval|the seller approved and holds for its "
@@ -799,6 +806,13 @@ def then_creative_failed_with(ctx: dict, creative_id: str, code: str, recovery: 
     errors = wire_entry_errors(ctx, "creatives", creative_id=creative_id)
     reported = (entry.get("action"), [(error.get("code"), error.get("recovery")) for error in errors])
     assert reported == ("failed", [(code, recovery)]), f"expected {code} {recovery} on a failed entry; got {entry}"
+
+
+@then("Google Ad Manager updated no creative")
+def then_gam_updated_no_creative(ctx: dict) -> None:
+    """Nothing reached GAM's creative update."""
+    updated = ctx["env"].gam_objects_sent("CreativeService", "updateCreatives")
+    assert updated == [], f"expected GAM to update no creative; it received {updated}"
 
 
 @then("Google Ad Manager created no creative")

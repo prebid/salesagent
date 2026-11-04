@@ -197,6 +197,7 @@ def sync_creatives(
         if uow is None:
             uow = stack.enter_context(CreativeUoW(tenant.tenant_id, dry_run=dry_run))
         assert uow.creatives is not None
+        assert uow.media_buys is not None
         creative_repo = uow.creatives
 
         # sync-creatives-response.json (SyncCreativesSuccess.sandbox): "When true, this
@@ -316,6 +317,7 @@ def sync_creatives(
                             creative=creative,
                             existing_creative=existing_creative,
                             creative_repo=creative_repo,
+                            media_buys=uow.media_buys,
                             format_value=format_value,
                             tenant=tenant,
                             webhook_url=webhook_url,
