@@ -14,7 +14,7 @@ import logging
 import re
 from collections.abc import Sequence
 
-from flask import Blueprint, Flask, flash, jsonify, redirect, render_template, request, url_for
+from flask import Blueprint, Flask, Response, flash, jsonify, redirect, render_template, request, session, url_for
 from sqlalchemy import func, select
 
 from src.admin.blueprints.products import _format_labels, _parse_authored_format_options
@@ -122,6 +122,26 @@ def _get_property_summary(publisher_properties: list[dict]) -> str:
         parts.append(f"{tag_count} tag{'s' if tag_count != 1 else ''}")
 
     return ", ".join(parts)
+
+
+@inventory_profiles_bp.after_request
+def _answer_a_fetch_refusal_as_json(response: Response) -> Response:
+    """A POST refused with a flash and a redirect is a 400 with the reason, to a fetch that asks.
+
+    ``fetch`` follows the redirect to a 200 and reads it as success, and the redirected GET
+    consumes the flash, so the inventory page's modal reported a profile it had not created.
+    A browser form still gets the flash and the redirect.
+    """
+    refused = response.status_code in (301, 302, 303) and request.method == "POST"
+    if not refused or request.accept_mimetypes.best_match(["text/html", "application/json"]) != "application/json":
+        return response
+    errors = [message for category, message in session.get("_flashes", []) if category == "error"]
+    if not errors:
+        return response
+    session.pop("_flashes")
+    refusal = jsonify({"error": errors[0]})
+    refusal.status_code = 400
+    return refusal
 
 
 @inventory_profiles_bp.route("/")

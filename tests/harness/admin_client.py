@@ -127,17 +127,23 @@ class AdminClient:
             self._http = requests.Session()
 
     def request(
-        self, method: str, path: str, *, data: dict[str, str] | None = None, json: dict[str, Any] | None = None
+        self,
+        method: str,
+        path: str,
+        *,
+        data: dict[str, str] | None = None,
+        json: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> AdminResponse:
         """Send *method* to *path* (``/tenant/...``) with a form body or a JSON body."""
         if self._flask_client is not None:
             # Over https, because a production app marks its session cookie Secure.
             response = self._flask_client.open(
-                path, method=method.upper(), data=data, json=json, base_url="https://localhost"
+                path, method=method.upper(), data=data, json=json, headers=headers, base_url="https://localhost"
             )
             return AdminResponse.from_flask(response)
         response = self._http.request(
-            method, f"{self._base_url}{path}", data=data, json=json, allow_redirects=False, timeout=60
+            method, f"{self._base_url}{path}", data=data, json=json, headers=headers, allow_redirects=False, timeout=60
         )
         return AdminResponse.from_requests(response)
 
