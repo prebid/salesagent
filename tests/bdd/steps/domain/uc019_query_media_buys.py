@@ -3410,6 +3410,13 @@ def then_package_wire_field_degraded(ctx: dict, pkg_id: str, field: str) -> None
     )
 
 
+@then(parsers.parse('the package "{pkg_id}" targeting_overlay should carry a frequency cap of {count:d} impressions'))
+def then_package_overlay_frequency_cap(ctx: dict, pkg_id: str, count: int) -> None:
+    """The stored cap's count, as the buyer reads it on the wire."""
+    overlay = _wire_package(ctx, pkg_id).get("targeting_overlay") or {}
+    assert overlay.get("frequency_cap", {}).get("max_impressions") == count
+
+
 @then(parsers.parse('the package "{pkg_id}" targeting_overlay should carry geo_countries {countries}'))
 def then_package_targeting_overlay_geo_countries(ctx: dict, pkg_id: str, countries: str) -> None:
     """Assert the package's rehydrated overlay reached the buyer carrying these countries.

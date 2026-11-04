@@ -1309,6 +1309,22 @@ Feature: BR-UC-019 Query Media Buys
   # error.recovery. INTERNAL_ERROR is absent from the enum but IS emittable, and since the code
   # rewriters were deleted it reaches the buyer as itself rather than being collapsed to
   # SERVICE_UNAVAILABLE.
+  # core/frequency-cap.json (v3.2.7) declares "dependencies": {"max_impressions": ["per", "window"]},
+  # which binds what a buyer sends. An earlier pin accepted {"max_impressions": 3}, so such a cap is
+  # stored; the readback is not a request, and refusing it told a buyer to correct a request
+  # that was fine, for every buy in the call. The create and update refusal of the same cap is
+  # the frequency_cap_missing_fields row of each tool's targeting outline.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/frequency-cap.json pointer=/dependencies
+  @T-UC-019-stored-count-only-frequency-cap @targeting_overlay @schema-v3.1
+  Scenario: A stored frequency cap with only a count reads back beside other buys
+    Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
+    And the principal "buyer-001" owns media buy "mb-002" with package "pkg-002"
+    And package "pkg-001" package_config key targeting_overlay holds the JSON value {"frequency_cap": {"max_impressions": 3}}
+    When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001", "mb-002"]
+    Then the response should include media buy "mb-001" with package "pkg-001"
+    And the response should include media buy "mb-002" with package "pkg-002"
+    And the package "pkg-001" targeting_overlay should carry a frequency cap of 3 impressions
+
   @T-UC-019-partition-targeting-rehydration @partition @targeting_overlay @schema-v3.1
   Scenario Outline: targeting_overlay rehydration - <partition>
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"

@@ -2385,16 +2385,23 @@ def convert_format_ids_to_formats(format_ids: list[str], tenant_id: str | None =
 # and what adapters and the discovery readers hand over -- fill a slot typed with this
 # subclass, by reading the five declared fields off it. Without that, pydantic refuses a
 # parent instance in a subclass slot by identity.
-class FrequencyCap(SchemaDependencies, LibraryFrequencyCap):
-    """The pinned ``core/frequency-cap.json``, declaring no field of its own.
+class StoredFrequencyCap(LibraryFrequencyCap):
+    """A frequency cap read back from a stored overlay, declaring no field of its own.
 
     See the note above for why this is a subclass rather than an alias, and why its one
-    ``model_config`` is the reason it exists. It also carries the schema's ``dependencies``,
-    which the generated parent does not compile: ``max_impressions`` needs ``per`` and
-    ``window``, and each of those needs ``max_impressions``.
+    ``model_config`` is the reason it exists. It does NOT enforce the schema's ``dependencies``,
+    because those bind what a buyer sends: an earlier pin accepted ``{"max_impressions": 3}``, so
+    such a cap is stored (``_dependencies.py``: a readback of a stored document is never refused).
     """
 
     model_config = ConfigDict(extra="ignore", from_attributes=True)
+
+
+class FrequencyCap(SchemaDependencies, StoredFrequencyCap):
+    """A frequency cap on a request: the schema's ``dependencies``, which the generated parent
+    does not compile. ``max_impressions`` needs ``per`` and ``window``, and each of those needs
+    ``max_impressions``.
+    """
 
     _SCHEMA_DEPENDENCIES = {
         "max_impressions": ("per", "window"),
@@ -2562,8 +2569,13 @@ class Targeting(PinnedTargeting, _InternalTargetingDimensions):
     LAST so its ``extra`` policy does (pydantic merges base configs in ``__bases__``
     order, last one wins) -- the same ordering rule the pricing members follow.
 
-    ``frequency_cap`` is narrowed on :class:`PinnedTargeting`, for the reasons it records.
+    ``frequency_cap`` is narrowed again, past :class:`PinnedTargeting`'s request-side slot: what
+    this class reads is stored, and a stored cap is not refused (:class:`StoredFrequencyCap`).
     """
+
+    frequency_cap: Annotated[LibraryFrequencyCap, as_local(StoredFrequencyCap)] | None = narrowed_from(
+        TargetingOverlay, "frequency_cap"
+    )
 
 
 class GeoProximityItem(LibraryGeoProximityItem):
