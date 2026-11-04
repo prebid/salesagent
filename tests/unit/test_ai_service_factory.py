@@ -20,6 +20,7 @@ from src.services.ai.config import (
     GOOGLE_PROVIDER_ALIASES,
     uses_legacy_gemini_api_key,
 )
+from src.services.ai.factory import ResolvedAIConfig
 
 
 def credential_of(model) -> str | None:
@@ -865,6 +866,47 @@ class TestAIServiceFactory:
             assert factory.create_model(tenant_ai_config={"provider": "gateway/anthropic", "model": "claude-x"}) == (
                 "gateway/anthropic:claude-x"
             )
+
+    @pytest.mark.parametrize(
+        "ai_config",
+        [
+            # No explicit-API-key integration, so building refuses rather than drop the key.
+            {"provider": "gateway/anthropic", "model": "claude-x", "api_key": "sk-tenant"},
+            # A blank model, and the platform's model belongs to Google.
+            {"provider": "anthropic", "model": "", "api_key": "sk-tenant"},
+        ],
+        ids=["no-explicit-key-integration", "blank-model-foreign-provider"],
+    )
+    def test_the_gate_refuses_what_the_build_refuses(self, ai_config):
+        """`resolve` is the gate every consumer asks before `create_model`, so they agree.
+
+        A configuration the gate passed and the build refused raised
+        CONFIGURATION_ERROR into a request that should have skipped AI: anonymous
+        get_products failed outright when the seller's row was one of these.
+        """
+        from src.core.exceptions import AdCPConfigurationError
+
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "platform-key"}, clear=True):
+            factory = AIServiceFactory()
+            config = TenantAIConfig(**ai_config)
+
+            assert factory.resolve(config) is None
+            assert factory.is_ai_enabled(config) is False
+            with pytest.raises(AdCPConfigurationError):
+                factory.create_model(tenant_ai_config=config)
+
+    def test_a_resolution_the_gate_passes_builds(self):
+        """The other half of the agreement: what `resolve` returns, `create_model` builds."""
+        from pydantic_ai.models.anthropic import AnthropicModel
+
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "platform-key"}, clear=True):
+            factory = AIServiceFactory()
+            config = TenantAIConfig(provider="anthropic", model="claude-x", api_key="sk-tenant")
+
+            resolved = factory.resolve(config)
+
+            assert resolved == ResolvedAIConfig(provider="anthropic", model="claude-x", api_key="sk-tenant")
+            assert isinstance(factory.create_model(tenant_ai_config=config), AnthropicModel)
 
     def test_model_receives_api_key_via_provider(self):
         """Factory passes API key directly via Provider, not environment variables."""

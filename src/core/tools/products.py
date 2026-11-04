@@ -18,7 +18,6 @@ from src.core.audit_logger import get_audit_logger
 from src.core.errors.details import PolicyViolationDetails
 from src.core.exceptions import (
     AdCPAuthorizationError,
-    AdCPConfigurationError,
     AdCPInternalError,
     AdCPPolicyViolationError,
     AdCPSalesAgentError,
@@ -34,6 +33,7 @@ from src.core.schemas import (
     Product,  # Extends library Product
 )
 from src.core.validation_helpers import safe_parse_json_field
+from src.services.ai import AIServiceFactory
 from src.services.ai.config import TenantAIConfig
 from src.services.policy_check_service import PolicyCheckService, PolicyStatus
 
@@ -242,16 +242,20 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
         # column the Admin UI writes. Reading only gemini_api_key skipped policy checks
         # for every tenant that configured AI in the UI, even with "enabled" ticked.
         #
-        # Deliberately NOT factory.is_ai_enabled(): that counts the platform key from the
-        # environment, which would switch policy checks on for every tenant of any
-        # deployment that sets one. And a stored provider/model row with no api_key (what
-        # the settings page writes when the key is left blank, telling the seller "AI
-        # features will be disabled") must stay off rather than run on the operator's key.
+        # from_tenant alone is not enough, and factory.is_ai_enabled() alone is too much:
+        # the factory counts the platform key from the environment, which would switch
+        # policy checks on for every tenant of any deployment that sets one, and a stored
+        # provider/model row with no api_key (what the settings page writes when the key
+        # is left blank, telling the seller "AI features will be disabled") must stay off
+        # rather than run on the operator's key. The factory gate then refuses the seller's
+        # own configurations it cannot build (a blank model for a foreign provider, a
+        # provider with no explicit-API-key integration), so constructing the service
+        # below cannot raise CONFIGURATION_ERROR into this auth-optional discovery call.
         tenant_ai_config = TenantAIConfig.from_tenant(tenant)
-        if tenant_ai_config is None:
-            # No AI configuration - cannot run policy checks
+        if tenant_ai_config is None or not AIServiceFactory().is_ai_enabled(tenant_ai_config):
+            # No usable AI configuration of the seller's own - cannot run policy checks
             policy_result = None
-            logger.warning(f"Policy checks enabled but no AI configuration for tenant {tenant.tenant_id}")
+            logger.warning(f"Policy checks enabled but no usable AI configuration for tenant {tenant.tenant_id}")
         else:
             # tenant_ai_config=, not the deprecated gemini_api_key=: that parameter pins
             # provider and model instead of honouring the tenant's own.
@@ -738,12 +742,8 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
                 )
             else:
                 logger.debug("[GET_PRODUCTS] AI ranking configured but AI not enabled (no API key)")
-        except (AdCPConfigurationError, ImportError, RuntimeError, OSError) as e:
+        except (ImportError, RuntimeError, OSError) as e:
             # structural-guard: no spec surface covers ranking.
-            # AdCPConfigurationError is the factory refusing a configuration that
-            # is_ai_enabled() accepted (a provider with no explicit-API-key integration
-            # here). It is not a RuntimeError, so without it a seller-side
-            # misconfiguration failed this auth-optional discovery call outright.
             # This degrades ORDER only — and the set returned is a SUPERSET, because
             # the <0.1 relevance filter stops running too, so the buyer loses nothing
             # they were entitled to. AdCP 3.1.1 defines no ordering guarantee for

@@ -35,6 +35,11 @@ class ResolvedAIConfig(NamedTuple):
     api_key: str | None
 
 
+# The providers `_create_provider_model` builds with an explicit API key. Any other
+# provider falls through to a bare model string, which has nowhere to put a key, so the
+# build refuses a configuration that names one with a key.
+_EXPLICIT_KEY_PROVIDERS = frozenset({CANONICAL_GOOGLE_PROVIDER, "anthropic", "openai", "groq", "mistral", "cohere"})
+
 # Track if logfire has been configured
 _logfire_configured = False
 
@@ -279,26 +284,35 @@ class AIServiceFactory:
             )
             return model_string
 
+    def resolve(
+        self,
+        tenant_ai_config: dict | TenantAIConfig | None = None,
+    ) -> ResolvedAIConfig | None:
+        """The resolution `create_model` can build for this configuration, or None.
+
+        This is the gate every consumer asks before building, so it refuses exactly what
+        the build refuses: no model, no API key, or a provider with no explicit-API-key
+        integration. A gate that passed something the build then refused raised
+        CONFIGURATION_ERROR into a request that should have skipped AI.
+
+        A key alone is not enough either: the platform's key belongs to the platform's
+        provider, so "there is a key somewhere" answered True for a tenant whose named
+        provider had no credential at all, and the call it green-lit either carried the
+        wrong vendor's secret or 404'd on a model name from another vendor.
+        """
+        _, resolved = self._resolve(tenant_ai_config)
+        if not (resolved.api_key and resolved.model):
+            return None
+        if canonicalize_google_provider(resolved.provider) not in _EXPLICIT_KEY_PROVIDERS:
+            return None
+        return resolved
+
     def is_ai_enabled(
         self,
         tenant_ai_config: dict | TenantAIConfig | None = None,
     ) -> bool:
-        """Check whether a COHERENT AI configuration resolves - can this call actually run?
-
-        Enabled means a provider with both a model and an API key that belong to it.
-        A key alone is not enough: the platform's key belongs to the platform's
-        provider, so "there is a key somewhere" answered True for a tenant whose named
-        provider had no credential at all, and the call it green-lit either carried the
-        wrong vendor's secret or 404'd on a model name from another vendor.
-
-        Args:
-            tenant_ai_config: Tenant's AI configuration
-
-        Returns:
-            True if AI calls can be made, False otherwise
-        """
-        _, resolved = self._resolve(tenant_ai_config)
-        return bool(resolved.api_key and resolved.model)
+        """True when `resolve` finds a buildable configuration - can this call actually run?"""
+        return self.resolve(tenant_ai_config) is not None
 
     def get_effective_config(
         self,

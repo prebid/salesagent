@@ -8,7 +8,7 @@ from adcp.types.generated_poc.brand import Brand  # TODO: no stable alias in adc
 from pydantic import BaseModel, Field
 
 from src.core.schemas import Product
-from src.services.ai import TenantAIConfig, get_factory
+from src.services.ai import AIServiceFactory, TenantAIConfig
 from src.services.ai.agents.policy_agent import (
     check_policy_compliance,
     create_policy_agent,
@@ -56,7 +56,7 @@ class PolicyCheckService:
             return
 
         self.ai_enabled = True
-        self._agent = create_policy_agent(get_factory().create_model(tenant_ai_config))
+        self._agent = create_policy_agent(AIServiceFactory().create_model(tenant_ai_config))
 
     async def check_brief_compliance(
         self,
