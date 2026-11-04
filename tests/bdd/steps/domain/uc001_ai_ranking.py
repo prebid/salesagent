@@ -14,7 +14,7 @@ scripted-ranking stub in ``tests/harness/product.py``, where the call lands.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from pytest_bdd import given, parsers, then, when
@@ -24,42 +24,52 @@ from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic._table import rows
 from tests.factories import PricingOptionFactory, ProductFactory
 
-# The ai_config a seller writes through the Admin UI. "gemini" rather than the
-# canonical "google" on purpose: it is the legacy spelling the UI stores, and
-# production canonicalizes it (``canonicalize_google_provider``) before use, so
-# the scenario exercises the shape sellers actually have in their database.
-_TENANT_AI_CONFIG: dict[str, Any] = {
-    "provider": "gemini",
-    "model": "gemini-2.0-flash",
-    "api_key": "tenant-owned-ranking-key",
-}
 
-# Where the seller's own configuration lives, by the Outline's <where> wording: the
-# (ai_config, gemini_api_key) column pair each one writes.
-_CONFIG_SOURCES: dict[str, tuple[dict[str, Any] | None, str | None]] = {
-    "in ai_config": (_TENANT_AI_CONFIG, None),
-    "in the legacy gemini_api_key column": (None, "tenant-owned-legacy-key"),
+def _seller_ai_config(env: Any) -> dict[str, Any]:
+    """The ai_config a seller writes through the Admin UI, carrying the env's scripted key.
+
+    "gemini" rather than the canonical "google" on purpose: it is the legacy spelling the
+    UI stores, and production canonicalizes it (``canonicalize_google_provider``) before
+    use, so the scenario exercises the shape sellers actually have in their database.
+    """
+    return {"provider": "gemini", "model": "gemini-2.0-flash", "api_key": env.scripted_model_key}
+
+
+def _configure_seller_ai(env: Any, ai_config: dict[str, Any] | None, gemini_api_key: str | None = None) -> None:
+    """Write the seller's own AI configuration columns, which every transport reads."""
+    env.configure_tenant_field("ai_config", ai_config)
+    env.configure_tenant_field("gemini_api_key", gemini_api_key)
+
+
+# Where the seller's own configuration lives, by the Outline's <where> wording.
+_CONFIG_SOURCES: dict[str, Callable[[Any], None]] = {
+    "in ai_config": lambda env: _configure_seller_ai(env, _seller_ai_config(env)),
+    "in the legacy gemini_api_key column": lambda env: _configure_seller_ai(env, None, env.scripted_model_key),
 }
 
 # Configurations reading the tenant's own column can produce and that cannot rank, by
 # the Outline's <configuration> wording.
-_UNUSABLE_CONFIGS: dict[str, dict[str, Any]] = {
-    # is_ai_enabled() accepts it (provider, model and key all present), but the factory
-    # has no explicit-API-key integration for this provider and refuses to build a model
-    # that would authenticate with some other credential (AdCPConfigurationError).
-    "an ai_config the model factory refuses to build": {
+_UNUSABLE_CONFIGS: dict[str, Callable[[Any], dict[str, Any]]] = {
+    # The factory has no explicit-API-key integration for this provider and refuses to
+    # build a model that would authenticate with some other credential.
+    "an ai_config the model factory refuses to build": lambda env: {
         "provider": "gateway/anthropic",
         "model": "claude-x",
-        "api_key": "tenant-owned-ranking-key",
+        "api_key": env.scripted_model_key,
     },
     # settings.temperature is bounded to [0, 2] by ModelSettings, so the stored row does
     # not validate as a TenantAIConfig.
-    "a stored ai_config that does not parse": {
+    "a stored ai_config that does not parse": lambda env: {
         "provider": "gemini",
-        "api_key": "tenant-owned-ranking-key",
+        "api_key": env.scripted_model_key,
         "settings": {"temperature": 99},
     },
 }
+
+
+def _set_advertising_policy(env: Any, *, enabled: bool) -> None:
+    """``advertising_policy.enabled`` on the tenant, as the Admin UI's policy settings store it."""
+    env.configure_tenant_field("advertising_policy", {"enabled": enabled})
 
 
 def _wire_product_ids(ctx: dict) -> list[str]:
@@ -95,20 +105,22 @@ def given_catalog_in_order(ctx: dict, datatable: Sequence[Sequence[object]]) -> 
 @given(parsers.parse('the seller configured AI ranking {where} with the prompt "{prompt}"'))
 def given_ranking_with_own_config(ctx: dict, where: str, prompt: str) -> None:
     """The seller has a ranking prompt and an AI configuration of its own, in ``where``."""
-    ai_config, gemini_api_key = _CONFIG_SOURCES[where]
-    ctx["env"].set_tenant_ai_ranking(ai_config, prompt, gemini_api_key=gemini_api_key)
+    _CONFIG_SOURCES[where](ctx["env"])
+    ctx["env"].set_tenant_ai_ranking(prompt)
 
 
 @given(parsers.parse('the seller configured AI ranking with {configuration} and the prompt "{prompt}"'))
 def given_ranking_with_unusable_config(ctx: dict, configuration: str, prompt: str) -> None:
     """The seller asked for ranking, but its own configuration cannot produce a ranking."""
-    ctx["env"].set_tenant_ai_ranking(_UNUSABLE_CONFIGS[configuration], prompt)
+    env = ctx["env"]
+    _configure_seller_ai(env, _UNUSABLE_CONFIGS[configuration](env))
+    env.set_tenant_ai_ranking(prompt)
 
 
 @given("the seller's AI is configured only in ai_config")
 def given_ai_only_in_ai_config(ctx: dict) -> None:
     """The seller's AI configuration is in the column the Admin UI writes, and nowhere else."""
-    ctx["env"].set_tenant_ai_config(_TENANT_AI_CONFIG)
+    _CONFIG_SOURCES["in ai_config"](ctx["env"])
 
 
 @given("the seller's ai_config names a provider and a model but no API key")
@@ -118,13 +130,13 @@ def given_keyless_ai_config(ctx: dict) -> None:
     The page tells the seller "AI features will be disabled" as it saves this, so it is
     not a configuration of the seller's own.
     """
-    ctx["env"].set_tenant_ai_config({"provider": "gemini", "model": "gemini-2.0-flash"})
+    _configure_seller_ai(ctx["env"], {"provider": "gemini", "model": "gemini-2.0-flash"})
 
 
 @given("the seller has advertising-policy checks enabled")
 def given_policy_checks_enabled(ctx: dict) -> None:
     """``advertising_policy.enabled`` is set on the tenant."""
-    ctx["env"].enable_policy_checks()
+    _set_advertising_policy(ctx["env"], enabled=True)
 
 
 @given("the seller's policy model blocks the brief")

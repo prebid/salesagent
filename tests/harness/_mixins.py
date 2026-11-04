@@ -1839,6 +1839,21 @@ class CircuitBreakerMixin(LocalOriginMixin):
         )
 
 
+def _e2e_set_policy_blocked(env: Any, reason: str = "Policy violation") -> None:
+    """E2E realization of :meth:`ProductMixin.set_policy_blocked`.
+
+    The live server's policy check is a real ``PolicyCheckService`` on the seller's own AI
+    configuration, whose model calls the scripted origin with the seller's API key
+    (``scripted_model_key``). Scripting a BLOCKED ``PolicyAnalysis`` for that key is the
+    same verdict the in-process mock returns. The verdict is served only if the check runs:
+    a seller with no usable configuration never calls the origin, as in-process the mocked
+    service is never constructed.
+    """
+    from tests.e2e._scripted_llm import install_script
+
+    install_script(env.scripted_model_key, policy={"output": {"status": "blocked", "reason": reason}})
+
+
 class ProductMixin:
     """Shared fluent API for _get_products_impl testing.
 
@@ -1874,8 +1889,26 @@ class ProductMixin:
         mock_instance.check_brief_compliance = AsyncMock(return_value=mock_result)
         self.mock["policy_service"].return_value = mock_instance  # type: ignore[attr-defined]
 
+    @property
+    def scripted_model_key(self) -> str:
+        """The API key a scenario puts in the seller's own AI configuration.
+
+        Minted once per env, so scenarios sharing the e2e stack's one scripted origin cannot
+        read each other's scripts. In-process nothing authenticates with it; over e2e the
+        scripted origin (``tests/e2e/scripted_llm_origin_service.py``) answers a call
+        carrying it, and refuses every other key as the real API refuses an invalid one.
+        """
+        if self.__dict__.get("_scripted_model_key") is None:
+            self.__dict__["_scripted_model_key"] = f"seller-ai-key-{uuid4().hex}"
+        return str(self.__dict__["_scripted_model_key"])
+
+    @realize_e2e(_e2e_set_policy_blocked)
     def set_policy_blocked(self, reason: str = "Policy violation") -> None:
-        """Configure PolicyCheckService to block the brief."""
+        """Configure PolicyCheckService to block the brief.
+
+        Over e2e the live server builds the real service on the seller's own AI
+        configuration, so the verdict is scripted on the origin that model calls.
+        """
         from unittest.mock import AsyncMock
 
         from src.services.policy_check_service import PolicyStatus

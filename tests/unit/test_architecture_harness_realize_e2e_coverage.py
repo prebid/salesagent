@@ -84,9 +84,6 @@ ALLOWLIST_ALWAYS_DB_WRITE: frozenset[tuple[str, str]] = frozenset(
         ("tests/harness/_base.py", "configure_tenant_field"),
         ("tests/harness/account_sync.py", "set_billing_policy"),
         ("tests/harness/account_sync.py", "set_approval_mode"),
-        # ProductEnv.set_tenant_ai_config delegates both columns to
-        # configure_tenant_field, the same shape as the account_sync setters (#2167).
-        ("tests/harness/product.py", "set_tenant_ai_config"),
         # CircuitBreakerEnv.make_webhook_config/set_db_webhooks persist
         # PushNotificationConfig rows via self._session unconditionally --
         # same shape.
@@ -160,7 +157,6 @@ ALLOWLIST_NOT_BDD_REACHABLE: frozenset[tuple[str, str]] = frozenset(
         # tests/integration/*, which never run over e2e. Latent risk only if
         # a future BDD Given step starts calling one of these.
         ("tests/harness/_mixins.py", "set_policy_approved"),
-        ("tests/harness/_mixins.py", "set_policy_blocked"),
         ("tests/harness/_mixins.py", "set_dynamic_variants"),
         ("tests/harness/_mixins.py", "set_property_list"),
         ("tests/harness/_mixins.py", "set_ranking_disabled"),
