@@ -618,15 +618,23 @@ Feature: BR-UC-006 Sync Creative Assets
     # --- BR-RULE-038: Assignment Package Validation ---
 
   @T-UC-006-rule-038-inv1 @invariant @BR-RULE-038
-  Scenario: INV-1 — package lookup is tenant-scoped
+  Scenario Outline: INV-1 — package lookup is scoped to the caller's own media buys — <owner>, <mode>
     Given the Buyer is authenticated
-    And a package exists in a different tenant
+    And a package exists <owner>
     And assignments referencing that package_id
-    And validation_mode is "strict"
+    And validation_mode is "<mode>"
     When the Buyer Agent syncs the creative
-    Then the response is compliant with the sync_creatives error spec
-    And the assignment should fail with "PACKAGE_NOT_FOUND"
-    And the cross-tenant package should not be accessible
+    Then the response is compliant with the sync_creatives <branch> spec
+    And <expected>
+    And no assignment should be written for that package
+    And that package's media buy status should remain "draft"
+
+    Examples:
+      | owner                                               | mode    | branch  | expected                                              |
+      | in a different tenant                               | strict  | error   | the assignment should fail with "PACKAGE_NOT_FOUND"   |
+      | in a different tenant                               | lenient | success | that package is reported in the creative's assignment_errors |
+      | on another principal's media buy in the same tenant | strict  | error   | the assignment should fail with "PACKAGE_NOT_FOUND"   |
+      | on another principal's media buy in the same tenant | lenient | success | that package is reported in the creative's assignment_errors |
 
   @T-UC-006-rule-038-inv3 @invariant @BR-RULE-038
   Scenario: INV-3 — idempotent assignment upsert

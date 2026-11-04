@@ -1211,8 +1211,13 @@ def then_creatives_entry_reports_package_assignment_error(ctx: dict, creative_id
     what proves it was skipped rather than attempted (GH #1418: the attempt was an FK
     violation surfacing as a 500).
     """
-    entry = _wire_creatives_entry(ctx, creative_id)
-    package_id = ctx["package"].package_id
+    _assert_entry_reports_assignment_error(
+        _wire_creatives_entry(ctx, creative_id), creative_id, ctx["package"].package_id
+    )
+
+
+def _assert_entry_reports_assignment_error(entry: dict, creative_id: str, package_id: str) -> None:
+    """*entry* names *package_id* in ``assignment_errors`` and carries no ``assigned_to``."""
     assignment_errors = entry.get("assignment_errors") or {}
     assert package_id in assignment_errors, (
         f"expected assignment_errors on the entry for {creative_id!r} to name {package_id!r}, got {assignment_errors!r}"
@@ -1489,43 +1494,71 @@ def given_assignments_referencing_same_package(ctx: dict) -> None:
     ctx["assignments"] = {creative_id: [package_id]}
 
 
-@given("a package exists in a different tenant")
-def given_package_in_different_tenant(ctx: dict) -> None:
-    """Create a package in a different tenant (cross-tenant isolation test).
+def _seed_foreign_package(ctx: dict, tenant: object, principal: object) -> None:
+    """Seed a package on a buy *principal* owns, which the caller must not resolve.
 
-    Seeds a second tenant with its own media buy and package. The
-    package_id is stored so the next step can reference it in assignments,
-    but since it belongs to a different tenant, the sync should fail with
-    PACKAGE_NOT_FOUND.
+    The buy is draft with approved_at set, so an assignment that wrongly lands on it
+    also moves it to pending_creatives (BR-RULE-038 INV-4) -- the status is observable.
     """
-    from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory, ProductFactory, TenantFactory
+    from datetime import UTC, datetime
+
+    from tests.factories import MediaBuyFactory, MediaPackageFactory, ProductFactory
 
     env = ctx["env"]
-    ensure_tenant_principal(ctx, env)
-
-    # Ensure a creative payload exists
     if not ctx.get("creatives"):
         given_creative_with_format(ctx)
 
-    other_tenant = TenantFactory(tenant_id="other_tenant_xtz", subdomain="other_xtz")
-    other_principal = PrincipalFactory(tenant=other_tenant, principal_id="other_principal_xtz")
-    other_buy = MediaBuyFactory(tenant=other_tenant, principal=other_principal, status="active")
-    other_product = ProductFactory(tenant=other_tenant, format_ids=[_product_format_entry(ctx, env)])
-    other_package = MediaPackageFactory(
-        media_buy=other_buy,
-        package_config={"product_id": other_product.product_id, "budget": 1000.0},
+    mb_kwargs: dict = {
+        "tenant": tenant,
+        "principal": principal,
+        "status": "draft",
+        "approved_at": datetime(2025, 1, 15, 12, 0, 0, tzinfo=UTC),
+    }
+    prod_kwargs: dict = {"tenant": tenant, "format_ids": [_product_format_entry(ctx, env)]}
+    pkg_kwargs: dict = {}
+    if is_e2e(ctx):
+        mb_kwargs["media_buy_id"] = _e2e_unique_id("mb")
+        prod_kwargs["product_id"] = _e2e_unique_id("prod")
+        pkg_kwargs["package_id"] = _e2e_unique_id("pkg")
+    media_buy = MediaBuyFactory(**mb_kwargs)
+    product = ProductFactory(**prod_kwargs)
+    package = MediaPackageFactory(
+        media_buy=media_buy,
+        package_config={"product_id": product.product_id, "budget": 1000.0},
+        **pkg_kwargs,
     )
     env._commit_factory_data()
-    ctx["cross_tenant_package_id"] = other_package.package_id
+    ctx["foreign_media_buy"] = media_buy
+    ctx["foreign_package_id"] = package.package_id
+
+
+@given("a package exists in a different tenant")
+def given_package_in_different_tenant(ctx: dict) -> None:
+    """Seed a second tenant with its own principal, media buy and package."""
+    from tests.factories import PrincipalFactory, TenantFactory
+
+    ensure_tenant_principal(ctx, ctx["env"])
+    other_tenant = TenantFactory(tenant_id="other_tenant_xtz", subdomain="other_xtz")
+    other_principal = PrincipalFactory(tenant=other_tenant, principal_id="other_principal_xtz")
+    _seed_foreign_package(ctx, other_tenant, other_principal)
+
+
+@given("a package exists on another principal's media buy in the same tenant")
+def given_package_on_other_principals_buy(ctx: dict) -> None:
+    """Seed a package on a buy another principal in the caller's tenant owns (GH #2417)."""
+    from tests.factories import PrincipalFactory
+
+    ensure_tenant_principal(ctx, ctx["env"])
+    principal_kwargs: dict = {"tenant": ctx["tenant"]}
+    if is_e2e(ctx):
+        principal_kwargs["principal_id"] = _e2e_unique_id("prin")
+    _seed_foreign_package(ctx, ctx["tenant"], PrincipalFactory(**principal_kwargs))
 
 
 @given("assignments referencing that package_id")
 def given_assignments_referencing_that_package(ctx: dict) -> None:
-    """Wire assignments to the cross-tenant package_id.
-
-    Uses the package_id stored by 'a package exists in a different tenant'.
-    """
-    package_id = ctx["cross_tenant_package_id"]
+    """Wire assignments to the package a 'a package exists ...' step seeded for someone else."""
+    package_id = ctx["foreign_package_id"]
     creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: [package_id]}
 
@@ -1975,35 +2008,46 @@ def then_existing_assignment_updated_not_duplicated(ctx: dict) -> None:
         )
 
 
-@then("the cross-tenant package should not be accessible")
-def then_cross_tenant_not_accessible(ctx: dict) -> None:
-    """Assert the sync rejected the cross-tenant package reference.
+@then("no assignment should be written for that package")
+def then_no_assignment_for_foreign_package(ctx: dict) -> None:
+    """No creative_assignments row names the other owner's package under the caller's tenant.
 
-    The cross-tenant package_id should not be accessible from the buyer's
-    tenant. The previous Then step already asserts the error code. This
-    step confirms no assignment was created for the cross-tenant package.
-
-    Cross-tenant isolation is a security invariant — a leaked assignment
-    is a hard test failure, never a tolerated spec-gap.
+    Isolation is a security invariant -- a leaked assignment is a hard failure.
     """
     from sqlalchemy import select
 
     from src.core.database.models import CreativeAssignment
 
-    cross_pkg = ctx["cross_tenant_package_id"]
-    tenant_id = ctx["tenant"].tenant_id
-    with db_session(ctx) as session:
+    foreign_pkg = ctx["foreign_package_id"]
+    with _readback(ctx) as session:
         assignment = session.scalars(
             select(CreativeAssignment).filter_by(
-                tenant_id=tenant_id,
-                package_id=cross_pkg,
+                tenant_id=ctx["tenant"].tenant_id,
+                package_id=foreign_pkg,
             )
         ).first()
         assert assignment is None, (
-            f"Cross-tenant isolation violation: package {cross_pkg} from another tenant "
-            f"should not be accessible, but an assignment was created: "
-            f"assignment_id={assignment.assignment_id if assignment else 'N/A'}"
+            f"isolation violation: package {foreign_pkg} belongs to another owner, but an assignment "
+            f"was created: assignment_id={assignment.assignment_id if assignment else 'N/A'}"
         )
+
+
+@then("that package is reported in the creative's assignment_errors")
+def then_foreign_package_in_assignment_errors(ctx: dict) -> None:
+    """Lenient mode skips the other owner's package and reports it, assigning nothing."""
+    creative_id = latest_creative_id(ctx)
+    _assert_entry_reports_assignment_error(
+        _wire_creatives_entry(ctx, creative_id), creative_id, ctx["foreign_package_id"]
+    )
+
+
+@then(parsers.parse('that package\'s media buy status should remain "{expected_status}"'))
+def then_foreign_media_buy_status_should_remain(ctx: dict, expected_status: str) -> None:
+    """The other owner's buy is untouched by the caller's sync."""
+    actual = _get_media_buy_status_from_db(ctx, ctx["foreign_media_buy"])
+    assert actual == expected_status, (
+        f"Expected the other owner's media buy to remain '{expected_status}', but got '{actual}'"
+    )
 
 
 @then("no assignment processing should occur")
@@ -3024,7 +3068,7 @@ def when_sync_creative_with_assignments(ctx: dict) -> None:
     dispatch_request(ctx, **kwargs)
 
 
-def _get_media_buy_status_from_db(ctx: dict) -> str:
+def _get_media_buy_status_from_db(ctx: dict, media_buy: Any = None) -> str:
     """Re-read the media buy status from the DB after sync.
 
     The row is the only observable: sync-creatives-response.json describes the
@@ -3037,7 +3081,7 @@ def _get_media_buy_status_from_db(ctx: dict) -> str:
 
     from src.core.database.models import MediaBuy
 
-    media_buy = ctx["media_buy"]
+    media_buy = media_buy or ctx["media_buy"]
     with _readback(ctx) as session:
         mb = session.scalars(
             select(MediaBuy).filter_by(
