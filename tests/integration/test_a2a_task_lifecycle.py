@@ -2,34 +2,46 @@
 
 This is an internal resource-lifetime contract: the JSON-RPC refusal returns no task
 ID, so a buyer-facing BDD scenario cannot observe the orphaned registry entry.
-Requests use the real HTTP route, with no patched dispatch or fabricated errors.
+Buyer requests use the real HTTP route, with no patched dispatch or fabricated errors.
+The internal context-wiring fault is exercised directly because it has no wire trigger.
 The unchanged refusal code is also covered by T-PREDISPATCH-a2a-unknown-skill.
 """
 
+import asyncio
+
 import pytest
-from a2a.types import Task, TaskState
+from a2a.server.routes.common import ServerCallContext
+from a2a.types import SendMessageRequest, Task, TaskState
 from google.protobuf import json_format
 
 from tests.factories import AdapterConfigFactory, MediaBuyFactory
-from tests.harness._base import _A2A_PATH, _A2A_VERSION_HEADER, BareIntegrationEnv, _a2a_message_send_body
+from tests.harness._base import (
+    _A2A_PATH,
+    _A2A_VERSION_HEADER,
+    BareIntegrationEnv,
+    WireRefusal,
+    _a2a_jsonrpc_body,
+    _a2a_jsonrpc_result,
+    _a2a_message_send_body,
+)
+from tests.harness.raw_wire import RawDocument, _a2a_message
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
 def _send_skill(client, skill):
-    body = _a2a_message_send_body("get_products", {})
-    # Mutate the wire so malformed skills reach production parsing too.
-    body["params"]["message"]["parts"][0]["data"]["skill"] = skill
+    document = RawDocument(tool="get_products", a2a_parts=({"skill": skill, "input": {}},))
+    request = SendMessageRequest(message=_a2a_message(document))
     return client.post(
         _A2A_PATH,
         headers=_A2A_VERSION_HEADER,
-        json=body,
+        json=_a2a_jsonrpc_body("SendMessage", request),
     )
 
 
 def _assert_registered_task(response, task_registry, expected_state):
     assert response.status_code == 200
-    returned_task = json_format.ParseDict(response.json()["result"]["task"], Task())
+    returned_task = json_format.ParseDict(_a2a_jsonrpc_result(response)["task"], Task())
     assert returned_task.status.state == expected_state
     assert task_registry[returned_task.id] == returned_task
     return returned_task
@@ -52,7 +64,7 @@ def task_registry(integration_db):
     ("skill", "error_code", "message_prefix"),
     [
         pytest.param("nonexistent_skill", -32601, "Unknown skill 'nonexistent_skill'", id="unknown-skill"),
-        pytest.param(["get_products"], -32603, "message processing failed:", id="malformed-skill"),
+        pytest.param(["get_products"], -32600, "Skill must be a string", id="malformed-skill"),
     ],
 )
 def test_protocol_errors_do_not_register_unreturned_tasks(task_registry, skill, error_code, message_prefix):
@@ -68,12 +80,27 @@ def test_protocol_errors_do_not_register_unreturned_tasks(task_registry, skill, 
         for _ in range(2):
             response = _send_skill(client, skill)
             assert response.status_code == 200
-            body = response.json()
+            with pytest.raises(WireRefusal) as refusal:
+                _a2a_jsonrpc_result(response)
+            body = refusal.value.response.json()
             assert body["error"]["code"] == error_code
             assert body["error"]["message"].startswith(message_prefix)
             assert "result" not in body
             assert set(task_registry) == retained_ids
             assert task_registry[returned_task.id] == returned_task
+
+
+def test_context_failure_does_not_register_an_unreturned_task(task_registry):
+    from src.a2a_server.adcp_a2a_server import InternalError
+    from src.app import _request_handler
+
+    initial_ids = set(task_registry)
+    request = SendMessageRequest(message=_a2a_message(RawDocument(tool="get_products")))
+    # A context built without request headers fails before dispatch. This exercises
+    # the generic exception exit after malformed skills move into parse-time validation.
+    with pytest.raises(InternalError):
+        asyncio.run(_request_handler.on_message_send(request, ServerCallContext()))
+    assert set(task_registry) == initial_ids
 
 
 def test_submitted_task_remains_registered(task_registry):
@@ -94,7 +121,7 @@ def test_submitted_task_remains_registered(task_registry):
                     "account": {"account_id": "acct_test"},
                     "idempotency_key": "task-lifecycle-submitted",
                     "media_buy_id": media_buy_id,
-                    "end_time": "2026-12-01T00:00:00Z",
+                    "end_time": env.clock.future_iso(30),
                 },
             ),
         )
