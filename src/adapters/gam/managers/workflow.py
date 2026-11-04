@@ -151,11 +151,12 @@ class GAMWorkflowManager(BaseWorkflowManager):
 
         # Use pre-loaded naming template or fallback to default
         from src.core.utils.naming import apply_naming_template, build_order_name_context
+        from src.services.ai.config import TenantAIConfig
 
         effective_template = order_name_template or "{campaign_name|brand_name} - {media_buy_id} - {date_range}"
-        tenant_gemini_key = None
+        tenant_ai_config = None
 
-        # Get tenant's Gemini key for auto_name generation
+        # Get the tenant's own AI configuration for auto_name generation
         try:
             from sqlalchemy import select
 
@@ -165,12 +166,12 @@ class GAMWorkflowManager(BaseWorkflowManager):
             with get_db_session() as db_session:
                 tenant_obj = db_session.scalars(select(Tenant).filter_by(tenant_id=self.tenant_id)).first()
                 if tenant_obj:
-                    tenant_gemini_key = tenant_obj.gemini_api_key
+                    tenant_ai_config = TenantAIConfig.from_tenant(tenant_obj)
         except sqlalchemy.exc.SQLAlchemyError as e:
-            logger.warning(f"Could not load tenant Gemini key: {e}")
+            logger.warning(f"Could not load tenant AI configuration: {e}")
 
         naming_context = build_order_name_context(
-            request, packages, start_time, end_time, tenant_gemini_key=tenant_gemini_key, media_buy_id=media_buy_id
+            request, packages, start_time, end_time, tenant_ai_config=tenant_ai_config, media_buy_id=media_buy_id
         )
         order_name = apply_naming_template(effective_template, naming_context)
 

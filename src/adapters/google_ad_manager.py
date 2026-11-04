@@ -577,9 +577,10 @@ class GoogleAdManager(AdServerAdapter):
         from src.adapters.gam.utils.constants import GAM_NAME_LIMITS
         from src.adapters.gam.utils.naming import truncate_name_with_suffix
         from src.core.utils.naming import apply_naming_template, build_order_name_context
+        from src.services.ai.config import TenantAIConfig
 
         order_name_template = self._order_name_template or "{campaign_name|brand_name} - {media_buy_id} - {date_range}"
-        tenant_gemini_key = None
+        tenant_ai_config = None
 
         # Get currency from the request's package pricing (validated upstream in media_buy_create.py)
         # All packages in a media buy use the same currency
@@ -589,7 +590,7 @@ class GoogleAdManager(AdServerAdapter):
                 order_currency = pricing.get("currency", "USD")
                 break  # All packages have same currency
 
-        # Get tenant's Gemini key for auto_name generation
+        # Get the tenant's own AI configuration for auto_name generation
         try:
             from src.core.database.database_session import get_db_session
             from src.core.database.models import Tenant
@@ -600,14 +601,14 @@ class GoogleAdManager(AdServerAdapter):
                 tenant_stmt = select(Tenant).filter_by(tenant_id=self.tenant_id)
                 tenant_obj = db_session.scalars(tenant_stmt).first()
                 if tenant_obj:
-                    tenant_gemini_key = tenant_obj.gemini_api_key
+                    tenant_ai_config = TenantAIConfig.from_tenant(tenant_obj)
         except sqlalchemy.exc.SQLAlchemyError as e:
-            logger.warning(f"Could not load tenant Gemini key: {e}")
+            logger.warning(f"Could not load tenant AI configuration: {e}")
 
         # Generate a pre-order media_buy_id for naming (GAM order_id replaces this in the response)
         pre_order_id = f"gam_{uuid.uuid4().hex[:8]}"
         context = build_order_name_context(
-            request, packages, start_time, end_time, tenant_gemini_key=tenant_gemini_key, media_buy_id=pre_order_id
+            request, packages, start_time, end_time, tenant_ai_config=tenant_ai_config, media_buy_id=pre_order_id
         )
         base_order_name = apply_naming_template(order_name_template, context)
 

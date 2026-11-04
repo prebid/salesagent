@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     # here is the adapter carrier, never the buyer's DTO. TYPE_CHECKING-only: this
     # module is under src/core and the carrier lives with the adapters.
     from src.adapters.base import AdapterCreateRequest
+    from src.services.ai.config import TenantAIConfig
 
 logger = logging.getLogger(__name__)
 
@@ -78,8 +79,7 @@ def generate_auto_name(
     packages: list,
     start_time: datetime,
     end_time: datetime,
-    tenant_ai_config=None,
-    tenant_gemini_key: str | None = None,  # Deprecated: use tenant_ai_config
+    tenant_ai_config: TenantAIConfig | None = None,
     max_length: int = 150,
 ) -> str:
     """Generate AI-powered order name using Pydantic AI.
@@ -89,8 +89,8 @@ def generate_auto_name(
         packages: List of MediaPackage objects
         start_time: Order start datetime
         end_time: Order end datetime
-        tenant_ai_config: Tenant's AI configuration (TenantAIConfig or dict)
-        tenant_gemini_key: Deprecated - Tenant's Gemini API key
+        tenant_ai_config: The seller's own AI configuration
+            (``TenantAIConfig.from_tenant``); None falls back to the platform's
         max_length: Maximum length for generated name
 
     Returns:
@@ -100,20 +100,12 @@ def generate_auto_name(
         "Nike Air Max Campaign - Q4 Holiday Push"
         "Acme Corp Brand Awareness - Premium Video"
     """
-    from src.services.ai import AIServiceFactory, TenantAIConfig
+    from src.services.ai import AIServiceFactory
 
     factory = AIServiceFactory()
 
-    # One owner for "ai_config first, legacy gemini_api_key second, else nothing":
-    # TenantAIConfig.from_tenant reads those two field names off whatever it is given,
-    # so the two deprecated-parameter shapes this function accepts resolve through the
-    # same rule as every other consumer. This site used to test `is None` where the
-    # others tested falsiness, which made an empty ai_config dict shadow the legacy key
-    # here and fall through to it everywhere else.
-    effective_config = TenantAIConfig.from_tenant({"ai_config": tenant_ai_config, "gemini_api_key": tenant_gemini_key})
-
     # Check if AI is enabled (None still falls back to the platform environment key)
-    if not factory.is_ai_enabled(effective_config):
+    if not factory.is_ai_enabled(tenant_ai_config):
         logger.debug("No AI configuration available, falling back to brand_name")
         return _get_fallback_name(request)
 
@@ -124,7 +116,7 @@ def generate_auto_name(
         )
 
         # Create the model and agent
-        model_string = factory.create_model(effective_config)
+        model_string = factory.create_model(tenant_ai_config)
         agent = create_naming_agent(model_string, max_length=max_length)
 
         # Extract context for AI
@@ -231,8 +223,7 @@ def build_order_name_context(
     packages: list,
     start_time: datetime,
     end_time: datetime,
-    tenant_ai_config=None,
-    tenant_gemini_key: str | None = None,  # Deprecated: use tenant_ai_config
+    tenant_ai_config: TenantAIConfig | None = None,
     media_buy_id: str | None = None,
 ) -> dict:
     """Build context dictionary for order name template.
@@ -242,8 +233,8 @@ def build_order_name_context(
         packages: List of MediaPackage objects
         start_time: Order start datetime
         end_time: Order end datetime
-        tenant_ai_config: Tenant's AI configuration (TenantAIConfig or dict)
-        tenant_gemini_key: Deprecated - Tenant's Gemini API key
+        tenant_ai_config: The seller's own AI configuration
+            (``TenantAIConfig.from_tenant``); None falls back to the platform's
         media_buy_id: Media buy identifier for template substitution
 
     Returns:
@@ -257,7 +248,6 @@ def build_order_name_context(
         start_time=start_time,
         end_time=end_time,
         tenant_ai_config=tenant_ai_config,
-        tenant_gemini_key=tenant_gemini_key,
     )
 
     # Extract brand name from brand (BrandReference)

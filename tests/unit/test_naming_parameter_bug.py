@@ -1,12 +1,11 @@
 """Test for naming parameter handling.
 
-Documents the correct usage of build_order_name_context() with tenant_gemini_key
-and media_buy_id. The function signature has tenant_ai_config as the 5th parameter,
-tenant_gemini_key as the 6th, and media_buy_id as the 7th, so callers must use
-keyword arguments.
+Documents the correct usage of build_order_name_context() with tenant_ai_config
+and media_buy_id. The function signature has tenant_ai_config as the 5th parameter
+and media_buy_id as the 6th, so callers must use keyword arguments.
 
 Related fixes:
-- adapters now use tenant_gemini_key=value instead of positional arg.
+- adapters pass TenantAIConfig.from_tenant(tenant) as tenant_ai_config=value.
 - media_buy_id is now included in the context dict for template substitution.
 """
 
@@ -16,6 +15,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.core.utils.naming import apply_naming_template, build_order_name_context
+from src.services.ai.config import DEFAULT_GOOGLE_MODEL, TenantAIConfig
 from tests.helpers.settings_injection import PlatformAICredential
 
 
@@ -41,7 +41,7 @@ class TestBuildOrderNameContextParameters:
         """Passing a string as 5th positional arg raises.
 
         The function signature is:
-            build_order_name_context(request, packages, start, end, tenant_ai_config=None, tenant_gemini_key=None)
+            build_order_name_context(request, packages, start, end, tenant_ai_config=None, media_buy_id=None)
 
         Passing a string as 5th positional arg makes it tenant_ai_config, which is a
         caller mistake and must be reported as one. This test documents why callers
@@ -73,7 +73,7 @@ class TestBuildOrderNameContextParameters:
         assert "ai_config" in str(excinfo.value)
 
     def test_keyword_arg_works_correctly(self):
-        """Passing gemini_key as keyword argument works correctly."""
+        """The seller's AI configuration, passed by keyword, reaches generate_auto_name."""
         request = MagicMock()
         request.brand = MagicMock(domain="testbrand.com")
         request.get_total_budget.return_value = 1000
@@ -82,10 +82,10 @@ class TestBuildOrderNameContextParameters:
         packages = []
         start_time = datetime(2025, 1, 1)
         end_time = datetime(2025, 1, 31)
-        gemini_key = "AIzaSy..."
+        config = TenantAIConfig(provider="google", model=DEFAULT_GOOGLE_MODEL, api_key="AIzaSy...")
 
-        # Patched so the assertion below can grade WHERE the key landed without the
-        # naming agent making a real call to the provider on a fake key - this test
+        # Patched so the assertion below can grade WHERE the configuration landed without
+        # the naming agent making a real call to the provider on a fake key - this test
         # used to open a live socket to generativelanguage.googleapis.com.
         with patch("src.core.utils.naming.generate_auto_name") as auto_name:
             auto_name.return_value = "Testbrand Campaign"
@@ -95,14 +95,18 @@ class TestBuildOrderNameContextParameters:
                 packages,
                 start_time,
                 end_time,
-                tenant_gemini_key=gemini_key,  # Correct!
+                tenant_ai_config=config,  # Correct!
             )
 
         assert "brand_name" in context
         assert "date_range" in context
-        # The point of the test: the key reaches the 6th parameter, not the 5th.
-        assert auto_name.call_args.kwargs["tenant_gemini_key"] == gemini_key
-        assert auto_name.call_args.kwargs["tenant_ai_config"] is None
+        auto_name.assert_called_once_with(
+            request=request,
+            packages=packages,
+            start_time=start_time,
+            end_time=end_time,
+            tenant_ai_config=config,
+        )
 
 
 class TestMediaBuyIdInContext:
