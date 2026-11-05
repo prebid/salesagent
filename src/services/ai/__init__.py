@@ -8,14 +8,8 @@ This module provides:
 Usage:
     from src.services.ai import AIServiceFactory, TenantAIConfig
 
-    # Create factory (singleton pattern)
-    factory = AIServiceFactory()
-
-    # Get model with platform defaults
-    model = factory.create_model()
-
-    # Get model with tenant configuration
-    model = factory.create_model(tenant_ai_config=tenant.ai_config)
+    # The model the seller's AI configuration runs on, or None when AI is unavailable
+    model = AIServiceFactory().build(tenant.ai_config)
 
 Configuration:
     Platform defaults come from environment variables:
@@ -30,7 +24,6 @@ Configuration:
 from src.services.ai.config import (
     ModelSettings,
     TenantAIConfig,
-    build_model_string,
     get_platform_defaults,
 )
 from src.services.ai.factory import (
@@ -46,5 +39,4 @@ __all__ = [
     "configure_logfire",
     "get_factory",
     "get_platform_defaults",
-    "build_model_string",
 ]

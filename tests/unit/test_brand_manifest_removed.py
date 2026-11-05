@@ -84,6 +84,7 @@ class TestBuildOrderNameContextFromAdcp360:
             packages=request.packages,
             start_time=start_time,
             end_time=end_time,
+            template="{campaign_name|brand_name}",
         )
 
         assert context["brand_name"] != "N/A", "brand_name should not be 'N/A' when request.brand.domain is set"
@@ -104,6 +105,7 @@ class TestBuildOrderNameContextFromAdcp360:
             packages=request.packages,
             start_time=start_time,
             end_time=end_time,
+            template="{campaign_name|brand_name}",
         )
 
         assert context["campaign_name"] == "adidas.com", "campaign_name should be 'adidas.com', not a generic fallback"
@@ -128,6 +130,7 @@ class TestGamBuildOrderNameContextFromAdcp360:
             packages=request.packages,
             start_time=start_time,
             end_time=end_time,
+            template="{campaign_name|brand_name}",
         )
 
         assert context["brand_name"] != "N/A", "GAM brand_name should not be 'N/A' when request.brand.domain is set"

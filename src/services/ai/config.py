@@ -1,8 +1,19 @@
 """Configuration models for Pydantic AI service."""
 
-from pydantic import BaseModel, Field
+import logging
+from collections.abc import Mapping
+from enum import Enum
+from typing import TYPE_CHECKING, Any, Final, Literal
 
-from src.core.config import get_settings
+from pydantic import BaseModel, Field, ValidationError
+
+from src.core.config import DEFAULT_GOOGLE_MODEL, get_settings
+from src.core.logging_config import log_safe
+
+if TYPE_CHECKING:
+    from src.core.database.models import Tenant
+
+logger = logging.getLogger(__name__)
 
 
 class ModelSettings(BaseModel):
@@ -36,7 +47,10 @@ class TenantAIConfig(BaseModel):
     All fields are optional - tenants inherit platform defaults for any unset values.
     """
 
-    model_config = {"extra": "ignore"}  # Forward compatible with future fields
+    # extra="ignore": forward compatible with future fields. hide_input_in_errors: a
+    # ValidationError renders the value it rejected, and a stored row carries the seller's
+    # API key, so a malformed row would otherwise put that key in the WARNING `coerce` logs.
+    model_config = {"extra": "ignore", "hide_input_in_errors": True}
 
     # Model selection - accepts any Pydantic AI provider string
     # e.g., "google-gla", "anthropic", "openai", "gateway/anthropic", etc.
@@ -52,6 +66,135 @@ class TenantAIConfig(BaseModel):
     # Model behavior settings
     settings: ModelSettings = Field(default_factory=ModelSettings)
 
+    @classmethod
+    def coerce(cls, value: Any, *, source: str = "tenant ai_config") -> "TenantAIConfig":
+        """Tolerant parse of a STORED AI configuration value; caller mistakes still raise.
+
+        Two failure modes arrive here and they need opposite answers:
+
+        * **Malformed stored data** - a dict or list that came out of the JSONB column
+          but does not satisfy this model (a settings block outside ModelSettings'
+          bounds, a list where an object belongs). The seller's row is broken; the
+          buyer's request is not. That degrades to a bare TenantAIConfig() with one
+          WARNING. Strict parsing here raised pydantic's ValidationError, which
+          subclasses ValueError and so was normalised by every transport into a
+          VALIDATION_ERROR/correctable envelope naming a field (e.g.
+          "settings.temperature") that does not exist in the buyer's request schema.
+        * **A caller passing the wrong Python type** - a str, an int, an arbitrary
+          object. `src/core/database/json_type.py` raises TypeError itself for anything
+          that is not a dict or list, so these shapes CANNOT come from the column; they
+          only come from a caller that passed the wrong argument (the reason this exists
+          is `build_order_name_context(..., gemini_key)` landing a key string in the
+          `tenant_ai_config` parameter). That raises TypeError naming the parameter and
+          the offending type. Degrading it instead hid the mistake behind a log line and
+          silently ran the AI feature on some other configuration.
+
+        `source` names the value being parsed; it appears in both messages so the log
+        or traceback identifies which tenant and which parameter is at fault.
+        """
+        if isinstance(value, cls):
+            return value
+        if value is None:
+            return cls()
+        parsed = cls._parse_stored(value, source=source)
+        return cls() if parsed is None else parsed
+
+    @classmethod
+    def _parse_stored(cls, value: Any, *, source: str) -> "TenantAIConfig | None":
+        """`coerce`'s parse, reporting a malformed value as None instead of a bare config.
+
+        `from_tenant` needs to tell "the row does not parse" from "the row parses to
+        nothing", because only the second may fall back to the platform's credential.
+        """
+        if not isinstance(value, Mapping | list):
+            raise TypeError(
+                f"{source} must be a JSON object (dict) or None, got {type(value).__name__}. "
+                "PostgreSQL JSONB only ever yields dict, list or None, so this value comes "
+                "from a caller passing the wrong argument - pass it by keyword."
+            )
+        try:
+            return cls.model_validate(value)
+        except ValidationError as exc:
+            # log_safe on exc: a ValidationError's message embeds the value it
+            # rejected, which is seller-stored JSON, and pydantic renders it over
+            # several lines. Without the escape the rejected value picks the line
+            # breaks in this log entry.
+            logger.warning(
+                "Ignoring malformed %s (%s); the AI feature degrades instead of failing the request: %s",
+                source,
+                type(value).__name__,
+                log_safe(exc),
+            )
+            return None
+
+    @classmethod
+    def from_tenant(cls, tenant: "Tenant") -> "SellerAIConfig":
+        """Resolve 'given a tenant row, what AI did the seller configure?' - the one owner of that rule.
+
+        Called once per request, by `TenantContext.from_orm_model`; every consumer reads
+        `TenantContext.ai_config` rather than asking again. The admin UI, which holds the
+        ORM row and no context, calls it on the row.
+
+        Three answers, because the consumers need to tell them apart:
+
+        * a `TenantAIConfig` - the seller's own usable configuration, with its own key:
+          `ai_config` when it carries an `api_key`, else the legacy `gemini_api_key` column
+          as the canonical Google config, provider and model pinned together;
+        * `None` - the seller configured nothing. Only this answer may fall back to the
+          platform's own credential, which ranking, order naming and creative review do;
+        * `UNUSABLE_AI_CONFIG` - the seller configured AI that cannot run: a stored row
+          that does not parse, or one naming a provider with no key. AI is OFF for this
+          seller. Answering None here sent the buyer's brief to the operator's Google key
+          for a seller who had chosen Anthropic, and for one the settings page had just
+          told "AI features will be disabled" (`src/admin/blueprints/settings.py` writes a
+          provider/model row with no key when the key field is left blank).
+
+        A row that names no provider and no key (`{}`, or settings alone) configured no
+        model, so it falls through to the legacy column like an absent one. A keyless row
+        naming Google still takes the legacy key, which belongs to that same vendor.
+
+        It NEVER falls back to the platform environment key - that decision belongs to
+        the factory, for the callers that want it.
+        """
+        legacy = (
+            # CANONICAL_GOOGLE_PROVIDER, not the literal "gemini": every consumer of the
+            # provider string canonicalizes before comparing or using it. The MODEL is
+            # pinned with the provider: left unset, the factory filled it from the
+            # platform's PYDANTIC_AI_MODEL, so a deployment configured for Anthropic handed
+            # "claude-sonnet-4-…" to a Google client built on this tenant's Gemini key.
+            cls(provider=CANONICAL_GOOGLE_PROVIDER, model=DEFAULT_GOOGLE_MODEL, api_key=tenant.gemini_api_key)
+            if tenant.gemini_api_key
+            else None
+        )
+        if not tenant.ai_config:
+            return legacy
+
+        # log_safe around the whole label: it is interpolated into the WARNING that
+        # _parse_stored logs, so the tenant identifier reaches a log line through it.
+        config = cls._parse_stored(
+            tenant.ai_config, source=log_safe(f"tenant ai_config for tenant {tenant.tenant_id!r}")
+        )
+        if config is None:
+            return UNUSABLE_AI_CONFIG
+        if config.api_key:
+            return config
+        if config.provider is None or (legacy is not None and uses_legacy_gemini_api_key(config.provider)):
+            return legacy
+        return UNUSABLE_AI_CONFIG
+
+
+class _UnusableAIConfig(Enum):
+    """The type of `UNUSABLE_AI_CONFIG`; an Enum so mypy narrows it with `is`."""
+
+    UNUSABLE = "unusable"
+
+
+#: The seller configured AI that cannot run (see `TenantAIConfig.from_tenant`).
+UNUSABLE_AI_CONFIG: Final = _UnusableAIConfig.UNUSABLE
+
+#: What `TenantAIConfig.from_tenant` answers: the seller's own config, nothing, or unusable.
+SellerAIConfig = TenantAIConfig | Literal[_UnusableAIConfig.UNUSABLE] | None
+
 
 def get_platform_defaults() -> dict:
     """Get platform-level AI configuration from the startup settings.
@@ -60,12 +203,34 @@ def get_platform_defaults() -> dict:
         dict with platform default settings
     """
     integrations = get_settings().integrations
+    provider = integrations.pydantic_ai_provider
+    # The settings field defaults to a Google model, so it names a model only when the
+    # operator set it. Otherwise the model follows the provider (see default_model_for).
+    model = (
+        integrations.pydantic_ai_model
+        if "pydantic_ai_model" in integrations.model_fields_set
+        else default_model_for(provider)
+    )
     return {
-        "provider": integrations.pydantic_ai_provider,
-        "model": integrations.pydantic_ai_model,
-        "api_key": _get_provider_api_key(integrations.pydantic_ai_provider),
+        "provider": provider,
+        "model": model,
+        "api_key": _get_provider_api_key(provider),
         "logfire_token": integrations.logfire_token,
     }
+
+
+def default_model_for(provider: str) -> str | None:
+    """The model this codebase can name for `provider` without being told.
+
+    Only Google: "gemini-2.0-flash" is what the deployment default has always meant, and
+    it is the pin `policy_check_service` carried at its own call site. For any other
+    provider we do not know a model, and None is the honest answer - guessing carries a
+    model name across vendors, which is how a Google client ended up asking for
+    "claude-sonnet-4-…" (404 on every call).
+    """
+    if canonicalize_google_provider(provider) == CANONICAL_GOOGLE_PROVIDER:
+        return DEFAULT_GOOGLE_MODEL
+    return None
 
 
 def _get_provider_api_key(provider: str) -> str | None:
@@ -78,19 +243,3 @@ def _get_provider_api_key(provider: str) -> str | None:
         API key if found, None otherwise
     """
     return get_settings().integrations.provider_api_key(canonicalize_google_provider(provider))
-
-
-def build_model_string(provider: str, model: str) -> str:
-    """Build the Pydantic AI model string.
-
-    Pydantic AI uses format: "provider:model" (e.g., "google:gemini-2.0-flash")
-
-    Args:
-        provider: Provider name (e.g., "google-gla", "anthropic", "gateway/openai")
-        model: Model name
-
-    Returns:
-        Pydantic AI model string
-    """
-    provider = canonicalize_google_provider(provider)
-    return f"{provider}:{model}"

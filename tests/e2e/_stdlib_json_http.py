@@ -1,9 +1,10 @@
 """Shared stdlib-only JSON/HTTP scaffolding for the e2e compose origins.
 
-Two e2e services answer JSON over plain HTTP behind the shared ``tls-proxy``
-front — ``webhook_capture_service`` (salesagent-mp53.9) and
-``counterparty_origin_service`` (salesagent-mp53.8) — and they answered it with
-byte-identical code until this module existed.
+Three e2e services answer JSON over plain HTTP — ``webhook_capture_service``
+(salesagent-mp53.9) and ``counterparty_origin_service`` (salesagent-mp53.8) behind the
+shared ``tls-proxy`` front, and ``scripted_llm_origin_service`` reached directly by
+service name — and they answered it, and ran it, with byte-identical code until this
+module existed.
 
 STRICTLY STDLIB, and that constraint is the whole reason this lives here rather
 than under ``tests/helpers/``: both services run on a bare ``python:3.12-slim``
@@ -23,10 +24,13 @@ transport-level plumbing every JSON origin repeats is here.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import socket
 import threading
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
@@ -98,3 +102,35 @@ def compose_project_name() -> str:
     port is published per stack.
     """
     return os.environ.get("COMPOSE_PROJECT_NAME", "")
+
+
+@contextlib.contextmanager
+def run_origin(
+    handler_class: type[BaseHTTPRequestHandler], *, host: str, port: int, server_attrs: dict[str, object]
+) -> Iterator[str]:
+    """Serve ``handler_class`` until the block exits, yielding the base URL (``http://host:port``).
+
+    ``server_attrs`` is the origin's own state; ``compose_project_name`` is added to it for
+    every origin, because each reports it on ``/health``.
+    """
+    server = serve_forever_in_thread(
+        handler_class,
+        host=host,
+        port=port,
+        server_attrs={**server_attrs, "compose_project_name": compose_project_name()},
+    )
+    try:
+        yield f"http://{host}:{server.server_address[1]}"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def serve_until_killed(run: Callable[..., AbstractContextManager[str]]) -> None:
+    """A compose service's entry point: ``run`` on every interface at ``$PORT``, forever.
+
+    ``0.0.0.0`` is the CONTAINER's network namespace: sibling services reach the origin by
+    its network alias, so a loopback-only bind would be unreachable to every one of them.
+    """
+    with run(host="0.0.0.0", port=int(os.environ.get("PORT", "8080"))):  # noqa: S104 - container namespace
+        threading.Event().wait()

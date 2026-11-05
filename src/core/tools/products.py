@@ -25,6 +25,7 @@ from src.core.exceptions import (
 )
 from src.core.helpers import enum_value
 from src.core.helpers.channel_helpers import effective_channel_names
+from src.core.logging_config import log_safe
 from src.core.resolved_identity import PublicIdentity
 from src.core.schemas import (
     GetProductsRequest,  # OURS, extending the SDK's — the accepted shape
@@ -32,6 +33,7 @@ from src.core.schemas import (
     Product,  # Extends library Product
 )
 from src.core.validation_helpers import safe_parse_json_field
+from src.services.ai import AIServiceFactory
 from src.services.policy_check_service import PolicyCheckService, PolicyStatus
 
 logger = logging.getLogger(__name__)
@@ -227,20 +229,28 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
 
     # Extract brief text early - needed for policy checks, dynamic variants, and AI ranking
     brief_text = req.brief if req.brief else ""
+    # What AI the seller configured, resolved once when the tenant was loaded.
+    seller_ai = tenant.ai_config
 
     if not policy_check_enabled:
         # Skip policy checks if disabled
         policy_result = None
         logger.info(f"Policy checks disabled for tenant {tenant.tenant_id}")
     else:
-        # Get tenant's Gemini API key for policy checks
-        tenant_gemini_key = tenant.gemini_api_key
-        if not tenant_gemini_key:
-            # No API key - cannot run policy checks
+        # Only the seller's OWN configuration runs the check (platform_fallback=False). The
+        # platform key from the environment would switch policy checks on for every tenant
+        # of any deployment that sets one, and a blocking verdict is a buyer-visible
+        # rejection the seller did not configure. The factory builds the model or answers
+        # None, so a configuration it cannot build (a blank model for a foreign provider)
+        # skips the check here rather than raising CONFIGURATION_ERROR into this
+        # auth-optional discovery call.
+        policy_model = AIServiceFactory().build(seller_ai, platform_fallback=False)
+        if policy_model is None:
+            # No usable AI configuration of the seller's own - cannot run policy checks
             policy_result = None
-            logger.warning(f"Policy checks enabled but no Gemini API key configured for tenant {tenant.tenant_id}")
+            logger.warning(f"Policy checks enabled but no usable AI configuration for tenant {tenant.tenant_id}")
         else:
-            policy_service = PolicyCheckService(gemini_api_key=tenant_gemini_key)
+            policy_service = PolicyCheckService(model=policy_model)
 
             # Use advertising_policy settings for tenant-specific rules
             tenant_policies = advertising_policy if advertising_policy else {}
@@ -680,9 +690,10 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
             )
             from src.services.ai.factory import get_factory
 
-            factory = get_factory()
-            if factory.is_ai_enabled():
-                model = factory.create_model()
+            # Configured nothing falls back to the platform's credential, which ranking has
+            # always run on; configured but unusable does not (`TenantAIConfig.from_tenant`).
+            model = get_factory().build(seller_ai)
+            if model is not None:
                 agent = create_ranking_agent(model)
 
                 # Convert products to dicts for ranking
@@ -717,13 +728,21 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
                 )
             else:
                 logger.debug("[GET_PRODUCTS] AI ranking configured but AI not enabled (no API key)")
-        except (ImportError, RuntimeError, OSError) as e:
+        except (TypeError, AttributeError):
+            # A programming error in this path, not a provider failure: it propagates (#1093).
+            raise
+        except Exception as e:
             # structural-guard: no spec surface covers ranking.
+            # Every other exception, as the policy check and order naming catch: each
+            # provider's client raises its own types (an unreachable endpoint is
+            # httpx.ConnectError, a dropped connection httpx.RemoteProtocolError, neither an
+            # OSError), and any of them escaping turned discovery into INTERNAL_ERROR.
             # This degrades ORDER only — and the set returned is a SUPERSET, because
             # the <0.1 relevance filter stops running too, so the buyer loses nothing
             # they were entitled to. AdCP 3.1.1 defines no ordering guarantee for
             # get_products and no `incomplete[]` scope for ranking.
-            logger.warning(f"Failed to apply AI product ranking: {e}. Returning unranked products.")
+            # log_safe: a provider exception carries the remote response body verbatim.
+            logger.warning(f"Failed to apply AI product ranking: {log_safe(e)}. Returning unranked products.")
 
     # Filter pricing data for anonymous users
     # Do this BEFORE serialization to avoid reconstruction issues

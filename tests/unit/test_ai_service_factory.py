@@ -1,18 +1,47 @@
 """Tests for AI service factory and configuration."""
 
+import logging
 import os
 from unittest.mock import patch
 
 import pytest
 
+from src.core.config import load_settings
 from src.services.ai import (
     AIServiceFactory,
     ModelSettings,
     TenantAIConfig,
-    build_model_string,
     get_platform_defaults,
 )
-from src.services.ai.config import GOOGLE_PROVIDER_ALIASES, uses_legacy_gemini_api_key
+from src.services.ai.config import (
+    CANONICAL_GOOGLE_PROVIDER,
+    DEFAULT_GOOGLE_MODEL,
+    GOOGLE_PROVIDER_ALIASES,
+    UNUSABLE_AI_CONFIG,
+    uses_legacy_gemini_api_key,
+)
+from src.services.ai.factory import PROVIDER_MODELS, ResolvedAIConfig
+from tests.factories import TenantFactory
+from tests.helpers.settings_injection import PlatformAICredential
+
+
+def credential_of(model) -> str | None:
+    """The API key the built model will actually authenticate with.
+
+    Reaches through the pydantic-ai model to the vendor client because that is the only
+    place the answer exists: `build` returns a Model, and which SECRET it carries
+    is exactly the property under test. Anthropic/OpenAI/Groq clients expose `api_key`
+    directly; the Google client keeps it on its inner `_api_client`, Mistral on its SDK
+    configuration and Cohere on its client wrapper.
+    """
+    client = model.client
+    if hasattr(client, "api_key"):
+        return client.api_key
+    if hasattr(client, "sdk_configuration"):  # Mistral
+        return client.sdk_configuration.security.api_key
+    if hasattr(client, "_client_wrapper"):  # Cohere
+        return client._client_wrapper._token
+    return getattr(getattr(client, "_api_client", None), "api_key", None)
 
 
 class TestTenantAIConfig:
@@ -47,6 +76,278 @@ class TestTenantAIConfig:
         )
         assert config.provider == "gemini"
         assert not hasattr(config, "future_field")
+
+
+class TestTenantAIConfigCoerce:
+    """TenantAIConfig.coerce is the one tolerant parse of a stored ai_config value."""
+
+    def test_dict_is_parsed(self):
+        """A well-formed dict parses into a real config."""
+        config = TenantAIConfig.coerce({"provider": "anthropic", "model": "claude-sonnet-4-20250514"})
+        assert config.provider == "anthropic"
+        assert config.model == "claude-sonnet-4-20250514"
+
+    def test_existing_instance_passes_through_unchanged(self):
+        """An already-parsed TenantAIConfig is returned as the same object, not re-validated."""
+        original = TenantAIConfig(provider="openai", api_key="k")
+        assert TenantAIConfig.coerce(original) is original
+
+    def test_none_yields_platform_defaults(self):
+        """None means 'nothing configured' — a bare config, so the factory uses platform defaults."""
+        config = TenantAIConfig.coerce(None)
+        assert config.provider is None
+        assert config.api_key is None
+
+    def test_malformed_settings_degrade_to_defaults_with_one_warning(self, caplog):
+        """A settings block that violates ModelSettings bounds must NOT raise.
+
+        Regression guard: TenantAIConfig.model_validate raises pydantic's
+        ValidationError, which subclasses ValueError, so a malformed seller-side
+        ai_config row reached the buyer as a VALIDATION_ERROR/correctable envelope
+        naming 'settings.temperature' — a field that does not exist in the request
+        schema. A broken config row must degrade the AI feature, not fail the request.
+        """
+        with caplog.at_level(logging.WARNING, logger="src.services.ai.config"):
+            config = TenantAIConfig.coerce({"provider": "gemini", "settings": {"temperature": 9}})
+
+        assert config.provider is None, "malformed config must fall back to platform defaults entirely"
+        assert config.settings.temperature == 0.3
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1, f"expected exactly one WARNING, got {[r.message for r in warnings]}"
+
+    def test_list_from_the_jsonb_column_degrades_instead_of_raising(self, caplog):
+        """A list is a shape the JSONB column can hold, so it is malformed DATA: degrade.
+
+        Before coerce, the factory's `elif tenant_ai_config:` branch bound such a value
+        straight to `config`, and the next line (`config.api_key`) died with AttributeError.
+        """
+        with caplog.at_level(logging.WARNING, logger="src.services.ai.config"):
+            config = TenantAIConfig.coerce(["provider", "gemini"])
+
+        assert config == TenantAIConfig()
+        assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 1
+
+    @pytest.mark.parametrize("value", ["gemini", 42, object()])
+    def test_caller_type_mistake_raises_type_error(self, value, caplog):
+        """A str/int/object can only come from a caller bug, so it must RAISE.
+
+        `src/core/database/json_type.py` raises TypeError itself for anything that is
+        not a dict or list, so these shapes never come out of the ai_config column. They
+        come from a caller passing the wrong argument — the live example being
+        `build_order_name_context(..., gemini_key)`, which lands an API-key string in
+        the `tenant_ai_config` parameter. Degrading that to platform defaults hid the
+        mistake behind a log line and quietly ran the AI feature on somebody else's
+        configuration; `code-patterns.md` names exactly that shape as wrong.
+
+        The message must name both the offending type and the parameter, because the
+        caller's only clue is this exception.
+        """
+        with caplog.at_level(logging.WARNING, logger="src.services.ai.config"):
+            with pytest.raises(TypeError) as excinfo:
+                TenantAIConfig.coerce(value)
+
+        assert type(value).__name__ in str(excinfo.value)
+        assert "ai_config" in str(excinfo.value)
+        assert [r.message for r in caplog.records if r.levelno == logging.WARNING] == [], (
+            "a caller mistake is raised, not logged-and-swallowed"
+        )
+
+    def test_source_label_names_the_offending_parameter(self):
+        """`source` identifies which value was wrong — the caller's only clue."""
+        with pytest.raises(TypeError, match="naming.tenant_ai_config"):
+            TenantAIConfig.coerce("AIzaSy...", source="naming.tenant_ai_config")
+
+    def test_empty_dict_yields_platform_defaults(self):
+        """An empty ai_config is valid and simply carries nothing."""
+        assert TenantAIConfig.coerce({}) == TenantAIConfig()
+
+
+@pytest.fixture
+def tenant_row(monkeypatch):
+    """An unsaved ORM ``Tenant`` row, built the way production reads one.
+
+    ``Tenant.gemini_api_key`` encrypts on write and decrypts on read, so a row carrying the
+    legacy column needs an ``ENCRYPTION_KEY``; a per-test Fernet key round-trips through the
+    real property rather than stubbing it.
+    """
+    from cryptography.fernet import Fernet
+
+    monkeypatch.setenv("ENCRYPTION_KEY", Fernet.generate_key().decode())
+
+    def make(**fields):
+        return TenantFactory.build(**{"tenant_id": "t1", **fields})
+
+    return make
+
+
+class TestTenantAIConfigFromTenant:
+    """TenantAIConfig.from_tenant owns 'given a tenant row, what AI did the seller configure?'."""
+
+    def test_ai_config_wins_over_legacy_key(self, tenant_row):
+        """A tenant's own ai_config supersedes the legacy gemini_api_key column."""
+        config = TenantAIConfig.from_tenant(
+            tenant_row(ai_config={"provider": "anthropic", "api_key": "tenant-key"}, gemini_api_key="legacy-key")
+        )
+
+        assert config == TenantAIConfig(provider="anthropic", api_key="tenant-key")
+
+    def test_legacy_key_alone_becomes_canonical_google_config(self, tenant_row):
+        """With no ai_config, the legacy key is surfaced as a Google-provider config.
+
+        The provider is CANONICAL_GOOGLE_PROVIDER rather than the literal "gemini":
+        every consumer canonicalizes the string before comparing or using it, so the
+        two spellings are interchangeable downstream.
+
+        The MODEL travels with the provider. Left None, the factory filled it from the
+        platform's PYDANTIC_AI_MODEL, which names whatever vendor the DEPLOYMENT runs —
+        so a deployment set to Anthropic produced a Google client asking for
+        "claude-sonnet-4-…" on this tenant's Gemini key, and every call 404'd.
+        """
+        config = TenantAIConfig.from_tenant(tenant_row(ai_config=None, gemini_api_key="legacy-key"))
+
+        assert config == TenantAIConfig(
+            provider=CANONICAL_GOOGLE_PROVIDER, model=DEFAULT_GOOGLE_MODEL, api_key="legacy-key"
+        )
+
+    def test_legacy_key_is_read_through_the_decrypting_property(self, tenant_row):
+        """The legacy path reads the ORM property, so it gets the decrypted key."""
+        tenant = tenant_row()
+        tenant.gemini_api_key = "legacy-secret"
+
+        config = TenantAIConfig.from_tenant(tenant)
+
+        assert isinstance(config, TenantAIConfig)
+        assert config.api_key == "legacy-secret", "must read the decrypting property, not the raw column"
+
+    def test_provider_without_a_key_is_unusable_not_nothing(self, tenant_row):
+        """A row naming a provider with no api_key is UNUSABLE: AI is off for this seller.
+
+        `src/admin/blueprints/settings.py` writes exactly {"provider": …, "model": …} when
+        the seller submits the AI form with the key field blank, and flashes "no API key
+        configured. AI features will be disabled." Answering None ("configured nothing")
+        let ranking and naming fall back to the OPERATOR's platform key for a seller who
+        had just been told AI was off.
+
+        The platform key is set on purpose: the answer is about the seller's choice, not
+        about whether a key exists anywhere.
+        """
+        with PlatformAICredential("platform-key"):
+            config = TenantAIConfig.from_tenant(tenant_row(ai_config={"provider": "anthropic", "model": "claude-x"}))
+
+        assert config is UNUSABLE_AI_CONFIG
+
+    def test_keyless_google_row_takes_the_legacy_key_of_the_same_vendor(self, tenant_row):
+        """A keyless row naming Google does not shadow a legacy Gemini key, which is Google's."""
+        config = TenantAIConfig.from_tenant(
+            tenant_row(ai_config={"provider": "google", "model": "gemini-2.0-flash"}, gemini_api_key="legacy-key")
+        )
+
+        assert config == TenantAIConfig(
+            provider=CANONICAL_GOOGLE_PROVIDER, model=DEFAULT_GOOGLE_MODEL, api_key="legacy-key"
+        )
+
+    def test_keyless_foreign_row_does_not_borrow_the_legacy_google_key(self, tenant_row):
+        """A seller who chose Anthropic and left the key blank is not switched to Google."""
+        config = TenantAIConfig.from_tenant(
+            tenant_row(ai_config={"provider": "anthropic", "model": "claude-x"}, gemini_api_key="legacy-key")
+        )
+
+        assert config is UNUSABLE_AI_CONFIG
+
+    def test_both_absent_is_nothing_configured(self, tenant_row):
+        """Nothing configured means None — from_tenant NEVER reaches for the platform key."""
+        with PlatformAICredential("platform-key"):
+            assert TenantAIConfig.from_tenant(tenant_row(ai_config=None)) is None
+
+    @pytest.mark.parametrize("ai_config", [{}, {"settings": {"temperature": 0.5}}], ids=["empty", "settings-only"])
+    def test_a_row_naming_no_model_falls_through_to_the_legacy_key(self, tenant_row, ai_config):
+        """A row with no provider and no key configured no model, so it does not shadow the legacy column."""
+        config = TenantAIConfig.from_tenant(tenant_row(ai_config=ai_config, gemini_api_key="legacy-key"))
+
+        assert isinstance(config, TenantAIConfig)
+        assert config.api_key == "legacy-key"
+
+    def test_a_row_naming_no_model_and_no_legacy_key_is_nothing(self, tenant_row):
+        assert TenantAIConfig.from_tenant(tenant_row(ai_config={"settings": {"temperature": 0.5}})) is None
+
+    def test_malformed_ai_config_is_unusable(self, tenant_row, caplog):
+        """A row that does not parse is UNUSABLE — never a config the factory refills, never nothing.
+
+        The api_key in the row is valid; only `settings.temperature` is out of bounds.
+        Answering None let ranking fall back to the platform's Google key, so the seller
+        who had deliberately chosen Anthropic had the buyer's brief and product catalog
+        sent to Google. One WARNING naming the tenant is how the seller finds out.
+        """
+        malformed = {"provider": "anthropic", "api_key": "sk-ant-real", "settings": {"temperature": 9}}
+
+        with PlatformAICredential("platform-key"):
+            with caplog.at_level(logging.WARNING, logger="src.services.ai.config"):
+                config = TenantAIConfig.from_tenant(tenant_row(ai_config=malformed, gemini_api_key="legacy-key"))
+
+        assert config is UNUSABLE_AI_CONFIG
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1, f"expected exactly one WARNING, got {[r.getMessage() for r in warnings]}"
+        assert "t1" in warnings[0].getMessage(), "the WARNING must name the tenant whose row is broken"
+
+    def test_malformed_row_does_not_log_its_key(self, tenant_row, caplog):
+        """A ValidationError renders the value it rejected; the row's key must not reach the log."""
+        with caplog.at_level(logging.WARNING, logger="src.services.ai.config"):
+            config = TenantAIConfig.from_tenant(
+                tenant_row(ai_config={"provider": "anthropic", "api_key": ["sk-ant-SECRET"]})
+            )
+
+        assert config is UNUSABLE_AI_CONFIG
+        logged = " ".join(r.getMessage() for r in caplog.records)
+        assert "api_key" in logged, "the WARNING still names the field that failed"
+        assert "sk-ant-SECRET" not in logged
+
+    def test_tenant_context_carries_the_resolution(self, tenant_row):
+        """TenantContext.from_orm_model resolves once; the context holds the answer, not the column."""
+        from src.core.tenant_context import TenantContext
+
+        context = TenantContext.from_orm_model(
+            tenant_row(
+                virtual_host="t1.example.com",
+                account_sandbox=False,
+                ai_config={"provider": "groq", "api_key": "ctx-key"},
+            )
+        )
+
+        assert context.ai_config == TenantAIConfig(provider="groq", api_key="ctx-key")
+        assert "ctx-key" not in repr(context)
+        assert not hasattr(context, "gemini_api_key"), "the legacy credential is not carried on the context"
+
+    def test_tenant_config_wins_while_a_platform_key_is_present(self, tenant_row):
+        """Anti-vacuity guard: the tenant's config must win over a set platform key.
+
+        A platform GEMINI_API_KEY makes the factory build a model on its own, so a test
+        that only asserts "AI was enabled" passes even when the tenant's own
+        configuration was dropped on the floor. Pinning the resolution is what fails if
+        from_tenant returns None here.
+        """
+        config = TenantAIConfig.from_tenant(
+            tenant_row(
+                ai_config={"provider": "anthropic", "model": "claude-sonnet-4-20250514", "api_key": "tenant-key"}
+            )
+        )
+
+        with PlatformAICredential("platform-key"):
+            resolved = AIServiceFactory().resolve(config)
+
+        assert resolved == ResolvedAIConfig(
+            provider="anthropic", model="claude-sonnet-4-20250514", api_key="tenant-key"
+        )
+
+    def test_legacy_key_wins_while_a_platform_key_is_present(self, tenant_row):
+        """Same guard for the legacy column — the tenant's own key must not be shadowed."""
+        config = TenantAIConfig.from_tenant(tenant_row(gemini_api_key="legacy-key"))
+
+        with PlatformAICredential("platform-key"):
+            resolved = AIServiceFactory().resolve(config)
+
+        assert resolved == ResolvedAIConfig(
+            provider=CANONICAL_GOOGLE_PROVIDER, model=DEFAULT_GOOGLE_MODEL, api_key="legacy-key"
+        )
 
 
 class TestModelSettings:
@@ -84,30 +385,6 @@ class TestUsesLegacyGeminiApiKey:
         assert uses_legacy_gemini_api_key(provider) is False
 
 
-class TestBuildModelString:
-    """Tests for build_model_string function."""
-
-    def test_gemini_provider(self):
-        """Gemini maps to google prefix (google-gla deprecated in pydantic-ai 1.99.0)."""
-        result = build_model_string("gemini", "gemini-2.0-flash")
-        assert result == "google:gemini-2.0-flash"
-
-    def test_google_gla_provider(self):
-        """Legacy google-gla alias maps to pydantic-ai canonical google prefix."""
-        result = build_model_string("google-gla", "gemini-2.0-flash")
-        assert result == "google:gemini-2.0-flash"
-
-    def test_openai_provider(self):
-        """OpenAI uses openai prefix."""
-        result = build_model_string("openai", "gpt-4o")
-        assert result == "openai:gpt-4o"
-
-    def test_anthropic_provider(self):
-        """Anthropic uses anthropic prefix."""
-        result = build_model_string("anthropic", "claude-sonnet-4-20250514")
-        assert result == "anthropic:claude-sonnet-4-20250514"
-
-
 class TestGetPlatformDefaults:
     """Tests for get_platform_defaults function."""
 
@@ -139,7 +416,7 @@ class TestGetPlatformDefaults:
 
         Regression guard: before this fix, _get_provider_api_key('google') returned
         None (missing from the mapping), so get_platform_defaults() produced
-        api_key=None and AIServiceFactory.is_ai_enabled() returned False even when
+        api_key=None and the factory built no model even when
         GEMINI_API_KEY was set.
         """
         with patch.dict(
@@ -153,8 +430,24 @@ class TestGetPlatformDefaults:
         ):
             defaults = get_platform_defaults()
             assert defaults["api_key"] == "test-gemini-key", (
-                "provider='google' must map to GEMINI_API_KEY; api_key=None would make is_ai_enabled() return False"
+                "provider='google' must map to GEMINI_API_KEY; api_key=None would make the factory build no model"
             )
+
+    def test_model_default_is_not_borrowed_across_vendors(self):
+        """PYDANTIC_AI_PROVIDER without PYDANTIC_AI_MODEL must not default to Google's model.
+
+        "gemini-2.0-flash" was the unconditional default, so an operator who set only
+        PYDANTIC_AI_PROVIDER=anthropic got a platform default pair that cannot work.
+        None is the honest answer: we do not know a model for that vendor.
+        """
+        with patch.dict(os.environ, {"PYDANTIC_AI_PROVIDER": "anthropic"}, clear=True):
+            defaults = get_platform_defaults()
+            assert defaults["provider"] == "anthropic"
+            assert defaults["model"] is None
+
+        with patch.dict(os.environ, {"PYDANTIC_AI_PROVIDER": "google-gla"}, clear=True):
+            load_settings()  # the settings are cached; this block changed the environment
+            assert get_platform_defaults()["model"] == DEFAULT_GOOGLE_MODEL
 
     def test_google_gla_provider_resolves_gemini_api_key(self):
         """PYDANTIC_AI_PROVIDER=google-gla (legacy DB value) also resolves GEMINI_API_KEY."""
@@ -172,77 +465,53 @@ class TestGetPlatformDefaults:
 
 
 class TestAIServiceFactory:
-    """Tests for AIServiceFactory class."""
+    """AIServiceFactory.build is the one call: the model a configuration runs on, or None."""
 
-    def test_create_model_with_platform_defaults(self):
-        """Factory creates model using platform defaults."""
+    def test_build_with_platform_defaults(self):
+        """Configured nothing builds on the platform defaults."""
         from pydantic_ai.models.google import GoogleModel
 
         with patch.dict(
             os.environ,
-            {
-                "PYDANTIC_AI_PROVIDER": "gemini",
-                "PYDANTIC_AI_MODEL": "gemini-2.0-flash",
-                "GEMINI_API_KEY": "test-key",
-            },
+            {"PYDANTIC_AI_PROVIDER": "gemini", "PYDANTIC_AI_MODEL": "gemini-2.0-flash", "GEMINI_API_KEY": "test-key"},
             clear=False,
         ):
-            factory = AIServiceFactory()
-            model = factory.create_model()
-            # Now returns a Model instance instead of a string
-            assert isinstance(model, GoogleModel)
+            model = AIServiceFactory().build()
 
-    def test_create_model_with_google_canonical_provider(self):
-        """provider='google' (pydantic-ai 1.99.0 canonical) injects API key, not env fallback.
+        assert isinstance(model, GoogleModel)
+        assert credential_of(model) == "test-key"
 
-        Regression guard: factory must normalize 'google' -> GoogleModel with explicit
-        GoogleProvider(api_key=...), not fall through to the string-return else-branch
-        which would silently bypass tenant API key injection.
-        """
+    def test_build_with_google_canonical_provider(self):
+        """provider='google' (pydantic-ai 1.99.0 canonical) builds a GoogleModel on the tenant's key."""
         from pydantic_ai.models.google import GoogleModel
 
-        factory = AIServiceFactory()
-        tenant_config = {
-            "provider": "google",
-            "model": "gemini-2.0-flash",
-            "api_key": "tenant-specific-key",
-        }
-        model = factory.create_model(tenant_ai_config=tenant_config)
-        assert isinstance(model, GoogleModel), (
-            "provider='google' must return a GoogleModel, not a plain string; "
-            "returning a string bypasses API key injection and leaks auth to env vars"
+        model = AIServiceFactory().build(
+            TenantAIConfig(provider="google", model="gemini-2.0-flash", api_key="tenant-specific-key")
         )
 
+        assert isinstance(model, GoogleModel)
+        assert credential_of(model) == "tenant-specific-key"
+
     def test_tenant_google_uses_platform_api_key_when_tenant_key_missing(self):
-        """Tenant provider='google' without api_key inherits platform GEMINI_API_KEY."""
+        """A Google config with no key of its own takes the platform's Google key: same vendor."""
         from pydantic_ai.models.google import GoogleModel
 
         with patch.dict(os.environ, {"GEMINI_API_KEY": "platform-gemini-key"}, clear=True):
-            factory = AIServiceFactory()
-            model = factory.create_model(
-                tenant_ai_config={"provider": "google", "model": "gemini-2.0-flash"},
-            )
-            assert isinstance(model, GoogleModel)
+            model = AIServiceFactory().build(TenantAIConfig(provider="google", model="gemini-2.0-flash"))
 
-    def test_create_model_raises_when_google_has_no_resolved_api_key(self):
-        """No tenant or platform key must raise instead of pydantic-ai env fallback."""
+        assert isinstance(model, GoogleModel)
+        assert credential_of(model) == "platform-gemini-key"
+
+    def test_no_resolved_api_key_builds_nothing(self):
+        """No tenant or platform key builds no model, rather than leaving pydantic-ai to find one."""
         with patch.dict(os.environ, {}, clear=True):
             factory = AIServiceFactory()
-            from src.core.exceptions import AdCPConfigurationError
 
-            # The sentence comes from CONFIGURATION_ERROR's table entry now; the provider
-            # that lacked a key is asserted below, where it is machine-readable.
-            with pytest.raises(AdCPConfigurationError) as exc_info:
-                factory.create_model(
-                    tenant_ai_config={"provider": "google", "model": "gemini-2.0-flash"},
-                )
-            # The provider is the actionable fact, and it is now structured rather than
-            # embedded in prose.
-            assert exc_info.value.details is not None
-        assert exc_info.value.details.provider == "google"
+            assert factory.build(TenantAIConfig(provider="google", model="gemini-2.0-flash")) is None
+            assert factory.build() is None
 
-    def test_create_model_with_tenant_config(self):
-        """Factory uses tenant config over platform defaults."""
+    def test_build_with_tenant_config(self):
+        """The tenant's config wins over the platform defaults."""
         from pydantic_ai.models.anthropic import AnthropicModel
 
         with patch.dict(
@@ -254,81 +523,172 @@ class TestAIServiceFactory:
             },
             clear=False,
         ):
-            factory = AIServiceFactory()
-            tenant_config = {
-                "provider": "anthropic",
-                "model": "claude-sonnet-4-20250514",
-                "api_key": "tenant-key",
-            }
-            model = factory.create_model(tenant_ai_config=tenant_config)
-            # Returns AnthropicModel for anthropic provider
-            assert isinstance(model, AnthropicModel)
+            model = AIServiceFactory().build(
+                TenantAIConfig(provider="anthropic", model="claude-sonnet-4-20250514", api_key="tenant-key")
+            )
 
-    def test_create_model_with_override(self):
-        """Explicit overrides take highest priority."""
-        from pydantic_ai.models.openai import OpenAIChatModel
+        assert isinstance(model, AnthropicModel)
+        assert credential_of(model) == "tenant-key"
 
+    def test_resolve_on_the_platform_defaults(self):
+        """What `build` would run on with nothing configured: the platform's own provider, model and key."""
         with patch.dict(
             os.environ,
-            {
-                "GEMINI_API_KEY": "test-key",
-            },
+            {"PYDANTIC_AI_PROVIDER": "gemini", "PYDANTIC_AI_MODEL": "gemini-2.0-flash", "GEMINI_API_KEY": "test-key"},
             clear=False,
         ):
-            factory = AIServiceFactory()
-            tenant_config = {"provider": "anthropic", "model": "claude-sonnet-4-20250514"}
-            model = factory.create_model(
-                tenant_ai_config=tenant_config,
-                provider_override="openai",
-                model_override="gpt-4o",
-            )
-            # Override to openai returns OpenAIChatModel
-            assert isinstance(model, OpenAIChatModel)
+            resolved = AIServiceFactory().resolve()
 
-    def test_get_effective_config_platform(self):
-        """Effective config shows platform source when no tenant config."""
+        assert resolved == ResolvedAIConfig(provider="google", model="gemini-2.0-flash", api_key="test-key")
+
+    def test_unusable_seller_config_builds_nothing_with_a_platform_key_present(self):
+        """The seller configured AI that cannot run: the platform's credential is no substitute.
+
+        This replaces a test that asserted the opposite (a malformed row degrading to the
+        platform's provider, model and key), which is the path that sent a seller's buyer
+        brief to the operator's Google key after the seller had chosen Anthropic.
+        """
+        with PlatformAICredential("platform-key"):
+            factory = AIServiceFactory()
+
+            assert factory.resolve(UNUSABLE_AI_CONFIG) is None
+            assert factory.build(UNUSABLE_AI_CONFIG) is None
+            assert factory.build(None) is not None, "the platform key alone does build: the refusal is UNUSABLE's"
+
+    def test_platform_fallback_off_builds_only_the_sellers_own(self):
+        """The policy check's rule: no seller configuration, no model, whatever the platform has."""
+        with PlatformAICredential("platform-key"):
+            factory = AIServiceFactory()
+
+            assert factory.build(None, platform_fallback=False) is None
+            own = TenantAIConfig(provider="google", model="gemini-2.0-flash", api_key="seller-key")
+            assert credential_of(factory.build(own, platform_fallback=False)) == "seller-key"
+
+    def test_platform_key_is_never_lent_to_another_vendor(self):
+        """The platform's Google secret must not travel to api.anthropic.com.
+
+        Provider and api_key were once resolved from independent expressions, so a tenant
+        row naming "anthropic" produced an AnthropicModel whose client carried the
+        platform's GEMINI_API_KEY. `get_products` is auth-OPTIONAL discovery, so an
+        anonymous buyer's brief was enough to trigger it. With no Anthropic key of the
+        tenant's own, nothing is built at all.
+        """
         with patch.dict(
             os.environ,
             {
                 "PYDANTIC_AI_PROVIDER": "gemini",
                 "PYDANTIC_AI_MODEL": "gemini-2.0-flash",
-                "GEMINI_API_KEY": "test-key",
+                "GEMINI_API_KEY": "PLATFORM-GEMINI-SECRET",
+                "ANTHROPIC_API_KEY": "PLATFORM-ANTHROPIC-KEY",
             },
-            clear=False,
+            clear=True,
         ):
             factory = AIServiceFactory()
-            effective = factory.get_effective_config()
-            assert effective["provider"] == "gemini"
-            assert effective["model"] == "gemini-2.0-flash"
-            assert effective["has_api_key"] is True
-            assert effective["source"] == "platform"
+            tenant = TenantAIConfig(provider="anthropic", model="claude-sonnet-4-20250514")
 
-    def test_get_effective_config_tenant(self):
-        """Effective config shows tenant source when tenant config provided."""
+            assert factory.resolve(tenant) is None
+            assert factory.build(tenant) is None
+            # The tenant's own key is enough on its own.
+            assert credential_of(factory.build(tenant.model_copy(update={"api_key": "sk-ant"}))) == "sk-ant"
+
+    def test_missing_model_for_a_foreign_provider_builds_nothing(self):
+        """A model name from another vendor is not a model for this one.
+
+        The Admin UI writes model="" when the seller leaves the field blank, so
+        {"provider": "anthropic", "api_key": …} with no model is a real stored shape.
+        Filling it from PYDANTIC_AI_MODEL handed "gemini-2.0-flash" to an Anthropic
+        client, and every call 404'd.
+        """
+        with patch.dict(
+            os.environ,
+            {"PYDANTIC_AI_PROVIDER": "gemini", "PYDANTIC_AI_MODEL": "gemini-2.0-flash", "GEMINI_API_KEY": "SECRET"},
+            clear=True,
+        ):
+            factory = AIServiceFactory()
+            keyed_but_modelless = TenantAIConfig(provider="anthropic", api_key="sk-ant-tenant")
+
+            assert factory.resolve(keyed_but_modelless) is None
+            assert factory.build(keyed_but_modelless) is None
+
+    def test_legacy_google_config_runs_on_google_under_an_anthropic_platform(self, tenant_row):
+        """End to end for the legacy column: provider, model and key are all Google.
+
+        With PYDANTIC_AI_PROVIDER=anthropic the platform model names a Claude release.
+        Before the pin, `from_tenant`'s legacy config carried provider="google" and no
+        model, so the factory paired that Claude name with a Google client built on the
+        tenant's Gemini key: a model that 404s on every request.
+        """
+        from pydantic_ai.models.google import GoogleModel
+
         with patch.dict(
             os.environ,
             {
-                "GEMINI_API_KEY": "platform-key",
+                "PYDANTIC_AI_PROVIDER": "anthropic",
+                "PYDANTIC_AI_MODEL": "claude-sonnet-4-20250514",
+                "ANTHROPIC_API_KEY": "PLATFORM-ANTHROPIC-KEY",
             },
             clear=False,
         ):
+            model = AIServiceFactory().build(TenantAIConfig.from_tenant(tenant_row(gemini_api_key="AIza-TENANT")))
+
+        assert isinstance(model, GoogleModel)
+        assert model.model_name == DEFAULT_GOOGLE_MODEL
+        assert credential_of(model) == "AIza-TENANT"
+
+    def test_the_table_names_the_providers_this_factory_builds(self):
+        """Membership, pinned: dropping an entry turns a seller's configuration into "no AI".
+
+        Before the table, a set of explicit-key providers stood beside the ``elif`` chain
+        that built them, and nothing compared the two. One statement now decides both what
+        resolves and what builds; this is the check that it still says what it said.
+        """
+        assert set(PROVIDER_MODELS) == {"google", "anthropic", "openai", "groq", "mistral", "cohere"}
+
+    @pytest.mark.parametrize("provider", sorted(PROVIDER_MODELS))
+    def test_every_provider_in_the_table_builds_its_model_on_the_configured_key(self, provider):
+        """The table is what can be built: each entry builds the class it names, on the seller's key.
+
+        `resolve` admits exactly the table's keys, so an entry whose classes no longer
+        resolve, or that drops the key, fails here rather than on a live request.
+        """
+        import pkgutil
+
+        config = TenantAIConfig(provider=provider, model="model-x", api_key=f"key-{provider}")
+
+        with patch.dict(os.environ, {}, clear=True):
             factory = AIServiceFactory()
-            tenant_config = {"provider": "anthropic", "model": "claude-sonnet-4-20250514"}
-            effective = factory.get_effective_config(tenant_ai_config=tenant_config)
-            assert effective["provider"] == "anthropic"
-            assert effective["model"] == "claude-sonnet-4-20250514"
-            assert effective["source"] == "tenant"
+            resolved = factory.resolve(config)
+            model = factory.build(config)
+
+        assert resolved == ResolvedAIConfig(provider=provider, model="model-x", api_key=f"key-{provider}")
+        assert isinstance(model, pkgutil.resolve_name(PROVIDER_MODELS[provider][0]))
+        assert model.model_name == "model-x"
+        assert credential_of(model) == f"key-{provider}"
+
+    @pytest.mark.parametrize("provider", ["gateway/anthropic", "bedrock", "vertex"])
+    def test_a_provider_outside_the_table_builds_nothing(self, provider):
+        """No explicit-key integration means nowhere to put the seller's key, so no model.
+
+        Handing pydantic-ai a "provider:model" string instead let it authenticate with
+        whatever it found in the environment — a different credential than the one the
+        seller configured.
+        """
+        assert provider not in PROVIDER_MODELS
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "platform-key"}, clear=True):
+            factory = AIServiceFactory()
+            config = TenantAIConfig(provider=provider, model="claude-x", api_key="sk-tenant")
+
+            assert factory.resolve(config) is None
+            assert factory.build(config) is None
 
     def test_model_receives_api_key_via_provider(self):
         """Factory passes API key directly via Provider, not environment variables."""
         from pydantic_ai.models.openai import OpenAIChatModel
 
-        # Clear the environment to prove we're not relying on env vars
         with patch.dict(os.environ, {}, clear=True):
-            factory = AIServiceFactory()
-            tenant_config = {"provider": "openai", "model": "gpt-4o", "api_key": "tenant-openai-key"}
-            model = factory.create_model(tenant_ai_config=tenant_config)
-            # Model is created successfully
+            model = AIServiceFactory().build(
+                TenantAIConfig(provider="openai", model="gpt-4o", api_key="tenant-openai-key")
+            )
+
             assert isinstance(model, OpenAIChatModel)
-            # API key is NOT set in environment (we pass it directly to Provider)
             assert os.environ.get("OPENAI_API_KEY") is None

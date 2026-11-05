@@ -1075,8 +1075,7 @@ class TestEmptyResults:
         """
         with patch("src.services.ai.factory.get_factory") as mock_factory:
             mock_ai = Mock()
-            mock_ai.is_ai_enabled.return_value = True
-            mock_ai.create_model.return_value = Mock()
+            mock_ai.build.return_value = Mock()
             mock_factory.return_value = mock_ai
 
             with patch("src.services.ai.agents.ranking_agent.create_ranking_agent") as mock_agent:

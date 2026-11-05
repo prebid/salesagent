@@ -128,8 +128,7 @@ class TestRelevanceThresholdIntegration:
                 patch("src.services.ai.factory.get_factory") as mock_factory,
             ):
                 factory_inst = MagicMock()
-                factory_inst.is_ai_enabled.return_value = True
-                factory_inst.create_model.return_value = MagicMock()
+                factory_inst.build.return_value = MagicMock()
                 mock_factory.return_value = factory_inst
                 mock_rank.return_value = ranking_result
 

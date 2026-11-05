@@ -148,3 +148,81 @@ def test_account_approval_mode_defaults_to_none_when_unset(integration_db):
         assert ctx.account_approval_mode is None
         # Creative approval_mode keeps its own default, unaffected
         assert ctx.approval_mode == "require-human"
+
+
+@pytest.mark.requires_db
+def test_the_ai_credential_stays_out_of_the_tenant_dict(integration_db):
+    """serialize_tenant_to_dict never carries the seller's AI credentials, in either column.
+
+    The dict reaches the Slack notifier and the audit path, and ai_config holds the
+    seller's api_key and logfire_token, the legacy gemini_api_key column a key of its own.
+    TenantContext is the one projection that needs the configuration, and it is built from
+    the ORM row, so the dict has no reason to carry either.
+    """
+    from tests.factories import TenantFactory
+    from tests.harness._base import IntegrationEnv
+
+    ai_config = {"provider": "anthropic", "model": "claude-x", "api_key": "tenant-key", "logfire_token": "lf-tok"}
+
+    with IntegrationEnv(tenant_id="test_aicfg"):
+        tenant = TenantFactory(
+            tenant_id="test_aicfg",
+            ai_config=ai_config,
+            product_ranking_prompt="rank by relevance to the brief",
+            gemini_api_key="legacy-key",
+        )
+
+        d = serialize_tenant_to_dict(tenant)
+
+        assert "ai_config" not in d
+        assert "gemini_api_key" not in d
+        assert "legacy-key" not in repr(d)
+        assert "tenant-key" not in repr(d)
+        assert "lf-tok" not in repr(d)
+        assert d["product_ranking_prompt"] == "rank by relevance to the brief"
+
+
+@pytest.mark.requires_db
+@pytest.mark.parametrize(
+    ("ai_config", "gemini_api_key", "expected"),
+    [
+        (
+            {"provider": "anthropic", "model": "claude-x", "api_key": "tenant-key"},
+            None,
+            {"provider": "anthropic", "model": "claude-x", "api_key": "tenant-key"},
+        ),
+        (None, "legacy-key", {"provider": "google", "model": "gemini-2.0-flash", "api_key": "legacy-key"}),
+    ],
+    ids=["ai_config", "legacy_gemini_api_key"],
+)
+def test_the_resolver_chain_carries_the_parsed_ai_config(integration_db, ai_config, gemini_api_key, expected):
+    """TenantContext.load carries the seller's AI configuration, parsed once and typed.
+
+    The resolver builds every request's tenant with ``TenantContext.load``. Its
+    ``ai_config`` is what ``TenantAIConfig.from_tenant`` resolved from the row, the column
+    the Admin UI writes or the legacy gemini_api_key column, so ranking, the policy gate
+    and creative review read one typed value instead of re-parsing a dict at every use.
+    Missing it makes those features fall back as if the seller had configured nothing.
+    """
+    from src.core.tenant_context import TenantContext
+    from src.services.ai.config import TenantAIConfig
+    from tests.factories import TenantFactory
+    from tests.harness._base import IntegrationEnv
+
+    with IntegrationEnv(tenant_id="test_aicfg_load"):
+        TenantFactory(
+            tenant_id="test_aicfg_load",
+            ai_config=ai_config,
+            product_ranking_prompt="rank by relevance to the brief",
+            gemini_api_key=gemini_api_key,
+        )
+
+        loaded = TenantContext.load("test_aicfg_load")
+
+        assert loaded is not None
+        assert loaded.ai_config == TenantAIConfig(**expected)
+        assert loaded.product_ranking_prompt == "rank by relevance to the brief"
+        # The context carries the resolution, not the column it came from: nothing reads
+        # the legacy credential off it, so it is not there to read.
+        assert "gemini_api_key" not in TenantContext.model_fields
+        assert expected["api_key"] not in repr(loaded)

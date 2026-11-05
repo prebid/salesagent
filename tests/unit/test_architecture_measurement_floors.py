@@ -34,8 +34,8 @@ sys.path.insert(0, str(REPO_ROOT))
 #
 # The set spans BOTH sources, deliberately. The literal `ENV_ROUTES` block holds
 # 31 wired tags; `ENV_ROUTES +=` then appends the UC-010 dormancy rows (all
-# xfailing) and 6 more wired ones from `_UC_BUCKET_ROUTES` at import time. "How
-# many wired tags are there" therefore has two answers (31 and 37), and a floor
+# xfailing) and 7 more wired ones from `_UC_BUCKET_ROUTES` at import time. "How
+# many wired tags are there" therefore has two answers (31 and 38), and a floor
 # that does not say which it means is itself an ambiguous counter. This pins the
 # runtime set — what actually routes scenarios.
 #
@@ -47,6 +47,10 @@ EXPECTED_WIRED_ROUTES: frozenset[str] = frozenset(
         # bucket rows, appended from _UC_BUCKET_ROUTES
         "ADMIN",
         "COMPAT",
+        # UC-001 joined the wired set in PR #2167: get_products discovery has had a
+        # harness all along (ProductEnv), but no row claimed the bucket, so a
+        # @T-UC-001-* scenario xfailed as "No harness wired for UC-001".
+        "UC-001",
         "UC-005",
         "UC-019",
         # UC-026 was disconnected in two places at once: no ENV_ROUTES row, and its

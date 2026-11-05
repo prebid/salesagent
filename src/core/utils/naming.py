@@ -18,6 +18,7 @@ Supports variable substitution with fallback syntax:
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -28,8 +29,22 @@ if TYPE_CHECKING:
     # here is the adapter carrier, never the buyer's DTO. TYPE_CHECKING-only: this
     # module is under src/core and the carrier lives with the adapters.
     from src.adapters.base import AdapterCreateRequest
+    from src.services.ai.config import SellerAIConfig
 
 logger = logging.getLogger(__name__)
+
+#: One template placeholder, ``{variable}`` or ``{var1|var2|var3}``.
+_PLACEHOLDER = re.compile(r"\{([^}]+)\}")
+
+
+def _alternatives(placeholder: re.Match[str]) -> list[str]:
+    """The variable names one placeholder tries, in order: ``{a|b}`` -> ``["a", "b"]``."""
+    return [name.strip() for name in placeholder.group(1).split("|")]
+
+
+def template_references(template: str, variable: str) -> bool:
+    """True when any placeholder in ``template`` names ``variable``, alone or as an alternative."""
+    return any(variable in _alternatives(placeholder) for placeholder in _PLACEHOLDER.finditer(template))
 
 
 def format_date_range(start_time: datetime, end_time: datetime) -> str:
@@ -78,8 +93,7 @@ def generate_auto_name(
     packages: list,
     start_time: datetime,
     end_time: datetime,
-    tenant_ai_config=None,
-    tenant_gemini_key: str | None = None,  # Deprecated: use tenant_ai_config
+    tenant_ai_config: SellerAIConfig = None,
     max_length: int = 150,
 ) -> str:
     """Generate AI-powered order name using Pydantic AI.
@@ -89,8 +103,8 @@ def generate_auto_name(
         packages: List of MediaPackage objects
         start_time: Order start datetime
         end_time: Order end datetime
-        tenant_ai_config: Tenant's AI configuration (TenantAIConfig or dict)
-        tenant_gemini_key: Deprecated - Tenant's Gemini API key
+        tenant_ai_config: What AI the seller configured (``TenantContext.ai_config``);
+            None falls back to the platform's credential
         max_length: Maximum length for generated name
 
     Returns:
@@ -102,30 +116,18 @@ def generate_auto_name(
     """
     from src.services.ai import AIServiceFactory
 
-    factory = AIServiceFactory()
-
-    # Handle backward compatibility: convert gemini_api_key to ai_config
-    effective_config = tenant_ai_config
-    if effective_config is None and tenant_gemini_key:
-        effective_config = {
-            "provider": "gemini",
-            "api_key": tenant_gemini_key,
-        }
-
-    # Check if AI is enabled
-    if not factory.is_ai_enabled(effective_config):
-        logger.debug("No AI configuration available, falling back to brand_name")
-        return _get_fallback_name(request)
-
     try:
+        model = AIServiceFactory().build(tenant_ai_config)
+        if model is None:
+            logger.debug("No AI configuration available, falling back to brand_name")
+            return _get_fallback_name(request)
+
         from src.services.ai.agents.naming_agent import (
             create_naming_agent,
             generate_name_async,
         )
 
-        # Create the model and agent
-        model_string = factory.create_model(effective_config)
-        agent = create_naming_agent(model_string, max_length=max_length)
+        agent = create_naming_agent(model, max_length=max_length)
 
         # Extract context for AI
         brand_name = _extract_brand_name(request) or "N/A"
@@ -198,19 +200,13 @@ def apply_naming_template(
 
     result = template
 
-    # Find all {variable} or {var1|var2} patterns
-    import re
-
-    pattern = r"\{([^}]+)\}"
-
-    for match in re.finditer(pattern, result):
+    for match in _PLACEHOLDER.finditer(result):
         full_match = match.group(0)  # e.g., "{campaign_name|promoted_offering}"
-        variables = match.group(1).split("|")  # e.g., ["campaign_name", "promoted_offering"]
+        variables = _alternatives(match)  # e.g., ["campaign_name", "promoted_offering"]
 
         # Try each variable in order until we find a non-None, non-empty value
         value = None
         for var_name in variables:
-            var_name = var_name.strip()
             if var_name in context:
                 candidate = context[var_name]
                 if candidate is not None and candidate != "":
@@ -231,8 +227,9 @@ def build_order_name_context(
     packages: list,
     start_time: datetime,
     end_time: datetime,
-    tenant_ai_config=None,
-    tenant_gemini_key: str | None = None,  # Deprecated: use tenant_ai_config
+    *,
+    template: str,
+    tenant_ai_config: SellerAIConfig = None,
     media_buy_id: str | None = None,
 ) -> dict:
     """Build context dictionary for order name template.
@@ -242,22 +239,27 @@ def build_order_name_context(
         packages: List of MediaPackage objects
         start_time: Order start datetime
         end_time: Order end datetime
-        tenant_ai_config: Tenant's AI configuration (TenantAIConfig or dict)
-        tenant_gemini_key: Deprecated - Tenant's Gemini API key
+        template: The order name template the context is built for
+        tenant_ai_config: What AI the seller configured (``TenantContext.ai_config``);
+            None falls back to the platform's credential
         media_buy_id: Media buy identifier for template substitution
 
     Returns:
         Dictionary of variables available for template substitution
     """
-    # Generate auto_name if template uses it (lazy evaluation via dict access is fine)
-    # Note: This gets called only if {auto_name} is in the template
-    auto_name = generate_auto_name(
-        request=request,
-        packages=packages,
-        start_time=start_time,
-        end_time=end_time,
-        tenant_ai_config=tenant_ai_config,
-        tenant_gemini_key=tenant_gemini_key,
+    # The model is asked only when the template uses its answer. This runs on the
+    # create_media_buy write path and the call blocks it, so asking on every order made a
+    # seller on the default template pay for a name it then discarded.
+    auto_name = (
+        generate_auto_name(
+            request=request,
+            packages=packages,
+            start_time=start_time,
+            end_time=end_time,
+            tenant_ai_config=tenant_ai_config,
+        )
+        if template_references(template, "auto_name")
+        else None
     )
 
     # Extract brand name from brand (BrandReference)

@@ -530,6 +530,22 @@ def then_entire_sync_operation_fails(ctx: dict) -> None:
 # ── Error code ───────────────────────────────────────────────────────
 
 
+@then(parsers.re(r'the operation should fail with error code "(?P<code>[A-Z_]+)"'))
+def then_operation_fails_with_code(ctx: dict, code: str) -> None:
+    """Assert the refusal the buyer received, through the harness's one envelope helper.
+
+    ``assert_wire_error`` defaults ``recovery`` from the pinned error-code table, so the
+    assertion also grades the retry semantics without the scenario repeating them.
+
+    UC-019 keeps its own definition of this sentence in steps/domain/uc019_query_media_buys.py,
+    which its test module imports at module scope and so overrides this one for UC-019 only:
+    that one also grades locally-tracked codes absent from the pinned enum.
+    """
+    result = ctx.get("result")
+    assert result is not None, "no TransportResult on the context — the When step did not dispatch"
+    result.assert_wire_error(code)
+
+
 @then(parsers.parse('the error code should be "{code}"'))
 def then_error_code(ctx: dict, code: str) -> None:
     """Assert the error code on the WIRE. No reconstructed fallback.

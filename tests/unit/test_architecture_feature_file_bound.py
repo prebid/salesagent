@@ -36,7 +36,6 @@ FEATURES_DIR = BDD_DIR / "features"
 # binding gap"), also tracked as salesagent-yz8mo. Each entry is
 # scenarios that never execute. This set may only shrink.
 UNBOUND_ALLOWLIST: set[str] = {
-    "BR-UC-001-discover-available-inventory.feature",
     "BR-UC-008-manage-audience-signals.feature",
     "BR-UC-012-manage-content-standards.feature",
     "BR-UC-013-manage-property-lists.feature",

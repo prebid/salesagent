@@ -93,8 +93,7 @@ class TestRankingThresholdBehavior:
                 patch("src.services.ai.factory.get_factory") as mock_factory,
             ):
                 factory_inst = MagicMock()
-                factory_inst.is_ai_enabled.return_value = True
-                factory_inst.create_model.return_value = MagicMock()
+                factory_inst.build.return_value = MagicMock()
                 mock_factory.return_value = factory_inst
                 mock_rank.return_value = ranking_result
 
@@ -138,8 +137,7 @@ class TestRankingThresholdBehavior:
                 patch("src.services.ai.factory.get_factory") as mock_factory,
             ):
                 factory_inst = MagicMock()
-                factory_inst.is_ai_enabled.return_value = True
-                factory_inst.create_model.return_value = MagicMock()
+                factory_inst.build.return_value = MagicMock()
                 mock_factory.return_value = factory_inst
                 mock_rank.return_value = ranking_result
 
@@ -180,8 +178,7 @@ class TestRankingThresholdBehavior:
                 patch("src.services.ai.factory.get_factory") as mock_factory,
             ):
                 factory_inst = MagicMock()
-                factory_inst.is_ai_enabled.return_value = True
-                factory_inst.create_model.return_value = MagicMock()
+                factory_inst.build.return_value = MagicMock()
                 mock_factory.return_value = factory_inst
                 mock_rank.return_value = ranking_result
 
@@ -221,8 +218,7 @@ class TestRankingThresholdBehavior:
                 patch("src.services.ai.factory.get_factory") as mock_factory,
             ):
                 factory_inst = MagicMock()
-                factory_inst.is_ai_enabled.return_value = True
-                factory_inst.create_model.return_value = MagicMock()
+                factory_inst.build.return_value = MagicMock()
                 mock_factory.return_value = factory_inst
                 mock_rank.return_value = ranking_result
 
@@ -261,8 +257,7 @@ class TestRankingFailureFailopen:
 
             with patch("src.services.ai.factory.get_factory") as mock_factory:
                 factory_inst = MagicMock()
-                factory_inst.is_ai_enabled.return_value = True
-                factory_inst.create_model.side_effect = RuntimeError("AI service unavailable")
+                factory_inst.build.side_effect = RuntimeError("AI service unavailable")
                 mock_factory.return_value = factory_inst
 
                 env.mock["ranking_factory"].stop()
@@ -272,6 +267,31 @@ class TestRankingFailureFailopen:
         assert len(response.products) == 2
         assert response.products[0].product_id == "p_first"
         assert response.products[1].product_id == "p_second"
+
+    @pytest.mark.asyncio
+    async def test_provider_exception_text_cannot_forge_a_log_line(self, integration_db, caplog):
+        """The ranking failure is logged in one line, whatever the provider's error text says.
+
+        A provider exception carries the remote response body verbatim, so its text is
+        written by a party outside the process. Logs are not on the wire, so no BDD
+        scenario can see this.
+        """
+        with ProductEnv(tenant_id="rank-forge", principal_id="p1") as env:
+            tenant = TenantFactory(tenant_id="rank-forge")
+            env.configure_tenant_field("product_ranking_prompt", "Rank products")
+            PrincipalFactory(tenant=tenant, principal_id="p1")
+            PricingOptionFactory(product=ProductFactory(tenant=tenant, product_id="p_first"))
+
+            factory = env.mock["ranking_factory"].return_value
+            factory.build.side_effect = RuntimeError("503 upstream\nWARNING forged entry")
+
+            with caplog.at_level("WARNING", logger="src.core.tools.products"):
+                await env.call_impl(brief="campaign")
+
+        ranking_lines = [r.getMessage() for r in caplog.records if "AI product ranking" in r.getMessage()]
+        assert len(ranking_lines) == 1, f"expected one ranking-failure log record, got {ranking_lines}"
+        assert ranking_lines[0].splitlines() == [ranking_lines[0]], f"the record spans lines: {ranking_lines[0]!r}"
+        assert "503 upstream\\nWARNING forged entry" in ranking_lines[0]
 
 
 # ---- Policy: tests 3, 4, 5 (S9, S8, S10) ----
@@ -492,8 +512,7 @@ class TestEmptyResultsPipelineStages:
                 patch("src.services.ai.factory.get_factory") as mock_factory,
             ):
                 factory_inst = MagicMock()
-                factory_inst.is_ai_enabled.return_value = True
-                factory_inst.create_model.return_value = MagicMock()
+                factory_inst.build.return_value = MagicMock()
                 mock_factory.return_value = factory_inst
                 mock_rank.return_value = ranking_result
 
