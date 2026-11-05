@@ -101,7 +101,7 @@ def test_scheduler_isolation_errors_increments():
     only sanitizes against :data:`SCHEDULER_ERROR_TYPE_VALUES`.
     """
     from src.core.metrics import record_scheduler_isolation_error
-    from tests.helpers.scheduler_isolation import counter_value
+    from tests.helpers.metrics import counter_value
 
     initial_value = counter_value("media_buy_status", "test_tenant", "db_error")
 
