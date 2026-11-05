@@ -70,7 +70,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import sys
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -111,24 +110,13 @@ def relative_target(config: Any) -> list[str]:
 
 
 def write_artifact(path: Path, body: str) -> None:
-    """Write one per-session artifact, reporting a failure instead of raising.
+    """Write one per-session artifact, creating its directory.
 
-    A diagnostic never changes the outcome of the thing it measures. An exception out
-    of ``pytest_sessionfinish`` is an unhandled error, so an unwritable path would turn
-    a session whose tests all passed into a nonzero exit with no summary line.
-
-    Swallowing the write is safe because losing the artifact is not silent: each reader
-    fails closed on a missing record (``load``, ``load_run``, and the runner's
-    missing-artifact check for the payload capture).
-
-    OSError, not Exception: PermissionError, FileExistsError, NotADirectoryError and
-    ENOSPC are all subclasses of it, while a defect in the artifact itself stays loud.
+    A failed write raises, and the session fails with it. A run whose artifact is
+    missing has not published the measurement it exists to make.
     """
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(body, encoding="utf-8")
-    except OSError as exc:
-        print(f"[session-artifact] could not write {path}: {exc}", file=sys.stderr)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body, encoding="utf-8")
 
 
 def read_artifacts(directory: str | Path) -> list[tuple[Path, dict[str, Any]]]:
