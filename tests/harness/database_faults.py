@@ -29,7 +29,8 @@ from __future__ import annotations
 
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
 import psycopg2
@@ -52,6 +53,15 @@ def _connect(url: URL, *, autocommit: bool = False):
     conn = psycopg2.connect(url.set(drivername="postgresql").render_as_string(hide_password=False))
     conn.autocommit = autocommit
     return conn
+
+
+@contextmanager
+def _admin_cursor(url: URL) -> Iterator:
+    admin = _connect(url, autocommit=True)
+    try:
+        yield admin.cursor()
+    finally:
+        admin.close()
 
 
 class _NextStatementInterrupter:
@@ -159,6 +169,50 @@ class DatabaseFaultMixin:
         self._guard("db_fault:connections", self.accept_new_connections)
         self._set_allow_connections(False)
 
+    def poison_media_buy_status_writes(self, media_buy_ids: Sequence[str], *, terminate: bool) -> None:
+        """Make the database fail an UPDATE of these media buys and no others.
+
+        A BEFORE UPDATE trigger raises, or terminates the backend, when the new
+        row's ``media_buy_id`` is one of *media_buy_ids* and ``status`` changes.
+        A confirmation stamp that leaves status alone is not a status write.
+        Installed before the rows are inserted. The trigger covers only these ids.
+        Cleanup drops the trigger and the function.
+        """
+        if not media_buy_ids:
+            raise ValueError("poison_media_buy_status_writes requires at least one media_buy_id")
+        self._commit_factory_data()
+        url = self._fault_target_url()
+        with _admin_cursor(url) as cur:
+            literals: list[str] = []
+            for media_buy_id in media_buy_ids:
+                cur.execute("SELECT quote_literal(%s)", (media_buy_id,))
+                literals.append(cur.fetchone()[0])
+            listed = ", ".join(literals)
+            action = "PERFORM pg_terminate_backend(pg_backend_pid());" if terminate else "RAISE EXCEPTION 'poison';"
+            cur.execute(
+                f"""
+                CREATE OR REPLACE FUNCTION poison_media_buy_status_write() RETURNS trigger
+                LANGUAGE plpgsql AS $fn$
+                BEGIN
+                  IF NEW.media_buy_id IN ({listed}) AND NEW.status IS DISTINCT FROM OLD.status THEN
+                    {action}
+                  END IF;
+                  RETURN NEW;
+                END
+                $fn$;
+                DROP TRIGGER IF EXISTS poison_media_buy_status_write ON media_buys;
+                CREATE TRIGGER poison_media_buy_status_write
+                BEFORE UPDATE ON media_buys
+                FOR EACH ROW EXECUTE FUNCTION poison_media_buy_status_write();
+                """
+            )
+        self._guard("db_fault:poison_status", self._drop_media_buy_status_poison)
+
+    def _drop_media_buy_status_poison(self) -> None:
+        with _admin_cursor(self._fault_target_url()) as cur:
+            cur.execute("DROP TRIGGER IF EXISTS poison_media_buy_status_write ON media_buys")
+            cur.execute("DROP FUNCTION IF EXISTS poison_media_buy_status_write()")
+
     def accept_new_connections(self) -> None:
         """Let the database accept connections again. Idempotent; also the refusal's cleanup."""
         self._set_allow_connections(True)
@@ -167,14 +221,10 @@ class DatabaseFaultMixin:
 
     def _set_allow_connections(self, allow: bool) -> None:
         url = self._fault_target_url()
-        admin = _connect(url.set(database="postgres"), autocommit=True)
-        try:
-            cur = admin.cursor()
+        with _admin_cursor(url.set(database="postgres")) as cur:
             cur.execute(f'ALTER DATABASE "{url.database}" WITH ALLOW_CONNECTIONS {str(allow).lower()}')
             if not allow:
                 terminate_backends(cur, url.database)
-        finally:
-            admin.close()
 
     @realize_e2e(_wait_out_fail_fast)
     def _clear_seller_fail_fast(self) -> None:

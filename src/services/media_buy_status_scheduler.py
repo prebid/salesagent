@@ -13,16 +13,54 @@ before their start date.
 import asyncio
 import logging
 from datetime import UTC, datetime
+from enum import Enum, auto
 
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
 
 from src.core.config import get_settings
-from src.core.database.database_session import get_db_session
+from src.core.database.database_session import _connection_lost, _server_never_answered, get_db_session
 from src.core.database.models import Creative, CreativeAssignment, MediaBuy, PersistedMediaBuyStatus
 from src.core.database.repositories import MediaBuyRepository
+from src.core.metrics import record_scheduler_isolation_error
 from src.core.tools._media_buy_transitions import resolve_flight_window_status
 
 logger = logging.getLogger(__name__)
+
+
+# Batch summary prefix — shared with tests via this constant (not a string literal).
+STATUS_BATCH_SUMMARY_PREFIX = "Media buy status update complete"
+
+
+class _BuyOutcome(Enum):
+    """Closed outcome domain for one buy inside a status-scheduler tick."""
+
+    FLIPPED = auto()
+    ISOLATED = auto()
+    NOOP = auto()
+
+
+def _classify_scheduler_error(exc: Exception) -> str:
+    """Bounded ``error_type`` for this scheduler's isolation metric.
+
+    Owned here (services layer) rather than in ``src/core/metrics.py`` — the
+    observability layer should not import ``sqlalchemy`` to interpret an
+    exception population it doesn't own. Callers pass the already-bounded
+    string to :func:`record_scheduler_isolation_error`.
+    """
+    return "db_error" if isinstance(exc, SQLAlchemyError) else "other"
+
+
+def _propagates_to_session(exc: BaseException) -> bool:
+    """Whether ``exc`` must leave the per-buy handler and reach ``get_db_session``.
+
+    A dropped connection (``_connection_lost``) or a connect the server never
+    answered (``_server_never_answered``) leaves this session unusable. The
+    unanswered connect is also what trips the process-wide fail-fast. A data
+    or statement failure stays inside the buy so the rest of the batch continues.
+    """
+    return isinstance(exc, SQLAlchemyError) and (_connection_lost(exc) or _server_never_answered(exc))
 
 
 _ACTIVATABLE_STATUSES = frozenset(
@@ -84,10 +122,110 @@ class MediaBuyStatusScheduler:
                 # Wait before next check
                 await asyncio.sleep(self._check_interval_seconds)
 
+    def _process_one_media_buy(
+        self, media_buy: MediaBuy, now: datetime, session: Session, flip_lines: list[str]
+    ) -> _BuyOutcome:
+        """Run one buy inside a repository savepoint and isolate a statement failure.
+
+        ``tenant_id``, ``principal_id``, and ``media_buy_id`` are columns the
+        listing query already loaded. They are bound above the ``try``, which
+        encloses only the savepoint, so an isolated failure is always metered
+        with the buy's tenant. A failure reading those ids aborts the tick.
+        That copy must not issue SQL: a statement that fails before the
+        savepoint aborts the PostgreSQL transaction.
+
+        A dropped connection or a connect the server never answered re-raises
+        so ``get_db_session`` rolls the session back and, for an unanswered
+        connect, trips the fail-fast. A per-buy data or statement failure is
+        isolated. A declined write raises ``LookupError`` inside the savepoint
+        and takes that same path. A flip line is appended to ``flip_lines`` and
+        logged only after the tick commits.
+
+        Status writes go through ``MediaBuyRepository.update_status``.
+        Self-transitions are already refused by ``_compute_new_status``.
+        """
+        tenant_id = media_buy.tenant_id
+        principal_id = media_buy.principal_id
+        media_buy_id = media_buy.media_buy_id
+        new_status: PersistedMediaBuyStatus | None = None
+        old_status: str | None = None
+        repo = MediaBuyRepository(session, tenant_id)
+
+        try:
+            with repo.savepoint():
+                new_status = self._compute_new_status(media_buy, now, session)
+                if new_status:
+                    old_status = media_buy.status
+                    # The sweep is deliberately cross-tenant, but the repository is
+                    # tenant-scoped, so build it from this row's own tenant. That
+                    # keeps every write inside the isolation the class enforces
+                    # rather than widening it with a cross-tenant write method.
+                    updated = repo.update_status(
+                        media_buy_id,
+                        new_status,
+                        # The sweep does not itself commit anything -- commitment
+                        # happened earlier, at the synchronous create or at approval,
+                        # and confirmed_at is write-once so a stamped row is untouched.
+                        # ACTIVE is passed as committing anyway, and the PIN is the
+                        # reason: create-media-buy-response.json @ 3.1.1 constrains
+                        # confirmed_at in exactly one direction -- a null value forbids
+                        # status "active". This sweep is the last writer before a buyer
+                        # can observe that combination, so it must not be able to
+                        # produce it. Any row reaching ACTIVE unstamped is already a
+                        # defect upstream; stamping here keeps the defect from becoming
+                        # a schema-invalid document on the wire.
+                        seller_committed=new_status == PersistedMediaBuyStatus.ACTIVE,
+                    )
+                    if updated is None:
+                        # The repository declined the write. Raising inside the
+                        # savepoint rolls this buy back and counts it on the one
+                        # isolation path. Clearing old_status would report a no-op
+                        # for a row the sweep tried to move.
+                        raise LookupError(media_buy_id)
+        except Exception as exc:
+            if _propagates_to_session(exc):
+                raise
+            try:
+                logger.error(
+                    f"Error updating media buy status "
+                    f"(tenant_id={tenant_id}, principal_id={principal_id}, "
+                    f"media_buy_id={media_buy_id}): {exc}",
+                    exc_info=True,
+                )
+                record_scheduler_isolation_error(
+                    scheduler="media_buy_status",
+                    tenant_id=tenant_id,
+                    error_type=_classify_scheduler_error(exc),
+                )
+            except Exception as handler_exc:
+                logger.error(
+                    f"Status isolation error handler failed "
+                    f"(tenant_id={tenant_id}, principal_id={principal_id}, "
+                    f"media_buy_id={media_buy_id}): {handler_exc}",
+                    exc_info=True,
+                )
+            return _BuyOutcome.ISOLATED
+
+        if not new_status or old_status is None:
+            return _BuyOutcome.NOOP
+        flip_lines.append(f"Updated media buy {media_buy_id} status: {old_status} -> {new_status}")
+        return _BuyOutcome.FLIPPED
+
     async def _update_statuses(self) -> None:
-        """Check and update media buy statuses based on flight dates."""
+        """Check and update media buy statuses based on flight dates.
+
+        Per-buy work runs inside ``MediaBuyRepository.savepoint()`` so a
+        statement error on one buy rolls back only that buy. Siblings still
+        reach the terminal ``session.commit()``. Flip lines are logged after
+        that commit. The batch summary runs in an outer ``finally`` and keys
+        its severity on whether the loop reached that commit.
+        """
         now = datetime.now(UTC)
         updated_count = 0
+        errors = 0
+        seen = 0
+        reached_end = False
+        flip_lines: list[str] = []
 
         try:
             with get_db_session() as session:
@@ -99,51 +237,59 @@ class MediaBuyStatusScheduler:
                 )
 
                 for media_buy in media_buys:
-                    new_status = self._compute_new_status(media_buy, now, session)
-
-                    if new_status and new_status != media_buy.status:
-                        old_status = media_buy.status
-                        # The sweep is deliberately cross-tenant, but the repository is
-                        # tenant-scoped, so build it from this row's own tenant. That
-                        # keeps every write inside the isolation the class enforces
-                        # rather than widening it with a cross-tenant write method.
-                        updated = MediaBuyRepository(session, media_buy.tenant_id).update_status(
-                            media_buy.media_buy_id,
-                            new_status,
-                            # The sweep does not itself commit anything -- commitment
-                            # happened earlier, at the synchronous create or at approval,
-                            # and confirmed_at is write-once so a stamped row is untouched.
-                            # ACTIVE is passed as committing anyway, and the PIN is the
-                            # reason: create-media-buy-response.json @ 3.1.1 constrains
-                            # confirmed_at in exactly one direction -- a null value forbids
-                            # status "active". This sweep is the last writer before a buyer
-                            # can observe that combination, so it must not be able to
-                            # produce it. Any row reaching ACTIVE unstamped is already a
-                            # defect upstream; stamping here keeps the defect from becoming
-                            # a schema-invalid document on the wire.
-                            seller_committed=new_status == PersistedMediaBuyStatus.ACTIVE,
-                        )
-                        if updated is None:
-                            # Unreachable: media_buy_id is the sole primary key and the
-                            # row is already loaded in this transaction, so the
-                            # tenant-filtered re-fetch cannot miss. Never fall through
-                            # silently — a sweep must not report an update it did not make.
-                            logger.error(
-                                f"Media buy {media_buy.media_buy_id} vanished from its own tenant "
-                                f"{media_buy.tenant_id!r} mid-sweep; status left at {old_status}"
-                            )
-                            continue
+                    seen += 1
+                    result = self._process_one_media_buy(media_buy, now, session, flip_lines)
+                    if result is _BuyOutcome.FLIPPED:
                         updated_count += 1
-                        logger.info(f"Updated media buy {media_buy.media_buy_id} status: {old_status} -> {new_status}")
+                    elif result is _BuyOutcome.ISOLATED:
+                        errors += 1
 
                 if updated_count > 0:
                     session.commit()
-                    logger.info(f"Updated {updated_count} media buy status(es)")
+                for line in flip_lines:
+                    logger.info(line)
+                reached_end = True
 
         except Exception as e:
             logger.error(f"Failed to update media buy statuses: {e}", exc_info=True)
+        finally:
+            self._log_batch_summary(
+                seen=seen,
+                updated_count=updated_count,
+                errors=errors,
+                reached_end=reached_end,
+            )
 
-    def _compute_new_status(self, media_buy: MediaBuy, now: datetime, session) -> PersistedMediaBuyStatus | None:
+    def _log_batch_summary(self, *, seen: int, updated_count: int, errors: int, reached_end: bool = True) -> None:
+        """Suppress all-quiet ticks (60s cadence); WARNING on total-loss or mid-loop abort.
+
+        Legitimate no-op flips do not count as failures, so the error tally
+        stays visible without paging on a normal quiet tick. Called from an
+        outer ``finally`` so the tally survives both a failed terminal commit
+        and a propagated connection failure mid-loop. When the loop did not reach
+        the end and pending flips exist, do not claim them as "updated" —
+        report pending flips lost instead. ``reached_end`` is false on escape
+        or commit failure paths so a zero-flip worst tick (every visited buy
+        failed, including an escaping dead connection) still WARNING rather
+        than INFO.
+        """
+        if not reached_end and updated_count:
+            summary = (
+                f"{STATUS_BATCH_SUMMARY_PREFIX}: 0 persisted ({updated_count} pending flips lost), {errors} errors"
+            )
+            logger.warning(summary)
+            return
+        if not (updated_count or errors):
+            return
+        summary = f"{STATUS_BATCH_SUMMARY_PREFIX}: {updated_count} updated, {errors} errors"
+        if errors == seen or not reached_end:
+            logger.warning(summary)
+        else:
+            logger.info(summary)
+
+    def _compute_new_status(
+        self, media_buy: MediaBuy, now: datetime, session: Session
+    ) -> PersistedMediaBuyStatus | None:
         """The status this sweep should write, or ``None`` to leave the row alone.
 
         The flight-window rule itself lives in
@@ -176,7 +322,7 @@ class MediaBuyStatusScheduler:
 
         return None
 
-    def _are_creatives_approved(self, media_buy: MediaBuy, session) -> bool:
+    def _are_creatives_approved(self, media_buy: MediaBuy, session: Session) -> bool:
         """Check if all creatives for a media buy are approved.
 
         Returns:

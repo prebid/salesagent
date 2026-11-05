@@ -1537,7 +1537,8 @@ class BaseTestEnv:
         it selects are this env's own. That is the same property the e2e branch has
         always relied on.
         """
-        from tests.helpers.signing import VERIFIED_METRIC, samples_with
+        from tests.helpers.metrics import samples_with
+        from tests.helpers.signing import VERIFIED_METRIC
 
         return int(sum(samples_with(VERIFIED_METRIC, keyid=self.signing.key_id).values()))
 
@@ -1574,7 +1575,8 @@ class BaseTestEnv:
         (``src/core/metrics.py:325``): a failure is recorded before any key is resolved,
         so the code is the only label that says WHICH rule refused.
         """
-        from tests.helpers.signing import FAILED_METRIC, counter_samples
+        from tests.helpers.metrics import counter_samples
+        from tests.helpers.signing import FAILED_METRIC
 
         return _by_signature_code(counter_samples(FAILED_METRIC))
 
