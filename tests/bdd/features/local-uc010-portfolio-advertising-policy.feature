@@ -15,8 +15,8 @@
 # publisher_domains, so a seller that declares no policy OMITS the member rather than
 # sending null — the omit-don't-null contract this repo grades everywhere else.
 #
-# @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/portfolio/properties/advertising_policies
-# @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/portfolio/required
+# @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/portfolio/properties/advertising_policies
+# @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/portfolio/required
 Feature: UC-010 get_adcp_capabilities — the seller publishes its advertising policy (local)
 
   @T-UC-010-local-advertising-policy-declared @main-flow @partition @boundary

@@ -43,3 +43,16 @@ Feature: The agent card publishes the host its tenant declares
     When the buyer fetches the agent card naming a seller nobody serves
     Then no card is published
     And the refusal names a seller-side misconfiguration
+
+  # list_creative_formats is a deprecated compatibility task for a sales agent at the pin:
+  # media-buy/list-creative-formats-request.json carries "deprecated": true, and
+  # creative/task-reference/list_creative_formats.mdx says "Sales agents MUST NOT use an
+  # agent-global format list as a purchasability promise". The SDK's description for the
+  # tool ("Returns format_ids needed for sync_creatives") presents it as a prerequisite, so
+  # the seller advertises the pinned request schema's own description instead. The card's
+  # skill is the A2A surface, read on every transport; on MCP the tools/list entry is read
+  # too. REST advertises no tool description.
+  @T-AGENTCARD-deprecated-compatibility-task
+  Scenario: The seller advertises list_creative_formats as the pin's deprecated compatibility task
+    When the buyer fetches the agent card naming the seller by Host
+    Then the seller advertises list_creative_formats with the pinned request schema's description

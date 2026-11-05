@@ -1,0 +1,976 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Creative-related xfail flip candidates — UC-019 and UC-026</title>
+<style>
+  :root{
+    --bg:#fbfaf8; --panel:#fff; --ink:#1b1b1d; --muted:#5d6068; --line:#e2e0da;
+    --red:#a3271f; --green:#1f6b3f; --amber:#8a5a08; --blue:#1f4f8a;
+    --code:#f3f1ec;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#131416; --panel:#1a1c1f; --ink:#e8e6e1; --muted:#a0a3aa; --line:#2d3034;
+      --red:#f08a80; --green:#7fd3a0; --amber:#e0b35c; --blue:#8fbdf0; --code:#202327;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#131416; --panel:#1a1c1f; --ink:#e8e6e1; --muted:#a0a3aa; --line:#2d3034;
+    --red:#f08a80; --green:#7fd3a0; --amber:#e0b35c; --blue:#8fbdf0; --code:#202327;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+    overflow-x:hidden;}
+  .wrap{max-width:1180px;margin:0 auto;padding:40px 24px 90px}
+  h1{font-size:30px;line-height:1.2;margin:0 0 6px;letter-spacing:-.02em}
+  h2{font-size:21px;margin:46px 0 12px;padding-bottom:7px;border-bottom:2px solid var(--line);letter-spacing:-.01em}
+  h3{font-size:16px;margin:28px 0 8px}
+  .sub{color:var(--muted);margin:0 0 28px;font-size:14.5px}
+  code,kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.875em;
+    background:var(--code);padding:1px 5px;border-radius:4px;word-break:break-word}
+  .scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:14px 0;
+    border:1px solid var(--line);border-radius:9px;background:var(--panel)}
+  table{border-collapse:collapse;width:100%;font-size:13.5px;min-width:760px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-weight:650;font-size:12px;text-transform:uppercase;letter-spacing:.055em;
+    color:var(--muted);background:var(--code)}
+  tr:last-child td{border-bottom:none}
+  .red{color:var(--red);font-weight:650}
+  .green{color:var(--green);font-weight:650}
+  .amber{color:var(--amber);font-weight:650}
+  .tag{display:inline-block;font:600 11px/1.5 ui-monospace,Menlo,monospace;
+    padding:1px 7px;border-radius:999px;border:1px solid var(--line);white-space:nowrap}
+  .tag.E{color:var(--green);border-color:var(--green)}
+  .tag.R{color:var(--blue);border-color:var(--blue)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:11px;
+    padding:18px 20px;margin:16px 0}
+  .card.warn{border-left:4px solid var(--amber)}
+  .card.bad{border-left:4px solid var(--red)}
+  .card.good{border-left:4px solid var(--green)}
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:18px 0 6px}
+  .kpi{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+  .kpi b{display:block;font-size:25px;line-height:1.1;letter-spacing:-.02em;font-weight:680}
+  .kpi span{display:block;font-size:11.5px;color:var(--muted);text-transform:uppercase;
+    letter-spacing:.05em;margin-top:5px}
+  ul,ol{padding-left:22px} li{margin:5px 0}
+  .note{border-left:3px solid var(--line);padding:2px 0 2px 15px;color:var(--muted);font-size:14.5px;margin:14px 0}
+  .lead{font-size:17px}
+  footer{margin-top:60px;padding-top:18px;border-top:1px solid var(--line);
+    color:var(--muted);font-size:13px}
+  .nowrap{white-space:nowrap}
+  .cat{display:inline-block;width:1.5em;height:1.5em;line-height:1.5em;text-align:center;
+    border-radius:50%;font-weight:700;font-size:12px;background:var(--code);border:1px solid var(--line)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Creative-related xfails in QUERY and PACKAGES: what would actually flip</h1>
+<p class="sub">
+  Assessment only, no production or routing change &middot; worktree <code>sa-xf-pk</code>,
+  branch <code>assess/xfail-packages</code> at <code>ccd3fe7ca</code> &middot;
+  pinned AdCP <strong>3.2.1</strong> (SDK <code>adcp==9.0.0b2+prs1435.1415.1447.1456</code>,
+  <code>pyproject.toml:10</code>) &middot; baseline run <code>innet_091026_1726</code> &middot; 2026-10-10
+</p>
+
+<div class="card">
+  <p class="lead" style="margin-top:0"><strong>Every claim is tagged.</strong></p>
+  <p style="margin-bottom:0">
+    <span class="tag E">EXECUTION</span> — measured by running the scenarios on
+    <code>noetis-b-vm</code> with the routing lifted, or by reading the per-nodeid record of
+    the baseline run.
+    <span class="tag R">READING</span> — established from source or the pinned schema, not run.
+    A flip prediction without an execution probe is READING, however obvious it looks.
+  </p>
+</div>
+
+<h2>0. The result in one paragraph</h2>
+
+<p class="lead">
+  The creative-related set is <strong>124 items governed by 16 routing entries</strong> — and the
+  single most useful thing measured is that <strong>UC-019's headline number is not what it
+  looks like</strong>. Of its 596 xfailed items, <strong>488 are DORMANT</strong>: a step
+  definition does not exist, the scenario grades nothing, and the conftest reason
+  "spec-production gap" is not what is happening. Only 108 are routed xfails that actually
+  reached production. Within the creative slice the same pattern holds one level deeper:
+  the three creative-approval outlines are routed as a production gap, the production
+  behaviour they demand is <em>already implemented and already graded green by four sibling
+  invariant scenarios</em>, and what blocks them is five <code>pytest.xfail()</code> calls
+  inside Given steps whose stated reason — "No CreativeAssignmentFactory" — is false: that
+  factory is imported 600 lines up in the same file and used by the two Givens immediately
+  above them.
+</p>
+
+<div class="kpis">
+  <div class="kpi"><b>124</b><span>creative-related xfailed items</span></div>
+  <div class="kpi"><b>16</b><span>routing entries governing them</span></div>
+  <div class="kpi"><b>488 / 596</b><span>UC-019 xfails that are dormant, not production</span></div>
+  <div class="kpi"><b>5</b><span>step-level pytest.xfail sites with a false reason</span></div>
+</div>
+
+<h2>1. Routing entries vs items</h2>
+
+<p>
+  Routing for both modules lives entirely in <code>tests/bdd/conftest.py</code>. Neither
+  module has a single line in <code>tests/bdd/e2e_rest_known_failures.txt</code>
+  (<span class="tag E">EXECUTION</span>: <code>grep -c uc019</code> and <code>grep -c uc026</code>
+  both return 0), so there is no e2e ledger to coordinate with. A third mechanism carries
+  more of UC-019 than either: the dormancy converter at <code>tests/bdd/conftest.py:263</code>,
+  which turns a missing step definition into an xfail, baselined in
+  <code>tests/bdd/dormant_scenarios.txt</code>. A fourth is imperative
+  <code>pytest.xfail()</code> inside a step body.
+</p>
+
+<div class="scroll">
+<table>
+<thead><tr><th>Module</th><th>Creative-related xfailed items</th><th>Routing entries</th><th>Mechanism</th></tr></thead>
+<tbody>
+<tr><td>UC-019</td><td class="nowrap">84</td><td class="nowrap">7</td>
+  <td>4 tag members of <code>_UC019_XFAIL_TAGS</code> (conftest.py:3639) + 3 lines of
+  <code>dormant_scenarios.txt</code> (:369, :406, :407). The three approval tags are
+  <em>pre-empted</em> by 5 <code>pytest.xfail()</code> sites in
+  <code>tests/bdd/steps/domain/uc019_query_media_buys.py</code>, which fire first and are
+  the effective routing.</td></tr>
+<tr><td>UC-026</td><td class="nowrap">40</td><td class="nowrap">9</td>
+  <td>5 tag members of <code>_UC026_XFAIL_TAGS</code> (conftest.py:4017) + 4 row-keyed entries
+  in <code>_UC026_PARTITION_SELECTIVE</code> (conftest.py:4274), two of which are shared with
+  non-creative rows.</td></tr>
+</tbody>
+</table>
+</div>
+
+<p class="note">
+  Counts are per-nodeid from <code>innet_091026_1726</code> (<code>bdd_inprocess.json</code> +
+  <code>bdd_e2e.json</code>), keyed on the <code>T-UC-0*</code> marker in each item's
+  <code>keywords</code>. <span class="tag E">EXECUTION</span>. Totals reconcile with the
+  brief: UC-019 441 + 155 = 596, UC-026 186 + 62 = 248.
+</p>
+
+<h2>2. UC-019 — the unexplored module</h2>
+
+<h3>2.1 The structural fact that reframes the 596</h3>
+
+<div class="card bad">
+  <p style="margin-top:0"><strong>488 of UC-019's 596 xfailed items are dormant.</strong>
+  <span class="tag E">EXECUTION</span></p>
+  <p>
+    Each one carries a <code>user_properties</code> entry
+    <code>dormant_scenario: &lt;tag&gt; :: &lt;missing step&gt;</code> and a
+    <code>StepDefinitionNotFoundError</code> in its <code>call</code> phase. Twenty-six
+    scenario tags are affected, all of them the <code>@schema-v3.1</code> generation:
+    <code>partition-currency-budget</code>, <code>partition-cancellation</code>,
+    <code>partition-delivery-status</code>, <code>partition-invoice-recipient</code>,
+    <code>partition-history</code>, <code>partition-valid-actions</code>,
+    <code>partition-targeting-rehydration</code>, the matching boundary outlines, and
+    sixteen <code>inv-*</code> scenarios.
+  </p>
+  <p style="margin-bottom:0">
+    Nothing in <code>_UC019_XFAIL_TAGS</code> mentions any of them — they are not
+    "spec-production gaps", they are unwritten step definitions. Any plan that reads 596 as a
+    production backlog is reading the wrong number by a factor of five and a half.
+  </p>
+</div>
+
+<h3>2.2 The creative slice</h3>
+
+<p>
+  Filtering to creative format identity and creative handling leaves six scenario tags.
+  UC-019 names no <code>format_id</code>, <code>format_kind</code>,
+  <code>format_option_ref</code>, <code>formats_to_provide</code> or <code>v1_format_ref</code>
+  anywhere in its 1 746 lines (<span class="tag E">EXECUTION</span>: regex scan over the
+  feature file returns zero hits), so "creative-related" here means creative <em>approval
+  state</em> and package <em>creative_deadline</em>.
+</p>
+
+<div class="scroll">
+<table>
+<thead><tr><th>Tag</th><th>Items</th><th>Feature lines</th><th>What it demands</th><th>Routed as</th></tr></thead>
+<tbody>
+<tr><td><code>T-UC-019-partition-approval</code></td><td>20</td><td>334–352</td>
+  <td>5 rows: internal creative status → AdCP <code>approval_status</code>, with
+  <code>rejection_reason</code> present/absent</td><td><code>_UC019_XFAIL_TAGS</code></td></tr>
+<tr><td><code>T-UC-019-boundary-approval</code></td><td>28</td><td>364–382</td>
+  <td>7 rows: exact/empty/null/case-mismatch status, plus a nonexistent creative silently
+  omitted</td><td><code>_UC019_XFAIL_TAGS</code></td></tr>
+<tr><td><code>T-UC-019-partition-approval-invalid</code></td><td>4</td><td>353–362</td>
+  <td>An assignment pointing at a creative that does not exist is omitted, no error</td>
+  <td><code>_UC019_XFAIL_TAGS</code></td></tr>
+<tr><td><code>T-UC-019-main</code></td><td>4</td><td>30–43</td>
+  <td>Among six Thens: "each package should include creative approval state when creatives
+  are assigned"</td><td><code>_UC019_XFAIL_TAGS</code></td></tr>
+<tr><td><code>T-UC-019-partition-package-creative-deadline</code></td><td>24</td><td>1105–1126</td>
+  <td>6 rows: package-level <code>creative_deadline</code> overrides the buy level; absence
+  inherits; two malformed-value rows</td><td>dormant baseline</td></tr>
+<tr><td><code>T-UC-019-inv-package-creative-deadline-inheritance</code></td><td>4</td><td>1128–1138</td>
+  <td>Same obligation as one invariant across two packages</td><td>dormant baseline</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>2.3 The approval mapping is implemented, and four scenarios already prove it</h3>
+
+<div class="card good">
+  <p style="margin-top:0">
+    <code>T-UC-019-inv-152-1</code>, <code>-152-2</code>, <code>-152-3</code> and
+    <code>-152-5</code> all <strong>PASS on all four transports</strong> in
+    <code>innet_091026_1726</code> (4 items each, 0 xfailed).
+    <span class="tag E">EXECUTION</span>
+  </p>
+  <p style="margin-bottom:0">
+    They grade BR-RULE-152 directly: <code>approved → approved</code>,
+    <code>rejected + reason → rejected</code> with the reason,
+    <code>in_review → pending_review</code>, and <code>rejection_reason</code> absent when
+    not rejected (feature lines 552–579, 384–392). So <code>_UC019_XFAIL_TAGS</code>' comment
+    "Creative approval mapping — not implemented" (<code>conftest.py:3663</code>) is
+    <strong>factually wrong</strong>. It is implemented and graded.
+  </p>
+</div>
+
+<p>
+  Production: <code>src/core/tools/media_buy_list.py:750</code> is the whole mapping — exact
+  <code>"approved"</code>, exact <code>"rejected"</code>, everything else
+  <code>pending_review</code>. <code>_fetch_creative_approvals</code>
+  (<code>media_buy_list.py:697</code>) reads the assignment rows, loads the creatives through
+  <code>CreativeRepository.get_by_ids(ids, principal_id)</code>, and at line 728–730 does
+  <code>if creative is None: continue</code> — which is exactly the "silently omitted"
+  behaviour <code>partition-approval-invalid</code> and the last boundary row demand.
+  <code>rejection_reason</code> is read only when the status mapped to <code>rejected</code>
+  (:733–736). <span class="tag R">READING</span>
+</p>
+
+<p>
+  Matched row by row against the pin: 3.2.1 <code>media-buy/get-media-buys-response.json</code>
+  declares <code>creative_approvals</code> on the package as "Approval status for each creative
+  assigned to this package. Absent when no creatives have been assigned", and
+  <code>enums/creative-approval-status.json</code> enumerates
+  <code>pending_review | approved | partially_approved | rejected</code>. Every status the
+  twelve rows expect is in that enum; none of them touches
+  <code>partially_approved</code>/<code>approval_scopes</code>, so nothing here is
+  over-specified. <code>docs/media-buy/specification.mdx</code> §"Creative Approval on
+  Packages" carries the same three-state table. <span class="tag R">READING</span>
+</p>
+
+<h3>2.4 What actually blocks them — five false FIXMEs</h3>
+
+<div class="card bad">
+  <p style="margin-top:0"><strong>Five Given steps call
+  <code>pytest.xfail()</code> in their body</strong>, each with the reason "No
+  CreativeAssignmentFactory", at
+  <code>tests/bdd/steps/domain/uc019_query_media_buys.py:632, 647, 662, 677, 692</code>.</p>
+  <p style="margin-bottom:0">
+    <code>CreativeAssignmentFactory</code> is imported at <strong>line 32 of that same
+    file</strong> and used at lines 603–604 and 624–625 by
+    <code>given_package_creative_status</code> and
+    <code>given_package_creative_rejected</code> — the two Givens that make
+    <code>inv-152-*</code> pass. The factory exists (<code>tests/factories/creative.py:187</code>),
+    takes <code>creative_id</code>, <code>status</code> and <code>data</code>, and already
+    seeds real rows. <span class="tag E">EXECUTION</span>
+  </p>
+</div>
+
+<p>
+  Because <code>pytest.xfail()</code> is imperative and fires at the second Given, the
+  conftest tag-xfail on these three tags is dead weight: the item would xfail with or without
+  it. That also means the dormancy tripwire never ran on these scenarios — which hid what the
+  probe below found.
+</p>
+
+<h3>2.5 PROBE: the approval scenarios with the routing lifted</h3>
+
+<p>
+  Probe: replaced the five <code>pytest.xfail()</code> bodies with real
+  <code>CreativeFactory</code> + <code>CreativeAssignmentFactory</code> seeding (and a row
+  delete for the "does not exist" Given), commented the three tags out of
+  <code>_UC019_XFAIL_TAGS</code>, ran
+  <code>cassini test bdd tests/bdd/test_uc019_query_media_buys.py -k creative_approval</code>
+  on <code>noetis-b-vm</code>. <strong>Reverted afterwards</strong> — see §6.
+</p>
+
+<p>
+  39 in-process items selected (the three approval tags carry 39 on a2a/mcp/rest and 13 more
+  on e2e_rest, which this slice does not run). <strong>12 passed, 27 failed</strong> — and not
+  one of the 27 failed on production behaviour.
+</p>
+
+<div class="scroll">
+<table>
+<thead><tr><th>Row</th><th>a2a</th><th>mcp</th><th>rest</th><th>Cause of the failure</th></tr></thead>
+<tbody>
+<tr><td colspan="5"><strong><code>T-UC-019-partition-approval</code></strong></td></tr>
+<tr><td><code>approved_creative</code></td>
+  <td class="green">PASS</td><td class="green">PASS</td><td class="green">PASS</td><td>—</td></tr>
+<tr><td><code>pending_review_explicit</code> (submitted)</td>
+  <td class="green">PASS</td><td class="green">PASS</td><td class="green">PASS</td><td>—</td></tr>
+<tr><td><code>pending_review_catchall</code> (processing)</td>
+  <td class="green">PASS</td><td class="green">PASS</td><td class="green">PASS</td><td>—</td></tr>
+<tr><td><code>rejected_without_reason</code></td>
+  <td class="green">PASS</td><td class="green">PASS</td><td class="green">PASS</td><td>—</td></tr>
+<tr><td><code>rejected_with_reason</code></td>
+  <td class="red">FAIL</td><td class="red">FAIL</td><td class="red">FAIL</td>
+  <td><strong>Unbound Then.</strong> The Examples cell says
+  <code>rejection_reason should be "Image too dark"</code>; the parser at
+  <code>uc019_query_media_buys.py:1809</code> is
+  <code>'the rejection_reason should be "{reason}"'</code>. One word. Its sibling at
+  <code>:1827</code> (<code>rejection_reason should be absent</code>) has no "the" and is why
+  the other four rows pass.</td></tr>
+<tr><td colspan="5"><strong><code>T-UC-019-boundary-approval</code></strong> — 7 rows, 21
+  items, all red</td></tr>
+<tr><td>5 rows: exact approved / exact rejected / rejected + empty data / empty string /
+  <code>"APPROVED"</code></td>
+  <td class="red">FAIL</td><td class="red">FAIL</td><td class="red">FAIL</td>
+  <td><strong>The whole <code>&lt;expected_outcome&gt;</code> column is unbound.</strong>
+  Three Then texts, none defined anywhere:
+  <code>approval_status should be "&lt;&gt;"</code>,
+  <code>… with rejection_reason</code>, <code>… with null rejection_reason</code>.</td></tr>
+<tr><td><code>creative.status is null</code></td>
+  <td class="red">FAIL</td><td class="red">FAIL</td><td class="red">FAIL</td>
+  <td>Given unbound: the cell spells it <code>internal status null</code>, unquoted, so it
+  matches no parser its five quoted siblings do.</td></tr>
+<tr><td><code>creative not found for assignment</code></td>
+  <td class="red">FAIL</td><td class="red">FAIL</td><td class="red">FAIL</td>
+  <td>Given unbound (<code>has a nonexistent creative_id</code>), and see the row below —
+  the state is unconstructible anyway.</td></tr>
+<tr><td colspan="5"><strong><code>T-UC-019-partition-approval-invalid</code></strong></td></tr>
+<tr><td>(single scenario)</td>
+  <td class="red">FAIL</td><td class="red">FAIL</td><td class="red">FAIL</td>
+  <td><strong>The database forbids the premise.</strong>
+  <code>psycopg2.errors.ForeignKeyViolation … "creative_assignments_creative_id_tenant_id_principal_id_fkey"</code>
+  — "Key (creative_id, tenant_id, principal_id)=(cr-999, test_tenant, buyer-001) is still
+  referenced from table creative_assignments".</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="card good">
+  <p style="margin-top:0"><strong>Reading of the probe.</strong>
+  <span class="tag E">EXECUTION</span></p>
+  <ul style="margin-bottom:0">
+    <li><strong>12 of the 15 in-process <code>partition-approval</code> items flip to a real
+      PASS</strong> the moment the five Given stubs do their job. Four of the five mappings
+      the pin defines are served correctly on all three transports today.</li>
+    <li>The 13th fails on a <strong>one-word</strong> difference between an Examples cell and
+      a parser.</li>
+    <li><strong><code>boundary-approval</code> is not a production gap; it is dormant on the
+      Then side</strong>, and the Given stub is what has been hiding that. Lifting its tag
+      without writing those three Thens would turn 28 routed xfails into 28 items that pass or
+      fail on nothing. This is trap T2 and it is the reason the probe was worth running.</li>
+    <li><strong><code>partition-approval-invalid</code> asserts a state this schema cannot
+      hold.</strong> <code>src/core/database/models.py:1106–1109</code> puts a composite
+      foreign key <code>(creative_id, tenant_id, principal_id) → creatives</code> on
+      <code>creative_assignments</code> with no <code>ON DELETE</code>, so "an assignment
+      whose creative does not exist" is unreachable in every environment. Which also means
+      production's <code>if creative is None: continue</code>
+      (<code>media_buy_list.py:728–730</code>) is reachable only the way its own comment at
+      <code>:717–721</code> describes — a <code>creative_id</code> that exists under
+      <em>another principal</em>, which the principal-scoped
+      <code>get_by_ids</code> will not return. That is the state the scenario should name, and
+      it grades something more valuable than the one it names now: cross-principal approval
+      leakage.</li>
+  </ul>
+</div>
+
+<h3>2.6 Package <code>creative_deadline</code> — small production change, real step work</h3>
+
+<p>
+  <code>GetMediaBuysPackage</code> <strong>already declares <code>creative_deadline</code></strong>
+  — inherited from the library type (<span class="tag E">EXECUTION</span>:
+  <code>'creative_deadline' in GetMediaBuysPackage.model_fields</code> is <code>True</code>).
+  Production simply never passes it: the constructor at
+  <code>src/core/tools/media_buy_list.py:336–349</code> supplies eleven arguments and
+  <code>creative_deadline</code> is not among them. The pin declares it on the package
+  (<code>3.2/core/package.json</code>: "ISO 8601 timestamp for creative upload or change
+  deadline for this package … When absent, the media buy's <code>creative_deadline</code>
+  applies") and <code>specification.mdx:1025</code> states the inheritance in the same words
+  the scenario does. <span class="tag R">READING</span>
+</p>
+
+<p>
+  The production side is one argument: <code>creative_deadline=_blob("creative_deadline")</code>.
+  <code>_resolve_blob_field</code> (<code>media_buy_list.py:412</code>) validates the persisted
+  value against the model annotation and, on a mismatch, degrades to <code>None</code> and
+  appends an advisory to <code>response.errors[]</code> — which is precisely what the two
+  "Invalid partitions" rows are about.
+</p>
+
+<div class="card warn">
+  <p style="margin-top:0"><strong>But those two rows demand a code the protocol does not
+  have.</strong> <span class="tag E">EXECUTION</span></p>
+  <p style="margin-bottom:0">
+    They assert <code>"SCHEMA_VIOLATION"</code>.
+    <code>SCHEMA_VIOLATION</code> is <strong>not among the pin's 120 error codes</strong>
+    (<code>3.2/enums/error-code.json</code>) and appears <strong>nowhere under
+    <code>src/</code></strong>. The advisory this machinery emits is
+    <code>CONFIGURATION_ERROR</code> / <code>terminal</code>
+    (<code>media_buy_list.py:77–78</code>) — the same shape the already-graduated
+    <code>T-UC-019-inv-150-11</code> asserts for an unmapped persisted status. Those two rows
+    need regrounding to <code>CONFIGURATION_ERROR</code>, not production work. Same defect
+    class as the <code>STATUS_FILTER_INVALID_VALUE</code> and <code>principal_id_missing</code>
+    corrections already recorded in <code>conftest.py:3640</code> and <code>:3694</code>.
+  </p>
+</div>
+
+<p>
+  The test side is the real cost. Missing and needed: 2 Givens for the outline
+  (<code>media buy "&lt;&gt;" carries buy creative_deadline "&lt;&gt;"</code> and its "no"
+  form), 1 for the invariant, and <strong>five Thens that do not exist anywhere</strong>
+  — including <code>the response should be flagged as schema-invalid for "&lt;&gt;" with code
+  "&lt;&gt;"</code>, which <span class="tag E">EXECUTION</span>
+  (<code>git grep "schema-invalid" -- tests/bdd/steps/</code>) shows is unbound. That one Then
+  is shared by <strong>six other dormant UC-019 outlines</strong>
+  (<code>currency-budget</code>, <code>cancellation</code>, <code>confirmed-at</code> and their
+  boundary siblings), so writing it once unlocks far more than the creative slice — the single
+  highest-leverage step definition in this module.
+</p>
+
+<h3>2.7 <code>T-UC-019-main</code> — two blockers, and the creative one is in the Given</h3>
+
+<p>
+  Its routed reason (<code>conftest.py:3652–3661</code>) is that packages omit the flight
+  window. Whether or not that is current — <code>media_buy_list.py:342–343</code> does pass
+  <code>start_time</code>/<code>end_time</code> through <code>_blob()</code>, so the failure
+  would be an unpopulated <code>package_config</code> rather than an unpopulated response
+  field — the scenario has a <em>second</em>, independent blocker on its creative Then.
+  <code>then_creative_approval_state</code>
+  (<code>tests/bdd/steps/domain/uc019_query_media_buys.py:1318</code>) ends with
+  <code>assert packages_with_approvals &gt; 0, "Step claims 'when creatives are assigned' but
+  none … had creative_approvals populated — test setup must assign creatives"</code>, and the
+  scenario's only Given
+  (<code>given_principal_owns_media_buy_with_dates</code>, :156) seeds a
+  <code>MediaBuyFactory</code> row and no creative at all. Fixing the flight window would move
+  this scenario from one red Then to the next. <span class="tag R">READING</span>
+</p>
+
+<h2>3. UC-026 — the creative slice, and what 051877652 already settles</h2>
+
+<div class="card warn">
+  <p style="margin-top:0"><strong>Superseded by <code>051877652</code>
+  (<code>work/epic-8qela-pipeline</code>, not in this base):</strong></p>
+  <ul style="margin-bottom:0">
+    <li>Every judgement about what <code>the outcome should be &lt;outcome&gt;</code> grades.
+      On that branch <code>_assert_requested_package_effects</code>
+      (new, <code>tests/bdd/steps/domain/uc026_package_media_buy.py:2088</code>) reads each
+      requested package field off the returned package, with
+      <code>format_ids</code> handled as a subset check at :2112–2117 and any
+      <code>list</code>-valued field (so <code>creative_assignments</code>) length-checked at
+      :2152–2160. The <code>format_ids</code> rows of
+      <code>partition-format-ids</code>/<code>boundary-format-ids</code> that currently pass
+      vacuously are graded there.</li>
+    <li>The keyword/negative-keyword regroundings to <code>UNSUPPORTED_FEATURE</code>. None of
+      those rows are creative-related, so they do not appear below.</li>
+    <li><strong>Not</strong> superseded: one gap stays open on that branch too —
+      <code>format_ids_omitted</code> rows send no <code>format_ids</code>, so
+      <code>_assert_requested_package_effects</code> has nothing to look up and the
+      "defaults to all product formats" claim in their outcome cell still grades nothing.
+      See trap T1.</li>
+  </ul>
+</div>
+
+<h3>3.1 The format-selector refusal code: production is right, four scenarios are not</h3>
+
+<div class="card good">
+  <p style="margin-top:0"><strong>Four items demand <code>INVALID_REQUEST</code> where the pin
+  gives <code>VALIDATION_ERROR</code>.</strong> <span class="tag R">READING</span>, from the
+  pinned enum and the written spec.</p>
+  <p>
+    3.2.1 <code>enums/error-code.json</code> splits them explicitly:<br>
+    <code>INVALID_REQUEST</code> — "Request is malformed, missing required fields, or
+    <strong>violates schema constraints</strong>."<br>
+    <code>VALIDATION_ERROR</code> — "Request contains invalid field values or
+    <strong>violates business rules beyond schema validation</strong>."
+  </p>
+  <p>
+    A <code>format_id</code> the target product does not carry is a business rule beyond
+    schema validation. And <code>docs/media-buy/specification.mdx:1040</code> lists
+    <code>VALIDATION_ERROR</code> ("Request format or parameter errors") in the media-buy
+    protocol's own error set while never listing <code>INVALID_REQUEST</code> at all.
+  </p>
+  <p style="margin-bottom:0">
+    Production refuses correctly: <code>src/core/tools/media_buy_create.py:3220–3245</code>
+    computes <code>requested_format_keys - product_format_keys</code> and raises
+    <code>AdCPValidationError(field="packages[n].format_ids",
+    details=ValidationDetails(product_id=…, rejected_value=…, accepted_values=…))</code>.
+    <code>AdCPValidationError._code</code> is <code>ErrorCode.VALIDATION_ERROR</code>
+    (<code>src/core/exceptions.py:449–452</code>). The refusal is present, attributed to the
+    right field, and carries the accepted set. The conftest reason "a format_id the product
+    does not carry is <strong>accepted instead of refused</strong>"
+    (<code>conftest.py:4287</code>) is factually wrong — it is refused, with a different code
+    than the scenario names.
+  </p>
+</div>
+
+<p>
+  This is the same wrong premise the sibling pricing-option entries carry
+  ("Production returns 'validation_error' instead of AdCP-spec 'INVALID_REQUEST'",
+  <code>conftest.py:4405–4409</code>), which is out of this scope but shares the root cause:
+  somewhere a reading took <code>INVALID_REQUEST</code> as the only legitimate refusal code
+  for a bad parameter. The pin disagrees for anything past schema shape. The graduations that
+  <em>do</em> rest on <code>INVALID_REQUEST</code> — <code>ext-g-*</code>,
+  <code>inv-197-4</code> — are all DTO/pydantic refusals, i.e. genuine schema-constraint
+  violations, so the distinction holds cleanly.
+</p>
+
+<h3>3.2 <code>format_ids</code> defaulting: the pin forbids what two scenarios demand</h3>
+
+<div class="card good">
+  <p style="margin-top:0">
+    3.2.1 <code>core/package.json</code> on <code>format_ids</code>:
+    "Legacy named-format IDs <strong>supplied for this package on create_media_buy</strong>.
+    Sellers SHOULD echo this field <strong>whenever the request included it</strong> …
+    <strong>Omitted means the request did not carry legacy format_ids</strong>."
+    <span class="tag R">READING</span>
+  </p>
+  <p style="margin-bottom:0">
+    The field is a request echo. A seller that returns the product's formats for a package
+    that supplied none is inventing a wire value the buyer never sent — the pin's own
+    sentence rules it out. <code>T-UC-026-inv-197-3</code> ("format_ids omitted
+    <strong>defaults to all product formats</strong>", feature line 558) and the
+    <code>then_package_default_formats</code> assertion inside
+    <code>T-UC-026-main-required-fields</code>
+    (<code>tests/bdd/steps/domain/uc026_package_media_buy.py:1747–1770</code>, which compares
+    the response's <code>format_ids</code> set for equality against
+    <code>ctx["default_product"].format_ids</code>) are both over-specified against 3.2.1.
+    They were written against a pre-3.2 reading.
+  </p>
+</div>
+
+<p>
+  Note what production <em>does</em> do, which is the right thing and is invisible to these
+  scenarios: <code>media_buy_create.py:3299+</code> ("Fallback to product's formats if no
+  request format_ids") defaults <code>format_ids_to_use</code> — the list handed to the
+  adapter and persistence — while the response package is built by
+  <code>Package.echoing(package, …)</code> from the <em>request</em> package
+  (<code>media_buy_create.py:3926–3933</code>). Effective selection defaults; the wire echo
+  does not. That is the pin's shape. <span class="tag R">READING</span>
+</p>
+
+<h3>3.3 <code>format_ids_to_provide</code>: the one place the canonical design matters here</h3>
+
+<p>
+  The second failing assertion in <code>T-UC-026-main-required-fields</code> is a real,
+  grounded obligation and a real gap. Production sets
+  <code>format_ids_to_provide=package.format_ids</code>
+  (<code>media_buy_create.py:3932</code>) — the request echo again — so a package that omitted
+  <code>format_ids</code> gets <code>None</code>, and
+  <code>then_package_formats_to_provide</code> (<code>uc026_package_media_buy.py:1780</code>)
+  fails on its first assertion. <span class="tag R">READING</span>
+</p>
+
+<p>
+  Under 3.2.1 the fix is not "echo the effective list". <code>formats_to_provide</code> is the
+  canonical field — "Immutable canonical creative contracts established for this package …
+  each entry is a <code>PackageFormatSnapshot</code>", <code>minItems: 1</code> — and
+  <code>format_ids_to_provide</code> is explicitly "<strong>DEPRECATED in 3.2.</strong> Legacy
+  named-format projection of <code>formats_to_provide</code>". So this is the one item in my
+  scope that maps onto the format-kind staged plan: snapshot emission, with
+  <code>format_ids_to_provide</code> as a derived projection
+  (<code>docs/audits/format-kind-canonical-analysis.html</code> §7, the selectors/emission
+  stage). <span class="tag R">READING</span>
+</p>
+
+<div class="card warn">
+  <p style="margin:0">
+    <strong>The format-kind design will not flip anything else in either module.</strong>
+    <span class="tag E">EXECUTION</span>: a regex scan of both feature files for
+    <code>format_kind</code>, <code>format_option</code>, <code>v1_format_ref</code>,
+    <code>formats_to_provide</code>, <code>formats_pending</code> returns hits only on
+    <code>format_ids_to_provide</code> in UC-026 (lines 14, 58, 63, 76, 78) and
+    <strong>nothing at all in UC-019</strong>. Neither module exercises the canonical arm, so
+    the brief's category 1 — "blocked only because comparisons key on the legacy pair" — has
+    exactly one member here, and it is this assertion.
+  </p>
+</div>
+
+<h3>3.4 <code>creative_assignments</code> on <code>affected_packages</code></h3>
+
+<p>
+  Three entries (12 items) turn on the same production gap. Production <em>applies</em> the
+  replacement correctly — <code>src/core/tools/media_buy_update.py:1160–1213</code> deletes
+  assignments absent from the new list and upserts the rest, which is BR-RULE-024 INV-2 — but
+  what it <em>returns</em> cannot show it. <code>_affected_package</code>
+  (<code>media_buy_update.py:159–212</code>) constructs <code>AffectedPackage</code> with
+  <code>package_id</code>, <code>paused</code>, <code>budget</code>, <code>product_id</code>
+  and <code>changes_applied</code> — no <code>creative_assignments</code>, and its own
+  docstring says <code>targeting_overlay</code> "is NOT carried yet". So
+  <code>then_pkg_creatives</code> (<code>uc026_package_media_buy.py:2886–2894</code>) fails on
+  <code>assert actual_ca is not None</code>, with an error message that already names the
+  fix. <span class="tag R">READING</span>
+</p>
+
+<p>
+  Grounded: 3.2.1 <code>media-buy/update-media-buy-response.json</code> —
+  <code>affected_packages</code> is "Array of <strong>full Package objects showing complete
+  post-update state</strong> for each modified package … a state snapshot, not a sparse delta:
+  sellers MUST NOT return <code>package_id</code>-only stubs", items <code>$ref</code>
+  <code>core/package.json</code>, which declares <code>creative_assignments</code>. This is
+  <strong>salesagent-amney</strong> exactly, scoped to its creative half.
+</p>
+
+<h2>4. Ranked shortlist</h2>
+
+<p class="note">
+  Category key — <span class="cat">1</span> blocked on a design we now have ·
+  <span class="cat">2</span> production gap with a known fix ·
+  <span class="cat">3</span> over-specified, flips by regrounding the scenario ·
+  <span class="cat">4</span> vacuous (a trap, not a win) ·
+  <span class="cat">5</span> genuinely blocked.
+</p>
+
+<div class="scroll">
+<table>
+<thead><tr>
+  <th>#</th><th>Scenario / rows</th><th>Items</th><th>Routing entry</th><th>Cat</th>
+  <th>Blocker</th><th>Smallest change that flips it</th><th>Confidence</th>
+</tr></thead>
+<tbody id="rank">
+<tr>
+  <td>1</td>
+  <td><code>T-UC-019-partition-approval</code> — rows <code>approved_creative</code>,
+    <code>pending_review_explicit</code>, <code>pending_review_catchall</code>,
+    <code>rejected_without_reason</code></td>
+  <td>16<br><span style="color:var(--muted);font-size:12px">12 measured + 4 e2e_rest</span></td>
+  <td><code>_UC019_XFAIL_TAGS</code></td>
+  <td><span class="cat">2</span></td>
+  <td>Five <code>pytest.xfail()</code> Given stubs, reason false on both halves
+    (<code>uc019_query_media_buys.py:632–705</code>)</td>
+  <td>Replace the five bodies with <code>CreativeFactory</code> +
+    <code>CreativeAssignmentFactory</code> seeding, copying the two working Givens 40 lines
+    above (<code>:589–629</code>). ~40 lines, no production change.</td>
+  <td class="green">HIGH <span class="tag E">EXECUTION</span></td>
+</tr>
+<tr>
+  <td>2</td>
+  <td><code>T-UC-019-partition-approval</code> — row <code>rejected_with_reason</code></td>
+  <td>4</td>
+  <td>same entry</td>
+  <td><span class="cat">2</span></td>
+  <td>#1's stubs, plus an unbound Then: parser has a leading "the" the Examples cell lacks</td>
+  <td>#1, plus delete <code>the&nbsp;</code> from the pattern at
+    <code>uc019_query_media_buys.py:1809</code> (its sibling at <code>:1827</code> is already
+    spelled the cell's way).</td>
+  <td class="green">HIGH <span class="tag E">EXECUTION</span></td>
+</tr>
+<tr>
+  <td>3</td>
+  <td><code>T-UC-026-ext-e</code>; <code>partition-format-ids[unsupported_format]</code>;
+    <code>boundary-format-ids[one unsupported format_id among valid ones]</code> and
+    <code>[format_id from different product]</code></td>
+  <td>16</td>
+  <td>1 tag member + 2 row-keyed entries</td>
+  <td><span class="cat">3</span></td>
+  <td>Scenarios demand <code>INVALID_REQUEST</code>; 3.2.1 assigns that to schema-constraint
+    violations and <code>VALIDATION_ERROR</code> to "business rules beyond schema validation",
+    which is what an unsupported format_id is. Production already refuses, correctly.</td>
+  <td>Reground four rows to <code>error "VALIDATION_ERROR" with suggestion</code>. No
+    production change. Worth strengthening at the same time: the refusal carries
+    <code>field="packages[0].format_ids"</code> plus <code>rejected_value</code> and
+    <code>accepted_values</code>, none of which any row reads.</td>
+  <td class="green">HIGH <span class="tag R">READING</span></td>
+</tr>
+<tr>
+  <td>4</td>
+  <td><code>T-UC-019-boundary-approval</code> — 5 rows: exact <code>approved</code>, exact
+    <code>rejected</code>, <code>rejected</code> + empty data, empty string,
+    <code>"APPROVED"</code></td>
+  <td>20<br><span style="color:var(--muted);font-size:12px">15 measured + 5 e2e_rest</span></td>
+  <td><code>_UC019_XFAIL_TAGS</code></td>
+  <td><span class="cat">2</span></td>
+  <td>#1's stubs AND three unbound Then texts covering the entire
+    <code>&lt;expected_outcome&gt;</code> column</td>
+  <td>#1, plus three Then definitions. Production satisfies all five mappings —
+    <code>_map_creative_status</code> (<code>media_buy_list.py:750</code>) is exact-match on
+    two values and <code>pending_review</code> otherwise, which is what every one of these
+    rows asserts.</td>
+  <td class="amber">MED-HIGH<br><span class="tag E">EXECUTION</span> for the dormancy,
+    <span class="tag R">READING</span> for the mappings</td>
+</tr>
+<tr>
+  <td>5</td>
+  <td><code>T-UC-026-inv-197-3</code>, and the
+    <code>then_package_default_formats</code> assertion of
+    <code>T-UC-026-main-required-fields</code></td>
+  <td>8</td>
+  <td>2 tag members</td>
+  <td><span class="cat">3</span></td>
+  <td>Both demand <code>format_ids</code> defaulted to the product's formats; 3.2.1
+    <code>core/package.json</code> makes the field a request echo and says omission means the
+    request omitted it. Written against a pre-3.2 reading.</td>
+  <td>Reground: assert <code>format_ids</code> is <em>absent</em> when the request omitted it,
+    and move the "all product formats" claim onto <code>formats_to_provide</code> (row 8). No
+    production change for this half.</td>
+  <td class="green">HIGH <span class="tag R">READING</span></td>
+</tr>
+<tr>
+  <td>6</td>
+  <td><code>T-UC-026-inv-201-3</code>;
+    <code>partition-replacement[replace_creative_assignments]</code>;
+    <code>boundary-replacement[creative_assignments provided]</code></td>
+  <td>12</td>
+  <td>1 tag member + 2 row-keyed entries (both shared with
+    <code>optimization_goals</code> rows)</td>
+  <td><span class="cat">2</span></td>
+  <td><code>AffectedPackage</code> carries <code>package_id</code>, <code>paused</code>,
+    <code>budget</code>, <code>product_id</code>, <code>changes_applied</code> and nothing
+    else (<code>media_buy_update.py:203–212</code>), so the replacement production
+    <em>does</em> apply at <code>:1160–1213</code> is unreadable on the response. This is
+    <strong>salesagent-amney</strong>.</td>
+  <td>Make <code>_affected_package</code> return full post-update package state, reading
+    assignments off <code>uow.assignments</code>. One function, and it closes the
+    <code>optimization_goals</code> and <code>targeting_overlay</code> rows of the same two
+    outlines with it.</td>
+  <td class="amber">MED-HIGH <span class="tag R">READING</span></td>
+</tr>
+<tr>
+  <td>7</td>
+  <td><code>T-UC-019-partition-package-creative-deadline</code> (4 valid rows);
+    <code>T-UC-019-inv-package-creative-deadline-inheritance</code></td>
+  <td>20</td>
+  <td>3 lines of <code>dormant_scenarios.txt</code></td>
+  <td><span class="cat">2</span></td>
+  <td>Production never passes <code>creative_deadline</code> to the package constructor
+    (<code>media_buy_list.py:336–349</code>), though the field is already declared on
+    <code>GetMediaBuysPackage</code>. Three Givens and five Thens are unwritten.</td>
+  <td>One constructor argument — <code>creative_deadline=_blob("creative_deadline")</code> —
+    plus the step definitions. The shared
+    <code>the response should be flagged as schema-invalid…</code> Then also unlocks six other
+    dormant UC-019 outlines, so write that one first.</td>
+  <td class="amber">MEDIUM <span class="tag R">READING</span></td>
+</tr>
+<tr>
+  <td>8</td>
+  <td><code>T-UC-026-main-required-fields</code> —
+    <code>format_ids_to_provide</code> assertion</td>
+  <td>4<br><span style="color:var(--muted);font-size:12px">same items as row 5</span></td>
+  <td><code>_UC026_XFAIL_TAGS</code></td>
+  <td><span class="cat">1</span></td>
+  <td><code>format_ids_to_provide=package.format_ids</code>
+    (<code>media_buy_create.py:3932</code>) echoes the request instead of projecting the
+    outstanding creative requirements. The only item in either module that the format-kind
+    canonical design moves.</td>
+  <td>Emit <code>formats_to_provide</code> snapshots from the selected product declarations and
+    derive <code>format_ids_to_provide</code> from them — the selectors/emission stage of
+    <code>format-kind-canonical-analysis.html</code> §7. Not a standalone fix.</td>
+  <td class="amber">MEDIUM <span class="tag R">READING</span></td>
+</tr>
+<tr>
+  <td>9</td>
+  <td><code>T-UC-019-partition-approval-invalid</code>;
+    <code>boundary-approval[creative not found for assignment]</code></td>
+  <td>8</td>
+  <td><code>_UC019_XFAIL_TAGS</code></td>
+  <td><span class="cat">3</span></td>
+  <td>The premise is unconstructible: composite FK
+    <code>(creative_id, tenant_id, principal_id) → creatives</code> on
+    <code>creative_assignments</code> (<code>models.py:1106–1109</code>), no
+    <code>ON DELETE</code>. Measured as a <code>ForeignKeyViolation</code>.</td>
+  <td>Reground both to the state the schema permits and that production's own comment
+    describes: an assignment whose creative row belongs to <em>another principal</em>, which
+    principal-scoped <code>get_by_ids</code> does not return, so the entry is omitted. Grades
+    cross-principal approval leakage instead of an impossible row.</td>
+  <td class="green">HIGH <span class="tag E">EXECUTION</span></td>
+</tr>
+<tr>
+  <td>10</td>
+  <td><code>T-UC-019-partition-package-creative-deadline</code> — 2 invalid rows</td>
+  <td>8</td>
+  <td>same dormant lines as row 7</td>
+  <td><span class="cat">3</span></td>
+  <td>Assert <code>code "SCHEMA_VIOLATION"</code>, which is not among the pin's 120 codes and
+    is absent from <code>src/</code></td>
+  <td>Reground to <code>CONFIGURATION_ERROR</code> / <code>terminal</code>, the advisory this
+    machinery emits (<code>media_buy_list.py:77–78</code>) and the shape the graduated
+    <code>inv-150-11</code> already asserts. Then row 7's one production argument serves them
+    too.</td>
+  <td class="green">HIGH <span class="tag E">EXECUTION</span></td>
+</tr>
+<tr>
+  <td>11</td>
+  <td><code>T-UC-019-boundary-approval[creative.status is null]</code></td>
+  <td>4</td>
+  <td><code>_UC019_XFAIL_TAGS</code></td>
+  <td><span class="cat">5</span></td>
+  <td>Given text <code>internal status null</code> is unquoted and matches no parser its five
+    quoted siblings use. Measured.</td>
+  <td>Either quote it in the Examples cell like its siblings, or add a parser for the unquoted
+    spelling. Production maps it to <code>pending_review</code> either way — the column is NOT
+    NULL, so "null" arrives as a string and falls through the catch-all.</td>
+  <td class="amber">MEDIUM <span class="tag E">EXECUTION</span> for the cause</td>
+</tr>
+<tr>
+  <td>12</td>
+  <td><code>T-UC-019-main</code></td>
+  <td>4</td>
+  <td><code>_UC019_XFAIL_TAGS</code></td>
+  <td><span class="cat">5</span></td>
+  <td>Two independent blockers. The creative one is in the Given: the scenario seeds a media
+    buy and no creative, and its creative Then requires at least one package with populated
+    <code>creative_approvals</code>.</td>
+  <td>Add a creative-assignment Given, after the flight-window question is settled. Not worth
+    touching before row 1 lands, since it needs the same seeding.</td>
+  <td class="amber">LOW-MED <span class="tag R">READING</span></td>
+</tr>
+<tr>
+  <td>13</td>
+  <td><code>T-UC-026-main-full-config</code></td>
+  <td>4</td>
+  <td><code>_UC026_XFAIL_TAGS</code></td>
+  <td><span class="cat">5</span></td>
+  <td>Creative-adjacent only. Per <code>conftest.py:4019</code> it fails at the DTO boundary on
+    <code>optimization_goals</code> missing <code>kind</code> and
+    <code>targeting_overlay.audiences</code> rejected as extra-forbidden — neither is a
+    creative concern, and both run before the echo its only Then grades.</td>
+  <td>Belongs to whoever owns <code>optimization_goals</code> and the targeting DTO. Deprioritize
+    in this slice.</td>
+  <td class="amber">LOW <span class="tag R">READING</span></td>
+</tr>
+</tbody>
+</table>
+</div>
+
+<h2>5. Reasons found factually wrong</h2>
+
+<div class="scroll">
+<table>
+<thead><tr><th>Location</th><th>Stated reason</th><th>Reality</th></tr></thead>
+<tbody>
+<tr>
+  <td><code>conftest.py:3663</code></td>
+  <td>"Creative approval mapping — not implemented"</td>
+  <td>Implemented at <code>media_buy_list.py:750</code> and graded green on all four
+  transports by <code>inv-152-1/2/3/5</code>. <span class="tag E">EXECUTION</span></td>
+</tr>
+<tr>
+  <td><code>uc019_query_media_buys.py:632, 647, 662, 677, 692</code> (base tree)</td>
+  <td>"SPEC-PRODUCTION GAP: No CreativeAssignmentFactory"</td>
+  <td>Two wrong claims in one line. The factory exists and is imported at line 32 of the same
+  file, used at :603 and :624. And the blocker is the harness, not the spec or production.
+  <span class="tag E">EXECUTION</span></td>
+</tr>
+<tr>
+  <td><code>conftest.py:4287</code> and <code>:4292</code></td>
+  <td>"a format_id the product does not carry is <em>accepted instead of refused</em> with
+  INVALID_REQUEST"</td>
+  <td>It is refused, at <code>media_buy_create.py:3238</code>, with field attribution and the
+  accepted set — as <code>VALIDATION_ERROR</code>, which is the code 3.2.1 assigns to a
+  business rule beyond schema validation. <span class="tag R">READING</span></td>
+</tr>
+<tr>
+  <td><code>_UC019_XFAIL_TAGS</code> umbrella reason, applied to 4 tags</td>
+  <td>"UC-019 spec-production gap — feature not yet implemented"</td>
+  <td>For the three approval tags the feature IS implemented; for <code>main</code> there are
+  two blockers and the creative one is a Given that seeds no creative.</td>
+</tr>
+<tr>
+  <td>Feature lines 1125–1126 (rows of a dormant outline)</td>
+  <td><code>code "SCHEMA_VIOLATION"</code></td>
+  <td>Not one of the pin's 120 codes and absent from <code>src/</code>. The emitted advisory is
+  <code>CONFIGURATION_ERROR</code>/<code>terminal</code>. <span class="tag E">EXECUTION</span></td>
+</tr>
+</tbody>
+</table>
+</div>
+
+<h2>6. Traps — would pass while grading nothing</h2>
+
+<div class="card warn">
+  <p style="margin-top:0"><strong>T1 · <code>format_ids_omitted</code> rows.</strong>
+  <code>T-UC-026-partition-format-ids[*-format_ids_omitted]</code> and
+  <code>T-UC-026-boundary-format-ids[*-format_ids omitted (defaults to all product
+  formats)]</code> are <strong>already passing</strong> (not xfailed) on all four transports,
+  and their outcome cells assert the defaulting that §3.2 shows the pin forbids. They are
+  graded by <code>the outcome should be success…</code>, whose request-derived reader has
+  nothing to look up when the request carries no <code>format_ids</code> — so they still grade
+  nothing after <code>051877652</code>. Do not read them as coverage of the defaulting
+  question, and do not "fix" production to make
+  <code>inv-197-3</code> agree with them.</p>
+</div>
+
+<div class="card warn">
+  <p style="margin-top:0"><strong>T2 · Graduating the approval outlines on a partial Given
+  fix.</strong> Wiring only the five Given steps makes
+  <code>T-UC-019-boundary-approval</code> go <em>dormant</em>, not green: its entire
+  <code>&lt;expected_outcome&gt;</code> column is unbound. Measured —
+  see §2.5. A graduation that removed the tag without writing those Thens would convert 28
+  routed xfails into 28 silently ungraded items.</p>
+</div>
+
+<div class="card warn">
+  <p style="margin-top:0"><strong>T3 · <code>then_any_creative_approval_status</code></strong>
+  (<code>uc019_query_media_buys.py:1782</code>) scans every approval on every package and
+  returns on the first whose status matches, so it cannot tell "the creative I named has this
+  status" from "some creative does". It is sound for the single-creative
+  <code>inv-152-*</code> scenarios it currently serves; it must not be reused by a
+  multi-creative scenario. The row-specific sibling at :1758 keys on
+  <code>creative_id</code> and is the one to extend.</p>
+</div>
+
+<div class="card warn">
+  <p style="margin-top:0"><strong>T4 · The approval Thens read the reconstructed typed
+  response</strong>, via <code>getattr</code> chains off <code>_get_media_buys(ctx)</code>,
+  not through a wire helper. These are success paths, so <code>tests/CLAUDE.md</code> permits
+  the typed payload — but a graduation should note that no wire-envelope assertion exists for
+  <code>creative_approvals</code> on any transport.</p>
+</div>
+
+<h2>7. Genuinely blocked, with the size named</h2>
+
+<ul>
+  <li><strong><code>T-UC-019-boundary-approval</code> rows "status is null" and "creative not
+    found for assignment"</strong> — their Given texts
+    (<code>has internal status null</code> without quotes;
+    <code>has a nonexistent creative_id</code>) match no parser even after the Given fix.
+    Needs two step definitions, or a feature correction to spell the null row like its
+    siblings. <span class="tag E">EXECUTION</span></li>
+  <li><strong>The <code>&lt;expected_outcome&gt;</code> Thens of
+    <code>boundary-approval</code></strong> — three texts, none of which exists anywhere in
+    <code>tests/bdd/steps/</code>. Small individually, but they are the whole reason that tag's
+    28 items cannot graduate on a Given fix alone. <span class="tag E">EXECUTION</span></li>
+  <li><strong>The <code>creative_deadline</code> pair (28 items)</strong> — 1 production
+    argument, 3 Givens, 5 Thens, and a regrounding of 2 rows off
+    <code>SCHEMA_VIOLATION</code>. Half a day, and the shared schema-invalid Then pays for
+    itself across six other dormant outlines.</li>
+  <li><strong><code>T-UC-026-main-full-config</code> (4 items)</strong> — creative-adjacent
+    only (its request table carries <code>format_ids</code> and
+    <code>creative_assignments</code>), but its blockers are neither: per
+    <code>conftest.py:4019</code>, <code>optimization_goals</code> missing <code>kind</code>
+    and <code>targeting_overlay.audiences</code> rejected as extra-forbidden, both at the DTO
+    boundary before any echo. Lowest priority in this set.</li>
+</ul>
+
+<h2>8. Probe hygiene</h2>
+
+<p>
+  Two probe runs, both <code>cassini test bdd tests/bdd/test_uc019_query_media_buys.py</code>
+  on <code>noetis-b-vm</code>. Each changed exactly two files — the five Given bodies in
+  <code>tests/bdd/steps/domain/uc019_query_media_buys.py</code> and three commented-out lines
+  in <code>_UC019_XFAIL_TAGS</code> — and both were reverted with
+  <code>git checkout --</code>. The first run's own measurement is reported too, because it
+  found the trap: its probe steps had a parser-shadowing bug of their own, and the dormancy
+  tripwire fired on <code>boundary-approval</code>'s Thens through it, which is how the
+  Then-side dormancy surfaced at all.
+</p>
+
+<div class="card">
+  <p style="margin:0">
+    <strong>A note on what a probe here can and cannot say.</strong> The slice runs
+    <code>a2a</code>, <code>mcp</code> and <code>rest</code>. The 13 <code>e2e_rest</code> items
+    of these three tags were not measured, and UC-019's Givens seed through
+    <code>MediaBuyFactory</code> into the harness session — the long-standing reason recorded
+    at <code>conftest.py:3872–3912</code>. A graduation of rows 1, 2 or 4 must check
+    <code>e2e_rest</code> separately rather than infer it from the in-process pass.
+  </p>
+</div>
+
+<footer>
+  Assessment for the creative slice of QUERY (UC-019) and PACKAGES (UC-026). No production
+  code, no scenario text, no routing entry, and no ratchet was changed. Baseline counts from
+  run <code>innet_091026_1726</code>; spec obligations from the pinned
+  <code>adcp/_schemas/3.2/</code> tree and <code>docs/media-buy/specification.mdx</code>
+  fetched verbatim at 3.2.1.
+</footer>
+
+</div>
+</body>
+</html>

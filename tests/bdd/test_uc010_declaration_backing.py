@@ -5,9 +5,9 @@ Grades the STRICT backing rules in
 a tenant may declare only protocols and specialisms this deployment actually
 implements, and a specialism claim must carry its parent protocol.
 
-The generated ``T-UC-010-v31-specialisms`` scenario cannot grade them — it declares
-``creative-generative`` plus the ``creative`` protocol, both unbacked, so it stays
-xfailed against #1724. Retire this file together with the local feature once the
+The generated ``T-UC-010-v31-specialisms`` scenario grades only the accepted path —
+it declares the two specialisms this seller backs, so it cannot reach the rejections.
+Retire this file together with the local feature once the
 upstream storyboard grows an equivalent rejection scenario.
 """
 

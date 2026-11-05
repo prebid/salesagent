@@ -48,7 +48,6 @@ WEAK_ASSERTION_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/unit/test_gam_service_account_auth.py", "test_service_account_credentials_creation"),
     ("tests/unit/test_get_media_buys.py", "test_snapshot_requested_calls_adapter"),
     ("tests/unit/test_pr1071_review_fixes.py", "test_audit_log_records_has_brand_not_has_brand_manifest"),
-    ("tests/unit/test_update_media_buy_behavioral.py", "test_update_both_start_and_end_time"),
     # FIXME(#1370): pre-existing split assertions outside tests/unit/ (surfaced by SCAN_DIRS widen)
     ("tests/integration/test_creative_async_lifecycle_obligations.py", "test_async_input_required_response"),
     ("tests/integration/test_delivery_webhooks_force.py", "test_trigger_report_for_media_buy_public_method"),
@@ -191,7 +190,6 @@ BARE_ASSERTION_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/unit/test_naming_agent.py", "test_generates_name_successfully"),
     ("tests/unit/test_serialization_at_the_persistence_edge.py", "test_create_from_request_adds_to_session"),
     ("tests/unit/test_review_agent.py", "test_returns_approval"),
-    ("tests/unit/test_update_media_buy_behavioral.py", "test_valid_date_range_persists_to_db"),
     # FIXME(#1370): pre-existing bare assertions outside tests/unit/ (surfaced by SCAN_DIRS widen)
     ("tests/integration/test_delivery_poll_behavioral.py", "test_adapter_failure_writes_audit_log"),
     ("tests/integration/test_gam_tenant_setup.py", "test_admin_ui_network_detection_endpoint"),

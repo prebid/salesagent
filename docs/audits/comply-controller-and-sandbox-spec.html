@@ -1,0 +1,1485 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>comply_test_controller and sandbox accounts — implementation spec</title>
+<style>
+  :root{
+    --bg:#fbfaf8; --panel:#fff; --ink:#1b1b1d; --muted:#5d6068; --line:#e2e0da;
+    --red:#a3271f; --green:#1f6b3f; --amber:#8a5a08; --blue:#1f4f8a;
+    --code:#f3f1ec;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#131416; --panel:#1a1c1f; --ink:#e8e6e1; --muted:#a0a3aa; --line:#2d3034;
+      --red:#f08a80; --green:#7fd3a0; --amber:#e0b35c; --blue:#8fbdf0; --code:#202327;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#131416; --panel:#1a1c1f; --ink:#e8e6e1; --muted:#a0a3aa; --line:#2d3034;
+    --red:#f08a80; --green:#7fd3a0; --amber:#e0b35c; --blue:#8fbdf0; --code:#202327;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+    overflow-x:hidden;}
+  .wrap{max-width:1180px;margin:0 auto;padding:40px 24px 90px}
+  h1{font-size:30px;line-height:1.2;margin:0 0 6px;letter-spacing:-.02em}
+  h2{font-size:21px;margin:46px 0 12px;padding-bottom:7px;border-bottom:2px solid var(--line);letter-spacing:-.01em}
+  h3{font-size:16px;margin:28px 0 8px}
+  h4{font-size:14.5px;margin:20px 0 6px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+  .sub{color:var(--muted);margin:0 0 28px;font-size:14.5px}
+  code,kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.875em;
+    background:var(--code);padding:1px 5px;border-radius:4px;word-break:break-word}
+  pre{background:var(--code);border:1px solid var(--line);border-radius:9px;padding:14px 16px;
+    overflow-x:auto;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-size:13px;line-height:1.55;margin:14px 0}
+  pre code{background:none;padding:0}
+  blockquote{margin:14px 0;padding:10px 16px;border-left:3px solid var(--blue);
+    background:var(--panel);color:var(--ink);font-size:14.5px}
+  blockquote p{margin:6px 0}
+  .scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:14px 0;
+    border:1px solid var(--line);border-radius:9px;background:var(--panel)}
+  table{border-collapse:collapse;width:100%;font-size:13.5px;min-width:720px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-weight:650;font-size:12px;text-transform:uppercase;letter-spacing:.055em;
+    color:var(--muted);background:var(--code);position:sticky;top:0}
+  tr:last-child td{border-bottom:none}
+  .red{color:var(--red);font-weight:650}
+  .green{color:var(--green);font-weight:650}
+  .amber{color:var(--amber);font-weight:650}
+  .tag{display:inline-block;font:600 11px/1.5 ui-monospace,Menlo,monospace;
+    padding:1px 7px;border-radius:999px;border:1px solid var(--line);white-space:nowrap}
+  .tag.E{color:var(--green);border-color:var(--green)}
+  .tag.R{color:var(--blue);border-color:var(--blue)}
+  .tag.X{color:var(--red);border-color:var(--red)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:11px;
+    padding:18px 20px;margin:16px 0}
+  .card.warn{border-left:4px solid var(--red)}
+  .card.ok{border-left:4px solid var(--green)}
+  .card.mid{border-left:4px solid var(--amber)}
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:18px 0 6px}
+  .kpi{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+  .kpi b{display:block;font-size:25px;line-height:1.1;letter-spacing:-.02em;font-weight:680}
+  .kpi span{display:block;font-size:11.5px;color:var(--muted);text-transform:uppercase;
+    letter-spacing:.05em;margin-top:5px}
+  ul,ol{padding-left:22px} li{margin:5px 0}
+  .note{border-left:3px solid var(--line);padding:2px 0 2px 15px;color:var(--muted);font-size:14.5px;margin:14px 0}
+  .lead{font-size:17px}
+  footer{margin-top:60px;padding-top:18px;border-top:1px solid var(--line);
+    color:var(--muted);font-size:13px}
+  .nowrap{white-space:nowrap}
+  .toc{columns:2;column-gap:32px;font-size:14px}
+  .toc a{color:var(--blue);text-decoration:none}
+  .toc a:hover{text-decoration:underline}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>comply_test_controller and sandbox accounts</h1>
+<p class="sub">
+  Implementation spec &middot; worktree <code>sa-spec-comply</code>, branch
+  <code>spec/comply-controller</code> at <code>f005254d3</code> &middot;
+  pinned AdCP <strong>3.2.1</strong> (SDK <code>adcp==9.0.0b2+prs1435.1415.1447.1456</code>,
+  <code>pyproject.toml:10</code>) &middot; 2026-10-10
+</p>
+
+<div class="card">
+  <p class="lead" style="margin-top:0"><strong>Every claim is tagged with how it was established.</strong></p>
+  <p style="margin:6px 0 0">
+    <span class="tag E">EXECUTION</span> — measured by running something (a YAML walk over the pinned
+    compliance bundle, a Python introspection of the installed SDK, a <code>git grep</code> count).
+    <span class="tag R">READING</span> — established from source text only.
+    <span class="tag X">NOT ESTABLISHED</span> — named as an open question rather than designed over.
+  </p>
+  <p style="margin:10px 0 0;color:var(--muted);font-size:14px">
+    No test suite was run. <code>cassini stats</code> could not reach the build daemon from this
+    machine (the <code>docker buildx ls</code> probe timed out), so no storyboard or BDD measurement
+    was taken on this branch. Every number below is either a corpus/SDK measurement or a reading of
+    a committed artifact, and each says which.
+  </p>
+</div>
+
+<h2>0. Contents</h2>
+<div class="toc">
+  <a href="#verdict">1. Verdict and the decision this spec supports</a><br>
+  <a href="#worth">2. What the lever is actually worth</a><br>
+  <a href="#pin">3. What the pin requires</a><br>
+  <a href="#today">4. What this seller has today</a><br>
+  <a href="#sandbox">5. Sandbox-account design</a><br>
+  <a href="#controller">6. Controller design</a><br>
+  <a href="#seam">7. The time-advancement seam</a><br>
+  <a href="#scope">8. Scenario-by-scenario scope and <code>list_scenarios</code></a><br>
+  <a href="#plan">9. Staged plan</a><br>
+  <a href="#cost">10. Cost estimate</a><br>
+  <a href="#risks">11. Risks</a><br>
+  <a href="#open">12. Open questions</a>
+</div>
+
+<h2 id="verdict">1. Verdict and the decision this spec supports</h2>
+
+<div class="card ok">
+<p style="margin-top:0"><strong>Build it, in stages, and do not treat it as one deliverable.</strong></p>
+<p>The controller is buildable here and most of it is cheap, because the pin's contract turns out to
+be far more accommodating than the repo's standing note assumed. Three facts carry that:</p>
+<ol style="margin-bottom:0">
+  <li>The SDK already ships the request type, all eight response arms, the 30-name scenario list,
+      and an abstract store contract with a working dispatcher
+      (<code>adcp/server/test_controller.py</code>, 1569 lines). <span class="tag E">EXECUTION</span></li>
+  <li><code>list_scenarios</code> makes support <strong>incremental and self-declaring</strong>. A
+      seller advertises only the scenarios it implements, and the conformance runner degrades the
+      rest to <code>not_applicable</code> rather than failing them.</li>
+  <li>The sandbox gate is <strong>already satisfiable from data the resolver loads today</strong>.
+      <code>identity.account.sandbox</code> is the persisted column, so the verification the spec
+      demands needs no new storage and no new read path.</li>
+</ol>
+</div>
+
+<div class="card warn">
+<p style="margin-top:0"><strong>But two things in the brief's framing do not survive contact with the code.</strong></p>
+<ul style="margin-bottom:0">
+  <li><strong>The three reporting-core scenarios are not a time-advancement problem. They are a
+      missing-subsystem problem.</strong> There is no reporting-obligation entity in this codebase at
+      all — no table, no row, no persisted <code>expected_at</code>, no recovery deadline.
+      <code>git grep -n "expected_at" -- alembic/ src/core/database/</code> returns <strong>zero
+      hits</strong> <span class="tag E">EXECUTION</span>. The SDK defines <code>ReportingObligation</code>
+      with ~30 fields (<code>adcp/types/domains/core/reporting_obligation.py:46</code>), and this
+      seller implements none of it. So <code>reporting_core_lifecycle_probe</code> is not stage one;
+      it is a separate programme behind its own decision.</li>
+  <li><strong>Sandbox accounts are not merely "declared but not first-class" — the isolation is
+      absent, and that is a live exposure today, before any controller exists.</strong> A buyer
+      referencing a sandbox account on a GAM-configured tenant reaches <strong>real GAM</strong>.
+      See §11.1. This is the spec's first <code>MUST NOT</code> and it is unenforced right now.</li>
+</ul>
+</div>
+
+<div class="card ok">
+<p style="margin-top:0"><strong>On the <code>MUST NOT expose in production</code> clause, stated up
+front because it is a design constraint and not a footnote.</strong></p>
+<p style="margin-bottom:0">
+  <strong>Nothing in this spec gates on <code>adcp_testing</code>, anywhere.</strong> The gate's only
+  input is <code>accounts.sandbox</code> — a persisted database column a deployment sets through
+  <code>sync_accounts</code> or the admin UI, read off <code>identity.account.sandbox</code> which the
+  resolver already hydrates from the row (§6.4). No production path branches on a test flag, so
+  critical pattern #11 is satisfied by construction rather than by discipline. The pin independently
+  forbids the alternative: "Sellers MUST NOT alter behavior based on these headers. Sandbox mode is
+  determined solely by the account reference." And the clause itself is satisfied by the gate rather
+  than by hiding the tool — the same schema says "real production endpoints accept sandbox-flagged
+  traffic &hellip; no separate test-mode endpoint required", and the storyboard grading env runs
+  <code>ENVIRONMENT=production</code> deliberately, so hiding it would hide it from the only run that
+  grades it (§6.4).
+</p>
+</div>
+
+<h4>Two corrections to the brief's measurements</h4>
+<ul>
+  <li>The brief says <strong>41</strong> of the 84 lost passes skip as <code>missing_test_controller</code>.
+    The repo's own measured attribution is <strong>57</strong> — "57 of the 84 became
+    <code>missing_test_controller</code> skips, 19 became <code>capability_profile_mismatch</code>
+    &hellip; and 2 ceased to exist because 3.2 deleted the phase"
+    (<code>scripts/audit/storyboard_run_diff.py:63-71</code>) <span class="tag R">READING</span>.
+    That strengthens the case rather than weakening it.</li>
+  <li>The brief says "a further 341 checks per protocol skip for the same reason in the current
+    corpus". The 341 is correct but it is <strong>not</strong> additional to the 57 — it is the total
+    <code>missing_test_controller</code> skip count in a measured run, of which the 57 regressions
+    are a subset. Stating the denominator matters here: <code>{missing_test_controller: 341,
+    not_applicable: 128, prerequisite_failed: 6}</code>, i.e. <strong>341 of 475 skips = 72%</strong>
+    <span class="tag R">READING</span>, from sibling-tree run records (§2).</li>
+</ul>
+
+<h2 id="worth">2. What the lever is actually worth</h2>
+
+<p>Three different denominators get conflated in discussions of this ticket. They are all real and
+they measure different things.</p>
+
+<div class="kpis">
+  <div class="kpi"><b>341</b><span>measured controller skips, per protocol</span></div>
+  <div class="kpi"><b>221</b><span>corpus steps calling the controller</span></div>
+  <div class="kpi"><b>551</b><span>checks on those steps</span></div>
+  <div class="kpi"><b>57</b><span>of the 84 lost passes</span></div>
+</div>
+
+<h4>2.1 Measured, from committed run records</h4>
+<p>
+  <span class="tag R">READING</span> No measured storyboard artifact exists on this branch
+  (<code>test-results/</code> is absent, <code>tests/storyboard/runner/results/</code> is empty).
+  The nearest measurements on the same 3.2.1 corpus come from sibling worktrees and are attributable
+  to those trees, not to this branch:
+</p>
+<div class="scroll">
+<table>
+<thead><tr><th>Record</th><th>SDK</th><th>passed</th><th>failed</th><th>skipped</th><th><code>missing_test_controller</code></th></tr></thead>
+<tbody>
+<tr><td><code>sa-mergedsdk</code> &rarr; <code>ci-summary-mcp.json</code></td><td>14.0.0</td><td>29</td><td>4</td><td>475</td><td class="red">341</td></tr>
+<tr><td><code>sa-mergedsdk</code> &rarr; <code>ci-summary-a2a.json</code></td><td>14.0.0</td><td>29</td><td>4</td><td>475</td><td class="red">341</td></tr>
+<tr><td><code>salesagent-1210</code> &rarr; <code>storyboard_summary_mcp.json</code></td><td>14.0.0-rc.42</td><td>18</td><td>3</td><td>475</td><td class="red">341</td></tr>
+<tr><td><code>salesagent-1210</code> &rarr; <code>storyboard_summary_a2a.json</code></td><td>14.0.0-rc.42</td><td>18</td><td>3</td><td>475</td><td class="red">341</td></tr>
+</tbody>
+</table>
+</div>
+<p class="note">
+  The floor is <code>{"mcp":102,"a2a":102}</code> and every 3.2.1 measurement findable scores 18–29.
+  The floor was committed already at 102 in <code>a8f5911a9</code> (PR #2191). Either the floor
+  predates the corpus bump or it was set against a different configuration. <span class="tag X">NOT
+  ESTABLISHED</span> — worth settling before anyone reads a post-controller run as progress against
+  it, because the gap is not all controller-shaped.
+</p>
+
+<h4>2.2 Corpus-derived, from the pinned compliance bundle</h4>
+<p>
+  <span class="tag E">EXECUTION</span> A read-only YAML walk over 359 storyboard files in the pinned
+  <code>adcp-3.2.1/compliance</code> bundle:
+</p>
+<div class="scroll">
+<table>
+<thead><tr><th>Quantity</th><th>Count</th></tr></thead>
+<tbody>
+<tr><td>Steps with <code>task: comply_test_controller</code></td><td>221</td></tr>
+<tr><td>Validations (graded checks) on those steps</td><td>551</td></tr>
+<tr><td>Steps with <code>requires_tool: comply_test_controller</code></td><td>114</td></tr>
+<tr><td>Steps following a controller step in the same phase (downstream)</td><td>240, carrying 931 checks</td></tr>
+<tr><td>Storyboards with top-level <code>requires: [controller]</code></td><td>27</td></tr>
+<tr><td>Storyboards with <code>prerequisites.controller_seeding: true</code></td><td>150</td></tr>
+<tr><td>Distinct wire <code>scenario</code> values the corpus requests</td><td>36</td></tr>
+<tr><td>Total corpus steps / validations</td><td>2,351 / 8,128</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="card mid">
+<p style="margin-top:0"><strong>A trap worth recording, because it nearly produced the wrong plan.</strong></p>
+<p style="margin-bottom:0">
+  The step field <code>comply_scenario</code> is a <em>storyboard label</em>, not the wire scenario.
+  The wire value lives at <code>sample_request.scenario</code>. Keyed on the label, the corpus appears
+  to request names like <code>full_sales_flow</code>, <code>creative_lifecycle</code> and
+  <code>deterministic_account</code> — none of which exist in the SDK's 30-member list. Keyed
+  correctly, those steps resolve to <code>force_creative_status</code>, <code>force_account_status</code>
+  and <code>list_scenarios</code>. <span class="tag E">EXECUTION</span> Every scope number in §8 is
+  keyed on <code>sample_request.scenario</code>.
+</p>
+</div>
+
+<h2 id="pin">3. What the pin requires</h2>
+
+<h3>3.1 <code>compliance/comply-test-controller-request.json</code></h3>
+<p><span class="tag R">READING</span> Quoted from the pinned file.</p>
+<blockquote>
+<p>"Request payload for the comply_test_controller tool. Triggers seller-side state transitions for
+compliance testing. <strong>Sandbox only — sellers MUST NOT expose this tool in production.</strong>
+Naturally idempotent: each known <code>scenario</code> is either a lookup (<code>list_scenarios</code>)
+or a state-forcing operation whose target state is carried in the payload (<code>force_*_status</code>,
+<code>simulate_*</code>), so <strong>replays converge to the same observable state without needing an
+idempotency_key</strong>. The compliance harness drives this tool deterministically and does not rely
+on the seller's at-most-once replay cache."</p>
+</blockquote>
+
+<ul>
+  <li><code>required: ["scenario", "account"]</code>; <code>additionalProperties: true</code>;
+      <code>x-mutates-state: true</code>.</li>
+  <li><code>scenario</code> is a plain <code>string</code>, deliberately <strong>not</strong> an enum:
+      "<em>'list_scenarios' discovers supported scenarios &hellip; Runners and sellers MUST accept
+      unknown scenario strings — new scenarios may be added in additive releases.</em>"</li>
+  <li><code>params</code>: "<em>Scenario-specific parameters. Required for all scenarios except
+      list_scenarios.</em>" 56 declared properties; per-scenario <code>if/then</code> branches in
+      <code>allOf</code> impose the required subset (29 such branches).</li>
+</ul>
+
+<p>The <code>account</code> field is the gate, and its description is the whole sandbox contract:</p>
+<blockquote>
+<p>"Sandbox account assertion. The runner MUST set <code>sandbox: true</code> on every
+comply_test_controller request. <strong>The seller MUST refuse the request (returning a structured
+error) if the targeted account is not a sandbox account in the seller's persisted records.</strong>
+This field is a caller-side declaration of intent — <strong>it does not grant sandbox status; sellers
+verify against their own account state.</strong> The (Sandbox) verification tier is defined by this
+gate: <strong>real production endpoints accept sandbox-flagged traffic and process it without
+real-world side effects, no separate test-mode endpoint required.</strong> See spec issue #3755 and
+the (Sandbox) framing in #4379."</p>
+<p>&mdash; <code>account.sandbox</code>, <code>const: true</code>: "MUST be true. The seller MUST
+verify the targeted account is sandbox by looking up the persisted account record, not by trusting
+this field. A request asserting <code>sandbox: false</code> schema-rejects before reaching the
+seller — defense-in-depth on top of the per-request gate."</p>
+</blockquote>
+
+<div class="card ok">
+<p style="margin:0"><strong>That last sentence settles the production-exposure question in the
+spec's own words.</strong> "No separate test-mode endpoint required" means the tool ships on the
+normal endpoint and the <em>gate</em> — not the deployment — confines it. §6.4 relies on this.</p>
+</div>
+
+<h3>3.2 <code>compliance/comply-test-controller-response.json</code></h3>
+<p>
+  <span class="tag E">EXECUTION</span> The response declares <strong>no top-level properties</strong>
+  — only <code>allOf</code> refs to <code>core/version-envelope.json</code> and
+  <code>core/protocol-envelope.json</code> — plus an <strong>8-branch <code>oneOf</code></strong>.
+  The arms are the contract:
+</p>
+<div class="scroll">
+<table>
+<thead><tr><th>#</th><th>Arm title</th><th><code>required</code></th><th>Serves</th></tr></thead>
+<tbody>
+<tr><td>0</td><td><code>ListScenariosSuccess</code></td><td><code>success</code>, <code>scenarios</code></td><td><code>list_scenarios</code></td></tr>
+<tr><td>1</td><td><code>StateTransitionSuccess</code></td><td><code>success</code>, <code>previous_state</code>, <code>current_state</code></td><td><code>force_*_status</code></td></tr>
+<tr><td>2</td><td><code>SimulationSuccess</code></td><td><code>success</code>, <code>simulated</code></td><td><code>simulate_*</code>, all <code>*_probe</code></td></tr>
+<tr><td>3</td><td><code>ForcedDirectiveSuccess</code></td><td><code>success</code>, <code>forced</code></td><td><code>force_*_arm</code></td></tr>
+<tr><td>4</td><td><code>SeedSuccess</code></td><td><code>success</code></td><td><code>seed_*</code>, purges</td></tr>
+<tr><td>5</td><td><code>ProvenanceAuditObservationsSuccess</code></td><td><code>success</code>, <code>creative_id</code>, <code>audit_observations</code></td><td><code>query_provenance_audit_observations</code></td></tr>
+<tr><td>6</td><td><code>UpstreamTrafficSuccess</code></td><td><code>success</code>, <code>recorded_calls</code>, <code>total_count</code>, <code>since_timestamp</code></td><td><code>query_upstream_traffic</code></td></tr>
+<tr><td>7</td><td><code>ControllerError</code></td><td><code>success</code>, <code>error</code></td><td>every refusal</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="card ok">
+<p style="margin-top:0"><strong>Arm 7 is the single most consequential finding for this repo's error
+architecture.</strong></p>
+<p>The controller's refusal is <strong>in-band</strong>: <code>success: false</code> plus a closed
+<code>error</code> enum —</p>
+<pre><code>["INVALID_TRANSITION", "INVALID_STATE", "NOT_FOUND", "UNKNOWN_SCENARIO",
+ "INVALID_PARAMS", "FORBIDDEN", "JCS_NON_FINITE_NUMBER", "INTERNAL_ERROR"]</code></pre>
+<p style="margin-bottom:0">
+  — plus <code>error_detail</code> ("Human-readable explanation of the failure") and an optional
+  <code>current_state</code>. <strong>This is not an AdCP error envelope.</strong> So the sandbox
+  refusal needs <strong>no new <code>AdCPSalesAgentError</code> subclass, no new
+  <code>CODE_TABLE</code> row, and no <code>ErrorDetails</code> class</strong> — critical pattern #10
+  is not engaged by the gate at all. The repo has no <code>FORBIDDEN</code> error code
+  (<span class="tag E">EXECUTION</span>: absent from both <code>adcp.types.ErrorCode</code> and the
+  local <code>AppErrorCode</code>), and it does not need one: <code>FORBIDDEN</code> here is a field
+  value on a success-shaped response. Likewise <code>error_detail</code> is free text on a
+  <em>response arm</em>, which is why it does not collide with "no <code>ErrorDetails</code> class has
+  a free-text field".
+</p>
+</div>
+
+<h3>3.3 The graded contract: <code>universal/reporting-core.yaml</code></h3>
+<p>
+  <span class="tag E">EXECUTION</span> 9 controller steps carrying <strong>34 validations</strong>,
+  in 5 phases. Storyboard-level <code>requires: [controller]</code> and
+  <code>prerequisites.controller_seeding: true</code>, so <strong>the whole storyboard is gated</strong>
+  — not merely the controller steps. The step the brief names, verbatim:
+</p>
+<pre><code>id: prepare_waiting_obligation
+title: Prepare the deterministic Core fixture
+task: comply_test_controller
+schema_ref: compliance/comply-test-controller-request.json
+response_schema_ref: compliance/comply-test-controller-response.json
+comply_scenario: reporting_core_lifecycle_probe
+stateful: true
+context_outputs:
+  - {name: reporting_core_obligation_id,    path: simulated.reporting_obligation_id}
+  - {name: reporting_core_delivery_config_id, path: simulated.delivery_config_id}
+  - {name: reporting_core_period_start,     path: simulated.period.start}
+  - {name: reporting_core_period_end,       path: simulated.period.end}
+  - {name: reporting_core_expected_at,      path: simulated.expected_at}
+  - {name: reporting_core_recovery_deadline, path: simulated.recovery_deadline}
+sample_request:
+  account:  {account_id: reporting_core_lab, sandbox: true}
+  scenario: reporting_core_lifecycle_probe
+  params:   {operation: prepare}
+  context:  {correlation_id: reporting_core--prepare}
+validations:
+  - {check: response_schema, description: Controller response is schema-valid}
+  - {check: field_value, path: success, value: true}
+  - {check: field_present, path: simulated.reporting_obligation_id}</code></pre>
+<p>
+  The <code>reporting_core_lifecycle_probe</code> operation vocabulary is
+  <code>prepare, advance_time, publish_zero_row, publish_nonempty, restate_snapshot,
+  restate_after_received, omit_obligation, advance_past_status_deadline, advance_past_escalation</code>;
+  <code>advance_time</code> additionally requires <code>target_health &isin; {delayed,
+  action_required}</code>, and every other operation is forbidden from carrying
+  <code>target_health</code> at all (an <code>else: {not: {required: [target_health]}}</code> branch).
+</p>
+
+<h3>3.4 <code>docs/media-buy/advanced-topics/sandbox.mdx</code> — the seller's duties</h3>
+<p><span class="tag R">READING</span> Fetched via <code>gh api</code>; quoted from § "Seller implementation".</p>
+<blockquote>
+<p>"When a request references a sandbox account (either via <code>sandbox: true</code> in the natural
+key or via a sandbox <code>account_id</code>), agents MUST NOT persist production state or cause
+real-world side effects:</p>
+<ul>
+<li><strong>MUST NOT</strong> make real ad platform API calls (no real orders, line items, etc.)</li>
+<li><strong>MUST NOT</strong> charge real money or create real billing records</li>
+<li><strong>MUST</strong> validate inputs the same way as production (reject invalid budgets, bad dates, etc.)</li>
+<li><strong>MUST</strong> return realistic response shapes with simulated data</li>
+<li><strong>SHOULD</strong> include <code>sandbox: true</code> in success responses</li>
+</ul>
+<p>Sandbox errors are real validation errors. If a buyer sends an invalid budget using a sandbox
+account, return a real error — don't simulate fake errors."</p>
+</blockquote>
+<p>And two structural rules that bear directly on the design:</p>
+<blockquote>
+<p>"Sandbox is <strong>account-level, not per-request</strong>. Once a request references a sandbox
+account, the entire request is treated as sandbox. This eliminates the risk of accidentally mixing
+real and test traffic in a multi-step flow."</p>
+<p>"The <code>X-Dry-Run</code>, <code>X-Test-Session-ID</code>, and <code>X-Mock-Time</code> HTTP
+headers are <strong>deprecated</strong> &hellip; Sellers MUST NOT alter behavior based on these
+headers. Sandbox mode is determined solely by the account reference."</p>
+</blockquote>
+<p class="note">
+  That second quote independently forbids the shape critical pattern #11 also forbids: no
+  out-of-band test signal may steer behaviour. The account reference is the only admissible input.
+  The spec and the repo's own rule agree, which is a convenient place to be.
+</p>
+
+<h2 id="today">4. What this seller has today</h2>
+
+<h3>4.1 Sandbox: persisted and keyed, but inert</h3>
+<div class="scroll">
+<table>
+<thead><tr><th>Thing</th><th><code>file:line</code></th><th>State</th></tr></thead>
+<tbody>
+<tr><td><code>accounts.sandbox</code> column</td><td><code>src/core/database/models.py:1166</code></td><td class="green">Exists — <code>Boolean</code>, <code>nullable=True</code>, <code>default=False</code></td></tr>
+<tr><td>Created by migration</td><td><code>alembic/versions/51d4f9009db4_create_accounts_and_agent_account_.py:44</code></td><td class="green">With the table, not added later</td></tr>
+<tr><td>Natural-key component</td><td><code>src/core/database/repositories/account.py:72-75</code></td><td class="green"><code>sandbox: bool | None</code>, one of four components</td></tr>
+<tr><td>Unique index</td><td><code>src/core/database/models.py:1226-1240</code></td><td class="green"><code>COALESCE(sandbox, false)</code> in <code>uq_accounts_natural_key</code></td></tr>
+<tr><td>Immutable after create</td><td><code>src/core/database/repositories/account.py:116</code></td><td class="green"><code>_IMMUTABLE_FIELDS</code></td></tr>
+<tr><td><code>_FIELD_POLICY["sandbox"]</code></td><td><code>src/core/tools/accounts.py:573-581</code></td><td class="green">Applied at provisioning; <code>settings_update</code> rejected <code>UNSUPPORTED_FEATURE</code></td></tr>
+<tr><td>Tenant posture <code>account_sandbox</code></td><td><code>src/core/database/models.py:104</code></td><td class="green">Deployment-settable, <code>nullable=False default=False</code></td></tr>
+<tr><td>Capabilities emission</td><td><code>src/services/seller_capabilities.py:334</code></td><td class="green"><code>sandbox=resolve_account_sandbox(tenant)</code></td></tr>
+<tr><td>Provisioning gate</td><td><code>src/core/tools/accounts.py:957-980</code></td><td class="green"><code>_check_sandbox_capability</code>, fails <code>sandbox_not_supported</code></td></tr>
+<tr><td>On the resolved identity</td><td><code>src/core/resolved_identity.py:139</code>, hydrated <code>:279-293</code></td><td class="green"><code>identity.account.sandbox</code> IS the DB column</td></tr>
+<tr><td><strong>Adapter selection honours it</strong></td><td><code>src/core/helpers/adapter_helpers.py:302-414</code></td><td class="red">NO — function never reads <code>identity.account</code></td></tr>
+<tr><td><strong>Any adapter knows the concept</strong></td><td><code>git grep -n sandbox -- src/adapters/</code></td><td class="red">NO — zero matches <span class="tag E">EXECUTION</span></td></tr>
+<tr><td><code>sandbox: true</code> on responses</td><td>see §5.3</td><td class="amber">2 of 8 applicable tools</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>4.2 The controller: absent, but the scenarios are already written down</h3>
+<ul>
+  <li><span class="tag E">EXECUTION</span> <code>git grep -n comply_test_controller -- src/</code>
+      returns <strong>zero</strong>. The registry holds 14 rows
+      (<code>src/core/tools/registry.py:206-271</code>) and none is it.</li>
+  <li><code>tests/bdd/features/BR-UC-032-compliance-test-controller.feature</code> exists — 619 lines,
+      <strong>41 scenarios</strong> (27 named + 14 <code>Scenario Outline</code> BVA blocks)
+      <span class="tag E">EXECUTION</span>.</li>
+  <li><strong>It is UNBOUND.</strong> <code>tests/unit/test_architecture_feature_file_bound.py:56</code>
+      lists it in <code>UNBOUND_ALLOWLIST</code>, so no module calls
+      <code>scenarios(...)</code> on it and <strong>all 41 scenarios execute nothing</strong>
+      <span class="tag R">READING</span>. That allowlist may only shrink — removing this entry is
+      part of the work and is a legitimate shrink.</li>
+  <li>No <code>tests/bdd/steps/domain/uc032_*.py</code> exists
+      (<code>ls</code> shows <code>uc004_delivery.py</code>, <code>uc010_capabilities.py</code> for
+      the sibling pattern) <span class="tag E">EXECUTION</span>.</li>
+</ul>
+
+<div class="card warn">
+<p style="margin-top:0"><strong>BR-UC-032 is doubly ungraded, and binding it is not a
+<code>scenarios()</code> call.</strong> <span class="tag R">READING</span></p>
+<p>
+  Even once the feature is bound, every scenario would xfail <strong>at fixture setup, before any
+  step runs</strong>. <code>tests/bdd/conftest.py:6854-6859</code>:
+</p>
+<pre><code>route = storyboard_spec.resolve_env_route(marker_names, ENV_ROUTES)
+if route is None:
+    # NOT WIRED is a real answer, not an absence. ...
+    pytest.xfail(f"No harness wired for {uc} (markers: {sorted(marker_names)})")</code></pre>
+<p>
+  BR-UC-032 has <strong>no <code>ENV_ROUTES</code> row</strong> — one of eighteen allowlisted
+  features that resolve to no harness route (measured by the bind-features lane; I verified the
+  mechanism at the line above, not the count of eighteen <span class="tag X">NOT ESTABLISHED</span>).
+  So the xfail carries no ledger entry and no baseline: there is nothing to compare a future run
+  against.
+</p>
+<p style="margin-bottom:0">
+  <strong>Consequence for this spec: a "build it" number that omits the route and the step authoring
+  is under-costed, because the tool would ship ungraded.</strong> Three artifacts are required, not
+  one — (a) the <code>scenarios()</code> binding and the allowlist removal, (b) an
+  <code>EnvRoute</code> row, (c) step definitions. The row itself is cheap: <code>tag</code>,
+  a <code>when</code> predicate over the marker set, an <code>env_builder</code>, and an optional
+  <code>seed</code> (<code>tests/bdd/conftest.py</code>, <code>class EnvRoute</code>) — and
+  <code>env_builder</code> can reuse an existing builder. The cost is (c), repeated per stage. §9
+  and §10 now price all three, and a row may carry <code>xfail_reason</code> to register a UC ahead
+  of its harness, which is the honest way to stage it.
+</p>
+</div>
+
+<h4>The standing "will not be implemented" notes this spec reverses</h4>
+<p>These are policy statements, not observations. They must be retracted in the same change, not
+edited around:</p>
+<ul>
+  <li><code>docs/test-obligations/storyboard-issue-map.yaml:366-368</code> — "comply_test_controller
+      is a required_tool we will not implement, so the graded injection path is permanently
+      unreachable"</li>
+  <li><code>docs/test-obligations/storyboard-wireability.yaml:651</code>, <code>:684</code>,
+      <code>:823</code> — "deliberately never exposed on this project's production wire";
+      "There is no comply_test_controller implementation anywhere in src/."</li>
+  <li><code>scripts/audit/storyboard_check_index.py:59,241</code> — <code>"e2e_blocker": "requires
+      comply_test_controller, which will not be implemented"</code>, <code>"e2e_source": "policy"</code></li>
+  <li><code>scripts/audit/storyboard_roadmap.py:136,335</code>;
+      <code>tests/unit/test_architecture_storyboard_controller_divergence.py</code> (whole module,
+      <code>CONTROLLER = "comply_test_controller"</code> at <code>:49</code>)</li>
+  <li><code>tests/bdd/conftest.py:776</code> — xfail reason "compliance_testing block not emitted by
+      the capabilities builder; no comply_test_controller surface — #1724"</li>
+  <li><code>tests/bdd/steps/domain/uc010_capabilities.py:2289-2317</code> — a Then step that returns
+      <code>None</code> because "This seller exposes NO comply_test_controller in production (#1592),
+      so there is no reference set to cross-check against"</li>
+</ul>
+
+<h3>4.3 The SDK already carries most of the plumbing</h3>
+<p><span class="tag E">EXECUTION</span> Introspected against the pinned SDK.</p>
+<div class="scroll">
+<table>
+<thead><tr><th>Artifact</th><th>Path</th><th>Usable?</th></tr></thead>
+<tbody>
+<tr><td><code>ComplyTestControllerRequest</code></td><td><code>adcp/types/domains/compliance/comply_test_controller_request.py:495</code></td><td class="green">Yes — the DTO must inherit it (§6.1)</td></tr>
+<tr><td>8 response arms</td><td>same package, <code>comply_test_controller_response.py:330-471</code></td><td class="green">Yes — subclass per arm (§6.2)</td></tr>
+<tr><td><code>SCENARIOS</code> (30 names)</td><td><code>adcp/server/test_controller.py:103-135</code></td><td class="green">Yes — the vocabulary</td></tr>
+<tr><td><code>TestControllerStore</code> (abstract)</td><td><code>adcp/server/test_controller.py:194</code></td><td class="amber">Partly — see below</td></tr>
+<tr><td><code>TestControllerError</code></td><td><code>adcp/server/test_controller.py:166</code></td><td class="green">Yes — exported</td></tr>
+<tr><td><code>register_test_controller</code></td><td><code>adcp/server/test_controller.py:1441</code></td><td class="red">No — registers its own FastMCP tool, bypassing this repo's registry and boundary</td></tr>
+<tr><td><code>_apply_sandbox_gate</code></td><td><code>adcp/server/test_controller.py:833</code></td><td class="red">No — underscore-private; reuse its <em>policy</em>, not the symbol</td></tr>
+<tr><td><code>ReportingObligation</code></td><td><code>adcp/types/domains/core/reporting_obligation.py:46</code></td><td class="green">Defined — and unimplemented here (§7)</td></tr>
+</tbody>
+</table>
+</div>
+<p>
+  <code>TestControllerStore</code> is an abstract contract: one <code>async def</code> per scenario,
+  each <code>raise NotImplementedError</code>, holding no state itself. Its
+  <code>_list_scenarios</code> (<code>:698</code>) is an <strong>MRO walk</strong> — a scenario is
+  advertised iff the method appears in a non-<code>TestControllerStore</code> ancestor's
+  <code>__dict__</code> (<code>:711</code>). That derivation is the right idea and §6.3 adopts it;
+  the class itself is optional.
+</p>
+
+<h2 id="sandbox">5. Sandbox-account design</h2>
+
+<p>The half that makes the controller legal. Three pieces, in dependency order.</p>
+
+<h3>5.1 The gate's input — no new storage</h3>
+<p>
+  The spec requires verification "by looking up the persisted account record, not by trusting this
+  field". That record is already resolved onto the identity before any <code>_impl</code> runs:
+  <code>ResolvedIdentity.account</code> (<code>src/core/resolved_identity.py:139</code>) is built by
+  <code>account_from_row</code> (<code>src/core/database/repositories/account_serialization.py:155</code>,
+  <code>sandbox=row.sandbox</code> at <code>:179</code>) from
+  <code>Account.sandbox</code> (<code>src/core/database/models.py:1166</code>).
+</p>
+<p><strong>So the gate is one predicate over data the boundary already loaded.</strong> No new column,
+no new repository method, no new read. Two details that will bite:</p>
+<ul>
+  <li><code>NULL</code> and <code>false</code> are the <strong>same key</strong>
+      (<code>src/core/database/models.py:1213-1216</code>). The gate must read
+      <code>bool(identity.account.sandbox)</code>, never <code>is True</code>.</li>
+  <li>On the <strong>natural-key</strong> arm, <code>ref.sandbox</code> is used as a query
+      <em>filter</em> (<code>src/core/database/repositories/account_lookup.py:85</code>), so a runner
+      asserting <code>sandbox: true</code> by natural key <em>selects</em> a sandbox row rather than
+      being verified against one. That is still spec-conformant — the row it selects is a persisted
+      sandbox row — but the <em>verification</em> semantics only exist on the by-id arm. The gate
+      must therefore read <code>identity.account.sandbox</code> <strong>after</strong> resolution,
+      which is correct for both arms, rather than comparing the request field.</li>
+</ul>
+
+<h3>5.2 The isolation that does not exist — and must</h3>
+<div class="card warn">
+<p style="margin-top:0"><strong>This is the single largest correctness item in the whole spec, and it
+is independent of the controller.</strong></p>
+<p style="margin-bottom:0">
+  <span class="tag R">READING</span> <code>get_adapter(identity)</code>
+  (<code>src/core/helpers/adapter_helpers.py:302</code>) decides the adapter from
+  <code>(AdapterConfig.adapter_type for tenant_id) or tenant.ad_server or "mock"</code>
+  (<code>resolve_tenant_adapter_type</code>, <code>:180-206</code>). The account is not an input —
+  <code>grep -n "account\|sandbox"</code> over that file returns <strong>zero matches</strong>
+  <span class="tag E">EXECUTION</span>. <code>src/adapters/google_ad_manager.py:354-700</code>
+  <code>create_media_buy</code> has no sandbox branch and calls
+  <code>orders_manager.create_order(...)</code> at <code>:624</code> &rarr;
+  <code>order_service.createOrders([order])</code>
+  (<code>src/adapters/gam/managers/orders.py:111-113</code>). <strong>A sandbox account on a
+  GAM-configured tenant books a real GAM order.</strong>
+</p>
+</div>
+
+<h4>The fix: the account becomes an input to adapter resolution</h4>
+<p>
+  <code>resolve_tenant_adapter_type</code> is the one place the choice is made, and every production
+  caller reaches it through <code>get_adapter(identity)</code>, which already holds the account. The
+  change is to resolve <code>"mock"</code> when <code>bool(identity.account.sandbox)</code>, before
+  the <code>AdapterConfig</code> lookup.
+</p>
+<p>Why this is the right shape rather than a flag check sprinkled at call sites:</p>
+<ul>
+  <li><strong>One owner.</strong> Eight call sites reach <code>get_adapter</code>
+      (<code>media_buy_create.py:587,1314,1366,1527,2688</code>;
+      <code>media_buy_delivery.py:179</code>; <code>media_buy_list.py:219</code>;
+      <code>media_buy_update.py:577</code>). None of them should know about sandbox; the resolver
+      should. This is the CLAUDE.md root-cause rule — one guard in the shared function, not one per
+      caller.</li>
+  <li><strong>Critical pattern #11 is satisfied by construction.</strong> The input is
+      <code>accounts.sandbox</code>, a database column a deployment sets through
+      <code>sync_accounts</code> or the admin UI. It is not <code>adcp_testing</code>, not an env
+      var, not a header. A test seeds it the way it seeds any other state.</li>
+  <li><strong>The spec mandates exactly this.</strong> "Sandbox mode is determined solely by the
+      account reference."</li>
+</ul>
+<p class="note">
+  Honest limit on the "unconstructable" ambition: routing through one resolver makes the wrong state
+  <em>unreachable by any current caller</em>, which is as far as this codebase's shape allows without
+  a larger retype (e.g. a distinct <code>SandboxAdapter</code> type that the live adapters cannot
+  satisfy). It is not a type-level impossibility. I am recording that honestly rather than claiming
+  more; a stronger version is possible later and is not needed to close the exposure.
+</p>
+
+<h4>What the mock adapter already gives you for free</h4>
+<p>
+  <code>src/adapters/mock_ad_server.py</code> supports all AdCP pricing models and currencies with
+  simulated metrics, and it already reads a per-row response override:
+  <code>DeliverySimulationConfig</code> (<code>src/core/database/models.py:2730-2770</code>, migration
+  <code>64f0fff7d954</code>) keyed <code>(tenant_id, media_buy_id)</code>, holding the exact wire
+  payload, read first with in-memory fallback
+  (<code>src/adapters/mock_ad_server.py:1164-1185</code> via
+  <code>src/core/database/repositories/delivery_simulation.py:42-48</code>). It deliberately has no FK
+  to <code>media_buys</code> so a row can be seeded before the buy exists. <strong>This is the
+  existing precedent for a production-code, DB-backed, per-row behaviour override seeded by a
+  harness</strong>, and §6.5 and §7 both build on it.
+</p>
+
+<h3>5.3 <code>sandbox: true</code> on success responses</h3>
+<p>
+  <span class="tag E">EXECUTION</span> 14 local schema classes inherit a <code>sandbox</code> field
+  from their library parent. Only two populate it.
+</p>
+<div class="scroll">
+<table>
+<thead><tr><th>Response</th><th>Pin declares <code>sandbox</code>?</th><th>Populated?</th><th>Site</th></tr></thead>
+<tbody>
+<tr><td><code>SyncCreativesResponse</code></td><td>yes</td><td class="green">YES</td><td><code>src/core/tools/creatives/_sync.py:176</code> &rarr; <code>:516</code></td></tr>
+<tr><td><code>ListCreativesResponse</code></td><td>yes</td><td class="green">YES</td><td><code>src/core/tools/creatives/listing.py:751</code></td></tr>
+<tr><td><code>ListCreativeFormatsResponse</code></td><td>yes</td><td class="red">DEAD</td><td><code>src/core/tools/creative_formats.py:514</code> is literally <code>sandbox_flag: bool | None = None</code></td></tr>
+<tr><td><code>GetProductsResponse</code></td><td>yes</td><td class="red">NO</td><td><code>src/core/tools/products.py:745-749</code> omits it</td></tr>
+<tr><td><code>GetMediaBuyDeliveryResponse</code></td><td>yes</td><td class="red">NO</td><td><code>src/core/tools/media_buy_delivery.py:627-650</code></td></tr>
+<tr><td><code>CreateMediaBuySuccess</code></td><td>yes (branch 0 only)</td><td class="red">NO</td><td><code>src/core/tools/media_buy_create.py:3937-3956</code></td></tr>
+<tr><td><code>UpdateMediaBuySuccess</code></td><td>yes</td><td class="red">NO</td><td><code>src/core/tools/media_buy_update.py:775</code>, <code>:1356</code></td></tr>
+<tr><td><code>GetMediaBuysResponse</code></td><td>yes</td><td class="red">NO</td><td><code>src/core/tools/media_buy_list.py:389</code></td></tr>
+<tr><td><code>list_accounts</code> / <code>sync_accounts</code> responses</td><td class="amber">NO top-level <code>sandbox</code></td><td>n/a</td><td>Per-row echo already works: <code>src/core/tools/accounts.py:1516</code>, <code>:1833</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>
+  The obligation is <code>SHOULD</code>, not <code>MUST</code>, so this is a conformance improvement
+  rather than a correctness fix — but it is nearly free (one derivation, already written twice, hoisted
+  into a shared helper per the DRY rule) and the pin declares the field on each of those responses.
+  <code>list_accounts</code>/<code>sync_accounts</code> are <strong>out of scope</strong>: their pinned
+  response schemas declare no top-level <code>sandbox</code> <span class="tag E">EXECUTION</span>.
+</p>
+
+<h3>5.4 Provisioning and discovery</h3>
+<p>Both paths the spec defines already work here, and the seller is the <code>require_operator_auth:
+false</code> kind (<code>src/services/seller_capabilities.py:333</code> sets
+<code>require_operator_auth=False</code>):</p>
+<ul>
+  <li><strong>Provisioning</strong> — <code>sync_accounts</code> with <code>sandbox: true</code>,
+      gated on <code>tenants.account_sandbox</code> (<code>src/core/tools/accounts.py:957-980</code>).
+      Already implemented.</li>
+  <li><strong>Discovery</strong> — <code>list_accounts</code> with the <code>sandbox: true</code>
+      filter (<code>src/core/tools/accounts.py:155-157</code>). Already implemented.</li>
+  <li><strong>Advertisement</strong> — <code>account.sandbox</code> in capabilities
+      (<code>src/services/seller_capabilities.py:334</code>). Already implemented, with one catch:
+      <code>_build_account_block</code> returns <code>None</code> entirely when
+      <code>supported_billing</code> is empty (<code>:328-329</code>), so a tenant with no billing
+      policy advertises no <code>account</code> block and therefore no sandbox claim. A
+      sandbox-enabled deployment must set both.</li>
+</ul>
+<p>
+  So the sandbox <em>account model</em> needs no new provisioning or discovery work. What it needs is
+  §5.2 (isolation) and §5.3 (response echo). The deployment that would enable this is the user's
+  <code>salesagent.noetis.dev</code> instance; its configuration is not inspected here
+  <span class="tag X">NOT ESTABLISHED</span>, so the only claim made is that
+  <code>tenants.account_sandbox</code> plus a billing policy are the two switches it would need.
+</p>
+
+<h2 id="controller">6. Controller design</h2>
+
+<h3>6.1 The DTO</h3>
+<p>Three import-time refusals are armed, so the DTO's shape is forced rather than chosen:</p>
+<ol>
+  <li><code>src/core/main.py:288</code> — the DTO must be both an <code>AdcpRequest</code> and an
+      <code>AdcpVersionEnvelope</code>.</li>
+  <li><code>src/core/main.py:327-338</code> — because the SDK <em>defines</em> this tool
+      (<code>ADCP_TOOL_DEFINITIONS</code>, <code>adcp/server/mcp_tools.py:1266-1288</code>),
+      <code>sdk_grounding(model)</code> must be non-<code>None</code>. That function walks the live
+      MRO for an <code>adcp.*</code> ancestor declaring a field beyond the two envelope keys
+      (<code>src/core/tools/_announced_shape.py:80-102</code>). Inheriting
+      <code>AdCPBaseModel</code> alone does not satisfy it.</li>
+  <li><code>src/core/main.py:313</code> — the impl's return annotation must descend from
+      <code>SalesAgentAdcpResponse</code>, placed <strong>after</strong> the SDK type in the base list
+      (<code>:323-325</code>).</li>
+</ol>
+
+<pre><code>from adcp.types.domains.compliance.comply_test_controller_request import (
+    ComplyTestControllerRequest as LibraryComplyTestControllerRequest,
+)
+
+class ComplyTestControllerRequest(LibraryComplyTestControllerRequest, BuyerRequest):
+    """Extends the library request: the pin REQUIRES `account`, the generated model does not."""
+    account: SandboxAssertion   # narrowed from `Account | None = None`</code></pre>
+
+<div class="card mid">
+<p style="margin-top:0"><strong>A real SDK/spec divergence, and the one field this DTO must redeclare.</strong></p>
+<p>
+  <span class="tag E">EXECUTION</span> The pinned JSON schema says
+  <code>required: ["scenario", "account"]</code>. The generated Python model says
+  <code>account: Account | None = None</code>
+  (<code>comply_test_controller_request.py:513-518</code>), and the hand-written MCP stub also
+  declares <code>"required": ["scenario"]</code> (<code>adcp/server/mcp_tools.py:1286</code>).
+  <strong>Per CLAUDE.md the written spec is the authority and the SDK is a cross-check</strong>, so
+  the DTO narrows to required. Inheriting as-is would ship a tool accepting a request the pinned
+  schema rejects.
+</p>
+<p style="margin-bottom:0">
+  <strong>This narrowing needs no allowlist row</strong>, which matters because the brief forbids
+  growing one. <span class="tag R">READING</span>
+  <code>tests/unit/test_architecture_schema_inheritance.py</code>: the NOT-WEAKER test fires on
+  <code>is_nullable(child) and not is_nullable(parent)</code> (<code>:196</code>) and on
+  <code>parent.is_required() and not child.is_required()</code> (<code>:198</code>). Going
+  <code>Account | None = None</code> &rarr; required non-null trips neither — it strengthens on both
+  axes — and the SHAPE test is satisfied because the child's class subclasses the parent's non-<code>None</code>
+  class (<code>:145-146</code>). <em>Verify by running the guard before relying on it;</em> this is a
+  reading of the predicate, not a measurement of the guard on the real class.
+</p>
+</div>
+
+<h4>Two things the DTO must NOT do</h4>
+<ul>
+  <li><strong>Do not narrow <code>scenario</code> to an enum or <code>Literal</code>.</strong> The pin
+      says "Runners and sellers MUST accept unknown scenario strings". The MCP stub's 31-value enum
+      is advertisement, not validation. An unknown scenario is answered with arm 7
+      <code>UNKNOWN_SCENARIO</code>, which the corpus grades
+      (<code>sample_request.scenario: nonexistent_scenario</code>, 1 step / 4 checks
+      <span class="tag E">EXECUTION</span>).</li>
+  <li><strong>Do not retype <code>params</code> to a free-form dict to dodge the accepted-shape
+      strip.</strong> See the next card — this is the one genuinely awkward interaction and it should
+      be resolved deliberately.</li>
+</ul>
+
+<div class="card mid">
+<p style="margin-top:0"><strong><code>params</code> versus critical pattern #7.</strong></p>
+<p>
+  <span class="tag E">EXECUTION</span> <code>deep_strip_to_schema</code>
+  (<code>src/core/schemas/_accepted_shape.py:158-175</code>) keeps an object's contents verbatim only
+  when the schema declares <strong>zero</strong> properties (<code>allows_additional and not
+  props</code>) — the carve-out for <code>ext</code> and <code>context</code>. The SDK's
+  <code>Params</code> def declares <strong>56</strong> properties, so the carve-out does not apply:
+  any <code>params</code> key outside those 56 is stripped, and in dev raises
+  <code>INVALID_REQUEST</code> naming pointer <code>/params/&lt;key&gt;</code>
+  (<code>src/core/schemas/_base.py:1080-1083</code>).
+</p>
+<p style="margin-bottom:0">
+  <strong>Recommendation: inherit the SDK's <code>Params</code> unchanged and accept the 56-key
+  ceiling.</strong> It is the pin's own accepted shape, every parameter the 3.2.1 corpus actually
+  sends is inside it, and a new scenario's parameter arriving with a future pin is <em>supposed</em>
+  to be loud in dev — that is the mechanism working, not failing. Retyping to a bare
+  <code>dict[str, Any]</code> would hit the free-form branch and pass everything through, but it
+  deletes the dev-strictness guarantee for this tool's entire payload and should not be chosen for
+  convenience. One scenario, <code>reliable_reporting_managed_delivery_probe</code>, appears to send
+  operations (<code>advance_within_retention</code>, <code>revoke_access</code>) that may be outside
+  the pinned <code>Operation</code> enum <span class="tag X">NOT ESTABLISHED</span> — check before
+  scoping that scenario (§12.3).
+</p>
+</div>
+
+<h3>6.2 The response</h3>
+<p>
+  Eight arms, discriminated by <code>success</code> as a <code>Literal</code>, dispatched by
+  <code>ResponseArmDispatchMixin._response_arm_models</code>
+  (<code>comply_test_controller_response.py:313-318</code>). Each arm this seller emits becomes one
+  local subclass with <code>SalesAgentAdcpResponse</code> as a <strong>later</strong> base, so the
+  SDK's field definitions — the <code>Literal</code> <code>success</code> const among them — win:
+</p>
+<pre><code>class ComplyListScenariosResponse(LibraryComplyTestControllerResponse1, SalesAgentAdcpResponse): ...
+class ComplyStateTransitionResponse(LibraryComplyTestControllerResponse2, SalesAgentAdcpResponse): ...
+class ComplySimulationResponse(LibraryComplyTestControllerResponse3, SalesAgentAdcpResponse): ...
+class ComplySeedResponse(LibraryComplyTestControllerResponse5, SalesAgentAdcpResponse): ...
+class ComplyErrorResponse(LibraryComplyTestControllerResponse8, SalesAgentAdcpResponse): ...</code></pre>
+<p>
+  Add arms 4 (<code>ForcedDirectiveSuccess</code>), 6 (<code>ProvenanceAuditObservations</code>) and 7
+  (<code>UpstreamTraffic</code>) only at the stage that implements their scenarios. The impl's return
+  annotation is the union of the arms it can emit; <code>src/core/main.py:313</code> reads that
+  annotation, so every member must descend from <code>SalesAgentAdcpResponse</code>.
+</p>
+<p class="note">
+  No <code>@model_serializer</code>, no <code>model_dump</code> override, no <code>_INTERNAL_ONLY_FIELDS</code>.
+  Conformance is by inheritance (critical pattern #4); the arms carry the pinned shape already.
+</p>
+
+<h3>6.3 The controller as controller-and-service</h3>
+<pre><code># src/core/tools/compliance.py
+async def _comply_test_controller_impl(
+    req: ComplyTestControllerRequest,
+    identity: ResolvedIdentity,          # NOT AccountIdentity — see below
+) -> ComplyControllerResponse:
+    return await comply_test_controller(req, identity=identity)</code></pre>
+<p>
+  <strong>The identity type is forced to <code>ResolvedIdentity</code>.</strong> The registry derives
+  <code>requires_account()</code> from <code>dto.model_fields["account"].is_required()</code>
+  (<code>src/core/tools/registry.py:156</code>) and <code>__post_init__</code> raises at import if the
+  annotation disagrees (<code>:134</code>). Narrowing <code>account</code> to required (§6.1) makes
+  <code>requires_account()</code> true, which <em>admits</em> <code>AccountIdentity</code> — but the
+  controller's <code>account</code> is the <strong>sandbox assertion type</strong>, one field
+  (<code>sandbox: Literal[True]</code>), not an account reference the resolver can look up. So the
+  assertion is not a selector, and the account the gate reads is the credential's resolved account.
+  <span class="tag X">NOT ESTABLISHED</span> — whether the registry's derivation keys on the field's
+  presence or on its type is the one thing to confirm before writing the row; if it keys on presence
+  alone, the DTO may need the assertion under a different field name than <code>account</code>, which
+  the pin forbids. <strong>This is the highest-value unknown in the spec and stage 1 should resolve it
+  first.</strong>
+</p>
+
+<h4>The dispatch, and why <code>list_scenarios</code> is derived</h4>
+<pre><code># src/core/tools/compliance_service.py
+_HANDLERS: Mapping[str, ScenarioHandler] = {
+    "simulate_delivery":      _simulate_delivery,
+    "force_creative_status":  _force_creative_status,
+    # ... one entry per IMPLEMENTED scenario, and no others
+}
+
+def _list_scenarios() -> list[str]:
+    return sorted(_HANDLERS)        # derived, never declared
+</code></pre>
+<p>
+  <strong>The advertised set is the handler table's keys.</strong> It cannot drift, because there is
+  no second list to keep in step — the same reasoning the SDK's MRO walk uses, with less machinery.
+  A declaration would go stale silently; a derivation cannot. (The one hazard with derivations is a
+  population that silently becomes empty — here that is harmless, because an empty table advertises
+  nothing and every storyboard degrades to <code>not_applicable</code>, which is the honest answer.)
+</p>
+<p>
+  Unknown scenario &rarr; arm 7 <code>UNKNOWN_SCENARIO</code>. Missing required params &rarr; arm 7
+  <code>INVALID_PARAMS</code>. Entity absent &rarr; <code>NOT_FOUND</code>. Terminal-state transition
+  &rarr; <code>INVALID_TRANSITION</code>. All in-band, no exception raised, no
+  <code>AdCPSalesAgentError</code> involved.
+</p>
+
+<h3>6.4 The sandbox gate, and how pattern #11 is satisfied</h3>
+<pre><code>def _sandbox_gate(identity: ResolvedIdentity) -> ComplyErrorResponse | None:
+    """The pin: verify the PERSISTED record, never the caller's declaration."""
+    account = identity.account
+    if account is None or not bool(account.sandbox):   # NULL and false are one key
+        return ComplyErrorResponse(
+            success=False,
+            error=ComplyError.FORBIDDEN,
+            error_detail="Targeted account is not a sandbox account in the seller's persisted records.",
+        )
+    return None</code></pre>
+<p>Four properties, each mapping onto a stated requirement:</p>
+<ul>
+  <li><strong>Fail-closed.</strong> No account resolved &rarr; refuse. The SDK's own gate takes the
+      same posture ("a raising resolver DENIES",
+      <code>adcp/server/test_controller.py:840-863</code>), including for a caller who omits the
+      declaration entirely — which is scenario
+      <code>@T-UC-032-ext-a-prod-rejected-no-account-declaration</code>.</li>
+  <li><strong>The caller's field is never consulted.</strong> <code>account.sandbox</code> on the wire
+      is <code>Literal[True]</code>, so it carries no information — a <code>false</code> assertion
+      schema-rejects before the seller sees it. The gate reads
+      <code>identity.account.sandbox</code>, the DB column.</li>
+  <li><strong>Critical pattern #11 is satisfied because the gate's input is a database column.</strong>
+      Not <code>adcp_testing</code>, not <code>is_production</code>, not a header. A deployment turns
+      sandbox accounts on with <code>tenants.account_sandbox</code> and creates them through
+      <code>sync_accounts</code>; a test seeds the same column with a factory. There is no fork on
+      "a suite is running", so the behaviour a scenario grades is the behaviour a deployment runs.</li>
+  <li><strong>No new error subclass.</strong> Arm 7 is a response, not a raise (§3.2).</li>
+</ul>
+
+<h4>The tool ships in production, and that is the correct reading</h4>
+<div class="card ok">
+<p style="margin-top:0">The schema says "Sellers MUST NOT expose this tool in production", and the
+same schema says "real production endpoints accept sandbox-flagged traffic and process it without
+real-world side effects, <strong>no separate test-mode endpoint required</strong>". The second
+sentence defines what the first one means: <em>exposure</em> is the ability to affect production
+state, and the gate removes it. Three further facts make conditional registration the wrong answer
+here:</p>
+<ul style="margin-bottom:0">
+  <li>The storyboard grading env <strong>runs <code>ENVIRONMENT=production</code> deliberately</strong>
+      — the <code>adcp-server-storyboard</code> service, because "a conformance storyboard grades a
+      DEPLOYED seller, and a deployed seller runs the production boundary"
+      (<code>tox.ini</code>, <code>[testenv:storyboard]</code>) <span class="tag R">READING</span>.
+      Hiding the tool in production would hide it from the only run that grades it.</li>
+  <li>No mechanism exists. <code>_TOOLS</code> is frozen into a <code>MappingProxyType</code> at import
+      — "nothing may add, drop or repoint a row at runtime"
+      (<code>src/core/tools/registry.py:278-288</code>) — and
+      <code>git grep -n "is_production" -- src/core/tools/ src/core/main.py src/a2a_server/</code>
+      returns <strong>nothing</strong> <span class="tag E">EXECUTION</span>. Conditional registration
+      would be the first environment-varying thing in the registry.</li>
+  <li>An environment fork is the shape pattern #11 exists to prevent, one level up: it makes the
+      served seller depend on which deployment served it.</li>
+</ul>
+</div>
+
+<h3>6.5 Registration — one row, and advertisement comes free</h3>
+<pre><code># src/core/tools/registry.py
+"comply_test_controller": ToolSpec(
+    dto=ComplyTestControllerRequest,
+    impl=_comply_test_controller_impl,
+    rest=None,          # REST is this repo's own surface, not AdCP's (registry.py:66-70)
+    a2a=True,
+),</code></pre>
+<p>
+  <code>ToolSpec</code> has exactly four fields (<code>src/core/tools/registry.py:129-132</code>);
+  there is no <code>auth=</code> and no name/description — the credential policy is <em>derived</em>
+  from the impl's identity annotation (<code>:163</code>) and the description comes from the SDK
+  definition. MCP registration loops <code>TOOLS</code> (<code>src/core/main.py:437</code>); the A2A
+  card derives one skill per row with <code>spec.a2a</code>
+  (<code>src/a2a_server/adcp_a2a_server.py:577-601</code>).
+</p>
+<div class="card ok">
+<p style="margin:0">
+  <strong>That single row both implements and advertises.</strong> The conformance runner's controller
+  gate reads <code>options.agentTools</code>, which is MCP <code>tools/list</code> for
+  <code>--protocol mcp</code> and the A2A card's skills for <code>--protocol a2a</code> — not
+  <code>get_adcp_capabilities</code>, not a hardcoded list
+  (<code>runner.js:1135-1142</code>, <code>client.js:376-389</code> in <code>@adcp/sdk</code>)
+  <span class="tag R">READING</span>. So there is no separate advertisement step to forget, and no way
+  to implement the tool without advertising it.
+</p>
+</div>
+
+<h4>Collateral that will break on the new row, and must be fixed in the same change</h4>
+<p>Each of these enumerates <code>TOOLS</code>:</p>
+<ul>
+  <li><code>tests/unit/test_architecture_storyboard_coverage_claims.py:63</code> asserts
+      <code>storyboard_coverage_map.ADVERTISED_TOOLS == set(TOOLS)</code>, and
+      <code>ADVERTISED_TOOLS = frozenset(TOOLS)</code>
+      (<code>scripts/audit/storyboard_coverage_map.py:108</code>) is what reclassifies all 66
+      controller storyboards from GATED to ON-PATH — cascading into
+      <code>storyboard_check_index.py</code> and <code>storyboard_roadmap.py</code>.</li>
+  <li><code>tests/integration/test_tool_registration.py:14</code>,
+      <code>tests/unit/test_architecture_dto_adds_no_field.py:53,67</code>,
+      <code>tests/unit/test_response_schema_category_resolves.py:92,163,194</code>,
+      <code>tests/unit/test_architecture_signing_operations.py:134</code>,
+      <code>src/core/signing/vocabulary.py:65</code>.</li>
+</ul>
+
+<h3>6.6 Capabilities: <code>compliance_testing</code></h3>
+<p>
+  <span class="tag E">EXECUTION</span> <code>git grep -n "compliance_testing" -- src/</code> returns
+  zero. Emitting <code>compliance_testing.scenarios</code> from
+  <code>describe_seller</code> (<code>src/services/seller_capabilities.py</code>), sourced from the
+  same derived handler table as <code>list_scenarios</code>, does two things: it lets the runner
+  short-circuit the seeding probe round-trip
+  (<code>controllerScenarioSetFromOptions</code>, <code>seeding.js:1024</code>), and it is what
+  <code>BR-UC-010</code> grades. It also clears the xfail at
+  <code>tests/bdd/conftest.py:776</code> and lets the dead Then step at
+  <code>tests/bdd/steps/domain/uc010_capabilities.py:2289-2317</code> assert something.
+</p>
+
+<h2 id="seam">7. The time-advancement seam</h2>
+
+<h3>7.1 Where the clock lives today: nowhere coherent</h3>
+<p><span class="tag E">EXECUTION</span> Measured over the eleven files on the reporting path:</p>
+<ul>
+  <li><strong>No reporting-obligation entity exists.</strong> No table, no row, no persisted
+      <code>expected_at</code>, no recovery deadline. <code>git grep -n "expected_at" -- alembic/
+      src/core/database/</code> &rarr; zero hits.</li>
+  <li><code>expected_at</code> exists only as the computed, never-persisted wire field
+      <code>next_expected_at</code>, derived from wall-clock <code>now</code> at emission by
+      <strong>three mutually-unaware</strong> sites:
+      <code>src/services/delivery_webhook_scheduler.py:326-328</code> (tomorrow, hardcoded daily);
+      <code>src/core/tools/media_buy_delivery.py:568-572</code> (<code>now + 24h</code>, a literal
+      unrelated to the registration's cadence);
+      <code>src/services/webhook_delivery_service.py:355-358</code> (caller-supplied interval).</li>
+  <li><strong><code>now</code> is read ad hoc at 16 call sites</strong> — 12 wall-clock reads plus 4
+      elapsed-duration reads — plus 3 independent Postgres <code>func.now()</code> server defaults.
+      There is no clock abstraction, no injected <code>now</code>, no <code>Clock</code> class:
+      <code>git grep -n "clock\|Clock" -- src/</code> yields 16 hits, <strong>all text in
+      comments</strong>, zero identifiers. <code>freezegun</code> appears nowhere under
+      <code>src/</code>.</li>
+  <li>The scheduler is a bare <code>asyncio</code> loop
+      (<code>src/services/delivery_webhook_scheduler.py:79-94</code>) with <strong>no due-date
+      comparison at all</strong>: "due" means "no successful send logged in the last 24 wall-clock
+      hours" (<code>:276-294</code>). It computes no health states — <code>partial_data = False</code>
+      and <code>unavailable_count = 0</code> are hardcoded with <code>TODO</code>s
+      (<code>:334-335</code>).</li>
+  <li>There is <strong>no <code>delayed</code>, <code>action_required</code>, <code>late</code> or
+      <code>missed</code> reporting-health state</strong>. The one adjacent thing,
+      <code>reporting_delayed</code> (<code>src/core/tools/media_buy_delivery.py:307-308</code>), is
+      driven by an <strong>in-process circuit-breaker dict</strong>
+      (<code>src/services/webhook_delivery_service.py:293</code>) keyed
+      <code>f"{tenant_id}:{config.url}"</code> — process-local, tenant-scoped, lost on restart, not
+      per-obligation.</li>
+</ul>
+
+<div class="card warn">
+<p style="margin:0">
+  <strong>So the brief's question — "can 'now' be moved for ONE obligation without moving it
+  globally?" — has no answer in the current code, because there is no obligation to move it for.</strong>
+  The favourable half is that everything buyer-visible is <em>derived on read</em> from timestamps,
+  with no stored health column to keep in step. The unfavourable half is that there is no row to
+  derive from.
+</p>
+</div>
+
+<h3>7.2 The seam, once an obligation row exists</h3>
+<p>
+  The right design inverts the brief's framing, and the pinned storyboard already specifies it that
+  way. <strong>Do not move the clock. Move the obligation's timestamps.</strong>
+</p>
+<p>
+  <code>ReportingObligation</code> (<code>adcp/types/domains/core/reporting_obligation.py:46</code>)
+  carries <code>expected_at</code> as a required <code>AwareDatetime</code> (<code>:82</code>), and
+  <code>ReportingSchedule.delivery_sla</code> gives the normative derivation — "<em>expected_at equals
+  the resolved period end plus this duration</em>" (<code>adcp/types/domains/core/reporting_schedule.py:51</code>).
+  <code>health</code> (<code>:103</code>) and <code>production_status</code> (<code>:104</code>, a
+  local <code>StrEnum</code>: <code>not_due, pending, published, failed</code>) are fields on the same
+  row.
+</p>
+<p>Therefore:</p>
+<ul>
+  <li><code>operation: prepare</code> &rarr; <code>INSERT</code> an obligation row with
+      <code>expected_at</code> in the future, and return its identity plus its timestamps in
+      <code>simulated.*</code> (the step's six <code>context_outputs</code>).</li>
+  <li><code>operation: advance_time, target_health: delayed</code> &rarr; <code>UPDATE</code> that one
+      row's <code>expected_at</code> to a past instant such that the read-time derivation yields
+      <code>delayed</code>.</li>
+  <li><code>operation: advance_past_escalation</code> &rarr; same <code>UPDATE</code>, further back,
+      past the escalation window.</li>
+</ul>
+<p>Why this is the correct seam rather than a clock override:</p>
+<ol>
+  <li><strong>It is inherently per-obligation.</strong> One row's columns change. No global state, no
+      process-wide monkeypatching, no effect on any other caller's obligations.</li>
+  <li><strong>It needs no clock abstraction and no refactor of the 16 <code>now</code> sites.</strong>
+      Those keep reading real wall-clock time; only the row's timestamps move.</li>
+  <li><strong>Pattern #11 is satisfied the same way as §6.4</strong> — the probe's effect is rows in
+      a table, written through a repository by a tool whose gate is a database column. No production
+      path branches on anything.</li>
+  <li><strong>It is what the storyboard asks for.</strong> The step's <code>context_outputs</code> read
+      <code>simulated.expected_at</code> and <code>simulated.recovery_deadline</code> — the runner
+      wants the <em>obligation's</em> timestamps back, which only makes sense if they are the
+      obligation's own data. A clock override would have nothing to return here.</li>
+  <li><strong>The precedent exists.</strong> <code>DeliverySimulationConfig</code> (§5.2) is already a
+      production, DB-backed, per-row behaviour override seeded by the harness. This is the same shape
+      applied to a different row.</li>
+</ol>
+<p class="note">
+  Scope honesty: the obligation row, its repository, its migration, the <code>expected_at</code>
+  derivation from <code>delivery_sla</code>, and the read-time health derivation are <strong>the
+  reporting subsystem</strong>, not controller work. The controller's share of
+  <code>reporting_core_lifecycle_probe</code> is nine thin handlers over a repository that does not
+  exist yet. That ordering is why it is stage 6 (§9) and why §10 prices it separately.
+  <code>recovery_deadline</code> has no SDK type at all — the nearest declared things are
+  <code>automated_recovery_window_seconds</code>
+  (<code>adcp/types/domains/core/reporting_delivery_capabilities.py:106</code>) and
+  <code>consumer_mismatch_escalation_seconds</code> (<code>:120</code>) — so the deadline is derived,
+  not stored, and <code>stale_received_grace_deadline</code> must be invented
+  <span class="tag X">NOT ESTABLISHED</span>.
+</p>
+
+<h2 id="scope">8. Scenario-by-scenario scope</h2>
+
+<p>
+  <span class="tag E">EXECUTION</span> Keyed on <code>sample_request.scenario</code> (not the
+  <code>comply_scenario</code> label — see §2). "Files" is the number of distinct storyboards
+  requesting it, which approximates how many <code>requires: [controller]</code> gates it helps open.
+</p>
+<div class="scroll">
+<table>
+<thead><tr><th>Wire scenario</th><th>Steps</th><th>Checks</th><th>Files</th><th>What it needs here</th><th>Stage</th></tr></thead>
+<tbody>
+<tr><td><code>simulate_delivery</code></td><td>52</td><td>59</td><td>19</td><td class="green"><code>DeliverySimulationConfig</code> row write — the precedent exists</td><td>2</td></tr>
+<tr><td><code>force_creative_status</code></td><td>37</td><td class="green">89</td><td>6</td><td class="green">Creative status column + <code>CreativeStatus</code> enum (6 members)</td><td>3</td></tr>
+<tr><td><code>reporting_core_lifecycle_probe</code></td><td>20</td><td>46</td><td>2</td><td class="red">Whole reporting-obligation subsystem (§7)</td><td>6</td></tr>
+<tr><td><code>compact_product_lifecycle_probe</code></td><td>10</td><td>42</td><td>4</td><td class="amber">Proposal holds + expiry</td><td>5</td></tr>
+<tr><td><code>force_task_completion</code></td><td>8</td><td>24</td><td>4</td><td class="amber">Task/workflow machinery + verbatim webhook delivery</td><td>5</td></tr>
+<tr><td><code>evaluate_distributed_brand_resolution</code></td><td>8</td><td>32</td><td>1</td><td class="amber">Brand-resolution probe — not in SDK <code>SCENARIOS</code></td><td>—</td></tr>
+<tr><td><code>catalog_item_availability_probe</code></td><td>8</td><td>24</td><td>1</td><td class="amber">Catalog generations + item eligibility</td><td>5</td></tr>
+<tr><td><code>force_audience_status</code></td><td>6</td><td>12</td><td>1</td><td class="amber">Not in SDK <code>SCENARIOS</code> (30)</td><td>—</td></tr>
+<tr><td><code>force_create_media_buy_arm</code></td><td>4</td><td>18</td><td>2</td><td class="amber">Single-shot directive store</td><td>5</td></tr>
+<tr><td><code>force_get_products_arm</code></td><td>4</td><td>16</td><td>2</td><td class="amber">Single-shot directive store</td><td>5</td></tr>
+<tr><td><code>force_account_status</code></td><td>4</td><td>14</td><td>1</td><td class="green">Account status column + <code>AccountStatus</code> (6 members)</td><td>4</td></tr>
+<tr><td><code>query_provenance_audit_observations</code></td><td>4</td><td>20</td><td>1</td><td class="amber">Creative provenance audit records</td><td>—</td></tr>
+<tr><td><code>force_get_creative_features_arm</code></td><td>4</td><td>14</td><td>1</td><td class="amber">Creative-features async arm</td><td>5</td></tr>
+<tr><td><code>force_media_buy_status</code></td><td>3</td><td>12</td><td>1</td><td class="green"><code>media_buys.status</code> + <code>MediaBuyStatus</code> (7 members)</td><td>4</td></tr>
+<tr><td><code>seed_account</code></td><td>3</td><td>3</td><td>1</td><td class="green">Account factory-equivalent write</td><td>4</td></tr>
+<tr><td><code>force_upstream_unavailable</code></td><td>3</td><td>7</td><td>2</td><td class="amber">Upstream-failure injection</td><td>—</td></tr>
+<tr><td>8 further <code>seed_*</code> / <code>force_*_purge</code> / <code>simulate_budget_spend</code></td><td>14</td><td>31</td><td>&mdash;</td><td class="green">Small, mostly one repository write each</td><td>4</td></tr>
+<tr><td><code>list_scenarios</code></td><td>1</td><td>4</td><td>1</td><td class="green">Derived from the handler table</td><td>1</td></tr>
+<tr><td><code>nonexistent_scenario</code></td><td>1</td><td>4</td><td>1</td><td class="green">Arm 7 <code>UNKNOWN_SCENARIO</code></td><td>1</td></tr>
+<tr><td>4 <code>reliable_reporting_*</code> / <code>evaluate_*</code> / governance probes</td><td>11</td><td>47</td><td>&mdash;</td><td class="red">Outside SDK <code>SCENARIOS</code>; subsystem-dependent</td><td>—</td></tr>
+<tr><td><strong>TOTAL</strong></td><td><strong>221</strong></td><td><strong>551</strong></td><td>&mdash;</td><td>&mdash;</td><td>&mdash;</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>8.1 What <code>list_scenarios</code> must advertise, and what it may decline</h3>
+<p>This is the question that makes the work incremental, and the answer is precise:</p>
+<ul>
+  <li><strong>To stop a check skipping as <code>missing_test_controller</code>, the tool must exist on
+      the wire.</strong> That gate reads only the transport's tool listing
+      (<code>runner.js:1135-1142</code>) — one registry row clears it for all 221 steps at once.</li>
+  <li><strong>To stop a check skipping as <code>fixture_seed_unsupported</code>, the specific
+      <code>seed_*</code>/<code>force_*</code> scenario a storyboard needs must appear in the
+      <code>list_scenarios</code> array.</strong> <code>findUnsupportedSeedScenario</code>
+      (<code>seeding.js:1007-1023</code>) checks membership; a miss degrades the storyboard to
+      <code>not_applicable</code> (<code>seeding.js:1046</code>) — still ungraded, but under a
+      different label and, crucially, <strong>not a failure</strong>.</li>
+  <li><strong>A seller may legitimately decline any scenario by omitting it.</strong> The pin's own
+      framing: <code>list_scenarios</code> "discovers supported scenarios", and the
+      <code>query_upstream_traffic</code> opt-in/opt-out pair is written into BR-UC-032 as two
+      scenarios (<code>@upstream-traffic-opt-in</code>, <code>@upstream-traffic-opt-out</code>)
+      asserting that non-advertisement produces <code>not_applicable</code> grading rather than
+      failure.</li>
+</ul>
+<div class="card ok">
+<p style="margin:0"><strong>That is the safety property the whole staged plan rests on:</strong>
+advertising only implemented scenarios converts every unimplemented one into
+<code>not_applicable</code> instead of a failure. Without it, landing stage 1 would un-skip 221 steps
+into red. §11.2 treats the inverse as the main delivery risk.</p>
+</div>
+
+<h2 id="plan">9. Staged plan</h2>
+
+<p>
+  Each stage is independently landable and separately valuable. Each names the BDD scenario that
+  grades it. Where a scenario must be authored, that is said — authoring is part of the stage, and
+  BR-UC-032's 41 scenarios already exist as the target.
+</p>
+
+<h3>Stage 0 — Close the sandbox isolation hole <span class="green">(no controller)</span></h3>
+<ul>
+  <li><strong>Change:</strong> <code>resolve_tenant_adapter_type</code> takes the identity and resolves
+      <code>"mock"</code> for <code>bool(identity.account.sandbox)</code>
+      (<code>src/core/helpers/adapter_helpers.py:180-206</code>, one owner for eight call sites).
+      Emit <code>sandbox: true</code> on the six responses whose pinned schema declares it, via one
+      shared derivation (§5.3) — and fix the dead <code>None</code> at
+      <code>src/core/tools/creative_formats.py:514</code>.</li>
+  <li><strong>Graded by:</strong> new scenarios on <code>BR-UC-002-create-media-buy.feature</code>
+      ("a sandbox account's media buy reaches no live ad server") and
+      <code>BR-UC-004-deliver-media-buy-metrics.feature</code> ("delivery for a sandbox account is
+      simulated"), plus the existing <code>sandbox</code>-tagged scenarios on the accounts features.
+      <span class="tag X">NOT ESTABLISHED</span> — I did not enumerate which sandbox scenarios pass
+      today, so stage 0 must begin by measuring that rather than assuming the new ones are the only
+      ones.</li>
+  <li><strong>Lands without:</strong> any controller, any registry change, any new DTO. This is a
+      bug fix and should ship on its own merits whatever is decided about the controller.</li>
+</ul>
+
+<h3>Stage 1 — Controller skeleton and the gate</h3>
+<ul>
+  <li><strong>Change:</strong> the DTO (§6.1), arms 0/1/4/7 (§6.2), the <code>_impl</code> + service
+      with a derived handler table holding <strong>only</strong> <code>list_scenarios</code> (§6.3),
+      the sandbox gate (§6.4), the registry row (§6.5), the <code>compliance_testing</code>
+      capabilities block (§6.6), and the collateral fixes in §6.5.
+      <strong>Make BR-UC-032 actually grade</strong> — three artifacts, not one: the
+      <code>scenarios()</code> binding, the <code>UNBOUND_ALLOWLIST</code> removal
+      (<code>tests/unit/test_architecture_feature_file_bound.py:56</code>), <strong>and an
+      <code>EnvRoute</code> row</strong>, without which every scenario xfails at fixture setup
+      before a step runs (<code>tests/bdd/conftest.py:6854-6859</code>, §4.2). Retract the
+      "will not be implemented" policy statements (§4.2).</li>
+  <li><strong>Graded by</strong> (all already written, currently executing nothing):
+    <ul>
+      <li><code>@T-UC-032-ext-a-prod-rejected</code> — persisted-record verification &rarr; FORBIDDEN</li>
+      <li><code>@T-UC-032-ext-a-prod-rejected-no-account-declaration</code> — fail-closed on an omitted declaration</li>
+      <li><code>@T-UC-032-main-sandbox-gate-pass</code> — sandbox account admitted</li>
+      <li><code>@T-UC-032-list-scenarios</code> — derived array + context echoed</li>
+      <li><code>@T-UC-032-list-scenarios-omits-upstream-traffic</code> — non-advertisement &rarr; <code>not_applicable</code></li>
+      <li><code>@T-UC-032-ext-b-unknown-scenario</code> — <code>UNKNOWN_SCENARIO</code></li>
+      <li><code>@T-UC-032-ext-b-context-echoed-on-failure</code>, <code>@T-UC-032-bva-sandbox-only-gate</code>,
+          <code>@T-UC-032-bva-caller-sandbox-declaration</code>, <code>@T-UC-032-bva-context-echo</code></li>
+    </ul>
+  </li>
+  <li><strong>First task in the stage:</strong> resolve the <code>requires_account()</code> derivation
+      question in §6.3. It can invalidate the DTO shape.</li>
+  <li><strong>Storyboard effect:</strong> clears <code>missing_test_controller</code> on all 221 steps;
+      they land on the seeding gate as <code>fixture_seed_unsupported</code>/<code>not_applicable</code>
+      because the handler table is nearly empty. Expect the measured <code>passed</code> to rise only
+      by the <code>list_scenarios</code> and <code>UNKNOWN_SCENARIO</code> checks (~8 across both
+      protocols). <strong>The value of stage 1 is unlocking stages 2–5, not its own check count.</strong></li>
+</ul>
+
+<h3>Stage 2 — <code>simulate_delivery</code> <span class="green">(best ratio in the plan)</span></h3>
+<ul>
+  <li><strong>Change:</strong> one handler writing a <code>DeliverySimulationConfig</code> row
+      (<code>src/core/database/repositories/delivery_simulation.py:42-48</code>), returning arm 2 with
+      <code>simulated</code> and <code>cumulative</code>. The mock adapter already reads that row
+      first (<code>src/adapters/mock_ad_server.py:1164-1185</code>), and stage 0 guarantees a sandbox
+      account is on the mock adapter. Add arm 2.</li>
+  <li><strong>Graded by:</strong> <code>@T-UC-032-simulate-delivery</code> (injects metrics, returns
+      cumulative totals), <code>@T-UC-032-bva-simulate-numeric</code>, and the dormant
+      <code>T-UC-004-storyboard-controller-driven-delivery-schema-compliance</code>
+      (<code>tests/bdd/dormant_scenarios.txt:182</code>).</li>
+  <li><strong>Storyboard effect:</strong> 52 steps / 59 checks across <strong>19 storyboards</strong> —
+      the widest single scenario in the corpus, and the one whose machinery already exists.</li>
+</ul>
+
+<h3>Stage 3 — <code>force_creative_status</code> and <code>force_creative_purge</code></h3>
+<ul>
+  <li><strong>Change:</strong> two handlers over the creative repository, transitioning the status
+      column across the pinned <code>CreativeStatus</code> members
+      (<code>processing, pending_review, approved, suspended, rejected, archived</code>
+      <span class="tag E">EXECUTION</span>), returning arm 1 with <code>previous_state</code> /
+      <code>current_state</code>, and arm 7 <code>INVALID_TRANSITION</code> from a terminal state.</li>
+  <li><strong>Graded by:</strong> <code>@T-UC-032-force-creative-status</code>,
+      <code>@T-UC-032-ext-b-invalid-transition</code>, <code>@T-UC-032-ext-b-not-found</code>,
+      <code>@T-UC-032-idempotent-replay</code>.</li>
+  <li><strong>Storyboard effect:</strong> 37 steps / <strong>89 checks</strong> — the highest check
+      count of any single scenario.</li>
+</ul>
+
+<h3>Stage 4 — The remaining cheap state-forcers and seeds</h3>
+<ul>
+  <li><strong>Change:</strong> <code>force_account_status</code>, <code>force_media_buy_status</code>,
+      <code>force_media_buy_purge</code>, <code>force_session_status</code>,
+      <code>simulate_budget_spend</code>, and the <code>seed_*</code> family
+      (<code>seed_account, seed_creative, seed_media_buy, seed_product, seed_pricing_option,
+      seed_creative_format, seed_measurement_catalog, seed_rights_grant</code>) — each one repository
+      write, each returning arm 1 or arm 4.</li>
+  <li><strong>Graded by:</strong> <code>@T-UC-032-force-account-status</code>,
+      <code>@T-UC-032-force-session-status-terminated</code>,
+      <code>@T-UC-032-simulate-budget-spend</code>, <code>@T-UC-032-seed-product</code>,
+      <code>@T-UC-032-seed-creative</code>, <code>@T-UC-032-bva-force-session-status</code>.</li>
+  <li><strong>Storyboard effect:</strong> ~31 steps / ~75 checks, plus it is what unlocks the 150
+      storyboards carrying <code>prerequisites.controller_seeding: true</code>, whose downstream
+      assertions (240 steps / 931 checks) are currently cascade-skipped.
+      <span class="tag X">NOT ESTABLISHED</span> — how much of that 931 becomes gradable depends on
+      each storyboard's non-controller requirements, which I did not evaluate per-file.</li>
+</ul>
+
+<h3>Stage 5 — Async arms and directives <span class="amber">(decision point)</span></h3>
+<ul>
+  <li><code>force_create_media_buy_arm</code>, <code>force_get_products_arm</code>,
+      <code>force_get_signals_arm</code>, <code>force_get_creative_features_arm</code>,
+      <code>force_task_completion</code>, plus the <code>compact_*</code> and
+      <code>catalog_item_availability</code> probes. These need a single-shot directive store (a row
+      keyed by account, consumed on next matching call) and, for
+      <code>force_task_completion</code>, verbatim result delivery to
+      <code>push_notification_config.url</code>.</li>
+  <li><strong>Graded by:</strong> <code>@T-UC-032-force-create-media-buy-branch-submitted</code>,
+      <code>@T-UC-032-force-task-completion-verbatim-delivery</code>,
+      <code>@T-UC-032-bva-force-create-media-buy-branch</code>,
+      <code>@T-UC-032-bva-force-task-completion-verbatim</code>,
+      <code>@T-UC-032-bva-force-task-completion-result</code>,
+      <code>@T-UC-032-ext-b-invalid-params-missing-task-id</code>,
+      <code>@T-UC-032-ext-b-invalid-params-result-payload</code>.</li>
+  <li><strong>Reassess before starting.</strong> ~40 steps / ~150 checks, but the directive store is
+      new machinery and the <code>compact_*</code> probes depend on proposals and catalog generations
+      whose local state I did not trace.</li>
+</ul>
+
+<h3>Stage 6 — <code>reporting_core_lifecycle_probe</code> <span class="red">(separate programme)</span></h3>
+<ul>
+  <li><strong>Prerequisite, not part of the stage:</strong> the reporting-obligation subsystem — ORM
+      model to the SDK's <code>ReportingObligation</code> shape, migration, repository,
+      <code>expected_at = period_end + delivery_sla</code>, read-time health derivation, and
+      reconciliation of the three existing unaware <code>next_expected_at</code> derivations (§7.1).</li>
+  <li><strong>Then:</strong> nine thin handlers writing that row's timestamps (§7.2).</li>
+  <li><strong>Graded by:</strong> no BR-UC-032 scenario covers this probe — the grading is the
+      storyboard itself (<code>universal/reporting-core.yaml</code>, 9 steps / 34 validations) plus
+      scenarios that would have to be authored on a reporting feature file.
+      <span class="tag X">NOT ESTABLISHED</span> — whether a <code>BR-UC-*</code> feature for reporting
+      obligations exists at all.</li>
+  <li><strong>Do not start this to chase the controller.</strong> Build it when reporting obligations
+      are wanted for their own sake; the probe is then a small addition.</li>
+</ul>
+
+<h3>Not scoped</h3>
+<p>
+  <code>query_upstream_traffic</code> (per-principal scoping, secret redaction, digest mode — 8
+  BR-UC-032 scenarios including 2 marked <code>@critical</code>) is deliberately omitted. It is a
+  traffic-recording subsystem, it is explicitly opt-in per the pin, and omitting it from
+  <code>list_scenarios</code> is a conformant choice that grades <code>not_applicable</code>. The
+  scenarios <code>evaluate_*</code>, <code>force_audience_status</code>,
+  <code>query_account_governance_binding</code> and the <code>reliable_reporting_*</code> probes
+  (~11 steps / 47 checks) are <strong>not in the SDK's 30-name <code>SCENARIOS</code> list</strong>
+  <span class="tag E">EXECUTION</span>, so what the pin obliges for them is unclear
+  <span class="tag X">NOT ESTABLISHED</span>.
+</p>
+
+<h2 id="cost">10. Cost estimate</h2>
+
+<div class="card">
+<p style="margin-top:0"><strong>This is an estimate, not a measurement.</strong> It is engineer-days
+for someone fluent in this codebase, including the BDD scenarios, the collateral guard fixes, and
+<code>make quality</code>. It excludes review latency and excludes any <code>cassini</code> run time.
+Treat the ranges as honest uncertainty, and treat stage 6 as a number you should not spend without a
+separate decision.</p>
+</div>
+
+<div class="scroll">
+<table>
+<thead><tr><th>Stage</th><th>Days</th><th>Corpus checks addressed</th><th>Confidence</th><th>Why that number</th></tr></thead>
+<tbody>
+<tr><td>0 — sandbox isolation</td><td class="green">2–4</td><td>n/a (correctness)</td><td class="green">High</td><td>One resolver change, one shared response derivation, 2+ new BDD scenarios. The uncertainty is how many existing scenarios assume a live adapter for a sandbox account.</td></tr>
+<tr><td>1 — skeleton + gate + <strong>grading route</strong></td><td class="amber">8–14</td><td>~8</td><td class="amber">Medium</td><td>DTO + 4 arms + registry row is a day or two. The rest is collateral and grading: 7 guard/audit modules enumerate <code>TOOLS</code>, <code>ADVERTISED_TOOLS</code> reclassifies 66 storyboards, 6 policy documents must be retracted, and BR-UC-032 must be bound <em>and routed</em> — a <code>scenarios()</code> call, the <code>UNBOUND_ALLOWLIST</code> removal, an <code>EnvRoute</code> row, and ~10 scenarios' steps across four transports (§4.2). Without the route the tool ships ungraded, so this is not optional. The <code>requires_account()</code> unknown (§6.3) is the variance.</td></tr>
+<tr><td>2 — <code>simulate_delivery</code></td><td class="green">3–5</td><td>59</td><td class="green">High</td><td>The storage, the repository and the adapter read all exist. One handler, one arm, 2 scenarios.</td></tr>
+<tr><td>3 — <code>force_creative_status</code></td><td class="green">4–6</td><td>89</td><td class="green">High</td><td>Two handlers over an existing column; the work is the transition matrix and <code>INVALID_TRANSITION</code>, plus 4 scenarios.</td></tr>
+<tr><td>4 — cheap forcers + seeds</td><td class="amber">7–12</td><td>~75 direct</td><td class="amber">Medium</td><td>13 handlers at roughly half a day each, plus 6 scenarios. Wide but shallow. Upside on the 931 cascade-skipped downstream checks is unquantified.</td></tr>
+<tr><td>5 — async arms</td><td class="amber">10–18</td><td>~150</td><td class="red">Low</td><td>New directive-store machinery, verbatim webhook delivery, and probes depending on proposal/catalog state I did not trace. Re-estimate after stage 4.</td></tr>
+<tr><td>6 — reporting probe</td><td class="red">20–40</td><td>46</td><td class="red">Low</td><td>Almost entirely the missing subsystem: ~30-field model, migration, repository, SLA-derived <code>expected_at</code>, read-time health, and reconciling 3 existing unaware derivations and 16 ad-hoc <code>now</code> reads. The probe handlers themselves are ~2 days of the total.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h4>The number to decide on</h4>
+<div class="kpis">
+  <div class="kpi"><b>17–29</b><span>days, stages 0–3</span></div>
+  <div class="kpi"><b>~148</b><span>corpus checks, stages 2–3</span></div>
+  <div class="kpi"><b>24–41</b><span>days, stages 0–4</span></div>
+  <div class="kpi"><b>20–40</b><span>days, stage 6 alone</span></div>
+</div>
+<p>
+  <strong>Stages 0–3 are the recommendation.</strong> Seventeen to twenty-nine days closes a live
+  production-exposure bug, puts the tool on the wire, and addresses the two highest-yield scenarios
+  (148 of the 551 corpus checks, 27%, concentrated in 25 storyboards) using machinery that already
+  exists. Stage 4 is good value and can follow immediately. Stage 5 should be re-estimated after 4.
+</p>
+<p>
+  <strong>Stage 6 is the one to decline</strong>, on this evidence: 20–40 days for 46 checks, where
+  ~90% of the cost is a reporting subsystem that nothing else currently asks for. If reporting
+  obligations become a product requirement, the probe is a cheap addition to that work — but buying
+  the subsystem to buy the probe is the wrong way round.
+</p>
+<div class="card mid">
+<p style="margin:0">
+  <strong>What this does not buy, and the brief should hear it plainly:</strong> none of these stages
+  gets the measured <code>passed</code> count from ~30 to the floor's 102 on its own. The 341
+  controller skips are the largest single cause, but 128 <code>not_applicable</code> and the 19
+  <code>capability_profile_mismatch</code> signing-posture losses are separate diseases, and the
+  floor's provenance is itself unresolved (§2.1). Stages 0–4 should be justified as conformance and
+  correctness work with a large check yield — not as the thing that restores the floor.
+</p>
+</div>
+
+<h2 id="risks">11. Risks</h2>
+
+<h3>11.1 What a sandbox account can expose today <span class="red">(live, pre-existing)</span></h3>
+<p>
+  The brief asks what a sandbox account could expose "if isolation is wrong". It is wrong now, and the
+  exposure is concrete: a buyer referencing a sandbox account on a GAM-configured tenant
+  <strong>creates a real GAM order and real line items</strong>
+  (<code>src/adapters/gam/managers/orders.py:111-113</code>, reached unconditionally from
+  <code>src/adapters/google_ad_manager.py:624,667</code>), and the adapter calls approval at
+  <code>:690</code>. The account is not an input to adapter selection at any point
+  (§5.2). Consequences, in order of severity:
+</p>
+<ol>
+  <li><strong>Real inventory booked under a test flow.</strong> The spec's warning — "Omitting the
+      selector from a natural key defaults to production and can book real inventory" — is about the
+      buyer's mistake; here the seller books real inventory even when the buyer does everything
+      right.</li>
+  <li><strong>Indirect real money.</strong> There is no billing path in this system
+      (<span class="tag E">EXECUTION</span>: no invoice/charge/payment/ledger table among the 41
+      <code>__tablename__</code> values; <code>src/core/billing_policy.py</code> is 58 lines deciding
+      only <em>who pays</em>), so the seller charges nothing. But a real GAM order is something a
+      publisher bills on outside this system. The "MUST NOT charge real money" obligation is
+      discharged by absence; "MUST NOT make real ad platform API calls" is not.</li>
+  <li><strong>Adding the controller multiplies it.</strong> A controller that forces states and
+      simulates delivery against an account whose requests reach a live ad server is strictly worse
+      than no controller. <strong>This is why stage 0 precedes stage 1 and is not optional.</strong></li>
+</ol>
+<p class="note">
+  Conversely, the gate's own failure mode is mild: if the gate wrongly refuses a genuine sandbox
+  account, the controller returns <code>FORBIDDEN</code> and storyboards skip — visible, inert, no
+  state touched. Fail-closed is the right default and costs little when wrong.
+</p>
+
+<h3>11.2 Landing stage 1 could redden CI <span class="amber">(manageable, by design)</span></h3>
+<p>
+  A <code>missing_test_controller</code> skip is ungraded and <strong>unledgerable</strong> — runner
+  skips are never <code>known_failures.txt</code> entries
+  (<code>tests/storyboard/conftest.py:10</code>). Un-skip a check that then <em>fails</em> and it
+  becomes a real failing item with no ledger entry, which reddens CI. Stage 1 un-skips 221 steps at
+  once.
+</p>
+<p>
+  <strong>The mitigation is the design, not a process promise:</strong> <code>list_scenarios</code>
+  derived from the handler table (§6.3) means an unimplemented scenario is never advertised, so the
+  seeding gate degrades the storyboard to <code>not_applicable</code>
+  (<code>seeding.js:1046</code>) rather than attempting and failing it. The residual hazard is a step
+  with <code>requires_tool: comply_test_controller</code> but <strong>no</strong>
+  <code>controller_seeding</code> prerequisite and <strong>not</strong> marked
+  <code>stateful: true</code> — such a step is attempted anyway and will fail
+  (<code>runner.js:2409</code> only cascades <code>stateful</code> steps).
+  <span class="tag X">NOT ESTABLISHED</span> — I did not count how many of the 114
+  <code>requires_tool</code> steps fall in that category. <strong>Stage 1 should begin by measuring
+  it</strong>, and the honest fallback if the number is large is to ledger those nodeids in the same
+  change with a reason naming the stage that will clear them.
+</p>
+
+<h3>11.3 Other risks</h3>
+<ul>
+  <li><strong>The tool becomes publicly discoverable.</strong> One registry row puts it on MCP
+      <code>tools/list</code>, the A2A card, and (if <code>rest</code> is non-<code>None</code>) a
+      REST route. That is intended (§6.4) and the gate is the control — but it means every buyer sees
+      a <code>comply_test_controller</code> skill. Mitigation: <code>rest=None</code>, and rely on the
+      gate. Anyone uncomfortable with the discoverability should reopen §6.4 rather than weaken the
+      gate.</li>
+  <li><strong><code>x-mutates-state: true</code> with no idempotency key.</strong> The pin says the
+      tool is "naturally idempotent &hellip; replays converge to the same observable state without
+      needing an idempotency_key", and reads/state-forcing operations take no key (consistent with
+      critical pattern #7's rule that reads take no idempotency key). Handlers must therefore be
+      written as <em>assignments</em> ("set status to X"), never as increments. <code>cumulative</code>
+      on <code>simulate_delivery</code> is the exception the pin itself names, and
+      <code>@T-UC-032-idempotent-replay</code> grades the property.</li>
+  <li><strong>Seed scenarios write real rows.</strong> <code>seed_*</code> creates products,
+      creatives and accounts. Under stage 0 those live on sandbox accounts and the mock adapter, but
+      they are rows in the real database. Mitigation: they are confined by the gate to sandbox
+      accounts, which is exactly the pin's model — "Sandbox is account-level".</li>
+  <li><strong>Pin drift.</strong> The DTO inherits the SDK's 56-property <code>Params</code>. An SDK
+      bump that reshapes it changes this tool's accepted shape silently.
+      <code>tests/unit/test_adcp_spec_version.py</code> catches pin drift; the per-scenario
+      <code>if/then</code> requirements are not guarded locally and would be caught by the storyboard
+      run.</li>
+  <li><strong>Two <code>sandbox</code> semantics in one field name.</strong> On the controller's
+      request, <code>account.sandbox</code> is a one-field assertion type with
+      <code>Literal[True]</code>. Everywhere else in this codebase <code>account</code> is a
+      reference with a natural key. Conflating them in the resolver is the most likely implementation
+      mistake; §6.3 is where it would surface.</li>
+</ul>
+
+<h2 id="open">12. Open questions</h2>
+
+<p>Named rather than designed over. The first two can change the design.</p>
+<ol>
+  <li><strong>Does <code>ToolSpec.requires_account()</code> key on the <code>account</code> field's
+      presence/required-ness alone, or on its type?</strong> (§6.3) The controller's
+      <code>account</code> is a sandbox assertion, not a resolvable reference. If the registry demands
+      <code>AccountIdentity</code> for any DTO with a required <code>account</code>, and the resolver
+      then tries to resolve the assertion as a reference, the DTO shape must change — and the pin
+      fixes the field name. <strong>Resolve first in stage 1.</strong>
+      <code>src/core/tools/registry.py:134,156</code>.</li>
+  <li><strong>Does the schema-inheritance guard actually admit narrowing
+      <code>account</code> to required?</strong> (§6.1) I read the predicate
+      (<code>tests/unit/test_architecture_schema_inheritance.py:145-146,196,198</code>) and it should,
+      but I did not run it against the real subclass. If it demands an allowlist row, that row would
+      <em>grow</em> an allowlist, which the brief forbids — and the fallback is to leave
+      <code>account</code> optional and enforce presence in the gate, which is weaker but legal.</li>
+  <li><strong>Are <code>advance_within_retention</code>, <code>revoke_access</code> and
+      <code>publish_adjustment</code> in the pinned <code>Operation</code> enum?</strong> The corpus
+      sends them for <code>reliable_reporting_*</code> probes
+      <span class="tag E">EXECUTION</span>, but the enum members I saw enumerated were
+      <code>prepare, advance_time, publish_zero_row, publish_nonempty, restate_snapshot,
+      restate_after_received, omit_obligation, advance_past_status_deadline, advance_past_escalation,
+      publish_official_adjustment, probe_scheduler_dst, suppress_readiness</code>. If they are absent,
+      those scenarios cannot be expressed under this pin at all.</li>
+  <li><strong>How many of the 114 <code>requires_tool</code> steps lack both
+      <code>controller_seeding</code> and <code>stateful: true</code>?</strong> (§11.2) This is the
+      size of stage 1's CI risk and it is a one-pass YAML count.</li>
+  <li><strong>Why is <code>.storyboard-pass-floor</code> 102 when every findable 3.2.1 measurement
+      scores 18–29?</strong> (§2.1) The floor was already 102 in <code>a8f5911a9</code>. Until this is
+      explained, no post-controller run should be read as progress toward it.</li>
+  <li><strong>What sandbox behaviour is graded today?</strong> (§9, stage 0) I did not enumerate
+      passing sandbox scenarios across the accounts/creatives features, so stage 0's starting
+      measurement is unknown.</li>
+  <li><strong>Is there a <code>BR-UC-*</code> feature for reporting obligations?</strong> (§9, stage 6)
+      Without one, stage 6's BDD grading has to be authored from nothing, which is additional to the
+      20–40 day estimate.</li>
+  <li><strong>What does <code>salesagent.noetis.dev</code> currently set?</strong> Per the brief I did
+      not inspect it. Stage 0 and the gate both need <code>tenants.account_sandbox</code> true <em>and</em>
+      a billing policy for the <code>account</code> capabilities block to appear at all
+      (<code>src/services/seller_capabilities.py:328-329</code>).</li>
+  <li><strong>How much of the 931 cascade-skipped downstream checks becomes gradable per stage?</strong>
+      (§9, stage 4) This needs a per-storyboard evaluation of non-controller requirements, which I did
+      not do. It is the largest unquantified upside in the plan.</li>
+</ol>
+
+<footer>
+  Spec written on branch <code>spec/comply-controller</code> at <code>f005254d3</code> in worktree
+  <code>sa-spec-comply</code> &middot; pinned AdCP 3.2.1 &middot; no production code written &middot;
+  no test suite run (the build daemon was unreachable from this machine) &middot;
+  spec text fetched from <code>adcontextprotocol/adcp</code> via <code>gh api</code>;
+  compliance corpus measured over the pinned <code>adcp-3.2.1/compliance</code> bundle (359 files).
+</footer>
+
+</div>
+</body>
+</html>

@@ -18,12 +18,11 @@ from src.core.exceptions import AdCPAdapterError, AdCPConfigurationError, AdCPIn
 from src.core.helpers.brand_key import brand_key_parts
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
+    AnyTargeting,
     MediaPackage,
     Principal,
     Product,
     ReportingPeriod,
-    Targeting,
-    url,
 )
 from src.core.security.outbound_http import OutboundError
 
@@ -84,7 +83,7 @@ class MediaBuyStatus:
 class PackageStatus:
     """Temporary stub for Xandr package status tracking (Xandr-specific, not AdCP).
 
-    NOTE: This is NOT the AdCP PackageStatus enum (which was removed in adcp 2.12.0).
+    NOTE: This is NOT the AdCP PackageStatus enum (which was removed in the pinned SDK).
     This is an internal class for tracking Xandr-specific package state information
     like delivery percentage and editability.
 
@@ -356,7 +355,7 @@ class XandrAdapter(AdServerAdapter):
             # FIXME(#1388): DeliveryMeasurement has a local subclass; import from src.core.schemas (Pattern #7/#4).
             from adcp.types import DeliveryMeasurement, DeliveryType
             from adcp.types import PriceGuidance as AdCPPriceGuidance
-            from adcp.types.generated_poc.core.publisher_property_selector import (
+            from adcp.types.domains.core.publisher_property_selector import (
                 PublisherPropertySelector1,
             )  # TODO: no stable alias in adcp.types
 
@@ -371,9 +370,9 @@ class XandrAdapter(AdServerAdapter):
                     name="Display - Standard Banners",
                     description="Standard display banner placements (supports geo, device, os, browser targeting)",
                     format_ids=[
-                        FormatId(agent_url=url("https://creative.adcontextprotocol.org"), id="display_728x90"),
-                        FormatId(agent_url=url("https://creative.adcontextprotocol.org"), id="display_300x250"),
-                        FormatId(agent_url=url("https://creative.adcontextprotocol.org"), id="display_320x50"),
+                        FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_728x90"),
+                        FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
+                        FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_320x50"),
                     ],
                     delivery_type=DeliveryType.non_guaranteed,
                     pricing_options=[
@@ -401,8 +400,8 @@ class XandrAdapter(AdServerAdapter):
                     name="Video - In-Stream",
                     description="Pre-roll, mid-roll, and post-roll video (supports geo, device, content targeting)",
                     format_ids=[
-                        FormatId(agent_url=url("https://creative.adcontextprotocol.org"), id="video_16x9"),
-                        FormatId(agent_url=url("https://creative.adcontextprotocol.org"), id="video_9x16"),
+                        FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_16x9"),
+                        FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_9x16"),
                     ],
                     delivery_type=DeliveryType.non_guaranteed,
                     pricing_options=[
@@ -430,8 +429,8 @@ class XandrAdapter(AdServerAdapter):
                     name="Native Advertising",
                     description="Native ad placements (supports geo, device, context targeting)",
                     format_ids=[
-                        FormatId(agent_url=url("https://creative.adcontextprotocol.org"), id="native_1x1"),
-                        FormatId(agent_url=url("https://creative.adcontextprotocol.org"), id="native_1.2x1"),
+                        FormatId(agent_url="https://creative.adcontextprotocol.org", id="native_1x1"),
+                        FormatId(agent_url="https://creative.adcontextprotocol.org", id="native_1.2x1"),
                     ],
                     delivery_type=DeliveryType.non_guaranteed,
                     pricing_options=[
@@ -459,9 +458,9 @@ class XandrAdapter(AdServerAdapter):
                     name="Private Marketplace Deals",
                     description="Access to premium inventory through deals (pricing varies by deal)",
                     format_ids=[
-                        FormatId(agent_url=url("https://creative.adcontextprotocol.org"), id="display_300x250"),
-                        FormatId(agent_url=url("https://creative.adcontextprotocol.org"), id="display_728x90"),
-                        FormatId(agent_url=url("https://creative.adcontextprotocol.org"), id="video_16x9"),
+                        FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
+                        FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_728x90"),
+                        FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_16x9"),
                     ],
                     delivery_type=DeliveryType.non_guaranteed,
                     pricing_options=[
@@ -602,10 +601,17 @@ class XandrAdapter(AdServerAdapter):
         }
         return mapping.get(product_id, "display")
 
-    def _create_targeting_profile(self, targeting: Targeting) -> int:
+    def _create_targeting_profile(self, targeting: AnyTargeting) -> int:
         """Create targeting profile in Xandr.
 
         Maps from AdCP Targeting model's flat field structure to Xandr's profile API format.
+
+        EITHER ARM. ``MediaPackage.targeting_overlay`` holds whichever of the two sibling
+        overlays its builder had -- split the shape into an input schema and a
+        readback schema, and they are siblings with identical field sets and neither a
+        subclass of the other -- so this reads only dimensions both declare. Narrowing with
+        a cast at the call site is what hid the split from the type checker in the first
+        place, so the annotation widens instead.
         """
         profile_data: dict[str, Any] = {
             "profile": {

@@ -358,19 +358,14 @@ Target users based on local weather conditions for maximum relevance.</div>
                 <br><small>Note: Audio formats are not supported by Google Ad Manager.</small>
             </p>
 
-            <!-- Format Template Picker Container -->
-            <div id="format-template-picker-container">
-                <div style="text-align: center; padding: 2rem; color: #666;">
-                    Loading format templates...
-                </div>
-            </div>
+            {# format_ids is NOT authored here. Deprecated in AdCP 3.2, removed in 4.0, and
+               the pin says "Do not author a new product from format_ids alone" -- so the
+               legacy template picker that used to stand here is gone and a GAM product
+               declares the canonical arm below, like every other seller. An existing
+               product KEEPS the legacy arm it already has; it is no longer editable here. #}
 
-            <!-- Hidden input for formats JSON (populated by picker) -->
-            <input type="hidden" id="formats-data" name="formats" value="[]">
+            {% include 'components/format_options_editor.html' %}
         </div><!-- end creative-formats-section -->
-
-        <!-- Load Format Template Picker JS -->
-        <script src="{{ request.script_root }}/static/js/format-template-picker.js"></script>
 
         <!-- Section 4: Pricing Options (AdCP PR #88) -->
         <h3 style="margin-top: 2rem; border-bottom: 2px solid #007bff; padding-bottom: 0.5rem;">Pricing Options</h3>
@@ -654,12 +649,6 @@ async function extractSizesFromInventory() {
     updateSizeChipsPanel();
     updateFormatMatchIndicators();
 
-    // Pass extracted sizes to format template picker (AdCP 2.5 parameterized formats)
-    if (window.formatPickerIntegration && inventoryCache && inventoryCache.extractedSizes.size > 0) {
-        const sizesArray = Array.from(inventoryCache.extractedSizes);
-        console.log('[FormatPicker] Auto-selecting sizes from inventory:', sizesArray);
-        window.formatPickerIntegration.addSizesFromInventory(sizesArray);
-    }
 }
 
 /**
@@ -1395,42 +1384,10 @@ function removePricingOption(index) {
 
 // Populate formats JSON before form submission
 function prepareFormSubmission(event) {
-    // Check if format picker has already populated the field
-    const formatsField = document.getElementById('formats-data');
-    const existingValue = formatsField ? formatsField.value : '';
-    let hasFormatPickerData = false;
-
-    try {
-        const parsed = JSON.parse(existingValue);
-        hasFormatPickerData = Array.isArray(parsed) && parsed.length > 0;
-    } catch (e) {
-        hasFormatPickerData = false;
-    }
-
-    if (hasFormatPickerData) {
-        // Format picker already populated - don't overwrite
-        console.log('[DEBUG] Form submission - using format picker data:', existingValue);
-    } else {
-        // Legacy path: Convert checked format checkboxes to JSON for backend
-        const formatCheckboxes = document.querySelectorAll('.format-checkbox:checked');
-        const formatsJson = Array.from(formatCheckboxes).map(cb => ({
-            agent_url: cb.dataset.agentUrl || '',
-            format_id: cb.dataset.formatId || ''
-        }));
-
-        // Populate the hidden field with JSON
-        if (formatsField) {
-            formatsField.value = JSON.stringify(formatsJson);
-        }
-
-        console.log('[DEBUG] Form submission - formats JSON (legacy):', formatsJson);
-        console.log('[DEBUG] Form submission - total checked:', formatsJson.length);
-
-        if (formatsJson.length === 0) {
-            console.log('[DEBUG] NO FORMATS CHECKED ON SUBMIT');
-            // Don't prevent submission, just log
-        }
-    }
+    // format_ids is no longer authored, so there is nothing to populate here. The
+    // checkbox-to-JSON conversion that used to run became dead the moment the handler
+    // stopped reading `formats`, and dead code that LOOKS like it authors a field is how
+    // an operator comes to believe a change was saved.
 
     // Debug targeting data
     const targetingField = document.getElementById('targeting-data');
@@ -1803,39 +1760,10 @@ if (existingOptions.length > 0) {
 addPricingOption();
 {% endif %}
 
-// Initialize format template picker
-// Use window.formatPicker for global access (needed for form submission and testing)
-(function() {
-    // Get existing formats from product (edit mode) or form_data (validation error)
-    const existingFormats = {% if product and product.formats %}{{ product.formats | tojson }}{% elif form_data and form_data.formats %}{{ form_data.formats | tojson }}{% else %}[]{% endif %};
-
-    window.formatPicker = new FormatTemplatePicker({
-        containerId: 'format-template-picker-container',
-        hiddenInputId: 'formats-data',
-        tenantId: '{{ tenant_id }}',
-        adapterType: 'gam',  // GAM adapter - hides audio formats
-        scriptRoot: '{{ request.script_root }}' || '',
-        initialFormats: existingFormats,
-        onSelectionChange: function(formats) {
-            console.log('Formats updated:', formats.length, 'formats selected');
-        }
-    });
-
-    // Integration with inventory picker: auto-populate sizes from selected inventory
-    // Hook into inventory selection callbacks to extract sizes
-    window.formatPickerIntegration = {
-        addSizesFromInventory: function(sizes) {
-            if (formatPicker && sizes && sizes.length > 0) {
-                formatPicker.addSizesFromInventory(sizes);
-            }
-        },
-        clearInventorySizes: function() {
-            if (formatPicker) {
-                formatPicker.clearInventorySizes();
-            }
-        }
-    };
-})();
+// The inventory picker's size hand-off to the format template picker is gone with the
+// picker itself: it called formatPicker.addSizesFromInventory, and with no formatPicker
+// in scope that is a ReferenceError the first time an operator selects inventory. Sizes
+// now reach a product through the canonical declaration's params, authored below.
 
 // Format info modal functionality
 function showFormatInfo(name, description, previewUrl, agentUrl, formatId) {

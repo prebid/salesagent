@@ -1,4 +1,4 @@
-# Storyboard -> GitHub issue map (AdCP 3.1.1)
+# Storyboard -> GitHub issue map (AdCP 3.2.1)
 #
 # THE ONE HAND-CURATED INPUT to scripts/audit/storyboard_roadmap.py.
 # Everything else in that table is derived from the pinned compliance tree and
@@ -20,7 +20,7 @@
 #     note:     one line -- what the issues do NOT cover, when partial
 #
 # `coverage: none` with no issues is a legitimate, informative answer: it means
-# "3.1.1 grades this, we do not test it, and nobody is tracking it." Those rows
+# "the pin grades this, we do not test it, and nobody is tracking it." Those rows
 # are the point of the document.
 #
 # RULES
@@ -241,13 +241,6 @@ storyboards:
     note: See universal/wholesale-feed-products.yaml.
 
   # -------------------------------------------------------- protocols/media-buy
-  protocols/media-buy/scenarios/create_media_buy_async.yaml:
-    issues: [1305, 1531]
-    coverage: partial
-    note: >-
-      #1305 is the spec-conformant async/submitted envelope; #1531 finishes the
-      update write path's async lifecycle. create's own async path is covered
-      by #1305 only at the envelope level.
   protocols/media-buy/scenarios/get_products_async.yaml:
     issues: [1305]
     coverage: partial
@@ -337,9 +330,6 @@ storyboards:
     coverage: none
     note: See provenance_audit_observation.yaml.
 
-  protocols/media-buy/scenarios/refine_products.yaml:
-    coverage: none
-    note: Product refinement round-trip is graded and untracked.
 
   # ------------------------------------------------------------- specialisms
   specialisms/sales-non-guaranteed/index.yaml:
@@ -365,9 +355,6 @@ storyboards:
       T-UC-003-storyboard-media-buy-not-found was wired through AdCPTestClient
       in this PR -- the demonstrator. Its two siblings remain in the binding
       allowlist.
-  protocols/media-buy/scenarios/creative_fate_after_cancellation.yaml:
-    coverage: partial
-    note: Both covering UC-003 scenarios are in the binding allowlist.
   protocols/media-buy/scenarios/creative_reception.yaml:
     coverage: partial
     note: >-
@@ -379,12 +366,6 @@ storyboards:
       Covered by one controller-driven scenario. comply_test_controller is a
       required_tool we will not implement, so the graded injection path is
       permanently unreachable -- see the roadmap's DETERMINISTIC INJECTION rows.
-  protocols/media-buy/scenarios/inventory_list_no_match.yaml:
-    coverage: partial
-    note: Covering scenario is in the binding allowlist.
-  protocols/media-buy/scenarios/inventory_list_targeting.yaml:
-    coverage: partial
-    note: One of two covering scenarios is in the binding allowlist.
   protocols/media-buy/scenarios/measurement_accountability.yaml:
     coverage: partial
     note: Covering scenario is in the binding allowlist.
@@ -397,8 +378,94 @@ storyboards:
       Four UC-006 scenarios, two of them in the binding allowlist. This is the
       storyboard whose standalone reachability is UNRESOLVED in the coverage
       map -- see scripts/audit/storyboard_coverage_map.py's module docstring.
-  protocols/media-buy/scenarios/vendor_metric_accountability.yaml:
-    coverage: partial
-    note: >-
-      Covered by two UC-004 scenarios. The sibling vendor_metric storyboards
-      (catalog_precondition, optimization_flow) have no scenario at all.
+
+  # ------------------------------------------ on-path only since the 3.2.1 pin
+  #
+  # The twenty-six storyboards below became on-path when the SDK pin moved from
+  # AdCP 3.1.1 to 3.2.1 (adcp 6.6.0 -> 9.0.0). Every one is listed because this
+  # file's rules require it -- "a spec bump cannot silently add an untracked gap" --
+  # and every one is `coverage: none` with no issues, which is the answer the SCHEMA
+  # defines for "the pin grades this, we do not test it, and nobody is tracking it."
+  #
+  # That is a claim about ISSUES and nothing else, which is all this file records: no
+  # issue was filed for a storyboard that did not exist on the previous pin. It is NOT
+  # a claim that the seller fails them -- whether it passes any is a measured fact that
+  # needs a storyboard run against the 3.2.1 bundle, which this repo gets from
+  # `tox -e storyboard` on the stack. Re-triage from that run and replace these rows
+  # with what it measures.
+
+  protocols/media-buy/scenarios/account_change_feed.yaml:
+    coverage: none
+    note: On-path since the 3.2.1 pin; not yet triaged against a measured run.
+  protocols/media-buy/scenarios/available_actions.yaml:
+    coverage: none
+    note: On-path since the 3.2.1 pin; not yet triaged against a measured run.
+  protocols/media-buy/scenarios/change_rights_state_projection.yaml:
+    coverage: none
+    note: On-path since the 3.2.1 pin; not yet triaged against a measured run.
+  protocols/media-buy/scenarios/collection_selection.yaml:
+    coverage: none
+    note: On-path since the 3.2.1 pin; not yet triaged against a measured run.
+  protocols/media-buy/scenarios/external_audience_source_binding.yaml:
+    coverage: none
+    note: On-path since the 3.2.1 pin; not yet triaged against a measured run.
+  protocols/media-buy/scenarios/get_products_rejected.yaml:
+    coverage: none
+    note: On-path since the 3.2.1 pin; not yet triaged against a measured run.
+  protocols/media-buy/scenarios/metric_container_subsumption.yaml:
+    coverage: none
+    note: On-path since the 3.2.1 pin; not yet triaged against a measured run.
+  protocols/media-buy/scenarios/owner_sold_channel_carriage.yaml:
+    coverage: none
+    note: On-path since the 3.2.1 pin; not yet triaged against a measured run.
+  protocols/media-buy/scenarios/pending_creatives_to_start.yaml:
+    coverage: none
+    note: On-path since the 3.2.1 pin; not yet triaged against a measured run.
+  protocols/media-buy/scenarios/per_creative_conversion_attribution.yaml:
+    coverage: none
+    note: On-path since the 3.2.1 pin; not yet triaged against a measured run.
+  protocols/media-buy/scenarios/portfolio_routing_scope.yaml:
+    coverage: none
+    note: On-path since the 3.2.1 pin; not yet triaged against a measured run.
+  protocols/media-buy/scenarios/product_coverage_filters.yaml:
+    coverage: none
+    note: On-path since the 3.2.1 pin; not yet triaged against a measured run.
+  protocols/media-buy/scenarios/product_filter_behavior.yaml:
+    coverage: none
+    note: On-path since the 3.2.1 pin; not yet triaged against a measured run.
+  protocols/media-buy/scenarios/read_filter_behavior.yaml:
+    coverage: none
+    note: On-path since the 3.2.1 pin; not yet triaged against a measured run.
+  protocols/media-buy/scenarios/revenue_share_pricing.yaml:
+    coverage: none
+    note: On-path since the 3.2.1 pin; not yet triaged against a measured run.
+  protocols/media-buy/scenarios/seller_optimized_min_spend_target_exceeds_package_cap.yaml:
+    coverage: none
+    note: On-path since the 3.2.1 pin; not yet triaged against a measured run.
+  protocols/media-buy/scenarios/seller_optimized_proposal_package_pacing.yaml:
+    coverage: none
+    note: On-path since the 3.2.1 pin; not yet triaged against a measured run.
+  protocols/media-buy/scenarios/targeting_aware_discovery.yaml:
+    coverage: none
+    note: On-path since the 3.2.1 pin; not yet triaged against a measured run.
+  protocols/media-buy/scenarios/total_budget_redistribution.yaml:
+    coverage: none
+    note: On-path since the 3.2.1 pin; not yet triaged against a measured run.
+  universal/governance.yaml:
+    coverage: none
+    note: On-path since the 3.2.1 pin; not yet triaged against a measured run.
+  universal/reliable-reporting-managed-delivery.yaml:
+    coverage: none
+    note: On-path since the 3.2.1 pin; not yet triaged against a measured run.
+  universal/reliable-reporting-reconciled-billing.yaml:
+    coverage: none
+    note: On-path since the 3.2.1 pin; not yet triaged against a measured run.
+  universal/reporting-consumer-status.yaml:
+    coverage: none
+    note: On-path since the 3.2.1 pin; not yet triaged against a measured run.
+  universal/reporting-core-declaration.yaml:
+    coverage: none
+    note: On-path since the 3.2.1 pin; not yet triaged against a measured run.
+  universal/reporting-core.yaml:
+    coverage: none
+    note: On-path since the 3.2.1 pin; not yet triaged against a measured run.

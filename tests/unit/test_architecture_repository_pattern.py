@@ -304,9 +304,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
         "test_trigger_still_blocks_manual_deletion_of_last_pricing_option",
     ),
     ("tests/integration/test_product_deletion_with_trigger.py", "test_product_deletion_with_multiple_pricing_options"),
-    # tests/integration/test_product_format_validation.py
-    ("tests/integration/test_product_format_validation.py", "tenant_with_prereqs"),
-    ("tests/integration/test_product_format_validation.py", "app_client"),
     # tests/integration/test_product_formats_update.py
     ("tests/integration/test_product_formats_update.py", "sample_product"),
     # tests/integration/test_product_multiple_format_ids.py
@@ -374,7 +371,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
         "tests/integration/test_update_media_buy_creative_assignment.py",
         "test_update_media_buy_assigns_creatives_to_package",
     ),
-    ("tests/integration/test_update_media_buy_creative_assignment.py", "test_update_media_buy_replaces_creatives"),
     ("tests/integration/test_update_media_buy_creative_assignment.py", "test_creative_assignments_with_weights"),
     ("tests/integration/test_update_media_buy_creative_assignment.py", "test_creative_assignments_replaces_all"),
     # tests/integration/test_update_media_buy_persistence.py
@@ -672,7 +668,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/admin/test_creatives_blueprint.py", "test_reject_creative_sets_status_rejected"),
     ("tests/admin/test_creatives_blueprint.py", "test_tenant"),
     ("tests/admin/test_inventory_profiles.py", "_create_sample_profile"),
-    ("tests/admin/test_inventory_profiles.py", "test_create_profile_missing_formats_redirects_without_creation"),
     ("tests/admin/test_inventory_profiles.py", "test_create_profile_missing_name_redirects_without_creation"),
     ("tests/admin/test_inventory_profiles.py", "test_create_profile_with_tags_saves_to_db"),
     ("tests/admin/test_inventory_profiles.py", "test_delete_profile_removes_from_db"),
@@ -767,20 +762,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_creative_review_model.py", "test_get_creative_reviews_query"),
     ("tests/integration/test_creative_review_model.py", "test_get_creative_reviews_tenant_isolation"),
     ("tests/integration/test_creative_review_model.py", "test_get_creative_with_latest_review_tenant_isolation"),
-    ("tests/integration/test_creative_sync_data_preservation.py", "test_generative_output_preserves_user_assets"),
-    ("tests/integration/test_creative_sync_data_preservation.py", "test_generative_output_preserves_user_url"),
-    (
-        "tests/integration/test_creative_sync_data_preservation.py",
-        "test_sync_preserves_dimensions_when_preview_has_different_size",
-    ),
-    (
-        "tests/integration/test_creative_sync_data_preservation.py",
-        "test_sync_preserves_user_url_when_preview_available",
-    ),
-    (
-        "tests/integration/test_creative_sync_data_preservation.py",
-        "test_update_preserves_user_url_when_preview_changes",
-    ),
     ("tests/integration/test_creative_sync_processing.py", "test_create_ai_powered_submits_task"),
     ("tests/integration/test_creative_sync_processing.py", "test_create_auto_approve_status"),
     ("tests/integration/test_creative_sync_processing.py", "test_create_preview_dimensions_extracted"),
@@ -795,7 +776,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_creative_sync_transport.py", "test_good_creative_persists_despite_bad_in_batch"),
     ("tests/integration/test_creative_sync_transport.py", "test_new_creative_created"),
     ("tests/integration/test_creative_sync_transport.py", "test_notification_deferred_for_ai_powered"),
-    ("tests/integration/test_creative_sync_transport.py", "test_update_without_prompt_skips_build"),
     ("tests/integration/test_creative_sync_transport.py", "test_upsert_existing_creative_reports_updated"),
     ("tests/integration/test_creative_sync_transport.py", "test_user_assets_not_overwritten"),
     ("tests/integration/test_creative_v3.py", "_get_db_status"),
@@ -1123,13 +1103,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
         "tests/integration/test_product_deletion_with_trigger.py",
         "test_trigger_still_blocks_manual_deletion_of_last_pricing_option",
     ),
-    ("tests/integration/test_product_format_validation.py", "app_client"),
-    ("tests/integration/test_product_format_validation.py", "tenant_with_prereqs"),
-    ("tests/integration/test_product_format_validation.py", "test_agent_down_saves_without_validation"),
-    ("tests/integration/test_product_format_validation.py", "test_empty_agent_rejects_format_ids"),
-    ("tests/integration/test_product_format_validation.py", "test_invalid_format_ids_rejected"),
-    ("tests/integration/test_product_format_validation.py", "test_partial_failure_validates_against_available"),
-    ("tests/integration/test_product_format_validation.py", "test_valid_format_ids_accepted"),
     ("tests/integration/test_product_formats_update.py", "sample_product"),
     ("tests/integration/test_product_formats_update.py", "test_product_countries_update_with_flag_modified"),
     ("tests/integration/test_product_formats_update.py", "test_product_formats_update_with_flag_modified"),
@@ -1233,7 +1206,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
         "tests/integration/test_update_media_buy_creative_assignment.py",
         "test_update_media_buy_assigns_creatives_to_package",
     ),
-    ("tests/integration/test_update_media_buy_creative_assignment.py", "test_update_media_buy_replaces_creatives"),
     ("tests/integration/test_update_media_buy_persistence.py", "test_tenant_setup"),
     ("tests/integration/test_update_media_buy_persistence.py", "test_update_media_buy_with_database_persisted_buy"),
     ("tests/integration/test_workflow_approval.py", "test_approve_workflow_step"),
@@ -1295,20 +1267,20 @@ class TestIntegrationTestsNoGetDbSession:
 # ---------------------------------------------------------------------------
 
 # The generated-response-shape family: types describing a WIRE response, not a
-# DB row. IdempotencyPosture/to_sdk_union() imported Idempotency/Idempotency3
+# DB row. IdempotencyPosture/to_sdk_union() imported Idempotency/Idempotency1
 # from here while living in repositories/idempotency_attempt.py (D2, salesagent-
 # c0ia.11 M2) -- business/wire-shaping logic belongs above the repository,
 # never inside it. Scoped to this specific submodule (not bare `adcp.types`,
 # whose top-level re-exports like ContextObject/Error are generic shared types
 # used legitimately in a handful of repository method signatures today) so the
 # check is crisp with zero false positives.
-_FORBIDDEN_REPOSITORY_IMPORT_PREFIX = "adcp.types.generated_poc.protocol"
+_FORBIDDEN_REPOSITORY_IMPORT_PREFIX = "adcp.types.domains.protocol"
 
 REPOSITORIES_DIR = "src/core/database/repositories"
 
 
 def _scan_for_protocol_imports(tree: ast.Module) -> list[tuple[str, int]]:
-    """(imported_module, line) for every ``from adcp.types.generated_poc.protocol...
+    """(imported_module, line) for every ``from adcp.types.domains.protocol...
     import ...`` in ``tree``."""
     return [
         (node.module, node.lineno)
@@ -1344,7 +1316,7 @@ class TestRepositoriesDoNotImportProtocolResponseTypes:
     def test_no_repository_imports_adcp_protocol_response_types(self):
         violations = _find_repository_protocol_imports()
         assert not violations, (
-            "repositories/*.py importing adcp.types.generated_poc.protocol.* "
+            "repositories/*.py importing adcp.types.domains.protocol.* "
             "(a response-shaped SDK type) -- move the business/wire-shaping logic "
             "that needs this type OUT of the repository layer (see "
             "src/core/idempotency_policy.py for the pattern):\n"
@@ -1354,9 +1326,7 @@ class TestRepositoriesDoNotImportProtocolResponseTypes:
     @pytest.mark.arch_guard
     def test_guard_catches_a_reintroduced_protocol_import(self):
         """Positive meta-test: reproduces the exact pre-M2 idempotency_attempt.py shape."""
-        drifted = ast.parse(
-            "from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import Idempotency\n"
-        )
+        drifted = ast.parse("from adcp.types.domains.protocol.get_adcp_capabilities_response import Idempotency\n")
         assert _scan_for_protocol_imports(drifted), "a reintroduced protocol-response import must be flagged"
 
     @pytest.mark.arch_guard

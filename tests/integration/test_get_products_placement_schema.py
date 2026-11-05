@@ -1,21 +1,14 @@
-"""get_products emits placements that validate against AdCP placement.json v3.1.1.
+"""Stored placements state kind and mode, and get_products serves them as stored.
 
-Regression for PR #1567 (adcp 5.7->6.6 bump). adcp 6.6 / spec
-3.1.1 made Placement.kind and Placement.mode required and added an allOf
-conditional: `if kind == "publisher_ref" then required: [publisher_domain]`
-(and `if kind == "seller_inline" then required: [name]`). Legacy placement rows
-stored before these fields existed carry `name`/`placement_id` but NOT
-`publisher_domain`. src/core/product_conversion.py defaulted them to
-`kind="publisher_ref"`, so the emitted placement object is schema-INVALID against
-draft-07 (missing publisher_domain) even though the SDK's Pydantic model — which
-does not encode the allOf conditional — accepts it.
+``core/placement.json`` requires ``kind``, ``placement_id`` and ``mode`` of a product
+placement, and its allOf conditionals require ``name`` of a ``seller_inline`` one and
+``publisher_domain`` of a ``publisher_ref`` one. Nothing fills a missing member when a row is
+read: ``ck_products_placements_explicit`` refuses a row that omits one when it is written, and
+revision 89442a2be9e1 brought the rows stored before the rule up to it.
 
-The schema authority here is the placement.json bundled inside the pinned
-adcp==6.6.0 package (`adcp/_schemas/3.1/core/placement.json`). It is byte-for-
-semantics identical to the adcp repo's v3.1.1 tag (dist/schemas/3.1.1/core/
-placement.json) — same `required`, same `anyOf`, same allOf conditionals — and
-is frozen with the package, so validation is deterministic and offline. This is
-the JSON schema artifact, not the SDK Pydantic model (which is not authoritative).
+The schema authority is the pinned spec's placement.json (``tests.helpers.pinned_schema``),
+validated with draft-07 and full ``$ref`` resolution, not the SDK Pydantic model, which does
+not encode the allOf conditionals.
 """
 
 from __future__ import annotations
@@ -24,8 +17,15 @@ from typing import Any
 
 import pytest
 from jsonschema.validators import Draft7Validator
+from sqlalchemy.exc import IntegrityError
 
-from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
+from tests.factories import (
+    PricingOptionFactory,
+    PrincipalFactory,
+    ProductFactory,
+    StoredPlacementFactory,
+    TenantFactory,
+)
 from tests.harness.product import ProductEnv
 from tests.harness.transport import Transport
 from tests.helpers import pinned_schema
@@ -52,7 +52,7 @@ def _assert_placement_schema_valid(placement: dict[str, Any]) -> None:
             f"  at {'.'.join(str(p) for p in e.absolute_path) or '<root>'}: {e.message}" for e in errors
         )
         raise AssertionError(
-            f"Emitted placement is not valid against adcp 3.1.1 placement.json:\n{placement}\n{details}"
+            f"Emitted placement is not valid against the pinned placement.json:\n{placement}\n{details}"
         )
 
 
@@ -86,20 +86,33 @@ def test_placement_validator_resolves_format_ids_ref():
         )
 
 
+#: What the seller stores: one placement per kind, and both modes.
+_STORED_PLACEMENTS = [
+    StoredPlacementFactory(placement_id="homepage_atf", name="Homepage Above the Fold"),
+    StoredPlacementFactory(placement_id="sidebar_btf", name="Sidebar", mode="included"),
+    # publisher_ref takes its name from the publisher's catalog, so the row states none.
+    {
+        "kind": "publisher_ref",
+        "placement_id": "pub_header",
+        "publisher_domain": "publisher.example",
+        "mode": "targetable",
+    },
+]
+
+
 @pytest.fixture
-def legacy_placement_product_env(integration_db):
-    """ProductEnv with one product whose placement is a legacy row (no kind/mode/publisher_domain)."""
+def placement_product_env(integration_db):
+    """ProductEnv with one product storing ``_STORED_PLACEMENTS``."""
     with ProductEnv(tenant_id="placement-schema-test", principal_id="test_principal") as env:
         tenant = TenantFactory(tenant_id="placement-schema-test")
         PrincipalFactory(tenant=tenant, principal_id="test_principal")
         product = ProductFactory(
             tenant=tenant,
-            product_id="legacy_placement_product",
-            name="Legacy Placement Product",
-            description="Product carrying a legacy placement row",
+            product_id="placement_product",
+            name="Placement Product",
+            description="Product carrying explicit placements",
             delivery_type="guaranteed",
-            # Legacy placement: pre-3.1.1 shape — no kind, no mode, no publisher_domain.
-            placements=[{"placement_id": "homepage_atf", "name": "Homepage Above the Fold"}],
+            placements=_STORED_PLACEMENTS,
         )
         PricingOptionFactory(product=product, pricing_model="cpm", rate="15.00", is_fixed=True, currency="USD")
         env.set_policy_approved()
@@ -108,71 +121,56 @@ def legacy_placement_product_env(integration_db):
 
 
 @pytest.mark.parametrize("transport", [Transport.A2A, Transport.MCP, Transport.REST])
-def test_legacy_placement_is_schema_valid_on_all_transports(legacy_placement_product_env, transport):
-    """Every emitted placement validates against adcp 3.1.1 placement.json, on all transports."""
-    result = legacy_placement_product_env.call_via(transport, brief="display ads")
+def test_stored_placements_are_served_as_stored_on_all_transports(placement_product_env, transport):
+    """Every stored member reaches the wire unchanged, and every placement is schema-valid."""
+    result = placement_product_env.call_via(transport, brief="display ads")
     assert result.is_success, f"{transport} get_products failed: {result.error}"
 
-    products = result.payload.products
-    placements = [
-        p.model_dump(mode="json") if hasattr(p, "model_dump") else p
-        for product in products
-        for p in (product.placements or [])
-    ]
-    assert placements, f"{transport}: expected at least one emitted placement to validate"
-    for placement in placements:
-        _assert_placement_schema_valid(placement)
-
-
-@pytest.fixture
-def nameless_legacy_placement_product_env(integration_db):
-    """ProductEnv with a legacy placement row MISSING name (carries only placement_id).
-
-    seller_inline requires only ``name`` (placement.json 3.1.1 allOf), so the
-    seller_inline default assumed legacy rows carry it. This fixture covers the
-    other legacy shape: the conversion's defined fallback derives ``name`` from
-    ``placement_id`` rather than silently emitting a schema-invalid placement
-    (PR #1567 round-2 cleanup).
-    """
-    with ProductEnv(tenant_id="placement-noname-test", principal_id="test_principal") as env:
-        tenant = TenantFactory(tenant_id="placement-noname-test")
-        PrincipalFactory(tenant=tenant, principal_id="test_principal")
-        product = ProductFactory(
-            tenant=tenant,
-            product_id="nameless_placement_product",
-            name="Nameless Placement Product",
-            description="Product carrying a legacy placement row without a name",
-            delivery_type="guaranteed",
-            # Legacy shape variant: placement_id only — no name, no kind/mode/publisher_domain.
-            placements=[{"placement_id": "sidebar_btf"}],
-        )
-        PricingOptionFactory(product=product, pricing_model="cpm", rate="15.00", is_fixed=True, currency="USD")
-        env.set_policy_approved()
-        env.set_ranking_disabled()
-        yield env
-
-
-@pytest.mark.parametrize("transport", [Transport.A2A, Transport.MCP, Transport.REST])
-def test_nameless_legacy_placement_gets_fallback_name_and_is_schema_valid(
-    nameless_legacy_placement_product_env, transport
-):
-    """A legacy placement missing ``name`` emits a schema-valid seller_inline placement.
-
-    The conversion's defined fallback sets name := placement_id (never a silent
-    schema-invalid emission). Asserts the exact fallback value AND full
-    placement.json validity on every transport.
-    """
-    result = nameless_legacy_placement_product_env.call_via(transport, brief="display ads")
-    assert result.is_success, f"{transport} get_products failed: {result.error}"
-
-    placements = [
-        p.model_dump(mode="json") if hasattr(p, "model_dump") else p
+    served = [
+        p.model_dump(mode="json", exclude_none=True) if hasattr(p, "model_dump") else p
         for product in result.payload.products
         for p in (product.placements or [])
     ]
-    assert placements, f"{transport}: expected the nameless legacy placement to be emitted"
-    for placement in placements:
-        assert placement.get("name") == "sidebar_btf", (
-            f"{transport}: fallback must derive name from placement_id, got {placement.get('name')!r}"
-        )
-        _assert_placement_schema_valid(placement)
+    assert [p["placement_id"] for p in served] == [p["placement_id"] for p in _STORED_PLACEMENTS], (
+        f"{transport}: served placements {served} are not the stored ones {_STORED_PLACEMENTS}"
+    )
+    for wire, row in zip(served, _STORED_PLACEMENTS, strict=True):
+        assert {k: wire.get(k) for k in row} == row, f"{transport}: placement served as {wire}, stored as {row}"
+        _assert_placement_schema_valid(wire)
+
+
+@pytest.mark.parametrize(
+    ("placement", "why"),
+    [
+        ({"placement_id": "p", "name": "P", "mode": "targetable"}, "no kind"),
+        ({"kind": "seller_inline", "placement_id": "p", "name": "P"}, "no mode"),
+        ({"kind": "seller_inline", "name": "P", "mode": "targetable"}, "no placement_id"),
+        ({"kind": "seller_inline", "placement_id": "p", "mode": "targetable"}, "seller_inline without name"),
+        ({"kind": "publisher_ref", "placement_id": "p", "mode": "targetable"}, "publisher_ref without domain"),
+    ],
+)
+def test_a_placement_omitting_a_required_member_is_refused_when_written(integration_db, placement, why):
+    """The write fails; nothing would fill the member in when the row is read."""
+    with ProductEnv(tenant_id="placement-refusal-test", principal_id="test_principal") as env:
+        tenant = TenantFactory(tenant_id="placement-refusal-test")
+        with pytest.raises(IntegrityError, match="ck_products_placements_explicit"):
+            ProductFactory(tenant=tenant, product_id="refused_placement", placements=[placement])
+            env.get_session()
+
+
+def test_a_complete_placement_beside_a_refused_one_does_not_save_the_row(integration_db):
+    """Every element is graded: one complete placement does not admit an incomplete sibling.
+
+    The control in the same shape: the complete placement alone is accepted.
+    """
+    complete = StoredPlacementFactory(placement_id="complete")
+    with ProductEnv(tenant_id="placement-sibling-test", principal_id="test_principal") as env:
+        tenant = TenantFactory(tenant_id="placement-sibling-test")
+        ProductFactory(tenant=tenant, product_id="complete_only", placements=[complete])
+        with pytest.raises(IntegrityError, match="ck_products_placements_explicit"):
+            ProductFactory(
+                tenant=tenant,
+                product_id="complete_and_bare",
+                placements=[complete, {"placement_id": "bare", "name": "Bare"}],
+            )
+            env.get_session()
