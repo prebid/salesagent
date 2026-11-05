@@ -52,28 +52,16 @@ from pydantic import BaseModel, RootModel, TypeAdapter, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from src.core.errors.codes import ErrorCode
+from src.core.errors.codes import AppErrorCode
 from src.core.errors.details import ConfigurationDetails, ValidationDetails
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tools._media_buy_status import resolve_canonical_status
 
 logger = logging.getLogger(__name__)
 
-# The wire pair for every advisory this module raises about a defective PERSISTED value.
-#
-# Selected by lookup, not by name. ``enums/error-code.json`` carries a ``recovery`` per
-# code in ``enumMetadata``, so the question is which code's recovery matches the actual
-# recoverability of the failure -- and a corrupt stored blob is not recoverable by the
-# buyer at all. Ten pinned codes carry ``terminal``; nine are scoped to auth, account,
-# agent-relationship or billing. CONFIGURATION_ERROR is the only seller-side,
-# operator-remediable one, so the choice is forced by the ABSENCE of a better candidate
-# rather than by fit -- no code in the pinned enum is scoped to "persisted row is
-# corrupt".
-#
-# What it must NOT be is VALIDATION_ERROR / ``correctable``: that tells the buyer to
-# "review error details and fix field values" for data in the SELLER's store, which they
-# do not own and cannot fix, and it is the documented previous bug on this path
-# (BR-UC-019-query-media-buys.feature:795-801).
+# Existing classification for generic unrenderable persisted fields. Targeting
+# rehydration has its own platform advisory below; the remaining blob paths keep
+# their current classification.
 _BLOB_DEFECT_CODE = "CONFIGURATION_ERROR"
 _BLOB_DEFECT_RECOVERY = "terminal"
 
@@ -230,7 +218,7 @@ def _get_media_buys_impl(
             unavailable_reason = SnapshotUnavailableReason.SNAPSHOT_UNSUPPORTED
 
     # Build response
-    response_media_buys = []
+    response_media_buys: list[GetMediaBuysMediaBuy] = []
     for buy in target_media_buys:
         # No policy here, and none is possible: the row's status was resolved at the
         # fetch seam and a row whose status could not be resolved never became a
@@ -239,7 +227,7 @@ def _get_media_buys_impl(
 
         # Build packages
         packages = packages_by_media_buy.get(buy.media_buy_id, [])
-        response_packages = []
+        response_packages: list[GetMediaBuysPackage] = []
         buy_snapshots = snapshot_data.get(buy.media_buy_id, {})
 
         for pkg in packages:
@@ -286,30 +274,18 @@ def _get_media_buys_impl(
                         pkg_id,
                         exc,
                     )
-                    # CONFIGURATION_ERROR, not SERVICE_UNAVAILABLE. This is a stored
-                    # package_config the buyer neither owns nor can repair, and the
-                    # comment here previously said "the buyer can't fix it" while the
-                    # code said transient — telling them to retry a request that fails
-                    # identically until someone at the seller fixes the row. The pinned
-                    # enum classifies CONFIGURATION_ERROR terminal. Both branches
-                    # reached that same conclusion independently (main via
-                    # ``_BLOB_DEFECT_CODE``/``_BLOB_DEFECT_RECOVERY``); this is the one
-                    # copy of it.
-                    #
-                    # It was chosen "matching the sibling per-creative advisory in
-                    # creatives/_processing.py" — copied rather than reasoned
-                    # (salesagent-tay20). Recovery still comes from CODE_TABLE via
-                    # Error.of; only the code was wrong.
-                    #
-                    # The discriminator is ``details.reasons``, NOT the message:
-                    # message is derived from CODE_TABLE, so no site can stamp a
-                    # ``TARGETING_REHYDRATION_FAILED:`` prefix into it (salesagent-3dawm).
-                    # ``row_advisories`` is main's renamed accumulator — it also
-                    # collects the omitted-row advisories, which did not exist here.
+                    # AdCP 3.2.7 L3/error-handling.mdx reserves CONFIGURATION_ERROR
+                    # for transport failures. This package degrades inside a usable
+                    # result, so use a terminal platform advisory (BR-RULE-294,
+                    # upstream-storyboard ungraded). The table owns its recovery and
+                    # seller guidance; details identify the persisted row.
                     row_advisories.append(
                         Error.of(  # structural-guard: advisory per-package result in GetMediaBuysResponse.errors[]
-                            ErrorCode.CONFIGURATION_ERROR,
-                            field=f"media_buys[].packages[{pkg_id}].targeting_overlay",
+                            AppErrorCode.TARGETING_REHYDRATION_FAILED,
+                            field=(
+                                f"media_buys[{len(response_media_buys)}]."
+                                f"packages[{len(response_packages)}].targeting_overlay"
+                            ),
                             details=ValidationDetails(
                                 reasons=["targeting_rehydration_failed"],
                                 package_id=pkg_id,

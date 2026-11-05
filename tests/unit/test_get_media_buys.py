@@ -682,17 +682,12 @@ class TestTargetingOverlayRoundTrip:
         assert good_response_pkg.targeting_overlay.property_list.list_id == "v1"
 
         # Failure surfaced via the response errors channel — buyer can reconcile.
-        # CONFIGURATION_ERROR / recovery "terminal", not the sibling per-creative
-        # advisory's SERVICE_UNAVAILABLE. Selected by lookup rather than by name: the
-        # pin gives SERVICE_UNAVAILABLE recovery "transient", which advises a retry that
-        # can never succeed against a permanently corrupt stored blob. Both halves are
-        # asserted because the code alone cannot carry the claim -- core/error.json makes
-        # error.recovery authoritative and enumMetadata only its documentary mirror, so a
-        # test checking the code would pass with the buyer still told to retry forever.
+        # The terminal platform advisory preserves the listing's success while
+        # distinguishing a corrupt package from a seller deployment failure.
         assert response.errors is not None
         assert len(response.errors) == 1
         err = response.errors[0]
-        assert err.code == "CONFIGURATION_ERROR"
+        assert err.code == "TARGETING_REHYDRATION_FAILED"
         assert err.recovery == "terminal", "a row the buyer cannot repair must not invite a retry"
         # The discriminator is ``details.reasons``, not the message: ``message`` is
         # derived from CODE_TABLE, so no raise site can stamp a

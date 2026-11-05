@@ -1156,6 +1156,12 @@ class AdCPConfigurationError(AdCPSalesAgentError[ConfigurationDetails]):
     _code: ClassVar[ErrorCodeT] = ErrorCode.CONFIGURATION_ERROR
 
 
+class AdCPTargetingRehydrationError(AdCPSalesAgentError[ValidationDetails]):
+    """Stored package targeting cannot be rendered; the seller must repair it."""
+
+    _code: ClassVar[ErrorCodeT] = AppErrorCode.TARGETING_REHYDRATION_FAILED
+
+
 class AdCPPersistedStateError(AdCPConfigurationError):
     """A persisted value is outside the vocabulary its column may hold (500).
 
