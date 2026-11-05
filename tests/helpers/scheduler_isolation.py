@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
@@ -19,16 +20,51 @@ from sqlalchemy.exc import (
 )
 
 
-def summary_lines(mock_logger: MagicMock, prefix: str, *, needle: str | None = None) -> list[str]:
-    """Extract log lines whose message contains ``needle``.
+def summary_lines(records: Sequence[logging.LogRecord]) -> list[tuple[str, str]]:
+    """``(level name, rendered message)`` for each record, in order."""
+    return [(record.levelname, record.getMessage()) for record in records]
 
-    Default ``needle`` is ``f"{prefix}:"`` — the production batch-summary
-    format (``f"{prefix}: {processed} …"``). Pass an explicit substring when
-    matching a different production log (e.g. ``"Updated media buy "``).
-    Prefer the production prefix constant (``STATUS_BATCH_SUMMARY_PREFIX``).
+
+def logged(records: Sequence[logging.LogRecord], level: str, needle: str) -> list[str]:
+    """Rendered messages at ``level`` whose text contains ``needle``."""
+    return [message for record_level, message in summary_lines(records) if record_level == level and needle in message]
+
+
+async def run_status_tick(scheduler=None) -> list[logging.LogRecord]:
+    """One status-sweep tick and the log records it produced."""
+    from tests.helpers.log_capture import capture_logs
+
+    if scheduler is None:
+        from src.services.media_buy_status_scheduler import MediaBuyStatusScheduler
+
+        scheduler = MediaBuyStatusScheduler()
+    logger_name = "src.services.media_buy_status_scheduler"
+    with capture_logs(logger_name, level=logging.INFO) as captured:
+        await scheduler._update_statuses()
+    return list(captured.log_records)
+
+
+async def run_mocked_tick(buys, compute, *, session: MagicMock | None = None) -> list[logging.LogRecord]:
+    """Run one tick against mocked buys and return its log records.
+
+    ``compute`` is the ``_compute_new_status`` stand-in: a callable is a side
+    effect, anything else is the return value.
     """
-    match = needle if needle is not None else f"{prefix}:"
-    return [call.args[0] for call in mock_logger.call_args_list if call.args and match in str(call.args[0])]
+    session = mock_savepoint_session() if session is None else session
+    cm = mock_get_db_session_cm(session)
+    from src.services.media_buy_status_scheduler import MediaBuyStatusScheduler
+
+    scheduler = MediaBuyStatusScheduler()
+    compute_patch = {"side_effect": compute} if callable(compute) else {"return_value": compute}
+    with (
+        patch("src.services.media_buy_status_scheduler.get_db_session", return_value=cm),
+        patch(
+            "src.services.media_buy_status_scheduler.MediaBuyRepository.get_all_by_statuses",
+            return_value=buys,
+        ),
+        patch.object(scheduler, "_compute_new_status", **compute_patch),
+    ):
+        return await run_status_tick(scheduler)
 
 
 class _Answered(Exception):

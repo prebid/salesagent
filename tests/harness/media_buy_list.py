@@ -21,12 +21,11 @@ import logging
 from typing import Any, cast
 
 from src.core.schemas._base import GetMediaBuysRequest, GetMediaBuysResponse
-from src.services.media_buy_status_scheduler import MediaBuyStatusScheduler
 from tests.harness._base import IntegrationEnv
 from tests.harness._realize import realize_e2e
 from tests.harness.database_faults import DatabaseFaultMixin
 from tests.harness.transport import DeliverResult
-from tests.helpers.log_capture import capture_logs
+from tests.helpers.scheduler_isolation import run_status_tick
 
 
 def _run_status_sweep(_env: object) -> list[logging.LogRecord]:
@@ -36,10 +35,7 @@ def _run_status_sweep(_env: object) -> list[logging.LogRecord]:
     scheduler, so the scenario's summary line is what proves this tick did
     the writes.
     """
-    logger = logging.getLogger("src.services.media_buy_status_scheduler")
-    with capture_logs(logger.name, level=logging.INFO) as captured:
-        asyncio.run(MediaBuyStatusScheduler()._update_statuses())
-    return list(captured.log_records)
+    return asyncio.run(run_status_tick())
 
 
 class MediaBuyListDispatchMixin:
