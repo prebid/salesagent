@@ -155,6 +155,15 @@ class AppErrorCode(StrEnum):
             status=500,
         ),
     )
+    TARGETING_REHYDRATION_FAILED = (
+        "TARGETING_REHYDRATION_FAILED",
+        CodeEntry(
+            recovery=Recovery.TERMINAL,
+            suggestion="Contact the seller to repair the stored targeting; retrying this request cannot repair it",
+            message="Stored targeting could not be returned for a package; the rest of the result remains usable",
+            status=500,
+        ),
+    )
     TENANT_UNDEFINED = (
         "TENANT_UNDEFINED",
         CodeEntry(

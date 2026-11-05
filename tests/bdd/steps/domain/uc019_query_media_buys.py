@@ -3330,19 +3330,13 @@ def then_package_targeting_overlay_geo_countries(ctx: dict, pkg_id: str, countri
 
 
 def _advisories_naming(advisories: list[dict], pkg_id: str, field: str) -> list[dict]:
-    """The advisories that identify BOTH the package and the field they degrade.
-
-    Matched across ``field`` and ``message`` together, so a selector-shaped
-    advisory and a prose-shaped one both count — what the obligation requires is
-    that the buyer can reconcile WHICH field of WHICH package went missing, not a
-    particular selector spelling.
-    """
-    out = []
-    for advisory in advisories:
-        haystack = " ".join(str(advisory.get(key) or "") for key in ("field", "message"))
-        if pkg_id in haystack and field in haystack:
-            out.append(advisory)
-    return out
+    """Match the package identity in structured details or a legacy field selector."""
+    return [
+        advisory
+        for advisory in advisories
+        if field in str(advisory.get("field") or "")
+        and ((advisory.get("details") or {}).get("package_id") == pkg_id or pkg_id in str(advisory.get("field") or ""))
+    ]
 
 
 @then(
@@ -3397,3 +3391,43 @@ def then_no_advisory_with_code(ctx: dict, code: str) -> None:
         f"expected no errors[] advisory with code {code!r} — its pinned recovery advises a retry "
         f"that can never repair a seller-side defect; got {offending!r}"
     )
+
+
+@then(
+    parsers.parse(
+        'the targeting advisory should identify media buy "{mb_id}" package "{pkg_id}" and suggest "{suggestion}"'
+    )
+)
+def then_targeting_advisory_identity(ctx: dict, mb_id: str, pkg_id: str, suggestion: str) -> None:
+    """Resolve the selector against the returned document, including nonzero positions."""
+    real_id = _resolve_media_buy_id(ctx, mb_id)
+    matching = [
+        advisory
+        for advisory in _wire_advisories(ctx)
+        if (advisory.get("details") or {}).get("media_buy_id") == real_id
+        and (advisory.get("details") or {}).get("package_id") == pkg_id
+    ]
+    assert len(matching) == 1
+    advisory = matching[0]
+    buys = wire_field(ctx, "media_buys")
+    buy_index = next(i for i, buy in enumerate(buys) if buy["media_buy_id"] == real_id)
+    package_index = next(i for i, package in enumerate(buys[buy_index]["packages"]) if package["package_id"] == pkg_id)
+    assert advisory.get("field") == f"media_buys[{buy_index}].packages[{package_index}].targeting_overlay"
+    assert advisory.get("details") == {
+        "reasons": ["targeting_rehydration_failed"],
+        "media_buy_id": real_id,
+        "package_id": pkg_id,
+    }
+    assert advisory.get("suggestion") == suggestion
+
+
+@then(
+    parsers.parse(
+        'response.errors[] should carry exactly {count:d} advisories with code "{code}" and recovery "{recovery}"'
+    )
+)
+def then_advisory_count_and_classification(ctx: dict, count: int, code: str, recovery: str) -> None:
+    """Assert the whole advisory array, including missing or duplicated entries."""
+    advisories = _wire_advisories(ctx)
+    assert len(advisories) == count
+    assert [(advisory.get("code"), advisory.get("recovery")) for advisory in advisories] == [(code, recovery)] * count
