@@ -899,14 +899,12 @@ def _update_media_buy_impl(
             _current_mb = uow.media_buys.get_by_id(media_buy_id_to_use)
             _current_status = _current_mb.status if _current_mb else ""
             if is_terminal_status(_current_status):
-                # The pin SPECIALIZES the code by what was asked, not by what went wrong:
-                # 3.1/enums/error-code.json reserves NOT_CANCELLABLE for "cannot be canceled
-                # in its current state" and leaves INVALID_STATE for "operation is not
-                # permitted for the resource's current status". Both are correctable. So a
-                # cancel against a terminal buy -- the re-cancel case -- answers the specific
-                # code, and every other mutation keeps the generic one.
-                # BR-UC-003-update-media-buy.feature states the same split.
-                if req.canceled:
+                # specification.mdx (media buy state transitions): a cancel of a buy already
+                # `canceled` "MUST reject with `NOT_CANCELLABLE`", and "All other updates to media
+                # buys in terminal states (`completed`, `rejected`, `canceled`) — including
+                # `canceled: true` attempts against `completed` or `rejected` buys — MUST be
+                # rejected with `INVALID_STATE`". So only the re-cancel answers the specific code.
+                if req.canceled and _current_status == PersistedMediaBuyStatus.CANCELED:
                     raise AdCPNotCancellableError(
                         details=InvalidStateDetails(current_status=_current_status),
                         field="media_buy_id",

@@ -1871,9 +1871,10 @@ def _no_given_branch(given: str, value: str) -> str:
     return f"Given gap: {given} has no branch for {value!r} (ValueError), so nothing is dispatched"
 
 
-def _no_datatable_field(field: str) -> str:
-    """The reason for a package-update datatable field the shared step does not accept."""
-    return f"step gap: the package-update datatable step does not accept {field!r}, so nothing is dispatched"
+_LEDGER_NO_PACKAGE_CANCEL = (
+    "production gap: this seller implements no cancellation (prebid/salesagent#1261) and refuses a "
+    "package cancel with NOT_CANCELLABLE, where the scenario expects the package canceled"
+)
 
 
 _LEDGER_SEED_MEDIA_BUY = (
@@ -2122,7 +2123,7 @@ _UC002_UC003_LEDGER: tuple[_CatchallXfail, ...] = (
         _LEDGER_INVOICE_RECIPIENT,
         rows=("invoice_recipient supplied = business entity not authorized for this account",),
     ),
-    _X("T-UC-003-cancel-package", _no_datatable_field("canceled")),
+    _X("T-UC-003-cancel-package", _LEDGER_NO_PACKAGE_CANCEL),
     _X("T-UC-003-new-packages-add", _LEDGER_NO_ADD_PACKAGES),
     _X("T-UC-003-new-packages-duplicate", _LEDGER_NO_ADD_PACKAGES),
     _X("T-UC-003-partition-approval-workflow", _UPDATE_TENANT_REVIEW_DIVERGENCE, rows=("pending_human_review",)),

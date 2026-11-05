@@ -3216,6 +3216,31 @@ Feature: BR-UC-003 Update Media Buy
     And the ad server received no update call
     And the stored media buy "mb_existing" is still "active"
 
+  # specification.mdx (v3.2.7), media buy state transitions: "When a buyer attempts to cancel a
+  # media buy already in `canceled` ... sales agents MUST reject with `NOT_CANCELLABLE`", and "All
+  # other updates to media buys in terminal states (`completed`, `rejected`, `canceled`) —
+  # including `canceled: true` attempts against `completed` or `rejected` buys — MUST be rejected
+  # with `INVALID_STATE`". A non-cancel update on each terminal state is graded by
+  # @T-UC-003-partition-media-buy-status and @T-UC-003-boundary-media-buy-status.
+  # @source repo=adcp ref=v3.2.7 path=docs/media-buy/specification.mdx section="Media Buy State Transitions"
+  @T-UC-003-terminal-cancel
+  Scenario Outline: A cancel of a terminal media buy answers by its state - <status>
+    Given the tenant is configured for auto-approval
+    And the media buy is in "<status>" status
+    And a valid update_media_buy request with:
+    | field        | value       |
+    | media_buy_id | mb_existing |
+    | canceled     | true        |
+    When the Buyer Agent sends the update_media_buy request
+    Then the buyer is refused <code> naming the request member "media_buy_id"
+    And the stored media buy "mb_existing" is still "<status>"
+
+    Examples:
+      | status    | code            |
+      | canceled  | NOT_CANCELLABLE |
+      | completed | INVALID_STATE   |
+      | rejected  | INVALID_STATE   |
+
   @T-UC-003-cancel-refused
   Scenario: A cancel of one package is refused NOT_CANCELLABLE and changes nothing
     Given the tenant is configured for auto-approval
