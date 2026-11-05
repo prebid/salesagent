@@ -119,6 +119,15 @@ def sync_creatives(
             details=CapabilityRefusalDetails(capability="validation_mode", rejected_value="lenient"),
             field="validation_mode",
         )
+    # sync-creatives-request.json assignment_operations: "Explicit, ordered assignment mutations",
+    # which this seller does not implement. Refused before anything is stored, as UNSUPPORTED_FEATURE
+    # ("A requested feature or field is not supported by this seller"), rather than answered as a
+    # sync that did none of them.
+    if req.assignment_operations:
+        raise AdCPCapabilityNotSupportedError(
+            details=CapabilityRefusalDetails(capability="assignment_operations"),
+            field="assignment_operations",
+        )
 
     from pydantic import ValidationError
 

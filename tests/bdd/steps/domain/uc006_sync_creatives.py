@@ -493,6 +493,8 @@ def when_sync_creative(ctx: dict) -> None:
         kwargs["assignments"] = ctx["assignment_entries"]
     if "validation_mode" in ctx:
         kwargs["validation_mode"] = ctx["validation_mode"]
+    if "assignment_operations" in ctx:
+        kwargs["assignment_operations"] = ctx["assignment_operations"]
     if "idempotency_key" in ctx:
         kwargs["idempotency_key"] = ctx["idempotency_key"]
     if "push_notification_config" in ctx:
@@ -1136,6 +1138,19 @@ def given_assignments_to_package_with_setup(ctx: dict, product_setup: str) -> No
 def given_validation_mode(ctx: dict, mode: str) -> None:
     """Set validation_mode on the sync_creatives request (strict or lenient)."""
     ctx["validation_mode"] = mode
+
+
+@given(parsers.parse('the request carries an assignment operation "{operation}"'))
+def given_assignment_operation(ctx: dict, operation: str) -> None:
+    """One assignment_operations entry of *operation*, naming the request's creative.
+
+    The pinned shapes: assign and unassign name creative_id and package_id; replace also names
+    replaces_creative_id.
+    """
+    entry = {"operation": operation, "creative_id": latest_creative_id(ctx), "package_id": "pkg_any"}
+    if operation == "replace":
+        entry["replaces_creative_id"] = "c_replaced"
+    ctx["assignment_operations"] = [entry]
 
 
 # --- 0xwq: assignment package boundary (existing pkg / existing assignment / missing pkg) ---

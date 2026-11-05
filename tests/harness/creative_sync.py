@@ -1560,7 +1560,14 @@ class CreativeSyncEnv(PeerCreativeAgentMixin, IntegrationEnv):
         body: dict[str, Any] = {}
         if "creatives" in kwargs:
             body["creatives"] = self._wire_value(kwargs["creatives"])
-        for key in ("assignments", "creative_ids", "push_notification_config", "account", "idempotency_key"):
+        for key in (
+            "assignments",
+            "assignment_operations",
+            "creative_ids",
+            "push_notification_config",
+            "account",
+            "idempotency_key",
+        ):
             if kwargs.get(key) is not None:
                 body[key] = self._wire_value(kwargs[key])
         for key in ("delete_missing", "dry_run", "validation_mode"):

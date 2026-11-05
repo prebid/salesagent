@@ -485,6 +485,26 @@ Feature: BR-UC-006 Sync Creative Assets
       | missing package  | assignments to a non-existent package                                                                  | PACKAGE_NOT_FOUND  |
       | missing creative | an assignment referencing the unknown creative "c_never_synced" to a package that exists in the tenant | CREATIVE_NOT_FOUND |
 
+  # sync-creatives-request.json (v3.2.7) assignment_operations: "Explicit, ordered assignment
+  # mutations". This seller does not implement them, and they used to answer success with nothing
+  # done. enums/error-code.json UNSUPPORTED_FEATURE: "A requested feature or field is not
+  # supported by this seller." So the request is refused before anything is stored.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/sync-creatives-request.json pointer=/properties/assignment_operations
+  @T-UC-006-assignment-operations-refused @invariant @error-details
+  Scenario Outline: An assignment operation is refused before anything is stored - <operation>
+    Given the Buyer is authenticated
+    And a creative with a known format_id
+    And the request carries an assignment operation "<operation>"
+    When the Buyer Agent syncs the creative
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the request member "assignment_operations"
+    And the creative library is unchanged
+
+    Examples:
+      | operation |
+      | assign    |
+      | unassign  |
+      | replace   |
+
   @T-UC-006-local-assignment-only-existing-creative @invariant @BR-RULE-033
   Scenario: Assignment-only reference to a creative already in the library surfaces assigned_to
     Given the Buyer is authenticated
