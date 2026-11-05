@@ -397,6 +397,7 @@ def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> No
         "budget",
         "idempotency_key",
         "invoice_recipient",
+        "name",
     }
     kwargs = _ensure_update_defaults(ctx)
     clock = ctx["env"].clock
@@ -434,6 +435,15 @@ def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> No
         elif field == "invoice_recipient":
             # The authorization check is a production gap (#1417); T-UC-003-ext-t is xfailed.
             kwargs["invoice_recipient"] = _invoice_recipient(value)
+        elif field == "name":
+            kwargs["name"] = value
+
+
+@given(parsers.parse('the media buy "{label}" is named "{name}"'))
+def given_media_buy_named(ctx: dict, label: str, name: str) -> None:
+    """The name a buyer gave the seeded buy at create, stored in its column."""
+    _existing_media_buy(ctx, label).name = name
+    ctx["env"]._commit_factory_data()
 
 
 @given(parsers.parse('the invoice_recipient "{recipient}" is not authorized for this account'))

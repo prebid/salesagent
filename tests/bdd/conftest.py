@@ -6524,6 +6524,7 @@ _UC003_INLINE_CREATIVES_READBACK_TAGS = frozenset(
         "T-UC-003-local-inline-creatives-keep-library",
         "T-UC-003-alt-creatives-inline",
         "T-UC-003-storyboard-creative-fate-after-cancellation",
+        "T-UC-003-media-buy-name",
     }
 )
 

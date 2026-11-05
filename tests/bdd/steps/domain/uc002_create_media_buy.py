@@ -678,8 +678,9 @@ def given_request_names_buy(ctx: dict, name: str) -> None:
 
 
 @then(parsers.parse('the created media buy\'s name on the wire is "{name}"'))
+@then(parsers.parse('the updated media buy\'s name on the wire is "{name}"'))
 def then_created_buy_name(ctx: dict, name: str) -> None:
-    """The create success response echoes the label unchanged."""
+    """The create or update success response carries the stored label."""
     assert wire_field(ctx, "name") == name
 
 

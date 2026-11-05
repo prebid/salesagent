@@ -3138,6 +3138,40 @@ Feature: BR-UC-003 Update Media Buy
     # BR-RULE-216 INV-4: buy not cancellable in current state -> NOT_CANCELLABLE (correctable)
     # POST-F3: pause instead (paused: true) or contact the seller
 
+  # update-media-buy-request.json (v3.2.7) name: "Replacement human-readable name for this media
+  # buy". update-media-buy-response.json name: "Persisted human-readable name after the update.
+  # When update_media_buy supplied name, the seller MUST return the stored value here".
+  # get-media-buys-response.json: "Sellers MUST include name when the media buy was created
+  # through AdCP with name". The name is a label in a column this seller owns, so it is replaced.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json pointer=/properties/name
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-response.json
+  @T-UC-003-media-buy-name @extension
+  Scenario: A replacement name is stored and returned by the update and by get_media_buys
+    Given the tenant is configured for auto-approval
+    And the media buy "mb_existing" is named "Spring flight - Q2"
+    And a valid update_media_buy request with:
+    | field        | value                      |
+    | media_buy_id | mb_existing                |
+    | name         | Summer flight - Q3 / North |
+    When the Buyer Agent sends the update_media_buy request
+    Then the response is compliant with the update_media_buy success spec
+    And the updated media buy's name on the wire is "Summer flight - Q3 / North"
+    When the Buyer Agent reads media buy "mb_existing" back with get_media_buys
+    Then the read media buy's name on the wire is "Summer flight - Q3 / North"
+
+  # An update that sends no name returns the stored one, so the field is never silently dropped.
+  @T-UC-003-media-buy-name @extension
+  Scenario: An update that sends no name returns the stored one
+    Given the tenant is configured for auto-approval
+    And the media buy "mb_existing" is named "Spring flight - Q2"
+    And a valid update_media_buy request with:
+    | field        | value       |
+    | media_buy_id | mb_existing |
+    | paused       | true        |
+    When the Buyer Agent sends the update_media_buy request
+    Then the response is compliant with the update_media_buy success spec
+    And the updated media buy's name on the wire is "Spring flight - Q2"
+
   @T-UC-003-cancel-reason-boundary @boundary @cancellation @schema-v3.1
   Scenario Outline: cancellation_reason length boundary - <boundary_point>
     Given the tenant is configured for auto-approval

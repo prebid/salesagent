@@ -65,6 +65,7 @@ def _make_mock_media_buy(media_buy_id="mb_test", currency="USD", status="active"
     """
     mb = MagicMock()
     mb.media_buy_id = media_buy_id
+    mb.name = None
     mb.currency = currency
     mb.status = status
     mb.start_time = datetime(2025, 1, 1, tzinfo=UTC)
@@ -991,6 +992,7 @@ class TestUC003UpdateCreativeIds:
             uow = env.mock["uow"].return_value
 
             mock_mb = MagicMock()
+            mock_mb.name = None
             mock_mb.media_buy_id = "mb_creative"
             mock_mb.status = "active"
             mock_mb.approved_at = None
@@ -1266,6 +1268,7 @@ class TestUC003UpdateCreativeAssignments:
             mock_session = env.mock["uow"].return_value.session
 
             mock_mb = MagicMock()
+            mock_mb.name = None
             mock_mb.media_buy_id = "mb_assign"
             mock_mb.status = "active"
             mock_mb.approved_at = None

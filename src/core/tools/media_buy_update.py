@@ -369,8 +369,7 @@ _UNAPPLIED_PACKAGE_FIELDS: tuple[str, ...] = unapplied_fields(
 #: The top-level fields this seller applies. ``new_packages`` and ``canceled`` are answered by
 #: their own branches. ``budget_allocation`` is applied in its fixed mode only
 #: (:func:`~src.services.targeting_capabilities.refuse_unapplied_request_fields`). ``name`` is
-#: not updated, which the field allows: "Sellers that cannot update name mid-flight" SHOULD echo
-#: the prior value, which this response does not yet do.
+#: stored, and the success response returns the stored value.
 _APPLIED_REQUEST_FIELDS: frozenset[str] = frozenset(
     {
         "budget_allocation",
@@ -1710,6 +1709,12 @@ def _update_media_buy_impl(
                 # reports ("Revision number after this update").
                 uow.media_buys.update_fields(req.media_buy_id, is_paused=bool(req.paused))
 
+            # update-media-buy-request.json name: "Replacement human-readable name for this media
+            # buy". A display label in a column this seller owns, so it is applied mid-flight; the
+            # response returns the stored value either way.
+            if req.name is not None:
+                uow.media_buys.update_fields(req.media_buy_id, name=req.name)
+
             # After every write above, so the coverage and the flight window it reads are
             # this update's result, and before the response reads the status back.
             assert uow.assignments is not None
@@ -1742,6 +1747,10 @@ def _update_media_buy_impl(
             final_response = UpdateMediaBuySuccess(
                 media_buy_id=req.media_buy_id or "",
                 message=f"Media buy {req.media_buy_id or ''} updated successfully.",
+                # update-media-buy-response.json name: "Persisted human-readable name after the
+                # update. When update_media_buy supplied name, the seller MUST return the stored
+                # value here". A buy with no stored name reports none.
+                name=_final_mb.name,
                 revision=_final_revision,
                 media_buy_status=_final_mbs,  # AdCP: mirrors `status`
                 # The applied instant (see _applied_instant). This branch reaches writes
