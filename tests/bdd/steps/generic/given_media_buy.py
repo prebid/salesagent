@@ -1654,7 +1654,7 @@ def given_daily_spend_boundary(ctx: dict, config: str) -> None:
     - daily=1000 cap=1000: at limit (budget=2000, 2-day flight)
     - daily=1001 cap=1000: exceeds by 1 (budget=2002, 2-day flight)
     - daily=9999 no-cap: no cap configured (check skipped); budget=9999, 1-day flight, 10.00 CPM
-    - 0-day-flight: start==end, production floors to 1 day
+    - 0-day-flight: a 12-hour flight, 0 whole days, production floors to 1 day
 
     THE DAILY RATE IS WHAT THESE ROWS VARY; THE TOTAL IS NOT FREE. A cap applies to
     ``budget / flight_days``, so a row can reach a daily figure by raising the budget or by
@@ -1684,9 +1684,12 @@ def given_daily_spend_boundary(ctx: dict, config: str) -> None:
         _set_daily_spend_cap(ctx, cap=None, budget=9999.0, flight_days=1, cpm=10.0)
 
     elif config == "0-day-flight":
-        # 0-day flight: start==end, production floors flight_days to 1
-        # daily = budget / 1 = 500, cap = 1000 → passes
+        # A flight of 0 whole days: it ends 12 hours after it starts, and production floors
+        # flight_days to 1, so daily = budget / 1 = 500, cap = 1000 -> passes. Not start==end:
+        # the seller refuses an end_time that is not after start_time.
         _set_daily_spend_cap(ctx, cap=1000.0, budget=500.0, flight_days=0)
+        kwargs = ctx["request_kwargs"]
+        kwargs["end_time"] = (datetime.fromisoformat(kwargs["start_time"]) + timedelta(hours=12)).isoformat()
 
     else:
         raise ValueError(f"Unknown daily spend boundary config: {config}")
