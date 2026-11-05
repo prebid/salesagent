@@ -672,8 +672,14 @@ class TargetingWidget {
         operatorSection.style.display = 'block';
         valuesList.innerHTML = '<div class="loading">Loading values...</div>';
 
+        // A response for a key the user has since moved off must not render: its
+        // checkboxes would save that key's value ids on the newly selected criterion.
+        // The hidden input holds a string, so compare against one.
+        const isCurrent = () => document.getElementById('key-selector').value === String(keyId);
+
         try {
             const values = await this.fetchValuesForKey(keyId);
+            if (!isCurrent()) return;
 
             if (values.length === 0) {
                 valuesList.innerHTML = '<div class="empty-state">No values available for this key</div>';
@@ -703,6 +709,7 @@ class TargetingWidget {
             this.updateApplyButton();
 
         } catch (error) {
+            if (!isCurrent()) return;
             valuesList.innerHTML = `<div class="error-state">Failed to load values: ${error.message}</div>`;
         }
     }

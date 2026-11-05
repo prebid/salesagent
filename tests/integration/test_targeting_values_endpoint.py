@@ -40,8 +40,8 @@ def gam_discovery():
         yield discovery_class
 
 
-def _values_url(tenant, key):
-    return f"/api/tenant/{tenant.tenant_id}/targeting/values/{key.inventory_id}"
+def _values_url(tenant_id, key_id):
+    return f"/api/tenant/{tenant_id}/targeting/values/{key_id}"
 
 
 def test_get_targeting_values_endpoint(authenticated_admin_session, gam_custom_targeting_key, gam_discovery):
@@ -79,7 +79,7 @@ def test_get_targeting_values_endpoint(authenticated_admin_session, gam_custom_t
 
     with patch("googleads.ad_manager.AdManagerClient") as mock_ad_manager_client:
         with patch("googleads.oauth2.GoogleRefreshTokenClient") as mock_oauth_client:
-            response = authenticated_admin_session.get(_values_url(tenant, key))
+            response = authenticated_admin_session.get(_values_url(tenant.tenant_id, key.inventory_id))
 
     # The client is built from the tenant's stored credentials and network code.
     mock_oauth_client.assert_called_once_with(client_id=ANY, client_secret=ANY, refresh_token="test_refresh_token")
@@ -122,7 +122,7 @@ def test_get_targeting_values_empty_result(authenticated_admin_session, gam_cust
     """Test endpoint returns empty array when GAM returns no values for key."""
     tenant, key = gam_custom_targeting_key
 
-    response = authenticated_admin_session.get(_values_url(tenant, key))
+    response = authenticated_admin_session.get(_values_url(tenant.tenant_id, key.inventory_id))
 
     assert response.status_code == 200
     data = response.json
@@ -134,7 +134,7 @@ def test_get_targeting_values_is_never_cached(authenticated_admin_session, gam_c
     """The values come from GAM live, so no cache may serve an earlier answer (#1045)."""
     tenant, key = gam_custom_targeting_key
 
-    response = authenticated_admin_session.get(_values_url(tenant, key))
+    response = authenticated_admin_session.get(_values_url(tenant.tenant_id, key.inventory_id))
 
     assert response.status_code == 200, response.data
     assert response.headers.get("Cache-Control") == "no-store"
@@ -144,7 +144,7 @@ def test_get_targeting_values_tenant_isolation(authenticated_admin_session, boun
     """A tenant with no ad server credentials is refused, never answered from another tenant's GAM."""
     key = GAMInventoryFactory(inventory_type="custom_targeting_key")
 
-    response = authenticated_admin_session.get(_values_url(key.tenant, key))
+    response = authenticated_admin_session.get(_values_url(key.tenant_id, key.inventory_id))
 
     assert response.status_code == 400
     assert response.json == {"error": "No adapter configured for this tenant"}
@@ -154,7 +154,7 @@ def test_get_targeting_values_requires_auth(admin_client, bound_factory_session)
     """An unauthenticated request is turned away even when the tenant and key exist."""
     key = GAMInventoryFactory(inventory_type="custom_targeting_key")
 
-    response = admin_client.get(_values_url(key.tenant, key))
+    response = admin_client.get(_values_url(key.tenant_id, key.inventory_id))
 
     # Should redirect to login or return 401/403
     assert response.status_code in [302, 401, 403]
