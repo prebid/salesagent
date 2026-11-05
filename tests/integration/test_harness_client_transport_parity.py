@@ -157,10 +157,9 @@ def _live_e2e_config() -> E2EConfig | None:
     """Detect a live Docker e2e stack (nginx + adcp-server + postgres) started via
     ``make test-stack-up`` / ``scripts/test-stack.sh`` / ``./run_all_tests.sh``.
 
-    Reads ``ADCP_SALES_PORT`` / ``POSTGRES_PORT`` — the host-published ports
-    ``scripts/test-stack.sh`` writes to ``.test-stack.env`` — and health-checks
-    the nginx proxy before trusting it, mirroring ``tests/bdd/conftest.py``'s
-    ``e2e_stack()`` fixture. Returns ``None`` (never raises/skips here) when no
+    Uses the in-network ``E2E_BASE_URL`` / ``E2E_POSTGRES_URL`` pair, or the
+    host-published ``ADCP_SALES_PORT`` / ``POSTGRES_PORT`` pair, and checks
+    the nginx proxy before trusting it. Returns ``None`` when no
     stack is detected or it fails its health check; the caller decides whether
     that means "skip this class" (this module) or "hard error" (BDD's
     explicitly-requested ``e2e_rest`` transport).
@@ -176,41 +175,34 @@ def _live_e2e_config() -> E2EConfig | None:
     """
     import httpx
 
-    mcp_port = os.environ.get("ADCP_SALES_PORT")
-    pg_port = os.environ.get("POSTGRES_PORT")
-    if not mcp_port or not pg_port:
-        return None
-    base_url = f"http://localhost:{mcp_port}"
+    base_url = os.environ.get("E2E_BASE_URL")
+    postgres_url = os.environ.get("E2E_POSTGRES_URL")
+    if not base_url or not postgres_url:
+        mcp_port = os.environ.get("ADCP_SALES_PORT")
+        pg_port = os.environ.get("POSTGRES_PORT")
+        if not mcp_port or not pg_port:
+            return None
+        base_url = f"http://localhost:{mcp_port}"
+        postgres_url = f"postgresql://adcp_user:secure_password_change_me@localhost:{pg_port}/adcp"
     try:
         resp = httpx.get(f"{base_url}/health", timeout=5)
         resp.raise_for_status()
     except Exception:
         return None
-    postgres_url = f"postgresql://adcp_user:secure_password_change_me@localhost:{pg_port}/adcp"
     return E2EConfig(base_url=base_url, postgres_url=postgres_url)
 
 
-def _reset_principal_token_sequence(suffix: str) -> None:
-    """Reset ``PrincipalFactory``'s ``access_token`` sequence before entering an
-    e2e-mode env, so every token this process mints for *this test* is
-    collision-proof against a prior run's leftover rows.
+def _reset_live_factory_sequences(suffix: str) -> None:
+    """Keep generated identities unique in the live stack's persistent database.
 
-    ``PrincipalFactory.access_token``'s default (``Sequence(lambda n: f"token_{n:08d}")``)
-    is a per-PROCESS counter starting at 0 — harmless against the per-test,
-    always-fresh ``integration_db``, but the live e2e stack's ``adcp``
-    database is NOT wiped between separate pytest invocations, so a fresh
-    process's counter restarting at 0 collides with an EARLIER run's
-    committed ``token_00000000`` row on ``principals_access_token_key`` — a
-    collision that happens INSIDE ``BaseTestEnv.__enter__``'s e2e auto-seed
-    (``_seed_identity``), before any test-body code gets a chance to
-    intervene. *suffix* is already unique per test (the same one used for
-    tenant_id), so reseeding the counter from it makes the collision
-    astronomically unlikely without a destructive reset of the live
-    server's database.
+    Tenant hosts have their own sequence. Principal secrets derive from the
+    principal id, so explicit ids carry a context prefix and this test's UUID.
     """
-    from tests.factories import PrincipalFactory
+    from tests.factories import PrincipalFactory, TenantFactory
 
-    PrincipalFactory.reset_sequence(int(suffix, 16) % 10_000_000, force=True)
+    seed = int(suffix, 16)
+    TenantFactory.reset_sequence(seed, force=True)
+    PrincipalFactory.reset_sequence(seed, force=True)
 
 
 def _seed_seller(env) -> None:
@@ -526,7 +518,7 @@ class TestEnvVsClientEquivalenceE2E:
     `./run_all_tests.sh`, which runs the full suite including this class) to
     exercise it.
 
-    Tenant/product identifiers are ``uuid``-suffixed (unlike the in-process
+    Tenant, product and principal identifiers are ``uuid``-suffixed (unlike the in-process
     class's fixed literals) because ``e2e_live_config`` points factories at
     the live server's persistent ``adcp`` database — NOT the per-test
     ``integration_db`` these tests also request (kept only for the
@@ -542,9 +534,11 @@ class TestEnvVsClientEquivalenceE2E:
         from tests.harness.account_list import AccountListEnv
         from tests.harness.product import ProductEnv
 
-        suffix = uuid.uuid4().hex[:8]
-        _reset_principal_token_sequence(suffix)
-        with ProductEnv(tenant_id=f"ev-e2erest-s-{suffix}", principal_id="p1", e2e_config=e2e_live_config) as env:
+        suffix = uuid.uuid4().hex
+        _reset_live_factory_sequences(suffix)
+        with ProductEnv(
+            tenant_id=f"ev-e2erest-s-{suffix}", principal_id=f"p1_s_{suffix}", e2e_config=e2e_live_config
+        ) as env:
             tenant, _principal = env.setup_default_data()
             product = ProductFactory(tenant=tenant, product_id=f"prod_ev_e2erest_{suffix}")
             PricingOptionFactory(product=product)
@@ -554,7 +548,9 @@ class TestEnvVsClientEquivalenceE2E:
 
         _assert_success_equivalent(via, client_result)
 
-        with AccountListEnv(tenant_id=f"ev-e2erest-e-{suffix}", principal_id="p1", e2e_config=e2e_live_config) as env:
+        with AccountListEnv(
+            tenant_id=f"ev-e2erest-e-{suffix}", principal_id=f"p1_e_{suffix}", e2e_config=e2e_live_config
+        ) as env:
             _seed_seller(env)
             via = env.call_via(Transport.E2E_REST, credential=env.credential(token=None))
             client_result = AdCPTestClient(env).call(
@@ -570,9 +566,11 @@ class TestEnvVsClientEquivalenceE2E:
         from tests.harness.account_list import AccountListEnv
         from tests.harness.product import ProductEnv
 
-        suffix = uuid.uuid4().hex[:8]
-        _reset_principal_token_sequence(suffix)
-        with ProductEnv(tenant_id=f"ev-e2emcp-s-{suffix}", principal_id="p1", e2e_config=e2e_live_config) as env:
+        suffix = uuid.uuid4().hex
+        _reset_live_factory_sequences(suffix)
+        with ProductEnv(
+            tenant_id=f"ev-e2emcp-s-{suffix}", principal_id=f"p1_s_{suffix}", e2e_config=e2e_live_config
+        ) as env:
             tenant, _principal = env.setup_default_data()
             product = ProductFactory(tenant=tenant, product_id=f"prod_ev_e2emcp_{suffix}")
             PricingOptionFactory(product=product)
@@ -582,7 +580,9 @@ class TestEnvVsClientEquivalenceE2E:
 
         _assert_success_equivalent(via, client_result)
 
-        with AccountListEnv(tenant_id=f"ev-e2emcp-e-{suffix}", principal_id="p1", e2e_config=e2e_live_config) as env:
+        with AccountListEnv(
+            tenant_id=f"ev-e2emcp-e-{suffix}", principal_id=f"p1_e_{suffix}", e2e_config=e2e_live_config
+        ) as env:
             _seed_seller(env)
             via = env.call_via(Transport.E2E_MCP, tool_name="list_accounts", credential=env.credential(token=None))
             client_result = AdCPTestClient(env).call(
@@ -598,9 +598,11 @@ class TestEnvVsClientEquivalenceE2E:
         from tests.harness.account_list import AccountListEnv
         from tests.harness.product import ProductEnv
 
-        suffix = uuid.uuid4().hex[:8]
-        _reset_principal_token_sequence(suffix)
-        with ProductEnv(tenant_id=f"ev-e2ea2a-s-{suffix}", principal_id="p1", e2e_config=e2e_live_config) as env:
+        suffix = uuid.uuid4().hex
+        _reset_live_factory_sequences(suffix)
+        with ProductEnv(
+            tenant_id=f"ev-e2ea2a-s-{suffix}", principal_id=f"p1_s_{suffix}", e2e_config=e2e_live_config
+        ) as env:
             tenant, _principal = env.setup_default_data()
             product = ProductFactory(tenant=tenant, product_id=f"prod_ev_e2ea2a_{suffix}")
             PricingOptionFactory(product=product)
@@ -610,7 +612,9 @@ class TestEnvVsClientEquivalenceE2E:
 
         _assert_success_equivalent(via, client_result)
 
-        with AccountListEnv(tenant_id=f"ev-e2ea2a-e-{suffix}", principal_id="p1", e2e_config=e2e_live_config) as env:
+        with AccountListEnv(
+            tenant_id=f"ev-e2ea2a-e-{suffix}", principal_id=f"p1_e_{suffix}", e2e_config=e2e_live_config
+        ) as env:
             _seed_seller(env)
             via = env.call_via(Transport.E2E_A2A, tool_name="list_accounts", credential=env.credential(token=None))
             client_result = AdCPTestClient(env).call(
