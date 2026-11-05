@@ -21,6 +21,7 @@ from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories.principal import plaintext_token_for
 from tests.helpers.credentials import credential_headers
 from tests.helpers.metrics import counter_value
+from tests.helpers.scheduler_isolation import summary_lines
 
 
 @dataclass
@@ -204,21 +205,13 @@ def then_isolation_unchanged(ctx: dict, tenant: str) -> None:
         assert counter_value("media_buy_status", tenant_id, error_type) == before.get(error_type, 0.0)
 
 
-def _summary_lines(ctx: dict) -> list[tuple[str, str]]:
-    lines = []
-    for record in ctx["sweep_records"]:
-        message = record.getMessage()
-        if STATUS_BATCH_SUMMARY_PREFIX in message:
-            lines.append((record.levelname, message))
-    return lines
-
-
 @then("the sweep summary is absent")
 def then_summary_absent(ctx: dict) -> None:
-    assert _summary_lines(ctx) == []
+    assert [line for line in summary_lines(ctx["sweep_records"]) if STATUS_BATCH_SUMMARY_PREFIX in line[1]] == []
 
 
 @then(parsers.re(r'the sweep summary is the (?P<severity>WARNING|INFO) "(?P<text>[^"]+)"'))
 def then_summary_is(ctx: dict, severity: str, text: str) -> None:
     expected = f"{STATUS_BATCH_SUMMARY_PREFIX}: {text}"
-    assert _summary_lines(ctx) == [(severity, expected)]
+    summaries = [line for line in summary_lines(ctx["sweep_records"]) if STATUS_BATCH_SUMMARY_PREFIX in line[1]]
+    assert summaries == [(severity, expected)]

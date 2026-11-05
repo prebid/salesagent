@@ -15,19 +15,18 @@ from unittest.mock import MagicMock, patch
 import pytest
 from sqlalchemy.exc import OperationalError
 
-import src.services.media_buy_status_scheduler as status_mod
 from src.core.metrics import scheduler_isolation_errors
-from src.services.media_buy_status_scheduler import STATUS_BATCH_SUMMARY_PREFIX, MediaBuyStatusScheduler
+from src.services.media_buy_status_scheduler import STATUS_BATCH_SUMMARY_PREFIX
 from tests.helpers.metrics import counter_value
 from tests.helpers.scheduler_isolation import (
     bare_disconnection_error,
     invalidated_dbapi_error,
-    mock_get_db_session_cm,
+    logged,
     mock_media_buy,
     mock_savepoint_session,
+    run_mocked_tick,
     server_never_answered_error,
     statement_failure,
-    summary_lines,
 )
 
 
@@ -39,25 +38,14 @@ async def test_savepoint_release_failure_counts_as_isolated_not_flipped():
     buys = [mock_media_buy(media_buy_id=f"mb_{i}", tenant_id=f"t{i}") for i in range(3)]
     release_exc = DataError("UPDATE media_buys", {}, Exception("value too long"))
     session = mock_savepoint_session(release_exc=release_exc)
-    cm = mock_get_db_session_cm(session)
-    scheduler = MediaBuyStatusScheduler()
 
-    with (
-        patch("src.services.media_buy_status_scheduler.get_db_session", return_value=cm),
-        patch(
-            "src.services.media_buy_status_scheduler.MediaBuyRepository.get_all_by_statuses",
-            return_value=buys,
-        ),
-        patch.object(scheduler, "_compute_new_status", return_value="completed"),
-        patch.object(status_mod.logger, "warning") as mock_warning,
-        patch.object(status_mod.logger, "info") as mock_info,
-    ):
-        await scheduler._update_statuses()
+    records = await run_mocked_tick(buys, "completed", session=session)
 
-    warn_lines = summary_lines(mock_warning, STATUS_BATCH_SUMMARY_PREFIX)
-    assert warn_lines == [f"{STATUS_BATCH_SUMMARY_PREFIX}: 0 updated, 3 errors"]
-    assert summary_lines(mock_info, STATUS_BATCH_SUMMARY_PREFIX) == []
-    assert summary_lines(mock_info, STATUS_BATCH_SUMMARY_PREFIX, needle="Updated media buy ") == []
+    assert logged(records, "WARNING", STATUS_BATCH_SUMMARY_PREFIX) == [
+        f"{STATUS_BATCH_SUMMARY_PREFIX}: 0 updated, 3 errors"
+    ]
+    assert logged(records, "INFO", STATUS_BATCH_SUMMARY_PREFIX) == []
+    assert logged(records, "INFO", "Updated media buy ") == []
     session.commit.assert_not_called()
 
 
@@ -79,10 +67,6 @@ async def test_status_scheduler_connection_failure_reraises(escaped):
     isolate log.
     """
     buy = mock_media_buy(media_buy_id="mb1", tenant_id="t-fail-fast")
-    session = mock_savepoint_session()
-    cm = mock_get_db_session_cm(session)
-
-    scheduler = MediaBuyStatusScheduler()
 
     def _raise_invalidated(_media_buy, _now, _session):
         raise escaped
@@ -90,18 +74,9 @@ async def test_status_scheduler_connection_failure_reraises(escaped):
     scheduler_isolation_errors.clear()
     metric_before = counter_value("media_buy_status", "t-fail-fast", "db_error")
 
-    with (
-        patch("src.services.media_buy_status_scheduler.get_db_session", return_value=cm),
-        patch(
-            "src.services.media_buy_status_scheduler.MediaBuyRepository.get_all_by_statuses",
-            return_value=[buy],
-        ),
-        patch.object(scheduler, "_compute_new_status", side_effect=_raise_invalidated),
-        patch.object(status_mod.logger, "error") as mock_error,
-    ):
-        await scheduler._update_statuses()
+    records = await run_mocked_tick([buy], _raise_invalidated)
 
-    error_msgs = [str(c.args[0]) for c in mock_error.call_args_list if c.args]
+    error_msgs = logged(records, "ERROR", "")
     assert any("Failed to update media buy statuses" in msg for msg in error_msgs)
     assert not any("Error updating media buy status" in msg for msg in error_msgs)
     assert counter_value("media_buy_status", "t-fail-fast", "db_error") == metric_before
@@ -117,10 +92,6 @@ async def test_status_isolates_one_failure_and_meters_once():
         mock_media_buy(media_buy_id="mb_fail", tenant_id="tenant-fail", principal_id="p-mb_fail"),
         mock_media_buy(media_buy_id="mb_b", tenant_id="tenant-ok-b", principal_id="p-mb_b"),
     ]
-    session = mock_savepoint_session()
-    cm = mock_get_db_session_cm(session)
-
-    scheduler = MediaBuyStatusScheduler()
 
     def _compute(media_buy, _now, _session):
         if media_buy.media_buy_id == "mb_fail":
@@ -130,20 +101,12 @@ async def test_status_isolates_one_failure_and_meters_once():
     scheduler_isolation_errors.clear()
     fail_before = counter_value("media_buy_status", "tenant-fail", "db_error")
 
-    with (
-        patch("src.services.media_buy_status_scheduler.get_db_session", return_value=cm),
-        patch(
-            "src.services.media_buy_status_scheduler.MediaBuyRepository.get_all_by_statuses",
-            return_value=buys,
-        ),
-        patch.object(scheduler, "_compute_new_status", side_effect=_compute),
-        patch.object(status_mod.logger, "error") as mock_error,
-    ):
-        await scheduler._update_statuses()
+    records = await run_mocked_tick(buys, _compute)
 
-    assert mock_error.call_count == 1
-    assert mock_error.call_args.kwargs.get("exc_info") is True
-    assert "tenant_id=tenant-fail" in mock_error.call_args.args[0]
+    errors = [record for record in records if record.levelname == "ERROR"]
+    assert len(errors) == 1
+    assert errors[0].exc_info
+    assert "tenant_id=tenant-fail" in errors[0].getMessage()
 
     assert counter_value("media_buy_status", "tenant-fail", "db_error") == fail_before + 1
     # Siblings must not be metered.
@@ -154,28 +117,16 @@ async def test_status_isolates_one_failure_and_meters_once():
 async def test_batch_summary_warns_when_every_visited_buy_fails():
     """Every visited buy failing logs WARNING, not INFO."""
     buys = [mock_media_buy(media_buy_id=f"mb_{i}", tenant_id=f"t{i}") for i in range(3)]
-    session = mock_savepoint_session()
-    cm = mock_get_db_session_cm(session)
-    scheduler = MediaBuyStatusScheduler()
 
     def _always_fail(_media_buy, _now, _session):
         raise statement_failure()
 
-    with (
-        patch("src.services.media_buy_status_scheduler.get_db_session", return_value=cm),
-        patch(
-            "src.services.media_buy_status_scheduler.MediaBuyRepository.get_all_by_statuses",
-            return_value=buys,
-        ),
-        patch.object(scheduler, "_compute_new_status", side_effect=_always_fail),
-        patch.object(status_mod.logger, "warning") as mock_warning,
-        patch.object(status_mod.logger, "info") as mock_info,
-    ):
-        await scheduler._update_statuses()
+    records = await run_mocked_tick(buys, _always_fail)
 
-    warn_lines = summary_lines(mock_warning, STATUS_BATCH_SUMMARY_PREFIX)
-    assert warn_lines == [f"{STATUS_BATCH_SUMMARY_PREFIX}: 0 updated, 3 errors"]
-    assert summary_lines(mock_info, STATUS_BATCH_SUMMARY_PREFIX) == []
+    assert logged(records, "WARNING", STATUS_BATCH_SUMMARY_PREFIX) == [
+        f"{STATUS_BATCH_SUMMARY_PREFIX}: 0 updated, 3 errors"
+    ]
+    assert logged(records, "INFO", STATUS_BATCH_SUMMARY_PREFIX) == []
 
 
 @pytest.mark.asyncio
@@ -186,30 +137,17 @@ async def test_batch_summary_info_when_noop_plus_one_raiser():
     no-ops must not page on the 60-second tick.
     """
     buys = [mock_media_buy(media_buy_id=f"mb_{i}", tenant_id=f"t{i}") for i in range(5)]
-    session = mock_savepoint_session()
-    cm = mock_get_db_session_cm(session)
-    scheduler = MediaBuyStatusScheduler()
 
     def _noop_or_raise(media_buy, _now, _session):
         if media_buy.media_buy_id == "mb_4":
             raise statement_failure()
 
-    with (
-        patch("src.services.media_buy_status_scheduler.get_db_session", return_value=cm),
-        patch(
-            "src.services.media_buy_status_scheduler.MediaBuyRepository.get_all_by_statuses",
-            return_value=buys,
-        ),
-        patch.object(scheduler, "_compute_new_status", side_effect=_noop_or_raise),
-        patch.object(status_mod.logger, "warning") as mock_warning,
-        patch.object(status_mod.logger, "info") as mock_info,
-    ):
-        await scheduler._update_statuses()
+    records = await run_mocked_tick(buys, _noop_or_raise)
 
-    assert summary_lines(mock_info, STATUS_BATCH_SUMMARY_PREFIX) == [
+    assert logged(records, "INFO", STATUS_BATCH_SUMMARY_PREFIX) == [
         f"{STATUS_BATCH_SUMMARY_PREFIX}: 0 updated, 1 errors"
     ]
-    assert summary_lines(mock_warning, STATUS_BATCH_SUMMARY_PREFIX) == []
+    assert logged(records, "WARNING", STATUS_BATCH_SUMMARY_PREFIX) == []
 
 
 @pytest.mark.asyncio
@@ -231,32 +169,19 @@ async def test_id_read_failure_stops_the_tick():
         mock_media_buy(media_buy_id="mb_ok_b", tenant_id="t-ok-b"),
     ]
     session = mock_savepoint_session()
-    cm = mock_get_db_session_cm(session)
-    scheduler = MediaBuyStatusScheduler()
 
     def _compute(media_buy, _now, _session):
         if getattr(media_buy, "media_buy_id", None) == "mb_lazy":
             raise AssertionError("compute must not run after lazy-id failure")
         return "completed"
 
-    with (
-        patch("src.services.media_buy_status_scheduler.get_db_session", return_value=cm),
-        patch(
-            "src.services.media_buy_status_scheduler.MediaBuyRepository.get_all_by_statuses",
-            return_value=buys,
-        ),
-        patch.object(scheduler, "_compute_new_status", side_effect=_compute),
-        patch.object(status_mod.logger, "error") as mock_error,
-        patch.object(status_mod.logger, "info") as mock_info,
-    ):
-        await scheduler._update_statuses()
+    records = await run_mocked_tick(buys, _compute, session=session)
 
-    err_msgs = [str(c.args[0]) for c in mock_error.call_args_list if c.args]
+    err_msgs = logged(records, "ERROR", "")
     assert any("Failed to update media buy statuses" in msg for msg in err_msgs)
     assert not any("Error updating media buy status" in msg for msg in err_msgs)
     session.commit.assert_not_called()
-    flip_lines = summary_lines(mock_info, STATUS_BATCH_SUMMARY_PREFIX, needle="Updated media buy ")
-    assert flip_lines == []
+    assert logged(records, "INFO", "Updated media buy ") == []
 
 
 @pytest.mark.asyncio
@@ -267,36 +192,23 @@ async def test_nested_handler_failure_stays_isolated():
         mock_media_buy(media_buy_id="mb_ok", tenant_id="t-ok"),
     ]
     session = mock_savepoint_session()
-    cm = mock_get_db_session_cm(session)
-    scheduler = MediaBuyStatusScheduler()
 
     def _compute(media_buy, _now, _session):
         if media_buy.media_buy_id == "mb_fail":
             raise statement_failure()
         return "completed"
 
-    with (
-        patch("src.services.media_buy_status_scheduler.get_db_session", return_value=cm),
-        patch(
-            "src.services.media_buy_status_scheduler.MediaBuyRepository.get_all_by_statuses",
-            return_value=buys,
-        ),
-        patch.object(scheduler, "_compute_new_status", side_effect=_compute),
-        patch(
-            "src.services.media_buy_status_scheduler.record_scheduler_isolation_error",
-            side_effect=RuntimeError("handler boom"),
-        ),
-        patch.object(status_mod.logger, "error") as mock_error,
-        patch.object(status_mod.logger, "info") as mock_info,
+    with patch(
+        "src.services.media_buy_status_scheduler.record_scheduler_isolation_error",
+        side_effect=RuntimeError("handler boom"),
     ):
-        await scheduler._update_statuses()
+        records = await run_mocked_tick(buys, _compute, session=session)
 
-    err_msgs = [str(c.args[0]) for c in mock_error.call_args_list if c.args]
+    err_msgs = logged(records, "ERROR", "")
     assert any("Status isolation error handler failed" in msg for msg in err_msgs)
     assert not any("Failed to update media buy statuses" in msg for msg in err_msgs)
     session.commit.assert_called_once_with()
-    flip_lines = summary_lines(mock_info, STATUS_BATCH_SUMMARY_PREFIX, needle="Updated media buy ")
-    assert len(flip_lines) == 1
+    assert len(logged(records, "INFO", "Updated media buy ")) == 1
 
 
 @pytest.mark.asyncio
@@ -308,54 +220,29 @@ async def test_batch_summary_warns_on_escape_with_only_prior_errors():
         mock_media_buy(media_buy_id="mb_c", tenant_id="t-c"),
         mock_media_buy(media_buy_id="mb_dead", tenant_id="t-dead"),
     ]
-    session = mock_savepoint_session()
-    cm = mock_get_db_session_cm(session)
-    scheduler = MediaBuyStatusScheduler()
 
     def _compute(media_buy, _now, _session):
         if media_buy.media_buy_id == "mb_dead":
             raise invalidated_dbapi_error(OperationalError)
         raise statement_failure()
 
-    with (
-        patch("src.services.media_buy_status_scheduler.get_db_session", return_value=cm),
-        patch(
-            "src.services.media_buy_status_scheduler.MediaBuyRepository.get_all_by_statuses",
-            return_value=buys,
-        ),
-        patch.object(scheduler, "_compute_new_status", side_effect=_compute),
-        patch.object(status_mod.logger, "warning") as mock_warning,
-        patch.object(status_mod.logger, "info") as mock_info,
-    ):
-        await scheduler._update_statuses()
+    records = await run_mocked_tick(buys, _compute)
 
-    warn_lines = summary_lines(mock_warning, STATUS_BATCH_SUMMARY_PREFIX)
-    assert warn_lines == [f"{STATUS_BATCH_SUMMARY_PREFIX}: 0 updated, 3 errors"]
-    assert summary_lines(mock_info, STATUS_BATCH_SUMMARY_PREFIX) == []
+    assert logged(records, "WARNING", STATUS_BATCH_SUMMARY_PREFIX) == [
+        f"{STATUS_BATCH_SUMMARY_PREFIX}: 0 updated, 3 errors"
+    ]
+    assert logged(records, "INFO", STATUS_BATCH_SUMMARY_PREFIX) == []
 
 
 @pytest.mark.asyncio
 async def test_batch_summary_suppresses_all_quiet_tick():
     """A tick with no flips and no errors logs no summary."""
     buys = [mock_media_buy(media_buy_id="mb_noop", tenant_id="t1")]
-    session = mock_savepoint_session()
-    cm = mock_get_db_session_cm(session)
-    scheduler = MediaBuyStatusScheduler()
 
-    with (
-        patch("src.services.media_buy_status_scheduler.get_db_session", return_value=cm),
-        patch(
-            "src.services.media_buy_status_scheduler.MediaBuyRepository.get_all_by_statuses",
-            return_value=buys,
-        ),
-        patch.object(scheduler, "_compute_new_status", return_value=None),
-        patch.object(status_mod.logger, "warning") as mock_warning,
-        patch.object(status_mod.logger, "info") as mock_info,
-    ):
-        await scheduler._update_statuses()
+    records = await run_mocked_tick(buys, None)
 
-    assert summary_lines(mock_warning, STATUS_BATCH_SUMMARY_PREFIX) == []
-    assert summary_lines(mock_info, STATUS_BATCH_SUMMARY_PREFIX) == []
+    assert logged(records, "WARNING", STATUS_BATCH_SUMMARY_PREFIX) == []
+    assert logged(records, "INFO", STATUS_BATCH_SUMMARY_PREFIX) == []
 
 
 @pytest.mark.asyncio
@@ -364,27 +251,15 @@ async def test_batch_summary_reports_pending_flips_when_commit_fails():
     buys = [mock_media_buy(media_buy_id="mb_a", tenant_id="t1")]
     session = mock_savepoint_session()
     session.commit = MagicMock(side_effect=RuntimeError("commit boom"))
-    cm = mock_get_db_session_cm(session)
-    scheduler = MediaBuyStatusScheduler()
 
-    with (
-        patch("src.services.media_buy_status_scheduler.get_db_session", return_value=cm),
-        patch(
-            "src.services.media_buy_status_scheduler.MediaBuyRepository.get_all_by_statuses",
-            return_value=buys,
-        ),
-        patch.object(scheduler, "_compute_new_status", return_value="completed"),
-        patch.object(status_mod.logger, "warning") as mock_warning,
-        patch.object(status_mod.logger, "info") as mock_info,
-    ):
-        await scheduler._update_statuses()
+    records = await run_mocked_tick(buys, "completed", session=session)
 
-    warn_lines = summary_lines(mock_warning, STATUS_BATCH_SUMMARY_PREFIX)
+    warn_lines = logged(records, "WARNING", STATUS_BATCH_SUMMARY_PREFIX)
     assert len(warn_lines) == 1
     assert "0 persisted" in warn_lines[0]
     assert "1 pending flips lost" in warn_lines[0]
-    assert summary_lines(mock_info, STATUS_BATCH_SUMMARY_PREFIX) == []
-    assert summary_lines(mock_info, STATUS_BATCH_SUMMARY_PREFIX, needle="Updated media buy ") == []
+    assert logged(records, "INFO", STATUS_BATCH_SUMMARY_PREFIX) == []
+    assert logged(records, "INFO", "Updated media buy ") == []
 
 
 @pytest.mark.asyncio
@@ -394,30 +269,17 @@ async def test_batch_summary_survives_dead_connection_escape():
         mock_media_buy(media_buy_id="mb_ok", tenant_id="t-ok"),
         mock_media_buy(media_buy_id="mb_dead", tenant_id="t-dead"),
     ]
-    session = mock_savepoint_session()
-    cm = mock_get_db_session_cm(session)
-    scheduler = MediaBuyStatusScheduler()
 
     def _compute(media_buy, _now, _session):
         if media_buy.media_buy_id == "mb_dead":
             raise invalidated_dbapi_error(OperationalError)
         return "completed"
 
-    with (
-        patch("src.services.media_buy_status_scheduler.get_db_session", return_value=cm),
-        patch(
-            "src.services.media_buy_status_scheduler.MediaBuyRepository.get_all_by_statuses",
-            return_value=buys,
-        ),
-        patch.object(scheduler, "_compute_new_status", side_effect=_compute),
-        patch.object(status_mod.logger, "warning") as mock_warning,
-        patch.object(status_mod.logger, "info") as mock_info,
-    ):
-        await scheduler._update_statuses()
+    records = await run_mocked_tick(buys, _compute)
 
-    warn_lines = summary_lines(mock_warning, STATUS_BATCH_SUMMARY_PREFIX)
+    warn_lines = logged(records, "WARNING", STATUS_BATCH_SUMMARY_PREFIX)
     assert len(warn_lines) == 1
     assert "0 persisted" in warn_lines[0]
     assert "1 pending flips lost" in warn_lines[0]
-    assert summary_lines(mock_info, STATUS_BATCH_SUMMARY_PREFIX) == []
-    assert summary_lines(mock_info, STATUS_BATCH_SUMMARY_PREFIX, needle="Updated media buy ") == []
+    assert logged(records, "INFO", STATUS_BATCH_SUMMARY_PREFIX) == []
+    assert logged(records, "INFO", "Updated media buy ") == []
