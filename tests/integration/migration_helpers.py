@@ -113,15 +113,29 @@ def reset_to_revision(
     run_alembic_upgrade(db_url, revision)
     run_alembic_downgrade(db_url, revision)
     with engine.begin() as conn:
+        # products.tenant_id has no ON DELETE rule in the Alembic-built schema
+        # (initial_schema.py); the CASCADE lives on the mapped column, which only
+        # Base.metadata.create_all reads. Clear the children first.
+        conn.execute(text("DELETE FROM products"))
         conn.execute(text("DELETE FROM accounts"))
         conn.execute(text("DELETE FROM tenants"))
+        tenant_columns = {
+            row[0]
+            for row in conn.execute(
+                text("SELECT column_name FROM information_schema.columns WHERE table_name = 'tenants'")
+            )
+        }
+        columns = ["tenant_id", "name", "subdomain", "virtual_host", "ad_server", "is_active"]
+        values = [":tid", ":name", ":subdomain", ":vhost", "'mock'", "true"]
+        # virtual_host is NOT NULL from revision 7f31c0ab94d2 and its index is UNIQUE, so
+        # the value is derived from the tenant_id to stay distinct across seeded tenants.
+        # The same revision adds virtual_host_name (NOT NULL); vhost_for() carries no
+        # port, so the host IS the name. Older revisions have no such column.
+        if "virtual_host_name" in tenant_columns:
+            columns.append("virtual_host_name")
+            values.append(":vhost")
         conn.execute(
-            text(
-                "INSERT INTO tenants (tenant_id, name, subdomain, virtual_host, ad_server, is_active) "
-                "VALUES (:tid, :name, :subdomain, :vhost, 'mock', true)"
-            ),
-            # virtual_host is NOT NULL from revision 7f31c0ab94d2 and its index is UNIQUE, so
-            # the value is derived from the tenant_id to stay distinct across seeded tenants.
+            text(f"INSERT INTO tenants ({', '.join(columns)}) VALUES ({', '.join(values)})"),
             {
                 "tid": tenant_id,
                 "name": tenant_name,
@@ -183,3 +197,46 @@ def seed_account(
                 "billing": billing,
             },
         )
+
+
+def seed_product(engine, *, tenant_id: str, product_id: str, channels: list[str] | None) -> None:
+    """Insert a products row directly -- a migration's subject is rows, not callers.
+
+    Raw SQL for the same reason as :func:`seed_account`: the channel-repair revision's
+    subject is a string the admin picker could once write and the enum-typed read path
+    refuses, so no factory can produce it. Column list as the delivery-measurement
+    migration test seeds it; ``'[]'`` satisfies the format_ids validator (zero iterations),
+    ``property_tags`` satisfies ``ck_product_authorization``, server defaults cover the rest.
+    ``channels=None`` writes SQL NULL, what production stores for "no channels declared".
+    """
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO products (tenant_id, product_id, name, description, delivery_type, "
+                "format_ids, targeting_template, property_tags, channels) "
+                "VALUES (:tid, :pid, :name, 'test', 'guaranteed', '[]'::jsonb, '{}'::jsonb, "
+                "'[\"all_inventory\"]'::jsonb, CAST(:channels AS jsonb))"
+            ),
+            {
+                "tid": tenant_id,
+                "pid": product_id,
+                "name": f"Product {product_id}",
+                "channels": None if channels is None else json.dumps(channels),
+            },
+        )
+
+
+def row_xmins(engine, *, table: str, key_column: str, tenant_id: str) -> dict[str, str]:
+    """Per-row ``xmin`` -- the transaction that last wrote the row -- keyed by *key_column*.
+
+    PostgreSQL bumps it on ANY update, including a rewrite of a row to itself, which is
+    what makes this the only assertion that can tell "issued no statement" apart from
+    "churned every row back to the same value". *table* and *key_column* are identifiers
+    from a fixed call site, hence interpolated; the tenant stays a bind.
+    """
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(f"SELECT {key_column} AS key, xmin::text AS xmin FROM {table} WHERE tenant_id = :tid"),
+            {"tid": tenant_id},
+        ).all()
+    return {row.key: row.xmin for row in rows}
