@@ -36,9 +36,9 @@ from tests.helpers.media_buy_write_seam import (
     assert_status_move_carried_bookkeeping,
     read_media_buy_state,
 )
+from tests.helpers.metrics import counter_value
 from tests.helpers.scheduler_isolation import (
     INVALIDATED_ESCAPE_ERROR_TYPES,
-    counter_value,
     seed_active_expired_buys,
     summary_lines,
 )
@@ -712,116 +712,44 @@ async def test_savepoint_release_failure_not_counted_processed_and_warns(integra
     assert updated_lines == []
 
 
-@pytest.mark.requires_db
-@pytest.mark.asyncio
-async def test_invalidated_connection_propagates_without_arming_fail_fast(integration_db):
-    """A discarded connection stops the tick and leaves the fail-fast unarmed.
+def _propagated_session_cases():
+    for exc_type in INVALIDATED_ESCAPE_ERROR_TYPES:
+        yield pytest.param(exc_type.__name__, False, id=exc_type.__name__)
+    yield pytest.param("server_never_answered", True, id="server_never_answered")
+    yield pytest.param("DisconnectionError", False, id="DisconnectionError")
 
-    The next ``get_db_session()`` opens. Only a connect the server never answered
-    makes that call raise.
-    A ``connection_invalidated`` error still has to propagate: the session's
-    connection is gone, so later buys in the tick must not run.
-    """
+
+def _propagated_session_error(kind: str):
     from tests.helpers.scheduler_isolation import (
-        assert_propagated_failure_stops_batch,
-        invalidated_operational_error,
-    )
-
-    tenant_id = _create_test_tenant("tenant_isolation_fail_fast_1714")
-    principal_id = _create_test_principal(tenant_id)
-    buy_ids = ["mb_fail_fast_a", "mb_fail_fast_b"]
-
-    seed_active_expired_buys(
-        _create_media_buy,
-        tenant_id=tenant_id,
-        principal_id=principal_id,
-        buy_ids=buy_ids,
-    )
-
-    await assert_propagated_failure_stops_batch(
-        MediaBuyStatusScheduler(),
-        invalidated_operational_error(),
-        tenant_id=tenant_id,
-        trips_fail_fast=False,
-        buy_count=len(buy_ids),
-    )
-
-
-@pytest.mark.requires_db
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "exc_type",
-    INVALIDATED_ESCAPE_ERROR_TYPES,
-    ids=[t.__name__ for t in INVALIDATED_ESCAPE_ERROR_TYPES],
-)
-async def test_invalidated_dbapi_subclasses_propagate_without_arming_fail_fast(integration_db, exc_type):
-    """Each discarded-connection DBAPIError subclass stops the tick without the fail-fast."""
-    from tests.helpers.scheduler_isolation import (
-        assert_propagated_failure_stops_batch,
+        bare_disconnection_error,
         invalidated_dbapi_error,
-    )
-
-    tenant_id = _create_test_tenant(f"tenant_isolation_{exc_type.__name__}_1714")
-    principal_id = _create_test_principal(tenant_id)
-    buy_ids = [f"mb_{exc_type.__name__}_a", f"mb_{exc_type.__name__}_b"]
-
-    seed_active_expired_buys(
-        _create_media_buy,
-        tenant_id=tenant_id,
-        principal_id=principal_id,
-        buy_ids=buy_ids,
-    )
-
-    await assert_propagated_failure_stops_batch(
-        MediaBuyStatusScheduler(),
-        invalidated_dbapi_error(exc_type),
-        tenant_id=tenant_id,
-        trips_fail_fast=False,
-        buy_count=len(buy_ids),
-    )
-
-
-@pytest.mark.requires_db
-@pytest.mark.asyncio
-async def test_invalidated_interface_error_propagates_without_arming_fail_fast(integration_db):
-    """An invalidated InterfaceError stops the tick and leaves the fail-fast unarmed."""
-    from tests.helpers.scheduler_isolation import (
-        assert_propagated_failure_stops_batch,
-        invalidated_interface_error,
-    )
-
-    tenant_id = _create_test_tenant("tenant_isolation_ie_fail_fast_1714")
-    principal_id = _create_test_principal(tenant_id)
-    buy_ids = ["mb_ie_fail_fast_a", "mb_ie_fail_fast_b"]
-
-    seed_active_expired_buys(
-        _create_media_buy,
-        tenant_id=tenant_id,
-        principal_id=principal_id,
-        buy_ids=buy_ids,
-    )
-
-    await assert_propagated_failure_stops_batch(
-        MediaBuyStatusScheduler(),
-        invalidated_interface_error(),
-        tenant_id=tenant_id,
-        trips_fail_fast=False,
-        buy_count=len(buy_ids),
-    )
-
-
-@pytest.mark.requires_db
-@pytest.mark.asyncio
-async def test_server_never_answered_arms_fail_fast_and_stops_batch(integration_db):
-    """An OperationalError with no SQLSTATE trips the fail-fast and stops the tick."""
-    from tests.helpers.scheduler_isolation import (
-        assert_propagated_failure_stops_batch,
         server_never_answered_error,
     )
 
-    tenant_id = _create_test_tenant("tenant_isolation_unanswered_1714")
+    if kind == "server_never_answered":
+        return server_never_answered_error()
+    if kind == "DisconnectionError":
+        return bare_disconnection_error()
+    exc_type = next(exc_type for exc_type in INVALIDATED_ESCAPE_ERROR_TYPES if exc_type.__name__ == kind)
+    return invalidated_dbapi_error(exc_type)
+
+
+@pytest.mark.requires_db
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("kind", "trips_fail_fast"), _propagated_session_cases())
+async def test_propagated_session_error_stops_the_tick(integration_db, kind, trips_fail_fast):
+    """A session-level database error stops the tick.
+
+    A discarded connection and a dropped connection leave the fail-fast unarmed.
+    An OperationalError with no SQLSTATE is a connect the server never answered,
+    and that one trips it. Later buys in the tick do not run.
+    """
+    from tests.helpers.scheduler_isolation import assert_propagated_failure_stops_batch
+
+    exc = _propagated_session_error(kind)
+    tenant_id = _create_test_tenant(f"iso_{kind}_{int(trips_fail_fast)}")
     principal_id = _create_test_principal(tenant_id)
-    buy_ids = ["mb_unanswered_a", "mb_unanswered_b"]
+    buy_ids = [f"mb_{kind}_a", f"mb_{kind}_b"]
 
     seed_active_expired_buys(
         _create_media_buy,
@@ -832,27 +760,22 @@ async def test_server_never_answered_arms_fail_fast_and_stops_batch(integration_
 
     await assert_propagated_failure_stops_batch(
         MediaBuyStatusScheduler(),
-        server_never_answered_error(),
+        exc,
         tenant_id=tenant_id,
-        trips_fail_fast=True,
+        trips_fail_fast=trips_fail_fast,
         buy_count=len(buy_ids),
     )
 
 
 @pytest.mark.requires_db
 @pytest.mark.asyncio
-async def test_disconnection_error_propagates_while_statement_failure_isolates(integration_db):
-    """A statement timeout stays in its buy; a DisconnectionError stops the tick.
+async def test_statement_timeout_stays_in_its_buy(integration_db):
+    """A statement timeout carries SQLSTATE 57014, so the server answered.
 
-    The statement timeout carries SQLSTATE 57014, so the server answered and
-    the fail-fast stays unarmed. ``DisconnectionError`` is a dropped connection:
-    it propagates, later buys do not run, and the fail-fast stays unarmed.
+    The buy is isolated, its siblings still flip, and the fail-fast stays unarmed.
     """
-    from src.core.database.database_session import reset_health_state
     from tests.helpers.scheduler_isolation import (
-        assert_next_session,
-        assert_propagated_failure_stops_batch,
-        bare_disconnection_error,
+        assert_propagated_session_error,
         statement_failure,
     )
 
@@ -878,39 +801,16 @@ async def test_disconnection_error_propagates_while_statement_failure_isolates(i
             raise statement_failure()
         return real_compute(media_buy, now_arg, session)
 
-    reset_health_state()
-    try:
+    async def _run() -> None:
         with patch.object(scheduler, "_compute_new_status", side_effect=_raise_statement_timeout):
             await scheduler._update_statuses()
-        assert_next_session(trips_fail_fast=False)
-    finally:
-        reset_health_state()
+
+    await assert_propagated_session_error(_run, trips_fail_fast=False)
     assert set(processed) == set(buy_ids)
     assert read_media_buy_state(tenant_id, "mb_de_a").status == "completed"
     assert read_media_buy_state(tenant_id, "mb_de_b").status == "active"
     assert read_media_buy_state(tenant_id, "mb_de_c").status == "completed"
     assert counter_value("media_buy_status", tenant_id, "db_error") == metric_before + 1
-
-    # The first half already completed two of these buys. A second tick on the
-    # same rows would have one eligible buy, so "visited exactly one" would
-    # pass whether or not the loop stopped. Seed a fresh set that is all still
-    # eligible.
-    stop_ids = ["mb_de_stop_a", "mb_de_stop_b", "mb_de_stop_c"]
-    seed_active_expired_buys(
-        _create_media_buy,
-        tenant_id=tenant_id,
-        principal_id=principal_id,
-        buy_ids=stop_ids,
-    )
-    await assert_propagated_failure_stops_batch(
-        scheduler,
-        bare_disconnection_error(),
-        tenant_id=tenant_id,
-        trips_fail_fast=False,
-        buy_count=len(stop_ids),
-    )
-    for media_buy_id in stop_ids:
-        assert read_media_buy_state(tenant_id, media_buy_id).status == "active"
 
 
 # =============================================================================

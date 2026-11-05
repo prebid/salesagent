@@ -155,6 +155,7 @@ from tests.factories.principal import plaintext_token_for
 from tests.harness._base import BareIntegrationEnv
 from tests.helpers.app_state import preserved_global_app_state
 from tests.helpers.asgi_wire import WireResponse, build_scope, send_wire_request
+from tests.helpers.metrics import samples_with
 from tests.helpers.signing import (
     COUNTERPARTY_AGENT_URL,
     FAILED_METRIC,
@@ -163,7 +164,6 @@ from tests.helpers.signing import (
     counterparty_key,
     declared_posture,
     rejection_code,
-    samples_with,
     signing_config,
     verifier_spy,
 )

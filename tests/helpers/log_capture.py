@@ -39,8 +39,11 @@ def capture_logs(logger_name: str, *, level: int = logging.WARNING) -> Iterator[
     """
     handler = LogCaptureHandler(level=level)
     logger = logging.getLogger(logger_name)
+    previous = logger.level
+    logger.setLevel(level)
     logger.addHandler(handler)
     try:
         yield handler
     finally:
         logger.removeHandler(handler)
+        logger.setLevel(previous)

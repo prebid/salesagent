@@ -117,6 +117,10 @@ services:
       ANTHROPIC_BASE_URL: http://scripted-llm:8080
       SUPER_ADMIN_EMAILS: ${SUPER_ADMIN_EMAILS:-}
       ADCP_TESTING: ${ADCP_TESTING:-true}
+      # The status-sweep scenarios run their own tick. At the 60-second default the
+      # server's scheduler can flip the unpoisoned siblings first, and the scenario
+      # then reports "1 updated, 1 errors". A day keeps that loop out of the run.
+      MEDIA_BUY_STATUS_CHECK_INTERVAL: "86400"
       FLASK_SECRET_KEY: "${FLASK_SECRET_KEY:-adcp-test-stack-session-signing-key}"
       # ─── Outbound egress escape hatch — TEST STACK ONLY ─────────────────────
       # The seam (src/core/security/outbound_http.py) refuses non-https schemes

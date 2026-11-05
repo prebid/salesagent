@@ -46,18 +46,6 @@ from unittest.mock import patch
 from adcp import get_adcp_spec_version
 
 from tests.helpers.credentials import credential_headers
-from tests.helpers.metrics import (
-    assert_counter_delta as assert_counter_delta,
-)
-from tests.helpers.metrics import (
-    counter_samples as counter_samples,
-)
-from tests.helpers.metrics import (
-    counter_total as counter_total,
-)
-from tests.helpers.metrics import (
-    samples_with as samples_with,
-)
 from tests.helpers.webhook_wire import CapturedWebhook
 
 # An RFC 9421 signature base: the canonicalized component list joined by LF with

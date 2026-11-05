@@ -27,6 +27,21 @@ def counter_total(sample_name: str) -> float:
     return sum(counter_samples(sample_name).values())
 
 
+def counter_value(scheduler: str, tenant_id: str, error_type: str) -> float:
+    """The isolation counter for one scheduler, tenant, and error type.
+
+    A missing series is zero. Reading it must not create the series.
+    """
+    return sum(
+        samples_with(
+            "scheduler_isolation_errors_total",
+            scheduler=scheduler,
+            tenant_id=tenant_id,
+            error_type=error_type,
+        ).values()
+    )
+
+
 def samples_with(sample_name: str, **labels: str) -> dict[tuple[tuple[str, str], ...], float]:
     """Samples of *sample_name* whose labels are a superset of *labels*."""
     wanted = labels.items()
