@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 import uuid
 from datetime import UTC, datetime
 
@@ -12,7 +13,9 @@ from sqlalchemy import func, select
 from src.admin.services import DashboardService
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action, record_admin_action_failure
+from src.admin.utils.operator_errors import safe_error_message
 from src.core.database.database_session import get_db_session
+from src.core.database.integrity import resolve_or_write
 from src.core.database.models import MediaBuy, PushNotificationConfig, Tenant
 from src.core.database.repositories.principal import PrincipalRepository
 from src.core.database.repositories.uow import PushNotificationConfigUoW
@@ -119,6 +122,62 @@ def list_principals(tenant_id):
         return redirect(url_for("core.index"))
 
 
+#: Prefix of the mock adapter's advertiser ID for a principal.
+_MOCK_ADVERTISER_PREFIX = "mock_"
+
+#: The advertiser ID rule. The create form renders it as its ``pattern`` so the browser and
+#: the server cannot disagree; ``\-`` keeps it valid under the ``v`` flag browsers compile
+#: ``pattern`` with. The length leaves room for the mock prefix: the mock adapter records
+#: its advertiser ID in ``audit_logs.adapter_id``, VARCHAR(50), the narrowest column a
+#: value derived from the ID reaches.
+ADVERTISER_ID_MAX_LENGTH = 50 - len(_MOCK_ADVERTISER_PREFIX)
+ADVERTISER_ID_PATTERN = rf"[a-zA-Z0-9_\-]{{1,{ADVERTISER_ID_MAX_LENGTH}}}"
+
+#: Literals audit rows carry in ``principal_id`` when the actor is not an advertiser:
+#: unauthenticated calls, and creative reviews from the admin UI. The dashboard names the
+#: actor by looking the id up among the tenant's advertisers, so an advertiser holding one
+#: would inherit that activity.
+_AUDIT_SENTINEL_IDS = frozenset({"anonymous", "unknown", "admin"})
+
+
+def _advertiser_id_refusal(principal_id: str) -> str | None:
+    """Why ``principal_id`` cannot name a new advertiser, or ``None`` when it can."""
+    if not re.fullmatch(ADVERTISER_ID_PATTERN, principal_id):
+        return f"Advertiser ID must contain 1 to {ADVERTISER_ID_MAX_LENGTH} letters, numbers, underscores, or hyphens"
+    if principal_id in _AUDIT_SENTINEL_IDS:
+        return f"Advertiser ID '{principal_id}' is reserved"
+    return None
+
+
+def _refuse_create(tenant_id: str, message: str, reason: object = None):
+    """Flash ``message``, record the create as failed, and send the operator back to the form."""
+    record_admin_action_failure(message if reason is None else reason)
+    flash(message, "error")
+    return redirect(url_for("principals.create_principal", tenant_id=tenant_id))
+
+
+def _issue_unless_taken(db_session, tenant_id: str, principal_id: str, **fields):
+    """``(token, None)`` when the advertiser was issued, ``(None, refusal)`` when the ID is taken.
+
+    ``principals_pkey`` is the authority; the loser of a race gets the pre-check's answer.
+    """
+    repository = PrincipalRepository(db_session, tenant_id)
+
+    def already_in_use():
+        if repository.get(principal_id) is None:
+            return None
+        return _refuse_create(tenant_id, "Advertiser ID is already in use")
+
+    issued: list[str] = []
+    refusal = resolve_or_write(
+        db_session,
+        conflict=already_in_use,
+        write=lambda: issued.append(repository.issue(principal_id=principal_id, **fields)[1]),
+        constraint="principals_pkey",
+    )
+    return (None, refusal) if refusal is not None else (issued[0], None)
+
+
 @principals_bp.route("/principals/create", methods=["GET", "POST"])
 @require_tenant_access()
 @log_admin_action(
@@ -143,16 +202,21 @@ def create_principal(tenant_id):
                 tenant_id=tenant_id,
                 tenant_name=tenant.name,
                 has_gam=has_gam,
+                advertiser_id_pattern=ADVERTISER_ID_PATTERN,
+                advertiser_id_max_length=ADVERTISER_ID_MAX_LENGTH,
             )
 
     # POST - Create the principal
     try:
         principal_name = request.form.get("name", "").strip()
         if not principal_name:
-            flash("Principal name is required", "error")
-            return redirect(request.url)
+            return _refuse_create(tenant_id, "Principal name is required")
 
-        principal_id = f"prin_{uuid.uuid4().hex[:8]}"
+        supplied_id = request.form.get("principal_id")
+        principal_id = supplied_id.strip() if supplied_id is not None else f"prin_{uuid.uuid4().hex[:8]}"
+        id_refusal = _advertiser_id_refusal(principal_id)
+        if id_refusal is not None:
+            return _refuse_create(tenant_id, id_refusal)
 
         # Build platform mappings
         platform_mappings = {}
@@ -164,12 +228,12 @@ def create_principal(tenant_id):
             try:
                 int(gam_advertiser_id)
             except (ValueError, TypeError):
-                flash(
+                return _refuse_create(
+                    tenant_id,
                     f"GAM Advertiser ID must be numeric (got: '{gam_advertiser_id}'). "
                     "Please select a valid advertiser from the dropdown.",
-                    "error",
+                    "GAM advertiser ID not numeric",
                 )
-                return redirect(request.url)
 
             platform_mappings["google_ad_manager"] = {
                 "advertiser_id": gam_advertiser_id,
@@ -179,7 +243,7 @@ def create_principal(tenant_id):
         # Mock adapter mapping (for testing)
         if request.form.get("enable_mock"):
             platform_mappings["mock"] = {
-                "advertiser_id": f"mock_{principal_id}",
+                "advertiser_id": f"{_MOCK_ADVERTISER_PREFIX}{principal_id}",
                 "enabled": True,
             }
 
@@ -193,13 +257,17 @@ def create_principal(tenant_id):
 
             # The token is minted here and shown ONCE, in the flash below; the row keeps
             # its hash. An operator who loses it rotates it.
-            principal, token = PrincipalRepository(db_session, tenant_id).issue(
-                principal_id=principal_id,
+            token, refusal = _issue_unless_taken(
+                db_session,
+                tenant_id,
+                principal_id,
                 name=principal_name,
                 platform_mappings=platform_mappings,  # JSONType handles serialization
                 created_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
+            if refusal is not None:
+                return refusal
             db_session.commit()
 
             flash(
@@ -210,8 +278,7 @@ def create_principal(tenant_id):
 
     except Exception as e:
         logger.error(f"Error creating principal: {e}", exc_info=True)
-        flash("Error creating advertiser", "error")
-        return redirect(request.url)
+        return _refuse_create(tenant_id, "Error creating advertiser", safe_error_message(e))
 
 
 @principals_bp.route("/principals/<principal_id>/edit", methods=["GET", "POST"])
@@ -588,7 +655,10 @@ def save_testing_config(tenant_id, principal_id):
 
             # Ensure mock adapter exists
             if "mock" not in platform_mappings:
-                platform_mappings["mock"] = {"advertiser_id": f"mock_{principal_id}", "enabled": True}
+                platform_mappings["mock"] = {
+                    "advertiser_id": f"{_MOCK_ADVERTISER_PREFIX}{principal_id}",
+                    "enabled": True,
+                }
 
             # Update hitl_config
             platform_mappings["mock"]["hitl_config"] = hitl_config

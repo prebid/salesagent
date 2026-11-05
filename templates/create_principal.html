@@ -26,7 +26,7 @@
         <div class="form-group">
             <label for="principal_id">Advertiser ID</label>
             <input type="text" id="principal_id" name="principal_id" required
-                   pattern="[a-zA-Z0-9_-]+"
+                   {% if not edit_mode %}maxlength="{{ advertiser_id_max_length }}" pattern="{{ advertiser_id_pattern }}"{% endif %}
                    placeholder="e.g., nike, coca_cola, ford_motors"
                    title="Only letters, numbers, underscores, and hyphens allowed"
                    value="{{ principal.principal_id if edit_mode else (form_data.principal_id if form_data else '') }}"
