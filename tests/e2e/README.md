@@ -20,6 +20,13 @@ start a stack:
 - Otherwise, the fixture builds and starts its own stack on dynamically
   allocated ports and tears it down at session end.
 
+Both paths use `stack_readiness.wait_for_e2e_stack` before seeding: PostgreSQL,
+then the creative agent, then the server's `/health`. Each attempt stops at the
+first failing check. The reuse path has a 60-second budget; standalone startup
+has 120 seconds. On timeout the helper names the failed check and dumps Compose
+logs once when the CLI is available. In-network runners probe service addresses;
+the host path inspects Compose health for the unpublished creative agent.
+
 Either way, the fixture seeds the server database through
 `scripts/setup/init_database_ci.py` — the `ci-test` and `iso-test` tenants,
 products, and the `ci-test-token` principal. It then yields the port map that
