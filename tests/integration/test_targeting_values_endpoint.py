@@ -8,8 +8,6 @@ from unittest.mock import ANY, patch
 
 import pytest
 
-from src.core.database.database_session import get_db_session
-from src.core.database.models import GAMInventory, Tenant
 from tests.factories import AdapterConfigFactory, GAMInventoryFactory, TenantFactory
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -142,58 +140,21 @@ def test_get_targeting_values_is_never_cached(authenticated_admin_session, gam_c
     assert response.headers.get("Cache-Control") == "no-store"
 
 
-def test_get_targeting_values_tenant_isolation(authenticated_admin_session, integration_db):
-    """Test endpoint requires GAM configuration (validates tenant isolation at config level)."""
-    with get_db_session() as db_session:
-        # Create tenant without GAM configuration
-        tenant = Tenant(
-            tenant_id="tenant_a",
-            name="Tenant A",
-            subdomain="tenanta",
-            virtual_host="tenant-a.adcp.test",
-        )
-        db_session.add(tenant)
+def test_get_targeting_values_tenant_isolation(authenticated_admin_session, bound_factory_session):
+    """A tenant with no ad server credentials is refused, never answered from another tenant's GAM."""
+    key = GAMInventoryFactory(inventory_type="custom_targeting_key")
 
-        # Create key
-        key_id = "shared_key_123"
-        key = GAMInventory(
-            tenant_id="tenant_a",
-            inventory_type="custom_targeting_key",
-            inventory_id=key_id,
-            name="category",
-            status="ACTIVE",
-            inventory_metadata={"display_name": "Category", "type": "PREDEFINED"},
-        )
-        db_session.add(key)
-        db_session.commit()
-
-    # Request values without GAM configured - should fail
-    response = authenticated_admin_session.get(f"/api/tenant/tenant_a/targeting/values/{key_id}")
+    response = authenticated_admin_session.get(_values_url(key.tenant, key))
 
     assert response.status_code == 400
-    data = response.json
-    assert "error" in data
-    # Updated to match new, more specific error message
-    assert "No adapter configured" in data["error"]
+    assert response.json == {"error": "No adapter configured for this tenant"}
 
 
-def test_get_targeting_values_requires_auth(admin_client, integration_db):
-    """Test endpoint requires authentication."""
-    with get_db_session() as db_session:
-        # Create test tenant and key
-        tenant = Tenant(
-            tenant_id="auth_test",
-            name="Auth Test",
-            subdomain="authtest",
-            virtual_host="auth-test.adcp.test",
-        )
-        db_session.add(tenant)
-        db_session.commit()
+def test_get_targeting_values_requires_auth(admin_client, bound_factory_session):
+    """An unauthenticated request is turned away even when the tenant and key exist."""
+    key = GAMInventoryFactory(inventory_type="custom_targeting_key")
 
-    key_id = "auth_key_123"
-
-    # Attempt to access without authentication
-    response = admin_client.get(f"/api/tenant/auth_test/targeting/values/{key_id}")
+    response = admin_client.get(_values_url(key.tenant, key))
 
     # Should redirect to login or return 401/403
     assert response.status_code in [302, 401, 403]
