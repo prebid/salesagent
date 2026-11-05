@@ -15,7 +15,7 @@ from tests.helpers.adcp_factories import create_test_brand_manifest, create_test
 @pytest.fixture
 def policy_service():
     """Policy service with AI disabled."""
-    return PolicyCheckService(tenant_ai_config=None)
+    return PolicyCheckService()
 
 
 class TestBriefComplianceTypedModel:

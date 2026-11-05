@@ -6,12 +6,13 @@ over e2e. That only works if three things hold, and none of them is visible from
 scenario that fails as "catalog order":
 
 * ``google-genai`` honours ``GOOGLE_GEMINI_BASE_URL`` for the model production builds
-  (``AIServiceFactory.create_model`` -> ``GoogleModel(provider=GoogleProvider(api_key=...))``);
+  (``AIServiceFactory.build`` -> ``GoogleModel(provider=GoogleProvider(api_key=...))``);
 * pydantic-ai accepts the origin's response as the agent's structured output, for both
   output models (``ProductRankingResult`` and ``PolicyAnalysis``);
 * every refusal the origin answers (an unscripted key, a scripted failure, a prompt that
-  does not carry the scripted text) raises a ``RuntimeError``, which is what the ranking
-  path in ``products.py`` catches to fall back to catalog order.
+  does not carry the scripted text) raises a ``RuntimeError``, and a dropped connection
+  raises ``httpx.RemoteProtocolError``; the ranking path in ``products.py`` catches both to
+  fall back to catalog order.
 
 So this runs the origin IN-PROCESS on loopback and drives production's real agents and
 real ``PolicyCheckService`` against it: no Docker, no compose network. The stack wiring is
@@ -24,12 +25,13 @@ import os
 from collections.abc import Iterator
 from unittest.mock import patch
 
+import httpx
 import pytest
 
 from src.services.ai import AIServiceFactory, TenantAIConfig
-from src.services.ai.agents.ranking_agent import build_ranking_prompt, create_ranking_agent, rank_products_async
+from src.services.ai.agents.ranking_agent import create_ranking_agent, rank_products_async
 from src.services.policy_check_service import PolicyCheckService, PolicyStatus
-from tests.e2e._scripted_llm import install_script
+from tests.e2e._scripted_llm import install_script, ranking_prompt_prefix
 from tests.e2e.scripted_llm_origin_service import run_scripted_llm_origin
 
 _SELLER_KEY = "seller-key-under-test"
@@ -47,8 +49,7 @@ def origin() -> Iterator[str]:
 
 def _seller_model(api_key: str = _SELLER_KEY):
     """The model production builds for a seller who configured Gemini in the Admin UI."""
-    config = TenantAIConfig.coerce({"provider": "gemini", "model": "gemini-2.0-flash", "api_key": api_key})
-    return AIServiceFactory().create_model(config)
+    return AIServiceFactory().build(TenantAIConfig(provider="gemini", model="gemini-2.0-flash", api_key=api_key))
 
 
 async def _rank(model, custom_prompt: str = _PROMPT, brief: str = _BRIEF):
@@ -56,8 +57,7 @@ async def _rank(model, custom_prompt: str = _PROMPT, brief: str = _BRIEF):
 
 
 def _prompt_prefix() -> str:
-    marker = "\x00brief\x00"
-    return build_ranking_prompt(_PROMPT, marker, []).split(marker)[0]
+    return ranking_prompt_prefix(_PROMPT)
 
 
 async def test_ranking_agent_returns_the_scripted_scores(origin: str) -> None:
@@ -71,9 +71,8 @@ async def test_ranking_agent_returns_the_scripted_scores(origin: str) -> None:
 
 async def test_policy_service_returns_the_scripted_verdict(origin: str) -> None:
     install_script(_SELLER_KEY, policy={"output": {"status": "blocked", "reason": "scripted block"}})
-    config = TenantAIConfig.coerce({"provider": "gemini", "model": "gemini-2.0-flash", "api_key": _SELLER_KEY})
 
-    result = await PolicyCheckService(tenant_ai_config=config).check_brief_compliance(brief=_BRIEF)
+    result = await PolicyCheckService(model=_seller_model()).check_brief_compliance(brief=_BRIEF)
 
     assert (result.status, result.reason) == (PolicyStatus.BLOCKED, "scripted block")
 
@@ -90,6 +89,26 @@ async def test_a_scripted_failure_raises_what_ranking_catches(origin: str) -> No
 
     with pytest.raises(RuntimeError, match="503"):
         await _rank(_seller_model())
+
+
+async def test_a_dropped_connection_raises_what_ranking_now_catches(origin: str) -> None:
+    """No OSError, RuntimeError or ImportError: the narrower except let this escape as INTERNAL_ERROR."""
+    install_script(_SELLER_KEY, ranking={"drop_connection": True})
+
+    with pytest.raises(httpx.RemoteProtocolError) as excinfo:
+        await _rank(_seller_model())
+
+    assert not isinstance(excinfo.value, ImportError | RuntimeError | OSError)
+
+
+async def test_a_scripted_policy_failure_fails_open_inside_the_service(origin: str) -> None:
+    """What BR-RULE-002 INV-4 meets over e2e: the real service answers ALLOWED with a warning."""
+    install_script(_SELLER_KEY, policy={"fail_status": 503})
+
+    result = await PolicyCheckService(model=_seller_model()).check_brief_compliance(brief=_BRIEF)
+
+    assert result.status == PolicyStatus.ALLOWED
+    assert result.warnings and "503" in result.warnings[0]
 
 
 async def test_the_seller_prompt_in_the_brief_slot_is_refused(origin: str) -> None:

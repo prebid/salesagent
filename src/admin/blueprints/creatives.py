@@ -20,6 +20,7 @@ from src.core.schemas.creative import SyncCreativeResult, SyncCreativesResponse
 from src.core.validation_helpers import run_async_in_sync_context
 from src.core.webhooks.delivery import WebhookTaskContext
 from src.core.webhooks.registration import accept_push_notification_config
+from src.services.ai.factory import tenant_ai_enabled
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 # TODO: Missing module - these functions need to be implemented
@@ -286,24 +287,6 @@ async def _call_webhook_for_creative_status(
         return False
 
 
-def _tenant_ai_enabled(tenant: Any) -> bool:
-    """Can an AI call actually run for this tenant? One owner for that question.
-
-    ``TenantAIConfig.from_tenant`` resolves the tenant's own configuration (``ai_config``
-    first, the legacy ``gemini_api_key`` column second) and ``is_ai_enabled`` adds the
-    platform fallback, so this answers the same question the AI review impl acts on.
-
-    Reading ``tenant.gemini_api_key`` directly answered a DIFFERENT question, and the two
-    disagreed inside this one file: ``review_creatives`` told a tenant that had configured
-    Anthropic (or a Gemini key) through the Admin UI's ``ai_config`` column that AI review
-    was unavailable, while ``_perform_ai_review`` — one page's button away — would happily
-    run one for that same tenant.
-    """
-    from src.services.ai import AIServiceFactory, TenantAIConfig
-
-    return AIServiceFactory().is_ai_enabled(TenantAIConfig.from_tenant(tenant))
-
-
 @creatives_bp.route("/", methods=["GET"])
 @require_tenant_access()
 def index(tenant_id, **kwargs):
@@ -390,7 +373,7 @@ def review_creatives(tenant_id, **kwargs):
         # Extract tenant attributes before UoW closes (avoid DetachedInstanceError)
         tenant_name = tenant.name
         # The same two conditions `_perform_ai_review` gates on, in the same order.
-        has_ai_review = bool(_tenant_ai_enabled(tenant) and tenant.creative_review_criteria)
+        has_ai_review = bool(tenant_ai_enabled(tenant) and tenant.creative_review_criteria)
         approval_mode = tenant.approval_mode
 
     return render_template(
@@ -1121,10 +1104,11 @@ def _ai_review_creative_impl_inner(
         if not tenant:
             return {"status": "pending_review", "error": "Tenant not found", "reason": "Configuration error"}
 
-        # Check AI availability through `_tenant_ai_enabled` — the same call the
-        # creative-management page makes for its `has_ai_review` flag, so the page and
-        # this impl cannot disagree about whether a review can run.
-        if not _tenant_ai_enabled(tenant):
+        # The model the review runs on, or None: the same resolution the
+        # creative-management page asks (`tenant_ai_enabled`) for its `has_ai_review` flag,
+        # so the page and this impl cannot disagree about whether a review can run.
+        model = AIServiceFactory().build(TenantAIConfig.from_tenant(tenant))
+        if model is None:
             return {
                 "status": "pending_review",
                 "error": "AI not configured",
@@ -1158,8 +1142,7 @@ def _ai_review_creative_impl_inner(
                                 promoted_offering = product.name
 
         # Create Pydantic AI agent and run review
-        model_string = AIServiceFactory().create_model(TenantAIConfig.from_tenant(tenant))
-        agent = create_review_agent(model_string)
+        agent = create_review_agent(model)
 
         # Run async agent in a separate thread to avoid event loop conflicts with Flask
         def run_review_in_thread():

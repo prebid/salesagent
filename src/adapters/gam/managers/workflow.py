@@ -12,13 +12,12 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-import sqlalchemy.exc
-
 from src.adapters.base import AdapterCreateRequest
 from src.adapters.base_workflow import BaseWorkflowManager
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Context, ObjectWorkflowMapping, WorkflowStep
 from src.core.schemas import MediaPackage
+from src.services.ai.config import SellerAIConfig
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +133,7 @@ class GAMWorkflowManager(BaseWorkflowManager):
         end_time: datetime,
         media_buy_id: str,
         order_name_template: str | None = None,
+        tenant_ai_config: SellerAIConfig = None,
     ) -> str | None:
         """Creates a workflow step for manual creation of GAM order (manual mode).
 
@@ -143,6 +143,9 @@ class GAMWorkflowManager(BaseWorkflowManager):
             start_time: Campaign start time
             end_time: Campaign end time
             media_buy_id: Generated media buy ID for tracking
+            order_name_template: The order name template; None uses the default
+            tenant_ai_config: What AI the seller configured (``TenantContext.ai_config``),
+                for the order name's ``{auto_name}``
 
         Returns:
             str: The workflow step ID if created successfully, None otherwise
@@ -151,27 +154,17 @@ class GAMWorkflowManager(BaseWorkflowManager):
 
         # Use pre-loaded naming template or fallback to default
         from src.core.utils.naming import apply_naming_template, build_order_name_context
-        from src.services.ai.config import TenantAIConfig
 
         effective_template = order_name_template or "{campaign_name|brand_name} - {media_buy_id} - {date_range}"
-        tenant_ai_config = None
-
-        # Get the tenant's own AI configuration for auto_name generation
-        try:
-            from sqlalchemy import select
-
-            from src.core.database.database_session import get_db_session
-            from src.core.database.models import Tenant
-
-            with get_db_session() as db_session:
-                tenant_obj = db_session.scalars(select(Tenant).filter_by(tenant_id=self.tenant_id)).first()
-                if tenant_obj:
-                    tenant_ai_config = TenantAIConfig.from_tenant(tenant_obj)
-        except sqlalchemy.exc.SQLAlchemyError as e:
-            logger.warning(f"Could not load tenant AI configuration: {e}")
 
         naming_context = build_order_name_context(
-            request, packages, start_time, end_time, tenant_ai_config=tenant_ai_config, media_buy_id=media_buy_id
+            request,
+            packages,
+            start_time,
+            end_time,
+            template=effective_template,
+            tenant_ai_config=tenant_ai_config,
+            media_buy_id=media_buy_id,
         )
         order_name = apply_naming_template(effective_template, naming_context)
 

@@ -28,11 +28,7 @@ from pathlib import Path
 
 # Fields that intentionally exist on TenantContext without a same-named Tenant
 # column. Each needs a reason; this list may only shrink.
-_CONTEXT_ONLY_FIELDS: dict[str, str] = {
-    # Tenant stores the encrypted column as `_gemini_api_key` and exposes a
-    # `gemini_api_key` property; the context carries the decrypted value.
-    "gemini_api_key": "Tenant maps this via the _gemini_api_key column + property",
-}
+_CONTEXT_ONLY_FIELDS: dict[str, str] = {}
 
 
 def _tenant_column_names() -> set[str]:

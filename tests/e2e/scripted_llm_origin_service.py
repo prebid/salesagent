@@ -28,7 +28,9 @@ A script entry per question is one of:
 
 * ``{"output": {...}}`` -- answer with a ``final_result`` call carrying exactly these
   arguments, which the agent then validates against its own output model;
-* ``{"fail_status": 503}`` -- answer with that HTTP status in the API's error shape.
+* ``{"fail_status": 503}`` -- answer with that HTTP status in the API's error shape;
+* ``{"drop_connection": true}`` -- close the connection without answering, as an
+  unreachable or crashing provider endpoint does.
 
 and may carry ``"require_text": "..."`` -- answer only when the user prompt contains that
 text, else 400. The ranking script uses it to grade which of the seller's prompt and the
@@ -40,14 +42,13 @@ runs on a bare ``python:3.12-slim`` compose service with no project dependencies
 
 from __future__ import annotations
 
-import contextlib
 import json
-import os
 import re
+import socket
 import threading
-from collections.abc import Iterator
+from contextlib import AbstractContextManager
 
-from tests.e2e._stdlib_json_http import JsonRequestHandler, compose_project_name, serve_forever_in_thread
+from tests.e2e._stdlib_json_http import JsonRequestHandler, run_origin, serve_until_killed
 
 #: The Gemini API route ``google-genai`` calls for a non-streaming generation.
 GENERATE_CONTENT_RE = re.compile(r"^/v1beta/models/[^/:]+:generateContent$")
@@ -174,6 +175,11 @@ class _ScriptedLlmHandler(JsonRequestHandler):
         if entry is None:
             self._write_json(400, _api_error(400, f"nothing is scripted for the {question!r} question on this key"))
             return
+        if entry.get("drop_connection"):
+            # No status line at all: the client's read ends with the connection.
+            self.close_connection = True
+            self.connection.shutdown(socket.SHUT_RDWR)
+            return
         if "fail_status" in entry:
             status = int(entry["fail_status"])
             self._write_json(status, _api_error(status, "scripted failure"))
@@ -185,32 +191,19 @@ class _ScriptedLlmHandler(JsonRequestHandler):
         self._write_json(200, _function_call_response(entry["output"]))
 
 
-@contextlib.contextmanager
-def run_scripted_llm_origin(*, host: str = "0.0.0.0", port: int = 8080) -> Iterator[str]:
+def run_scripted_llm_origin(*, host: str = "0.0.0.0", port: int = 8080) -> AbstractContextManager[str]:
     """Run the origin, yielding its base URL (``http://host:port``).
 
     Plaintext: the caller is ``google-genai``'s own HTTP client, not this repo's egress
     seam, so the seam's https-only rule does not apply to it, and the server reaches the
     origin by compose service name with no TLS front in between.
     """
-    server = serve_forever_in_thread(
-        _ScriptedLlmHandler,
-        host=host,
-        port=port,
-        server_attrs={"script_store": _ScriptStore(), "compose_project_name": compose_project_name()},
-    )
-    try:
-        yield f"http://{host}:{server.server_address[1]}"
-    finally:
-        server.shutdown()
-        server.server_close()
+    return run_origin(_ScriptedLlmHandler, host=host, port=port, server_attrs={"script_store": _ScriptStore()})
 
 
 def main() -> None:
     """Entry point for ``python -m tests.e2e.scripted_llm_origin_service``."""
-    port = int(os.environ.get("PORT", "8080"))
-    with run_scripted_llm_origin(host="0.0.0.0", port=port):
-        threading.Event().wait()
+    serve_until_killed(run_scripted_llm_origin)
 
 
 if __name__ == "__main__":

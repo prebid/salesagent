@@ -49,6 +49,7 @@ from src.core.schemas import (
 )
 from src.core.security.webhook_egress import deliver_webhook
 from src.core.validation_helpers import package_field_path
+from src.services.ai.config import SellerAIConfig
 
 
 def simulate_breakdowns(impressions: float, spend: float) -> tuple[list[dict], list[dict]]:
@@ -137,9 +138,24 @@ class MockAdServer(AdServerAdapter):
     SUPPORTED_DEVICE_TYPES = {"mobile", "desktop", "tablet", "ctv", "dooh", "audio"}
     SUPPORTED_MEDIA_TYPES = {"olv", "display", "social", "streaming_audio", "dooh"}
 
-    def __init__(self, config, principal, creative_engine=None, tenant_id=None):
-        """Initialize mock adapter with GAM-like objects."""
+    def __init__(
+        self,
+        config,
+        principal,
+        creative_engine=None,
+        tenant_id=None,
+        order_name_template: str | None = None,
+        tenant_ai_config: SellerAIConfig = None,
+    ):
+        """Initialize mock adapter with GAM-like objects.
+
+        ``order_name_template`` and ``tenant_ai_config`` come off the tenant
+        (``TenantContext``) for the order name; ``None`` is the default template and
+        "configured nothing".
+        """
         super().__init__(config, principal, creative_engine, tenant_id)
+        self._order_name_template = order_name_template or "{campaign_name|brand_name} - {media_buy_id} - {date_range}"
+        self._tenant_ai_config = tenant_ai_config
 
         # Initialize HITL configuration from principal's platform_mappings
         self._initialize_hitl_config()
@@ -843,35 +859,19 @@ class MockAdServer(AdServerAdapter):
         tenant_id = self.tenant_id or "unknown"
 
         # Generate order name using naming template
-        from sqlalchemy import select
-
-        from src.core.database.database_session import get_db_session
-        from src.core.database.models import Tenant
         from src.core.utils.naming import apply_naming_template, build_order_name_context
-        from src.services.ai.config import TenantAIConfig
-
-        order_name_template = "{campaign_name|brand_name} - {media_buy_id} - {date_range}"  # Default
-        tenant_ai_config = None
-        try:
-            with get_db_session() as db_session:
-                if tenant_id and tenant_id != "unknown":
-                    tenant_obj = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-                    if tenant_obj:
-                        if tenant_obj.order_name_template:
-                            order_name_template = tenant_obj.order_name_template
-                        tenant_ai_config = TenantAIConfig.from_tenant(tenant_obj)
-        except Exception:
-            # Database not available (e.g., in unit tests) - use default template
-            logger.debug("Could not load tenant config from DB, using defaults", exc_info=True)
 
         # Build context and apply template
         context = build_order_name_context(
-            request, packages, start_time, end_time, tenant_ai_config=tenant_ai_config, media_buy_id=media_buy_id
+            request,
+            packages,
+            start_time,
+            end_time,
+            template=self._order_name_template,
+            tenant_ai_config=self._tenant_ai_config,
+            media_buy_id=media_buy_id,
         )
-        print(
-            f"[NAMING DEBUG] template={repr(order_name_template)}, has_promoted_offering={('promoted_offering' in context)}"
-        )
-        order_name = apply_naming_template(order_name_template, context)
+        order_name = apply_naming_template(self._order_name_template, context)
 
         # Default priority for campaigns (standard = 8, guaranteed = 4)
         priority = 4 if any(p.delivery_type == "guaranteed" for p in packages) else 8

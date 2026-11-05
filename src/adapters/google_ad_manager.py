@@ -17,8 +17,6 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, cast
 
-import sqlalchemy.exc
-
 if TYPE_CHECKING:
     from src.core.schemas import Snapshot
 
@@ -86,6 +84,7 @@ from src.core.schemas import (
     MediaPackage,
     ReportingPeriod,
 )
+from src.services.ai.config import SellerAIConfig
 
 # Set up logger
 logger = logging.getLogger(__name__)
@@ -122,6 +121,7 @@ class GoogleAdManager(AdServerAdapter):
         tenant_id: str | None = None,
         targeting_config: dict[str, Any] | None = None,
         naming_templates: tuple[str | None, str | None] | None = None,
+        tenant_ai_config: SellerAIConfig = None,
     ):
         """Initialize Google Ad Manager adapter with modular managers.
 
@@ -137,6 +137,8 @@ class GoogleAdManager(AdServerAdapter):
                 If None, uses empty defaults (caller should pre-load via repository).
             naming_templates: Pre-loaded (order_template, line_item_template) tuple.
                 If None, uses (None, None) defaults.
+            tenant_ai_config: What AI the seller configured (``TenantContext.ai_config``),
+                for the order name's ``{auto_name}``.
         """
         super().__init__(config, principal, None, tenant_id)
         assert self.tenant_id is not None  # Guaranteed by base class validation
@@ -170,6 +172,7 @@ class GoogleAdManager(AdServerAdapter):
         self._targeting_config = targeting_config
         self._order_name_template: str | None = naming_templates[0] if naming_templates else None
         self._line_item_name_template: str | None = naming_templates[1] if naming_templates else None
+        self._tenant_ai_config = tenant_ai_config
         self._placement_targeting_map: dict[str, str] = {}
 
         if not self.key_file and not self.service_account_json and not self.refresh_token:
@@ -561,6 +564,7 @@ class GoogleAdManager(AdServerAdapter):
                 end_time,
                 media_buy_id,
                 order_name_template=self._order_name_template,
+                tenant_ai_config=self._tenant_ai_config,
             )
 
             if step_id:
@@ -577,10 +581,8 @@ class GoogleAdManager(AdServerAdapter):
         from src.adapters.gam.utils.constants import GAM_NAME_LIMITS
         from src.adapters.gam.utils.naming import truncate_name_with_suffix
         from src.core.utils.naming import apply_naming_template, build_order_name_context
-        from src.services.ai.config import TenantAIConfig
 
         order_name_template = self._order_name_template or "{campaign_name|brand_name} - {media_buy_id} - {date_range}"
-        tenant_ai_config = None
 
         # Get currency from the request's package pricing (validated upstream in media_buy_create.py)
         # All packages in a media buy use the same currency
@@ -590,25 +592,16 @@ class GoogleAdManager(AdServerAdapter):
                 order_currency = pricing.get("currency", "USD")
                 break  # All packages have same currency
 
-        # Get the tenant's own AI configuration for auto_name generation
-        try:
-            from src.core.database.database_session import get_db_session
-            from src.core.database.models import Tenant
-
-            with get_db_session() as db_session:
-                from sqlalchemy import select
-
-                tenant_stmt = select(Tenant).filter_by(tenant_id=self.tenant_id)
-                tenant_obj = db_session.scalars(tenant_stmt).first()
-                if tenant_obj:
-                    tenant_ai_config = TenantAIConfig.from_tenant(tenant_obj)
-        except sqlalchemy.exc.SQLAlchemyError as e:
-            logger.warning(f"Could not load tenant AI configuration: {e}")
-
         # Generate a pre-order media_buy_id for naming (GAM order_id replaces this in the response)
         pre_order_id = f"gam_{uuid.uuid4().hex[:8]}"
         context = build_order_name_context(
-            request, packages, start_time, end_time, tenant_ai_config=tenant_ai_config, media_buy_id=pre_order_id
+            request,
+            packages,
+            start_time,
+            end_time,
+            template=order_name_template,
+            tenant_ai_config=self._tenant_ai_config,
+            media_buy_id=pre_order_id,
         )
         base_order_name = apply_naming_template(order_name_template, context)
 

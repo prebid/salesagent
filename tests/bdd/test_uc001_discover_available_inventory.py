@@ -29,6 +29,16 @@ def test_policy_check_skipped() -> None:
     """Disabled, or no AI configuration of the seller's own that can run the check."""
 
 
+@scenario(FEATURE, "BR-RULE-002 INV-4 holds - policy service unavailable, fail-open")
+def test_policy_fails_open() -> None:
+    """The seller's policy model fails, and the request proceeds."""
+
+
+@scenario(FEATURE, "BR-RULE-002 INV-5 holds - policy evaluation returns ALLOWED")
+def test_policy_allows_the_brief() -> None:
+    """The seller's policy model allows the brief, and the request proceeds."""
+
+
 @scenario(FEATURE, "BR-RULE-005 INV-1 violated - product below 0.1 threshold excluded")
 def test_ranking_excludes_below_threshold() -> None:
     """Ranking runs on the seller's own AI configuration and drops a low score."""

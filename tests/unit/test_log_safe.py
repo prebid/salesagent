@@ -66,17 +66,15 @@ class TestCallSites:
         """The SECOND value reaching that log line, through ``source``.
 
         ``from_tenant`` builds the label as ``f"tenant ai_config for tenant {id!r}"``
-        and hands it to ``coerce``, which interpolates it. Escaping only the exception
+        and hands it to the parse, which interpolates it. Escaping only the exception
         left this path open; CodeQL found it after the first fix and the test above
         does not cover it, because it forges a value INSIDE the config dict rather
         than the tenant identifier.
         """
         from src.services.ai.config import TenantAIConfig
+        from tests.factories import TenantFactory
 
-        tenant = {
-            "tenant_id": "acme\nWARNING forged",
-            "ai_config": {"settings": {"temperature": 99}},
-        }
+        tenant = TenantFactory.build(tenant_id="acme\nWARNING forged", ai_config={"settings": {"temperature": 99}})
         with caplog.at_level(logging.WARNING, logger="src.services.ai.config"):
             TenantAIConfig.from_tenant(tenant)
 
@@ -90,18 +88,19 @@ class TestCallSites:
         """The case ``!r`` does NOT cover, which is why the label is escaped.
 
         ``repr()`` of a ``str`` already escapes its line breaks, so a forged string
-        identifier comes out single-line either way. ``_read_tenant_field`` is typed
-        ``Any``, though, and ``repr`` of an arbitrary object is whatever that object's
-        ``__repr__`` returns — line breaks included. Without the escape this is the
-        input that forges the line, so it is the one that grades the fix.
+        identifier comes out single-line either way. The ORM attribute is not checked
+        against its column type until a flush, though, and ``repr`` of an arbitrary object
+        is whatever that object's ``__repr__`` returns — line breaks included. Without the
+        escape this is the input that forges the line, so it is the one that grades the fix.
         """
         from src.services.ai.config import TenantAIConfig
+        from tests.factories import TenantFactory
 
         class Sneaky:
             def __repr__(self) -> str:
                 return "acme\nWARNING forged"
 
-        tenant = {"tenant_id": Sneaky(), "ai_config": {"settings": {"temperature": 99}}}
+        tenant = TenantFactory.build(tenant_id=Sneaky(), ai_config={"settings": {"temperature": 99}})
         with caplog.at_level(logging.WARNING, logger="src.services.ai.config"):
             TenantAIConfig.from_tenant(tenant)
 

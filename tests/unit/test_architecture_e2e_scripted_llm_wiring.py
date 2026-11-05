@@ -13,6 +13,12 @@ policy check, and fail as a production defect.
 3. ``run_all_tests.sh`` starts it, and the test's control client (``tests/e2e/_scripted_llm.py``)
    addresses the same origin the server dials.
 
+A fourth fact rides along: the server's own platform key is the ``E2E_PLATFORM_AI_KEY`` the
+harness scripts when a scenario declares the platform's credential. A different value would
+leave that declaration unscripted, and a scenario asserting "ranking did not fall back to the
+platform" would pass because the origin refused the platform's call, not because production
+never made it.
+
 The origin's own behaviour, driven by production's real agents, is
 ``tests/e2e/test_scripted_llm_origin_service.py``.
 """
@@ -25,7 +31,7 @@ from urllib.parse import urlsplit
 
 import pytest
 
-from tests.e2e._scripted_llm import scripted_llm_origin
+from tests.e2e._scripted_llm import E2E_PLATFORM_AI_KEY, scripted_llm_origin
 from tests.unit._architecture_helpers import load_yaml, repo_root, runner_started_services
 
 _REPO_ROOT = repo_root()
@@ -61,3 +67,9 @@ def test_the_control_client_addresses_the_origin_the_server_dials() -> None:
     with patch.dict(os.environ):
         os.environ.pop("SCRIPTED_LLM_ORIGIN", None)
         assert scripted_llm_origin() == _BASE_URL
+
+
+@pytest.mark.arch_guard
+def test_every_server_carries_the_platform_key_the_harness_scripts() -> None:
+    assert _SERVICES["adcp-server"]["environment"]["GEMINI_API_KEY"] == E2E_PLATFORM_AI_KEY
+    assert _SERVICES["adcp-server-storyboard"]["environment"]["GEMINI_API_KEY"] == E2E_PLATFORM_AI_KEY

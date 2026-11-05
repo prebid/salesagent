@@ -77,6 +77,7 @@ _SELLER_AI: dict[str, Callable[[Any], None]] = {
         env, {"provider": "gemini", "model": "gemini-2.0-flash", "api_key": env.scripted_model_key}
     ),
     "in the legacy gemini_api_key column": lambda env: _configure_seller_ai(env, None, env.scripted_model_key),
+    "nowhere": lambda env: _configure_seller_ai(env, None),
     # What the settings page stores when the seller leaves the key blank, telling the
     # seller "AI features will be disabled" as it saves it.
     "in an ai_config row without an API key": lambda env: _configure_seller_ai(
@@ -106,18 +107,27 @@ def _ranking_on(where: str) -> Callable[[Any], None]:
     return _apply
 
 
-def _ranking_service_fails(env: Any) -> None:
-    _ranking_on("in ai_config")(env)
-    env.set_ranking_unavailable()
+def _seller_model_fails(fail: Callable[[Any], None]) -> Callable[[Any], None]:
+    """Ranking on the seller's own ai_config, whose model then fails as ``fail`` sets up."""
+
+    def _apply(env: Any) -> None:
+        _ranking_on("in ai_config")(env)
+        fail(env)
+
+    return _apply
 
 
 #: Why ranking cannot run, by the INV-4 Outline's <failure> wording.
 _RANKING_FAILURES: dict[str, Callable[[Any], None]] = {
-    "the AI ranking service fails": _ranking_service_fails,
+    "the AI ranking service fails": _seller_model_fails(lambda env: env.set_ranking_unavailable()),
+    "the seller's AI provider drops the connection": _seller_model_fails(
+        lambda env: env.set_ranking_connection_dropped()
+    ),
     "the seller's ai_config is one the model factory refuses to build": _ranking_on(
         "in an ai_config the model factory refuses to build"
     ),
     "the seller's stored ai_config does not parse": _ranking_on("in a stored ai_config that does not parse"),
+    "the seller's ai_config names a provider with no API key": _ranking_on("in an ai_config row without an API key"),
 }
 
 
@@ -146,6 +156,24 @@ def given_seller_ai(ctx: dict, where: str) -> None:
 def given_llm_blocks_the_brief(ctx: dict) -> None:
     """The policy model returns a BLOCKED verdict if it is asked."""
     ctx["env"].set_policy_blocked("Brief violates the seller's advertising policy")
+
+
+@given("the LLM evaluates the brief as ALLOWED")
+def given_llm_allows_the_brief(ctx: dict) -> None:
+    """The policy model returns an ALLOWED verdict if it is asked."""
+    ctx["env"].set_policy_approved()
+
+
+@given("the LLM policy service is unavailable")
+def given_policy_model_unavailable(ctx: dict) -> None:
+    """The policy model fails if it is asked."""
+    ctx["env"].set_policy_unavailable()
+
+
+@given("the platform has an AI credential of its own")
+def given_platform_ai_credential(ctx: dict) -> None:
+    """A Gemini key in the platform's environment, on every transport."""
+    ctx["env"].set_platform_ai_credential()
 
 
 @given(
@@ -190,11 +218,12 @@ def given_second_product_score(ctx: dict, score: float) -> None:
 @when("the Buyer Agent sends a get_products request with a brief")
 @when("the Buyer Agent sends a get_products request with a non-compliant brief")
 @when("the Buyer Agent sends a get_products request with any brief content")
+@when("the Buyer Agent sends a get_products request with a compliant brief")
 def when_get_products_with_brief(ctx: dict) -> None:
     """Dispatch get_products with a brief through the current transport.
 
-    One brief for every wording: whether it is "non-compliant" is the scripted policy
-    model's verdict (a Given), not a property of the text.
+    One brief for every wording: whether it is "non-compliant" or "compliant" is the
+    scripted policy model's verdict (a Given), not a property of the text.
     """
     dispatch_request(ctx, brief=_BRIEF)
 
@@ -228,6 +257,8 @@ def then_products_sorted_by_score(ctx: dict) -> None:
 
 @then("products should be returned unranked with no threshold applied")
 @then("the request should proceed to product discovery without policy check")
+@then("the request should proceed (fail-open behavior)")
+@then("the request should proceed with full product catalog")
 def then_full_catalog_in_catalog_order(ctx: dict) -> None:
     """products[] is the whole catalog, in catalog order: nothing ranked, filtered or blocked."""
     expected = ctx["catalog"]

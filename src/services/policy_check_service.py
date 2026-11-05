@@ -3,12 +3,12 @@
 import logging
 from datetime import UTC, datetime
 from enum import StrEnum
+from typing import Any
 
 from adcp.types.generated_poc.brand import Brand  # TODO: no stable alias in adcp.types
 from pydantic import BaseModel, Field
 
 from src.core.schemas import Product
-from src.services.ai import AIServiceFactory, TenantAIConfig
 from src.services.ai.agents.policy_agent import (
     check_policy_compliance,
     create_policy_agent,
@@ -41,22 +41,21 @@ class PolicyCheckService:
     Uses Pydantic AI for multi-model support, on the seller's own AI configuration only.
     """
 
-    def __init__(self, tenant_ai_config: TenantAIConfig | None = None):
+    def __init__(self, model: Any | None = None):
         """Initialize the policy check service.
 
         Args:
-            tenant_ai_config: The seller's own AI configuration, which the caller has
-                already gated on ``AIServiceFactory.is_ai_enabled``, so building its model
-                cannot fail on configuration grounds. ``None`` runs basic rules only.
+            model: The model built from the seller's own AI configuration
+                (``AIServiceFactory.build``). ``None`` runs basic rules only.
         """
-        if tenant_ai_config is None:
+        if model is None:
             logger.warning("No AI configuration. Policy checks will use basic rules only.")
             self.ai_enabled = False
             self._agent = None
             return
 
         self.ai_enabled = True
-        self._agent = create_policy_agent(AIServiceFactory().create_model(tenant_ai_config))
+        self._agent = create_policy_agent(model)
 
     async def check_brief_compliance(
         self,

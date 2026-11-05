@@ -87,7 +87,7 @@ class PlatformAICredential:
     """The platform's AI credential, stated for the length of a test: none, or one Gemini key.
 
     ``tests/conftest.py`` sets ``GEMINI_API_KEY`` for every test, and
-    ``AIServiceFactory.is_ai_enabled`` counts the platform key, so a test about the
+    ``AIServiceFactory.build`` falls back to the platform key, so a test about the
     SELLER's own configuration has to remove it or every tenant looks AI-enabled.
 
     Pinned in the ENVIRONMENT, unlike :func:`inject_limits`: a composition root rebuilds
@@ -100,12 +100,14 @@ class PlatformAICredential:
     uses it as a context manager.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, gemini_api_key: str | None = None) -> None:
+        """``gemini_api_key`` is the platform key :meth:`start` states; ``None`` is none."""
         self._environ = patch.dict(os.environ)
+        self._gemini_api_key = gemini_api_key
 
-    def start(self, gemini_api_key: str | None = None) -> None:
+    def start(self) -> None:
         self._environ.start()
-        self.set(gemini_api_key)
+        self.set(self._gemini_api_key)
 
     def set(self, gemini_api_key: str | None) -> None:
         """Replace the platform credential: ``None`` removes it."""

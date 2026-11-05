@@ -152,11 +152,12 @@ def test_account_approval_mode_defaults_to_none_when_unset(integration_db):
 
 @pytest.mark.requires_db
 def test_the_ai_credential_stays_out_of_the_tenant_dict(integration_db):
-    """serialize_tenant_to_dict never carries the seller's AI configuration.
+    """serialize_tenant_to_dict never carries the seller's AI credentials, in either column.
 
     The dict reaches the Slack notifier and the audit path, and ai_config holds the
-    seller's api_key and logfire_token. TenantContext is the one projection that needs the
-    configuration, and it is built from the ORM row, so the dict has no reason to carry it.
+    seller's api_key and logfire_token, the legacy gemini_api_key column a key of its own.
+    TenantContext is the one projection that needs the configuration, and it is built from
+    the ORM row, so the dict has no reason to carry either.
     """
     from tests.factories import TenantFactory
     from tests.harness._base import IntegrationEnv
@@ -168,11 +169,14 @@ def test_the_ai_credential_stays_out_of_the_tenant_dict(integration_db):
             tenant_id="test_aicfg",
             ai_config=ai_config,
             product_ranking_prompt="rank by relevance to the brief",
+            gemini_api_key="legacy-key",
         )
 
         d = serialize_tenant_to_dict(tenant)
 
         assert "ai_config" not in d
+        assert "gemini_api_key" not in d
+        assert "legacy-key" not in repr(d)
         assert "tenant-key" not in repr(d)
         assert "lf-tok" not in repr(d)
         assert d["product_ranking_prompt"] == "rank by relevance to the brief"
@@ -218,5 +222,7 @@ def test_the_resolver_chain_carries_the_parsed_ai_config(integration_db, ai_conf
         assert loaded is not None
         assert loaded.ai_config == TenantAIConfig(**expected)
         assert loaded.product_ranking_prompt == "rank by relevance to the brief"
-        assert TenantAIConfig.from_tenant(loaded) == TenantAIConfig(**expected)
+        # The context carries the resolution, not the column it came from: nothing reads
+        # the legacy credential off it, so it is not there to read.
+        assert "gemini_api_key" not in TenantContext.model_fields
         assert expected["api_key"] not in repr(loaded)

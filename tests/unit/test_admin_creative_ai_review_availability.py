@@ -8,7 +8,7 @@ tested ``tenant.gemini_api_key`` (the legacy column) while the impl resolved thr
 who configured AI in the Admin UI — which writes ``ai_config``, not that column — was
 shown "AI review unavailable" by a page whose impl would happily have run one.
 
-Both now go through ``_tenant_ai_enabled``, the single owner of "can an AI call actually
+Both now go through ``tenant_ai_enabled``, the single owner of "can an AI call actually
 run for this tenant".
 
 ``TenantFactory.build()`` makes a real ORM ``Tenant`` without touching the database, so
@@ -22,7 +22,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.admin.blueprints.creatives import _tenant_ai_enabled, review_creatives
+from src.admin.blueprints.creatives import review_creatives
+from src.services.ai.factory import tenant_ai_enabled
 from tests.factories import TenantFactory
 from tests.helpers.settings_injection import PlatformAICredential
 
@@ -39,7 +40,7 @@ _KEYLESS_AI_CONFIG = {"provider": "google", "model": "gemini-2.0-flash"}
 def _tenant_credentials_only(monkeypatch):
     """Remove the platform credentials, and supply the key the tenant column needs.
 
-    ``is_ai_enabled`` counts the platform key, so with ``GEMINI_API_KEY`` left in place —
+    the factory counts the platform key, so with ``GEMINI_API_KEY`` left in place —
     ``tests/conftest.py`` sets it for every test — every tenant looks AI-enabled and the
     keyless-row case below would pass no matter what production resolved.
 
@@ -84,7 +85,7 @@ class TestPageOffersAIReviewExactlyWhenTheImplWouldRunOne:
 
         assert _render_page(tenant)["has_ai_review"] is True
         # ...and the impl agrees, which is the whole point of sharing the owner.
-        assert _tenant_ai_enabled(tenant) is True
+        assert tenant_ai_enabled(tenant) is True
 
     def test_legacy_gemini_key_tenant_is_still_offered_ai_review(self):
         """The pre-existing behaviour the page had, preserved through the new owner."""
@@ -101,7 +102,7 @@ class TestPageOffersAIReviewExactlyWhenTheImplWouldRunOne:
         )
 
         assert _render_page(tenant)["has_ai_review"] is False
-        assert _tenant_ai_enabled(tenant) is False
+        assert tenant_ai_enabled(tenant) is False
 
     def test_configured_ai_without_review_criteria_is_not_offered_ai_review(self):
         """The second condition still stands: the impl refuses without criteria."""

@@ -1849,9 +1849,46 @@ def _e2e_set_policy_blocked(env: Any, reason: str = "Policy violation") -> None:
     a seller with no usable configuration never calls the origin, as in-process the mocked
     service is never constructed.
     """
+    _e2e_script_policy(env, {"output": {"status": "blocked", "reason": reason}})
+
+
+def _e2e_script_policy(env: Any, entry: dict[str, Any]) -> None:
+    """Script the policy verdict for the seller's key, and for the platform's if the env declared one.
+
+    The platform's key answers the same verdict, so a check that ran on it instead of the
+    seller's credential shows on the wire (a BLOCKED brief is refused).
+    """
     from tests.e2e._scripted_llm import install_script
 
-    install_script(env.scripted_model_key, policy={"output": {"status": "blocked", "reason": reason}})
+    for api_key in env.scripted_api_keys():
+        install_script(api_key, policy=entry)
+
+
+def _e2e_set_policy_approved(env: Any) -> None:
+    """E2E realization of :meth:`ProductMixin.set_policy_approved`: an ALLOWED verdict, scripted."""
+    _e2e_script_policy(env, {"output": {"status": "allowed"}})
+
+
+def _e2e_set_policy_unavailable(env: Any) -> None:
+    """E2E realization of :meth:`ProductMixin.set_policy_unavailable`: the origin answers 503."""
+    _e2e_script_policy(env, {"fail_status": 503})
+
+
+def _policy_service_answering(check: Any) -> MagicMock:
+    """A stand-in ``PolicyCheckService`` whose model answers ``check``; the rest is production's.
+
+    Only the model call (``check_brief_compliance``) is scripted. ``check_product_eligibility``
+    is the real service's, a pure rule with no model in it, so the products that survive a
+    verdict are decided by production, not by a MagicMock that answers anything.
+    """
+    from unittest.mock import AsyncMock
+
+    from src.services.policy_check_service import PolicyCheckService
+
+    instance = MagicMock()
+    instance.check_brief_compliance = AsyncMock(**check)
+    instance.check_product_eligibility = PolicyCheckService().check_product_eligibility
+    return instance
 
 
 class ProductMixin:
@@ -1865,14 +1902,16 @@ class ProductMixin:
         {"dynamic_variants", "resolve_property_list"}
 
     Fluent API:
-        set_policy_approved()            -- policy check returns approved
+        set_policy_approved()            -- policy check returns allowed
         set_policy_blocked(reason)       -- policy check returns blocked
+        set_policy_unavailable()         -- policy model fails
         set_dynamic_variants(variants)   -- configure dynamic variant generation
         set_property_list(ids)           -- configure property list resolver
         set_ranking_disabled()           -- disable AI ranking
         call_impl(brief, **kw)           -- call _get_products_impl
     """
 
+    @realize_e2e(_e2e_set_policy_approved)
     def set_policy_approved(self) -> None:
         """Configure PolicyCheckService to approve the brief.
 
@@ -1882,12 +1921,31 @@ class ProductMixin:
         By default the harness identity has neither, so this is a no-op
         unless the test explicitly configures the tenant.
         """
-        from unittest.mock import AsyncMock
+        from src.services.policy_check_service import PolicyCheckResult, PolicyStatus
 
-        mock_result = MagicMock(status="approved", reason=None, restrictions=[])
-        mock_instance = MagicMock()
-        mock_instance.check_brief_compliance = AsyncMock(return_value=mock_result)
-        self.mock["policy_service"].return_value = mock_instance  # type: ignore[attr-defined]
+        verdict = PolicyCheckResult(status=PolicyStatus.ALLOWED)
+        self.mock["policy_service"].return_value = _policy_service_answering({"return_value": verdict})  # type: ignore[attr-defined]
+
+    @realize_e2e(_e2e_set_policy_unavailable)
+    def set_policy_unavailable(self) -> None:
+        """The policy model is down: the check fails as pydantic-ai fails on an HTTP 503.
+
+        In-process the check raises ``ModelHTTPError`` into ``_get_products_impl``, whose
+        handler fails open. Over e2e the real service's agent meets the same 503 from the
+        scripted origin and fails open itself (``check_policy_compliance`` answers ALLOWED
+        with a warning). Both are the seller's fail-open, and both let the request proceed.
+        """
+        from pydantic_ai.exceptions import ModelHTTPError
+
+        failure = ModelHTTPError(status_code=503, model_name="scripted", body="unavailable")
+        self.mock["policy_service"].return_value = _policy_service_answering({"side_effect": failure})  # type: ignore[attr-defined]
+
+    #: The platform's own AI key, once a scenario declares one (``ProductEnv.set_platform_ai_credential``).
+    _platform_ai_key: str | None = None
+
+    def scripted_api_keys(self) -> list[str]:
+        """The keys a scripted answer is installed for: the seller's, and the platform's if declared."""
+        return [self.scripted_model_key, *([self._platform_ai_key] if self._platform_ai_key else [])]
 
     @property
     def scripted_model_key(self) -> str:
@@ -1909,14 +1967,10 @@ class ProductMixin:
         Over e2e the live server builds the real service on the seller's own AI
         configuration, so the verdict is scripted on the origin that model calls.
         """
-        from unittest.mock import AsyncMock
+        from src.services.policy_check_service import PolicyCheckResult, PolicyStatus
 
-        from src.services.policy_check_service import PolicyStatus
-
-        mock_result = MagicMock(status=PolicyStatus.BLOCKED, reason=reason, restrictions=[])
-        mock_instance = MagicMock()
-        mock_instance.check_brief_compliance = AsyncMock(return_value=mock_result)
-        self.mock["policy_service"].return_value = mock_instance  # type: ignore[attr-defined]
+        verdict = PolicyCheckResult(status=PolicyStatus.BLOCKED, reason=reason)
+        self.mock["policy_service"].return_value = _policy_service_answering({"return_value": verdict})  # type: ignore[attr-defined]
 
     def set_dynamic_variants(self, variants: list[Any] | None = None) -> None:
         """Configure generate_variants_for_brief to return specific variants.
@@ -1935,9 +1989,9 @@ class ProductMixin:
         self.mock["resolve_property_list"].return_value = property_ids or []  # type: ignore[attr-defined]
 
     def set_ranking_disabled(self) -> None:
-        """Disable AI ranking by making the factory report AI as not enabled."""
+        """Disable AI ranking by making the factory build no model."""
         mock_factory = MagicMock()
-        mock_factory.is_ai_enabled.return_value = False
+        mock_factory.build.return_value = None
         self.mock["ranking_factory"].return_value = mock_factory  # type: ignore[attr-defined]
 
     def _configure_product_mocks(self) -> None:
@@ -1946,7 +2000,7 @@ class ProductMixin:
         Call from _configure_mocks() in concrete classes.
 
         Defaults:
-        - PolicyCheckService: not invoked (no gemini_api_key in tenant dict)
+        - PolicyCheckService: not invoked (no AI configuration of the seller's own)
         - Dynamic variants: returns [] (already AsyncMock via ASYNC_PATCHES)
         - DynamicPricingService: pass-through in unit mode, real in integration mode
         - Property list resolver: returns [] (already AsyncMock via ASYNC_PATCHES)

@@ -5,6 +5,7 @@ from unittest.mock import patch
 import pytest
 
 from src.core.schemas import GetProductsRequest
+from src.services.ai import AIServiceFactory
 from src.services.ai.config import DEFAULT_GOOGLE_MODEL, TenantAIConfig
 from src.services.policy_check_service import PolicyCheckResult, PolicyCheckService, PolicyStatus
 from tests.helpers.adcp_factories import create_test_brand_manifest, create_test_product
@@ -16,7 +17,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 def policy_service():
     """Create a policy service without AI for basic testing."""
     # Service without AI will just allow everything with a warning
-    return PolicyCheckService(tenant_ai_config=None)
+    return PolicyCheckService()
 
 
 @pytest.fixture
@@ -25,7 +26,9 @@ def policy_service_with_ai():
     # The service needs AI enabled. We'll patch the check_policy_compliance function
     # to return mock responses in each test.
     return PolicyCheckService(
-        tenant_ai_config=TenantAIConfig(provider="google", model=DEFAULT_GOOGLE_MODEL, api_key="test-key")
+        model=AIServiceFactory().build(
+            TenantAIConfig(provider="google", model=DEFAULT_GOOGLE_MODEL, api_key="test-key")
+        )
     )
 
 

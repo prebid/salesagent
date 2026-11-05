@@ -93,8 +93,7 @@ class TestRankingThresholdBehavior:
                 patch("src.services.ai.factory.get_factory") as mock_factory,
             ):
                 factory_inst = MagicMock()
-                factory_inst.is_ai_enabled.return_value = True
-                factory_inst.create_model.return_value = MagicMock()
+                factory_inst.build.return_value = MagicMock()
                 mock_factory.return_value = factory_inst
                 mock_rank.return_value = ranking_result
 
@@ -138,8 +137,7 @@ class TestRankingThresholdBehavior:
                 patch("src.services.ai.factory.get_factory") as mock_factory,
             ):
                 factory_inst = MagicMock()
-                factory_inst.is_ai_enabled.return_value = True
-                factory_inst.create_model.return_value = MagicMock()
+                factory_inst.build.return_value = MagicMock()
                 mock_factory.return_value = factory_inst
                 mock_rank.return_value = ranking_result
 
@@ -180,8 +178,7 @@ class TestRankingThresholdBehavior:
                 patch("src.services.ai.factory.get_factory") as mock_factory,
             ):
                 factory_inst = MagicMock()
-                factory_inst.is_ai_enabled.return_value = True
-                factory_inst.create_model.return_value = MagicMock()
+                factory_inst.build.return_value = MagicMock()
                 mock_factory.return_value = factory_inst
                 mock_rank.return_value = ranking_result
 
@@ -221,8 +218,7 @@ class TestRankingThresholdBehavior:
                 patch("src.services.ai.factory.get_factory") as mock_factory,
             ):
                 factory_inst = MagicMock()
-                factory_inst.is_ai_enabled.return_value = True
-                factory_inst.create_model.return_value = MagicMock()
+                factory_inst.build.return_value = MagicMock()
                 mock_factory.return_value = factory_inst
                 mock_rank.return_value = ranking_result
 
@@ -261,8 +257,7 @@ class TestRankingFailureFailopen:
 
             with patch("src.services.ai.factory.get_factory") as mock_factory:
                 factory_inst = MagicMock()
-                factory_inst.is_ai_enabled.return_value = True
-                factory_inst.create_model.side_effect = RuntimeError("AI service unavailable")
+                factory_inst.build.side_effect = RuntimeError("AI service unavailable")
                 mock_factory.return_value = factory_inst
 
                 env.mock["ranking_factory"].stop()
@@ -288,8 +283,7 @@ class TestRankingFailureFailopen:
             PricingOptionFactory(product=ProductFactory(tenant=tenant, product_id="p_first"))
 
             factory = env.mock["ranking_factory"].return_value
-            factory.is_ai_enabled.return_value = True
-            factory.create_model.side_effect = RuntimeError("503 upstream\nWARNING forged entry")
+            factory.build.side_effect = RuntimeError("503 upstream\nWARNING forged entry")
 
             with caplog.at_level("WARNING", logger="src.core.tools.products"):
                 await env.call_impl(brief="campaign")
@@ -518,8 +512,7 @@ class TestEmptyResultsPipelineStages:
                 patch("src.services.ai.factory.get_factory") as mock_factory,
             ):
                 factory_inst = MagicMock()
-                factory_inst.is_ai_enabled.return_value = True
-                factory_inst.create_model.return_value = MagicMock()
+                factory_inst.build.return_value = MagicMock()
                 mock_factory.return_value = factory_inst
                 mock_rank.return_value = ranking_result
 

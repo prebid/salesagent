@@ -33,9 +33,6 @@ def _make_db_session(product_mock):
         elif call_count == 3:
             # AdapterConfig lookup
             result.first.return_value = None
-        elif call_count == 4:
-            # Tenant lookup
-            result.first.return_value = None
         else:
             result.first.return_value = None
             result.all.return_value = []
@@ -68,6 +65,7 @@ def test_products_map_includes_delivery_type():
     mock_adapter._placement_targeting_map = {}
     mock_adapter._order_name_template = None
     mock_adapter._line_item_name_template = None
+    mock_adapter._tenant_ai_config = None
     mock_adapter.targeting_manager = Mock()
 
     # Create a mock Product with delivery_type = "guaranteed"

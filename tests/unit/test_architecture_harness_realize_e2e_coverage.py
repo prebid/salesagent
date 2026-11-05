@@ -156,7 +156,6 @@ ALLOWLIST_NOT_BDD_REACHABLE: frozenset[tuple[str, str]] = frozenset(
         # by grep) -- only used by tests/harness/test_harness_product.py and
         # tests/integration/*, which never run over e2e. Latent risk only if
         # a future BDD Given step starts calling one of these.
-        ("tests/harness/_mixins.py", "set_policy_approved"),
         ("tests/harness/_mixins.py", "set_dynamic_variants"),
         ("tests/harness/_mixins.py", "set_property_list"),
         ("tests/harness/_mixins.py", "set_ranking_disabled"),

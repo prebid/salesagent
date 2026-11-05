@@ -47,13 +47,12 @@ would run that package's ``__init__``, which transitively pulls in ``factory-boy
 
 from __future__ import annotations
 
-import contextlib
 import json
 import os
 import threading
-from collections.abc import Iterator
+from contextlib import AbstractContextManager
 
-from tests.e2e._stdlib_json_http import JsonRequestHandler, compose_project_name, serve_forever_in_thread
+from tests.e2e._stdlib_json_http import JsonRequestHandler, run_origin, serve_until_killed
 
 #: The public origin the SERVER walks. Read from the environment so the compose
 #: service, the nginx SNI map and this module cannot drift apart silently: every
@@ -242,32 +241,19 @@ class _CounterpartyHandler(JsonRequestHandler):
         self._write_json(200, {"installed": len(jwks.get("keys", [])), "slot": slot})
 
 
-@contextlib.contextmanager
-def run_counterparty_origin(*, host: str = "0.0.0.0", port: int = 8080) -> Iterator[str]:
+def run_counterparty_origin(*, host: str = "0.0.0.0", port: int = 8080) -> AbstractContextManager[str]:
     """Run the counterparty origin, yielding its base URL (``http://host:port``).
 
     Plaintext by design: TLS is terminated by the shared ``tls-proxy`` front,
     which routes ``counterparty.adcp-e2e.dev`` here by SNI. The origin never holds a
     certificate — one terminator, one leaf, one place to keep in step.
     """
-    server = serve_forever_in_thread(
-        _CounterpartyHandler,
-        host=host,
-        port=port,
-        server_attrs={"jwks_store": _JwksStore(), "compose_project_name": compose_project_name()},
-    )
-    try:
-        yield f"http://{host}:{server.server_address[1]}"
-    finally:
-        server.shutdown()
-        server.server_close()
+    return run_origin(_CounterpartyHandler, host=host, port=port, server_attrs={"jwks_store": _JwksStore()})
 
 
 def main() -> None:
     """Entry point for ``python -m tests.e2e.counterparty_origin_service``."""
-    port = int(os.environ.get("PORT", "8080"))
-    with run_counterparty_origin(host="0.0.0.0", port=port):
-        threading.Event().wait()
+    serve_until_killed(run_counterparty_origin)
 
 
 if __name__ == "__main__":

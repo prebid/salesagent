@@ -2,12 +2,16 @@
 
 import logging
 from collections.abc import Mapping
-from typing import Any
+from enum import Enum
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 from pydantic import BaseModel, Field, ValidationError
 
 from src.core.config import DEFAULT_GOOGLE_MODEL, get_settings
 from src.core.logging_config import log_safe
+
+if TYPE_CHECKING:
+    from src.core.database.models import Tenant
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +47,10 @@ class TenantAIConfig(BaseModel):
     All fields are optional - tenants inherit platform defaults for any unset values.
     """
 
-    model_config = {"extra": "ignore"}  # Forward compatible with future fields
+    # extra="ignore": forward compatible with future fields. hide_input_in_errors: a
+    # ValidationError renders the value it rejected, and a stored row carries the seller's
+    # API key, so a malformed row would otherwise put that key in the WARNING `coerce` logs.
+    model_config = {"extra": "ignore", "hide_input_in_errors": True}
 
     # Model selection - accepts any Pydantic AI provider string
     # e.g., "google-gla", "anthropic", "openai", "gateway/anthropic", etc.
@@ -89,6 +96,16 @@ class TenantAIConfig(BaseModel):
             return value
         if value is None:
             return cls()
+        parsed = cls._parse_stored(value, source=source)
+        return cls() if parsed is None else parsed
+
+    @classmethod
+    def _parse_stored(cls, value: Any, *, source: str) -> "TenantAIConfig | None":
+        """`coerce`'s parse, reporting a malformed value as None instead of a bare config.
+
+        `from_tenant` needs to tell "the row does not parse" from "the row parses to
+        nothing", because only the second may fall back to the platform's credential.
+        """
         if not isinstance(value, Mapping | list):
             raise TypeError(
                 f"{source} must be a JSON object (dict) or None, got {type(value).__name__}. "
@@ -108,96 +125,75 @@ class TenantAIConfig(BaseModel):
                 type(value).__name__,
                 log_safe(exc),
             )
-            return cls()
-
-    @classmethod
-    def from_tenant(cls, tenant: Any) -> "TenantAIConfig | None":
-        """Resolve 'given a tenant, what is its AI configuration?' - the one owner of that rule.
-
-        Accepts every shape a tenant travels as: the ORM Tenant row, TenantContext,
-        and the plain tenant dict. The field names `ai_config` and
-        `gemini_api_key` are identical across all three; only the ACCESS MECHANISM
-        differs (the ORM row has no `.get()`, the plain dict has no attribute access),
-        which is why the read goes through `_read_tenant_field`.
-
-        USABILITY IS THE CONTRACT. A config comes back only when the tenant has its OWN
-        usable credential, because that is what every consumer asks this question for.
-        Resolution order:
-
-        1. `ai_config` parses AND carries a non-empty `api_key` -> that config.
-        2. Otherwise the legacy `gemini_api_key` column -> the canonical Google config,
-           provider and model pinned together.
-        3. Otherwise None.
-
-        A row carrying provider/model but NO api_key is not a tenant configuration.
-        `src/admin/blueprints/settings.py` writes exactly that shape when the seller
-        leaves the key field blank, and tells them "AI features will be disabled" as it
-        does. Returning it as a real config opened the policy gate in
-        `src/core/tools/products.py` for those tenants and ran `check_brief_compliance`
-        on the OPERATOR's platform credential - a live LLM call, and a BLOCKED verdict
-        there is a new buyer-visible rejection. None makes that gate skip, and lets
-        ranking fall back to the platform's own coherent provider+model+key instead.
-
-        A MALFORMED row resolves to nothing, never to a different vendor. `coerce`
-        degrades it to a bare config, which carries no api_key, so it falls through to
-        step 2 and then to None - it is never returned as if it were the tenant's
-        configuration. Returning the bare config let the factory fill in the PLATFORM's
-        provider and key, so a seller who had deliberately configured Anthropic had the
-        buyer's brief and product catalog sent to Google, unranked-advisory-free.
-
-        The absent-test is FALSY, not `is None`: an empty `ai_config` dict (`{}`)
-        carries no provider and no key, so it must fall through to the legacy field
-        rather than shadow it. This resolves the divergence with
-        `src/core/utils/naming.py`, which tested `is None` while every other site
-        tested falsiness.
-
-        It NEVER falls back to the platform environment key - that decision belongs to
-        the caller, because the two consumers (ranking, policy) want different answers
-        to it.
-        """
-        if tenant is None:
             return None
 
-        tenant_id = _read_tenant_field(tenant, "tenant_id")
-        # log_safe around the whole label: this string is built here and interpolated
-        # into the WARNING in coerce, so the tenant identifier reaches a log line
-        # through it. !r escapes a str's line breaks but _read_tenant_field is typed
-        # Any, and a non-str whose __repr__ spans lines would go through unescaped.
-        source = log_safe(f"tenant ai_config for tenant {tenant_id!r}") if tenant_id else "tenant ai_config"
+    @classmethod
+    def from_tenant(cls, tenant: "Tenant") -> "SellerAIConfig":
+        """Resolve 'given a tenant row, what AI did the seller configure?' - the one owner of that rule.
 
-        ai_config = _read_tenant_field(tenant, "ai_config")
-        if ai_config:
-            config = cls.coerce(ai_config, source=source)
-            if config.api_key:
-                return config
+        Called once per request, by `TenantContext.from_orm_model`; every consumer reads
+        `TenantContext.ai_config` rather than asking again. The admin UI, which holds the
+        ORM row and no context, calls it on the row.
 
-        legacy_key = _read_tenant_field(tenant, "gemini_api_key")
-        if legacy_key:
-            # CANONICAL_GOOGLE_PROVIDER, not the literal "gemini": every consumer of
-            # the provider string canonicalizes before comparing or using it
-            # (canonicalize_google_provider at config.py _get_provider_api_key /
-            # build_model_string, factory.create_model, and uses_legacy_gemini_api_key),
-            # so the two spellings are interchangeable downstream.
-            #
-            # The MODEL is pinned with the provider. Left unset, the factory filled it
-            # from the platform's PYDANTIC_AI_MODEL - so a deployment configured for
-            # Anthropic handed "claude-sonnet-4-…" to a Google client built on this
-            # tenant's Gemini key, and every call 404'd.
-            return cls(provider=CANONICAL_GOOGLE_PROVIDER, model=DEFAULT_GOOGLE_MODEL, api_key=legacy_key)
+        Three answers, because the consumers need to tell them apart:
 
-        return None
+        * a `TenantAIConfig` - the seller's own usable configuration, with its own key:
+          `ai_config` when it carries an `api_key`, else the legacy `gemini_api_key` column
+          as the canonical Google config, provider and model pinned together;
+        * `None` - the seller configured nothing. Only this answer may fall back to the
+          platform's own credential, which ranking, order naming and creative review do;
+        * `UNUSABLE_AI_CONFIG` - the seller configured AI that cannot run: a stored row
+          that does not parse, or one naming a provider with no key. AI is OFF for this
+          seller. Answering None here sent the buyer's brief to the operator's Google key
+          for a seller who had chosen Anthropic, and for one the settings page had just
+          told "AI features will be disabled" (`src/admin/blueprints/settings.py` writes a
+          provider/model row with no key when the key field is left blank).
+
+        A row that names no provider and no key (`{}`, or settings alone) configured no
+        model, so it falls through to the legacy column like an absent one. A keyless row
+        naming Google still takes the legacy key, which belongs to that same vendor.
+
+        It NEVER falls back to the platform environment key - that decision belongs to
+        the factory, for the callers that want it.
+        """
+        legacy = (
+            # CANONICAL_GOOGLE_PROVIDER, not the literal "gemini": every consumer of the
+            # provider string canonicalizes before comparing or using it. The MODEL is
+            # pinned with the provider: left unset, the factory filled it from the
+            # platform's PYDANTIC_AI_MODEL, so a deployment configured for Anthropic handed
+            # "claude-sonnet-4-…" to a Google client built on this tenant's Gemini key.
+            cls(provider=CANONICAL_GOOGLE_PROVIDER, model=DEFAULT_GOOGLE_MODEL, api_key=tenant.gemini_api_key)
+            if tenant.gemini_api_key
+            else None
+        )
+        if not tenant.ai_config:
+            return legacy
+
+        # log_safe around the whole label: it is interpolated into the WARNING that
+        # _parse_stored logs, so the tenant identifier reaches a log line through it.
+        config = cls._parse_stored(
+            tenant.ai_config, source=log_safe(f"tenant ai_config for tenant {tenant.tenant_id!r}")
+        )
+        if config is None:
+            return UNUSABLE_AI_CONFIG
+        if config.api_key:
+            return config
+        if config.provider is None or (legacy is not None and uses_legacy_gemini_api_key(config.provider)):
+            return legacy
+        return UNUSABLE_AI_CONFIG
 
 
-def _read_tenant_field(tenant: Any, field: str) -> Any:
-    """Read one field from a tenant in whichever shape it arrived.
+class _UnusableAIConfig(Enum):
+    """The type of `UNUSABLE_AI_CONFIG`; an Enum so mypy narrows it with `is`."""
 
-    Plain dicts answer to `.get()`; ORM rows and TenantContext answer to attribute
-    access. Missing fields read as None rather than raising, so a partial projection
-    degrades to "not configured" instead of failing the request.
-    """
-    if isinstance(tenant, Mapping):
-        return tenant.get(field)
-    return getattr(tenant, field, None)
+    UNUSABLE = "unusable"
+
+
+#: The seller configured AI that cannot run (see `TenantAIConfig.from_tenant`).
+UNUSABLE_AI_CONFIG: Final = _UnusableAIConfig.UNUSABLE
+
+#: What `TenantAIConfig.from_tenant` answers: the seller's own config, nothing, or unusable.
+SellerAIConfig = TenantAIConfig | Literal[_UnusableAIConfig.UNUSABLE] | None
 
 
 def get_platform_defaults() -> dict:
@@ -247,19 +243,3 @@ def _get_provider_api_key(provider: str) -> str | None:
         API key if found, None otherwise
     """
     return get_settings().integrations.provider_api_key(canonicalize_google_provider(provider))
-
-
-def build_model_string(provider: str, model: str) -> str:
-    """Build the Pydantic AI model string.
-
-    Pydantic AI uses format: "provider:model" (e.g., "google:gemini-2.0-flash")
-
-    Args:
-        provider: Provider name (e.g., "google-gla", "anthropic", "gateway/openai")
-        model: Model name
-
-    Returns:
-        Pydantic AI model string
-    """
-    provider = canonicalize_google_provider(provider)
-    return f"{provider}:{model}"

@@ -122,12 +122,6 @@ def _make_configured_product():
     product = Mock()
     product.product_id = "prod_test"
     product.implementation_config = {"targeted_ad_unit_ids": ["123456"]}
-    # The same .first() answers the adapter's TENANT lookup, so the tenant columns it reads
-    # are pinned to what an unconfigured tenant row holds; a Mock attribute there is a value
-    # PostgreSQL can never return, and TenantAIConfig.from_tenant refuses it.
-    product.gemini_api_key = None
-    product.ai_config = None
-    product.order_name_template = None
     return product
 
 
@@ -212,6 +206,7 @@ class TestGAMManualApprovalPath:
                     end_time,
                     response.media_buy_id,
                     order_name_template=None,
+                    tenant_ai_config=None,
                 )
 
     def test_manual_approval_failure_still_returns_packages(

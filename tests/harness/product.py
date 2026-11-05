@@ -75,9 +75,11 @@ class ProductEnv(DatabaseFaultMixin, ProductMixin, IntegrationEnv):
 
     Plus the AI-ranking setters defined below (the seller's own AI configuration is
     written with ``configure_tenant_field``, which every transport reads):
-        set_tenant_ai_ranking(prompt)  -- the seller's ranking prompt, platform key removed
-        set_ranking_scores(scores)     -- deterministic relevance scores
-        set_ranking_unavailable()      -- the ranking model fails
+        set_platform_ai_credential()       -- the platform has a Gemini key of its own
+        set_tenant_ai_ranking(prompt)      -- the seller's ranking prompt
+        set_ranking_scores(scores)         -- deterministic relevance scores
+        set_ranking_unavailable()          -- the ranking model answers 503
+        set_ranking_connection_dropped()   -- the ranking model's endpoint drops the connection
 
     Over e2e the scripted answers come from the compose ``scripted-llm`` origin
     (``tests/e2e/scripted_llm_origin_service.py``), keyed by ``scripted_model_key``.
@@ -111,7 +113,10 @@ class ProductEnv(DatabaseFaultMixin, ProductMixin, IntegrationEnv):
         # The scripted ranking model's answer: scores by product_id, or the failure it raises.
         self._scripted_scores: dict[str, float] = {}
         self._scripted_ranking_failure: Exception | None = None
+        self._e2e_seller_ranking_failure: dict[str, Any] | None = None
         self._ranking_patch_started = False
+        # The platform's own AI credential: none unless the scenario declares one.
+        self._platform_credential: Any = None
 
     def _configure_mocks(self) -> None:
         self._configure_product_mocks()
@@ -135,106 +140,134 @@ class ProductEnv(DatabaseFaultMixin, ProductMixin, IntegrationEnv):
         self.configure_tenant_field("product_ranking_prompt", ranking_prompt)
         self._tenant_ranking_prompt = ranking_prompt
 
+    def _stated_platform_credential(self) -> Any:
+        """The platform credential this env states in-process: started once, undone with the env."""
+        from tests.helpers.settings_injection import PlatformAICredential
+
+        if self._platform_credential is None:
+            self._platform_credential = PlatformAICredential(self._platform_ai_key)
+            self._platform_credential.start()
+            self._guard("platform_ai_credential", self._platform_credential.stop)
+        return self._platform_credential
+
+    def _e2e_set_platform_ai_credential(self) -> None:
+        """E2E realization of :meth:`set_platform_ai_credential`: the server's own key, scripted.
+
+        Every e2e server carries ``E2E_PLATFORM_AI_KEY`` (``docker-compose.e2e.yml``). The
+        ranking script is installed for that key too (``_e2e_install_ranking``), so a
+        server that ranked on the platform's key would get scores, reorder or filter the
+        products, and fail the scenario, as the in-process stub ranks on any model.
+        """
+        from tests.e2e._scripted_llm import E2E_PLATFORM_AI_KEY
+
+        self._platform_ai_key = E2E_PLATFORM_AI_KEY
+
+    @realize_e2e(_e2e_set_platform_ai_credential)
+    def set_platform_ai_credential(self) -> None:
+        """The platform has an AI credential of its own: a Gemini key in its environment.
+
+        Declared, because whether the seller's configuration is what decides depends on
+        it: with a platform key present, production that fell back to it would still rank.
+        In-process the key is put in the environment (``PlatformAICredential``); the
+        scripted ranking model answers any model production builds, so a fallback to the
+        platform's credential shows on the wire.
+        """
+        self._platform_ai_key = "platform-ai-key"
+        self._stated_platform_credential().set(self._platform_ai_key)
+
     def _e2e_set_tenant_ai_ranking(self, ranking_prompt: str) -> None:
         """E2E realization of :meth:`set_tenant_ai_ranking`: the prompt column, and nothing else.
 
-        The live server's platform key (``GEMINI_API_KEY`` in its own environment) stays
-        where it is, and that does not make the scenario vacuous here the way it would
-        in-process: the scripted model answers only the API key the SELLER configured
-        (``scripted_model_key``), and refuses any other key as the real API refuses an
-        invalid one. A server that ranked on the platform key instead of the seller's
-        would be refused, fall back to catalog order, and fail the scenario.
+        The live server's platform key (``E2E_PLATFORM_AI_KEY``) stays where it is, and that
+        does not make the scenario vacuous: the scripted model answers only the keys a
+        scenario scripted, and refuses any other as the real API refuses an invalid one.
         """
         self._write_ranking_prompt(ranking_prompt)
 
     @realize_e2e(_e2e_set_tenant_ai_ranking)
     def set_tenant_ai_ranking(self, ranking_prompt: str) -> None:
-        """Turn on AI product ranking with ``ranking_prompt``, with no platform AI key present.
+        """Turn on AI product ranking with ``ranking_prompt``, on the platform credential the env states.
 
         The seller's own AI configuration (``ai_config`` / ``gemini_api_key``) is written by
         the caller through ``configure_tenant_field``; this method owns the two things a
         column write cannot say: the ranking prompt the scripted model grades against, and
-        that the seller's configuration is the ONLY one in play.
+        which platform credential is in play (none, unless ``set_platform_ai_credential``
+        declared one).
 
-        The platform key is REMOVED here, and that is the half the scenarios depend on.
-        ``tests/conftest.py`` sets ``GEMINI_API_KEY`` for every test in the suite, and
-        ``AIServiceFactory.is_ai_enabled`` returns True on the platform key ALONE. The
-        in-process scripted model (``set_ranking_scores``) does not look at keys, so with the
-        platform key left in place, ranking runs whatever the seller has configured and a
-        scenario asserting "ranking happened" passes with the production fix reverted.
-        The removal is then VERIFIED through production's own predicate rather than
-        assumed: if any other provider/key combination still enables AI (say
-        ``PYDANTIC_AI_PROVIDER=openai`` with an ``OPENAI_API_KEY`` in the environment),
-        this raises instead of handing back a vacuous scenario.
+        ``tests/conftest.py`` sets ``GEMINI_API_KEY`` for every test, and the factory falls
+        back to it. The in-process scripted model (``set_ranking_scores``) does not look at
+        keys, so with that key left in place, ranking runs whatever the seller has
+        configured and a scenario asserting "ranking happened" passes with the production
+        fix reverted. With no platform credential declared, its absence is VERIFIED through
+        production's own factory rather than assumed: if any other provider/key
+        combination still builds a model (say ``PYDANTIC_AI_PROVIDER=openai`` with an
+        ``OPENAI_API_KEY``), this raises instead of handing back a vacuous scenario.
 
-        ``get_factory`` stays patched, but its return value becomes a REAL
-        ``AIServiceFactory`` built against the key-free environment: the whole point is
-        to grade production's "is this seller's AI usable?" rule, and a MagicMock
-        answering ``is_ai_enabled`` would be the test grading its own stub.
+        ``get_factory`` stays patched, but each call now builds a REAL ``AIServiceFactory``
+        against the stated environment: the point is to grade production's "can this
+        seller's AI run?" rule, and a MagicMock answering it would be the test grading its
+        own stub.
         """
         from src.services.ai.factory import AIServiceFactory
-        from tests.helpers.settings_injection import PlatformAICredential
 
         self._write_ranking_prompt(ranking_prompt)
+        self._stated_platform_credential()
 
-        credential = PlatformAICredential()
-        credential.start()
-        self._guard("platform_ai_credential", credential.stop)
-
-        factory = AIServiceFactory()
-        if factory.is_ai_enabled(None):
+        if self._platform_ai_key is None and AIServiceFactory().build(None) is not None:
             raise RuntimeError(
-                "set_tenant_ai_ranking() removed the platform AI credential but production still reports "
-                "AI enabled with no tenant configuration, so the tenant's own config would not be what "
-                "makes ranking run and the scenario would pass with the fix reverted. Check "
-                "PYDANTIC_AI_PROVIDER and the other provider key environment variables."
+                "set_tenant_ai_ranking() removed the platform AI credential but production still builds a model "
+                "with no tenant configuration, so the tenant's own config would not be what makes ranking run "
+                "and the scenario would pass with the fix reverted. Check PYDANTIC_AI_PROVIDER and the other "
+                "provider key environment variables."
             )
-        self.mock["ranking_factory"].return_value = factory
+        self.mock["ranking_factory"].side_effect = AIServiceFactory
 
     def _scripted_prompt_prefix(self) -> str:
-        """The ranking prompt up to the buyer's brief, as production builds it for this seller.
-
-        Built by production's own ``build_ranking_prompt`` with the seller's prompt in the
-        seller's slot, so the scripted model can tell whether the call it receives put the
-        seller's prompt there. Exchanging ``custom_prompt`` and ``brief`` at the call site in
-        ``products.py`` moves the BRIEF into that slot, and the prefix no longer matches.
-        """
-        from src.services.ai.agents.ranking_agent import build_ranking_prompt
+        """The ranking prompt up to the buyer's brief, as production builds it for this seller."""
+        from tests.e2e._scripted_llm import ranking_prompt_prefix
 
         if self._tenant_ranking_prompt is None:
             raise RuntimeError(
-                "set_ranking_scores() / set_ranking_unavailable() require set_tenant_ai_ranking() first: "
+                "set_ranking_scores() / the ranking failures require set_tenant_ai_ranking() first: "
                 "the seller's product_ranking_prompt is what the scripted model grades the prompt against."
             )
-        brief_marker = "\x00brief\x00"
-        return build_ranking_prompt(self._tenant_ranking_prompt, brief_marker, []).split(brief_marker)[0]
+        return ranking_prompt_prefix(self._tenant_ranking_prompt)
 
-    def _e2e_script_ranking(self, entry: dict[str, Any]) -> None:
-        """Script the live server's ranking call, for the seller's own API key."""
+    def _e2e_install_ranking(self) -> None:
+        """Script the live server's ranking call: the seller's key, and the platform's if declared.
+
+        The seller's key answers the declared failure if there is one, else the scores; the
+        platform's key always answers the scores, so a fallback to it is visible. Each
+        answers only when the prompt carries the seller's ranking prompt in the seller's
+        slot (``require_text``), which is how the e2e leg grades the argument roles the
+        in-process stub grades directly.
+        """
         from tests.e2e._scripted_llm import install_script
 
-        install_script(self.scripted_model_key, ranking={**entry, "require_text": self._scripted_prompt_prefix()})
-
-    def _e2e_set_ranking_scores(self, scores: Mapping[str, float]) -> None:
-        """E2E realization of :meth:`set_ranking_scores`: the scores, served by the scripted origin.
-
-        The origin answers only when the prompt carries the seller's ranking prompt in the
-        seller's slot (``require_text``), which is how the e2e leg grades the argument roles
-        the in-process stub grades directly. A refused call falls back to catalog order.
-        """
-        self._scripted_scores.update(scores)
+        prefix = self._scripted_prompt_prefix()
         rankings = [
             {"product_id": product_id, "relevance_score": score, "reason": "scripted by set_ranking_scores"}
             for product_id, score in self._scripted_scores.items()
         ]
-        self._e2e_script_ranking({"output": {"rankings": rankings}})
+        scores = {"output": {"rankings": rankings}, "require_text": prefix}
+        seller_key, *platform_keys = self.scripted_api_keys()
+        install_script(seller_key, ranking=self._e2e_seller_ranking_failure or scores)
+        for platform_key in platform_keys:
+            install_script(platform_key, ranking=scores)
+
+    def _e2e_set_ranking_scores(self, scores: Mapping[str, float]) -> None:
+        """E2E realization of :meth:`set_ranking_scores`: the scores, served by the scripted origin."""
+        self._scripted_scores.update(scores)
+        self._e2e_install_ranking()
 
     @realize_e2e(_e2e_set_ranking_scores)
     def set_ranking_scores(self, scores: Mapping[str, float]) -> None:
         """Score each product deterministically, by product_id, instead of calling a model.
 
         Cumulative: a second call adds scores to the first, so a scenario can score its
-        products one Given at a time.
+        products one Given at a time. A declared ranking failure stands: the scores are
+        what a model WOULD answer, which is what makes a fallback to another credential
+        visible.
 
         Replaces ``rank_products_async`` with a plain async function rather than a mock:
         the scenario's obligation is the ORDER on the wire, and a mock would additionally
@@ -249,7 +282,7 @@ class ProductEnv(DatabaseFaultMixin, ProductMixin, IntegrationEnv):
         stub that accepted both and ignored both made that swap invisible: exchanging the
         two keyword arguments at the ``rank_products_async`` call in ``products.py`` left
         every ranking test green. Over e2e the scripted origin grades the same swap on the
-        prompt it receives (``_e2e_set_ranking_scores``).
+        prompt it receives (``_e2e_install_ranking``).
 
         The two expected values are not passed in — they are read from where each one is
         really decided, so they cannot drift from the scenario: the prompt from
@@ -266,12 +299,19 @@ class ProductEnv(DatabaseFaultMixin, ProductMixin, IntegrationEnv):
         """
         self._scripted_prompt_prefix()  # refuses before the When, not inside production
         self._scripted_scores.update(scores)
-        self._scripted_ranking_failure = None
+        self._install_scripted_ranking()
+
+    def _fail_ranking(self, in_process: Exception, e2e_entry: dict[str, Any]) -> None:
+        """The seller's ranking model fails: ``in_process`` raised by the stub, ``e2e_entry`` scripted."""
+        self._scripted_prompt_prefix()
+        self._scripted_ranking_failure = in_process
+        self._e2e_seller_ranking_failure = e2e_entry
         self._install_scripted_ranking()
 
     def _e2e_set_ranking_unavailable(self) -> None:
         """E2E realization of :meth:`set_ranking_unavailable`: the origin answers 503."""
-        self._e2e_script_ranking({"fail_status": 503})
+        self._e2e_seller_ranking_failure = {"fail_status": 503}
+        self._e2e_install_ranking()
 
     @realize_e2e(_e2e_set_ranking_unavailable)
     def set_ranking_unavailable(self) -> None:
@@ -283,9 +323,28 @@ class ProductEnv(DatabaseFaultMixin, ProductMixin, IntegrationEnv):
         """
         from pydantic_ai.exceptions import ModelHTTPError
 
-        self._scripted_prompt_prefix()
-        self._scripted_ranking_failure = ModelHTTPError(status_code=503, model_name="scripted", body="unavailable")
-        self._install_scripted_ranking()
+        self._fail_ranking(
+            ModelHTTPError(status_code=503, model_name="scripted", body="unavailable"), {"fail_status": 503}
+        )
+
+    def _e2e_set_ranking_connection_dropped(self) -> None:
+        """E2E realization of :meth:`set_ranking_connection_dropped`: the origin closes the connection."""
+        self._e2e_seller_ranking_failure = {"drop_connection": True}
+        self._e2e_install_ranking()
+
+    @realize_e2e(_e2e_set_ranking_connection_dropped)
+    def set_ranking_connection_dropped(self) -> None:
+        """The seller's provider endpoint drops the connection without answering.
+
+        ``httpx.RemoteProtocolError`` is what the Gemini client raises when the origin
+        closes the connection mid-request (``tests/e2e/test_scripted_llm_origin_service.py``
+        pins it). It is no ``OSError``, so it is the case a narrower ``except`` let escape.
+        """
+        import httpx
+
+        self._fail_ranking(
+            httpx.RemoteProtocolError("Server disconnected without sending a response."), {"drop_connection": True}
+        )
 
     def _install_scripted_ranking(self) -> None:
         """Replace ``rank_products_async`` with the scripted model, once per env."""

@@ -34,7 +34,6 @@ from src.core.schemas import (
 )
 from src.core.validation_helpers import safe_parse_json_field
 from src.services.ai import AIServiceFactory
-from src.services.ai.config import TenantAIConfig
 from src.services.policy_check_service import PolicyCheckService, PolicyStatus
 
 logger = logging.getLogger(__name__)
@@ -230,34 +229,28 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
 
     # Extract brief text early - needed for policy checks, dynamic variants, and AI ranking
     brief_text = req.brief if req.brief else ""
+    # What AI the seller configured, resolved once when the tenant was loaded.
+    seller_ai = tenant.ai_config
 
     if not policy_check_enabled:
         # Skip policy checks if disabled
         policy_result = None
         logger.info(f"Policy checks disabled for tenant {tenant.tenant_id}")
     else:
-        # `from_tenant` returns a config only when the tenant has its OWN usable
-        # credential (ai_config with an api_key, else the legacy gemini_api_key column),
-        # so `is None` asks what `tenant.gemini_api_key` used to ask, generalised to the
-        # column the Admin UI writes. Reading only gemini_api_key skipped policy checks
-        # for every tenant that configured AI in the UI, even with "enabled" ticked.
-        #
-        # from_tenant alone is not enough, and factory.is_ai_enabled() alone is too much:
-        # the factory counts the platform key from the environment, which would switch
-        # policy checks on for every tenant of any deployment that sets one, and a stored
-        # provider/model row with no api_key (what the settings page writes when the key
-        # is left blank, telling the seller "AI features will be disabled") must stay off
-        # rather than run on the operator's key. The factory gate then refuses the seller's
-        # own configurations it cannot build (a blank model for a foreign provider, a
-        # provider with no explicit-API-key integration), so constructing the service
-        # below cannot raise CONFIGURATION_ERROR into this auth-optional discovery call.
-        tenant_ai_config = TenantAIConfig.from_tenant(tenant)
-        if tenant_ai_config is None or not AIServiceFactory().is_ai_enabled(tenant_ai_config):
+        # Only the seller's OWN configuration runs the check (platform_fallback=False). The
+        # platform key from the environment would switch policy checks on for every tenant
+        # of any deployment that sets one, and a blocking verdict is a buyer-visible
+        # rejection the seller did not configure. The factory builds the model or answers
+        # None, so a configuration it cannot build (a blank model for a foreign provider)
+        # skips the check here rather than raising CONFIGURATION_ERROR into this
+        # auth-optional discovery call.
+        policy_model = AIServiceFactory().build(seller_ai, platform_fallback=False)
+        if policy_model is None:
             # No usable AI configuration of the seller's own - cannot run policy checks
             policy_result = None
             logger.warning(f"Policy checks enabled but no usable AI configuration for tenant {tenant.tenant_id}")
         else:
-            policy_service = PolicyCheckService(tenant_ai_config=tenant_ai_config)
+            policy_service = PolicyCheckService(model=policy_model)
 
             # Use advertising_policy settings for tenant-specific rules
             tenant_policies = advertising_policy if advertising_policy else {}
@@ -697,15 +690,10 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
             )
             from src.services.ai.factory import get_factory
 
-            factory = get_factory()
-            # The tenant's own AI configuration, resolved by its one owner. Without it the
-            # factory sees only the platform key from the environment, so a tenant that
-            # configured AI in the Admin UI got no ranking at all. is_ai_enabled() still
-            # falls back to the platform key, which ranking has always relied on.
-            tenant_ai_config = TenantAIConfig.from_tenant(tenant)
-
-            if factory.is_ai_enabled(tenant_ai_config):
-                model = factory.create_model(tenant_ai_config=tenant_ai_config)
+            # Configured nothing falls back to the platform's credential, which ranking has
+            # always run on; configured but unusable does not (`TenantAIConfig.from_tenant`).
+            model = get_factory().build(seller_ai)
+            if model is not None:
                 agent = create_ranking_agent(model)
 
                 # Convert products to dicts for ranking
@@ -740,8 +728,15 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
                 )
             else:
                 logger.debug("[GET_PRODUCTS] AI ranking configured but AI not enabled (no API key)")
-        except (ImportError, RuntimeError, OSError) as e:
+        except (TypeError, AttributeError):
+            # A programming error in this path, not a provider failure: it propagates (#1093).
+            raise
+        except Exception as e:
             # structural-guard: no spec surface covers ranking.
+            # Every other exception, as the policy check and order naming catch: each
+            # provider's client raises its own types (an unreachable endpoint is
+            # httpx.ConnectError, a dropped connection httpx.RemoteProtocolError, neither an
+            # OSError), and any of them escaping turned discovery into INTERNAL_ERROR.
             # This degrades ORDER only — and the set returned is a SUPERSET, because
             # the <0.1 relevance filter stops running too, so the buyer loses nothing
             # they were entitled to. AdCP 3.1.1 defines no ordering guarantee for
