@@ -54,11 +54,8 @@ export COMPOSE_PROJECT_NAME="$(printf '%s' "${COMPOSE_PROJECT_NAME:-adcp-innet-$
 # /app/logs unwritable and killed adcp-server at import. .tox moved back onto a
 # named volume in the same change, so the `.tox` ownership failure that
 # motivated deriving it no longer has a bind mount to happen on.
-# The delivery-webhook scheduler runs on the SERVER (adcp-server), gated by this
-# interval. docker-compose.e2e.yml defaults it empty (scheduler off); the host
-# e2e path sets it to 5 via conftest. Mirror that so test_daily_delivery_webhook
-# gets a report. Compose interpolates this into the adcp-server service env.
-export DELIVERY_WEBHOOK_INTERVAL="${DELIVERY_WEBHOOK_INTERVAL:-5}"
+# The delivery-webhook scheduler runs on adcp-server. docker-compose.e2e.yml is
+# the only writer for that sweep interval (adcp-server and the tests service).
 
 # Parallelism defaults, sized against DOCKER'S memory rather than the host's.
 #

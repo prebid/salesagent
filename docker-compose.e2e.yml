@@ -12,6 +12,10 @@
 #   ADCP_SALES_PORT - Nginx proxy port (default: 8092, proxies to adcp-server:8080)
 #   POSTGRES_PORT   - PostgreSQL port (default: 5435)
 
+# One default for adcp-server and the tests service. Compose interpolates the
+# anchor once, so the two services cannot drift.
+x-delivery-webhook-interval: &delivery-webhook-interval "${DELIVERY_WEBHOOK_INTERVAL:-5}"
+
 services:
   postgres:
     image: postgres:17-alpine
@@ -226,7 +230,7 @@ services:
       SSL_CERT_FILE: /app/.test-tls/ca-bundle.pem
       ADCP_SIGNING_KEY_PASSPHRASE_ENV: "ADCP_SIGNING_DEV_KEK"
       ADCP_SIGNING_DEV_KEK: "dev-only-signing-kek-not-a-secret"
-      DELIVERY_WEBHOOK_INTERVAL: ${DELIVERY_WEBHOOK_INTERVAL:-}
+      DELIVERY_WEBHOOK_INTERVAL: *delivery-webhook-interval
       # GH #1802: the breaker's RECOVERY timeout only. Reaching
       # HALF_OPEN honestly means waiting this out inside the server, and 60s per
       # scenario is wall clock the suite should not spend. This is a VALUE, not a
@@ -771,7 +775,7 @@ services:
       # needs the public roots this combined file still carries.
       SSL_CERT_FILE: /app/.test-tls/combined-ca.pem
       CREATE_SAMPLE_DATA: "true"
-      DELIVERY_WEBHOOK_INTERVAL: "5"
+      DELIVERY_WEBHOOK_INTERVAL: *delivery-webhook-interval
       # The source is bind-mounted, so the host's in-tree __pycache__ comes with
       # it — and those .pyc embed host absolute paths in co_filename, which makes
       # pytest-bdd's scenarios() resolve feature files to /Users/... instead of
