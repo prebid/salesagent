@@ -6615,6 +6615,7 @@ _UC006_WIRED_SCENARIOS = frozenset(
         # integration file: wired because they pass on every in-process transport.
         "T-UC-006-local-assignment-unknown-creative",
         "T-UC-006-local-assignment-only-missing-package",
+        "T-UC-006-assignment-refusal-stores-nothing",
         "T-UC-006-local-assignment-only-existing-creative",
         "T-UC-006-local-failed-creative-assignment",
         "T-UC-006-local-dryrun-parity",

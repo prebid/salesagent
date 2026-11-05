@@ -3062,6 +3062,12 @@ def _stored_synced_creative_column(ctx: dict, column: str) -> Any:
 def then_refused_nothing_stored_at_assignment(ctx: dict, code: str) -> None:
     """The whole request's refusal, and the row's absence: the wire alone cannot show the write."""
     ctx["result"].assert_wire_error(code)
+    then_no_creative_stored_at_assignment(ctx)
+
+
+@then("the creative library holds nothing for that creative")
+def then_no_creative_stored_at_assignment(ctx: dict) -> None:
+    """The refused sync's creative has no row: the wire alone cannot show the write."""
     from src.core.database.models import Creative
 
     stored = ctx["env"].query(Creative, creative_id=_SYNC_CREATIVE_ID)

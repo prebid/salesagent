@@ -1187,9 +1187,11 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     And the buyer syncs a canonical "image" creative carrying the "image_300x250" manifest and naming product option "satisfaction_image_mrec"
     When the Buyer Agent assigns it to that package
     Then the creatives are refused CREATIVE_VALIDATION_FAILED_GENERIC at "assignments" for leaving placement "satisfaction_leaderboard_slot" uncovered
+    And the creative library holds nothing for that creative
 
     # The pair differs only in the stored placements. Every creative is one the product
-    # takes; what fails is the package's set.
+    # takes; what fails is the package's set. A strict refusal fails the entire sync
+    # (sync-creatives-request.json validation_mode), so the creative is not stored either.
 
   @T-UC-FORMAT-SATISFACTION-sync-unprojectable-placements-covered @format_satisfaction_sync @requires_db
   Scenario Outline: sync_creatives accepts a deprecated creative the SDK cannot project on placements that admit it - <placements>
@@ -1210,6 +1212,7 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     And the buyer syncs a creative identified by format_id "display_300x250_image_2x"
     When the Buyer Agent assigns it to that package
     Then the creatives are refused CREATIVE_VALIDATION_FAILED_GENERIC at "assignments" for leaving placement "satisfaction_leaderboard_slot" uncovered
+    And the creative library holds nothing for that creative
 
     # The rule of the create-path outline above, asked of a creative CLAIMING a deprecated
     # reference, which reaches the seller only through sync. unprojectable_mrec narrows to the
@@ -1398,8 +1401,7 @@ Feature: A format selector must satisfy the canonical declaration the product pu
 
   # Validate first, save second. sync-creatives-request.json (v3.2.7): "'strict' fails entire sync
   # on any validation error", and the error arm is "operation failed completely, no creatives
-  # were processed". The creative used to commit before the assignment stage refused it. Only
-  # this refusal moves: a per-item failure of the creative itself stays action failed, which
+  # were processed". A per-item failure of the creative itself stays action failed, which
   # storyboards with no validation_mode grade for provenance, revision and localization.
   # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/sync-creatives-request.json pointer=/properties/validation_mode
   # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/sync-creatives-response.json

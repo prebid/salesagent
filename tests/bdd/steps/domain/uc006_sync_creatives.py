@@ -7153,68 +7153,40 @@ def then_workflow_steps_visible_at_notification(ctx: dict) -> None:
     )
 
 
-@then("no creative assignment was committed when Slack was notified")
-def then_no_assignment_committed_at_notification(ctx: dict) -> None:
-    """The approval notification precedes the assignment stage.
+@then("the assignment the request made was already committed when Slack was notified")
+def then_assignment_committed_at_notification(ctx: dict) -> None:
+    """The notification comes after the commit of the whole sync, assignment included.
 
-    Once the workflow-step write joins the creatives transaction, the
-    notification is an after_commit effect draining at ``stack.close()`` — which
-    is BEFORE _process_assignments runs. Today it fires at the end of the impl,
-    after that stage has committed its rows, so this reads a non-zero count.
-    Graded together with the step visibility above: one observation, taken at
-    one instant, that reddens if either ordering regresses.
+    Graded together with the step visibility above: one observation, taken at one
+    instant. A message sent before the assignment stage would announce a creative
+    that stage can still refuse.
     """
     _assert_success_response(ctx)
     _rows, count = _notification_observation(ctx)
-    assert count == 0, (
-        f"{count} creative assignment(s) were already committed when Slack was notified — the "
-        "approval notification is an effect of the creatives commit and must drain before the "
-        "assignment stage runs"
-    )
-
-
-@then("the assignment the request made is committed")
-def then_assignment_is_committed(ctx: dict) -> None:
-    """Non-vacuity control for the ordering assertion above.
-
-    Without it, "no assignment at notification time" also holds for a request
-    that never created one — i.e. it would grade nothing.
-    """
-    _assert_success_response(ctx)
     committed = ctx["env"].committed_sync_effects().assignment_count
-    assert committed == 1, (
-        f"expected the request to leave exactly 1 committed creative assignment, got {committed}; "
-        "without one the notification-time count of 0 proves nothing"
+    assert committed == 1, f"expected the request to leave 1 committed creative assignment, got {committed}"
+    assert count == committed, (
+        f"{count} creative assignment(s) were committed when Slack was notified, and the request "
+        f"finally committed {committed}: the message went out before the sync stood"
     )
 
 
-@then("every committed creative awaiting approval has a committed workflow step")
-def then_no_orphan_creative_awaiting_approval(ctx: dict) -> None:
-    """GH #1987: no creative left in the queue unqueued.
+@then("no creative, workflow step or Slack notification came of the request")
+def then_refusal_left_nothing_awaiting_approval(ctx: dict) -> None:
+    """GH #1987: a refused sync leaves no creative at pending_review and tells no human about one.
 
-    A creative committed at ``pending_review`` is a promise that a human will be
-    asked to review it, and the workflow step is the only thing that asks. When
-    _process_assignments raises in strict mode the creatives are already
-    committed (``if not dry_run: stack.close()``) while the workflow-step call
-    sits after the raise — so the promise is committed and the queue entry never
-    written. Once the steps join the creatives' transaction they commit in the
-    same ``stack.close()``, before the raise, and the two cannot diverge.
+    The require-human tenant is what makes this able to fail: the same request with a
+    package that exists commits a creative, a step and a message
+    (@T-UC-006-local-post-commit-workflow-step-ordering).
     """
     effects = ctx["env"].committed_sync_effects()
-    awaiting = effects.creatives_awaiting_approval
-    expected_ids = _synced_creative_ids(ctx)
-    # Non-vacuity: the require-human tenant must actually have committed the
-    # creative before the raise. If it did not, there is no orphan to look for
-    # and the mapping comparison below would hold over two empty sets.
-    assert awaiting == expected_ids, (
-        f"expected the strict-mode failure to leave {expected_ids} committed at pending_review, "
-        f"got {awaiting}; without a committed creative there is no orphan to grade"
+    observed = (effects.creatives_awaiting_approval, effects.workflow_step_ids, effects.workflow_object_ids)
+    assert observed == ([], [], []), (
+        f"the request was refused and left creatives {effects.creatives_awaiting_approval}, "
+        f"steps {effects.workflow_step_ids}, mappings {effects.workflow_object_ids} committed"
     )
-    assert sorted(set(effects.workflow_object_ids) & set(awaiting)) == awaiting, (
-        f"creatives {sorted(set(awaiting) - set(effects.workflow_object_ids))} were committed "
-        "awaiting approval with no workflow step naming them — the assignment failure aborted "
-        "before the steps were written, but after the creatives were committed (GH #1987)"
-    )
+    notified = ctx["env"].slack_notified_creatives
+    assert notified == [], f"the request was refused and Slack was told about {notified}"
 
 
 # ═══════════════════════════════════════════════════════════════════════

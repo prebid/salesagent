@@ -465,6 +465,26 @@ Feature: BR-UC-006 Sync Creative Assets
     Then the response is compliant with the sync_creatives error spec
     And the error code should be "PACKAGE_NOT_FOUND"
 
+  # sync-creatives-request.json (v3.2.7) validation_mode: "'strict' fails entire sync on any
+  # validation error". The error arm of the response: "operation failed completely, no creatives
+  # were processed". So the creative beside a refused assignment is not stored either. The control
+  # that a sync does store is @T-UC-FORMAT-SATISFACTION-sync-acceptance-stores.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/sync-creatives-request.json pointer=/properties/validation_mode
+  @T-UC-006-assignment-refusal-stores-nothing @invariant @BR-RULE-033 @error-details
+  Scenario Outline: An assignment refused for <refusal> leaves no creative stored
+    Given the Buyer is authenticated
+    And a creative with a known format_id
+    And <assignment>
+    When the Buyer Agent syncs the creative
+    Then the response is compliant with the sync_creatives error spec
+    And the error code should be "<code>"
+    And the creative library is unchanged
+
+    Examples:
+      | refusal          | assignment                                                                                             | code               |
+      | missing package  | assignments to a non-existent package                                                                  | PACKAGE_NOT_FOUND  |
+      | missing creative | an assignment referencing the unknown creative "c_never_synced" to a package that exists in the tenant | CREATIVE_NOT_FOUND |
+
   @T-UC-006-local-assignment-only-existing-creative @invariant @BR-RULE-033
   Scenario: Assignment-only reference to a creative already in the library surfaces assigned_to
     Given the Buyer is authenticated
