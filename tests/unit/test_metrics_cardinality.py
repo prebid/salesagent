@@ -98,7 +98,7 @@ def test_scheduler_isolation_errors_cardinality_bounded():
 def test_scheduler_isolation_oracle_uses_db_error_class():
     """Unit oracle must pin the bounded label the scheduler loop actually records."""
     from src.core import metrics
-    from tests.helpers.scheduler_isolation import counter_value
+    from tests.helpers.metrics import counter_value
 
     metrics.scheduler_isolation_errors.clear()
     metrics.record_scheduler_isolation_error(
@@ -166,6 +166,6 @@ def test_scheduler_isolation_cardinality_bounded_under_freeform_scheduler():
     # All free-form names collapse to scheduler="other" x error_type="other".
     assert len(metrics.SCHEDULER_ERROR_TYPE_VALUES) <= 2
     assert _series_count(metrics.scheduler_isolation_errors) <= len(metrics.SCHEDULER_ERROR_TYPE_VALUES) * 2
-    from tests.helpers.scheduler_isolation import counter_value
+    from tests.helpers.metrics import counter_value
 
     assert counter_value("other", "t1", "other") == 1000
