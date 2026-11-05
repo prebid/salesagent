@@ -1582,6 +1582,8 @@ class MediaBuy(Base):
     )
     principal_id: Mapped[str] = mapped_column(String(50), nullable=False)
     order_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # The buyer's own display label, echoed verbatim. ``order_name`` is generated for the ad server.
+    name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     advertiser_name: Mapped[str] = mapped_column(String(255), nullable=False)
     campaign_objective: Mapped[str | None] = mapped_column(String(100), nullable=True)
     kpi_goal: Mapped[str | None] = mapped_column(String(255), nullable=True)

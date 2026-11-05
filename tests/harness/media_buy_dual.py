@@ -20,13 +20,25 @@ from unittest.mock import MagicMock
 from src.core.schemas import UpdateMediaBuyRequest
 from tests.factories.request import OMIT
 from tests.harness._mixins import make_adapter_update_side_effect
-from tests.harness.media_buy_create import OMIT_ACCOUNT, OMIT_IDEMPOTENCY_KEY, MediaBuyCreateEnv
+from tests.harness._realize import realize_e2e
+from tests.harness.media_buy_create import (
+    OMIT_ACCOUNT,
+    OMIT_IDEMPOTENCY_KEY,
+    MediaBuyCreateEnv,
+    _adapter_operation_receipts,
+)
 from tests.harness.transport import DeliverResult
 
 if TYPE_CHECKING:
     from tests.helpers.signing import SignatureRealization
 
 _UPDATE_MODULE = "src.core.tools.media_buy_update"
+
+
+def _adapter_update_actions_on_the_live_stack(self: MediaBuyDualEnv) -> list[str]:
+    """The actions the SERVER's ad server was handed, read off the receipts it wrote."""
+    return [details["action"] for details in _adapter_operation_receipts(self, "update_media_buy")]
+
 
 _UPDATE_PATCHES = {
     "update_adapter": f"{_UPDATE_MODULE}.get_adapter",
@@ -78,6 +90,12 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
     def _configure_mocks(self) -> None:
         super()._configure_mocks()
         self._configure_update_mocks()
+
+    @realize_e2e(_adapter_update_actions_on_the_live_stack)
+    def adapter_update_actions(self) -> list[str]:
+        """The ``action`` of each ``update_media_buy`` the ad server was handed, in order."""
+        calls = self.mock["update_adapter"].return_value.update_media_buy.call_args_list
+        return [call.kwargs["action"] for call in calls]
 
     def adapter_mocks(self) -> list[MagicMock]:
         """The create module's adapter, then the update module's (``_UPDATE_PATCHES``)."""

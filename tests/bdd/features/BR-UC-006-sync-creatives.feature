@@ -119,18 +119,20 @@ Feature: BR-UC-006 Sync Creative Assets
     # POST-S5: Creative routed to approval workflow
 
   @T-UC-006-main-lenient-warnings @main-flow
-  Scenario: Sync creatives — lenient mode with mixed assignment results
+  Scenario: Sync creatives — lenient mode is refused before anything is stored
     Given the Buyer is authenticated
     And a creative with a known format_id
     And assignments to three packages: two valid, one non-existent
     And validation_mode is "lenient"
     When the Buyer Agent syncs the creative
-    Then the response is compliant with the sync_creatives success spec
-    And the creative should have action "created"
-    And two assignments should be created successfully
-    And the response should include assignment_errors for the non-existent package
-    # POST-S3: Buyer knows successful assignments
-    # POST-S4: Buyer knows about assignment errors
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the request member "validation_mode"
+    And the creative library is unchanged
+    # The owner's ruling: sync_creatives is strict-only for now, and a mode that is accepted and
+    # not applied is refused. sync-creatives-request.json (v3.2.7) validation_mode: "'lenient'
+    # processes valid creatives and reports errors", a behavior this seller does not implement.
+    # assignment_operations already "requires strict validation; lenient partial processing is not
+    # permitted". Implementing lenient is tracked by GH #2515.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/sync-creatives-request.json pointer=/properties/validation_mode
 
   # main-provenance-warning (POST-S4) said a creative missing provenance under a policy
   # that requires it is created with a warning. The pin says otherwise: enums/error-code.json
@@ -376,16 +378,14 @@ Feature: BR-UC-006 Sync Creative Assets
     # POST-F3: Suggestion for recovery
 
   @T-UC-006-rule-033-inv3 @invariant @BR-RULE-033
-  Scenario: INV-3 — assignment error in lenient mode skips and continues
+  Scenario: INV-3 — an assignment error aborts the sync, since lenient mode is refused
     Given the Buyer is authenticated
     And a creative with a known format_id
     And assignments to two packages: one valid and one non-existent
     And validation_mode is "lenient"
     When the Buyer Agent syncs the creative
-    Then the response is compliant with the sync_creatives success spec
-    And the valid assignment should be created
-    And the non-existent package should be reported as a warning
-    And processing should continue normally
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the request member "validation_mode"
+    And the creative library is unchanged
 
   @T-UC-006-rule-033-inv4 @invariant @BR-RULE-033
   Scenario: INV-4 — assignment errors always recorded in response
@@ -394,9 +394,8 @@ Feature: BR-UC-006 Sync Creative Assets
     And assignments to a non-existent package
     And validation_mode is "lenient"
     When the Buyer Agent syncs the creative
-    Then the response is compliant with the sync_creatives success spec
-    And the response should include assignment_errors
-    And the assignment_errors should contain the package_id
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the request member "validation_mode"
+    And the creative library is unchanged
 
   @T-UC-006-rule-033-inv5 @invariant @BR-RULE-033
   Scenario: INV-5 — default validation_mode is strict
@@ -441,8 +440,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # library ... Sellers MUST return this code uniformly for any creative_id not owned
     # by the calling account", recovery correctable) and PACKAGE_NOT_FOUND; the response
     # schema puts per-item failures on creatives[] with action "failed" and a
-    # core/error.json errors[] entry, so the same code reaches the buyer on both arms:
-    # strict aborts the request, lenient records it on the synthesized entry.
+    # core/error.json errors[] entry; strict, the one mode this seller serves, aborts the request.
 
   @T-UC-006-local-assignment-unknown-creative @invariant @BR-RULE-034 @error-details
   Scenario Outline: Assignment naming a creative the library does not hold — <mode>
@@ -457,25 +455,61 @@ Feature: BR-UC-006 Sync Creative Assets
     Examples:
       | mode    | branch  | expected                                                                    |
       | strict  | error   | the error code should be "CREATIVE_NOT_FOUND"                               |
-      | lenient | success | the creatives entry for "c_never_synced" carries error code "CREATIVE_NOT_FOUND" |
 
   @T-UC-006-local-assignment-only-missing-package @invariant @BR-RULE-033 @error-details
-  Scenario: Assignment-only reference whose package does not exist carries PACKAGE_NOT_FOUND on its entry
+  Scenario: Assignment-only reference whose package does not exist answers PACKAGE_NOT_FOUND
     Given the Buyer is authenticated
     And a creative with a known format_id
     And an assignment referencing the library creative "c_exists_in_library" to the package "pkg_does_not_exist"
-    And validation_mode is "lenient"
     When the Buyer Agent syncs the creative
-    Then the response is compliant with the sync_creatives success spec
-    And the creatives entry for "c_exists_in_library" has action "failed"
-    And the creatives entry for "c_exists_in_library" carries error code "PACKAGE_NOT_FOUND"
+    Then the response is compliant with the sync_creatives error spec
+    And the error code should be "PACKAGE_NOT_FOUND"
+
+  # sync-creatives-request.json (v3.2.7) validation_mode: "'strict' fails entire sync on any
+  # validation error". The error arm of the response: "operation failed completely, no creatives
+  # were processed". So the creative beside a refused assignment is not stored either. The control
+  # that a sync does store is @T-UC-FORMAT-SATISFACTION-sync-acceptance-stores.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/sync-creatives-request.json pointer=/properties/validation_mode
+  @T-UC-006-assignment-refusal-stores-nothing @invariant @BR-RULE-033 @error-details
+  Scenario Outline: An assignment refused for <refusal> leaves no creative stored
+    Given the Buyer is authenticated
+    And a creative with a known format_id
+    And <assignment>
+    When the Buyer Agent syncs the creative
+    Then the response is compliant with the sync_creatives error spec
+    And the error code should be "<code>"
+    And the creative library is unchanged
+
+    Examples:
+      | refusal          | assignment                                                                                             | code               |
+      | missing package  | assignments to a non-existent package                                                                  | PACKAGE_NOT_FOUND  |
+      | missing creative | an assignment referencing the unknown creative "c_never_synced" to a package that exists in the tenant | CREATIVE_NOT_FOUND |
+
+  # sync-creatives-request.json (v3.2.7) assignment_operations: "Explicit, ordered assignment
+  # mutations". This seller does not implement them, and they used to answer success with nothing
+  # done. enums/error-code.json UNSUPPORTED_FEATURE: "A requested feature or field is not
+  # supported by this seller." So the request is refused before anything is stored.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/sync-creatives-request.json pointer=/properties/assignment_operations
+  @T-UC-006-assignment-operations-refused @invariant @error-details
+  Scenario Outline: An assignment operation is refused before anything is stored - <operation>
+    Given the Buyer is authenticated
+    And a creative with a known format_id
+    And the request carries an assignment operation "<operation>"
+    When the Buyer Agent syncs the creative
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the request member "assignment_operations"
+    And the creative library is unchanged
+
+    Examples:
+      | operation |
+      | assign    |
+      | unassign  |
+      | replace   |
 
   @T-UC-006-local-assignment-only-existing-creative @invariant @BR-RULE-033
   Scenario: Assignment-only reference to a creative already in the library surfaces assigned_to
     Given the Buyer is authenticated
     And a creative with a known format_id
     And an assignment referencing the library creative "c_preexisting" to a package that exists in the tenant
-    And validation_mode is "lenient"
     When the Buyer Agent syncs the creative
     Then the response is compliant with the sync_creatives success spec
     And the creatives entry for "c_preexisting" has action "unchanged"
@@ -492,7 +526,6 @@ Feature: BR-UC-006 Sync Creative Assets
     And a creative with a known format_id
     And the creative has an empty name
     And an assignment to a package that exists in the tenant
-    And validation_mode is "lenient"
     When the Buyer Agent syncs the creative
     Then the response is compliant with the sync_creatives success spec
     And the creatives entry for "creative-known-fmt-001" has action "failed"
@@ -796,16 +829,14 @@ Feature: BR-UC-006 Sync Creative Assets
     And the assignment should be created successfully
 
   @T-UC-006-rule-039-inv5-lenient @invariant @BR-RULE-039
-  Scenario: INV-5 — format mismatch in lenient mode skips assignment
+  Scenario: INV-5 — a format mismatch aborts the sync, since lenient mode is refused
     Given the Buyer is authenticated
     And a creative with a known format_id
     And assignments to two packages: one with compatible format and one incompatible
     And validation_mode is "lenient"
     When the Buyer Agent syncs the creative
-    Then the response is compliant with the sync_creatives success spec
-    And the compatible package assignment should be created
-    And the incompatible package should be reported in assignment_errors
-    And processing should continue without aborting
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the request member "validation_mode"
+    And the creative library is unchanged
     # --- BR-RULE-040: Media Buy Status Transition ---
 
   @T-UC-006-rule-040-inv1 @invariant @BR-RULE-040
@@ -1250,7 +1281,7 @@ Feature: BR-UC-006 Sync Creative Assets
       | boundary_point           | mode       | expected                                                 |
       | not set (default strict) | not set    | the operation should abort with PACKAGE_NOT_FOUND        |
       | strict                   | "strict"   | the operation should abort with PACKAGE_NOT_FOUND        |
-      | lenient                  | "lenient"  | the assignment should be skipped with a warning          |
+      | lenient                  | "lenient"  | the error code should be "UNSUPPORTED_FEATURE"           |
       | unknown value            | "partial"  | the error code should be "INVALID_REQUEST"               |
 
   @T-UC-006-boundary-format-id @boundary @format-id

@@ -533,6 +533,48 @@ Feature: A format selector must satisfy the canonical declaration the product pu
       | exact_300x250      |
       | direct_plus_legacy |
 
+  # A legacy reference needs its agent's served declaration to project, and an outage of that
+  # agent says nothing about the request: enums/error-code.json classes UNSUPPORTED_FEATURE
+  # correctable and SERVICE_UNAVAILABLE transient, so the buyer retries rather than changes a
+  # valid selector. An agent the request does not name stays skipped, which is the control.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumMetadata/SERVICE_UNAVAILABLE
+  @T-UC-FORMAT-SATISFACTION-agent-outage @format_satisfaction @requires_db
+  Scenario: a selector naming a creative agent that does not answer is refused as transient
+    Given the seller declares a canonical format option "fixed_300x250"
+    And a creative agent the seller configured does not answer
+    And the buyer's package names a deprecated format at the agent that does not answer
+    When the Buyer Agent sends the create_media_buy request
+    Then the error code should be "SERVICE_UNAVAILABLE"
+    And the error recovery should be "transient"
+    And no media buy is persisted for the tenant
+
+  @T-UC-FORMAT-SATISFACTION-agent-outage @format_satisfaction @requires_db
+  Scenario: a creative agent that does not answer is skipped when no selector names it
+    Given the seller declares a canonical format option "fixed_300x250"
+    And a creative agent the seller configured does not answer
+    And the buyer's package selects "exact_300x250"
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer receives the media buy
+
+  # The registry's format_id_glob entries are written in the reference agent's id namespace.
+  # Another agent's id is that agent's own: registries/v1-canonical-mapping.json projects it
+  # through the agent's served declaration or its slot shape, and with neither it fails
+  # closed. So the same id at another agent gives this product no canonical shape, and a
+  # direct route that the reference agent's id satisfies (exact_300x250, accepted above)
+  # selects nothing here.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/registries/v1-canonical-mapping.json
+  @T-UC-FORMAT-SATISFACTION-legacy-only-another-agent @format_satisfaction @requires_db
+  Scenario Outline: a direct route against another agent's deprecated format id is refused - <format_id>
+    Given the seller publishes only another agent's deprecated format "<format_id>"
+    And the buyer's package selects "exact_300x250"
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the "format_kind" selector
+
+    Examples:
+      | format_id             |
+      | display_300x250       |
+      | display_300x250_image |
+
   @T-UC-FORMAT-SATISFACTION-legacy-only-direct-refused @format_satisfaction @requires_db
   Scenario Outline: a broad route against a legacy-only product's fixed-size format is refused - <selector>
     Given the seller publishes only the deprecated format_ids
@@ -1145,10 +1187,11 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     And the buyer syncs a canonical "image" creative carrying the "image_300x250" manifest and naming product option "satisfaction_image_mrec"
     When the Buyer Agent assigns it to that package
     Then the creatives are refused CREATIVE_VALIDATION_FAILED_GENERIC at "assignments" for leaving placement "satisfaction_leaderboard_slot" uncovered
+    And the creative library holds nothing for that creative
 
-    # The pair differs only in the stored placements. The refusal is raised whatever the
-    # validation mode: lenient skips a creative the product will not take, and here every
-    # creative is one the product takes -- what fails is the package's set.
+    # The pair differs only in the stored placements. Every creative is one the product
+    # takes; what fails is the package's set. A strict refusal fails the entire sync
+    # (sync-creatives-request.json validation_mode), so the creative is not stored either.
 
   @T-UC-FORMAT-SATISFACTION-sync-unprojectable-placements-covered @format_satisfaction_sync @requires_db
   Scenario Outline: sync_creatives accepts a deprecated creative the SDK cannot project on placements that admit it - <placements>
@@ -1169,6 +1212,7 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     And the buyer syncs a creative identified by format_id "display_300x250_image_2x"
     When the Buyer Agent assigns it to that package
     Then the creatives are refused CREATIVE_VALIDATION_FAILED_GENERIC at "assignments" for leaving placement "satisfaction_leaderboard_slot" uncovered
+    And the creative library holds nothing for that creative
 
     # The rule of the create-path outline above, asked of a creative CLAIMING a deprecated
     # reference, which reaches the seller only through sync. unprojectable_mrec narrows to the
@@ -1355,31 +1399,42 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     When the Buyer Agent assigns it to that package
     Then the buyer is refused UNSUPPORTED_FEATURE
 
+  # Validate first, save second. sync-creatives-request.json (v3.2.7): "'strict' fails entire sync
+  # on any validation error", and the error arm is "operation failed completely, no creatives
+  # were processed". A per-item failure of the creative itself stays action failed, which
+  # storyboards with no validation_mode grade for provenance, revision and localization.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/sync-creatives-request.json pointer=/properties/validation_mode
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/sync-creatives-response.json
+  # @source repo=adcp ref=v3.2.7 path=docs/creative/task-reference/sync_creatives.mdx
+  @T-UC-FORMAT-SATISFACTION-sync-refusal-stores-nothing @format_satisfaction_sync @requires_db
+  Scenario Outline: a format the product does not take leaves no creative stored - <arm>
+    Given a packaged product <product>
+    And the buyer syncs a creative identified by <creative>
+    When the Buyer Agent assigns it to that package
+    Then the buyer is refused <code> and the creative library holds nothing for that creative
+
+    Examples:
+      | arm        | product                                              | creative                      | code                |
+      | canonical  | declaring a canonical image option fixed at 300x250  | canonical kind "video_hosted" | UNSUPPORTED_FEATURE |
+      | deprecated | declaring only the deprecated format_ids             | format_id "video_1280x720"    | VALIDATION_ERROR    |
+
+  # The control. The same creative and the same request shape with a format the product takes
+  # stores the row, so "nothing stored" above is not satisfied by a sync that stores nothing.
+  @T-UC-FORMAT-SATISFACTION-sync-acceptance-stores @format_satisfaction_sync @requires_db
+  Scenario: a format the product takes is stored and assigned in one request
+    Given a packaged product declaring a canonical image option fixed at 300x250
+    And the buyer syncs a canonical "image" creative carrying the "image_300x250" manifest
+    When the Buyer Agent assigns it to that package
+    Then the assignment is recorded with no assignment error
+    And the creative is stored carrying canonical kind "image"
+
   @T-UC-FORMAT-SATISFACTION-sync-lenient-canonical @format_satisfaction_sync @requires_db
-  Scenario: lenient validation does not soften a closed-set refusal
+  Scenario: lenient validation is refused before the assignment is reached
     Given a packaged product declaring a canonical image option fixed at 300x250
     And the buyer syncs a creative identified by canonical kind "video_hosted"
     And the buyer asks for lenient validation
     When the Buyer Agent assigns it to that package
-    Then the buyer is refused UNSUPPORTED_FEATURE
-
-    # THE ASYMMETRY, graded deliberately because it reads like a bug to anyone who meets it
-    # without this scenario. ``validation_mode: "lenient"`` means "skip an assignment this
-    # product will not take and record the reason", and the LEGACY lane still does exactly
-    # that -- the row below proves it. A CANONICAL refusal does not soften, because the
-    # product published a closed set and this creative is outside it: there is no partial
-    # assignment to fall back to, and core/product-format-declaration.json calls the
-    # closed-set rejection "structural, not negotiable". Without these two rows side by
-    # side the next person to read the raise site sees one branch ignoring validation_mode
-    # and "fixes" it.
-
-  @T-UC-FORMAT-SATISFACTION-sync-lenient-legacy @format_satisfaction_sync @requires_db
-  Scenario: lenient validation does soften a deprecated-arm refusal
-    Given a packaged product declaring only the deprecated format_ids
-    And the buyer syncs a creative identified by format_id "video_1280x720"
-    And the buyer asks for lenient validation
-    When the Buyer Agent assigns it to that package
-    Then the sync succeeds and records an assignment error for that package
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the request member "validation_mode"
 
   # ── The LIBRARY UPSERT path: a creative whose format resolves to no canonical kind ────
   #
@@ -1577,10 +1632,6 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     When the Buyer Agent syncs it into the library
     Then the creative is reported failed with REFERENCE_NOT_FOUND and nothing is stored
 
-    # The OTHER half of the asymmetry, and the control for the row above: same tool, same
-    # lenient mode, same "this product will not take this creative" condition -- and the
-    # legacy lane skips with a recorded error instead of refusing. Both rows are needed:
-    # either one alone is satisfied by a gate that treats every mode the same.
 
   @T-UC-FORMAT-SATISFACTION-sync-sized-conforming @format_satisfaction_sync @requires_db
   Scenario: a creative sized as the deprecated arm requires is accepted

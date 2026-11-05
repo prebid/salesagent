@@ -54,7 +54,4 @@ Feature: UC-006 sync_creatives — a dry_run preview describes the outcome the l
       | existing creative with a valid assignment         |
       | new creative synced and assigned in one payload   |
       | format update and assignment in one payload       |
-      | package not found in lenient mode                 |
-      | assignment-only reference to a missing creative   |
       | strict package not found refuses both arms        |
-      | format mismatch in lenient mode                   |

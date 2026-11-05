@@ -28,6 +28,7 @@ from tests.bdd.steps._outcome_helpers import (
     wire_field,
     wire_lookup,
 )
+from tests.bdd.steps.domain._unapplied_members import OVERLAY_DIMENSIONS, UPDATE_REQUEST_MEMBERS
 from tests.bdd.steps.generic._auth import authenticate_env_as
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic._table import as_bool, drop_header_if
@@ -396,6 +397,7 @@ def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> No
         "budget",
         "idempotency_key",
         "invoice_recipient",
+        "name",
     }
     kwargs = _ensure_update_defaults(ctx)
     clock = ctx["env"].clock
@@ -433,6 +435,15 @@ def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> No
         elif field == "invoice_recipient":
             # The authorization check is a production gap (#1417); T-UC-003-ext-t is xfailed.
             kwargs["invoice_recipient"] = _invoice_recipient(value)
+        elif field == "name":
+            kwargs["name"] = value
+
+
+@given(parsers.parse('the media buy "{label}" is named "{name}"'))
+def given_media_buy_named(ctx: dict, label: str, name: str) -> None:
+    """The name a buyer gave the seeded buy at create, stored in its column."""
+    _existing_media_buy(ctx, label).name = name
+    ctx["env"]._commit_factory_data()
 
 
 @given(parsers.parse('the invoice_recipient "{recipient}" is not authorized for this account'))
@@ -2701,6 +2712,55 @@ def _ensure_update_defaults(ctx: dict) -> dict[str, Any]:
             "media_buy_id": mb.media_buy_id,
         }
     return apply_required_update_fields(ctx, ctx["update_kwargs"])
+
+
+@given(parsers.parse('the package update\'s overlay sets its "{dimension}" dimension'))
+def given_package_update_overlay_dimension(ctx: dict, dimension: str) -> None:
+    """Set a valid value of one overlay dimension on the first package update."""
+    ctx["update_kwargs"]["packages"][0]["targeting_overlay"] = {dimension: OVERLAY_DIMENSIONS[dimension]}
+
+
+@given(parsers.parse('the package update sets a new budget and catalogs of "{kind}" types'))
+def given_package_update_budget_and_catalogs(ctx: dict, kind: str) -> None:
+    """A budget change beside catalogs, ``duplicate`` being two of one type."""
+    catalogs = [{"type": "product", "catalog_id": "a"}, {"type": "product", "catalog_id": "b"}]
+    package = ctx["update_kwargs"]["packages"][0]
+    package["budget"] = 6000
+    package["catalogs"] = catalogs if kind == "duplicate" else catalogs[:1]
+
+
+@then("the ad server received no update call")
+def then_ad_server_no_update_call(ctx: dict) -> None:
+    """Read from the ad server's own record, on every transport (``adapter_update_actions``)."""
+    actions = ctx["env"].adapter_update_actions()
+    assert actions == [], f"the ad server was handed {actions} for a request the seller refused"
+
+
+@then(parsers.parse('the stored media buy "{label}" is still "{status}"'))
+def then_stored_buy_status(ctx: dict, label: str, status: str) -> None:
+    """Read the persisted row: a refused update leaves the buy's status where it was."""
+    from src.core.database.models import MediaBuy
+
+    rows = ctx["env"].query(MediaBuy, media_buy_id=_resolve_media_buy_id(ctx, label))
+    assert [row.status for row in rows] == [status], f"the stored media buy reads {[r.status for r in rows]}"
+
+
+@then("the ad server received an update_package_budget call")
+def then_ad_server_budget_call(ctx: dict) -> None:
+    """The control: this request does reach the ad server, so the no-call Then can fail."""
+    actions = ctx["env"].adapter_update_actions()
+    assert actions == ["update_package_budget"], f"the ad server was handed {actions}"
+
+
+@given(parsers.parse('the update sets its "{member}" member'))
+def given_update_sets_member(ctx: dict, member: str) -> None:
+    """Set a valid value of a top-level field this seller does not apply, and note the revision."""
+    from tests.bdd.steps.domain.local_constraint_relaxations import _persisted_revision
+
+    kwargs = _ensure_update_defaults(ctx)
+    kwargs[member] = UPDATE_REQUEST_MEMBERS[member]
+    ctx["update_target_id"] = kwargs["media_buy_id"]
+    ctx["revision_before"] = _persisted_revision(ctx, kwargs["media_buy_id"])
 
 
 # ═══════════════════════════════════════════════════════════════════════

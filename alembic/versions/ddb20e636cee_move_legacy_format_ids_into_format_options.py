@@ -110,6 +110,8 @@ def plan_canonical_moves(
     """
     from adcp.canonical_formats import project_legacy_format_id
 
+    from src.core.format_resolver import names_reference_agent
+
     moves: list[tuple[Any, list[dict[str, Any]]]] = []
     unmovable: list[Any] = []
     held_back: list[Any] = []
@@ -121,6 +123,10 @@ def plan_canonical_moves(
             continue
         declarations: list[dict[str, Any]] = []
         for index, format_id in enumerate(format_ids):
+            # Only at the reference agent: the SDK's catalog index answers a bare id whatever
+            # agent names it, and another agent's id projects only through its own declaration.
+            if not names_reference_agent(format_id):
+                break
             projected = project_legacy_format_id(format_id, product_id=str(key), field=f"format_ids[{index}]")
             if projected.declaration is None:
                 break

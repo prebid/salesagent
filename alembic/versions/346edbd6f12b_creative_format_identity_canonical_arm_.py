@@ -34,10 +34,14 @@ The two-arm exclusivity is not a CHECK constraint. It is a protocol rule the req
 state models both enforce as a oneOf on the way in. A constraint here would be another place
 to state the same rule and another place for it to drift.
 
-No data is preserved. ``upgrade()`` changes the structure and ``downgrade()`` reverts it;
-the legacy pair was NOT NULL before this revision, so the revert restores it that way and a
-non-empty table refuses it -- which is honest, because the values are gone and the old
-structure forbids the NULL that would stand in for them.
+``upgrade()`` CARRIES EVERY EXISTING REFERENCE ACROSS THE DROP, by the owner's ruling for this
+chain, which sets aside the repo's "migrations do not preserve data" rule here only. Each row's
+``{agent_url, id: format} ∪ format_parameters`` becomes its ``legacy_format_id``, and that
+assertion's key its ``legacy_format_key``, before the three columns go; ``b4f1a9c27d53``
+then projects ``format_kind`` from it. A reference that cannot be parsed gets no key and is
+named by that revision's abort. ``downgrade()`` reverts the structure only: the legacy pair was
+NOT NULL before this revision, so the revert restores it that way and a non-empty table
+refuses it.
 
 Revision ID: 346edbd6f12b
 Revises: 7f31c0ab94d2
@@ -45,11 +49,13 @@ Create Date: 2026-10-07 11:54:16.822830
 
 """
 
+import json
 from collections.abc import Sequence
+from typing import Any
 
 import sqlalchemy as sa
-from alembic import op
 
+from alembic import op
 from src.core.database.json_type import JSONType
 
 # revision identifiers, used by Alembic.
@@ -59,13 +65,50 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
+def _carry_legacy_references() -> None:
+    """Write each row's reference into the assertion column and its key into the indexed one."""
+    from src.core.format_resolver import format_identity
+
+    bind = op.get_bind()
+    rows = bind.execute(
+        sa.text("SELECT creative_id, tenant_id, principal_id, agent_url, format, format_parameters FROM creatives")
+    ).fetchall()
+    carried: list[dict[str, Any]] = []
+    for creative_id, tenant_id, principal_id, agent_url, format_id, parameters in rows:
+        stated = {name: value for name, value in (parameters or {}).items() if value is not None}
+        assertion = {**stated, "agent_url": agent_url, "id": format_id}
+        try:
+            key: str | None = format_identity(assertion)
+        except ValueError:
+            key = None
+        carried.append(
+            {
+                "assertion": json.dumps(assertion),
+                "key": key,
+                "creative_id": creative_id,
+                "tenant_id": tenant_id,
+                "principal_id": principal_id,
+            }
+        )
+    if carried:
+        bind.execute(
+            sa.text(
+                "UPDATE creatives SET legacy_format_id = CAST(:assertion AS JSONB), legacy_format_key = :key "
+                "WHERE creative_id = :creative_id AND tenant_id = :tenant_id AND principal_id = :principal_id"
+            ),
+            carried,
+        )
+
+
 def upgrade() -> None:
-    """Add the canonical identity and the retained assertion; drop the decomposed legacy trio."""
+    """Add the canonical identity and the retained assertion, carry each row's reference, drop the trio."""
     op.add_column("creatives", sa.Column("format_kind", sa.String(100), nullable=True))
     op.add_column("creatives", sa.Column("format_option_ref", JSONType(), nullable=True))
     op.add_column("creatives", sa.Column("legacy_format_id", JSONType(), nullable=True))
     op.add_column("creatives", sa.Column("legacy_format_key", sa.String(), nullable=True))
     op.create_index("idx_creatives_legacy_format_key", "creatives", ["legacy_format_key"])
+
+    _carry_legacy_references()
 
     op.drop_index("idx_creatives_format_namespace", table_name="creatives")
     op.drop_column("creatives", "format_parameters")

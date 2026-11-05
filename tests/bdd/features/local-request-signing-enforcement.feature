@@ -119,6 +119,49 @@ Feature: Inbound request-signature enforcement on an AdCP operation (local)
     # is not the same place on every transport: the env puts it where each transport's
     # production code READS it. That difference is the point — see the a2a result.
 
+  @T-UC-006-local-signing-upgraded-legacy-digest @request-signing @error-path @invariant @boundary
+  Scenario Outline: a seller upgraded from a legacy digest posture still refuses what a required posture refuses
+    Given a creative with a known format_id
+    And the Buyer Agent has published a signing key the seller can resolve
+    And the seller stored the legacy digest posture "<digest>" before this upgrade
+    And the upgrade has rewritten stored digest postures
+    And <request>
+    When the Buyer Agent syncs the creative
+    Then the seller answers with the request-signature challenge "<code>" and recovery "<recovery>"
+    # A posture this pin refuses to read fell back to the unsupported posture, so the same
+    # requests were accepted with nothing enforced. get-adcp-capabilities-response.json
+    # (v3.2.7) pins covers_content_digest to "required" when supported is true; the revision
+    # rewrites the stored value to that, and verification then runs as for any such tenant.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/request_signing/properties/covers_content_digest
+    # @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx pointer=L1709-L1712
+
+    Examples:
+      | digest    | request                                                         | code                          | recovery    |
+      | either    | the request registers a webhook whose authentication carries credentials | request_signature_required    | correctable |
+      | forbidden | the request registers a webhook whose authentication carries credentials | request_signature_required    | correctable |
+      | either    | the Buyer Agent signs under a key its trust root does not publish | request_signature_key_unknown | correctable |
+      | forbidden | the Buyer Agent signs under a key its trust root does not publish | request_signature_key_unknown | correctable |
+
+  # enums/request-signing-error-code.json (v3.2.7) publishes each code's recovery, and "SDKs MUST
+  # consume enumMetadata for recovery classification". The transcription this seller carried
+  # said terminal for these, against the pin's correctable: the buyer can re-sign, or publish
+  # the key, and send it again. The challenge is graded with the recovery, byte for byte.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/request-signing-error-code.json pointer=/enumMetadata
+  @T-UC-006-local-signing-pinned-recovery @request-signing @error-path @invariant
+  Scenario Outline: A refused signature carries the recovery the pin publishes - <code>
+    Given a creative with a known format_id
+    And the Buyer Agent has published a signing key the seller can resolve
+    And the seller places "sync_creatives" in the "supported" request-signature bucket
+    And <request>
+    When the Buyer Agent syncs the creative
+    Then the seller answers with the request-signature challenge "<code>" and recovery "correctable"
+
+    Examples:
+      | code                              | request                                                           |
+      | request_signature_invalid         | the Buyer Agent signs with a key other than the one it published  |
+      | request_signature_digest_mismatch | the Buyer Agent signs a different rendering of the request        |
+      | request_signature_key_unknown     | the Buyer Agent signs under a key its trust root does not publish |
+
   @T-UC-006-local-signing-malformed-every-bucket @request-signing @error-path @invariant @boundary
   Scenario Outline: a present-but-malformed signature is refused in every bucket the seller declares
     Given a creative with a known format_id
@@ -169,7 +212,7 @@ Feature: Inbound request-signature enforcement on an AdCP operation (local)
     And the seller places "sync_creatives" in the "supported" request-signature bucket
     And the Buyer Agent signs a different rendering of the request
     When the Buyer Agent syncs the creative
-    Then the seller answers with the request-signature challenge "request_signature_digest_mismatch" and recovery "terminal"
+    Then the seller answers with the request-signature challenge "request_signature_digest_mismatch" and recovery "correctable"
     # ONE variable apart from the scenario above: the same operation, the same key, the same
     # tampered bytes — the bucket. This is the control that makes that completion mean
     # something: without it, "the request completed" is equally explained by a verifier that
@@ -183,7 +226,7 @@ Feature: Inbound request-signature enforcement on an AdCP operation (local)
     And the Buyer Agent signs a different rendering of the request
     And the request registers a webhook whose authentication carries credentials
     When the Buyer Agent syncs the creative
-    Then the seller answers with the request-signature challenge "request_signature_digest_mismatch" and recovery "terminal"
+    Then the seller answers with the request-signature challenge "request_signature_digest_mismatch" and recovery "correctable"
     # ONE variable apart from "a signed-but-invalid request completes when the seller grades
     # no operation" above: the same operation, the same key, the same tampered bytes, the same
     # posture — the request now hands over webhook CREDENTIALS. That scenario COMPLETES and

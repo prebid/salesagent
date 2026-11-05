@@ -119,6 +119,7 @@ class MediaBuyUpdateEnv(BaseTestEnv):
         # need a specific status call ``set_media_buy(status=...)``.
         _default_mb = MagicMock()
         _default_mb.status = "active"
+        _default_mb.name = None
         self._uow_instance.media_buys.get_by_id.return_value = _default_mb
 
         # The *_or_raise repository helpers delegate to the plain getters and raise
@@ -280,6 +281,7 @@ class MediaBuyUpdateEnv(BaseTestEnv):
         """
         mb = MagicMock()
         mb.media_buy_id = media_buy_id
+        mb.name = None
         mb.currency = currency
         mb.status = status
         mb.start_time = start_time

@@ -40,15 +40,15 @@ The remaining 8 belong to this platform. `AppErrorCode` declares them with their
 `CodeEntry` inline, so declaring a code and declaring what it means are one act — a
 member with no entry raises `TypeError` at class creation.
 
-The signature family lacks one thing the other published codes have: metadata. The
-pinned `enums/error-code.json` carries `enumMetadata` for the codes it publishes and
-publishes none of the 28, so `src/core/errors/signature_codes.py` transcribes their
-recovery, suggestion, and message from the specification's own tables. That transcription
-is a fallback inside the published loop rather than a pass written over the top, so a
-future pin that publishes the family answers for it and the transcription stops being
-consulted.
+The pin publishes the signature family in a file of its own,
+`enums/request-signing-error-code.json`, whose `enumMetadata` carries each code's recovery and
+suggestion ("SDKs MUST consume enumMetadata for recovery classification"). `_load_published_codes`
+reads both files. The family keeps its 401, its `CodeGroup.SIGNATURE`, and a message per recovery
+class (`SIGNATURE_MESSAGES` in `src/core/errors/signature_codes.py`): the pin's descriptions of
+these codes name which verification step refused, and `transport-errors.mdx` forbids that detail
+in a client-facing field.
 
-`recovery`, `suggestion` and `message` come from the pinned file and nowhere else. A
+`recovery` and `suggestion` come from the pinned files and nowhere else, and so does `message` outside the signature family. A
 message resolves from the first of two sources that has one: an authored override for
 the nine published codes whose pinned text is implementer-facing
 (`_AUTHORED_SPEC_MESSAGES` in `src/core/errors/codes.py`), then the pinned

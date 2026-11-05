@@ -42,13 +42,11 @@ from src.core.database.repositories.creative import CLEARED_TO_SERVE, CreativeRe
 from src.core.database.repositories.media_buy import RequestedPackage, stored_line_item_id
 from src.core.exceptions import (
     AdCPAdapterError,
-    AdCPAuthorizationError,
     AdCPBudgetExceededError,
     AdCPBudgetTooLowError,
     AdCPCapabilityNotSupportedError,
     AdCPConfigurationError,
     AdCPCreativeNotFoundError,
-    AdCPFormatNotFoundError,
     AdCPGoneError,
     AdCPIdempotencyExpiredError,
     AdCPIdempotencyInFlightError,
@@ -138,7 +136,6 @@ from src.core.schemas import (
     PackageRequest,
     Product,
     Targeting,
-    canonical_agent_url,
 )
 from src.core.security.outbound_http import CounterpartyUrl, UrlProvenance
 from src.core.tools._media_buy_status import seller_valid_actions
@@ -169,7 +166,11 @@ from src.services.gam_product_config_service import GAMProductConfigService
 from src.services.targeting_capabilities import (
     property_list_unsupported_advisories,
     raise_if_property_targeting_violations,
+    refuse_ambiguous_bidding,
     refuse_invalid_package_overlays,
+    refuse_unapplied_request_fields,
+    refuse_unsupported_package_members,
+    unapplied_fields,
     validate_property_targeting_allowed,
 )
 
@@ -966,7 +967,8 @@ def _resolve_package_selectors(
         selector_routes,
     )
 
-    catalogue = seller_format_catalogue(tenant_id) if any(pkg.format_ids for pkg in req.packages or []) else []
+    references = [reference for pkg in req.packages or [] for reference in pkg.format_ids or []]
+    catalogue = seller_format_catalogue(tenant_id, references=references) if references else []
     resolutions: dict[int, SelectorResolution] = {}
     for pkg_index, pkg in enumerate(req.packages or []):
         # A package naming a product this tenant does not hold is already refused above by
@@ -2145,6 +2147,84 @@ def push_creative_to_existing_buy(
 _VALUE_TARGET_KINDS = frozenset({"per_ad_spend", "maximize_value"})
 
 
+#: The top-level fields this seller applies. ``budget_allocation`` is applied in its fixed mode
+#: only (:func:`~src.services.targeting_capabilities.refuse_unapplied_request_fields`), and a
+#: ``proposal_id`` is refused with its own code. ``agency_estimate_number`` "travels with the
+#: order": it is kept on the stored record, where the buy-level scenario reads it.
+_APPLIED_REQUEST_FIELDS: frozenset[str] = frozenset(
+    {
+        "agency_estimate_number",
+        "brand",
+        "budget_allocation",
+        "end_time",
+        "name",
+        "packages",
+        "po_number",
+        "proposal_id",
+        "push_notification_config",
+        "reporting_webhook",
+        "start_time",
+        "total_budget",
+    }
+)
+
+#: Not instructions. ``governance_context`` and the deprecated ``plan_id`` are opaque governance
+#: references for a governed account, which no account here is.
+_NON_INSTRUCTION_REQUEST_FIELDS: frozenset[str] = frozenset(
+    {
+        "account",
+        "adcp_major_version",
+        "adcp_version",
+        "context",
+        "ext",
+        "governance_context",
+        "idempotency_key",
+        "plan_id",
+    }
+)
+
+#: The package fields this seller reads. ``committed_metrics``, ``measurement_terms`` and
+#: ``performance_standards`` are negotiated, each answered by its own refusal when it proposes
+#: what this seller cannot honor. ``optimization_goals`` is validated and not otherwise applied:
+#: storyboards with no capability gate (``delivery_reporting``) require such a buy to succeed.
+_APPLIED_PACKAGE_FIELDS: frozenset[str] = frozenset(
+    {
+        "agency_estimate_number",
+        "bid_price",
+        "budget",
+        "catalogs",
+        "committed_metrics",
+        "creative_assignments",
+        "creative_ids",
+        "creatives",
+        "format_ids",
+        "format_kind",
+        "format_option_refs",
+        "measurement_terms",
+        "optimization_goals",
+        "params",
+        "paused",
+        "performance_standards",
+        "pricing_option_id",
+        "product_id",
+        "targeting_overlay",
+    }
+)
+_NON_INSTRUCTION_PACKAGE_FIELDS: frozenset[str] = frozenset({"adcp_major_version", "adcp_version", "context", "ext"})
+
+#: What this seller accepts because the pin declares it and cannot apply, DERIVED by
+#: subtraction as update's are. ``media-buy/create-media-buy-request.json``: ``frequency_cap``
+#: "otherwise sellers MUST reject with UNSUPPORTED_FEATURE before any mutation and MUST NOT
+#: silently drop, soften, or clamp the cap"; ``daily_budget_cap`` "otherwise rejected with
+#: UNSUPPORTED_FEATURE".
+_UNAPPLIED_REQUEST_FIELDS: tuple[str, ...] = unapplied_fields(
+    CreateMediaBuyRequest, _APPLIED_REQUEST_FIELDS, _NON_INSTRUCTION_REQUEST_FIELDS
+)
+_UNAPPLIED_PACKAGE_FIELDS: tuple[str, ...] = unapplied_fields(
+    PackageRequest, _APPLIED_PACKAGE_FIELDS, _NON_INSTRUCTION_PACKAGE_FIELDS
+)
+
+
 def _refuse_package_terms_it_cannot_honor(pkg_index: int, package: PackageRequest) -> None:
     """Refuse a package asking for something this seller cannot honor, before anything is read.
 
@@ -2192,6 +2272,12 @@ def _refuse_package_terms_it_cannot_honor(pkg_index: int, package: PackageReques
         raise AdCPTermsRejectedError(
             details=EntityRefDetails(package_index=pkg_index),
             field=package_field_path(f"measurement_terms.{proposed}", pkg_index),
+        )
+    # The same negotiation: "Seller accepts, rejects with TERMS_REJECTED, or adjusts".
+    if package.performance_standards:
+        raise AdCPTermsRejectedError(
+            details=EntityRefDetails(package_index=pkg_index),
+            field=package_field_path("performance_standards", pkg_index),
         )
 
 
@@ -2365,168 +2451,7 @@ def _validate_pricing_model_selection(
     return pricing_info_for(selected_option, bid_price=float(package.bid_price) if package.bid_price else None)
 
 
-def _build_registered_agent_urls(registered_agents: list[Any], tenant_id: str) -> set[str]:
-    """Normalize each registered agent's URL for registration-matching comparison.
-
-    A malformed PRE-EXISTING registered agent_url (admin-ingested data the buyer
-    never touched) is skipped with a warning rather than raised: it can never
-    legitimately equal a well-formed incoming agent_url, so excluding it changes
-    nothing for a correct match, but hard-failing here would let ONE unrelated
-    bad registration break every format_id validation in the request
-    (#1291).
-    """
-    from src.core.signing.canonical import TargetUriMalformedError
-
-    registered_agent_urls = set()
-    for agent in registered_agents:
-        try:
-            registered_agent_urls.add(canonical_agent_url(agent.agent_url))
-        except TargetUriMalformedError as e:
-            logger.warning(
-                f"Tenant {tenant_id}: registered creative agent_url {agent.agent_url!r} is malformed "
-                f"per RFC 9421 canonicalization ({e.reason}); excluded from registration matching."
-            )
-    return registered_agent_urls
-
-
-def _normalize_incoming_agent_url(agent_url: str, package_idx: int, idx: int) -> str:
-    """Normalize a buyer-supplied format_id.agent_url, or raise with the same
-    'Package N, format_ids[idx]' context every sibling validation in
-    ``_validate_and_convert_format_ids`` carries (#1291).
-    """
-    from src.core.signing.canonical import TargetUriMalformedError
-
-    try:
-        return canonical_agent_url(agent_url)
-    except TargetUriMalformedError as e:
-        # The refusal REASON is the signing layer's diagnostic, not buyer-facing text:
-        # post-ADR-010 the sentence is CODE_TABLE's property and the cause rides
-        # ``internal_detail``. What the buyer gets is the position and the offending
-        # value, in the same ``ValidationDetails`` shape every sibling rejection here uses.
-        raise AdCPValidationError(
-            field=f"packages[{package_idx}].format_ids[{idx}]",
-            details=ValidationDetails(package_index=package_idx, format_index=idx, rejected_value=str(agent_url)),
-            internal_detail=e,
-        ) from e
-
-
-async def _validate_and_convert_format_ids(
-    format_ids: list[Any], tenant_id: str, package_idx: int
-) -> list[dict[str, str]]:
-    """Validate and convert format_ids to FormatId objects with strict enforcement.
-
-    Per AdCP spec, format_ids must be FormatId objects with {agent_url, id}.
-    This function enforces:
-    1. Only FormatId objects are accepted (no plain strings)
-    2. agent_url must be a registered creative agent (default or tenant-specific)
-    3. format_id must exist on the specified agent
-    4. Format must pass validation (dimensions, asset requirements, etc.)
-
-    Args:
-        format_ids: List of format ID objects from request
-        tenant_id: Tenant ID for looking up registered agents
-        package_idx: Package index for error messages (0-based)
-
-    Returns:
-        List of validated FormatId dicts with {agent_url, id}
-
-    Raises:
-        ToolError: If any format_id is invalid, unregistered, or doesn't exist
-    """
-    from src.core.creative_agent_registry import get_creative_agent_registry, names_listed_agent
-
-    if not format_ids:
-        return []
-
-    # The registry the DEPLOYMENT selected, never a hand-constructed one: which class
-    # answers an operator agent (live dial vs the checked-in reference catalog) is a
-    # composition decision `get_creative_agent_registry()` owns, and constructing
-    # `CreativeAgentRegistry()` here quietly opted this path out of it — the one call
-    # site in src/ still doing so after the settings refactor.
-    registry = get_creative_agent_registry()
-    validated_format_ids = []
-
-    # Get registered agents for this tenant.
-    #
-    # Both sides of the registration check go through `canonical_agent_url` — the AdCP
-    # canonical form, which PRESERVES the path. This check used to run on
-    # `validation.normalize_agent_url`, which additionally stripped `/mcp`, `/a2a` and
-    # `/.well-known/adcp/sales`. Nothing in the pin asks for that, and it decided an
-    # AUTHORIZATION outcome: an agent registered at `https://x.com` also authorized
-    # `https://x.com/mcp`, and one host serving MCP at /mcp and A2A at /a2a read as a
-    # single agent.
-    #
-    # The set is built through `_build_registered_agent_urls` rather than a bare
-    # comprehension so that ONE malformed pre-existing registration (admin-ingested data
-    # the buyer never touched) is skipped with a warning instead of failing every
-    # format_id in the request (#1291).
-    registered_agents = registry._get_tenant_agents(tenant_id)
-    registered_agent_urls = _build_registered_agent_urls(registered_agents, tenant_id)
-
-    for idx, fmt_id in enumerate(format_ids):
-        # Every rejection here is per-package AND per-format, so the position and the
-        # offending identifiers travel as structured detail. Without them the buyer gets
-        # a bare VALIDATION_ERROR and cannot tell WHICH format in WHICH package failed.
-        where = {"package_index": package_idx, "format_index": idx}
-        field = f"packages[{package_idx}].format_ids[{idx}]"
-
-        # STRICT ENFORCEMENT: Reject plain strings
-        if isinstance(fmt_id, str):
-            raise AdCPValidationError(
-                field=field,
-                details=ValidationDetails(**where, rejected_value=str(fmt_id), received_type="FormatId object"),
-            )
-
-        # Coerce to FormatId via Pydantic validation (handles dicts and FormatId objects)
-        try:
-            validated_fmt = FormatId.model_validate(fmt_id, from_attributes=True)
-        except (ValueError, ValidationError) as e:
-            raise AdCPValidationError(field=field, details=ValidationDetails(**where), internal_detail=e) from e
-        # Canonicalized ONCE, here, and every later use (the registration check and the
-        # registry fetch) reads this value. A URL the canonicalization profile refuses
-        # outright — no host, bare IPv6, unclosed bracket — comes back as a positioned
-        # VALIDATION_ERROR rather than an uncaught ValueError (#1291).
-        agent_url = _normalize_incoming_agent_url(str(validated_fmt.agent_url), package_idx, idx)
-        format_id = validated_fmt.id
-
-        if not agent_url or not format_id:
-            raise AdCPValidationError(
-                field=field, details=ValidationDetails(**where, agent_url=agent_url, format_id=format_id)
-            )
-
-        # VALIDATION: Check agent is registered. `agent_url` is already canonical (above),
-        # and so is every member of `registered_agent_urls` — one form, both sides. The
-        # operator's own agent, which the registry always lists, is recognized by ORIGIN
-        # instead (`names_listed_agent`); every other agent keeps the path-preserving match.
-        if not names_listed_agent(agent_url, registered_agent_urls):
-            raise AdCPAuthorizationError(field=field, details=EntityRefDetails(**where, agent_url=agent_url))
-
-        # VALIDATION: Verify format exists on agent
-        try:
-            format_obj = await registry.get_format(agent_url, format_id)
-            if not format_obj:
-                raise AdCPFormatNotFoundError(
-                    field=field,
-                    details=EntityRefDetails(**where, agent_url=agent_url, format_id=format_id),
-                )
-        except AdCPSalesAgentError:
-            raise
-        except Exception as e:
-            logger.exception(f"Error fetching format {format_id} from {agent_url}: {e}")
-            raise AdCPAdapterError(
-                field=field,
-                details=AdapterFailureDetails(**where, agent_url=agent_url, format_id=format_id),
-                internal_detail=e,
-            ) from e
-
-        # Format validated - add to results
-        validated_format_ids.append({"agent_url": str(agent_url), "id": format_id})
-
-    return validated_format_ids
-
-
 from src.core.errors.details import (
-    AdapterFailureDetails,
     CapabilityRefusalDetails,
     ConfigurationDetails,
     CreativeRefDetails,
@@ -2745,6 +2670,13 @@ async def _create_media_buy_impl(
             req.push_notification_config,
             field_prefix="push_notification_config",
         )
+
+    # Capability refusal, above any write: the pin puts it "before any mutation". A request
+    # naming a proposal is answered PROPOSAL_NOT_FOUND below, whatever else it carries.
+    if req.proposal_id is None:
+        refuse_ambiguous_bidding(req.packages)
+        refuse_unapplied_request_fields(req, _UNAPPLIED_REQUEST_FIELDS)
+        refuse_unsupported_package_members(req.packages, _UNAPPLIED_PACKAGE_FIELDS)
 
     # The tenant's readiness to serve REAL inventory is not a precondition for a SANDBOX
     # request, which serves simulated data and makes no real ad-platform call. Measured
@@ -4646,6 +4578,7 @@ async def _create_media_buy_impl(
         )
 
         modified_response.status = AdcpTaskStatus.completed.value
+        modified_response.name = req.name
         return modified_response
 
     except AdCPSalesAgentError as adcp_err:

@@ -22,6 +22,7 @@ from adcp.types import (
 )
 
 from src.core.schemas import FrequencyCap, Targeting
+from src.core.schemas._base import StoredFrequencyCap
 from tests.factories import FrequencyCapFactory
 
 
@@ -224,7 +225,7 @@ class TestFrequencyCapInheritance:
 
     def test_freq_cap_in_targeting(self):
         t = Targeting(frequency_cap={"suppress_minutes": 60})
-        assert isinstance(t.frequency_cap, FrequencyCap)
+        assert isinstance(t.frequency_cap, StoredFrequencyCap)
         assert isinstance(t.frequency_cap, LibraryFrequencyCap)
 
     def test_stale_stored_scope_is_dropped_on_readback(self):
@@ -247,5 +248,5 @@ class TestFrequencyCapInheritance:
         refuses a parent instance in a subclass slot by identity without this.
         """
         t = Targeting(frequency_cap=LibraryFrequencyCap(suppress_minutes=90))
-        assert isinstance(t.frequency_cap, FrequencyCap)
+        assert isinstance(t.frequency_cap, StoredFrequencyCap)
         assert t.frequency_cap.suppress_minutes == 90.0

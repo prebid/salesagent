@@ -45,13 +45,12 @@ from src.core.signing.canonical import origin_of
 # ``https://ads.streamhaus.example/mcp`` in both of the places a publisher copies from —
 # ``brand.json`` ``agents[].url`` and ``adagents.json`` ``authorized_agents[].url``.
 #
-# PUBLISHED, not served-after-redirect. The two differ for MCP: ``/mcp`` is a Starlette
-# ``Mount`` and 307s to ``/mcp/``, while ``/a2a`` answers where it is (``src/app.py``).
-# A redirect is how a counterparty REACHES an endpoint and says nothing about which
-# string IDENTIFIES it: security.mdx's key-discovery step 5 matches a canonicalized
+# Both ``/mcp`` and ``/mcp/`` serve MCP with no redirect (``src/app.py``), as ``/a2a`` answers
+# where it is. Which one is published is still a choice, because the string IDENTIFIES the
+# endpoint: security.mdx's key-discovery step 5 matches a canonicalized
 # ``agents[].url`` against the canonicalized agent URL the counterparty HOLDS, and
 # there "a trailing slash remains significant under the shared algorithm". Publishing
-# the post-redirect ``/mcp/`` therefore meant a buyer holding the spec example's
+# ``/mcp/`` therefore meant a buyer holding the spec example's
 # ``/mcp`` matched no entry of ours at all — ``request_signature_agent_not_in_brand_json``
 # for a buyer that had done everything the documentation told it to.
 AGENT_ENDPOINT_PATHS: dict[str, str] = {"mcp": "/mcp", "a2a": "/a2a"}

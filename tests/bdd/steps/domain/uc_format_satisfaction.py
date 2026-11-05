@@ -1550,6 +1550,13 @@ def given_legacy_only_product(ctx: dict) -> None:
     _store_product(ctx, "satisfaction_legacy_only", format_ids=list(_LEGACY_ARM), format_options=None)
 
 
+@given(parsers.parse('the seller publishes only another agent\'s deprecated format "{format_id}"'))
+def given_legacy_only_product_of_another_agent(ctx: dict, format_id: str) -> None:
+    """Store a legacy-only product naming an id of the reference namespace at another agent."""
+    arm = [{"agent_url": "https://another-creative-agent.example", "id": format_id}]
+    _store_product(ctx, "satisfaction_legacy_only", format_ids=arm, format_options=None)
+
+
 @given(
     parsers.parse(
         'the seller publishes only the deprecated 300x250 and 728x90 formats across placements "{placements}"'
@@ -2041,7 +2048,7 @@ def given_sync_unprojectable_product_across_placements(ctx: dict, placements: st
 
 @given("a packaged product declaring only the deprecated format_ids")
 def given_sync_legacy_product(ctx: dict) -> None:
-    """The LEGACY-arm control for the lenient asymmetry: no ``format_options`` at all.
+    """A legacy-arm product: no ``format_options`` at all.
 
     Which lane the satisfaction function takes is decided by what the PRODUCT declares, so
     this is the one knob that moves the sibling scenario from the canonical lane to the
@@ -2784,6 +2791,14 @@ def given_selector_at_respelled_agent(ctx: dict, format_id: str, variant: str) -
     _put_selector(ctx, {"format_ids": [{"agent_url": _agent_url_spelled(variant), "id": format_id}]})
 
 
+@given("the buyer's package names a deprecated format at the agent that does not answer")
+def given_selector_at_unreachable_agent(ctx: dict) -> None:
+    """A legacy selector whose agent is the one ``configure_peer_agent`` left unreachable."""
+    _put_selector(
+        ctx, {"format_ids": [{"agent_url": ctx["env"].unreachable_creative_agent_url(), "id": "peer_format"}]}
+    )
+
+
 # ── Then steps ──────────────────────────────────────────────────────
 
 
@@ -2979,34 +2994,6 @@ def then_assignment_recorded(ctx: dict) -> None:
     assert errors == {}, f"expected no assignment error, got {errors!r}"
 
 
-@then("the sync succeeds and records an assignment error for that package")
-def then_assignment_error_recorded(ctx: dict) -> None:
-    """Assert lenient mode SOFTENED the deprecated-arm refusal: success plus a recorded error.
-
-    The control for the canonical row above. Three things together, because any two of them
-    are satisfied by the wrong behaviour: the call succeeded (not refused), the error map
-    names THIS package, and the recorded reason names both format identities -- the refused
-    one and what the product accepts. The reason is graded on those VALUES and not on its
-    wording, the same correction made to the sibling integration test.
-
-    ``video_1280x720`` is the refused id, and it is a CATALOG id on purpose: the scenario's
-    creative claims a reference production RESOLVES, so what the record names is a
-    satisfaction verdict rather than an unresolvable-reference refusal upstream of the gate.
-    It also cannot satisfy the second assertion by accident, which a nearer id would --
-    ``display_300x250`` is a substring of the catalog's ``display_300x250_image``.
-    """
-    result = ctx["result"]
-    assert result.is_success, f"lenient mode should have answered success, got {result.error!r}"
-    creative_results = result.payload.creatives
-    assert creative_results, "sync_creatives answered with no creative results"
-    package_id = ctx["existing_package"].package_id
-    errors = creative_results[0].assignment_errors or {}
-    assert package_id in errors, f"no assignment error recorded for {package_id!r}: {errors!r}"
-    recorded = errors[package_id]
-    assert "video_1280x720" in recorded, f"the record does not name the refused format: {recorded}"
-    assert "display_300x250" in recorded, f"the record does not name what the product accepts: {recorded}"
-
-
 @then("the buyer is refused INVALID_REQUEST")
 def then_refused_invalid_request(ctx: dict) -> None:
     """Assert the SCHEMA bucket, which is the point: a malformed selector is not an
@@ -3069,6 +3056,22 @@ def _stored_synced_creative_column(ctx: dict, column: str) -> Any:
     result = ctx["result"]
     assert result.is_success, f"the sync was expected to succeed but answered {result.error!r}"
     return stored_creative_column(ctx, _SYNC_CREATIVE_ID, column)
+
+
+@then(parsers.parse("the buyer is refused {code:w} and the creative library holds nothing for that creative"))
+def then_refused_nothing_stored_at_assignment(ctx: dict, code: str) -> None:
+    """The whole request's refusal, and the row's absence: the wire alone cannot show the write."""
+    ctx["result"].assert_wire_error(code)
+    then_no_creative_stored_at_assignment(ctx)
+
+
+@then("the creative library holds nothing for that creative")
+def then_no_creative_stored_at_assignment(ctx: dict) -> None:
+    """The refused sync's creative has no row: the wire alone cannot show the write."""
+    from src.core.database.models import Creative
+
+    stored = ctx["env"].query(Creative, creative_id=_SYNC_CREATIVE_ID)
+    assert stored == [], f"the request was refused and left {[row.creative_id for row in stored]} stored"
 
 
 @then("the buyer is refused UNSUPPORTED_FEATURE and nothing is stored")

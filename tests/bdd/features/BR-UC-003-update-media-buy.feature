@@ -1167,6 +1167,90 @@ Feature: BR-UC-003 Update Media Buy
     # implemented (salesagent-8qela.8 chose refusal over implementation), this reverts to
     # asserting acceptance and INV-3 becomes gradable again.
 
+  # update-media-buy-request.json (v3.2.7): daily_budget_cap "otherwise rejected with
+  # UNSUPPORTED_FEATURE"; frequency_cap "rejected atomically with UNSUPPORTED_FEATURE before any
+  # change; sellers MUST NOT clamp it". The rest of this seller's unapplied top-level fields
+  # take the same refusal, under core/targeting.json's "applied exactly or rejected".
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json pointer=/properties/frequency_cap
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json pointer=/properties/daily_budget_cap
+  # The one overlay refusal both tools share, on the update side.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/targeting.json
+  # update_media_buy.mdx (v3.2.7): "One update_media_buy request is one atomic mutation."
+  # core/package.json requires a package's catalogs to be of distinct types. The refusal
+  # was right and came after the ad server had the new budget. The control is the same budget
+  # with one catalog, which does reach the ad server, so "no call" here is not vacuous.
+  # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/update_media_buy.mdx
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/package.json pointer=/properties/catalogs
+  @T-UC-003-duplicate-catalogs-atomic
+  Scenario: A budget beside duplicate catalog types reaches no ad server
+    Given the tenant is configured for auto-approval
+    And a valid update_media_buy request with:
+    | field        | value       |
+    | media_buy_id | mb_existing |
+    And the request includes 1 package update with:
+    | field      | value   |
+    | package_id | pkg_001 |
+    And the package "pkg_001" exists in the media buy
+    And the package update sets a new budget and catalogs of "duplicate" types
+    When the Buyer Agent sends the update_media_buy request
+    Then the buyer is refused VALIDATION_ERROR naming the package member "catalogs"
+    And the ad server received no update call
+
+  @T-UC-003-duplicate-catalogs-atomic
+  Scenario: A budget beside one catalog reaches the ad server
+    Given the tenant is configured for auto-approval
+    And a valid update_media_buy request with:
+    | field        | value       |
+    | media_buy_id | mb_existing |
+    And the request includes 1 package update with:
+    | field      | value   |
+    | package_id | pkg_001 |
+    And the package "pkg_001" exists in the media buy
+    And the package update sets a new budget and catalogs of "one" types
+    When the Buyer Agent sends the update_media_buy request
+    Then the response should succeed
+    And the ad server received an update_package_budget call
+
+  @T-UC-003-unapplied-overlay-dimension
+  Scenario Outline: An overlay dimension no adapter applies is refused on update - <dimension>
+    Given the tenant is configured for auto-approval
+    And a valid update_media_buy request with:
+    | field        | value       |
+    | media_buy_id | mb_existing |
+    And the request includes 1 package update with:
+    | field      | value   |
+    | package_id | pkg_001 |
+    And the package "pkg_001" exists in the media buy
+    And the package update's overlay sets its "<dimension>" dimension
+    When the Buyer Agent sends the update_media_buy request
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the package member "targeting_overlay.<dimension>"
+
+    Examples:
+      | dimension             |
+      | geo_places            |
+      | property_list_exclude |
+
+  @T-UC-003-unapplied-request-member
+  Scenario Outline: A top-level update field this seller does not apply is refused before any change - <member>
+    Given the tenant is configured for auto-approval
+    And a valid update_media_buy request with:
+    | field        | value       |
+    | media_buy_id | mb_existing |
+    And the update sets its "<member>" member
+    When the Buyer Agent sends the update_media_buy request
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the request member "<member>"
+    And the media buy's persisted revision is unchanged
+
+    Examples:
+      | member              |
+      | bidding             |
+      | budget_cap_timezone |
+      | daily_budget_cap    |
+      | frequency_cap       |
+      | invoice_recipient   |
+      | pacing              |
+      | total_budget        |
+
   @T-UC-003-ext-r-cross-ok-2 @invariant @BR-RULE-083
   Scenario: Keyword operations -- negative_keywords_add with targeting_overlay.keyword_targets is valid
     Given the tenant is configured for auto-approval
@@ -3084,6 +3168,40 @@ Feature: BR-UC-003 Update Media Buy
     # BR-RULE-216 INV-4: buy not cancellable in current state -> NOT_CANCELLABLE (correctable)
     # POST-F3: pause instead (paused: true) or contact the seller
 
+  # update-media-buy-request.json (v3.2.7) name: "Replacement human-readable name for this media
+  # buy". update-media-buy-response.json name: "Persisted human-readable name after the update.
+  # When update_media_buy supplied name, the seller MUST return the stored value here".
+  # get-media-buys-response.json: "Sellers MUST include name when the media buy was created
+  # through AdCP with name". The name is a label in a column this seller owns, so it is replaced.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json pointer=/properties/name
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-response.json
+  @T-UC-003-media-buy-name @extension
+  Scenario: A replacement name is stored and returned by the update and by get_media_buys
+    Given the tenant is configured for auto-approval
+    And the media buy "mb_existing" is named "Spring flight - Q2"
+    And a valid update_media_buy request with:
+    | field        | value                      |
+    | media_buy_id | mb_existing                |
+    | name         | Summer flight - Q3 / North |
+    When the Buyer Agent sends the update_media_buy request
+    Then the response is compliant with the update_media_buy success spec
+    And the updated media buy's name on the wire is "Summer flight - Q3 / North"
+    When the Buyer Agent reads media buy "mb_existing" back with get_media_buys
+    Then the read media buy's name on the wire is "Summer flight - Q3 / North"
+
+  # An update that sends no name returns the stored one, so the field is never silently dropped.
+  @T-UC-003-media-buy-name @extension
+  Scenario: An update that sends no name returns the stored one
+    Given the tenant is configured for auto-approval
+    And the media buy "mb_existing" is named "Spring flight - Q2"
+    And a valid update_media_buy request with:
+    | field        | value       |
+    | media_buy_id | mb_existing |
+    | paused       | true        |
+    When the Buyer Agent sends the update_media_buy request
+    Then the response is compliant with the update_media_buy success spec
+    And the updated media buy's name on the wire is "Spring flight - Q2"
+
   @T-UC-003-cancel-reason-boundary @boundary @cancellation @schema-v3.1
   Scenario Outline: cancellation_reason length boundary - <boundary_point>
     Given the tenant is configured for auto-approval
@@ -3097,12 +3215,76 @@ Feature: BR-UC-003 Update Media Buy
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
     # BR-RULE-216 INV-2: cancellation_reason MUST be at most 500 characters
+    # LOCAL CORRECTION: the 500-character row read success, for a cancel this seller never
+    # applied. It refuses every cancel with NOT_CANCELLABLE until prebid/salesagent#1261
+    # implements cancellation, which turns the row back to success. The pair still grades the
+    # boundary: 500 characters passes the request shape and reaches the cancel refusal, and
+    # 501 is refused by the shape first.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
 
     Examples: Boundary values
-      | boundary_point         | value             | outcome                                 |
-      | reason 500 chars (max) | <500 char string> | success                                 |
+      | boundary_point           | value             | outcome                                 |
+      | reason 500 chars (max)   | <500 char string> | error "NOT_CANCELLABLE" with suggestion |
       | reason 501 chars (max+1) | <501 char string> | error "INVALID_REQUEST" with suggestion |
+
+  # update-media-buy-request.json (v3.2.7) canceled: "Sellers MAY reject with NOT_CANCELLABLE if
+  # the media buy cannot be canceled in its current state." package-update.json canceled:
+  # "Sellers MAY reject with NOT_CANCELLABLE." This seller does not implement cancellation
+  # (prebid/salesagent#1261), so a cancel is refused before any change rather than answered as a
+  # success that leaves the buy delivering.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json pointer=/properties/canceled
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/canceled
+  @T-UC-003-cancel-refused
+  Scenario: A cancel of the media buy is refused NOT_CANCELLABLE and changes nothing
+    Given the tenant is configured for auto-approval
+    And a valid update_media_buy request with:
+    | field        | value       |
+    | media_buy_id | mb_existing |
+    | canceled     | true        |
+    When the Buyer Agent sends the update_media_buy request
+    Then the buyer is refused NOT_CANCELLABLE naming the request member "canceled"
+    And the ad server received no update call
+    And the stored media buy "mb_existing" is still "active"
+
+  # specification.mdx (v3.2.7), media buy state transitions: "When a buyer attempts to cancel a
+  # media buy already in `canceled` ... sales agents MUST reject with `NOT_CANCELLABLE`", and "All
+  # other updates to media buys in terminal states (`completed`, `rejected`, `canceled`) —
+  # including `canceled: true` attempts against `completed` or `rejected` buys — MUST be rejected
+  # with `INVALID_STATE`". A non-cancel update on each terminal state is graded by
+  # @T-UC-003-partition-media-buy-status and @T-UC-003-boundary-media-buy-status.
+  # @source repo=adcp ref=v3.2.7 path=docs/media-buy/specification.mdx section="Media Buy State Transitions"
+  @T-UC-003-terminal-cancel
+  Scenario Outline: A cancel of a terminal media buy answers by its state - <status>
+    Given the tenant is configured for auto-approval
+    And the media buy is in "<status>" status
+    And a valid update_media_buy request with:
+    | field        | value       |
+    | media_buy_id | mb_existing |
+    | canceled     | true        |
+    When the Buyer Agent sends the update_media_buy request
+    Then the buyer is refused <code> naming the request member "media_buy_id"
+    And the stored media buy "mb_existing" is still "<status>"
+
+    Examples:
+      | status    | code            |
+      | canceled  | NOT_CANCELLABLE |
+      | completed | INVALID_STATE   |
+      | rejected  | INVALID_STATE   |
+
+  @T-UC-003-cancel-refused
+  Scenario: A cancel of one package is refused NOT_CANCELLABLE and changes nothing
+    Given the tenant is configured for auto-approval
+    And a valid update_media_buy request with:
+    | field        | value       |
+    | media_buy_id | mb_existing |
+    And the request includes 1 package update with:
+    | field      | value   |
+    | package_id | pkg_001 |
+    | canceled   | true    |
+    When the Buyer Agent sends the update_media_buy request
+    Then the buyer is refused NOT_CANCELLABLE naming the package member "canceled"
+    And the ad server received no update call
+    And the stored media buy "mb_existing" is still "active"
 
   @T-UC-003-cancel-package @invariant @BR-RULE-216 @cancellation @schema-v3.1 @post-s2
   Scenario: Package-level cancellation stops only that package (INV-6)

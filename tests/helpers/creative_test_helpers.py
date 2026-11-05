@@ -17,6 +17,7 @@ from uuid import uuid4
 
 from adcp.types import AccountReferenceById
 
+from src.core.creative_agent_registry import FormatFetchResult
 from src.core.schemas import SyncCreativesRequest
 from tests.factories.creative_asset import AssetSpec, assert_assets, build_assets, image_spec, named_format_assets
 
@@ -213,8 +214,14 @@ def make_registry_mock(
     async def _default_get_format(agent_url, format_id, **_kwargs):
         return listing[0] if listing else None
 
+    listed = list_all_formats or _default_list_all_formats
+
+    async def _list_all_formats_with_errors(tenant_id=None, **kwargs):
+        return FormatFetchResult(formats=await listed(tenant_id=tenant_id, **kwargs), errors=[])
+
     registry = Mock()
-    registry.list_all_formats = list_all_formats or _default_list_all_formats
+    registry.list_all_formats = listed
+    registry.list_all_formats_with_errors = _list_all_formats_with_errors
     registry.get_format = get_format or _default_get_format
     # Both defaults are the INERT no-result case _processing already guards for
     # (``if build_result:`` / ``if preview_result and preview_result.get("previews")``),

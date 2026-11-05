@@ -493,6 +493,8 @@ def when_sync_creative(ctx: dict) -> None:
         kwargs["assignments"] = ctx["assignment_entries"]
     if "validation_mode" in ctx:
         kwargs["validation_mode"] = ctx["validation_mode"]
+    if "assignment_operations" in ctx:
+        kwargs["assignment_operations"] = ctx["assignment_operations"]
     if "idempotency_key" in ctx:
         kwargs["idempotency_key"] = ctx["idempotency_key"]
     if "push_notification_config" in ctx:
@@ -1136,6 +1138,19 @@ def given_assignments_to_package_with_setup(ctx: dict, product_setup: str) -> No
 def given_validation_mode(ctx: dict, mode: str) -> None:
     """Set validation_mode on the sync_creatives request (strict or lenient)."""
     ctx["validation_mode"] = mode
+
+
+@given(parsers.parse('the request carries an assignment operation "{operation}"'))
+def given_assignment_operation(ctx: dict, operation: str) -> None:
+    """One assignment_operations entry of *operation*, naming the request's creative.
+
+    The pinned shapes: assign and unassign name creative_id and package_id; replace also names
+    replaces_creative_id.
+    """
+    entry = {"operation": operation, "creative_id": latest_creative_id(ctx), "package_id": "pkg_any"}
+    if operation == "replace":
+        entry["replaces_creative_id"] = "c_replaced"
+    ctx["assignment_operations"] = [entry]
 
 
 # --- 0xwq: assignment package boundary (existing pkg / existing assignment / missing pkg) ---
@@ -3613,6 +3628,17 @@ def then_no_creative_persisted_for_tenant(ctx: dict) -> None:
     request added nothing.
     """
     _assert_success_response(ctx)
+    _assert_library_unchanged(ctx)
+
+
+@then("the creative library is unchanged")
+def then_creative_library_unchanged(ctx: dict) -> None:
+    """A refused request wrote nothing: read the rows, since the wire cannot show the write."""
+    _assert_library_unchanged(ctx)
+
+
+def _assert_library_unchanged(ctx: dict) -> None:
+    """The library against the set captured BEFORE the request."""
     before = ctx.get("pre_request_library", {})
     after = _persisted_creative_fingerprints(ctx)
     added = sorted(set(after) - set(before))
@@ -3628,8 +3654,8 @@ def then_no_creative_persisted_for_tenant(ctx: dict) -> None:
     # disappear today, so it guards against a future hard delete rather than
     # against delete_missing.
     assert added == [] and removed == [] and modified == [], (
-        f"dry_run wrote to the library — added {added}, removed {removed}, modified {modified}; "
-        "a preview must leave it exactly as it found it"
+        f"the request wrote to the library — added {added}, removed {removed}, modified {modified}; "
+        "it must leave it exactly as it found it"
     )
 
 
@@ -5927,7 +5953,7 @@ def when_sync_cross_principal_assignment(ctx: dict) -> None:
     3.1/media-buy/sync-creatives-request.json, ``creatives`` is in ``required`` and
     carries ``minItems: 1``. This step used to send ``creatives=[]``, so every
     transport correctly refused the whole request with INVALID_REQUEST before the
-    assignment logic was ever reached — the scenario could not observe the skip it
+    assignment logic was ever reached — the scenario could not observe the refusal it
     exists to grade, and the refusal it got instead read as a production bug.
     A spec-valid request is the only one that reaches the behavior under test.
     """
@@ -5946,7 +5972,6 @@ def when_sync_cross_principal_assignment(ctx: dict) -> None:
     media_buy = MediaBuyFactory(tenant=tenant, principal=authenticated)
     pkg = MediaPackageFactory(media_buy=media_buy)
     env._commit_factory_data()
-    ctx["xp_package_id"] = pkg.package_id
     format_id, agent_url, assets = _format_payload(ctx, env)
     own_creative = CreativeAssetRequestFactory.payload(
         creative_id="creative-own-b",
@@ -5958,31 +5983,6 @@ def when_sync_cross_principal_assignment(ctx: dict) -> None:
         ctx,
         creatives=[own_creative],
         assignments=[{"creative_id": "creative-xp", "package_id": pkg.package_id}],
-        validation_mode="lenient",
-    )
-
-
-@then("the sync operation should not fail")
-def then_sync_did_not_fail(ctx: dict) -> None:
-    """The cross-principal reference must be skipped — never a raw FK 500 —
-    and the skip must be VISIBLE: a synthesized per-item action='failed'
-    result naming the package in assignment_errors (;
-    the spec's success branch forbids response-level errors, so the outcome
-    rides creatives[]). A bare no-error check survives deletion of the
-    error recording — this assertion does not.
-    """
-    error = ctx.get("error")
-    assert error is None, f"sync_creatives failed on a cross-principal assignment reference: {error!r}"
-    response = require_payload(ctx)
-    entries = {r.creative_id: r for r in (getattr(response, "creatives", None) or [])}
-    entry = entries.get("creative-xp")
-    assert entry is not None, (
-        f"Skipped cross-principal assignment must surface as a per-item result entry, got creatives={sorted(entries)}"
-    )
-    assert entry.action == "failed", f"Expected action='failed' for the skipped reference, got {entry.action!r}"
-    pkg_id = ctx["xp_package_id"]
-    assert (entry.assignment_errors or {}).get(pkg_id), (
-        f"assignment_errors must name the skipped package {pkg_id}: {entry.assignment_errors!r}"
     )
 
 
@@ -6987,9 +6987,9 @@ def then_assignment_of_creative_carries_weight(ctx: dict, creative_id: str, pack
 def given_creatives_all_fail(ctx: dict, count: int) -> None:
     """Set up `count` creatives that each fail per-creative validation.
 
-    Empty name fails validation; under validation_mode='lenient' each failure
-    is reported as a per-creative result (action='failed') INSIDE the success
-    variant rather than collapsing the whole operation to the error variant.
+    Empty name fails validation; each failure is reported as a per-creative result
+    (action='failed') INSIDE the success variant rather than collapsing the whole
+    operation to the error variant.
     """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
@@ -7005,7 +7005,6 @@ def given_creatives_all_fail(ctx: dict, count: int) -> None:
                 assets=assets,
             )
         )
-    ctx["validation_mode"] = "lenient"
 
 
 @then("the response is the success variant carrying a creatives array")
@@ -7190,68 +7189,40 @@ def then_workflow_steps_visible_at_notification(ctx: dict) -> None:
     )
 
 
-@then("no creative assignment was committed when Slack was notified")
-def then_no_assignment_committed_at_notification(ctx: dict) -> None:
-    """The approval notification precedes the assignment stage.
+@then("the assignment the request made was already committed when Slack was notified")
+def then_assignment_committed_at_notification(ctx: dict) -> None:
+    """The notification comes after the commit of the whole sync, assignment included.
 
-    Once the workflow-step write joins the creatives transaction, the
-    notification is an after_commit effect draining at ``stack.close()`` — which
-    is BEFORE _process_assignments runs. Today it fires at the end of the impl,
-    after that stage has committed its rows, so this reads a non-zero count.
-    Graded together with the step visibility above: one observation, taken at
-    one instant, that reddens if either ordering regresses.
+    Graded together with the step visibility above: one observation, taken at one
+    instant. A message sent before the assignment stage would announce a creative
+    that stage can still refuse.
     """
     _assert_success_response(ctx)
     _rows, count = _notification_observation(ctx)
-    assert count == 0, (
-        f"{count} creative assignment(s) were already committed when Slack was notified — the "
-        "approval notification is an effect of the creatives commit and must drain before the "
-        "assignment stage runs"
-    )
-
-
-@then("the assignment the request made is committed")
-def then_assignment_is_committed(ctx: dict) -> None:
-    """Non-vacuity control for the ordering assertion above.
-
-    Without it, "no assignment at notification time" also holds for a request
-    that never created one — i.e. it would grade nothing.
-    """
-    _assert_success_response(ctx)
     committed = ctx["env"].committed_sync_effects().assignment_count
-    assert committed == 1, (
-        f"expected the request to leave exactly 1 committed creative assignment, got {committed}; "
-        "without one the notification-time count of 0 proves nothing"
+    assert committed == 1, f"expected the request to leave 1 committed creative assignment, got {committed}"
+    assert count == committed, (
+        f"{count} creative assignment(s) were committed when Slack was notified, and the request "
+        f"finally committed {committed}: the message went out before the sync stood"
     )
 
 
-@then("every committed creative awaiting approval has a committed workflow step")
-def then_no_orphan_creative_awaiting_approval(ctx: dict) -> None:
-    """GH #1987: no creative left in the queue unqueued.
+@then("no creative, workflow step or Slack notification came of the request")
+def then_refusal_left_nothing_awaiting_approval(ctx: dict) -> None:
+    """GH #1987: a refused sync leaves no creative at pending_review and tells no human about one.
 
-    A creative committed at ``pending_review`` is a promise that a human will be
-    asked to review it, and the workflow step is the only thing that asks. When
-    _process_assignments raises in strict mode the creatives are already
-    committed (``if not dry_run: stack.close()``) while the workflow-step call
-    sits after the raise — so the promise is committed and the queue entry never
-    written. Once the steps join the creatives' transaction they commit in the
-    same ``stack.close()``, before the raise, and the two cannot diverge.
+    The require-human tenant is what makes this able to fail: the same request with a
+    package that exists commits a creative, a step and a message
+    (@T-UC-006-local-post-commit-workflow-step-ordering).
     """
     effects = ctx["env"].committed_sync_effects()
-    awaiting = effects.creatives_awaiting_approval
-    expected_ids = _synced_creative_ids(ctx)
-    # Non-vacuity: the require-human tenant must actually have committed the
-    # creative before the raise. If it did not, there is no orphan to look for
-    # and the mapping comparison below would hold over two empty sets.
-    assert awaiting == expected_ids, (
-        f"expected the strict-mode failure to leave {expected_ids} committed at pending_review, "
-        f"got {awaiting}; without a committed creative there is no orphan to grade"
+    observed = (effects.creatives_awaiting_approval, effects.workflow_step_ids, effects.workflow_object_ids)
+    assert observed == ([], [], []), (
+        f"the request was refused and left creatives {effects.creatives_awaiting_approval}, "
+        f"steps {effects.workflow_step_ids}, mappings {effects.workflow_object_ids} committed"
     )
-    assert sorted(set(effects.workflow_object_ids) & set(awaiting)) == awaiting, (
-        f"creatives {sorted(set(awaiting) - set(effects.workflow_object_ids))} were committed "
-        "awaiting approval with no workflow step naming them — the assignment failure aborted "
-        "before the steps were written, but after the creatives were committed (GH #1987)"
-    )
+    notified = ctx["env"].slack_notified_creatives
+    assert notified == [], f"the request was refused and Slack was told about {notified}"
 
 
 # ═══════════════════════════════════════════════════════════════════════

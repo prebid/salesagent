@@ -8,7 +8,8 @@ Proves data survives:
 
 import json
 
-from src.core.schemas import FrequencyCap, Targeting
+from src.core.schemas import Targeting
+from src.core.schemas._base import StoredFrequencyCap
 from tests.factories import FrequencyCapFactory
 
 
@@ -204,4 +205,4 @@ class TestFrequencyCapRoundtrip:
         t2 = _json_roundtrip(t)
         assert t2.frequency_cap.max_impressions == 10
         assert t2.frequency_cap.suppress_minutes == 120.0
-        assert isinstance(t2.frequency_cap, FrequencyCap)
+        assert isinstance(t2.frequency_cap, StoredFrequencyCap)

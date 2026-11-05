@@ -11,8 +11,8 @@ from adcp.types.legacy import LegacyCreativeAsset as CreativeAsset
 from pydantic import BaseModel
 
 from src.core.database.repositories.uow import CreativeUoW
-from src.core.errors.details import ValidationDetails
-from src.core.exceptions import AdCPSalesAgentError, adcp_error_for
+from src.core.errors.details import CapabilityRefusalDetails, ValidationDetails
+from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPSalesAgentError, adcp_error_for
 from src.core.format_resolver import seller_format_catalogue
 from src.core.helpers import enum_value, log_tool_activity
 from src.core.resolved_identity import AccountIdentity, ResolvedIdentity
@@ -111,7 +111,23 @@ def sync_creatives(
     dry_run = bool(req.dry_run)
     joined = uow is not None
     assert not (joined and dry_run), "a joined sync commits with its caller and cannot be a preview"
-    validation_mode = enum_value(req.validation_mode)
+    # Strict is the one mode this seller serves, and it is refused here, before anything is
+    # stored. sync-creatives-request.json: "'lenient' processes valid creatives and reports
+    # errors", which this seller does not implement (GH #2515).
+    if enum_value(req.validation_mode) == "lenient":
+        raise AdCPCapabilityNotSupportedError(
+            details=CapabilityRefusalDetails(capability="validation_mode", rejected_value="lenient"),
+            field="validation_mode",
+        )
+    # sync-creatives-request.json assignment_operations: "Explicit, ordered assignment mutations",
+    # which this seller does not implement. Refused before anything is stored, as UNSUPPORTED_FEATURE
+    # ("A requested feature or field is not supported by this seller"), rather than answered as a
+    # sync that did none of them.
+    if req.assignment_operations:
+        raise AdCPCapabilityNotSupportedError(
+            details=CapabilityRefusalDetails(capability="assignment_operations"),
+            field="assignment_operations",
+        )
 
     from pydantic import ValidationError
 
@@ -186,13 +202,8 @@ def sync_creatives(
     # ONE write path for both branches: dry_run rolls this transaction back on clean
     # exit instead of committing it (BaseUoW), so preview and live run identical
     # resolve/validate/write code and a preview's reads see its own flushed rows
-    # (sync-creatives-request.json#/properties/dry_run).
-    #
-    # The stack, rather than a plain `with`, is what keeps the assignment stage a
-    # SINGLE call site below: live closes this transaction before that call (as
-    # the implicit block exit used to), dry keeps it open and hands it over so
-    # both stages share the one rolled-back transaction. A second invocation
-    # under an `if dry_run:` would re-fork the very seam this collapses.
+    # (sync-creatives-request.json#/properties/dry_run). The stack enters a unit only when no
+    # caller supplied one.
     with ExitStack() as stack:
         if uow is None:
             uow = stack.enter_context(CreativeUoW(tenant.tenant_id, dry_run=dry_run))
@@ -510,33 +521,16 @@ def sync_creatives(
 
             creative_repo.after_commit(_notify, label="creative_approval_slack")
 
-        # LIVE: close (and so commit) the creatives transaction here, exactly as
-        # the implicit block exit did before — the assignment stage then opens
-        # its own, and reads these creatives as committed rows.
-        # DRY: leave it open. The assignment stage joins THIS transaction and
-        # reads the same creatives as flushed rows, so it grades the post-sync
-        # state without a shadow carrier, and the whole thing rolls back together.
-        # NOTE: this conditional is the transaction seam itself (the commit-vs-
-        # rollback decision), not a hand-placed effect gate — it is deliberately
-        # retained, so this file is not literally dry_run-free after prkv.16.
-        # JOINED: the caller owns the transaction, so it stays open like a preview's and
-        # the assignment stage joins it; the caller's commit or rollback decides both.
-        keep_open = dry_run or joined
-        if not keep_open:
-            stack.close()
-
-        # Process assignments (spec-compliant: creative_id → package_ids mapping).
-        # ONE mechanism, one call site, both branches: the same resolution,
-        # validation, strict-raise, upsert, weight normalization and media-buy
-        # status transition run either way — dry_run differs only in which
-        # transaction they run in and that it is discarded.
+        # Process assignments (spec-compliant: creative_id -> package_ids mapping), in this
+        # transaction on every path. Validate first, save second: a whole-request refusal here
+        # takes the creatives, their workflow steps and their queued effects with it
+        # (sync-creatives-request.json: "'strict' fails entire sync on any validation error").
         assignment_list = _process_assignments(
             assignments=req.assignments,
             results=results,
-            tenant=tenant,
-            validation_mode=validation_mode,
             principal_id=principal_id,
-            uow=uow if keep_open else None,
+            uow=uow,
+            tenant=tenant,
         )
 
     # The audit writer opens a unit and a session of its own, so it runs only once no unit of

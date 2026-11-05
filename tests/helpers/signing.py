@@ -1330,10 +1330,16 @@ MALFORMED_SIGNATURE_HEADERS = {
 #:
 #: Collapsing the two would make the (code, step) predicate lane .1 turns on
 #: unrepresentable from a scenario.
-SIGNATURE_REALIZATIONS: tuple[Any, ...] = (False, True, "malformed", "tampered")
+#:
+#: * ``"unknown_key"`` — a real signature over the exact bytes sent, under a ``keyid`` the
+#:   counterparty's trust root does not publish, so the verifier answers
+#:   ``request_signature_key_unknown`` at its key lookup;
+#: * ``"wrong_key"`` — a signature over the exact bytes sent, under the published ``keyid``, by a
+#:   private key other than the published one: ``request_signature_invalid``.
+SIGNATURE_REALIZATIONS: tuple[Any, ...] = (False, True, "malformed", "tampered", "unknown_key", "wrong_key")
 
 #: The type every seam that carries a realization is annotated with.
-SignatureRealization = bool | Literal["malformed", "tampered"]
+SignatureRealization = bool | Literal["malformed", "tampered", "unknown_key", "wrong_key"]
 
 
 def realization(signed: Any) -> SignatureRealization:
@@ -1352,13 +1358,15 @@ def realization(signed: Any) -> SignatureRealization:
     ``True``/``False`` but are not realizations, and a caller that produced an int
     where a realization belongs has a bug worth surfacing.
     """
-    if signed is True or signed is False or signed in ("malformed", "tampered"):
+    if signed is True or signed is False or signed in ("malformed", "tampered", "unknown_key", "wrong_key"):
         return signed
     raise ValueError(
         f"signed={signed!r} is not a signature realization. Pass one of "
         f"{SIGNATURE_REALIZATIONS!r}: False (no signature headers), True (a real signature over "
         "the exact bytes sent), 'malformed' (unparseable headers — a step-1 pre-check failure), "
-        "or 'tampered' (a real signature over a different body — a checklist digest mismatch). "
+        "'tampered' (a real signature over a different body — a checklist digest mismatch), "
+        "'unknown_key' (a real signature under a keyid nobody publishes), "
+        "or 'wrong_key' (a signature its published key does not verify). "
         "Refusing rather than falling through to a correct signature, which would make a "
         "scenario grading a refusal pass on an acceptance."
     )

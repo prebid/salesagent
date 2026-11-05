@@ -206,6 +206,46 @@ Feature: Canonical format options a seller stores are announced to buyers on the
     # @source repo=adcp ref=v3.2.7 path=docs/creative/canonical-formats.mdx section="Producer rules"
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/FORMAT_DECLARATION_DIVERGENT
 
+  # canonical-formats.mdx "Narrows" (normative) is one-directional: every v2 parameter must
+  # fall inside the v1 requirement. So a range wider than the exact duration a reference
+  # states conflicts ("v2.range narrows v1.range when ..."), and "An omitted legacy ratio is
+  # 1x", so pixel_ratios 2 conflicts with a reference that states no ratio. The registry
+  # states a density id's ratios itself (static/test-vectors/v1-canonical-mapping.json,
+  # display-300-by-250-2x), and a reference silent about a parameter leaves it open.
+  # The rows' selection is a name because an Examples value lands in the nodeid.
+  # @source repo=adcp ref=v3.2.7 path=docs/creative/canonical-formats.mdx section="Narrows"
+  # @source repo=adcp ref=v3.2.7 path=static/test-vectors/v1-canonical-mapping.json pointer=/narrowing_vectors
+  @T-UC-GET-PRODUCTS-format-options-narrows-conflict @format_option_announcement @requires_db
+  Scenario Outline: a declaration wider than the reference it asserts conflicts - <declaration>
+    Given the seller stores a canonically-authored product declaring "<declaration>" and asserting the v1_format_ref "<reference>"
+    When the buyer requests products
+    Then the announced product carries no format_ids key at all
+    And the response carries one FORMAT_DECLARATION_DIVERGENT advisory from the producer naming "products[0]"
+
+    Examples:
+      | declaration                 | reference                |
+      | video_range_5s_to_60s       | video_30s                |
+      | image_300x250_density_2     | display_300x250_image    |
+      | image_300x250_density_1_2   | display_300x250_image_2x |
+      | image_300x250_density_1_3   | display_300x250_image_1x_2x |
+
+  @T-UC-GET-PRODUCTS-format-options-narrows-agreement @format_option_announcement @requires_db
+  Scenario Outline: a declaration inside the reference it asserts is projected - <declaration>
+    Given the seller stores a canonically-authored product declaring "<declaration>" and asserting the v1_format_ref "<reference>"
+    When the buyer requests products
+    Then the announced product's format_ids name exactly "<reference>"
+    And the response carries no format-declaration advisory
+
+    Examples:
+      | declaration                 | reference                |
+      | video_exact_30s             | video_30s                |
+      | video_range_30s_only        | video_30s                |
+      | video_range_5s_to_60s       | video_standard_30s       |
+      | image_300x250_density_1     | display_300x250_image    |
+      | image_300x250_density_2     | display_300x250_image_2x |
+      | image_300x250_density_1_2   | display_300x250_image_1x_2x |
+      | image_300x250_density_2     | display_300x250_image_1x_2x |
+
   @T-UC-GET-PRODUCTS-format-options-not-narrowed-partial @format_option_announcement @requires_db
   Scenario: only the v1_format_ref a declaration does not narrow is left out of format_ids
     Given the seller stores a canonically-authored product whose "image" declaration of 300x250 asserts v1_format_refs to "display_300x250_image, display_728x90_image"

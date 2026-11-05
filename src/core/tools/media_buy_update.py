@@ -30,7 +30,6 @@ from sqlalchemy import select
 
 from src.core.exceptions import (
     AdCPAdapterError,
-    AdCPAmbiguousBiddingPolicyError,
     AdCPBudgetExceededError,
     AdCPBudgetTooLowError,
     AdCPCapabilityNotSupportedError,
@@ -103,8 +102,11 @@ from src.core.validation_helpers import (
 from src.services.targeting_capabilities import (
     property_list_unsupported_advisories,
     raise_if_property_targeting_violations,
+    refuse_ambiguous_bidding,
     refuse_invalid_package_overlays,
+    refuse_unapplied_request_fields,
     refuse_unsupported_package_members,
+    unapplied_fields,
     validate_property_targeting_allowed,
 )
 
@@ -322,8 +324,15 @@ _APPLIED_PACKAGE_FIELDS: frozenset[str] = frozenset(
 )
 
 #: Not instructions, so neither applied nor refused: the package's identity, the echoed
-#: protocol context, and the extension bag.
-_NON_INSTRUCTION_PACKAGE_FIELDS: frozenset[str] = frozenset({"package_id", "context", "ext"})
+#: protocol context, the extension bag, and ``cancellation_reason``, a note beside ``canceled``
+#: as it is at the root.
+_NON_INSTRUCTION_PACKAGE_FIELDS: frozenset[str] = frozenset({"package_id", "context", "ext", "cancellation_reason"})
+
+#: ``canceled`` at the root and on a package. This seller does not implement cancellation
+#: (prebid/salesagent#1261), and both pinned fields name the refusal: "Sellers MAY reject with
+#: NOT_CANCELLABLE" (update-media-buy-request.json and package-update.json). So it is answered by
+#: :func:`_refuse_cancellation`, not by the UNSUPPORTED_FEATURE refusal of the derived sets.
+_REFUSED_AS_NOT_CANCELLABLE: frozenset[str] = frozenset({"canceled"})
 
 #: The package-update fields this seller accepts in its DTO — because the pinned schema
 #: declares them — and cannot execute. DERIVED by SUBTRACTION from the DTO's own field set,
@@ -360,11 +369,69 @@ _NON_INSTRUCTION_PACKAGE_FIELDS: frozenset[str] = frozenset({"package_id", "cont
 #: ``git grep overlay_support -- src/`` returns nothing, so this seller advertises no overlay
 #: support at all and never claimed keyword targeting. (It also understates the dimensions
 #: this seller DOES support, which is its own gap and not this refusal's business.)
-_UNAPPLIED_PACKAGE_FIELDS: tuple[str, ...] = tuple(
-    name
-    for name in AdCPPackageUpdate.model_fields
-    if name not in _APPLIED_PACKAGE_FIELDS and name not in _NON_INSTRUCTION_PACKAGE_FIELDS
+_UNAPPLIED_PACKAGE_FIELDS: tuple[str, ...] = unapplied_fields(
+    AdCPPackageUpdate, _APPLIED_PACKAGE_FIELDS | _REFUSED_AS_NOT_CANCELLABLE, _NON_INSTRUCTION_PACKAGE_FIELDS
 )
+
+#: The top-level fields this seller applies. ``new_packages`` is answered by its own refusal.
+#: ``budget_allocation`` is applied in its fixed mode only
+#: (:func:`~src.services.targeting_capabilities.refuse_unapplied_request_fields`). ``name`` is
+#: stored, and the success response returns the stored value.
+_APPLIED_REQUEST_FIELDS: frozenset[str] = frozenset(
+    {
+        "budget_allocation",
+        "end_time",
+        "media_buy_id",
+        "name",
+        "new_packages",
+        "packages",
+        "paused",
+        "push_notification_config",
+        "reporting_webhook",
+        "revision",
+        "start_time",
+    }
+)
+
+#: Not instructions. ``governance_context`` is an opaque token for a governed account, which no
+#: account here is. ``cancellation_reason`` is a note beside ``canceled``, which is refused, so
+#: there is no cancellation for it to describe.
+_NON_INSTRUCTION_REQUEST_FIELDS: frozenset[str] = frozenset(
+    {
+        "account",
+        "adcp_major_version",
+        "adcp_version",
+        "cancellation_reason",
+        "context",
+        "ext",
+        "governance_context",
+        "idempotency_key",
+    }
+)
+
+#: The top-level update fields this seller accepts because the pin declares them and cannot
+#: apply. ``media-buy/update-media-buy-request.json`` refuses ``daily_budget_cap`` and
+#: ``frequency_cap`` by name ("rejected atomically with UNSUPPORTED_FEATURE before any change").
+_UNAPPLIED_REQUEST_FIELDS: tuple[str, ...] = unapplied_fields(
+    UpdateMediaBuyRequest, _APPLIED_REQUEST_FIELDS | _REFUSED_AS_NOT_CANCELLABLE, _NON_INSTRUCTION_REQUEST_FIELDS
+)
+
+
+def _refuse_cancellation(req: UpdateMediaBuyRequest, current_status: str) -> None:
+    """Refuse a cancel of the buy or of a package, before any change.
+
+    This seller does not implement cancellation (prebid/salesagent#1261), so a cancel was answered
+    as a success while the buy kept delivering. The root cancel is asked first: specification.mdx,
+    "Root cancellation takes precedence".
+    """
+    if req.canceled:
+        field = "canceled"
+    else:
+        canceled = [index for index, package in enumerate(req.packages or ()) if package.canceled]
+        if not canceled:
+            return
+        field = package_field_path("canceled", canceled[0])
+    raise AdCPNotCancellableError(details=InvalidStateDetails(current_status=current_status), field=field)
 
 
 def _refuse_unapplied_package_fields(req: UpdateMediaBuyRequest) -> None:
@@ -381,24 +448,6 @@ def _refuse_unapplied_package_fields(req: UpdateMediaBuyRequest) -> None:
     (``src/services/targeting_capabilities.py``).
     """
     refuse_unsupported_package_members(req.packages, _UNAPPLIED_PACKAGE_FIELDS)
-
-
-def _refuse_ambiguous_bidding(req: UpdateMediaBuyRequest) -> None:
-    """Refuse a package update carrying a non-null ``bidding`` object beside ``bid_price``.
-
-    ``enums/error-code.json`` AMBIGUOUS_BIDDING_POLICY: "Sellers MUST reject rather than
-    choosing a winner." Raised ahead of :func:`_refuse_unapplied_package_fields`, which
-    would otherwise answer UNSUPPORTED_FEATURE for either member alone and hide the more
-    specific refusal. ``bidding: null`` beside ``bid_price`` is allowed by the pin and reads
-    as ``None`` here, so it passes. The members are read by attribute with no default, so a
-    pin that renames one fails loudly here instead of never matching.
-    """
-    for index, pkg_update in enumerate(req.packages or ()):
-        if all(getattr(pkg_update, name) is not None for name in AdCPPackageUpdate.AMBIGUOUS_BIDDING_MEMBERS):
-            raise AdCPAmbiguousBiddingPolicyError(
-                details=EntityRefDetails(package_id=pkg_update.package_id, package_index=index),
-                field=f"packages[{index}]",
-            )
 
 
 def _refuse_unsupported_actions(req: UpdateMediaBuyRequest) -> None:
@@ -801,8 +850,14 @@ def _update_media_buy_impl(
 
     # Capability refusal, above the UoW for the same reason the webhook gates are: the spec
     # puts this rejection "before any mutation", so no transaction may be open when it fires.
-    _refuse_ambiguous_bidding(req)
+    refuse_ambiguous_bidding(req.packages)
     _refuse_unapplied_package_fields(req)
+    # A package's catalogs are required to be of distinct types (core/package.json), the same
+    # refusal create makes. Here rather than beside the catalog write, which runs after the
+    # pause and budget adapter calls of the same package.
+    for pkg_index, pkg_update in enumerate(req.packages or ()):
+        refuse_duplicate_catalog_types(pkg_update.catalogs, pkg_index)
+    refuse_unapplied_request_fields(req, _UNAPPLIED_REQUEST_FIELDS)
     _refuse_unsupported_actions(req)
 
     # ── Workflow-step bookkeeping fence ──────────────────────────────────
@@ -844,14 +899,12 @@ def _update_media_buy_impl(
             _current_mb = uow.media_buys.get_by_id(media_buy_id_to_use)
             _current_status = _current_mb.status if _current_mb else ""
             if is_terminal_status(_current_status):
-                # The pin SPECIALIZES the code by what was asked, not by what went wrong:
-                # 3.1/enums/error-code.json reserves NOT_CANCELLABLE for "cannot be canceled
-                # in its current state" and leaves INVALID_STATE for "operation is not
-                # permitted for the resource's current status". Both are correctable. So a
-                # cancel against a terminal buy -- the re-cancel case -- answers the specific
-                # code, and every other mutation keeps the generic one.
-                # BR-UC-003-update-media-buy.feature states the same split.
-                if req.canceled:
+                # specification.mdx (media buy state transitions): a cancel of a buy already
+                # `canceled` "MUST reject with `NOT_CANCELLABLE`", and "All other updates to media
+                # buys in terminal states (`completed`, `rejected`, `canceled`) — including
+                # `canceled: true` attempts against `completed` or `rejected` buys — MUST be
+                # rejected with `INVALID_STATE`". So only the re-cancel answers the specific code.
+                if req.canceled and _current_status == PersistedMediaBuyStatus.CANCELED:
                     raise AdCPNotCancellableError(
                         details=InvalidStateDetails(current_status=_current_status),
                         field="media_buy_id",
@@ -860,6 +913,10 @@ def _update_media_buy_impl(
                     details=InvalidStateDetails(current_status=_current_status),
                     field="media_buy_id",
                 )
+
+            # After the terminal refusal, which keeps its own answer for a re-cancel, and before
+            # the workflow step and any adapter call.
+            _refuse_cancellation(req, _current_status)
 
             _requested = _requested_actions(req)
             _allowed = set(seller_valid_actions(_current_status))
@@ -1582,9 +1639,6 @@ def _update_media_buy_impl(
                     if pkg_update.catalogs is not None:
                         if not pkg_update.package_id:
                             raise AdCPValidationError(field=package_field_path("package_id", pkg_index))
-                        # The replacement becomes the package's catalogs, which core/package.json
-                        # requires to be of distinct types -- the same refusal create makes.
-                        refuse_duplicate_catalog_types(pkg_update.catalogs, pkg_index)
                         catalog_pkg = uow.media_buys.get_package_or_raise(req.media_buy_id, pkg_update.package_id)
                         # Through the repository's own writer rather than a mutate +
                         # flag_modified pair: it replaces the document, bumps the buy's
@@ -1686,6 +1740,12 @@ def _update_media_buy_impl(
                 # reports ("Revision number after this update").
                 uow.media_buys.update_fields(req.media_buy_id, is_paused=bool(req.paused))
 
+            # update-media-buy-request.json name: "Replacement human-readable name for this media
+            # buy". A display label in a column this seller owns, so it is applied mid-flight; the
+            # response returns the stored value either way.
+            if req.name is not None:
+                uow.media_buys.update_fields(req.media_buy_id, name=req.name)
+
             # After every write above, so the coverage and the flight window it reads are
             # this update's result, and before the response reads the status back.
             assert uow.assignments is not None
@@ -1718,6 +1778,10 @@ def _update_media_buy_impl(
             final_response = UpdateMediaBuySuccess(
                 media_buy_id=req.media_buy_id or "",
                 message=f"Media buy {req.media_buy_id or ''} updated successfully.",
+                # update-media-buy-response.json name: "Persisted human-readable name after the
+                # update. When update_media_buy supplied name, the seller MUST return the stored
+                # value here". A buy with no stored name reports none.
+                name=_final_mb.name,
                 revision=_final_revision,
                 media_buy_status=_final_mbs,  # AdCP: mirrors `status`
                 # The applied instant (see _applied_instant). This branch reaches writes

@@ -250,7 +250,6 @@ class TestSyncSavepointIsolationTransport:
                     _creative(creative_id="c_bad", name=""),  # empty name → validation fail
                     _creative(creative_id="c_good_2", name="Good Two"),
                 ],
-                validation_mode="lenient",
             )
 
         assert result.is_success
@@ -307,34 +306,6 @@ class TestSyncStrictModeAbortTransport:
         # raises AdCPPackageNotFoundError here (_assignments.py:163), which is more
         # specific than the AdCPNotFoundError this used to accept.
         assert result.error_code() == "PACKAGE_NOT_FOUND", f"Expected PACKAGE_NOT_FOUND, got {result.error_code()!r}"
-
-
-@pytest.mark.requires_db
-class TestSyncLenientModeContinuesTransport:
-    """Lenient mode records assignment errors without aborting.
-
-    Covers: UC-006-MAIN-MCP-07
-    """
-
-    @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
-    def test_lenient_mode_missing_package_records_error(self, integration_db, transport):
-        """Lenient validation_mode logs error and continues past missing package."""
-        with CreativeSyncEnv() as env:
-            env.setup_default_data()
-
-            result = env.call_via(
-                transport,
-                creatives=[_creative(creative_id="c_lenient", name="Lenient Test")],
-                assignments=[{"creative_id": "c_lenient", "package_id": "PKG-MISSING"}],
-                validation_mode="lenient",
-            )
-
-        assert result.is_success
-        assert_envelope(result, transport)
-        assert len(result.payload.creatives) == 1
-        creative_result = result.payload.creatives[0]
-        assert creative_result.assignment_errors is not None
-        assert "PKG-MISSING" in creative_result.assignment_errors
 
 
 @pytest.mark.requires_db
@@ -969,14 +940,9 @@ class TestAssignmentPackageTenantFilter:
                 transport,
                 creatives=[_creative(creative_id="c_cross", name="Cross Tenant")],
                 assignments=[{"creative_id": "c_cross", "package_id": pkg_id}],
-                validation_mode="lenient",
             )
 
-        assert result.is_success
-        assert_envelope(result, transport)
-        creative_result = result.payload.creatives[0]
-        assert creative_result.assignment_errors is not None
-        assert pkg_id in creative_result.assignment_errors
+        result.assert_wire_error("PACKAGE_NOT_FOUND")
 
 
 @pytest.mark.requires_db
@@ -987,8 +953,8 @@ class TestAssignmentFormatCompatibility:
     """
 
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
-    def test_format_mismatch_records_error(self, integration_db, transport):
-        """Creative format not in product.format_ids → assignment_errors."""
+    def test_format_mismatch_refuses_the_sync(self, integration_db, transport):
+        """Creative format not in product.format_ids refuses the request."""
         from tests.factories import (
             MediaBuyFactory,
             MediaPackageFactory,
@@ -1022,23 +988,9 @@ class TestAssignmentFormatCompatibility:
                 transport,
                 creatives=[_creative(creative_id="c_fmt_mismatch", name="Format Mismatch")],
                 assignments=[{"creative_id": "c_fmt_mismatch", "package_id": pkg_id}],
-                validation_mode="lenient",
             )
 
-        assert result.is_success
-        assert_envelope(result, transport)
-        creative_result = result.payload.creatives[0]
-        assert creative_result.assignment_errors is not None
-        assert pkg_id in creative_result.assignment_errors
-        error_msg = creative_result.assignment_errors[pkg_id]
-        # The two FORMAT IDENTITIES, not the sentence. This asserted the substring "not
-        # supported", which pinned the wording of a diagnostic record rather than anything a
-        # buyer can act on -- and it broke on a reword while every fact it meant to check
-        # still held. The values are what the record exists to carry: which format was
-        # refused and which the product accepts. Same reasoning as ``assert_wire_error``
-        # having deliberately no ``message_substr``.
-        assert "display_300x250" in error_msg, f"the record does not name the refused format: {error_msg}"
-        assert "video_30s" in error_msg, f"the record does not name what the product accepts: {error_msg}"
+        result.assert_wire_error("VALIDATION_ERROR")
 
 
 @pytest.mark.requires_db
@@ -1139,7 +1091,6 @@ class TestEmptyNameFails:
             result = env.call_via(
                 transport,
                 creatives=[_creative(creative_id="c_no_name", name="")],
-                validation_mode="lenient",
             )
 
         assert result.is_success  # sync succeeds, individual creative fails
@@ -1184,7 +1135,6 @@ class TestMissingFormatFails:
                         "assets": build_assets(image_spec("banner")),
                     }
                 ],
-                validation_mode="lenient",
             )
 
         assert result.is_error, f"{transport.value}: the request boundary must refuse this payload"
@@ -1251,7 +1201,6 @@ class TestStaticPreviewFailed:
                         "assets": named_format_assets("display_generative", prompt="No media here"),
                     }
                 ],
-                validation_mode="lenient",
             )
 
         if result.is_error:
@@ -1294,7 +1243,6 @@ class TestGeminiKeyMissing:
                         "assets": prompt_assets("Build a banner", text_spec("message", content="Build a banner")),
                     }
                 ],
-                validation_mode="lenient",
             )
 
         assert result.is_success

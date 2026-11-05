@@ -95,6 +95,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc010_capabilities",
     "tests.bdd.steps.domain.uc011_accounts",
     "tests.bdd.steps.domain.admin_accounts",
+    "tests.bdd.steps.domain.admin_inventory_profiles",
     "tests.bdd.steps.domain.uc_get_products_inventory",
     "tests.bdd.steps.domain.uc_get_products_pricing",
     "tests.bdd.steps.domain.uc_get_products_format_options",
@@ -106,6 +107,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.local_context_echo",
     "tests.bdd.steps.domain.tenant_identification",
     "tests.bdd.steps.domain.agent_card_discovery",
+    "tests.bdd.steps.domain.mcp_endpoint_paths",
     "tests.bdd.steps.domain.publisher_format_catalog",
     "tests.bdd.steps.domain.publisher_authorization",
     "tests.bdd.steps.domain.pre_dispatch_refusals",
@@ -1870,9 +1872,10 @@ def _no_given_branch(given: str, value: str) -> str:
     return f"Given gap: {given} has no branch for {value!r} (ValueError), so nothing is dispatched"
 
 
-def _no_datatable_field(field: str) -> str:
-    """The reason for a package-update datatable field the shared step does not accept."""
-    return f"step gap: the package-update datatable step does not accept {field!r}, so nothing is dispatched"
+_LEDGER_NO_PACKAGE_CANCEL = (
+    "production gap: this seller implements no cancellation (prebid/salesagent#1261) and refuses a "
+    "package cancel with NOT_CANCELLABLE, where the scenario expects the package canceled"
+)
 
 
 _LEDGER_SEED_MEDIA_BUY = (
@@ -2017,12 +2020,9 @@ _UC002_UC003_LEDGER: tuple[_CatchallXfail, ...] = (
         "T-UC-002-inv-006-5",
         _dormant("given a package uses a bid-based auction pricing model with max_bid set to true"),
     ),
-    _X(
-        "T-UC-002-inv-214-8",
-        _dormant(
-            "given a create_media_buy request that carries an invoice_recipient overriding the account default billing entity"
-        ),
-    ),
+    # Graduated: T-UC-002-inv-214-8. Its Givens are bound (uc002_v31_request.py), the request
+    # carrying an invoice_recipient is refused before any write on every transport, and the
+    # Thens read the error spec and the absence of a booking.
     _X("T-UC-002-partition-catalog-distinct-type", _LEDGER_CATALOG_NOT_FOUND, rows=("catalog_not_found",)),
     _X(
         "T-UC-002-partition-optimization-goals",
@@ -2124,7 +2124,7 @@ _UC002_UC003_LEDGER: tuple[_CatchallXfail, ...] = (
         _LEDGER_INVOICE_RECIPIENT,
         rows=("invoice_recipient supplied = business entity not authorized for this account",),
     ),
-    _X("T-UC-003-cancel-package", _no_datatable_field("canceled")),
+    _X("T-UC-003-cancel-package", _LEDGER_NO_PACKAGE_CANCEL),
     _X("T-UC-003-new-packages-add", _LEDGER_NO_ADD_PACKAGES),
     _X("T-UC-003-new-packages-duplicate", _LEDGER_NO_ADD_PACKAGES),
     _X("T-UC-003-partition-approval-workflow", _UPDATE_TENANT_REVIEW_DIVERGENCE, rows=("pending_human_review",)),
@@ -2806,23 +2806,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
-        # FIXME(production-gap bead): UC-003 ext-v cancellation
-        # refused. canceled IS a valid UpdateMediaBuyRequest field but production
-        # never reads it, has no state-based NOT_CANCELLABLE check, and
-        # has_updatable_fields() omits canceled — so a media_buy_id+canceled
-        # request trips the empty-update INVALID_REQUEST path instead of
-        # NOT_CANCELLABLE. The step branches the update adapter with the canonical
-        # NOT_CANCELLABLE refusal and dispatches the real cancel on the wire, so
-        # this strict xfail flips to a pass when production wires the cancel path.
-        if "T-UC-003-ext-v" in marker_names:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="production gap: update_media_buy never reads canceled and has no state-based "
-                    "cancellation gate; has_updatable_fields() omits canceled so the request short-circuits "
-                    "via empty-update INVALID_REQUEST (canonical target: NOT_CANCELLABLE)",
-                    strict=True,
-                )
-            )
+        # Graduated: T-UC-003-ext-v. update_media_buy refuses every cancel with NOT_CANCELLABLE
+        # before any adapter call (_refuse_cancellation, until prebid/salesagent#1261 implements
+        # cancellation). It XPASSed strict on a2a, mcp and rest on the box; its Given no longer
+        # makes the adapter raise the code, so the pass is production's.
 
         # Retired (both sides, 20e5b60d8 / PR #1567 round-2 item 2): the former
         # T-UC-002-alt-manual workflow_step_id xfail targeted the pre-3.1.1
@@ -5551,6 +5538,7 @@ def _uc010_wired_tags() -> frozenset[str]:
             # left, so it must join this set or it would xfail as "not yet wired" rather
             # than run.
             "T-UC-010-v31-request-signing-legacy-digest",
+            "T-UC-010-v31-request-signing-migrated-digest",
             "T-UC-010-v31-request-signing-subset",
             "T-UC-010-v31-webhook-signing",
             # Batch 17 — a GAM seller declares only the geo targeting it books
@@ -6541,6 +6529,7 @@ _UC003_INLINE_CREATIVES_READBACK_TAGS = frozenset(
         "T-UC-003-local-inline-creatives-keep-library",
         "T-UC-003-alt-creatives-inline",
         "T-UC-003-storyboard-creative-fate-after-cancellation",
+        "T-UC-003-media-buy-name",
     }
 )
 
@@ -6632,6 +6621,8 @@ _UC006_WIRED_SCENARIOS = frozenset(
         # integration file: wired because they pass on every in-process transport.
         "T-UC-006-local-assignment-unknown-creative",
         "T-UC-006-local-assignment-only-missing-package",
+        "T-UC-006-assignment-refusal-stores-nothing",
+        "T-UC-006-assignment-operations-refused",
         "T-UC-006-local-assignment-only-existing-creative",
         "T-UC-006-local-failed-creative-assignment",
         "T-UC-006-local-dryrun-parity",
@@ -6823,6 +6814,15 @@ ENV_ROUTES: list[EnvRoute] = [
     EnvRoute(
         tag="agentcard",
         when=lambda m: "agentcard" in m,
+        env_builder=_build_capabilities_env,
+        seed=_seed_tenant_and_principal,
+    ),
+    # ── @mcppath (local MCP endpoint paths feature) ─────────────────────────
+    # Unscoped for the reason the row above gives. No tool is dispatched: the env only supplies
+    # how a path is reached on this transport (``post_mcp_initialize``).
+    EnvRoute(
+        tag="mcppath",
+        when=lambda m: "mcppath" in m,
         env_builder=_build_capabilities_env,
         seed=_seed_tenant_and_principal,
     ),
@@ -7251,7 +7251,7 @@ ENV_ROUTES: list[EnvRoute] = [
     # it used before the readback was added.
     EnvRoute(
         tag="uc002-inline-creatives-readback",
-        when=_uc("UC-002", lambda m: "T-UC-002-alt-creatives" in m),
+        when=_uc("UC-002", lambda m: "T-UC-002-alt-creatives" in m or "T-UC-002-media-buy-name" in m),
         env_builder=_env("tests.harness.media_buy_create_list.MediaBuyCreateListEnv"),
         seed=_seed_media_buy_chain_create_dispatch,
     ),

@@ -27,6 +27,7 @@ from tests.bdd.steps._outcome_helpers import (
     wire_entry,
     wire_field,
 )
+from tests.bdd.steps.domain._unapplied_members import CREATE_PACKAGE_MEMBERS, CREATE_REQUEST_MEMBERS, OVERLAY_DIMENSIONS
 from tests.bdd.steps.domain.uc002_task_query import assert_task_query_outcome, is_task_query_outcome
 from tests.bdd.steps.domain.uc002_v31_request import (
     assert_governance_skipped_outcome,
@@ -638,6 +639,133 @@ def given_package_format_id_unregistered_agent(ctx: dict) -> None:
     """
     pkg = _first_package(ctx)
     pkg["format_ids"] = [{"agent_url": "https://unregistered-agent.example.com", "id": "banner_300x250"}]
+
+
+@given("a package requests a valid format followed by an unknown format on the registered default agent")
+def given_package_unknown_format(ctx: dict) -> None:
+    """A served format the product declares, then an id the reference agent does not serve."""
+    from tests.factories import FormatIdFactory
+
+    pkg = _first_package(ctx)
+    pkg["format_ids"] = [
+        FormatIdFactory(agent_url="https://creative.adcontextprotocol.org", id=format_id).model_dump(mode="json")
+        for format_id in ("display_300x250_image", "missing-format-1933")
+    ]
+
+
+@given(parsers.parse('the package requests format "{format_id}" from "{agent_url}" supported by its product'))
+def given_package_known_format(ctx: dict, format_id: str, agent_url: str) -> None:
+    """The package names one reference, and the product declares exactly that reference."""
+    from tests.factories import FormatIdFactory
+
+    pkg = _first_package(ctx)
+    pkg["format_ids"] = [FormatIdFactory(agent_url=agent_url, id=format_id).model_dump(mode="json")]
+    ctx["env"].set_product_format_ids(ctx["default_product"].product_id, pkg["format_ids"])
+
+
+@given(parsers.parse('the request sets its "{member}" member'))
+def given_request_sets_member(ctx: dict, member: str) -> None:
+    """Set a valid value of a top-level field this seller does not apply."""
+    _first_package(ctx)
+    ctx["request_kwargs"][member] = CREATE_REQUEST_MEMBERS[member]
+
+
+@given(parsers.parse('the request names the media buy "{name}"'))
+def given_request_names_buy(ctx: dict, name: str) -> None:
+    """The display label the buyer chose."""
+    _first_package(ctx)
+    ctx["request_kwargs"]["name"] = name
+
+
+@then(parsers.parse('the created media buy\'s name on the wire is "{name}"'))
+@then(parsers.parse('the updated media buy\'s name on the wire is "{name}"'))
+def then_created_buy_name(ctx: dict, name: str) -> None:
+    """The create or update success response carries the stored label."""
+    assert wire_field(ctx, "name") == name
+
+
+@then(parsers.parse('the read media buy\'s name on the wire is "{name}"'))
+def then_read_buy_name(ctx: dict, name: str) -> None:
+    """The get_media_buys read echoes the label unchanged."""
+    assert wire_field(ctx, "media_buys")[0]["name"] == name
+
+
+@then("the read media buy carries no name on the wire")
+def then_read_buy_no_name(ctx: dict) -> None:
+    """A buy the buyer did not name reports none, rather than a generated order name."""
+    assert "name" not in wire_field(ctx, "media_buys")[0]
+
+
+@given("the request asks for a seller-optimized budget allocation")
+def given_request_seller_optimized(ctx: dict) -> None:
+    """The shape the seller_optimized_budget storyboard sends: a shared total and goals."""
+    _first_package(ctx)
+    ctx["request_kwargs"]["total_budget"] = {"amount": _first_package(ctx)["budget"], "currency": "USD"}
+    ctx["request_kwargs"]["budget_allocation"] = {
+        "mode": "seller_optimized",
+        "optimization_goals": [{"kind": "metric", "metric": "clicks", "priority": 1}],
+    }
+
+
+@given("the request asks for a fixed budget allocation")
+def given_request_fixed_allocation(ctx: dict) -> None:
+    """Fixed is what omitting the field means, so sending it asks for what the seller does."""
+    _first_package(ctx)
+    ctx["request_kwargs"]["budget_allocation"] = {"mode": "fixed"}
+
+
+@given(parsers.parse('the package sets its "{member}" member'))
+def given_package_sets_member(ctx: dict, member: str) -> None:
+    """Set a valid value of a package field this seller does not apply."""
+    _first_package(ctx)[member] = CREATE_PACKAGE_MEMBERS[member]
+
+
+@given(parsers.parse('the package overlay sets its "{dimension}" dimension'))
+def given_package_overlay_dimension(ctx: dict, dimension: str) -> None:
+    """Set a valid value of one overlay dimension."""
+    _first_package(ctx)["targeting_overlay"] = {dimension: OVERLAY_DIMENSIONS[dimension]}
+
+
+@given("the package carries both bidding and bid_price")
+def given_package_ambiguous_bidding(ctx: dict) -> None:
+    """The pair the pin's root ``not`` forbids."""
+    package = _first_package(ctx)
+    package["bidding"] = {"automatic": True}
+    package["bid_price"] = 6.0
+
+
+@then("the buyer is refused AMBIGUOUS_BIDDING_POLICY naming the package itself")
+def then_refused_ambiguous_bidding(ctx: dict) -> None:
+    """Neither member alone is at fault, so ``field`` is the package object."""
+    ctx["result"].assert_wire_error("AMBIGUOUS_BIDDING_POLICY", field="packages[0]")
+
+
+@given("the package proposes performance standards")
+def given_package_performance_standards(ctx: dict) -> None:
+    """One well-formed proposed standard (core/performance-standard.json)."""
+    _first_package(ctx)["performance_standards"] = [
+        {"metric": "viewability", "threshold": 0.7, "vendor": {"domain": "verifier.example"}}
+    ]
+
+
+@then(parsers.re(r'the buyer is refused (?P<code>[A-Z_]+) naming the request member "(?P<member>[\w.]+)"'))
+def then_refused_naming_request_member(ctx: dict, code: str, member: str) -> None:
+    """The code, its pinned recovery and the field, on the wire."""
+    ctx["result"].assert_wire_error(code, field=member)
+
+
+@then(parsers.re(r'the buyer is refused (?P<code>[A-Z_]+) naming the package member "(?P<member>[\w.]+)"'))
+def then_refused_naming_package_member(ctx: dict, code: str, member: str) -> None:
+    """The code, its pinned recovery and the indexed field, on the wire."""
+    ctx["result"].assert_wire_error(code, field=f"packages[0].{member}")
+
+
+@then("the format selection creates a completed media buy")
+def then_format_selection_creates_buy(ctx: dict) -> None:
+    assert wire_field(ctx, "status") == "completed"
+    media_buy_id = wire_field(ctx, "media_buy_id")
+    assert isinstance(media_buy_id, str) and media_buy_id
+    assert len(wire_field(ctx, "packages")) == 1
 
 
 @given(parsers.parse('a package has two catalogs both with type "{catalog_type}"'))

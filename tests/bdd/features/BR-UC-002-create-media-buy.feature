@@ -437,6 +437,8 @@ Feature: BR-UC-002 Create Media Buy
     And the operation should fail
     And the error code should be "UNSUPPORTED_FEATURE"
     And the error should include "suggestion" field
+    And the response error field is packages[0].format_ids
+    And no media buy is persisted for the tenant
     # A legacy format_id the seller cannot normalize, or one that resolves and satisfies
     # nothing the product declares, is coded by the package selector contract:
     # UNSUPPORTED_FEATURE in both cases. REFERENCE_NOT_FOUND is the generic fallback "when
@@ -445,6 +447,219 @@ Feature: BR-UC-002 Create Media Buy
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/description
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/properties/format_ids/description
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/REFERENCE_NOT_FOUND
+
+  @T-UC-002-ext-h-manual @extension @ext-h @error
+  Scenario: A format the agent does not serve is refused before manual approval
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And the tenant requires manual approval
+    But a package requests a valid format followed by an unknown format on the registered default agent
+    When the Buyer Agent sends the create_media_buy request
+    Then the error code should be "UNSUPPORTED_FEATURE"
+    And the response error field is packages[0].format_ids
+    And no media buy is persisted for the tenant
+    # Each format_id is its own route, resolved independently, so one served reference does
+    # not admit the package past an unresolved one. The refusal answers the request: a
+    # manually approved buy is not created and parked for the operator.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/description
+
+  # A field the pin declares and this seller does not apply is refused before any write.
+  # create-media-buy-request.json (v3.2.7): frequency_cap "otherwise sellers MUST reject with
+  # UNSUPPORTED_FEATURE before any mutation and MUST NOT silently drop, soften, or clamp the
+  # cap"; daily_budget_cap "otherwise rejected with UNSUPPORTED_FEATURE". core/targeting.json
+  # states the general rule for a fresh request, "applied exactly or rejected".
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/create-media-buy-request.json pointer=/properties/frequency_cap
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/create-media-buy-request.json pointer=/properties/daily_budget_cap
+  # @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/protocols/media-buy/scenarios/budget_cap_timezone_override_rejected.yaml
+  @T-UC-002-unapplied-request-member @extension
+  Scenario Outline: A request field this seller does not apply is refused before any write - <member>
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And the request sets its "<member>" member
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the request member "<member>"
+    And no media buy is persisted for the tenant
+
+    Examples:
+      | member                 |
+      | advertiser_industry    |
+      | artifact_webhook       |
+      | bidding                |
+      | budget_cap_timezone    |
+      | daily_budget_cap       |
+      | frequency_cap          |
+      | invoice_recipient      |
+      | io_acceptance          |
+      | opportunity            |
+      | pacing                 |
+      | paused                 |
+
+  # create-media-buy-request.json (v3.2.7): "When supplied, the seller MUST persist it and echo it
+  # unchanged on the create success response and subsequent get_media_buys reads." Spelled with
+  # surrounding detail a generated order name could not produce, and read back from the wire on
+  # the same transport.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/create-media-buy-request.json pointer=/properties/name
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
+  @T-UC-002-media-buy-name @extension
+  Scenario: A media buy's name is persisted and echoed unchanged
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And the request names the media buy "Spring flight - Q2 / North"
+    When the Buyer Agent sends the create_media_buy request
+    Then the format selection creates a completed media buy
+    And the created media buy's name on the wire is "Spring flight - Q2 / North"
+    When the Buyer Agent reads the created media buy back with get_media_buys
+    Then the read media buy's name on the wire is "Spring flight - Q2 / North"
+
+  @T-UC-002-media-buy-name @extension
+  Scenario: A media buy created with no name reads back with none
+    Given a valid create_media_buy request
+    And the account exists and is active
+    When the Buyer Agent sends the create_media_buy request
+    Then the format selection creates a completed media buy
+    When the Buyer Agent reads the created media buy back with get_media_buys
+    Then the read media buy carries no name on the wire
+
+  @T-UC-002-unapplied-budget-allocation @extension
+  Scenario: A seller-optimized budget allocation is refused before any write
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And the request asks for a seller-optimized budget allocation
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the request member "budget_allocation"
+    And no media buy is persisted for the tenant
+    # media-buy/create-media-buy-request.json budget_allocation: omission means fixed, so a
+    # fixed allocation is what this seller applies; seller_optimized needs
+    # media_buy.features.seller_optimized_budget, which it does not advertise.
+    # @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/protocols/media-buy/scenarios/seller_optimized_budget.yaml
+
+  @T-UC-002-applied-budget-allocation @extension
+  Scenario: A fixed budget allocation is what this seller applies
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And the request asks for a fixed budget allocation
+    When the Buyer Agent sends the create_media_buy request
+    Then the format selection creates a completed media buy
+
+  @T-UC-002-unapplied-package-member @extension
+  Scenario Outline: A package field this seller does not apply is refused before any write - <member>
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And the package sets its "<member>" member
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the package member "<member>"
+    And no media buy is persisted for the tenant
+    # package-request.json (v3.2.7): daily_budget_cap "Requires advertised package budget-capping
+    # scope; otherwise rejected with UNSUPPORTED_FEATURE"; audience_evidence_pins "MUST reject
+    # ... missing snapshots".
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json
+
+    Examples:
+      | member                         |
+      | audience_evidence_pins         |
+      | audience_evidence_requirements |
+      | bidding                        |
+      | daily_budget_cap               |
+      | end_time                       |
+      | impressions                    |
+      | pacing                         |
+      | start_time                     |
+
+  # core/targeting.json (v3.2.7): "A fresh create/update request MUST be applied exactly or
+  # rejected"; for geo_places, "reject unsupported entries rather than silently dropping them".
+  # The refused set is the pin's targeting fields minus what an adapter here reads, so a buyer
+  # narrowing by place or excluding a property list no longer gets delivery as wide as the product.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/targeting.json
+  @T-UC-002-unapplied-overlay-dimension @extension
+  Scenario Outline: A targeting dimension no adapter applies is refused before any write - <dimension>
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And the package overlay sets its "<dimension>" dimension
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the package member "targeting_overlay.<dimension>"
+    And no media buy is persisted for the tenant
+
+    Examples:
+      | dimension               |
+      | age_restriction         |
+      | audience_exclude        |
+      | audience_include        |
+      | audiences_none_of       |
+      | browser_exclude         |
+      | browser_none_of         |
+      | collection_list         |
+      | collection_selection    |
+      | connection_type_any_of  |
+      | content_cat_none_of     |
+      | daypart_targets         |
+      | device_platform_exclude |
+      | device_type_exclude     |
+      | device_type_none_of     |
+      | geo_places              |
+      | geo_places_exclude      |
+      | keywords_none_of        |
+      | language                |
+      | media_type_none_of      |
+      | os_none_of              |
+      | placement_selection     |
+      | property_list_exclude   |
+
+  # An adapter reads these, so they keep working. media_type_any_of is GAM's (and Kevel's and
+  # Triton's), and the capabilities builder does not declare it, which is why that builder is
+  # not the refused set's other operand.
+  @T-UC-002-applied-overlay-dimension @extension
+  Scenario Outline: A targeting dimension an adapter applies keeps working - <dimension>
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And the package overlay sets its "<dimension>" dimension
+    When the Buyer Agent sends the create_media_buy request
+    Then the format selection creates a completed media buy
+
+    Examples:
+      | dimension         |
+      | media_type_any_of |
+      | geo_countries     |
+      | geo_regions       |
+
+  # package-request.json (v3.2.7) forbids the pair (`not: {required: [bidding, bid_price]}`) and
+  # its bidding text says "Sellers MUST reject ... with AMBIGUOUS_BIDDING_POLICY". The rule is
+  # the update tool's, and it answers ahead of the refusal bidding alone would get.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/properties/bidding
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/AMBIGUOUS_BIDDING_POLICY
+  @T-UC-002-ambiguous-bidding @extension
+  Scenario: A package carrying bidding beside bid_price is refused as ambiguous
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And the package carries both bidding and bid_price
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer is refused AMBIGUOUS_BIDDING_POLICY naming the package itself
+    And no media buy is persisted for the tenant
+
+  @T-UC-002-package-performance-standards @extension
+  Scenario: Proposed performance standards are rejected as terms this seller cannot honor
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And the package proposes performance standards
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer is refused TERMS_REJECTED naming the package member "performance_standards"
+    And no media buy is persisted for the tenant
+    # package-request.json performance_standards: "Seller accepts, rejects with TERMS_REJECTED,
+    # or adjusts."
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/properties/performance_standards
+
+  @T-UC-002-ext-h-valid @extension @ext-h
+  Scenario Outline: A format reference the product declares creates a media buy
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And the package requests format "<format_id>" from "<agent_url>" supported by its product
+    When the Buyer Agent sends the create_media_buy request
+    Then the format selection creates a completed media buy
+
+    Examples:
+      | agent_url                              | format_id             |
+      | https://creative.adcontextprotocol.org | display_300x250_image |
+      | broadstreet://format-source-tenant     | broadstreet_static    |
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/properties/format_ids/description
     # --- ext-i: Authentication Error ---
 
   @T-UC-002-ext-i @extension @ext-i @error @post-f1 @post-f2 @post-f3
@@ -3153,14 +3368,15 @@ Feature: BR-UC-002 Create Media Buy
     # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
 
   @T-UC-002-v31-advertiser-industry-per-buy @v31 @advertiser-industry @post-s1
-  Scenario: v3.1 advertiser_industry on the request targets a single industry per buy
+  Scenario: v3.1 advertiser_industry on the request is refused by a seller that cannot map it
     Given the tenant is configured for auto-approval
     And a valid create_media_buy request with advertiser_industry "healthcare.wellness"
     And the account "acc-001" exists and is active
     When the Buyer Agent sends the create_media_buy request
-    Then the response is compliant with the create_media_buy success spec
-    And the response should succeed
-    And the response status should be "completed"
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the request member "advertiser_industry"
+    # create-media-buy-request.json: "Sellers map this to platform-native codes". No adapter
+    # here maps it, so accepting it would answer success for a classification that never
+    # reaches the ad server. Refused like any field accepted and not applied.
     # v3.1: a brand may operate across multiple industries; each media buy targets exactly one
     # Corrected to the pin. Two lines are deleted because nothing in this scenario can
     # establish or observe them:
