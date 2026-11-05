@@ -2726,6 +2726,15 @@ def then_ad_server_no_update_call(ctx: dict) -> None:
     assert actions == [], f"the ad server was handed {actions} for a request the seller refused"
 
 
+@then(parsers.parse('the stored media buy "{label}" is still "{status}"'))
+def then_stored_buy_status(ctx: dict, label: str, status: str) -> None:
+    """Read the persisted row: a refused update leaves the buy's status where it was."""
+    from src.core.database.models import MediaBuy
+
+    rows = ctx["env"].query(MediaBuy, media_buy_id=_resolve_media_buy_id(ctx, label))
+    assert [row.status for row in rows] == [status], f"the stored media buy reads {[r.status for r in rows]}"
+
+
 @then("the ad server received an update_package_budget call")
 def then_ad_server_budget_call(ctx: dict) -> None:
     """The control: this request does reach the ad server, so the no-call Then can fail."""

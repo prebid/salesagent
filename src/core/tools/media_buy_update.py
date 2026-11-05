@@ -324,8 +324,15 @@ _APPLIED_PACKAGE_FIELDS: frozenset[str] = frozenset(
 )
 
 #: Not instructions, so neither applied nor refused: the package's identity, the echoed
-#: protocol context, and the extension bag.
-_NON_INSTRUCTION_PACKAGE_FIELDS: frozenset[str] = frozenset({"package_id", "context", "ext"})
+#: protocol context, the extension bag, and ``cancellation_reason``, a note beside ``canceled``
+#: as it is at the root.
+_NON_INSTRUCTION_PACKAGE_FIELDS: frozenset[str] = frozenset({"package_id", "context", "ext", "cancellation_reason"})
+
+#: ``canceled`` at the root and on a package. This seller does not implement cancellation
+#: (prebid/salesagent#1261), and both pinned fields name the refusal: "Sellers MAY reject with
+#: NOT_CANCELLABLE" (update-media-buy-request.json and package-update.json). So it is answered by
+#: :func:`_refuse_cancellation`, not by the UNSUPPORTED_FEATURE refusal of the derived sets.
+_REFUSED_AS_NOT_CANCELLABLE: frozenset[str] = frozenset({"canceled"})
 
 #: The package-update fields this seller accepts in its DTO — because the pinned schema
 #: declares them — and cannot execute. DERIVED by SUBTRACTION from the DTO's own field set,
@@ -363,17 +370,16 @@ _NON_INSTRUCTION_PACKAGE_FIELDS: frozenset[str] = frozenset({"package_id", "cont
 #: support at all and never claimed keyword targeting. (It also understates the dimensions
 #: this seller DOES support, which is its own gap and not this refusal's business.)
 _UNAPPLIED_PACKAGE_FIELDS: tuple[str, ...] = unapplied_fields(
-    AdCPPackageUpdate, _APPLIED_PACKAGE_FIELDS, _NON_INSTRUCTION_PACKAGE_FIELDS
+    AdCPPackageUpdate, _APPLIED_PACKAGE_FIELDS | _REFUSED_AS_NOT_CANCELLABLE, _NON_INSTRUCTION_PACKAGE_FIELDS
 )
 
-#: The top-level fields this seller applies. ``new_packages`` and ``canceled`` are answered by
-#: their own branches. ``budget_allocation`` is applied in its fixed mode only
+#: The top-level fields this seller applies. ``new_packages`` is answered by its own refusal.
+#: ``budget_allocation`` is applied in its fixed mode only
 #: (:func:`~src.services.targeting_capabilities.refuse_unapplied_request_fields`). ``name`` is
 #: stored, and the success response returns the stored value.
 _APPLIED_REQUEST_FIELDS: frozenset[str] = frozenset(
     {
         "budget_allocation",
-        "canceled",
         "end_time",
         "media_buy_id",
         "name",
@@ -388,7 +394,8 @@ _APPLIED_REQUEST_FIELDS: frozenset[str] = frozenset(
 )
 
 #: Not instructions. ``governance_context`` is an opaque token for a governed account, which no
-#: account here is. ``cancellation_reason`` is a "SHOULD store" note beside ``canceled``.
+#: account here is. ``cancellation_reason`` is a note beside ``canceled``, which is refused, so
+#: there is no cancellation for it to describe.
 _NON_INSTRUCTION_REQUEST_FIELDS: frozenset[str] = frozenset(
     {
         "account",
@@ -406,8 +413,25 @@ _NON_INSTRUCTION_REQUEST_FIELDS: frozenset[str] = frozenset(
 #: apply. ``media-buy/update-media-buy-request.json`` refuses ``daily_budget_cap`` and
 #: ``frequency_cap`` by name ("rejected atomically with UNSUPPORTED_FEATURE before any change").
 _UNAPPLIED_REQUEST_FIELDS: tuple[str, ...] = unapplied_fields(
-    UpdateMediaBuyRequest, _APPLIED_REQUEST_FIELDS, _NON_INSTRUCTION_REQUEST_FIELDS
+    UpdateMediaBuyRequest, _APPLIED_REQUEST_FIELDS | _REFUSED_AS_NOT_CANCELLABLE, _NON_INSTRUCTION_REQUEST_FIELDS
 )
+
+
+def _refuse_cancellation(req: UpdateMediaBuyRequest, current_status: str) -> None:
+    """Refuse a cancel of the buy or of a package, before any change.
+
+    This seller does not implement cancellation (prebid/salesagent#1261), so a cancel was answered
+    as a success while the buy kept delivering. The root cancel is asked first: specification.mdx,
+    "Root cancellation takes precedence".
+    """
+    if req.canceled:
+        field = "canceled"
+    else:
+        canceled = [index for index, package in enumerate(req.packages or ()) if package.canceled]
+        if not canceled:
+            return
+        field = package_field_path("canceled", canceled[0])
+    raise AdCPNotCancellableError(details=InvalidStateDetails(current_status=current_status), field=field)
 
 
 def _refuse_unapplied_package_fields(req: UpdateMediaBuyRequest) -> None:
@@ -891,6 +915,10 @@ def _update_media_buy_impl(
                     details=InvalidStateDetails(current_status=_current_status),
                     field="media_buy_id",
                 )
+
+            # After the terminal refusal, which keeps its own answer for a re-cancel, and before
+            # the workflow step and any adapter call.
+            _refuse_cancellation(req, _current_status)
 
             _requested = _requested_actions(req)
             _allowed = set(seller_valid_actions(_current_status))

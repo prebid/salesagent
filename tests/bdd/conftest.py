@@ -2804,23 +2804,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
-        # FIXME(production-gap bead): UC-003 ext-v cancellation
-        # refused. canceled IS a valid UpdateMediaBuyRequest field but production
-        # never reads it, has no state-based NOT_CANCELLABLE check, and
-        # has_updatable_fields() omits canceled — so a media_buy_id+canceled
-        # request trips the empty-update INVALID_REQUEST path instead of
-        # NOT_CANCELLABLE. The step branches the update adapter with the canonical
-        # NOT_CANCELLABLE refusal and dispatches the real cancel on the wire, so
-        # this strict xfail flips to a pass when production wires the cancel path.
-        if "T-UC-003-ext-v" in marker_names:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="production gap: update_media_buy never reads canceled and has no state-based "
-                    "cancellation gate; has_updatable_fields() omits canceled so the request short-circuits "
-                    "via empty-update INVALID_REQUEST (canonical target: NOT_CANCELLABLE)",
-                    strict=True,
-                )
-            )
+        # Graduated: T-UC-003-ext-v. update_media_buy refuses every cancel with NOT_CANCELLABLE
+        # before any adapter call (_refuse_cancellation, until prebid/salesagent#1261 implements
+        # cancellation). It XPASSed strict on a2a, mcp and rest on the box; its Given no longer
+        # makes the adapter raise the code, so the pass is production's.
 
         # Retired (both sides, 20e5b60d8 / PR #1567 round-2 item 2): the former
         # T-UC-002-alt-manual workflow_step_id xfail targeted the pre-3.1.1

@@ -748,10 +748,10 @@ def given_package_performance_standards(ctx: dict) -> None:
     ]
 
 
-@then(parsers.parse('the buyer is refused UNSUPPORTED_FEATURE naming the request member "{member}"'))
-def then_refused_naming_request_member(ctx: dict, member: str) -> None:
+@then(parsers.re(r'the buyer is refused (?P<code>[A-Z_]+) naming the request member "(?P<member>[\w.]+)"'))
+def then_refused_naming_request_member(ctx: dict, code: str, member: str) -> None:
     """The code, its pinned recovery and the field, on the wire."""
-    ctx["result"].assert_wire_error("UNSUPPORTED_FEATURE", field=member)
+    ctx["result"].assert_wire_error(code, field=member)
 
 
 @then(parsers.re(r'the buyer is refused (?P<code>[A-Z_]+) naming the package member "(?P<member>[\w.]+)"'))

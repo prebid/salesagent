@@ -3185,12 +3185,51 @@ Feature: BR-UC-003 Update Media Buy
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
     # BR-RULE-216 INV-2: cancellation_reason MUST be at most 500 characters
+    # LOCAL CORRECTION: the 500-character row read success, for a cancel this seller never
+    # applied. It refuses every cancel with NOT_CANCELLABLE until prebid/salesagent#1261
+    # implements cancellation, which turns the row back to success. The pair still grades the
+    # boundary: 500 characters passes the request shape and reaches the cancel refusal, and
+    # 501 is refused by the shape first.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
 
     Examples: Boundary values
-      | boundary_point         | value             | outcome                                 |
-      | reason 500 chars (max) | <500 char string> | success                                 |
+      | boundary_point           | value             | outcome                                 |
+      | reason 500 chars (max)   | <500 char string> | error "NOT_CANCELLABLE" with suggestion |
       | reason 501 chars (max+1) | <501 char string> | error "INVALID_REQUEST" with suggestion |
+
+  # update-media-buy-request.json (v3.2.7) canceled: "Sellers MAY reject with NOT_CANCELLABLE if
+  # the media buy cannot be canceled in its current state." package-update.json canceled:
+  # "Sellers MAY reject with NOT_CANCELLABLE." This seller does not implement cancellation
+  # (prebid/salesagent#1261), so a cancel is refused before any change rather than answered as a
+  # success that leaves the buy delivering.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json pointer=/properties/canceled
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/canceled
+  @T-UC-003-cancel-refused
+  Scenario: A cancel of the media buy is refused NOT_CANCELLABLE and changes nothing
+    Given the tenant is configured for auto-approval
+    And a valid update_media_buy request with:
+    | field        | value       |
+    | media_buy_id | mb_existing |
+    | canceled     | true        |
+    When the Buyer Agent sends the update_media_buy request
+    Then the buyer is refused NOT_CANCELLABLE naming the request member "canceled"
+    And the ad server received no update call
+    And the stored media buy "mb_existing" is still "active"
+
+  @T-UC-003-cancel-refused
+  Scenario: A cancel of one package is refused NOT_CANCELLABLE and changes nothing
+    Given the tenant is configured for auto-approval
+    And a valid update_media_buy request with:
+    | field        | value       |
+    | media_buy_id | mb_existing |
+    And the request includes 1 package update with:
+    | field      | value   |
+    | package_id | pkg_001 |
+    | canceled   | true    |
+    When the Buyer Agent sends the update_media_buy request
+    Then the buyer is refused NOT_CANCELLABLE naming the package member "canceled"
+    And the ad server received no update call
+    And the stored media buy "mb_existing" is still "active"
 
   @T-UC-003-cancel-package @invariant @BR-RULE-216 @cancellation @schema-v3.1 @post-s2
   Scenario: Package-level cancellation stops only that package (INV-6)
