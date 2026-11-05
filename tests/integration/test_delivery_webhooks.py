@@ -1,10 +1,9 @@
 """Integration tests for delivery webhook scheduler."""
 
-from unittest.mock import AsyncMock, Mock, patch
-
 import pytest
 
 from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
+from tests.harness.sandbox_lifecycle import SchedulerLifecycleEnv
 
 # TODO: @yusuf - We actually need to:
 # - Test the scheduler is calling sending webhooks correctly in every correct intervals
@@ -45,68 +44,29 @@ async def test_scheduler_start_when_already_running(scheduler):
     await scheduler.stop()
 
 
+@pytest.mark.requires_db
 @pytest.mark.asyncio
-@patch("src.services.delivery_webhook_scheduler.get_db_session")
-async def test_send_reports_no_webhooks(mock_db_session, scheduler):
-    """Test sending reports when no media buys have webhooks configured."""
-    # Setup mock session with no media buys
-    mock_session = Mock()
-    mock_db_session.return_value.__enter__.return_value = mock_session
-    mock_session.scalars.return_value.all.return_value = []
+async def test_send_reports_no_webhooks(integration_db, scheduler):
+    """A real buy without reporting configuration produces no outbound report."""
+    with SchedulerLifecycleEnv() as env:
+        env.seed_lifecycle()
+        env.seed_owned_buy("sandbox", status="active")
 
-    # Execute
-    await scheduler._send_reports()
-
-    # Should complete without errors
-
-
-@pytest.mark.asyncio
-@patch("src.services.delivery_webhook_scheduler.get_db_session")
-async def test_send_reports_with_media_buys(mock_db_session, scheduler):
-    """Test sending reports for media buys with webhooks."""
-    # Setup mock media buys
-    mock_media_buy_1 = Mock()
-    mock_media_buy_1.media_buy_id = "mb_1"
-    mock_media_buy_1.tenant_id = "tenant_1"
-    mock_media_buy_1.principal_id = "principal_1"
-    mock_media_buy_1.raw_request = {
-        "reporting_webhook": {
-            "url": "https://example.com/webhook1",
-            "reporting_frequency": "daily",
-        }
-    }
-
-    mock_media_buy_2 = Mock()
-    mock_media_buy_2.media_buy_id = "mb_2"
-    mock_media_buy_2.raw_request = {}  # No webhook
-
-    mock_media_buy_3 = Mock()
-    mock_media_buy_3.media_buy_id = "mb_3"
-    mock_media_buy_3.tenant_id = "tenant_1"
-    mock_media_buy_3.principal_id = "principal_1"
-    mock_media_buy_3.raw_request = {
-        "reporting_webhook": {
-            "url": "https://example.com/webhook3",
-            "reporting_frequency": "daily",
-        }
-    }
-
-    # Setup mock session
-    mock_session = Mock()
-    mock_db_session.return_value.__enter__.return_value = mock_session
-    mock_session.scalars.return_value.all.return_value = [
-        mock_media_buy_1,
-        mock_media_buy_2,
-        mock_media_buy_3,
-    ]
-
-    # Mock the send_report_for_media_buy method
-    with patch.object(scheduler, "_send_report_for_media_buy", new_callable=AsyncMock) as mock_send:
-        # Execute
         await scheduler._send_reports()
 
-        # Assert - should only send for media buys with webhooks (mb_1 and mb_3)
-        assert mock_send.call_count == 2
+        assert env.delivery_attempts == 0
 
 
-# Removed - test was over-mocking internal _impl functions
+@pytest.mark.requires_db
+@pytest.mark.asyncio
+async def test_send_reports_with_media_buys(integration_db, scheduler):
+    """Only the two configured buys in the batch produce outbound reports."""
+    with SchedulerLifecycleEnv() as env:
+        env.seed_lifecycle()
+        env.seed_reporting_buy("sandbox", "mb_1")
+        env.seed_owned_buy("sandbox", media_buy_id="mb_2", status="active")
+        env.seed_reporting_buy("sandbox", "mb_3")
+
+        await scheduler._send_reports()
+
+        assert env.delivery_attempts == 2

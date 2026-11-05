@@ -4196,7 +4196,8 @@ def _seed_valid_account_if_named(ctx: dict, value: str) -> None:
     including the invalid rows — is left unseeded so production correctly emits
     ACCOUNT_NOT_FOUND / INVALID_REQUEST. Historically these rows only passed
     because the a2a account param was wire-dropped ; now that
-    resolution runs, a valid row REQUIRES its account to exist.
+    resolution runs, a valid row requires its account to exist and own the
+    scenario's media buy.
     """
     env = ctx.get("env")
     if env is None or not hasattr(env, "_session"):
@@ -4214,40 +4215,47 @@ def _seed_valid_account_if_named(ctx: dict, value: str) -> None:
     if tenant is None or principal is None:
         return
 
+    from src.core.database.models import MediaBuy
     from tests.helpers.account_seeding import seed_account_with_access
 
     # Explicit account_id ONLY (the invalid oneOf row also carries account_id but
     # pairs it with brand/operator — exclude it so it still errors).
-    if set(parsed) == {"account_id"} and parsed["account_id"] == _VALID_ACCOUNT_ID:
-        seed_account_with_access(
-            tenant,
-            principal,
-            account_id=_VALID_ACCOUNT_ID,
-            status="active",
-            brand_domain=_VALID_BRAND_DOMAIN,
-            operator=_VALID_OPERATOR,
-        )
-        return
-
-    # Natural key (brand + operator), optionally sandbox:true. Non-sandbox and
-    # sandbox variants are distinct accounts (the repo scopes the query by the
-    # sandbox flag), so each valid row resolves to exactly one match.
     brand = parsed.get("brand")
-    if (
+    sandbox = None
+    if set(parsed) == {"account_id"} and parsed["account_id"] == _VALID_ACCOUNT_ID:
+        account_id = _VALID_ACCOUNT_ID
+    elif (
         isinstance(brand, dict)
         and brand.get("domain") == _VALID_BRAND_DOMAIN
         and parsed.get("operator") == _VALID_OPERATOR
     ):
+        # Natural-key sandbox and live variants resolve to distinct accounts.
         sandbox = bool(parsed.get("sandbox", False))
-        seed_account_with_access(
-            tenant,
-            principal,
-            account_id=f"acc-acme-corp{'-sandbox' if sandbox else ''}",
-            status="active",
-            brand_domain=_VALID_BRAND_DOMAIN,
-            operator=_VALID_OPERATOR,
-            sandbox=sandbox,
-        )
+        account_id = f"acc-acme-corp{'-sandbox' if sandbox else ''}"
+    else:
+        return
+
+    account = seed_account_with_access(
+        tenant,
+        principal,
+        account_id=account_id,
+        status="active",
+        brand_domain=_VALID_BRAND_DOMAIN,
+        operator=_VALID_OPERATOR,
+        sandbox=sandbox,
+    )
+    # The valid example names the account of the buy seeded by its Given. The
+    # factory default is a different account, which would correctly filter it out.
+    buy_id = _resolve_media_buy_id(ctx, next(reversed(ctx["media_buys"])))
+    buy = env.get_one(
+        MediaBuy,
+        tenant_id=tenant.tenant_id,
+        principal_id=principal.principal_id,
+        media_buy_id=buy_id,
+    )
+    assert buy is not None, f"valid account fixture requires owned media buy {buy_id!r}"
+    buy.account_id = account.account_id
+    env._commit_factory_data()
 
 
 def _dispatch_partition(ctx: dict, field: str, value: str) -> None:

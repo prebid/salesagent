@@ -12,13 +12,15 @@ from flask import Blueprint, request
 from sqlalchemy import select
 
 from src.admin.utils import approve_media_buy_through_writer, require_auth, require_tenant_access
-from src.core.database.models import PersistedMediaBuyStatus, PushNotificationConfig
+from src.core.database.models import PersistedMediaBuyStatus
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.principal import PrincipalRepository
+from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
 from src.core.errors.details import RejectionReasonDetails
 from src.core.exceptions import AdCPMediaBuyRejectedError
+from src.core.logging_config import log_safe
 from src.core.schemas import CreateMediaBuyError, CreateMediaBuySuccess, Error
-from src.core.tools.media_buy_create import ApprovalOutcome
+from src.core.tools.media_buy_create import ApprovalOutcome, ApprovalResult
 from src.core.webhooks.delivery import WebhookTaskContext
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
@@ -114,6 +116,25 @@ def media_buy_detail(tenant_id, media_buy_id):
     )
 
     try:
+        # Capture ownership before the central identity resolver opens its sessions.
+        from src.core.database.repositories.uow import MediaBuyUoW
+
+        with MediaBuyUoW(tenant_id) as ownership_uow:
+            assert ownership_uow.media_buys is not None
+            stored = ownership_uow.media_buys.get_by_id(media_buy_id)
+            if stored is None:
+                return "Media buy not found", 404
+            owner_principal_id, owner_account_id = stored.principal_id, stored.account_id
+        from src.core.exceptions import AdCPConfigurationError
+        from src.core.tools.media_buy_create import identity_for_stored_buy
+
+        owner = None
+        try:
+            owner = identity_for_stored_buy(tenant_id, owner_principal_id, owner_account_id, media_buy_id)
+        except AdCPConfigurationError as exc:
+            logger.warning("Could not resolve stored media-buy ownership: %s", exc)
+        principal = owner.principal if owner else None
+
         with get_db_session() as db_session:
             repo = MediaBuyRepository(db_session, tenant_id)
             media_buy = repo.get_by_id(media_buy_id)
@@ -121,19 +142,9 @@ def media_buy_detail(tenant_id, media_buy_id):
             if not media_buy:
                 return "Media buy not found", 404
 
-            # The buy's owner, loaded ONCE: the same stored-ids resolution the approval
-            # path uses, so the template's principal and the adapter's identity are one
-            # load. A buy whose owner row is gone renders without one.
-            from src.core.exceptions import AdCPConfigurationError
-            from src.core.resolved_identity import identity_of
-
-            owner = None
-            if media_buy.principal_id:
-                try:
-                    owner = identity_of(tenant_id, media_buy.principal_id)
-                except AdCPConfigurationError:
-                    owner = None
-            principal = owner.principal if owner else None
+            if owner and (media_buy.principal_id, media_buy.account_id) != (owner_principal_id, owner_account_id):
+                owner = None
+                principal = None
 
             # Get packages for this media buy from MediaPackage table
             media_packages = repo.get_packages(media_buy_id)
@@ -313,6 +324,43 @@ def _media_buy_webhook_task(
     )
 
 
+def _notify_approved_buy(
+    tenant_id: str,
+    media_buy_id: str,
+    media_buy_data: dict[str, Any] | None,
+    step_data: dict[str, Any],
+    approval: ApprovalResult,
+) -> None:
+    from src.core.database.repositories.uow import MediaBuyUoW, PushNotificationConfigUoW
+
+    if not media_buy_data or not media_buy_data["push_notification_url"]:
+        return
+    with PushNotificationConfigUoW(tenant_id) as config_uow:
+        assert config_uow.push_notification_configs is not None
+        target = config_uow.push_notification_configs.find_target_by_url(
+            media_buy_data["principal_id"], media_buy_data["push_notification_url"]
+        )
+        if target is None:
+            return
+    with MediaBuyUoW(tenant_id) as buy_uow:
+        assert buy_uow.media_buys is not None
+        packages = [Package(package_id=package.package_id) for package in buy_uow.media_buys.get_packages(media_buy_id)]
+    result = CreateMediaBuySuccess.sync_success(
+        media_buy_id=media_buy_id,
+        message=f"Media buy {media_buy_id} created successfully.",
+        packages=packages,
+        confirmed_at=approval.confirmed_at,
+        revision=approval.revision,
+    )
+    task = _media_buy_webhook_task(step_data, tenant_id, media_buy_id, media_buy_data)
+    try:
+        service = get_protocol_webhook_service()
+        asyncio.run(service.notify(target, task=task, status=AdcpTaskStatus.completed, result=result))
+        logger.info(log_safe(f"Sent webhook notification for approved media buy {media_buy_id}"))
+    except Exception as webhook_err:
+        logger.warning(f"Failed to send webhook notification: {webhook_err}")
+
+
 @operations_bp.route("/media-buy/<media_buy_id>/approve", methods=["POST"])
 @require_tenant_access()
 def approve_media_buy(tenant_id, media_buy_id, **kwargs):
@@ -388,72 +436,10 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     step.step_id, user=user_email, text="Approved via media buy detail page"
                 )
 
-                # Commit the step BEFORE calling the writer. The callee opens nested
-                # sessions, and get_db_session()'s exit closes the shared thread-scoped
-                # session without committing — which discards whatever this route still
-                # had pending. The step's approval and its audit comment must not depend
-                # on what the adapter does next: a successful approval that leaves the
-                # step reading 'requires_approval' is what the operator sees.
+                # Keep approval and its audit comment durable before execution.
+                needs_creation = media_buy is not None and media_buy.status == "pending_approval"
                 db_session.commit()
-
-                if media_buy and media_buy.status == "pending_approval":
-                    approval = approve_media_buy_through_writer(media_buy_id, tenant_id, approved_by=user_email)
-
-                    if approval.outcome is ApprovalOutcome.HELD_PENDING_CREATIVES or not approval.ok:
-                        return redirect(
-                            url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id)
-                        )
-
-                    logger.info(f"[APPROVAL] Adapter creation succeeded for {media_buy_id}")
-
-                    # Send webhook notification to buyer
-                    webhook_config = None
-                    if media_buy_data and media_buy_data["push_notification_url"]:
-                        stmt_webhook = (
-                            select(PushNotificationConfig)
-                            .filter_by(
-                                tenant_id=tenant_id,
-                                principal_id=media_buy_data["principal_id"],
-                                url=media_buy_data["push_notification_url"],
-                                is_active=True,
-                            )
-                            .order_by(PushNotificationConfig.created_at.desc())
-                        )
-                        webhook_config = db_session.scalars(stmt_webhook).first()
-
-                    if webhook_config and media_buy_data:
-                        approve_repo = MediaBuyRepository(db_session, tenant_id)
-                        all_packages = approve_repo.get_packages(media_buy_id)
-
-                        # Both columns come off the ApprovalResult, not a re-read. The
-                        # writer reports what it wrote; a route that re-reads the row after
-                        # the call is the shape that made a detached read possible here.
-                        create_media_buy_approved_result = CreateMediaBuySuccess.sync_success(
-                            media_buy_id=media_buy_id,
-                            message=f"Media buy {media_buy_id} created successfully.",
-                            packages=[Package(package_id=x.package_id) for x in all_packages],
-                            confirmed_at=approval.confirmed_at,
-                            revision=approval.revision,
-                        )
-                        webhook_task = _media_buy_webhook_task(step_data, tenant_id, media_buy_id, media_buy_data)
-
-                        try:
-                            service = get_protocol_webhook_service()
-                            asyncio.run(
-                                service.notify(
-                                    webhook_config,
-                                    task=webhook_task,
-                                    status=AdcpTaskStatus.completed,
-                                    result=create_media_buy_approved_result,
-                                )
-                            )
-                            logger.info(f"Sent webhook notification for approved media buy {media_buy_id}")
-                        except Exception as webhook_err:
-                            logger.warning(f"Failed to send webhook notification: {webhook_err}")
-
-                    flash("Media buy approved and order created successfully", "success")
-                else:
-                    db_session.commit()
+                if not needs_creation:
                     flash("Media buy approved successfully", "success")
 
             elif action == "reject":
@@ -477,17 +463,9 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                 # Send webhook notification to buyer
                 webhook_config = None
                 if media_buy_data and media_buy_data["push_notification_url"]:
-                    stmt_webhook = (
-                        select(PushNotificationConfig)
-                        .filter_by(
-                            tenant_id=tenant_id,
-                            principal_id=media_buy_data["principal_id"],
-                            url=media_buy_data["push_notification_url"],
-                            is_active=True,
-                        )
-                        .order_by(PushNotificationConfig.created_at.desc())
+                    webhook_config = PushNotificationConfigRepository(db_session, tenant_id).find_target_by_url(
+                        media_buy_data["principal_id"], media_buy_data["push_notification_url"]
                     )
-                    webhook_config = db_session.scalars(stmt_webhook).first()
 
                 if webhook_config and media_buy_data:
                     # A rejection is NOT a completed media buy. adcp 6.6 defaults
@@ -541,7 +519,16 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
 
                 flash("Media buy rejected", "info")
 
-            return redirect(url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id))
+        # The writer resolves the stored account and owns its own units of work.
+        # No route session remains registered when execution starts.
+        if action == "approve" and needs_creation:
+            approval = approve_media_buy_through_writer(media_buy_id, tenant_id, approved_by=user_email)
+            if approval.outcome is ApprovalOutcome.HELD_PENDING_CREATIVES or not approval.ok:
+                return redirect(url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id))
+            logger.info(log_safe(f"[APPROVAL] Adapter creation succeeded for {media_buy_id}"))
+            _notify_approved_buy(tenant_id, media_buy_id, media_buy_data, step_data, approval)
+            flash("Media buy approved and order created successfully", "success")
+        return redirect(url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id))
 
     except Exception as e:
         logger.error(f"Error approving/rejecting media buy {media_buy_id}: {e}", exc_info=True)

@@ -236,6 +236,23 @@ class GoogleAdManager(AdServerAdapter):
             return self.client_manager.auth_manager.get_credentials()
         return None
 
+    @classmethod
+    def validate_request(
+        cls,
+        request: AdapterCreateRequest,
+        packages: list[MediaPackage],
+        start_time: datetime,
+        end_time: datetime,
+        package_pricing_info: dict[str, dict] | None = None,
+    ) -> list[ErrorProblem]:
+        """Apply GAM's local constraints to both live and sandbox requests."""
+        problems = super().validate_request(request, packages, start_time, end_time, package_pricing_info)
+        if any(GAMTargetingManager.validate_targeting(package.targeting_overlay) for package in packages):
+            raise AdCPCapabilityNotSupportedError()
+        for package in packages:
+            GAMTargetingManager.validate_local_targeting(package.targeting_overlay)
+        return problems
+
     # Legacy targeting methods - delegated to targeting manager
     def _validate_targeting(self, targeting_overlay):
         """Validate targeting and return unsupported features (delegated to targeting manager)."""

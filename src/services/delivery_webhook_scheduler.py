@@ -8,26 +8,27 @@ This runs as a background task and sends reports when GAM data is fresh (after 4
 import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from adcp.types.generated_poc.media_buy.get_media_buy_delivery_response import (
     NotificationType,
 )  # TODO: no stable alias — response-level NotificationType differs from top-level
-from sqlalchemy import func, select
 
 from src.core.config import get_settings
-from src.core.database.database_session import get_db_session
-from src.core.database.models import PersistedMediaBuyStatus, WebhookDeliveryLog
-from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
-from src.core.database.repositories import MediaBuyRepository
+from src.core.database.repositories.media_buy import (
+    DeliveryWebhookBuy,
+    read_delivery_webhook_buys,
+    read_delivery_webhook_send_state,
+    recent_delivery_webhook_id,
+)
 from src.core.exceptions import AdCPValidationError
+from src.core.logging_config import log_safe
 from src.core.schemas import GetMediaBuyDeliveryResponse
 from src.core.tools.media_buy_delivery import delivery_for_media_buy
 from src.core.utils import utc_flight_start
 from src.core.webhooks.delivery import WebhookTaskContext
 from src.core.webhooks.registration import accept_push_notification_config
-from src.services.protocol_webhook_service import get_protocol_webhook_service
+from src.services.protocol_webhook_service import DeliverableWebhookTarget, get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
 
@@ -93,76 +94,38 @@ class DeliveryWebhookScheduler:
         logger.info("Starting scheduled delivery report webhook batch")
 
         try:
-            with get_db_session() as session:
-                # Find all active media buys (cross-tenant scheduler query)
-                media_buys = MediaBuyRepository.get_all_by_statuses(
-                    session, {PersistedMediaBuyStatus.ACTIVE, PersistedMediaBuyStatus.APPROVED}
-                )
-
-                reports_sent = 0
-                errors = 0
-
-                for media_buy in media_buys:
-                    try:
-                        # Check if this media buy has a reporting webhook configured
-                        raw_request = media_buy.raw_request or {}
-                        reporting_webhook = raw_request.get("reporting_webhook")
-
-                        if not reporting_webhook:
-                            continue
-
-                        # Send delivery report
-                        if await self._send_report_for_media_buy(media_buy, reporting_webhook, session):
-                            reports_sent += 1
-                        else:
-                            errors += 1
-
-                    except Exception as e:
-                        logger.error(f"Error sending report for media buy {media_buy.media_buy_id}: {e}", exc_info=True)
+            # The repository returns values after closing the batch read session.
+            media_buys = read_delivery_webhook_buys()
+            reports_sent = 0
+            errors = 0
+            for media_buy in media_buys:
+                try:
+                    if await self._send_report_for_media_buy(media_buy):
+                        reports_sent += 1
+                    else:
                         errors += 1
-
-                logger.info(f"Daily delivery report batch complete: {reports_sent} sent, {errors} errors")
-
+                except Exception as e:
+                    logger.error(f"Error sending report for media buy {media_buy.media_buy_id}: {e}", exc_info=True)
+                    errors += 1
+            logger.info(f"Daily delivery report batch complete: {reports_sent} sent, {errors} errors")
         except Exception as e:
             logger.error(f"Error in daily delivery report batch: {e}", exc_info=True)
 
     async def trigger_report_for_media_buy_by_id(self, media_buy_id: str, tenant_id: str) -> bool:
-        """Manually trigger a delivery report for a single media buy by ID.
-
-        This method manages its own database session to avoid detached instance errors.
-
-        Args:
-            media_buy_id: The media buy ID
-            tenant_id: The tenant ID
-
-        Returns:
-            bool: True if report was triggered successfully, False otherwise
-        """
+        """Manually send a report, bypassing frequency and successful-send suppression."""
         try:
-            with get_db_session() as session:
-                repo = MediaBuyRepository(session, tenant_id)
-                media_buy = repo.get_by_id(media_buy_id)
-
-                if not media_buy:
-                    logger.warning(f"Cannot trigger report: Media buy {media_buy_id} not found")
-                    return False
-
-                raw_request = media_buy.raw_request or {}
-                reporting_webhook = raw_request.get("reporting_webhook")
-
-                if not reporting_webhook:
-                    logger.warning(f"Cannot trigger report: No reporting_webhook configured for {media_buy_id}")
-                    return False
-
-                # Force sending even if already sent today (for testing)
-                return await self._send_report_for_media_buy(media_buy, reporting_webhook, session, force=True)
+            media_buys = read_delivery_webhook_buys(media_buy_id=media_buy_id, tenant_id=tenant_id)
+            if not media_buys:
+                logger.warning(
+                    log_safe(f"Cannot trigger report: Media buy {media_buy_id} not found or has no reporting_webhook")
+                )
+                return False
+            return await self._send_report_for_media_buy(media_buys[0], force=True)
         except Exception as e:
             logger.error(f"Error manually triggering report for {media_buy_id}: {e}", exc_info=True)
             return False
 
-    async def _send_report_for_media_buy(
-        self, media_buy: Any, reporting_webhook: dict, session: Any, force: bool = False
-    ) -> bool:
+    async def _send_report_for_media_buy(self, media_buy: DeliveryWebhookBuy, force: bool = False) -> bool:
         """Send a delivery report for a single media buy, and report WHETHER IT WENT.
 
         Returns the sender's own verdict rather than ``None``. It used to return nothing
@@ -179,18 +142,14 @@ class DeliveryWebhookScheduler:
         the same meaning: a decline is a verdict, not a success.
 
         Args:
-            media_buy: MediaBuy database model
-            reporting_webhook: Webhook configuration dict
-            session: Database session
+            media_buy: Stored ownership and webhook configuration snapshot
             force: If True, bypass frequency checks and duplicate checks
 
         Returns:
             bool: True only if the sender reported the delivery as made.
         """
-        # Captured as a plain str up front: everything after the release below runs
-        # against EXPIRED ORM instances, so a post-send ``media_buy.media_buy_id``
-        # would silently re-open a transaction just to format a log line.
         media_buy_id = media_buy.media_buy_id
+        reporting_webhook = media_buy.reporting_webhook
         try:
             # Determine reporting frequency from AdCP config (hourly, daily, monthly)
             raw_freq = str(reporting_webhook.get("frequency") or "daily").lower()
@@ -213,20 +172,13 @@ class DeliveryWebhookScheduler:
             if not force:
                 # Look back 24 hours to find recent successful webhooks
                 one_day_ago = datetime.now(UTC) - timedelta(hours=24)
-                existing_stmt = select(WebhookDeliveryLog).where(
-                    WebhookDeliveryLog.media_buy_id == media_buy.media_buy_id,
-                    WebhookDeliveryLog.task_type == "media_buy_delivery",
-                    WebhookDeliveryLog.notification_type == "scheduled",
-                    WebhookDeliveryLog.status == "success",
-                    WebhookDeliveryLog.created_at > one_day_ago,
-                )
-                existing_log = session.scalars(existing_stmt).first()
+                existing_log = recent_delivery_webhook_id(media_buy, since=one_day_ago)
                 if existing_log:
                     logger.info(
                         "Skipping daily delivery webhook for media buy %s and date %s – already sent (log id %s)",
                         media_buy.media_buy_id,
                         end_date_obj,
-                        existing_log.id,
+                        existing_log,
                     )
                     return False
 
@@ -248,18 +200,6 @@ class DeliveryWebhookScheduler:
                 )
                 return False
 
-            # Get sequence number for this webhook (get max sequence + 1)
-            sequence_number = 1
-            try:
-                stmt = select(func.coalesce(func.max(WebhookDeliveryLog.sequence_number), 0)).where(
-                    WebhookDeliveryLog.media_buy_id == media_buy.media_buy_id,
-                    WebhookDeliveryLog.task_type == "media_buy_delivery",
-                )
-                max_seq = session.scalar(stmt)
-                sequence_number = (max_seq or 0) + 1
-            except Exception as e:
-                logger.warning(f"Could not get sequence number for media buy {media_buy.media_buy_id}: {e}")
-
             # Calculate next_expected_at for daily frequency: start of next day (UTC)
             next_day = datetime.now(UTC).date() + timedelta(days=1)
             next_expected_at = utc_flight_start(next_day)
@@ -279,18 +219,9 @@ class DeliveryWebhookScheduler:
 
             # A stored row still wins: a real registration outranks whatever the
             # request carried inline.
-            config_stmt = select(DBPushNotificationConfig).where(
-                DBPushNotificationConfig.principal_id == media_buy.principal_id,
-                DBPushNotificationConfig.tenant_id == media_buy.tenant_id,
-                DBPushNotificationConfig.url == webhook_url,
-                DBPushNotificationConfig.is_active,
-            )
-            push_notification_config = session.scalars(config_stmt).first()
-
-            if push_notification_config:
-                # Detach from session and extract data
-                session.expunge(push_notification_config)
-            else:
+            sequence_number, stored_target = read_delivery_webhook_send_state(media_buy)
+            push_notification_config: DeliverableWebhookTarget | None = stored_target
+            if push_notification_config is None:
                 # No stored row: the sender is handed the GATE'S VALUE, not a
                 # config-shaped object built here. send_notification takes
                 # DeliverableWebhookTarget, which ValidatedWebhookRegistration
@@ -355,29 +286,8 @@ class DeliveryWebhookScheduler:
                 else None,
             )
 
-            # RELEASE THE READ TRANSACTION BEFORE ANY SOCKET EXISTS (#1757 — "the rule a
-            # connection held across a POST to a buyer-supplied URL would break", stated
-            # at protocol_webhook_service._deliver's signer= argument and obeyed there).
-            #
-            # Everything above is SELECTs plus an expunge; this ends that transaction and
-            # drops the locks it holds. Without it the caller's session (BOTH callers open
-            # one and pass it in) stays open for the whole delivery — which is the retry
-            # ladder, i.e. SECONDS of outbound HTTP to a buyer-controlled endpoint — while
-            # holding row locks on webhook_delivery_log. MEASURED, not theorised: a live
-            # bdd_e2e worker deadlocked exactly there, pg_stat_activity showing this
-            # session "idle in transaction" on push_notification_configs while the BDD
-            # harness's per-scenario `TRUNCATE TABLE webhook_delivery_log, ...` waited on
-            # an ACCESS EXCLUSIVE lock behind it. Everything queued, /health stopped
-            # answering, and the server read as hung while sitting at 0.01% CPU.
-            #
-            # The comment this replaces claimed the opposite — "Send webhook notification
-            # OUTSIDE the session context / This ensures the session is closed before async
-            # webhook call". It was never true: the session is the CALLER's and is still
-            # open. Committing a read-only transaction is the release; it expires the ORM
-            # instances, which is why media_buy_id is captured above and why the batch
-            # loop's next iteration refreshes (a short query, holding nothing).
-            session.commit()
-
+            # Every repository read and stored-account resolution has finished.
+            # No ORM object or caller session crosses into the receiver's HTTP latency.
             delivered = await self.webhook_service.notify(
                 push_notification_config,
                 task=webhook_task,

@@ -20,6 +20,7 @@ from src.core.schemas import (
 )
 from tests.factories.media_buy import pricing_options_for, request_package
 from tests.factories.principal import PrincipalFactory
+from tests.helpers.unit_identity import UNIT_ACCOUNT_ID, fabricated_account_identity
 
 
 class TestDeliveryLoopErrorHandling:
@@ -46,7 +47,7 @@ class TestDeliveryLoopErrorHandling:
             "brand_manifest_policy": "public",
             "advertising_policy": {},
         }
-        identity = PrincipalFactory.make_identity(
+        identity = fabricated_account_identity(
             principal_id="p1",
             tenant_id="test",
             tenant=tenant,
@@ -54,6 +55,7 @@ class TestDeliveryLoopErrorHandling:
 
         # Create two mock media buys: one good, one that will error
         good_buy = MagicMock()
+        good_buy.account_id = UNIT_ACCOUNT_ID
         good_buy.status = "active"
         good_buy.is_paused = False
         good_buy.start_time = None
@@ -66,6 +68,7 @@ class TestDeliveryLoopErrorHandling:
         }
 
         bad_buy = MagicMock()
+        bad_buy.account_id = UNIT_ACCOUNT_ID
         # This will raise when accessed in the loop (e.g., start_date raises)
         type(bad_buy).start_date = property(lambda self: (_ for _ in ()).throw(ValueError("DB corruption")))
         bad_buy.raw_request = None

@@ -38,7 +38,7 @@ import pytest
 
 from scripts.audit import ledger, storyboard_spec
 from scripts.setup.seed_storyboard_tenant import STORYBOARD_TOKEN, STORYBOARD_VIRTUAL_HOST
-from tests.storyboard import collected, corrected_storyboards, corrected_vectors
+from tests.storyboard import collected, corrected_storyboards
 from tests.storyboard.bundle import materialize_bundle as _materialize_bundle
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -356,31 +356,8 @@ def _bundle_path(env_name: str) -> str:
 
 
 def _graded_compliance_dir() -> str:
-    """The compliance tree the runner is pointed at: the pinned one, fixtures corrected.
-
-    THE PINNED TREE IS NOT EDITED. This writes a sibling (``adcp-<version>-corrected/``,
-    covered by the runner directory's existing ``adcp-*/`` ignore) and hands the runner
-    that. Two corrections, both to fixtures rather than to anything a check grades:
-
-    * request-signing vector BODIES (``corrected_vectors``, adcp#7567). A seller
-      validates the payload before it authenticates the caller, so the corpus's stub
-      bodies (``{"plan_id":"plan_001"}``) are answered ``INVALID_REQUEST`` and the RFC
-      9421 checklist never runs — measured here as all 27 graded signed-requests checks
-      failing with ``got 200 (error="(none)")``.
-    * a product for ``webhook_emission`` to buy (``corrected_storyboards``, adcp#7609).
-      That storyboard discovers no product, so its four ``create_media_buy`` triggers
-      ship the SDK's ``"test-product"`` placeholder and are answered
-      ``PRODUCT_NOT_FOUND`` — measured as 4 of the 7 webhook_emission failures in run
-      innet_200926_0635.
-
-    Everything else is copied through byte-for-byte. Both are local stand-ins until the
-    fixes land upstream.
-    """
-    source = Path(_bundle_path(_COMPLIANCE_DIR_ENV))
-    dest = source.parent.parent / f"{source.parent.name}-corrected" / source.name
-    tree = corrected_vectors.corrected_compliance_tree(source, dest)
-    corrected_storyboards.correct_webhook_emission(tree)
-    return str(tree)
+    """Resolve the configured source and use the shared corrected-tree construction."""
+    return str(corrected_storyboards.graded_compliance_tree(Path(_bundle_path(_COMPLIANCE_DIR_ENV))))
 
 
 def _webhook_receiver_args(protocol: str) -> tuple[list[str], dict[str, str]]:

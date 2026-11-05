@@ -12,7 +12,9 @@ session and do not enforce tenant isolation — these are system-level operation
 from __future__ import annotations
 
 import datetime
+import logging
 from collections.abc import Collection
+from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
 
@@ -24,8 +26,116 @@ from src.core.database.models import (
     MediaPackage,
     PersistedMediaBuyStatus,
 )
+from src.core.database.repositories.push_notification_config import StoredWebhookTarget
 from src.core.errors.details import EntityRefDetails
 from src.core.idempotency_canonical import canonical_request_hash
+
+
+@dataclass(frozen=True)
+class DeliveryWebhookBuy:
+    """Stored ownership and reporting configuration, independent of an ORM session."""
+
+    media_buy_id: str
+    tenant_id: str
+    principal_id: str
+    account_id: str | None
+    reporting_webhook: dict[str, Any] = field(repr=False)
+
+
+def read_delivery_webhook_buys(
+    *, media_buy_id: str | None = None, tenant_id: str | None = None
+) -> list[DeliveryWebhookBuy]:
+    """Snapshot a manual target or the scheduled batch, closing the session before work."""
+    from src.core.database.database_session import get_db_session
+
+    with get_db_session() as session:
+        if media_buy_id is not None:
+            assert tenant_id is not None
+            buy = MediaBuyRepository(session, tenant_id).get_by_id(media_buy_id)
+            buys = [buy] if buy is not None else []
+        else:
+            buys = MediaBuyRepository.get_all_by_statuses(
+                session, {PersistedMediaBuyStatus.ACTIVE, PersistedMediaBuyStatus.APPROVED}
+            )
+        return [
+            DeliveryWebhookBuy(
+                buy.media_buy_id, buy.tenant_id, buy.principal_id, buy.account_id, dict(reporting_webhook)
+            )
+            for buy in buys
+            if (reporting_webhook := (buy.raw_request or {}).get("reporting_webhook"))
+        ]
+
+
+def recent_delivery_webhook_id(buy: DeliveryWebhookBuy, *, since: datetime.datetime) -> str | None:
+    """The successful scheduled send that suppresses this report, if any."""
+    from src.core.database.database_session import get_db_session
+    from src.core.database.repositories.delivery import DeliveryRepository
+
+    with get_db_session() as session:
+        row = DeliveryRepository(session, buy.tenant_id).get_recent_successful_log(
+            buy.media_buy_id, task_type="media_buy_delivery", notification_type="scheduled", since=since
+        )
+        return row.id if row is not None else None
+
+
+def read_delivery_webhook_send_state(buy: DeliveryWebhookBuy) -> tuple[int, StoredWebhookTarget | None]:
+    """Read sequence and registration after gathering delivery, before any HTTP send."""
+    from src.core.database.database_session import get_db_session
+    from src.core.database.repositories.delivery import DeliveryRepository
+    from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
+
+    with get_db_session() as session:
+        sequence_number = 1
+        try:
+            sequence_number = (
+                DeliveryRepository(session, buy.tenant_id).get_max_sequence_number(
+                    buy.media_buy_id, task_type="media_buy_delivery"
+                )
+                + 1
+            )
+        except Exception as exc:
+            logging.getLogger(__name__).warning(
+                "Could not get sequence number for media buy %s: %s", buy.media_buy_id, exc
+            )
+        target = PushNotificationConfigRepository(session, buy.tenant_id).find_target_by_url(
+            buy.principal_id, buy.reporting_webhook["url"]
+        )
+        return sequence_number, target
+
+
+@dataclass(frozen=True)
+class SandboxBuyState:
+    """Persisted sandbox state copied inside the repository session."""
+
+    status: str
+    currency: str
+    package_ids: tuple[str, ...]
+    seeded_delivery: dict[str, Any] | None
+
+
+def read_sandbox_buy_state(
+    tenant_id: str,
+    principal_id: str,
+    account_id: str,
+    media_buy_id: str,
+) -> SandboxBuyState | None:
+    """Read independently so adapter reporting cannot close a caller's transaction."""
+    from src.core.database.database_session import get_engine
+    from src.core.database.repositories.delivery_simulation import DeliverySimulationConfigRepository
+
+    with Session(get_engine()) as session:
+        repo = MediaBuyRepository(session, tenant_id)
+        buy = repo.get_by_id_for_account(media_buy_id, principal_id, account_id)
+        if buy is None:
+            return None
+        row = DeliverySimulationConfigRepository(session, tenant_id).get(media_buy_id)
+        seeded = dict(row.response_payload) if row is not None else None
+        return SandboxBuyState(
+            status=buy.status,
+            currency=buy.currency or "USD",
+            package_ids=tuple(package.package_id for package in repo.get_packages(media_buy_id)),
+            seeded_delivery=seeded,
+        )
 
 
 class MediaBuyRepository:
@@ -73,6 +183,26 @@ class MediaBuyRepository:
                 MediaBuy.media_buy_id == media_buy_id,
             )
         ).first()
+
+    def get_by_id_for_account(self, media_buy_id: str, principal_id: str, account_id: str) -> MediaBuy | None:
+        """Find a buy only inside its tenant, requesting principal and account."""
+        return self._session.scalars(
+            select(MediaBuy).where(
+                MediaBuy.tenant_id == self._tenant_id,
+                MediaBuy.principal_id == principal_id,
+                MediaBuy.account_id == account_id,
+                MediaBuy.media_buy_id == media_buy_id,
+            )
+        ).first()
+
+    def get_by_id_for_account_or_raise(self, media_buy_id: str, principal_id: str, account_id: str) -> MediaBuy:
+        """Require the stored buy within its complete execution ownership scope."""
+        buy = self.get_by_id_for_account(media_buy_id, principal_id, account_id)
+        if buy is None:
+            from src.core.exceptions import AdCPMediaBuyNotFoundError
+
+            raise AdCPMediaBuyNotFoundError(details=EntityRefDetails(media_buy_id=media_buy_id))
+        return buy
 
     def get_by_id_or_raise(self, media_buy_id: str) -> MediaBuy:
         """Get a media buy by ID or raise ``AdCPMediaBuyNotFoundError``.

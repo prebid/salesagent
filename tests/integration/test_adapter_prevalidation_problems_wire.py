@@ -36,25 +36,15 @@ _WIRE_TRANSPORTS = [Transport.MCP, Transport.A2A, Transport.REST]
 
 
 def _drive_real_prevalidation(env) -> None:
-    """Make the mocked adapter run the REAL pre-validation, refusing the seeded model.
-
-    ``env.mock["adapter"]`` is a MagicMock, so calling validate_media_buy_request on
-    it returns another MagicMock and the method under test never executes. Binding
-    the real ``AdServerAdapter.validate_media_buy_request`` with the mock standing in
-    for ``self`` runs the actual default implementation while
-    ``get_supported_pricing_models`` is controlled — which is the only thing the
-    method reads off self.
-
-    Supported is set to ``{"cpc"}`` so the seeded ``cpm`` package is refused. Without
-    that the request succeeds and there is nothing to grade.
-    """
+    """Run a real class validator for a seller that supports CPC only."""
     from src.adapters.base import AdServerAdapter
 
-    adapter = env.mock["adapter"].return_value
-    adapter.get_supported_pricing_models.return_value = {"cpc"}
-    adapter.validate_media_buy_request = lambda *args, **kwargs: AdServerAdapter.validate_media_buy_request(
-        adapter, *args, **kwargs
-    )
+    class CPCOnlyAdapter(AdServerAdapter):
+        @staticmethod
+        def get_supported_pricing_models() -> set[str]:
+            return {"cpc"}
+
+    env.mock["adapter"].return_value.validate_media_buy_request = CPCOnlyAdapter.validate_request
 
 
 @pytest.mark.parametrize("transport", _WIRE_TRANSPORTS, ids=lambda t: t.value)

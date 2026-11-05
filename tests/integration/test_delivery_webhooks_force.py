@@ -8,6 +8,7 @@ from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import WebhookDeliveryLog
+from src.core.database.repositories.media_buy import read_delivery_webhook_buys
 from src.core.schemas import GetMediaBuyDeliveryResponse
 from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
 from tests.integration.test_delivery_webhooks_integration import (
@@ -110,24 +111,22 @@ async def test_force_trigger_delivery_webhook_bypasses_duplicate_check(integrati
 
             media_buy = session.scalars(select(MediaBuy).filter_by(media_buy_id=media_buy_id)).first()
 
-            # 3. Try sending WITHOUT force - should skip
-            await scheduler._send_report_for_media_buy(
-                media_buy, media_buy.raw_request["reporting_webhook"], session, force=False
-            )
-            assert mock_send.call_count == 0
+        buy_snapshot = read_delivery_webhook_buys(media_buy_id=media_buy_id, tenant_id=tenant_id)[0]
 
-            # 4. Try sending WITH force - should send
-            await scheduler._send_report_for_media_buy(
-                media_buy, media_buy.raw_request["reporting_webhook"], session, force=True
-            )
-            assert mock_send.call_count == 1
+        # 3. Try sending WITHOUT force - should skip
+        await scheduler._send_report_for_media_buy(buy_snapshot, force=False)
+        assert mock_send.call_count == 0
 
-            # Verify call args
-            args, kwargs = mock_send.await_args
-            payload = kwargs.get("payload")
-            assert payload is not None
-            # Extract result from the McpWebhookPayload
-            assert payload.result["media_buy_deliveries"][0]["media_buy_id"] == media_buy_id
+        # 4. Try sending WITH force - should send
+        await scheduler._send_report_for_media_buy(buy_snapshot, force=True)
+        assert mock_send.call_count == 1
+
+        # Verify call args
+        args, kwargs = mock_send.await_args
+        payload = kwargs.get("payload")
+        assert payload is not None
+        # Extract result from the McpWebhookPayload
+        assert payload.result["media_buy_deliveries"][0]["media_buy_id"] == media_buy_id
 
 
 @pytest.mark.requires_db
@@ -194,11 +193,9 @@ async def test_trigger_report_propagates_a_refused_delivery_as_false(integration
         # This assertion does real work: the wrapper's OTHER way to answer False is the
         # "no reporting_webhook configured" early return, which never reaches the sender.
         # Pinning that the sender WAS called (once, forced) is what makes this test grade
-        # propagation rather than that early return. ANY on the three positionals — the
-        # media buy, its reporting_webhook dict and the session are all fetched by the
-        # wrapper itself, so the test holds no handle to them; `force` is the argument
-        # this call is about.
-        mock_send_internal.assert_called_once_with(ANY, ANY, ANY, force=True)
+        # propagation rather than that early return. ANY covers the repository snapshot;
+        # `force` is the argument this call is about.
+        mock_send_internal.assert_called_once_with(ANY, force=True)
 
 
 @pytest.mark.requires_db
