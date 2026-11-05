@@ -159,7 +159,7 @@ def update_admin_settings():
     # GAM OAuth credentials are now managed via environment variables only
     # This endpoint is kept for future superadmin configuration needs
     flash("GAM OAuth credentials are now configured via environment variables. No settings to update here.", "info")
-    return redirect(url_for("superadmin_settings.superadmin_settings"))
+    return redirect(url_for("tenant_management_settings.tenant_management_settings"))
 
 
 # POST-only routes for updating tenant settings

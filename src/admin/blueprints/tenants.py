@@ -432,6 +432,7 @@ def tenant_settings(tenant_id, section=None):
 @require_tenant_access()
 def update(tenant_id):
     """Update tenant settings."""
+    settings_url = url_for("tenants.tenant_settings", tenant_id=tenant_id)
     try:
         # Sanitize form data
         form_data = sanitize_form_data(request.form.to_dict())
@@ -441,7 +442,7 @@ def update(tenant_id):
         if not is_valid:
             for error in errors:
                 flash(error, "error")
-            return redirect(url_for("tenants.settings", tenant_id=tenant_id))
+            return redirect(settings_url)
 
         with get_db_session() as db_session:
             tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
@@ -462,7 +463,7 @@ def update(tenant_id):
         logger.error(f"Error updating tenant: {e}", exc_info=True)
         flash("Error updating tenant", "error")
 
-    return redirect(url_for("tenants.settings", tenant_id=tenant_id))
+    return redirect(settings_url)
 
 
 @tenants_bp.route("/<tenant_id>/test_slack", methods=["POST"])
