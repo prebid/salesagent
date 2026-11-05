@@ -31,22 +31,6 @@ def summary_lines(mock_logger: MagicMock, prefix: str, *, needle: str | None = N
     return [call.args[0] for call in mock_logger.call_args_list if call.args and match in str(call.args[0])]
 
 
-def counter_value(scheduler: str, tenant_id: str, error_type: str) -> float:
-    """Read ``scheduler_isolation_errors`` counter for one label triple."""
-    from src.core.metrics import scheduler_isolation_errors
-
-    return scheduler_isolation_errors.labels(
-        scheduler=scheduler,
-        tenant_id=tenant_id,
-        error_type=error_type,
-    )._value.get()
-
-
-def invalidated_operational_error() -> OperationalError:
-    """OperationalError whose connection the pool has already discarded."""
-    return OperationalError("SELECT 1", {}, Exception("gone"), connection_invalidated=True)
-
-
 class _Answered(Exception):
     """DB-API error carrying a SQLSTATE, the shape of a server that answered."""
 
@@ -86,12 +70,9 @@ INVALIDATED_ESCAPE_ERROR_TYPES: tuple[type[DBAPIError], ...] = (
     IntegrityError,
     InternalError,
     NotSupportedError,
+    OperationalError,
+    InterfaceError,
 )
-
-
-def invalidated_interface_error() -> InterfaceError:
-    """Connection-invalidated InterfaceError used by fail-fast oracles."""
-    return InterfaceError("SELECT 1", {}, Exception("gone"), connection_invalidated=True)
 
 
 def bare_disconnection_error() -> DisconnectionError:
@@ -147,6 +128,8 @@ async def assert_propagated_failure_stops_batch(
     is true only for a connect the server never answered.
     """
     assert buy_count >= 2, "seed at least two buys so a continued batch is visible"
+    from tests.helpers.metrics import counter_value
+
     metric_before = counter_value("media_buy_status", tenant_id, "db_error")
     processed: list[str] = []
 

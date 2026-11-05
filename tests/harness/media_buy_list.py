@@ -37,14 +37,9 @@ def _run_status_sweep(_env: object) -> list[logging.LogRecord]:
     the writes.
     """
     logger = logging.getLogger("src.services.media_buy_status_scheduler")
-    previous = logger.level
-    logger.setLevel(logging.INFO)
-    try:
-        with capture_logs(logger.name, level=logging.INFO) as captured:
-            asyncio.run(MediaBuyStatusScheduler()._update_statuses())
-        return list(captured.log_records)
-    finally:
-        logger.setLevel(previous)
+    with capture_logs(logger.name, level=logging.INFO) as captured:
+        asyncio.run(MediaBuyStatusScheduler()._update_statuses())
+    return list(captured.log_records)
 
 
 class MediaBuyListDispatchMixin:

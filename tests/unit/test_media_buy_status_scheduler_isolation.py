@@ -13,14 +13,15 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
+from sqlalchemy.exc import OperationalError
 
 import src.services.media_buy_status_scheduler as status_mod
 from src.core.metrics import scheduler_isolation_errors
 from src.services.media_buy_status_scheduler import STATUS_BATCH_SUMMARY_PREFIX, MediaBuyStatusScheduler
+from tests.helpers.metrics import counter_value
 from tests.helpers.scheduler_isolation import (
     bare_disconnection_error,
-    counter_value,
-    invalidated_operational_error,
+    invalidated_dbapi_error,
     mock_get_db_session_cm,
     mock_media_buy,
     mock_savepoint_session,
@@ -64,7 +65,7 @@ async def test_savepoint_release_failure_counts_as_isolated_not_flipped():
 @pytest.mark.parametrize(
     "escaped",
     [
-        invalidated_operational_error(),
+        invalidated_dbapi_error(OperationalError),
         server_never_answered_error(),
         bare_disconnection_error(),
     ],
@@ -313,7 +314,7 @@ async def test_batch_summary_warns_on_escape_with_only_prior_errors():
 
     def _compute(media_buy, _now, _session):
         if media_buy.media_buy_id == "mb_dead":
-            raise invalidated_operational_error()
+            raise invalidated_dbapi_error(OperationalError)
         raise statement_failure()
 
     with (
@@ -399,7 +400,7 @@ async def test_batch_summary_survives_dead_connection_escape():
 
     def _compute(media_buy, _now, _session):
         if media_buy.media_buy_id == "mb_dead":
-            raise invalidated_operational_error()
+            raise invalidated_dbapi_error(OperationalError)
         return "completed"
 
     with (

@@ -152,6 +152,9 @@ from tests.factories.request import CreateMediaBuyRequestFactory
 from tests.harness._base import BareIntegrationEnv
 from tests.helpers import assert_envelope_shape
 from tests.helpers.asgi_wire import send_wire_messages, truncated_body
+from tests.helpers.metrics import assert_counter_delta
+from tests.helpers.metrics import counter_samples as _counter_samples
+from tests.helpers.metrics import samples_with as _samples_with
 
 # The B1 seams, the counter readers, the shared counterparty/tenant/surface
 # constants and the request builders all live in tests/helpers/signing.py
@@ -175,7 +178,6 @@ from tests.helpers.signing import (
     VERIFIED_METRIC,
     VERIFIER_ERROR,
     WIRE_ORIGIN,
-    assert_counter_delta,
     bucketed_declaration,
     counterparty_key,
     keypair_for,
@@ -189,16 +191,10 @@ from tests.helpers.signing import (
     unsupported,
 )
 from tests.helpers.signing import (
-    counter_samples as _counter_samples,
-)
-from tests.helpers.signing import (
     declared_posture as _declared_posture,
 )
 from tests.helpers.signing import (
     rejection_code as _rejection_code,
-)
-from tests.helpers.signing import (
-    samples_with as _samples_with,
 )
 from tests.helpers.signing import (
     signing_config as _signing_config,

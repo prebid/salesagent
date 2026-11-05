@@ -26,7 +26,6 @@ Feature: A failing media buy does not take its siblings' status flips (local)
     And tenant "B" has one pending_start buy past its flight start
     And the database will fail the status write for tenant "A" buy <slot>
     When the status sweep runs
-    And the buyer reads the swept buys
     Then tenant "A" buy <slot> reads "pending_start" from get_media_buys
     And the other tenant "A" buys and the tenant "B" buy read "active"
     And the isolation error count for tenant "A" rose by 1 with error_type "db_error"
@@ -44,7 +43,6 @@ Feature: A failing media buy does not take its siblings' status flips (local)
     Given tenant "A" has three pending_start buys past their flight start
     And the database will drop the connection serving the status write for tenant "A" buy 1
     When the status sweep runs
-    And the buyer reads the swept buys
     Then all three buys read "pending_start" from get_media_buys
     And the isolation error count for tenant "A" did not move
     And the sweep summary is the WARNING "0 persisted (1 pending flips lost), 0 errors"
