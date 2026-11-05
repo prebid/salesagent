@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from src.core.database.repositories.product import ProductRepository
 from src.services.dynamic_products import (
     archive_expired_variants,
     create_variant_from_template,
@@ -27,7 +28,7 @@ from src.services.dynamic_products import (
     generate_variants_for_brief,
     generate_variants_from_signals,
 )
-from tests.factories import ProductFactory, TenantFactory
+from tests.factories import PricingOptionFactory, ProductFactory, TenantFactory
 from tests.harness._base import IntegrationEnv
 
 # ---------------------------------------------------------------------------
@@ -283,7 +284,7 @@ def _make_signal(
 
 def _make_template(tenant, product_id: str = "template_1"):
     """Create a dynamic product template in the DB via factory."""
-    return ProductFactory(
+    template = ProductFactory(
         tenant=tenant,
         product_id=product_id,
         name="Dynamic Template",
@@ -294,6 +295,8 @@ def _make_template(tenant, product_id: str = "template_1"):
         max_signals=10,
         variant_ttl_days=30,
     )
+    PricingOptionFactory(product=template)
+    return template
 
 
 @pytest.fixture
@@ -313,7 +316,11 @@ class TestGenerateVariantsFromSignals:
         signals = [_make_signal(segment_id="seg_1", name="Premium")]
 
         variants = generate_variants_from_signals(
-            factory_env._session, template, signals, "test brief", "https://our.example.com/mcp"
+            ProductRepository(factory_env._session, template.tenant_id),
+            template,
+            signals,
+            "test brief",
+            "https://our.example.com/mcp",
         )
 
         assert len(variants) == 1
@@ -333,7 +340,11 @@ class TestGenerateVariantsFromSignals:
 
         # First call — creates
         v1 = generate_variants_from_signals(
-            factory_env._session, template, signals, "brief", "https://our.example.com/mcp"
+            ProductRepository(factory_env._session, template.tenant_id),
+            template,
+            signals,
+            "brief",
+            "https://our.example.com/mcp",
         )
         factory_env._session.flush()
         first_id = v1[0].product_id
@@ -341,7 +352,11 @@ class TestGenerateVariantsFromSignals:
 
         # Second call — updates
         v2 = generate_variants_from_signals(
-            factory_env._session, template, signals, "brief", "https://our.example.com/mcp"
+            ProductRepository(factory_env._session, template.tenant_id),
+            template,
+            signals,
+            "brief",
+            "https://our.example.com/mcp",
         )
 
         assert len(v2) == 1
@@ -357,7 +372,11 @@ class TestGenerateVariantsFromSignals:
         signals = [{"signal_agent_segment_id": "seg_bad", "deployments": []}]
 
         variants = generate_variants_from_signals(
-            factory_env._session, template, signals, "brief", "https://our.example.com/mcp"
+            ProductRepository(factory_env._session, template.tenant_id),
+            template,
+            signals,
+            "brief",
+            "https://our.example.com/mcp",
         )
         factory_env._session.commit()
 
@@ -373,7 +392,11 @@ class TestGenerateVariantsFromSignals:
         ]
 
         variants = generate_variants_from_signals(
-            factory_env._session, template, signals, "brief", "https://our.example.com/mcp"
+            ProductRepository(factory_env._session, template.tenant_id),
+            template,
+            signals,
+            "brief",
+            "https://our.example.com/mcp",
         )
 
         assert len(variants) == 2
