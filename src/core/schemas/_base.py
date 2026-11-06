@@ -249,6 +249,7 @@ from pydantic import (
     model_validator,
 )
 from pydantic.dataclasses import dataclass as pydantic_dataclass
+from pydantic.json_schema import SkipJsonSchema
 from pydantic_core import InitErrorDetails, PydanticCustomError
 from pydantic_core import ValidationError as PydanticCoreValidationError
 
@@ -3489,7 +3490,7 @@ class AssetStatus(SalesAgentBaseModel):
     concept_name: str | None = None  # Human-readable concept name
     concept_source: str | None = None  # Provenance marker, e.g. "gam_order"
     # What a failure classifies as, for the caller answering a buyer. An adapter's own type: off every wire.
-    error: AdCPSalesAgentError | None = Field(default=None, exclude=True)
+    error: SkipJsonSchema[AdCPSalesAgentError | None] = Field(default=None, exclude=True)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 

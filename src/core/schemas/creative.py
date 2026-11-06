@@ -68,6 +68,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from pydantic.json_schema import SkipJsonSchema
 from pydantic_core import PydanticCustomError
 
 from src.core.config import get_pydantic_extra_mode
@@ -656,7 +657,8 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
     )
     # The typed error a failed result was built from, for an in-process caller that answers the
     # buyer with it (update_media_buy's inline creatives). ``errors`` is its wire form.
-    cause: AdCPSalesAgentError | None = Field(None, exclude=True)
+    # SkipJsonSchema: an exception type has no JSON Schema, and the field is no part of the wire's.
+    cause: SkipJsonSchema[AdCPSalesAgentError | None] = Field(None, exclude=True)
 
     @model_validator(mode="after")
     def _advisory_status_from_review_state(self) -> "SyncCreativeResult":
