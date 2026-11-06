@@ -19,6 +19,7 @@
 # @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/protocols/media-buy/scenarios/inline_creatives_without_sync.yaml
 # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/media-buy-features.json pointer=/properties/inline_creative_management
 # @source repo=adcp ref=v3.2.7 path=docs/creative/task-reference/sync_creatives.mdx
+# @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/update_media_buy.mdx section="Compatibility transaction boundary"
 Feature: UC-003 update_media_buy — inline creatives replace the package's inline creatives (local)
 
   # BR-UC-003's Background, unchanged: these scenarios run in that flow, and its last Given
@@ -75,6 +76,35 @@ Feature: UC-003 update_media_buy — inline creatives replace the package's inli
     Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the refusal is INVALID_STATE for creative "cr_inline_before" on package "pkg_001" of media buy "mb_existing" in status "active"
+
+  # update_media_buy.mdx § Compatibility transaction boundary: "The seller validates the complete
+  # post-update state before applying any field. Invalid inline creative bodies or creative
+  # assignments therefore fail the entire request, including otherwise-valid budget, targeting,
+  # catalog, pause, and billing changes in the same payload." So the refusal comes before any
+  # change reaches the ad server, and it wins over a failure the ad server would have answered.
+  @T-UC-003-local-inline-creatives-active-delivery-before-ad-server @creatives-inline
+  Scenario Outline: a refused inline creative change sends the same package's budget change to no ad server - <ad_server>
+    Given the tenant is configured for auto-approval
+    And a valid update_media_buy request with:
+    | field        | value       |
+    | media_buy_id | mb_existing |
+    And the request includes 1 package update with:
+    | field      | value   |
+    | package_id | pkg_001 |
+    | budget     | 6000    |
+    And the package "pkg_001" exists in the media buy
+    And an earlier update gave package "pkg_001" the inline creative "cr_inline_before"
+    And the package update sends inline creative "cr_inline_before" showing "https://example.com/cr_inline_changed.png"
+    And the adapter <ad_server>
+    When the Buyer Agent sends the update_media_buy request
+    Then the operation should fail
+    And the refusal is INVALID_STATE for creative "cr_inline_before" on package "pkg_001" of media buy "mb_existing" in status "active"
+    And the ad server received no update call
+
+    Examples:
+      | ad_server       |
+      | returns success |
+      | returns error   |
 
   @T-UC-003-local-inline-creatives-keep-library @creatives-inline @post-s1 @post-s2
   Scenario: inline creatives on a package update leave the package's library creatives assigned

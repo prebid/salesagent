@@ -1135,126 +1135,16 @@ def _update_media_buy_impl(
 
             # Handle package-level updates
             if req.packages:
-                # enumerate so a per-package rejection can name WHICH package failed:
-                # the pointer is packages[N].package_id, never packages[].package_id,
-                # which named neither the array nor an element.
+                # Every package's creatives first: they can refuse the request, and nothing has
+                # reached the ad server yet. update_media_buy.mdx (v3.2.7) § Compatibility
+                # transaction boundary: "The seller validates the complete post-update state
+                # before applying any field. Invalid inline creative bodies or creative
+                # assignments therefore fail the entire request, including otherwise-valid
+                # budget, targeting, catalog, pause, and billing changes in the same payload."
+                # This unit rolls back what it wrote; it cannot roll back the ad server. These
+                # branches write no package row, which the ad server calls below write in
+                # sessions of their own.
                 for pkg_index, pkg_update in enumerate(req.packages):
-                    # Handle paused state
-                    if pkg_update.paused is not None:
-                        # the pinned SDK+: paused=True means pause, paused=False means resume
-                        action = "pause_package" if pkg_update.paused else "resume_package"
-                        # Failure is raised by the adapter, never returned.
-                        adapter.update_media_buy(
-                            media_buy_id=req.media_buy_id,
-                            action=action,
-                            package_id=pkg_update.package_id,
-                            budget=None,
-                            today=utc_flight_start(today),
-                        )
-
-                        # This branch modified a package, so the response says which one
-                        # and in what state. It used to apply the pause through the adapter
-                        # and record NOTHING, which is the one shape the pin's
-                        # affected_packages description does not allow outside a
-                        # campaign-level update (see _affected_package). ``paused`` is
-                        # carried, not re-read: it is the value this branch just caused.
-                        record = _package_changes(changes_by_package, pkg_update.package_id)
-                        record.paused = pkg_update.paused
-
-                    # Handle budget updates
-                    if pkg_update.budget is not None:
-                        # Validate package_id is provided (required for budget updates)
-                        if not pkg_update.package_id:
-                            raise AdCPValidationError(field=package_field_path("package_id", pkg_index))
-                        # Extract budget amount - handle both float and Budget object
-                        budget_amount: float
-                        currency: str
-                        if isinstance(pkg_update.budget, int | float):
-                            budget_amount = float(pkg_update.budget)
-                            # F-07: preserve existing DB currency rather than defaulting to USD
-                            _existing_mb = uow.media_buys.get_by_id(req.media_buy_id)
-                            currency = str(_existing_mb.currency) if _existing_mb and _existing_mb.currency else "USD"
-                        else:
-                            # Budget object with .total and .currency attributes
-                            budget_amount = float(pkg_update.budget.total)
-                            currency = str(pkg_update.budget.currency) if pkg_update.budget.currency else "USD"
-
-                        # A zero or negative budget is BUDGET_TOO_LOW, not a fall-through.
-                        # This check existed only on the campaign-level path, which AdCP
-                        # 3.1.1 does not define -- so removing that path took the only
-                        # positivity guard with it, and `if pkg_update.budget:` skipped 0.0 as
-                        # falsy, leaving a zero budget to surface later as INVALID_STATE.
-                        budget_positive_err = validate_budget_positive(
-                            Decimal(str(budget_amount)), field=package_field_path("budget", pkg_index)
-                        )
-                        if budget_positive_err:
-                            raise AdCPBudgetTooLowError(field=package_field_path("budget", pkg_index))
-
-                        assert uow.currency_limits is not None
-                        _cl = uow.currency_limits.get_for_currency(currency)
-                        if _cl and _cl.min_package_budget:
-                            # `currency` is keyword-only and REQUIRED; this call omitted it.
-                            # It never raised because the enclosing guard was
-                            # `if pkg_update.budget:` -- truthy-only, so a 0 budget (the one
-                            # value that reliably reaches the minimum check) was skipped and
-                            # the broken call was unreachable. Fixing the guard to
-                            # `is not None` exposed it.
-                            package_min_budget_error: str | None = validate_min_package_budget(
-                                package_budget=Decimal(str(budget_amount)),
-                                min_package_budget=Decimal(str(_cl.min_package_budget)),
-                                currency=currency,
-                            )
-                            raise_if_validation_failed(
-                                package_min_budget_error,
-                                exc_type=AdCPBudgetTooLowError,
-                                requested_budget=Decimal(str(budget_amount)),
-                                budget_limit=Decimal(str(_cl.min_package_budget)),
-                            )
-
-                        # The package must exist in the media buy before we hand the
-                        # budget change to the adapter — otherwise the adapter silently
-                        # no-ops (quiet failure). Checked after the budget-value
-                        # validation so a malformed budget still surfaces BUDGET_TOO_LOW.
-                        # Raise PACKAGE_NOT_FOUND (BR-UC-003 ext-l).
-                        uow.media_buys.get_package_or_raise(req.media_buy_id, pkg_update.package_id)
-
-                        # Failure is raised by the adapter, never returned.
-                        adapter.update_media_buy(
-                            media_buy_id=req.media_buy_id,
-                            action="update_package_budget",
-                            package_id=pkg_update.package_id,
-                            budget=int(budget_amount),
-                            today=utc_flight_start(today),
-                        )
-
-                        # The seller's budget column is written HERE, inside this request's
-                        # unit of work, once the ad server has accepted the change, and
-                        # nowhere else: no adapter writes media_packages.budget. It was left
-                        # to each adapter, and they disagreed: Kevel wrote nothing, GAM and
-                        # Broadstreet wrote only package_config["budget"] while get_media_buys
-                        # reads the column, and the mock wrote both in its own session. Pinned
-                        # update_media_buy.mdx (v3.2.7) makes the request "one atomic mutation"
-                        # in which no package field from a rejected update may change, and
-                        # "every mutating update increments revision": update_package_fields
-                        # writes the column and moves the revision, and both roll back with
-                        # the UoW. The UoW owns only that: the adapter call above has already
-                        # reached the ad server when a later branch refuses, and GAM and
-                        # Broadstreet still commit package_config["budget"] in their own
-                        # sessions.
-                        uow.media_buys.update_package_fields(
-                            req.media_buy_id,
-                            pkg_update.package_id,
-                            budget=Decimal(str(budget_amount)),
-                        )
-
-                        # Track budget update in affected_packages. ``budget`` is carried
-                        # (the value just applied); ``paused`` is read off the record,
-                        # because a budget change does not alter it and the literal
-                        # ``False`` that stood here reported an already-paused package as
-                        # active.
-                        record = _package_changes(changes_by_package, pkg_update.package_id)
-                        record.budget = budget_amount
-
                     # Handle creative_ids updates (AdCP v2.2.0+)
                     if pkg_update.creative_ids is not None:
                         # Validate package_id is provided
@@ -1578,6 +1468,126 @@ def _update_media_buy_impl(
 
                         # Track in affected_packages
                         _package_changes(changes_by_package, pkg_update.package_id)
+
+                # enumerate so a per-package rejection can name WHICH package failed:
+                # the pointer is packages[N].package_id, never packages[].package_id,
+                # which named neither the array nor an element.
+                for pkg_index, pkg_update in enumerate(req.packages):
+                    # Handle paused state
+                    if pkg_update.paused is not None:
+                        # the pinned SDK+: paused=True means pause, paused=False means resume
+                        action = "pause_package" if pkg_update.paused else "resume_package"
+                        # Failure is raised by the adapter, never returned.
+                        adapter.update_media_buy(
+                            media_buy_id=req.media_buy_id,
+                            action=action,
+                            package_id=pkg_update.package_id,
+                            budget=None,
+                            today=utc_flight_start(today),
+                        )
+
+                        # This branch modified a package, so the response says which one
+                        # and in what state. It used to apply the pause through the adapter
+                        # and record NOTHING, which is the one shape the pin's
+                        # affected_packages description does not allow outside a
+                        # campaign-level update (see _affected_package). ``paused`` is
+                        # carried, not re-read: it is the value this branch just caused.
+                        record = _package_changes(changes_by_package, pkg_update.package_id)
+                        record.paused = pkg_update.paused
+
+                    # Handle budget updates
+                    if pkg_update.budget is not None:
+                        # Validate package_id is provided (required for budget updates)
+                        if not pkg_update.package_id:
+                            raise AdCPValidationError(field=package_field_path("package_id", pkg_index))
+                        # Extract budget amount - handle both float and Budget object
+                        budget_amount: float
+                        currency: str
+                        if isinstance(pkg_update.budget, int | float):
+                            budget_amount = float(pkg_update.budget)
+                            # F-07: preserve existing DB currency rather than defaulting to USD
+                            _existing_mb = uow.media_buys.get_by_id(req.media_buy_id)
+                            currency = str(_existing_mb.currency) if _existing_mb and _existing_mb.currency else "USD"
+                        else:
+                            # Budget object with .total and .currency attributes
+                            budget_amount = float(pkg_update.budget.total)
+                            currency = str(pkg_update.budget.currency) if pkg_update.budget.currency else "USD"
+
+                        # A zero or negative budget is BUDGET_TOO_LOW, not a fall-through.
+                        # This check existed only on the campaign-level path, which AdCP
+                        # 3.1.1 does not define -- so removing that path took the only
+                        # positivity guard with it, and `if pkg_update.budget:` skipped 0.0 as
+                        # falsy, leaving a zero budget to surface later as INVALID_STATE.
+                        budget_positive_err = validate_budget_positive(
+                            Decimal(str(budget_amount)), field=package_field_path("budget", pkg_index)
+                        )
+                        if budget_positive_err:
+                            raise AdCPBudgetTooLowError(field=package_field_path("budget", pkg_index))
+
+                        assert uow.currency_limits is not None
+                        _cl = uow.currency_limits.get_for_currency(currency)
+                        if _cl and _cl.min_package_budget:
+                            # `currency` is keyword-only and REQUIRED; this call omitted it.
+                            # It never raised because the enclosing guard was
+                            # `if pkg_update.budget:` -- truthy-only, so a 0 budget (the one
+                            # value that reliably reaches the minimum check) was skipped and
+                            # the broken call was unreachable. Fixing the guard to
+                            # `is not None` exposed it.
+                            package_min_budget_error: str | None = validate_min_package_budget(
+                                package_budget=Decimal(str(budget_amount)),
+                                min_package_budget=Decimal(str(_cl.min_package_budget)),
+                                currency=currency,
+                            )
+                            raise_if_validation_failed(
+                                package_min_budget_error,
+                                exc_type=AdCPBudgetTooLowError,
+                                requested_budget=Decimal(str(budget_amount)),
+                                budget_limit=Decimal(str(_cl.min_package_budget)),
+                            )
+
+                        # The package must exist in the media buy before we hand the
+                        # budget change to the adapter — otherwise the adapter silently
+                        # no-ops (quiet failure). Checked after the budget-value
+                        # validation so a malformed budget still surfaces BUDGET_TOO_LOW.
+                        # Raise PACKAGE_NOT_FOUND (BR-UC-003 ext-l).
+                        uow.media_buys.get_package_or_raise(req.media_buy_id, pkg_update.package_id)
+
+                        # Failure is raised by the adapter, never returned.
+                        adapter.update_media_buy(
+                            media_buy_id=req.media_buy_id,
+                            action="update_package_budget",
+                            package_id=pkg_update.package_id,
+                            budget=int(budget_amount),
+                            today=utc_flight_start(today),
+                        )
+
+                        # The seller's budget column is written HERE, inside this request's
+                        # unit of work, once the ad server has accepted the change, and
+                        # nowhere else: no adapter writes media_packages.budget. It was left
+                        # to each adapter, and they disagreed: Kevel wrote nothing, GAM and
+                        # Broadstreet wrote only package_config["budget"] while get_media_buys
+                        # reads the column, and the mock wrote both in its own session. Pinned
+                        # update_media_buy.mdx (v3.2.7) makes the request "one atomic mutation"
+                        # in which no package field from a rejected update may change, and
+                        # "every mutating update increments revision": update_package_fields
+                        # writes the column and moves the revision, and both roll back with
+                        # the UoW. The UoW owns only that: the adapter call above has already
+                        # reached the ad server when a later branch refuses, and GAM and
+                        # Broadstreet still commit package_config["budget"] in their own
+                        # sessions.
+                        uow.media_buys.update_package_fields(
+                            req.media_buy_id,
+                            pkg_update.package_id,
+                            budget=Decimal(str(budget_amount)),
+                        )
+
+                        # Track budget update in affected_packages. ``budget`` is carried
+                        # (the value just applied); ``paused`` is read off the record,
+                        # because a budget change does not alter it and the literal
+                        # ``False`` that stood here reported an already-paused package as
+                        # active.
+                        record = _package_changes(changes_by_package, pkg_update.package_id)
+                        record.budget = budget_amount
 
                     # Handle targeting_overlay updates
                     if pkg_update.targeting_overlay is not None:
