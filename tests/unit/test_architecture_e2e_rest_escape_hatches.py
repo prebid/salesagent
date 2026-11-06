@@ -159,7 +159,7 @@ def test_conftest_e2e_rest_xfail_routes_match_pin() -> None:
 # routes) nor detector 2 (tests/harness/ E2EUnsupportedSetup) could see, because
 # it lives in a different hook and never raises an xfail. #1802 deleted the tag
 # set; the merged conftest keeps that deletion, and
-# tests/unit/test_e2e_rest_ssrf_blocked_scenario_collected.py proves
+# tests/collection/test_e2e_rest_ssrf_blocked_scenario_collected.py proves
 # behaviourally that the one scenario it used to drop
 # (T-UC-004-webhook-ssrf-blocked) is collected on e2e_rest again — reachable
 # because the outbound-egress seam's ADCP_TESTING loopback allowance lets the

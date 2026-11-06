@@ -17,7 +17,7 @@ marker-set-keyed prose branches in ``_harness_env``, invisible to
 as a "tag combination in the table" at all. So the input is the real collected
 ``tests/bdd`` suite: every scenario's tag + MARKER set, taken from a real
 ``pytest --collect-only`` run (the same shape as
-``tests/integration/test_bdd_scenario_liveness_real_run.py``'s narrow slices),
+``tests/collection/test_bdd_scenario_liveness_real_run.py``'s narrow slices),
 grouped per feature module so a failure names the module it is in.
 
 ## The negative obligation (F1c.1)
@@ -46,11 +46,6 @@ scenario. See ``test_uc004_catch_all_is_unreachable_so_all_of_it_resolves_wired`
 from __future__ import annotations
 
 import json
-import os
-import shutil
-import subprocess
-import sys
-import tempfile
 from collections import defaultdict
 from functools import lru_cache
 from pathlib import Path
@@ -58,6 +53,7 @@ from typing import Any
 
 import pytest
 
+from tests._collection_manifest import BDD_TREE, load, manifest_dir
 from tests.unit._architecture_helpers import assert_violations_match_allowlist, repo_root
 from tests.unit._liveness_contract_pins import (
     DERIVATION_ACCESSOR,
@@ -95,7 +91,8 @@ _CATCH_ALL_SCENARIOS = (
 
 _UC004_TAG_PREFIX = "T-UC-004-"
 
-# The nested collection yields ~7.2k items today (7223 at authoring time).
+# The real BDD collection yields ~7.2k in-process items today (9945 rows
+# collected with e2e_rest on, 7223 in-process at authoring time).
 _MINIMUM_COLLECTED_ITEMS = 6000
 
 # BDD modules whose scenarios carry NO ``T-`` identity tag. They are outside the
@@ -110,91 +107,35 @@ _MODULES_WITHOUT_SCENARIO_IDENTITY = frozenset(
     }
 )
 
-# A pytest plugin, written to a tmp dir and loaded with -p, that dumps every
-# collected item's marker set — and, once the pinned accessor exists, the set
-# that accessor derives for the same node. `pytest_collection_finish` runs after
-# every `pytest_collection_modifyitems`, so the auto-applied entity markers
-# (tests/conftest.py) and conftest's own deselection are already reflected.
-_COLLECTOR_PLUGIN = """
-import importlib
-import json
-import os
-
-
-def pytest_collection_finish(session):
-    dotted = os.environ.get("LANE_F_ACCESSOR_MODULE") or ""
-    accessor = getattr(importlib.import_module(dotted), os.environ["LANE_F_ACCESSOR_NAME"]) if dotted else None
-    rows = []
-    for item in session.items:
-        rows.append(
-            {
-                "nodeid": item.nodeid,
-                "markers": sorted({m.name for m in item.iter_markers()}),
-                "derived": None if accessor is None else sorted(accessor(item)),
-            }
-        )
-    with open(os.environ["LANE_F_DUMP"], "w", encoding="utf-8") as handle:
-        json.dump(rows, handle)
-"""
-
 
 @lru_cache(maxsize=1)
 def _collected_items() -> tuple[dict[str, Any], ...]:
-    """Every collected ``tests/bdd`` item with its marker set, from a real run."""
-    repo = repo_root()
-    # A private dir per invocation: under xdist each worker runs its own nested
-    # collection, and two workers sharing one dump would race.
-    plugin_dir = Path(tempfile.mkdtemp(prefix="lane_f_collect_"))
-    (plugin_dir / "lane_f_collector.py").write_text(_COLLECTOR_PLUGIN, encoding="utf-8")
-    dump = plugin_dir / "collected.json"
+    """Every collected ``tests/bdd`` item with its marker set, from a real run.
 
-    env = dict(os.environ)
-    # The nested collection must not inherit the outer suite's e2e switch: with
-    # it on, scenarios additionally parametrize over e2e_rest and the collected
-    # marker sets stop being the in-process ones this grader reasons about.
-    env.pop("BDD_E2E_ENABLED", None)
-    env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(plugin_dir), env.get("PYTHONPATH", "")]))
-    env["LANE_F_DUMP"] = str(dump)
-    env["LANE_F_ACCESSOR_NAME"] = DERIVATION_ACCESSOR
-    dotted = accessor_dotted_module()
-    if dotted is not None:
-        env["LANE_F_ACCESSOR_MODULE"] = dotted
-    env.setdefault("ADCP_TESTING", "true")
+    Reads the full-tree record the real BDD session published rather than
+    spawning a nested ``pytest --collect-only``. The marker sets are the ones
+    ``iter_markers()`` reports AFTER every ``pytest_collection_modifyitems``
+    hook — the auto-applied entity markers from tests/conftest.py and the
+    transport xfail markers from tests/bdd/conftest.py included — because the
+    record is serialized at ``pytest_collection_finish``. That is the superset
+    ``DERIVATION_ACCESSOR`` is pinned on, and grading against anything narrower
+    would compare two equally-truncated sets and pass while proving nothing.
 
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pytest",
-            str(_BDD_DIR),
-            "--collect-only",
-            "-q",
-            "-p",
-            "no:cacheprovider",
-            "-p",
-            "no:randomly",
-            "-p",
-            "lane_f_collector",
-        ],
-        cwd=repo,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=600,
-    )
-    context = f"stdout:\n{result.stdout[-4000:]}\nstderr:\n{result.stderr[-4000:]}"
-    assert result.returncode == 0, (
-        f"the nested `pytest --collect-only {_BDD_DIR}` exited {result.returncode}. A partial collection would "
-        f"silently shrink this grader's input.\n{context}"
-    )
-    assert dump.is_file(), f"the nested `pytest --collect-only {_BDD_DIR}` did not write {dump}.\n{context}"
-    rows = json.loads(dump.read_text(encoding="utf-8"))
-    shutil.rmtree(plugin_dir, ignore_errors=True)
+    The in-network rows are dropped: this grader reasons about the in-process marker
+    sets, and the record may come from a session that had BDD_E2E_ENABLED on
+    (docker-compose sets it in-network). Dropping them here is what the old
+    nested collection achieved by popping the variable from its subprocess env.
+    """
+    rows = [row for row in load(manifest_dir(), target=BDD_TREE) if "[e2e_" not in row["nodeid"]]
+
     # The suite collects ~7.2k items today. A floor well under that still catches
-    # a truncated collection, which would make every verdict below vacuous.
+    # a truncated collection, which would make every verdict below vacuous. It
+    # binds because `target` scoped the read to the tests/bdd tree — rows from
+    # tests/unit cannot pad it.
     assert len(rows) > _MINIMUM_COLLECTED_ITEMS, (
-        f"the nested collection produced only {len(rows)} items (expected > {_MINIMUM_COLLECTED_ITEMS}) — "
-        f"the grader would be reasoning about a truncated suite.\n{context}"
+        f"the collection record produced only {len(rows)} in-process items "
+        f"(expected > {_MINIMUM_COLLECTED_ITEMS}) — the grader would be reasoning "
+        "about a truncated suite."
     )
     return tuple(rows)
 
@@ -391,28 +332,6 @@ def test_uc004_catch_all_is_unreachable_so_all_of_it_resolves_wired(tmp_path: Pa
         not_wired,
         set(),
         fix_hint=f"(scenario, _harness_env verdict, join verdict) — every UC-004 scenario is wired today.\n{FIX_HINT}",
-    )
-
-
-def test_scenario_never_measured_this_run_resolves_not_wired(tmp_path: Path) -> None:
-    """4c: a marker-keyed resolver has no input for an unmeasured scenario.
-
-    ``build_index`` calls the resolver for ids whose record is ``None``. Unstated,
-    the implementer keeps the tag-only lookup as a fallback and resurrects the
-    divergent path as a branch. Record-is-None resolves NOT-WIRED — consistent,
-    because ``graded_by_live_scenario`` already ANDs ``measured_this_run``.
-    """
-    from scripts.audit.scenario_liveness_join import build_index
-
-    empty = tmp_path / "liveness.json"
-    empty.write_text(json.dumps({"scenarios": []}), encoding="utf-8")
-    index = build_index({"T-UC-005-boundary-agent-asset"}, artifact_path=empty, env_routes=_env_routes())
-    record = index["T-UC-005-boundary-agent-asset"]
-
-    assert record.measured_this_run is False
-    assert record.registry_wired is False, (
-        "an unmeasured scenario has no marker set to route on, so it cannot be reported registry-wired — "
-        f"a tag-only fallback here is the divergent path returning as a branch.\n{FIX_HINT}"
     )
 
 

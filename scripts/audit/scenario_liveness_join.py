@@ -47,6 +47,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts.audit import storyboard_spec
+from scripts.ci import shard_split
 from src.core.config import ToolingSettings
 
 #: The artifact field carrying the scenario's marker set — the join's only
@@ -161,6 +162,16 @@ def _reject_narrowed_run(path: Path, run: dict[str, Any] | None) -> None:
         return
     selection = run.get("selection") or ""
     markers = run.get("markers") or ""
+    # A shard narrows by neither: it is handed a file list. ``target`` is absent in an
+    # artifact written before the writer recorded it, which the legacy rule above covers.
+    target = run.get("target")
+    if target is not None and not shard_split.targets_cover_suite("bdd", target):
+        raise storyboard_spec.StoryboardAuditError(
+            f"{path} was written by a session invoked on {len(target)} path(s), which do not "
+            f"account for every BDD module ({run.get('collected')} collected). It is one shard, "
+            "not a measurement of the suite. Re-run the full suite (`pytest tests/bdd`) before "
+            "regenerating anything that quotes liveness."
+        )
     if not selection and not markers:
         return
     raise storyboard_spec.StoryboardAuditError(

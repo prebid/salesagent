@@ -142,6 +142,10 @@ TRANSPORT_PROTOCOL: dict[Transport, str] = {
     Transport.E2E_A2A: "a2a",
 }
 
+# The transports a BDD scenario runs on with no server: the parametrize list in
+# tests/bdd/conftest.py, and the projection tests/bdd/scenario_liveness.py grades.
+BDD_IN_PROCESS_TRANSPORTS = (Transport.A2A, Transport.MCP, Transport.REST)
+
 
 # The ONE credential-argument omission sentinel for the whole dispatch core
 # (tests/harness/client.py, dispatchers.py, raw_wire.py, _base.py, _mixins.py).

@@ -2,7 +2,7 @@
 
 One place, so the structural guard
 (``tests/unit/test_architecture_liveness_contract_owner.py``) and the behavioral
-grader (``tests/unit/test_architecture_env_route_agreement.py``) cannot drift
+grader (``tests/collection/test_architecture_env_route_agreement.py``) cannot drift
 apart — the same disease this lane exists to cure.
 
 Authored RED, before implementation: these names ARE the contract the implement

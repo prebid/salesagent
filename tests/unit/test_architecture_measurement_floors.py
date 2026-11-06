@@ -323,3 +323,25 @@ def test_a_full_run_is_still_read_normally(tmp_path) -> None:
     )
 
     assert set(scenario_liveness_join.load_artifact(artifact)) == {"T-UC-003-x"}
+
+
+def test_one_shard_of_the_suite_is_refused_like_any_other_narrowing(tmp_path: Path) -> None:
+    """A shard narrows by neither -k nor -m: it is handed a file list."""
+    from scripts.audit import scenario_liveness_join, storyboard_spec
+
+    artifact = tmp_path / "bdd_scenario_liveness.json"
+    run = {"collected": 266, "selection": "", "markers": "", "target": ["tests/bdd/test_uc001_get_products.py"]}
+    artifact.write_text(json.dumps({"run": run, "scenarios": [{"scenario_id": "T-UC-001-x"}]}), encoding="utf-8")
+
+    with pytest.raises(storyboard_spec.StoryboardAuditError, match="one shard"):
+        scenario_liveness_join.load_artifact(artifact)
+
+
+def test_a_whole_tree_target_is_a_measurement_of_the_suite(tmp_path: Path) -> None:
+    from scripts.audit import scenario_liveness_join
+
+    artifact = tmp_path / "bdd_scenario_liveness.json"
+    run = {"collected": 8000, "selection": "", "markers": "", "target": ["tests/bdd"]}
+    artifact.write_text(json.dumps({"run": run, "scenarios": [{"scenario_id": "T-UC-001-x"}]}), encoding="utf-8")
+
+    assert set(scenario_liveness_join.load_artifact(artifact)) == {"T-UC-001-x"}

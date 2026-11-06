@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterable
 from functools import cache
 from pathlib import Path
 
@@ -64,6 +65,22 @@ def list_suite_files(suite: str, repo_root: Path | None = None) -> list[str]:
         raise KeyError(f"Unknown suite {suite!r}")
     root = repo_root or _REPO_ROOT
     return sorted(str(p.relative_to(root)) for p in root.glob(SUITE_GLOBS[suite]))
+
+
+def targets_cover_suite(suite: str, targets: Iterable[str], repo_root: Path | None = None) -> bool:
+    """True when these pytest invocation paths account for every file of the suite.
+
+    Two shapes reach here. A session invoked on the DIRECTORY (`pytest tests/bdd`) names one
+    target that is a prefix of every module. Sharded sessions each name their own files, and
+    must union to the whole set.
+    """
+    named = set(targets)
+    if not named:
+        return False
+    return all(
+        any(module == t or module.startswith(f"{t}/") for t in named)
+        for module in (Path(f).as_posix() for f in list_suite_files(suite, repo_root=repo_root))
+    )
 
 
 def bdd_scenario_count(test_path: str, repo_root: Path | None = None) -> int:

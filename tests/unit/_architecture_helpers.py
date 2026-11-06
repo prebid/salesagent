@@ -31,6 +31,8 @@ from typing import Any, NamedTuple
 
 import yaml
 
+from tests._collection_manifest import unpublished_env
+
 # ---------------------------------------------------------------------------
 # Repo-root anchor
 # ---------------------------------------------------------------------------
@@ -809,7 +811,7 @@ def iter_architecture_guard_trees(
     """Yield ``(parsed_tree, repo_relative_path)`` for each ``test_architecture_*.py`` module."""
     repo = repo_root()
     skip = set(exempt or ())
-    for path in sorted((repo / "tests" / "unit").glob("test_architecture_*.py")):
+    for path in sorted((repo / "tests").glob("*/test_architecture_*.py")):
         rel = path.relative_to(repo)
         if rel in skip:
             continue
@@ -1725,18 +1727,16 @@ def collect_bdd_node_ids_with_e2e_enabled(
 ) -> list[str]:
     """Collect pytest node ids under *target* with BDD_E2E_ENABLED=true.
 
-    Shared by the e2e_rest known-failures ledger fitness function and any
-    test asserting a specific scenario's transport parametrization —
-    same subprocess invocation, same env, same flags (-n0 satisfies the
-    BDD_E2E_ENABLED xdist guard; addopts is cleared so -q prints bare
-    nodeids).
+    For a test that compares two seeded collections of one module, which one real
+    run cannot answer: it has one seed. -n0 satisfies the BDD_E2E_ENABLED xdist
+    guard; addopts is cleared so -q prints bare nodeids.
 
     *randomly_seed* selects the collection ORDER. The default (``None``)
     disables pytest-randomly, which is what a caller asserting "this scenario
     is collected" wants: one stable order. A caller asserting that collection
     does not DEPEND on order passes two different seeds and compares — the
     suite runs with pytest-randomly live and a fresh seed per run
-    (``tox.ini`` [testenv:bdd_inprocess] does not pass ``-p no:randomly``), so
+    (``tox.ini`` [testenv:bdd-inprocess-s{1,2}] does not pass ``-p no:randomly``), so
     order-sensitive collection shows up there as a per-run flap.
     """
     order = ["-p", "no:randomly"] if randomly_seed is None else ["-p", "randomly", f"--randomly-seed={randomly_seed}"]
@@ -1754,7 +1754,7 @@ def collect_bdd_node_ids_with_e2e_enabled(
             "-n0",
         ],
         cwd=repo_root(),
-        env={**os.environ, "BDD_E2E_ENABLED": "true", "BDD_XDIST_N": "0"},
+        env={**unpublished_env(), "BDD_E2E_ENABLED": "true", "BDD_XDIST_N": "0"},
         capture_output=True,
         text=True,
         timeout=timeout,
