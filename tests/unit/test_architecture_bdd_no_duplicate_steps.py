@@ -45,7 +45,7 @@ _DUPLICATE_THRESHOLD = 2
 # the action they assert, or the fixture value they set look byte-identical here. Four such
 # false positives were caught by reading the pair before collapsing it, two of them only after
 # a collapse went red: given_assignments_referencing_same_package reads "idempotent_package_id"
-# while its twin reads "cross_tenant_package_id", and the two output_format_ids steps differ in
+# while its twin reads "foreign_package_id", and the two output_format_ids steps differ in
 # the creative NAME, which is the subject of the name-fallback scenario that uses one of them.
 # Read both bodies verbatim before lowering this number again.
 #

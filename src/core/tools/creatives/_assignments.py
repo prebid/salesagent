@@ -150,6 +150,7 @@ def _process_assignments(
             if uow is None:
                 uow = stack.enter_context(CreativeUoW(tenant.tenant_id))
             assert uow.assignments is not None
+            assert uow.media_buys is not None
             assignment_repo = uow.assignments
 
             for creative_id, terms_by_package in assignments.items():
@@ -209,8 +210,8 @@ def _process_assignments(
                     continue
 
                 for package_id, (requested_weight, placement_ids) in terms_by_package.items():
-                    # Find which media buy this package belongs to
-                    pkg_result = assignment_repo.find_package_with_media_buy(package_id)
+                    # Find which of the caller's media buys this package belongs to
+                    pkg_result = uow.media_buys.find_package_with_media_buy(package_id, principal_id)
 
                     media_buy_id = None
                     actual_package_id = None
@@ -369,7 +370,6 @@ def _process_assignments(
                         assignments_by_creative[creative_id].append(actual_package_id)
 
             # Update media buy status if needed (draft -> pending_creatives).
-            assert uow.media_buys is not None
             for mb_id, mb_obj in media_buys_with_new_assignments.items():
                 if mb_obj.status == "draft" and mb_obj.approved_at is not None:
                     uow.media_buys.update_status(mb_id, PersistedMediaBuyStatus.PENDING_CREATIVES)
