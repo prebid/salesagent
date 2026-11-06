@@ -496,11 +496,18 @@ if [ "${E2E_WORKERS:-0}" -gt 0 ] 2>/dev/null; then
     # scenario errors attributed to the wrong layer. Collect all of them first
     # (one pass, so the operator sees every unhealthy worker rather than just
     # the first) and then abort with the count.
+    #
+    # One deadline for all workers, the same 360s the adcp-server wait uses. A
+    # fresh window per worker gave gw0, polled first, the shortest real wait.
+    # Every worker is probed at least once, so one past the deadline is still
+    # reported from its own state.
     _unhealthy=""
+    wd=$(( $(date +%s) + 360 ))
     for i in $(seq 0 $((N - 1))); do
-        wd=$(( $(date +%s) + 120 )); ok=false
-        while [ "$(date +%s)" -lt "$wd" ]; do
+        ok=false
+        while :; do
             docker exec "${COMPOSE_PROJECT_NAME}-server-gw$i" curl -sf http://localhost:8080/health >/dev/null 2>&1 && ok=true && break
+            [ "$(date +%s)" -lt "$wd" ] || break
             sleep 2
         done
         if [ "$ok" = true ]; then
