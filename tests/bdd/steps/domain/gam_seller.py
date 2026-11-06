@@ -838,6 +838,33 @@ def then_gam_updated_that_creative(ctx: dict, url: str) -> None:
     assert held.get("imageUrl") == url, f"expected GAM to hold the creative showing {url}; it holds {held}"
 
 
+@then(
+    parsers.re(
+        r'Google Ad Manager holds that creative on line items "(?P<line_items>[^"]+)" as (?P<status>serving|not serving)$'
+    )
+)
+def then_gam_association_serving(ctx: dict, line_items: str, status: str) -> None:
+    """Each association of the one creative GAM created is ACTIVE (serving) or INACTIVE, line items in order."""
+    (creative,) = _creatives_created(ctx)
+    expected = [
+        (line_item.strip(), "ACTIVE" if status == "serving" else "INACTIVE") for line_item in line_items.split(",")
+    ]
+    held = [
+        (str(a["lineItemId"]), a.get("status", "ACTIVE"))
+        for a in _licas_created(ctx)
+        if str(a["creativeId"]) == str(creative["id"])
+    ]
+    assert held == expected, f"expected GAM to hold that creative as {expected}; it holds {held}"
+
+
+@then("Google Ad Manager was asked to change no association's serving")
+def then_gam_no_serving_change(ctx: dict) -> None:
+    """Nothing reached GAM's association activate or deactivate action."""
+    lica = ctx["env"].mock["gam_client"].return_value.GetService("LineItemCreativeAssociationService")
+    calls = lica.performLineItemCreativeAssociationAction.call_args_list
+    assert calls == [], f"expected no association action; GAM received {calls}"
+
+
 @then("Google Ad Manager updated no creative")
 def then_gam_updated_no_creative(ctx: dict) -> None:
     """Nothing reached GAM's creative update."""

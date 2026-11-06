@@ -743,6 +743,22 @@ def _refuse_change_in_active_delivery(media_buys: MediaBuyRepository, creative_i
             )
 
 
+def _hold_at_ad_server_after_commit(
+    creative_repo: CreativeRepository, tenant_id: str, principal_id: str, ad_server_creative_id: str
+) -> None:
+    """Queue the ad server hold of a creative under review for when this sync commits (a dry_run never does)."""
+
+    def _hold() -> None:
+        from src.core.tools.media_buy_create import hold_creative_at_ad_server
+
+        # structural-guard: nested-unit-of-work - after_commit runs this once the unit that committed has closed
+        hold_creative_at_ad_server(
+            tenant_id=tenant_id, principal_id=principal_id, ad_server_creative_id=ad_server_creative_id
+        )
+
+    creative_repo.after_commit(_hold, label="creative_review_ad_server_hold")
+
+
 def _update_existing_creative(
     creative: CreativeAsset,
     existing_creative: Any,
@@ -856,6 +872,9 @@ def _update_existing_creative(
         if enters_review
         else False
     )
+    if needs_approval and "ad_server_creative_id" in data:
+        # The ad server holds the old content; it must not serve it while this one is reviewed.
+        _hold_at_ad_server_after_commit(creative_repo, tenant.tenant_id, principal_id, data["ad_server_creative_id"])
 
     # ALWAYS validate updates with creative agent
     format_obj = _dialled_format_for(creative, incoming_identity, all_formats)

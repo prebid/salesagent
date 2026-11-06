@@ -2142,6 +2142,33 @@ def push_creative_to_existing_buy(
         return CreativePushFailure(str(e), adcp_error_for(e))
 
 
+def hold_creative_at_ad_server(*, tenant_id: str, principal_id: str, ad_server_creative_id: str) -> None:
+    """Stop the ad server serving a creative whose changed content awaits the seller's review.
+
+    docs/creative/task-reference/sync_creatives.mdx (v3.2.7), Creative revisions: "The prior
+    revision is not kept serving during review", and "A revised creative under re-review is
+    ineligible for delivery like any other pending_review creative until it re-reaches
+    approved". The approval's push (``push_creative_to_existing_buy``) serves it again. Runs
+    once the sync has committed and nothing of it is open; a failure is logged, because the
+    sync has already been answered.
+    """
+    from src.core.helpers.adapter_helpers import get_adapter_class_for_tenant
+    from src.core.tenant_context import TenantContext
+
+    try:
+        tenant = TenantContext.load(tenant_id)
+        if tenant is None or not get_adapter_class_for_tenant(tenant).capabilities.supports_creative_trafficking:
+            return
+        adapter = get_adapter(identity_of(tenant_id, principal_id))
+        if hasattr(adapter, "creatives_manager") and adapter.creatives_manager:
+            adapter.creatives_manager.set_creative_serving(ad_server_creative_id, serving=False)
+    except Exception as e:
+        logger.error(
+            log_safe(f"[HOLD] Ad server creative {ad_server_creative_id} not held from serving during review: {e}"),
+            exc_info=True,
+        )
+
+
 #: Event-goal target kinds that aggregate conversion value, so a goal carrying one needs a
 #: value-bearing event source (core/optimization-goal.json event_sources[].value_field).
 _VALUE_TARGET_KINDS = frozenset({"per_ad_spend", "maximize_value"})

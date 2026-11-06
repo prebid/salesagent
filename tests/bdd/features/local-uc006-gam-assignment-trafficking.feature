@@ -181,17 +181,42 @@ Feature: UC-006 a Google Ad Manager seller traffics assigned creatives onto its 
       | before start   | pending_start | left   |
 
   # Under review, the change has not gone anywhere: sync_creatives.mdx, "prior approval does not
-  # transfer", so the seller's approval is what sends it. Known gap: GAM keeps the old content on
-  # the line item meanwhile, so a pending_start buy that reaches its start during re-review serves
-  # it, where sync_creatives.mdx says "The prior revision is not kept serving during review."
+  # transfer", so the seller's approval is what sends it. Nor does the old content serve meanwhile:
+  # "The prior revision is not kept serving during review", and "A revised creative under re-review
+  # is ineligible for delivery like any other pending_review creative until it re-reaches approved".
+  # GAM's LineItemCreativeAssociation status INACTIVE: "the associated Creative is ineligible for
+  # being served". The seller's approval updates the creative and makes its associations ACTIVE
+  # again. Nobody has tried the association action against real GAM.
   @T-UC-006-local-gam-change-under-review-held
-  Scenario: A changed creative under the seller's review sends nothing to GAM
-    Given the buyer holds a buy booked in Google Ad Manager as order "6000005" in status "pending_start" whose package "pkg-live" is line item "5000005" accepting 300x250
+  Scenario Outline: A changed creative under the seller's review stops serving at GAM, and serves again on approval - <state>
+    Given the buyer holds a buy booked in Google Ad Manager as order "6000005" in status "<status>" whose package "pkg-live" is line item "5000005" accepting 300x250
     And the buyer synced a 300x250 image creative "cr-banner" showing "https://example.com/banner.png" assigned to package "pkg-live"
+    And the buyer has <paused> package "pkg-live" of the buy
     And the tenant has approval_mode "require-human"
     And the buyer syncs a 300x250 image creative "cr-banner" showing "https://example.com/banner-v2.png" assigned to package "pkg-live"
     When the Buyer Agent syncs the creative with assignments
     Then Google Ad Manager updated no creative
+    And Google Ad Manager holds that creative on line items "5000005" as not serving
+    When the seller approves creative "cr-banner"
+    Then Google Ad Manager updated that creative, once, to show "https://example.com/banner-v2.png"
+    And Google Ad Manager holds that creative on line items "5000005" as serving
+
+    Examples:
+      | state          | status        | paused |
+      | before start   | pending_start | left   |
+      | paused package | active        | paused |
+
+  # The same content sent again under review is not a revision: nothing enters review, and GAM
+  # keeps serving it.
+  @T-UC-006-local-gam-unchanged-under-review-serves
+  Scenario: Sending a creative again unchanged under the seller's review leaves it serving at GAM
+    Given the buyer holds a buy booked in Google Ad Manager as order "6000005" in status "pending_start" whose package "pkg-live" is line item "5000005" accepting 300x250
+    And the buyer synced a 300x250 image creative "cr-banner" showing "https://example.com/banner.png" assigned to package "pkg-live"
+    And the tenant has approval_mode "require-human"
+    And the buyer syncs a 300x250 image creative "cr-banner" showing "https://example.com/banner.png" assigned to package "pkg-live"
+    When the Buyer Agent syncs the creative with assignments
+    Then Google Ad Manager was asked to change no association's serving
+    And Google Ad Manager holds that creative on line items "5000005" as serving
 
   # An auto-approving seller clears the change at sync, so the sync that carries the assignment sends it.
   @T-UC-006-local-gam-auto-approved-change-updates-in-place

@@ -213,6 +213,10 @@ class GAMCreativesManager:
                     lica_service,
                     placement_targeting_map,
                 )
+                # Content that changed was held from serving while it was under review
+                # (``set_creative_serving``); its approval is what this push carries.
+                if asset.get("platform_creative_outdated"):
+                    self.set_creative_serving(str(gam_creative_id), serving=True)
 
                 created_asset_statuses.append(_approved(asset["creative_id"], str(gam_creative_id)))
 
@@ -250,6 +254,27 @@ class GAMCreativesManager:
                 )
 
         return created_asset_statuses
+
+    def set_creative_serving(self, gam_creative_id: str, *, serving: bool) -> None:
+        """Activate or deactivate every line item creative association of a GAM creative.
+
+        GAM API LineItemCreativeAssociation.Status: ACTIVE "the associated Creative can be
+        served"; INACTIVE "the associated Creative is ineligible for being served".
+        LineItemCreativeAssociationService.performLineItemCreativeAssociationAction applies
+        ActivateLineItemCreativeAssociations or DeactivateLineItemCreativeAssociations to the
+        associations its statement matches, here every one naming the creative. Nobody has
+        tried this against real GAM. Ceiling: one page of the statement builder's default
+        limit (500) associations.
+        """
+        lica_service = self.client_manager.get_service("LineItemCreativeAssociationService")
+        statement = (
+            self.client_manager.get_statement_builder()
+            .Where("creativeId = :creativeId")
+            .WithBindVariable("creativeId", int(gam_creative_id))
+        )
+        action = "ActivateLineItemCreativeAssociations" if serving else "DeactivateLineItemCreativeAssociations"
+        lica_service.performLineItemCreativeAssociationAction({"xsi_type": action}, statement.ToStatement())
+        logger.info(f"{action} for GAM creative {gam_creative_id}")
 
     def _get_line_item_placeholders(self, media_buy_id: str, line_item_service) -> dict[str, list]:
         """The creative placeholders of each line item in an order, keyed by line item id.

@@ -117,6 +117,11 @@ def stub_gam_client(
       ``client.creative_update_fault`` it refuses instead, with ``gam_fault``. Ceiling: nobody has
       tried this call against real GAM; the stand-in does not model which fields GAM lets an
       update change (``Creative.size`` is read-only after creation).
+    * ``LineItemCreativeAssociationService.performLineItemCreativeAssociationAction`` sets
+      ``status`` (ACTIVE for ActivateLineItemCreativeAssociations, INACTIVE for
+      DeactivateLineItemCreativeAssociations) on the associations it created for the statement's
+      ``creativeId``; an association it has not acted on carries no status, which GAM reads as
+      ACTIVE at creation. Ceiling: it reads the one bind variable and no other PQL.
     * ``LineItemCreativeAssociationService.getLineItemCreativeAssociationsByStatement``
       answers the associations the network created, read at call time.
 
@@ -189,6 +194,21 @@ def stub_gam_client(
         return _associate(objects, *args, **kwargs)
 
     services[lica].createLineItemCreativeAssociations = MagicMock(side_effect=_associate_unless_refused)
+
+    _serving = {"ActivateLineItemCreativeAssociations": "ACTIVE", "DeactivateLineItemCreativeAssociations": "INACTIVE"}
+
+    def _association_action(action: Mapping[str, Any], statement: Mapping[str, Any], *_a: Any, **_k: Any) -> SoapObject:
+        (creative_id,) = [int(v["value"]["value"]) for v in statement["values"] if v["key"] == "creativeId"]
+        held = [
+            a
+            for a in created.get((lica, "createLineItemCreativeAssociations"), [])
+            if int(a["creativeId"]) == creative_id
+        ]
+        for association in held:
+            association["status"] = _serving[action["xsi_type"]]
+        return SoapObject(numChanges=len(held))
+
+    services[lica].performLineItemCreativeAssociationAction = MagicMock(side_effect=_association_action)
     services[lica].getLineItemCreativeAssociationsByStatement = MagicMock(
         side_effect=lambda *_args: SoapObject(
             results=list(created.get((lica, "createLineItemCreativeAssociations"), []))
