@@ -522,19 +522,16 @@ def given_request_no_updatable_fields(ctx: dict) -> None:
     kwargs["media_buy_id"] = media_buy_id
 
 
-@given(parsers.parse("the request includes 1 package update with:"))
-def given_package_update_with_table(ctx: dict, datatable: list[list[str]]) -> None:
-    """Add a package update to the request from a data table."""
-    import json
-
-    # product_id is intentionally accepted here so the immutable-field override
-    # reaches production. AdCPPackageUpdate forbids it (extra=forbid), so it is
-    # rejected — currently as VALIDATION_ERROR rather than the spec-expected
-    # INVALID_REQUEST (BR-RULE-198), so T-UC-003-ext-w is xfailed (#1417).
-    # canceled and start_time are package-update.json properties (adcp v3.2.7), sent as
-    # written: start_time's literal "asap" is the value the package-scope row exists to
-    # show refused (``not: {const: asap}``), so it is not resolved as a date token.
-    _supported_pkg_fields = {
+#: The package-update.json members a scenario table may set on one package.
+#: product_id is intentionally accepted so the immutable-field override reaches production.
+#: AdCPPackageUpdate forbids it (extra=forbid), so it is rejected -- currently as
+#: VALIDATION_ERROR rather than the spec-expected INVALID_REQUEST (BR-RULE-198), so
+#: T-UC-003-ext-w is xfailed (#1417). canceled and start_time are package-update.json
+#: properties (adcp v3.2.7), sent as written: start_time's literal "asap" is the value the
+#: package-scope row exists to show refused (``not: {const: asap}``), so it is not resolved
+#: as a date token.
+_SUPPORTED_PACKAGE_FIELDS = frozenset(
+    {
         "package_id",
         "budget",
         "paused",
@@ -543,30 +540,54 @@ def given_package_update_with_table(ctx: dict, datatable: list[list[str]]) -> No
         "product_id",
         "canceled",
         "start_time",
+        "pacing",
     }
+)
+
+
+def _set_package_field(pkg_update: dict[str, Any], field: str, value: str) -> None:
+    """Set one package-update member from a scenario table cell, as a buyer would send it."""
+    import json
+
+    assert field in _SUPPORTED_PACKAGE_FIELDS, (
+        f"Unrecognized package field '{field}' in datatable — "
+        f"supported: {sorted(_SUPPORTED_PACKAGE_FIELDS)}. "
+        f"Add handling for '{field}' if it's a valid package update field."
+    )
+    if field == "budget":
+        pkg_update["budget"] = float(value)
+    elif field in ("paused", "canceled"):
+        pkg_update[field] = as_bool(value)
+    elif field in ("targeting_overlay", "catalogs"):
+        pkg_update[field] = json.loads(value)
+    else:
+        pkg_update[field] = value
+
+
+@given(parsers.parse("the request includes 1 package update with:"))
+def given_package_update_with_table(ctx: dict, datatable: list[list[str]]) -> None:
+    """Add a package update to the request from a data table."""
     kwargs = _ensure_update_defaults(ctx)
     pkg_update: dict[str, Any] = {}
     # Skip header row if present (pytest-bdd datatables include header as first row)
-    rows = drop_header_if(datatable, "field")
-    for row in rows:
-        field, value = row[0].strip(), row[1].strip()
-        assert field in _supported_pkg_fields, (
-            f"Unrecognized package field '{field}' in datatable — "
-            f"supported: {sorted(_supported_pkg_fields)}. "
-            f"Add handling for '{field}' if it's a valid package update field."
-        )
-        if field == "package_id":
-            pkg_update["package_id"] = value
-        elif field == "budget":
-            pkg_update["budget"] = float(value)
-        elif field in ("paused", "canceled"):
-            pkg_update[field] = as_bool(value)
-        elif field in ("targeting_overlay", "catalogs"):
-            pkg_update[field] = json.loads(value)
-        elif field in ("product_id", "start_time"):
-            pkg_update[field] = value
+    for row in drop_header_if(datatable, "field"):
+        _set_package_field(pkg_update, row[0].strip(), row[1].strip())
     assert pkg_update, "Datatable produced empty package update — check table format"
     kwargs["packages"] = [pkg_update]
+
+
+@given("the request updates these packages, in order:")
+def given_package_updates_in_order(ctx: dict, datatable: list[list[str]]) -> None:
+    """Replace the request's packages with one update per package_id, members in table order.
+
+    Columns: ``package_id | field | value``; consecutive rows of one package_id build one update.
+    """
+    kwargs = _ensure_update_defaults(ctx)
+    packages: dict[str, dict[str, Any]] = {}
+    for row in drop_header_if(datatable, "package_id"):
+        package_id, field, value = (cell.strip() for cell in row)
+        _set_package_field(packages.setdefault(package_id, {"package_id": package_id}), field, value)
+    kwargs["packages"] = list(packages.values())
 
 
 @given(parsers.parse('the package "{package_id}" exists in the media buy'))
