@@ -14,6 +14,8 @@ Enforced by ``.ast-grep/rules/test-credential-header-single-producer.yml``, whic
 
 from __future__ import annotations
 
+from typing import Literal
+
 
 def credential_headers(
     *,
@@ -21,6 +23,7 @@ def credential_headers(
     tenant: str | None = None,
     host: str | None = None,
     host_resolves_nothing: bool = False,
+    scheme: Literal["Bearer", "Basic"] = "Bearer",
 ) -> dict[str, str]:
     """THE producer: the headers a test presents to this seller, from plain values.
 
@@ -59,7 +62,7 @@ def credential_headers(
     headers: dict[str, str] = {}
     if token is not None:
         # ast-grep-ignore: test-credential-header-single-producer - this IS the one producer
-        headers["Authorization"] = f"Bearer {token}"
+        headers["Authorization"] = f"{scheme} {token}"
     if host:
         # THE DEFAULT WAY a request names its seller, because it is how a DEPLOYMENT does
         # it: production nginx derives ``x-adcp-tenant`` from the host

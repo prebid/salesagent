@@ -286,16 +286,27 @@ def test_every_precheck_handles_the_index_verdict():
 # ── Inventory non-vacuity ───────────────────────────────────────────
 
 #: Measured against models.py. Counts, not just presence: a silently emptied
-#: inventory makes every scan below vacuously green. Three of the 21 declared
+#: inventory makes every scan below vacuously green. Four of the 22 declared
 #: tuples postdate the guard: ``PricingOption.uq_pricing_options_option_id`` and
 #: ``Principal.uq_principals_tenant_agent_url`` from the rewritten request
-#: boundary, and ``SigningKey.uq_signing_keys_tenant_kid`` on ``(tenant_id, kid)``
+#: boundary; ``SigningKey.uq_signing_keys_tenant_kid`` on ``(tenant_id, kid)``
 #: — a real UNIQUE constraint (``e7a2c40b91d5_add_signing_keys_table``), not a PK
 #: subset: ``signing_keys`` keys on a surrogate ``id``, so the natural key is
-#: separately declared and separately enforced.
-EXPECTED_DECLARED_TUPLES = 21
-EXPECTED_DECLARED_MODELS = 18
-EXPECTED_FORM_COUNTS = {"unique-constraint": 13, "unique-index": 5, "column-unique": 3}
+#: separately declared and separately enforced; and
+#: ``OAuthClient.uq_oauth_clients_client_id``
+#: (``9c2d7e8f4a11_add_mcp_oauth_clients``), which makes an OAuth ``client_id``
+#: globally unique ACROSS tenants rather than within one. RFC 6749 requires that
+#: of a client identifier, because the client presents it without naming a
+#: tenant — so the single column is unique even though ``oauth_clients`` keys on
+#: ``(tenant_id, client_id)``, and both are in the inventory.
+#:
+#: ``oauth_access_tokens`` (``750ec2ca30c0``) contributes nothing here and is not
+#: an omission: ``token_hash`` is a single-column primary key, which
+#: ``_model_unique_keys`` excludes by design, and the table declares no
+#: ``UniqueConstraint``, no ``Index(unique=True)`` and no column-level ``unique``.
+EXPECTED_DECLARED_TUPLES = 22
+EXPECTED_DECLARED_MODELS = 19
+EXPECTED_FORM_COUNTS = {"unique-constraint": 14, "unique-index": 5, "column-unique": 3}
 
 #: Excluded, never truncated — the column subset these name is NOT unique in the DB.
 EXPECTED_UNUSABLE = {

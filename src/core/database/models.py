@@ -175,6 +175,9 @@ class Tenant(Base, JSONValidatorMixin):
 
     # Relationships
     products = relationship("Product", back_populates="tenant", cascade="all, delete-orphan")
+    oauth_clients = relationship(
+        "OAuthClient", back_populates="tenant", cascade="all, delete-orphan", overlaps="principal"
+    )
     # No `principals` collection. It has no reader, and a relationship traversal is the
     # one way to reach Principal rows without importing the class — which is what the
     # TID251 ban on `src.core.database.models.Principal` outside the four repository
@@ -804,6 +807,12 @@ class Principal(Base, JSONValidatorMixin):
     tenant = relationship("Tenant", overlaps="principals")
     media_buys = relationship("MediaBuy", back_populates="principal", overlaps="media_buys")
     strategies = relationship("Strategy", back_populates="principal", overlaps="strategies")
+    oauth_clients = relationship(
+        "OAuthClient",
+        back_populates="principal",
+        cascade="all, delete-orphan",
+        overlaps="oauth_clients,tenant",
+    )
     push_notification_configs = relationship(
         "PushNotificationConfig",
         back_populates="principal",
@@ -850,6 +859,143 @@ class Principal(Base, JSONValidatorMixin):
         from src.core.platform_mappings import resolve_adapter_id
 
         return resolve_adapter_id(self.platform_mappings, adapter_name)
+
+
+class OAuthClient(Base):
+    __tablename__ = "oauth_clients"
+
+    tenant_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    client_id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    principal_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    client_secret_hash: Mapped[str] = mapped_column(String(500), nullable=False)
+    scopes: Mapped[list[str]] = mapped_column(JSONType, nullable=False, default=list)
+    redirect_uris: Mapped[list[str]] = mapped_column(JSONType, nullable=False, default=list)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    tenant = relationship("Tenant", back_populates="oauth_clients", overlaps="principal")
+    principal = relationship(
+        "Principal",
+        back_populates="oauth_clients",
+        overlaps="oauth_clients,tenant",
+        foreign_keys=[tenant_id, principal_id],
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "principal_id"],
+            ["principals.tenant_id", "principals.principal_id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
+        Index("idx_oauth_clients_tenant_principal", "tenant_id", "principal_id"),
+        Index("idx_oauth_clients_client_id", "client_id"),
+        UniqueConstraint("client_id", name="uq_oauth_clients_client_id"),
+    )
+
+
+class OAuthAuthorizationCode(Base):
+    __tablename__ = "oauth_authorization_codes"
+
+    code_hash: Mapped[str] = mapped_column(String(128), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    client_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    principal_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    redirect_uri: Mapped[str] = mapped_column(String(1000), nullable=False)
+    code_challenge: Mapped[str] = mapped_column(String(256), nullable=False)
+    code_challenge_method: Mapped[str] = mapped_column(String(20), nullable=False)
+    scopes: Mapped[list[str]] = mapped_column(JSONType, nullable=False, default=list)
+    resource: Mapped[str] = mapped_column(String(1000), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "client_id"],
+            ["oauth_clients.tenant_id", "oauth_clients.client_id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "principal_id"],
+            ["principals.tenant_id", "principals.principal_id"],
+            ondelete="CASCADE",
+        ),
+        Index("idx_oauth_authorization_codes_client", "tenant_id", "client_id"),
+        Index("idx_oauth_authorization_codes_expires_at", "expires_at"),
+    )
+
+
+class OAuthAccessToken(Base):
+    """An issued MCP OAuth access token: the row IS the token.
+
+    The deliberate near-mirror of :class:`OAuthAuthorizationCode` one step later in the
+    flow. An access token is a high-entropy random string the token endpoint returns ONCE;
+    what is kept here is ``sha256`` of it (``src.core.credentials.hash_token``, the same
+    stored form as a buyer token and an authorization code) plus the facts that belong to
+    it. The plaintext is never stored, so this table leaked is not a set of usable
+    bearers, and an operator reading it cannot impersonate a buyer.
+
+    **Why a row and not a JWT.** The JWT this replaces carried ``tenant``, ``client_id``,
+    ``principal_id``, ``scope`` and ``aud`` as signed claims, and the verifier then
+    re-read every one of them off these same ``oauth_clients`` and ``principals`` rows to
+    check the client was still active and the principal still existed — so the claims
+    were never the authority, only a cache of it that could disagree. Storing the facts
+    once removes the disagreement: verification is a single tenant-scoped hash lookup
+    (``OAuthAccessTokenRepository.find_live``) and what it returns is current by
+    construction.
+
+    **Revocation is exact.** A JWT is valid until it expires because nothing can be
+    withdrawn from a signature; revoking one needs a deny-list, which is this table with
+    the sense inverted and the window still open. Here ``revoked_at`` on the row ends the
+    token at the next request, and the two FK pairs mean deleting a client or a principal
+    takes its live tokens with it (``ON DELETE CASCADE``) rather than leaving bearers that
+    outlive the identity they name.
+
+    **``resource`` records the audience binding, settled at mint time.** The RFC 8707
+    resource is stored here rather than signed into an ``aud`` claim. Every path that
+    writes the column first refuses any value but this deployment's own audience
+    (``src/routes/oauth.py``, the ``invalid_target`` checks on ``/authorize`` and both
+    grants), so the column can only hold that audience, and the verifier is given no
+    second value to compare it against — an MCP tool request names no resource. What
+    remains is the record of what was granted, which is what a deployment serving more
+    than one audience would need to compare.
+
+    ``expires_at`` is still enforced, in SQL, alongside ``revoked_at``: expiry bounds the
+    damage of a stolen plaintext the seller never hears about. The index on it is for
+    pruning dead rows (``delete_expired``) — correctness never depends on that running,
+    since every read filters on expiry.
+    """
+
+    __tablename__ = "oauth_access_tokens"
+
+    token_hash: Mapped[str] = mapped_column(String(128), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    client_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    principal_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    scopes: Mapped[list[str]] = mapped_column(JSONType, nullable=False, default=list)
+    resource: Mapped[str] = mapped_column(String(1000), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "client_id"],
+            ["oauth_clients.tenant_id", "oauth_clients.client_id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "principal_id"],
+            ["principals.tenant_id", "principals.principal_id"],
+            ondelete="CASCADE",
+        ),
+        Index("idx_oauth_access_tokens_client", "tenant_id", "client_id"),
+        Index("idx_oauth_access_tokens_expires_at", "expires_at"),
+    )
 
 
 class User(Base):

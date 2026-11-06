@@ -168,6 +168,28 @@ For GAM adapter integration:
 | `ADMIN_DOMAIN` | - | Domain where the Admin UI is accessible (for example, `admin.sales-agent.example.com`) |
 | `SUPER_ADMIN_DOMAIN` | - | Email domain whose users get super admin access |
 
+---
+
+## First-party MCP OAuth
+
+This deployment is the authorization server for the MCP access tokens it mints. Both
+variables are overrides of a derivation from `SALES_AGENT_DOMAIN`, and both are normally
+unset.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MCP_OAUTH_ISSUER` | derived from `SALES_AGENT_DOMAIN` | The issuer URL published in OAuth discovery metadata. Set it only when the public OAuth origin is not the host this deployment is served at; it wins over the derivation. |
+| `MCP_OAUTH_AUDIENCE` | derived, else `<issuer>/mcp` | The RFC 8707 resource identifier of the MCP endpoint — the audience a token is bound to, stored on the token's row and compared at every lookup. |
+
+With neither `SALES_AGENT_DOMAIN` nor `MCP_OAUTH_ISSUER` set, serving OAuth discovery
+metadata and minting a token are refused with `CONFIGURATION_ERROR`. There is no
+`http://localhost:8000` fallback: a deployment that cannot name itself must not claim to be
+an OAuth issuer, because the issuer is published to clients and compared by every client
+that holds a token.
+
+Access tokens are opaque (`oat_`) and stored as a hash in `oauth_access_tokens`, so there is
+no signing secret. `MCP_OAUTH_JWT_SECRET` no longer exists and setting it does nothing.
+
 ### SSO requirements by deployment mode
 
 The SSO requirement varies based on deployment mode:

@@ -34,6 +34,7 @@ import secrets
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, TypedDict
+from urllib.parse import urlsplit
 
 from adcp.signing.agent_resolver import BrandAgentType
 from pydantic import Field, ValidationInfo, field_validator, model_validator
@@ -65,6 +66,47 @@ class RuntimeSettings(BaseSettings):
     super_admin_domain: str | None = None
     support_email: str = "support@example.com"
     adcp_agent_url: str | None = None
+    mcp_oauth_issuer: str | None = Field(
+        default=None,
+        description=(
+            "Explicit OAuth issuer URL for the first-party MCP access tokens this deployment "
+            "mints. Unset (the normal case) it is DERIVED from sales_agent_domain, which is "
+            "where a deployment already names itself; this states it outright and wins, for a "
+            "deployment whose public OAuth origin is not the host it is served at. There is NO "
+            "localhost fallback: with neither this nor sales_agent_domain set, the OAuth layer "
+            "refuses rather than claim an issuer nothing can reach"
+        ),
+    )
+    mcp_oauth_audience: str | None = Field(
+        default=None,
+        description=(
+            "Explicit RFC 8707 resource identifier for this deployment's MCP endpoint — the "
+            "audience an access token is bound to. Unset it is DERIVED the same way the issuer "
+            "is, from sales_agent_domain, and falls back to '<issuer>/mcp'"
+        ),
+    )
+
+    @field_validator("mcp_oauth_issuer", "mcp_oauth_audience")
+    @classmethod
+    def validate_oauth_url(cls, value: str | None, info: ValidationInfo) -> str | None:
+        if value is None:
+            return None
+        parsed = urlsplit(value)
+        path = "/mcp" if info.field_name == "mcp_oauth_audience" else ""
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+            or parsed.path.rstrip("/") != path
+        ):
+            raise ValueError(
+                f"{info.field_name} must be an HTTP(S) origin{path}; prefixes, queries and fragments are unsupported"
+            )
+        return value
+
     adcp_multi_tenant: bool = False
     adcp_log_dir: Path = Path("logs")
     adcp_run_background_schedulers: bool = True

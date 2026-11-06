@@ -3,7 +3,8 @@
 The ORM ``Principal`` is repository-private: ``ruff-boundary.toml`` bans importing it
 anywhere outside this package. The resolver's primitives (``src/core/auth_utils``) come
 here for the row a token or a stored id names, and the identity carries what they loaded;
-the admin views and the seed scripts come here to list, count, create and delete rows.
+the admin views, the MCP OAuth routes and the seed scripts come here to list, count,
+create and delete rows.
 """
 
 from __future__ import annotations
@@ -23,7 +24,11 @@ class PrincipalRepository:
 
     Args:
         session: SQLAlchemy session (caller manages lifecycle).
-        tenant_id: Every query is scoped to this tenant.
+        tenant_id: Every query is scoped to this tenant. It is constructor-bound and
+            required: there is no spelling of a lookup here that reaches another tenant's
+            row, which is what lets the resolver's callers carry no tenant check of their
+            own. Genuinely cross-tenant reads live in
+            ``repositories/principal_lookup.py``, deliberately outside this class.
     """
 
     def __init__(self, session: Session, tenant_id: str) -> None:
@@ -31,7 +36,13 @@ class PrincipalRepository:
         self._tenant_id = tenant_id
 
     def get(self, principal_id: str) -> Principal | None:
-        """The principal with ``principal_id`` in this tenant, or ``None``."""
+        """The principal with ``principal_id`` in this tenant, or ``None``.
+
+        The admin edit form and the MCP OAuth routes read a principal through this, the
+        way ``TenantRepository.get_by_id`` is called beside them; the filter is on the
+        (tenant, principal) pair, never on ``principal_id`` alone, because after the
+        composite-PK migration a principal id is unique only within its tenant.
+        """
         return self._session.scalars(
             select(Principal).filter_by(tenant_id=self._tenant_id, principal_id=principal_id)
         ).first()

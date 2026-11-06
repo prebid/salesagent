@@ -47,6 +47,7 @@ from src.landing.landing_page import generate_fallback_landing_page
 from src.routes.api_v1 import router as api_v1_router
 from src.routes.health import debug_router as health_debug_router
 from src.routes.health import router as health_router
+from src.routes.oauth import router as oauth_router
 from src.routes.well_known import router as well_known_router
 from src.services.seller_capabilities import describe_seller
 
@@ -129,11 +130,12 @@ app = FastAPI(
     lifespan=combine_lifespans(app_lifespan, mcp_app.lifespan),
 )
 
-# Mount MCP at /mcp behind NOTHING.
+# Mounted BARE: the MCP sub-app, and nothing wrapped around it.
 #
-# There is deliberately no auth gate in front of this. A middleware here cannot know which
-# tool is being called: the name is inside the JSON-RPC body, and a middleware that parsed
-# it would be re-implementing a fragment of the transport's own parsing and asking
+# No CREDENTIAL POLICY gate in front of this, and that is the invariant to keep. A
+# middleware here cannot know which tool is being called: the name is inside the JSON-RPC
+# body, and a middleware that decided whether that tool NEEDS a caller would be
+# re-implementing a fragment of the transport's own parsing and asking
 # ``ToolSpec.requires_credential`` a second time. The credential policy is a property of
 # the tool, not of a transport, which is what makes "MCP soft-returns where A2A
 # hard-refuses" unrepresentable.
@@ -143,6 +145,18 @@ app = FastAPI(
 # is app-wide: AuthChallengeResponder is registered as middleware over the whole app (see the
 # middleware stack below), so MCP, A2A and REST are all answered by the same code and no
 # transport can grow its own 401.
+#
+# ``MCPOAuthChallengeMiddleware`` used to be wrapped here, and is DELETED. It answered a
+# credential-less ``tools/call`` with the AUTH_MISSING body ahead of FastMCP, which made it a
+# fourth reader of the question the registry already declares -- it sniffed the tool name out
+# of the JSON-RPC body to ask ``ToolSpec.requires_credential`` for itself, exactly the shape
+# ``_resolve_identity`` records #1291's signature middleware being deleted for. Nothing was
+# lost by removing it: a credential-less call for a protected tool reaches the boundary, the
+# resolver raises AUTH_MISSING, and ``AuthChallengeResponder`` derives the RFC 9728
+# ``resource_metadata`` pointer from that code -- which is where the pointer has to be
+# derived anyway, because the renderer strips any inbound ``WWW-Authenticate``. The discovery
+# answer MCP owes a token-less client is graded on this real path by
+# ``tests/integration/test_mcp_oauth_discovery_challenge.py``.
 app.mount("/mcp", mcp_app)
 
 
@@ -326,8 +340,9 @@ def _restore_a2a_wire_integers(
     learn how to authenticate, and the storyboard's security_baseline grades the HTTP
     handshake. The body is fully buffered here -- it is already being parsed and re-emitted
     -- so the status is simply set on the response being built, with no side channel and no
-    ordering hazard. AUTH_INVALID reaches this point too, because A2A validates the token
-    before answering; MCP cannot say the same (see the pre-dispatch gate).
+    ordering hazard. AUTH_MISSING and AUTH_INVALID both reach it, because the resolver mints
+    both inside ``serve`` -- on MCP as well, which is what let the /mcp mount's own
+    pre-dispatch challenge be deleted.
     """
 
     async def _wrapped(request: Request) -> Response:
@@ -527,6 +542,17 @@ async def a2a_messageid_compatibility_middleware(request: Request, call_next):
 
 app.include_router(api_v1_router)
 
+# MCP OAuth: the two discovery documents (/.well-known/oauth-protected-resource[/mcp] and
+# /.well-known/oauth-authorization-server) plus /authorize and /oauth/token. The
+# resource_metadata URL every bearer challenge hands back (``AuthChallengeResponder``) is
+# served from here, so the challenge is only answerable while this router is mounted. It is
+# app-wide rather than MCP-only because the token it points at is: the resolver accepts a
+# first-party OAuth access token on every transport. Registered at
+# import time, like the trust root below, so these paths are matched before
+# _install_admin_mounts() re-appends the Flask "" catch-all at lifespan startup -- and
+# before the OpenAPI document is assembled at the bottom of this module.
+app.include_router(oauth_router)
+
 
 def _openapi_with_rest_components() -> dict[str, Any]:
     """The generated OpenAPI document, with every REST request body's nested models resolvable.
@@ -570,6 +596,12 @@ app.include_router(well_known_router)
 # (the exact bytes, and ``@target-uri`` from ``raw_path``), so they have to be recorded where
 # they still exist. INNERMOST, so that nothing between it and the app can rewrite the body it
 # recorded a digest-able copy of.
+#
+# Three, and these three are the whole stack: there is nothing wrapped around the /mcp mount
+# either (see above). OAuth authentication needs ZERO middleware of its own -- the resolver
+# decides, and AuthChallengeResponder renders -- so the discovery challenge an MCP client
+# needs is produced by this stack and the boundary, with no per-transport wrapper to keep in
+# step.
 # ---------------------------------------------------------------------------
 
 app.add_middleware(SignedExchangeCapture)
