@@ -621,6 +621,19 @@ class GoogleAdManager(AdServerAdapter):
         # Calculate total budget from package budgets (AdCP v2.2.0)
         total_budget_amount = request.total_budget
 
+        # Build targeting for each package (per AdCP spec, targeting is at package level):
+        # the buyer's overlay, ANDed with the product's own custom targeting. Built before
+        # the order so a targeting config GAM cannot take is refused with no order left behind.
+        package_targeting = {}
+        for package in packages:
+            targeting = self._build_targeting(package.targeting_overlay) if package.targeting_overlay else {}
+            product_impl_config = cast(dict[str, Any], products_map[package.package_id]["implementation_config"])
+            targeting = self.targeting_manager.add_product_custom_targeting(
+                targeting, product_impl_config.get("custom_targeting_keys") or {}
+            )
+            if targeting:
+                package_targeting[package.package_id] = targeting
+
         order_id = self.orders_manager.create_order(
             order_name=order_name,
             total_budget=total_budget_amount,
@@ -630,12 +643,6 @@ class GoogleAdManager(AdServerAdapter):
         )
 
         self.log(f"✓ Created GAM Order ID: {order_id}")
-
-        # Build targeting for each package (per AdCP spec, targeting is at package level)
-        package_targeting = {}
-        for package in packages:
-            if package.targeting_overlay:
-                package_targeting[package.package_id] = self._build_targeting(package.targeting_overlay)
 
         # Build placement_targeting_map from all products' impl_configs (adcp#208)
         # This maps placement_id → targeting_name for creative-level targeting

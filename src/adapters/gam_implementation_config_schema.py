@@ -117,7 +117,11 @@ class GAMImplementationConfig(BaseModel):
 
     # Custom targeting template
     custom_targeting_keys: dict[str, Any] = Field(
-        default_factory=dict, description="Custom key-value pairs for targeting"
+        default_factory=dict,
+        description=(
+            "Custom targeting every line item must match, ANDed with the buyer's: the groups "
+            "format the targeting widget saves, or the older legacy or include/exclude format"
+        ),
     )
 
     # Native ad settings

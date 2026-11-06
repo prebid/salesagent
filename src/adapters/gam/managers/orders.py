@@ -360,7 +360,8 @@ class GAMOrdersManager:
             package_pricing_info: Optional pricing info per package (AdCP PR #88)
                 Maps package_id → {pricing_model, rate, currency, is_fixed, bid_price}
             package_targeting: Pre-built GAM targeting dicts per package
-                Maps package_id → GAM targeting dict (built by adapter from targeting_overlay)
+                Maps package_id → GAM targeting dict (built by adapter from targeting_overlay
+                and the product's custom_targeting_keys)
 
         Returns:
             List of created line item IDs
@@ -439,20 +440,6 @@ class GAMOrdersManager:
                 )
                 log(f"[red]Error: {error_msg}[/red]")
                 raise AdCPConfigurationError()
-
-            # Add custom targeting from product config
-            # IMPORTANT: Merge without overwriting the buyer's own custom targeting
-            if impl_config.get("custom_targeting_keys"):
-                if "customTargeting" not in line_item_targeting:
-                    line_item_targeting["customTargeting"] = {}
-                # Add product custom targeting, but don't overwrite existing keys from buyer
-                for key, value in impl_config["custom_targeting_keys"].items():
-                    if key not in line_item_targeting["customTargeting"]:
-                        line_item_targeting["customTargeting"][key] = value
-                    else:
-                        log(
-                            f"[yellow]Product config custom targeting key '{key}' conflicts with buyer targeting, keeping buyer value[/yellow]"
-                        )
 
             # Build creative placeholders from format_ids
             # First try to get from package.format_ids (buyer-specified)
