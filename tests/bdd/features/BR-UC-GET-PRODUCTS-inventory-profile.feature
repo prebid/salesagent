@@ -11,8 +11,13 @@ Feature: Product discovery with inventory profile publisher_properties
   # requires the PublisherPropertySelector discriminated union to have
   # selection_type ("all", "by_id", or "by_tag").
 
+  # A profile's selectors are offered only for a publisher the seller holds a verified
+  # property of (#1845; BR-UC-GET-PRODUCTS-publisher-domain.feature), so every profile
+  # here names example.com and the seller is authorized there.
+
   Background:
     Given a tenant is configured for product discovery
+    And the seller is authorized for property "homepage" of publisher "example.com" tagged "premium"
 
 
   @inventory_profile @selection_type @requires_db

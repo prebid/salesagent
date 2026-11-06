@@ -16,6 +16,7 @@ from collections.abc import Sequence
 
 from flask import Blueprint, Flask, flash, jsonify, redirect, render_template, request, url_for
 from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
@@ -29,6 +30,8 @@ from src.core.database.models import (
     PropertyTag,
     Tenant,
 )
+from src.core.database.repositories.authorized_property import AuthorizedPropertyRepository
+from src.core.helpers.publisher_property_helpers import id_selection, tag_selection
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +54,25 @@ def _generate_profile_id(name: str) -> str:
     # Collapse multiple underscores
     profile_id = re.sub(r"_+", "_", profile_id)
     return profile_id
+
+
+def _selectors_from_form(session: Session, tenant_id: str, property_mode: str) -> tuple[list[dict], str | None]:
+    """The ``tags`` / ``property_ids`` form selection as selectors, one per publisher.
+
+    Each selector names the publisher whose verified authorized properties it matches,
+    never the tenant's own host: a tenant is a seller representing many publishers (#1845),
+    and AdCP 3.1.1 ``core/publisher-property-selector.json`` makes property IDs
+    publisher-scoped. A pending property is not selectable, because a product would not
+    sell it (``AuthorizedPropertyRepository.list_refs``). The product forms validate through
+    the same ``tag_selection`` / ``id_selection``.
+
+    Returns ``(selectors, None)``, or ``([], message)`` when the selection is unusable.
+    """
+    authorized = AuthorizedPropertyRepository(session, tenant_id).list_refs()
+    if property_mode == "tags":
+        tags = [tag for tag in (t.strip().lower() for t in request.form.get("property_tags", "").split(",")) if tag]
+        return tag_selection(tags, authorized)
+    return id_selection(request.form.getlist("selected_property_ids"), authorized)
 
 
 def _get_inventory_summary(inventory_config: dict) -> str:
@@ -215,73 +237,11 @@ def add_inventory_profile(tenant_id: str):
             property_mode = form_data.get("property_mode", "tags")
 
             with get_db_session() as prop_session:
-                tenant = prop_session.get(Tenant, tenant_id)
-                if not tenant or not tenant.primary_domain:
-                    flash("Tenant primary_domain not configured", "error")
-                    return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
-
-                publisher_domain = tenant.primary_domain
-
-                if property_mode == "tags":
-                    # by_tag mode: Parse comma-separated tags
-                    property_tags_str = form_data.get("property_tags", "").strip()
-                    if not property_tags_str:
-                        flash("Property tags are required", "error")
+                if property_mode in {"tags", "property_ids"}:
+                    publisher_properties, error = _selectors_from_form(prop_session, tenant_id, property_mode)
+                    if error:
+                        flash(error, "error")
                         return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
-
-                    # Validate tag format per AdCP spec
-                    import re
-
-                    TAG_PATTERN = re.compile(r"^[a-z0-9_]{2,50}$")
-                    property_tags = []
-                    for tag in property_tags_str.split(","):
-                        tag = tag.strip().lower()
-                        if tag and TAG_PATTERN.match(tag):
-                            property_tags.append(tag)
-                        elif tag:
-                            flash(
-                                f"Invalid tag format: '{tag}'. Use lowercase letters, numbers, underscores (2-50 chars)",
-                                "error",
-                            )
-                            return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
-
-                    if not property_tags:
-                        flash("At least one valid property tag is required", "error")
-                        return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
-
-                    publisher_properties = [
-                        {
-                            "publisher_domain": publisher_domain,
-                            "property_tags": property_tags,
-                            "selection_type": "by_tag",
-                        }
-                    ]
-
-                elif property_mode == "property_ids":
-                    # by_id mode: Parse selected_property_ids checkboxes
-                    selected_property_ids = request.form.getlist("selected_property_ids")
-                    if not selected_property_ids:
-                        flash("At least one property must be selected", "error")
-                        return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
-
-                    # Verify property_ids exist in authorized properties
-                    stmt = select(AuthorizedProperty.property_id).filter(
-                        AuthorizedProperty.tenant_id == tenant_id,
-                        AuthorizedProperty.property_id.in_(selected_property_ids),
-                    )
-                    existing_ids = set(prop_session.scalars(stmt).all())
-                    invalid_ids = set(selected_property_ids) - existing_ids
-                    if invalid_ids:
-                        flash(f"Invalid property IDs: {', '.join(invalid_ids)}", "error")
-                        return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
-
-                    publisher_properties = [
-                        {
-                            "publisher_domain": publisher_domain,
-                            "property_ids": selected_property_ids,
-                            "selection_type": "by_id",
-                        }
-                    ]
 
                 elif property_mode in {"full", "all", "specific"}:
                     # "full" is legacy textarea JSON mode
@@ -356,11 +316,7 @@ def add_inventory_profile(tenant_id: str):
 
     # GET: Show form
     with get_db_session() as session:
-        # Get tenant and check primary_domain upfront
         tenant = session.get(Tenant, tenant_id)
-        if not tenant or not tenant.primary_domain:
-            flash("Tenant primary_domain must be configured before creating inventory profiles", "warning")
-            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
 
         # Get authorized properties for property selection
         authorized_properties = session.scalars(
@@ -423,97 +379,16 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
                 # Update publisher properties based on property_mode
                 property_mode = form_data.get("property_mode", "tags")
 
-                tenant_obj = session.get(Tenant, tenant_id)
-                if not tenant_obj or not tenant_obj.primary_domain:
-                    flash("Tenant primary_domain not configured", "error")
-                    return redirect(
-                        url_for("inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id)
-                    )
-
-                publisher_domain = tenant_obj.primary_domain
-
-                if property_mode == "tags":
-                    # by_tag mode: Parse comma-separated tags
-                    property_tags_str = form_data.get("property_tags", "").strip()
-                    if not property_tags_str:
-                        flash("Property tags are required", "error")
+                if property_mode in {"tags", "property_ids"}:
+                    publisher_properties, error = _selectors_from_form(session, tenant_id, property_mode)
+                    if error:
+                        flash(error, "error")
                         return redirect(
                             url_for(
                                 "inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id
                             )
                         )
-
-                    # Validate tag format per AdCP spec
-                    import re
-
-                    TAG_PATTERN = re.compile(r"^[a-z0-9_]{2,50}$")
-                    property_tags = []
-                    for tag in property_tags_str.split(","):
-                        tag = tag.strip().lower()
-                        if tag and TAG_PATTERN.match(tag):
-                            property_tags.append(tag)
-                        elif tag:
-                            flash(
-                                f"Invalid tag format: '{tag}'. Use lowercase letters, numbers, underscores (2-50 chars)",
-                                "error",
-                            )
-                            return redirect(
-                                url_for(
-                                    "inventory_profiles.edit_inventory_profile",
-                                    tenant_id=tenant_id,
-                                    profile_id=profile_id,
-                                )
-                            )
-
-                    if not property_tags:
-                        flash("At least one valid property tag is required", "error")
-                        return redirect(
-                            url_for(
-                                "inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id
-                            )
-                        )
-
-                    profile.publisher_properties = [
-                        {
-                            "publisher_domain": publisher_domain,
-                            "property_tags": property_tags,
-                            "selection_type": "by_tag",
-                        }
-                    ]
-
-                elif property_mode == "property_ids":
-                    # by_id mode: Parse selected_property_ids checkboxes
-                    selected_property_ids = request.form.getlist("selected_property_ids")
-                    if not selected_property_ids:
-                        flash("At least one property must be selected", "error")
-                        return redirect(
-                            url_for(
-                                "inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id
-                            )
-                        )
-
-                    # Verify property_ids exist in authorized properties
-                    stmt = select(AuthorizedProperty.property_id).filter(
-                        AuthorizedProperty.tenant_id == tenant_id,
-                        AuthorizedProperty.property_id.in_(selected_property_ids),
-                    )
-                    existing_ids = set(session.scalars(stmt).all())
-                    invalid_ids = set(selected_property_ids) - existing_ids
-                    if invalid_ids:
-                        flash(f"Invalid property IDs: {', '.join(invalid_ids)}", "error")
-                        return redirect(
-                            url_for(
-                                "inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id
-                            )
-                        )
-
-                    profile.publisher_properties = [
-                        {
-                            "publisher_domain": publisher_domain,
-                            "property_ids": selected_property_ids,
-                            "selection_type": "by_id",
-                        }
-                    ]
+                    profile.publisher_properties = publisher_properties
 
                 elif property_mode == "full":
                     # Legacy full mode: Parse JSON from textarea
@@ -575,11 +450,7 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
                 session.rollback()
 
         # GET: Show form with existing data
-        # Get tenant and check primary_domain upfront
         tenant = session.get(Tenant, tenant_id)
-        if not tenant or not tenant.primary_domain:
-            flash("Tenant primary_domain must be configured before editing inventory profiles", "warning")
-            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
 
         authorized_properties = session.scalars(
             select(AuthorizedProperty).where(AuthorizedProperty.tenant_id == tenant_id)

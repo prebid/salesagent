@@ -430,10 +430,13 @@ async def test_media_buy_reflects_profile_updates(sample_tenant):
             "placements": ["new_placement"],
             "include_descendants": True,
         }
+        # The updated profile names the publisher sample_tenant holds a verified property
+        # of; the original names one it does not. So the buy below succeeds only if the
+        # catalogue reads the CURRENT profile (#1845).
         profile.publisher_properties = [
             {
                 "selection_type": "by_id",
-                "publisher_domain": "new.example.com",
+                "publisher_domain": "example.com",
                 "property_ids": ["new_property"],
             }
         ]

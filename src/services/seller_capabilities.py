@@ -55,7 +55,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from src.adapters.base import TargetingCapabilities
 from src.core.agent_identity import AGENT_ENDPOINT_PATHS, brand_json_url, canonical_agent_url, jwks_origin
 from src.core.billing_policy import BillingParty, resolve_account_sandbox, resolve_supported_billing
-from src.core.database.repositories.uow import CapabilitiesUoW
+from src.core.database.repositories.uow import TrustRootUoW
 from src.core.errors.codes import ErrorCode
 from src.core.errors.details import CapabilityRefusalDetails
 from src.core.exceptions import AdCPConfigurationError
@@ -114,17 +114,17 @@ def _record_degradation(advisories: list[Error], what: str, exc: Exception) -> N
 
     ONE helper for EVERY degradation site in :func:`describe_seller` — the discovery
     lookups routed through :func:`_resolve_or_degrade`, and the two reads inside the
-    ``CapabilitiesUoW`` block that need their own terminal-error posture.
+    ``TrustRootUoW`` block that need their own terminal-error posture.
     A site that only logs and falls through to a default leaves the response
     silently carrying a placeholder (or an omission), with no way for the buyer to
     tell "this seller has none" from "the lookup failed" — the quiet-failure class
     CLAUDE.md bans.
 
     EXCEPT-PATH ONLY, deliberately. Two of these sites also degrade on an EMPTY
-    result with no exception (``primary_channels``, ``publisher_domains``), and a
-    tenant with zero publisher partners is the COMMON case — advising there would
-    put ``errors[]`` on nearly every tenant-resolved capabilities response across
-    every use case. A genuinely faulted lookup is the advisory-worthy event.
+    result with no exception (``primary_channels``, ``publisher_domains``). An empty
+    result is the seller's real state (a tenant no publisher has verified yet is
+    common), not a degradation, so it carries no advisory. A genuinely faulted lookup
+    is the advisory-worthy event.
 
     The advisory is a WARNING, not a failure: ``errors`` is "Task-specific errors
     and warnings" and the envelope still reports success, so discovery is not
@@ -233,7 +233,7 @@ def _build_signing_blocks(
 
 
 def _resolve_signing_blocks(
-    uow: CapabilitiesUoW,
+    uow: TrustRootUoW,
     declarations: CapabilityDeclarations,
     *,
     tenant: TenantContext,
@@ -552,7 +552,7 @@ def describe_seller(identity: PublicIdentity) -> SellerCapabilities:
             advisories, "supported pricing models", _resolve_pricing_models, default=None
         )
 
-    # ONE session for every database read this response needs: the publisher partners,
+    # ONE session for every database read this response needs: the verified publishers,
     # and the signing family's key + tenant-host reads. Two reads, each with its OWN
     # degradation label, because a signing-key failure advertised as "could not resolve
     # publisher domains" tells the buyer the wrong thing.
@@ -571,16 +571,24 @@ def describe_seller(identity: PublicIdentity) -> SellerCapabilities:
         jwks_origin=None,
     )
     try:
-        with CapabilitiesUoW(tenant_id) as uow:
+        with TrustRootUoW(tenant_id) as uow:
             tenant_config = uow.tenant_config
-            assert tenant_config is not None
+            authorized_properties = uow.authorized_properties
+            assert tenant_config is not None and authorized_properties is not None
 
             def _resolve_publisher_domains() -> list[PublisherDomain]:
-                return [
-                    PublisherDomain(root=partner.publisher_domain)
-                    for partner in tenant_config.list_publisher_partners()
-                    if partner.publisher_domain
-                ]
+                # The publishers this seller is authorized to represent
+                # (get-adcp-capabilities-response.json portfolio.publisher_domains), each of
+                # which a buyer checks at https://<domain>/.well-known/adagents.json. Two
+                # tables record a publisher that has verified the seller, and neither is a
+                # superset of the other, so both are read and unioned. Unverified rows are
+                # left out: claiming a publisher whose authorization was never seen sends the
+                # buyer to a file that does not list this agent.
+                domains = set(authorized_properties.list_verified_publisher_domains())
+                domains.update(
+                    partner.publisher_domain for partner in tenant_config.list_publisher_partners(verified=True)
+                )
+                return [PublisherDomain(root=domain) for domain in sorted(domains)]
 
             publisher_domains = _resolve_or_degrade(
                 advisories, "publisher domains", _resolve_publisher_domains, default=[]
@@ -598,14 +606,6 @@ def describe_seller(identity: PublicIdentity) -> SellerCapabilities:
         # The session itself could not be opened, so neither read happened.
         _record_degradation(advisories, "tenant configuration", e)
 
-    # With no publisher partners recorded, the seller's portfolio is its own inventory, so
-    # the domain it names is the one it is served at — never a derived name, which reaches
-    # the buyer as the publisher's own domain while nobody owns it (#1845). Through
-    # ``primary_domain``, the one accessor, because AdCP's publisher_domain pattern admits no
-    # colon while virtual_host carries the port.
-    if not publisher_domains:
-        publisher_domains = [PublisherDomain(root=tenant.primary_domain)]
-
     # Get advertising policies from tenant config
     advertising_policies: str | None = None
     policy = tenant.advertising_policy
@@ -613,12 +613,20 @@ def describe_seller(identity: PublicIdentity) -> SellerCapabilities:
         if isinstance(policy, dict) and policy.get("description"):
             advertising_policies = policy["description"]
 
-    # Build portfolio
-    portfolio = Portfolio(
-        description=f"Advertising inventory from {tenant_name}",
-        primary_channels=primary_channels if primary_channels else None,
-        publisher_domains=publisher_domains,
-        advertising_policies=advertising_policies,
+    # publisher_domains is required with minItems 1, so a seller that no publisher has
+    # verified has no portfolio to declare, and it is omitted. Its own host is not a
+    # stand-in: a tenant is a sales agent, its host is not a publisher, and a buyer that
+    # fetches that host's adagents.json finds no authorization. An empty set is the
+    # seller's real state, so it carries no advisory; a FAILED lookup already recorded one.
+    portfolio = (
+        Portfolio(
+            description=f"Advertising inventory from {tenant_name}",
+            primary_channels=primary_channels if primary_channels else None,
+            publisher_domains=publisher_domains,
+            advertising_policies=advertising_policies,
+        )
+        if publisher_domains
+        else None
     )
 
     # Build features - be honest about what we actually support

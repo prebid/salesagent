@@ -22,10 +22,15 @@ from decimal import Decimal
 import pytest
 
 from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
+from tests.factories.product import authorize_publishers
 from tests.harness.product import ProductEnv
 from tests.integration.property_list_helpers import allow_local_origin, origin_ref, property_list_body
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
+
+#: Every publisher these tests' products name; the seller holds a verified property on each,
+#: so property-list filtering is what decides which products are offered (#1845).
+_PUBLISHERS = ("example.com", "other.com", "us-publisher.com", "eu-publisher.com", "mixed-publisher.com")
 
 
 # ---------------------------------------------------------------------------
@@ -64,6 +69,7 @@ class TestPropertyListResolution:
         """
         with ProductEnv(tenant_id="proplist-resolve", principal_id="proplist-principal") as env:
             tenant = TenantFactory(tenant_id="proplist-resolve", subdomain="proplist-resolve")
+            authorize_publishers(tenant, *_PUBLISHERS)
             PrincipalFactory(tenant=tenant, principal_id="proplist-principal")
 
             # Product with specific property IDs via by_id selector
@@ -233,6 +239,7 @@ class TestPropertyListResolution:
         """
         with ProductEnv(tenant_id="proplist-filter", principal_id="proplist-filter-principal") as env:
             tenant = TenantFactory(tenant_id="proplist-filter", subdomain="proplist-filter")
+            authorize_publishers(tenant, *_PUBLISHERS)
             PrincipalFactory(tenant=tenant, principal_id="proplist-filter-principal")
 
             # Product targeting US sites (specific property IDs)
@@ -320,6 +327,7 @@ class TestPropertyListResolution:
         """
         with ProductEnv(tenant_id="proplist-empty", principal_id="proplist-empty-principal") as env:
             tenant = TenantFactory(tenant_id="proplist-empty", subdomain="proplist-empty")
+            authorize_publishers(tenant, *_PUBLISHERS)
             PrincipalFactory(tenant=tenant, principal_id="proplist-empty-principal")
 
             # Product with selection_type="all" (always matches)

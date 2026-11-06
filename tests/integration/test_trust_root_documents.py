@@ -45,10 +45,11 @@ Schema authority: the vendored v3.1.1 fixtures under
 ``tests/fixtures/adcp_schemas_pinned/3.1.1/`` (``adagents.json`` and
 ``brand.json`` DIFFER at the older ``PINNED_SHA``, and
 ``core/authorized-agent-base.json`` — where ``signing_keys[]`` lives — does not
-exist there at all). The adagents document additionally goes through
-``adcp.adagents.validate_adagents_structure``: that is the exact code path our
-OWN consumers run (``src/admin/blueprints/publisher_partners.py``), so it grades
-the producer against the consumer rather than against a second opinion.
+exist there at all). Whether a host publishes adagents.json at all, and that the
+document it publishes validates against the pinned schema and against
+``adcp.adagents.validate_adagents_structure`` (the code path our OWN consumers run),
+is graded on every transport by ``tests/bdd/features/local-trust-root-adagents.feature``;
+this file grades the key pin inside it.
 
 No BDD feature accompanies this work. Not because the harness cannot model these
 documents — it models them as COUNTERPARTY state today (``BR-UC-020:721`` serves
@@ -86,7 +87,6 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 _NOW = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
 
 _BRAND_SCHEMA = f"{EXPECTED_SPEC_VERSION}/brand.json"
-_ADAGENTS_SCHEMA = f"{EXPECTED_SPEC_VERSION}/adagents.json"
 
 _BRAND_PATH = "/.well-known/brand.json"
 _ADAGENTS_PATH = "/.well-known/adagents.json"
@@ -107,7 +107,12 @@ _BRAND_AGENT_KEYS = {
 
 
 def _seed(env, slug: str, **key_kwargs):
-    """Seed one tenant reachable at its own virtual host, plus one signing key.
+    """Seed one tenant reachable at its own virtual host, one signing key, and one
+    authorized property on that host.
+
+    The property is what makes the host publish an adagents.json at all (a host that owns
+    none answers 404), and what gives the document an ``authorized_agents`` entry to carry
+    the key pin: without it every pin assertion below holds over an empty set.
 
     Every test gets its OWN slug: the integration database is not rolled back
     between tests in this suite, and two live tenants sharing a ``virtual_host``
@@ -116,7 +121,7 @@ def _seed(env, slug: str, **key_kwargs):
     The subdomain is deliberately hyphenated — hyphens are legal there and
     ILLEGAL in brand.json's ``brand_agent_entry.id`` (``^[a-z0-9_]+$``).
     """
-    from tests.factories import SigningKeyFactory, TenantFactory
+    from tests.factories import AuthorizedPropertyFactory, SigningKeyFactory, TenantFactory
 
     tenant = TenantFactory(
         tenant_id=f"tr_{slug}",
@@ -125,6 +130,7 @@ def _seed(env, slug: str, **key_kwargs):
     )
     key_kwargs.setdefault("not_before", _NOW - timedelta(days=1))
     key = SigningKeyFactory(tenant=tenant, **key_kwargs)
+    AuthorizedPropertyFactory(tenant=tenant, publisher_domain=tenant.virtual_host_name, tags=["premium_news"])
     env.get_session()  # commits pending factory data
     return tenant, key
 
@@ -200,6 +206,14 @@ def _publishable(env, tenant_id: str, *, now: datetime = _NOW, purpose: str = RE
 
     repo = SigningKeyRepository(env.get_session(), tenant_id)
     return repo.publishable_at(now=now, grace_seconds=_grace_seconds(), purpose=purpose)
+
+
+def _authorizations(env, tenant) -> list:
+    """The properties the route builds the tenant's adagents.json from, read the way it reads them."""
+    from src.core.database.repositories.authorized_property import AuthorizedPropertyRepository
+
+    repo = AuthorizedPropertyRepository(env.get_session(), tenant.tenant_id)
+    return repo.list_for_publisher_domain(tenant.virtual_host_name)
 
 
 class TestCanonicalAgentUrlIsTheOneIdentity:
@@ -456,27 +470,18 @@ class TestRevocationGraceWindow:
         without the marker inverts the property the grace window exists for.
         """
         from src.core.signing.trust_root import build_adagents_json, build_jwks
-        from tests.factories import AuthorizedPropertyFactory, SigningKeyFactory
+        from tests.factories import SigningKeyFactory
 
         with BareIntegrationEnv(tenant_id="trust_root_env_j") as env:
             env.setup_default_data()
             tenant, live = _seed(env, "j")
             revoked_at = _NOW - timedelta(seconds=_grace_seconds() // 2)
             revoked = SigningKeyFactory(tenant=tenant, not_before=_NOW - timedelta(days=2), revoked_at=revoked_at)
-            # An authorization record is a PRECONDITION for this test, not incidental setup:
-            # every authorized_agents[*] variant requires its selector array (minItems: 1), so a
-            # tenant with no backing record correctly publishes authorized_agents == [] (asserted
-            # by test_adagents_claims_no_authorization_without_a_backing_record). Without a record
-            # there is no pin to inspect, and the marker assertions below would pass VACUOUSLY —
-            # `all(...)` over an empty list is true. Same shape as the two sibling tests.
-            authorization = AuthorizedPropertyFactory(
-                tenant=tenant, publisher_domain=tenant.virtual_host, tags=["premium_news"]
-            )
             env.get_session()
 
             keys = _publishable(env, tenant.tenant_id)
             jwks = build_jwks(keys)
-            adagents = build_adagents_json(tenant, keys, [authorization])
+            adagents = build_adagents_json(tenant, keys, _authorizations(env, tenant))
 
             assert _kids(jwks["keys"]) == {live.kid, revoked.kid}, (
                 f"a key inside its grace window stays in the JWKS; got {sorted(_kids(jwks['keys']))}"
@@ -528,12 +533,12 @@ class TestRevocationGraceWindow:
 
             keys = _publishable(env, tenant.tenant_id)
             jwks = build_jwks(keys)
-            adagents = build_adagents_json(tenant, keys, [])
+            adagents = build_adagents_json(tenant, keys, _authorizations(env, tenant))
 
             assert _kids(jwks["keys"]) == {live.kid}, (
                 f"a key revoked beyond the grace window must be gone from the JWKS; got {sorted(_kids(jwks['keys']))}"
             )
-            assert expired.kid not in _pinned_kids(adagents), (
+            assert _pinned_kids(adagents) == {live.kid}, (
                 f"...and gone from the adagents pin too; got {sorted(_pinned_kids(adagents))}"
             )
 
@@ -633,47 +638,16 @@ class TestWellKnownEndpoints:
 
 
 class TestAdagentsDocument:
-    """The publisher-pin document — same key set, and never a fabricated claim."""
-
-    def test_adagents_is_schema_valid_and_passes_the_consumer_validator(self, integration_db):
-        """Graded twice on purpose: jsonschema against the vendored v3.1.1 file, and
-        ``validate_adagents_structure`` — the exact function our own admin code runs
-        when it consumes a PUBLISHER's adagents.json.
-        """
-        from adcp.adagents import validate_adagents_structure
-
-        from tests.factories import AuthorizedPropertyFactory
-
-        with BareIntegrationEnv(tenant_id="trust_root_env_o") as env:
-            env.setup_default_data()
-            tenant, _ = _seed(env, "o")
-            AuthorizedPropertyFactory(tenant=tenant, publisher_domain=tenant.virtual_host, tags=["premium_news"])
-            env.get_session()
-            client = env.get_rest_client()
-
-            document = _get_document(client, _ADAGENTS_PATH, tenant)
-
-            validate_against_pinned_schema(_ADAGENTS_SCHEMA, document)
-
-            report = validate_adagents_structure(document)
-            assert report.schema_valid, f"our own consumer path rejects the document we publish: {report.errors}"
-            assert report.authorized_agents_count >= 1, (
-                "the document must carry the authorization backed by the seeded authorized-property "
-                f"record; got {report.authorized_agents_count} entries"
-            )
+    """The publisher-pin document carries the same key set as the JWKS."""
 
     def test_adagents_signing_keys_are_the_jwks_key_set(self, integration_db):
         """R7: both documents are produced from the SAME ``publishable_at`` result.
         If the pin drifts from the JWKS, our own sell-side webhooks are rejected
         against our own published document.
         """
-        from tests.factories import AuthorizedPropertyFactory
-
         with BareIntegrationEnv(tenant_id="trust_root_env_p") as env:
             env.setup_default_data()
             tenant, _ = _seed(env, "p")
-            AuthorizedPropertyFactory(tenant=tenant, publisher_domain=tenant.virtual_host, tags=["premium_news"])
-            env.get_session()
             client = env.get_rest_client()
 
             jwks = _get_document(client, _JWKS_PATH, tenant)
@@ -682,24 +656,4 @@ class TestAdagentsDocument:
             assert _pinned_kids(adagents) == _kids(jwks["keys"]), (
                 "the adagents signing_keys[] pin and the JWKS must be the same key set; "
                 f"pin={sorted(_pinned_kids(adagents))} jwks={sorted(_kids(jwks['keys']))}"
-            )
-
-    def test_adagents_claims_no_authorization_without_a_backing_record(self, integration_db):
-        """R-M1: ``authorizations`` come from the existing authorized-properties
-        records and are NEVER fabricated — fabricating them means self-attesting an
-        authorization no publisher granted.
-        """
-        with BareIntegrationEnv(tenant_id="trust_root_env_q") as env:
-            env.setup_default_data()
-            tenant, _ = _seed(env, "q")
-            client = env.get_rest_client()
-
-            response = client.get(_ADAGENTS_PATH, headers={"Host": tenant.virtual_host})
-
-            assert response.status_code == 200, (
-                f"the endpoint answers for a tenant with no properties; got {response.status_code}"
-            )
-            assert response.json()["authorized_agents"] == [], (
-                "with no authorized-property record on file the document must claim NO authorization; "
-                f"got {response.json()['authorized_agents']}"
             )

@@ -10,9 +10,16 @@ nothing else, so they live here once. An env names its routes and reads its rows
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from typing import Any
+from urllib.parse import urlsplit
 
-from tests.helpers.admin_session import admin_auth_session, admin_test_app, authenticate_http_session
+from tests.helpers.admin_session import (
+    admin_auth_session,
+    admin_test_app,
+    authenticate_http_session,
+    drop_stated_session_cookie,
+)
 
 
 class _CaseInsensitiveHeaders(dict):
@@ -141,6 +148,21 @@ class AdminClient:
         )
         return AdminResponse.from_requests(response)
 
+    def submit(self, path: str, data: dict[str, Any]) -> AdminResponse:
+        """POST the form *data* to *path* and GET the page its redirect names, flash included.
+
+        A form that answers without a redirect (it re-rendered with an error) is returned as is.
+        """
+        response = self.request("post", path, data=data)
+        location = response.headers.get("location")
+        if not location:
+            return response
+        if self._http is not None:
+            # The flash lives in the session the server just wrote; see the helper.
+            drop_stated_session_cookie(self._http)
+        target = urlsplit(location)
+        return self.request("get", target.path + (f"?{target.query}" if target.query else ""))
+
     def close(self) -> None:
         if self._flask_client is not None:
             self._flask_client.__exit__(None, None, None)
@@ -148,3 +170,17 @@ class AdminClient:
         if self._http is not None:
             self._http.close()
             self._http = None
+
+
+def guarded_admin_client(
+    guard: Callable[[str, Callable[[], None]], None], base_url: str | None, tenant_id: str
+) -> AdminClient:
+    """An :class:`AdminClient` authenticated for *tenant_id*, closed by the env's *guard*.
+
+    An env opens it on its first admin request, after every Given, so the in-process app is
+    composed under the deployment a Given chose.
+    """
+    client = AdminClient(base_url)
+    guard("admin_client", client.close)
+    client.authenticate(tenant_id)
+    return client

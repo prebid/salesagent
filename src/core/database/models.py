@@ -1,10 +1,11 @@
 """SQLAlchemy models for database schema."""
 
 import logging
+from collections.abc import Sequence
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from adcp.types import BrandReference
@@ -53,6 +54,9 @@ from src.core.signing.algorithms import (
     signing_alg_check_clause,
     signing_purpose_check_clause,
 )
+
+if TYPE_CHECKING:
+    from src.core.helpers.publisher_property_helpers import SelectableProperty
 
 logger = logging.getLogger(__name__)
 
@@ -317,29 +321,6 @@ class Tenant(Base, JSONValidatorMixin):
         return canonical_agent_url(self)
 
     @property
-    def primary_domain(self) -> str:
-        """The publisher domain this tenant is known by — a HOSTNAME, never an origin.
-
-        ``virtual_host`` stores the origin the tenant is served at, port included, because
-        the agent card publishes that string and a card naming the wrong port sends every
-        client to a closed one. A publisher domain is a different part of the same fact:
-        AdCP constrains ``publisher_properties[].publisher_domain`` to a pattern admitting
-        no colon, so the port comes off here. Feeding an origin in fails every product of
-        such a tenant and answers INTERNAL_ERROR for the whole catalogue.
-
-        It is the ONE derivation of this value, so no caller can feed the colon through.
-
-        Always a string, because ``virtual_host`` is mandatory. Neither a fabricated domain
-        nor a ``None`` belongs here: a made-up host reaches buyers as the publisher's own
-        (#1845), and a ``None`` only moves the invention into every caller. A tenant declares
-        the host it is served at, so the domain it is known by follows from it and no caller
-        has anything to decide.
-        """
-        from src.core.http_utils import hostname_of
-
-        return hostname_of(self.virtual_host)
-
-    @property
     def is_gam_tenant(self) -> bool:
         """Check if this tenant is using Google Ad Manager adapter.
 
@@ -500,82 +481,27 @@ class Product(Base, JSONValidatorMixin):
             return self.inventory_profile.format_ids
         return self.format_ids
 
-    @property
-    def effective_properties(self) -> list[dict] | None:
-        """Get publisher properties from inventory profile (if set) or product itself.
+    def resolve_publisher_properties(self, authorized_properties: Sequence["SelectableProperty"]) -> list[dict]:
+        """This product's ``publisher_properties``, one selector per publisher.
 
-        Returns properties in AdCP 2.0.0 discriminated union format:
-        - all variant: {publisher_domain, selection_type='all'} (default)
-        - by_id variant: {publisher_domain, property_ids, selection_type='by_id'}
-        - by_tag variant: {publisher_domain, property_tags, selection_type='by_tag'}
-        - legacy: Full Property objects (for backward compatibility)
+        *authorized_properties* are the seller's VERIFIED authorized properties, loaded once
+        per request by the caller (``AuthorizedPropertyRepository.list_refs``). An inventory
+        profile's selectors, or the product's own ``properties``, already name their
+        publishers and keep only those this list holds. The legacy ``property_ids`` /
+        ``property_tags`` columns name none, so they resolve against it.
 
-        When inventory_profile_id is set, returns current profile's properties (auto-updates).
-        When inventory_profile_id is null, converts product's authorization to AdCP format.
-
-        If no properties/property_ids/property_tags are set, defaults to "all" variant
-        (all properties from this publisher).
+        A tenant is a SELLER: its host is where its agent answers, not a publisher, and a
+        buyer verifies a product at ``https://<publisher_domain>/.well-known/adagents.json``
+        (#1845). So a product no verified property backs resolves to ``[]`` rather than
+        borrowing the host; the caller does not offer it.
         """
-        from src.core.helpers.publisher_property_helpers import ensure_selection_type
+        from src.core.helpers.publisher_property_helpers import authorized_selectors, legacy_selectors
 
         if self.inventory_profile_id and self.inventory_profile:
-            return ensure_selection_type(self.inventory_profile.publisher_properties)
-
-        # Convert product's authorization to AdCP publisher_properties format
+            return authorized_selectors(self.inventory_profile.publisher_properties, authorized_properties)
         if self.properties:
-            return ensure_selection_type(self.properties)
-
-        if self.property_ids:
-            # AdCP 2.0.0 by_id variant
-            return [
-                {
-                    "publisher_domain": self.publisher_domain,
-                    "property_ids": self.property_ids,
-                    "selection_type": "by_id",
-                }
-            ]
-        if self.property_tags:
-            # AdCP 2.0.0 by_tag variant
-            return [
-                {
-                    "publisher_domain": self.publisher_domain,
-                    "property_tags": self.property_tags,
-                    "selection_type": "by_tag",
-                }
-            ]
-
-        # Default: Use "all" variant (all properties from this publisher)
-        # This ensures products always have publisher_properties as required by AdCP spec
-        return [{"publisher_domain": self.publisher_domain, "selection_type": "all"}]
-
-    @property
-    def publisher_domain(self) -> str:
-        """The domain this product's inventory is published under.
-
-        A DOMAIN, with no port. A tenant's ``virtual_host`` is the HOST it is served at and
-        may carry one (an e2e or staging front rarely sits on 443), but every consumer of
-        this value reads it as a bare domain: the pinned ``publisher_properties`` schema
-        fixes a domain pattern that a colon fails, and a verifier resolves the publisher's
-        adagents.json at ``https://<publisher_domain>/.well-known/adagents.json``, where a
-        port is not part of the name either. Measured: a tenant served at
-        ``storyboard.adcp.test:8443`` emitted that whole string, which knocked out the
-        matching member of the ``publisher_properties`` union and made ``get_products``
-        answer ``INTERNAL_ERROR`` for the entire catalogue — a 500-class answer to a
-        well-formed request, three frames from anything naming the port.
-
-        The projection is ``Tenant.primary_domain``'s and is not repeated here: one name
-        drops the port, and this one names the publisher a PRODUCT is sold by. All three
-        ``effective_properties`` variants read this, so a fix cannot land on one of them and
-        leave the others emitting the unusable value.
-
-        ``"unknown"`` covers exactly one case, an UNLOADED ``self.tenant`` — a different
-        question from the tenant having no domain, which cannot arise because
-        ``virtual_host`` is mandatory. What this never does is FABRICATE a domain: a
-        made-up host on a reserved TLD reaches a buyer as the publisher's own (#1845).
-        """
-        if not getattr(self, "tenant", None):
-            return "unknown"
-        return self.tenant.primary_domain
+            return authorized_selectors(self.properties, authorized_properties)
+        return legacy_selectors(self.property_ids, self.property_tags, authorized_properties)
 
     @property
     def effective_property_tags(self) -> list[str] | None:
@@ -2538,6 +2464,27 @@ class AuthorizedProperty(Base, JSONValidatorMixin):
 
     # Relationships
     tenant = relationship("Tenant", backref="authorized_properties")
+
+    @classmethod
+    def verified_website(
+        cls, *, tenant_id: str, property_id: str, domain: str, name: str, tags: list[str] | None = None
+    ) -> "AuthorizedProperty":
+        """A website on *domain* whose publisher already authorizes this agent.
+
+        The row a seed writes for a publisher it controls: the domain is both the property's
+        identifier and its publisher, and it is stored ``verified`` because no verification
+        fetch will run for it.
+        """
+        return cls(
+            tenant_id=tenant_id,
+            property_id=property_id,
+            property_type="website",
+            name=name,
+            identifiers=[{"type": "domain", "value": domain}],
+            tags=tags,
+            publisher_domain=domain,
+            verification_status="verified",
+        )
 
     __table_args__ = (
         ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),

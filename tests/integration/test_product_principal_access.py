@@ -16,6 +16,7 @@ from src.core.database.models import (
 from src.core.product_conversion import convert_product_model_to_schema
 from tests.factories import PricingOptionFactory
 from tests.factories.principal import plaintext_token_for
+from tests.factories.product import ONE_AUTHORIZED_PROPERTY
 from tests.utils.database_helpers import seed_tenant_with_product_prerequisites, vhost_for
 
 
@@ -130,7 +131,7 @@ def test_convert_product_includes_allowed_principal_ids(integration_db):
         session.refresh(product_model)
 
         # Convert to schema
-        product_schema = convert_product_model_to_schema(product_model)
+        product_schema = convert_product_model_to_schema(product_model, authorized_properties=ONE_AUTHORIZED_PROPERTY)
 
         # Verify allowed_principal_ids is included
         assert product_schema.allowed_principal_ids == ["allowed_principal"]
@@ -175,7 +176,7 @@ def test_allowed_principal_ids_excluded_from_serialization(integration_db):
         session.refresh(product_model)
 
         # Convert to schema and serialize
-        product_schema = convert_product_model_to_schema(product_model)
+        product_schema = convert_product_model_to_schema(product_model, authorized_properties=ONE_AUTHORIZED_PROPERTY)
         serialized = product_schema.model_dump()
 
         # allowed_principal_ids should NOT be in serialized output

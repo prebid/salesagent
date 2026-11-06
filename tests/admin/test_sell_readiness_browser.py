@@ -80,7 +80,8 @@ def _lookup_product(live_server: dict[str, str], auth_token: str, product_id: st
     raise AssertionError(f"Product {product_id} was not discoverable through get_products")
 
 
-def _create_property_selection(base_url: str, tenant_id: str) -> dict[str, str]:
+def _create_property_selection(live_server: dict[str, str], tenant_id: str) -> dict[str, str]:
+    base_url = live_server["admin"]
     session = build_admin_test_session(base_url, tenant_id)
     suffix = uuid.uuid4().hex[:8]
     publisher_domain = f"browser-{suffix}.example.com"
@@ -114,6 +115,16 @@ def _create_property_selection(base_url: str, tenant_id: str) -> dict[str, str]:
     assert property_response.status_code in {302, 303}, (
         f"Authorized property setup failed: {property_response.status_code}"
     )
+    # The form stores the property pending until its publisher's adagents.json is seen to
+    # authorize this agent, which no fetch finds for an invented domain. The product form
+    # selects, and get_products sells, only verified properties, so record the verification.
+    with psycopg2.connect(live_server["postgres"]) as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "UPDATE authorized_properties SET verification_status = 'verified' "
+                "WHERE tenant_id = %s AND publisher_domain = %s",
+                (tenant_id, publisher_domain),
+            )
 
     return {
         "publisher_domain": publisher_domain,
@@ -291,7 +302,7 @@ def test_add_product_browser_flow(docker_services_e2e, live_server, test_auth_to
     """Create a product in the browser and verify downstream discoverability."""
     reference_product = _discover_reference_product(live_server, test_auth_token)
     format_ref = reference_product["format_ids"][0]
-    property_selection = _create_property_selection(live_server["admin"], TENANT_ID)
+    property_selection = _create_property_selection(live_server, TENANT_ID)
     product_id = f"browser-prod-{uuid.uuid4().hex[:8]}"
     product_name = f"Browser Product {uuid.uuid4().hex[:6]}"
 
@@ -320,7 +331,7 @@ def test_edit_product_browser_flow(docker_services_e2e, live_server, test_auth_t
     """Edit a product in the browser and verify downstream discoverability changes."""
     reference_product = _discover_reference_product(live_server, test_auth_token)
     format_ref = reference_product["format_ids"][0]
-    property_selection = _create_property_selection(live_server["admin"], TENANT_ID)
+    property_selection = _create_property_selection(live_server, TENANT_ID)
     product_id = f"browser-edit-{uuid.uuid4().hex[:8]}"
     original_name = f"Browser Seed {uuid.uuid4().hex[:6]}"
     updated_name = f"Browser Updated {uuid.uuid4().hex[:6]}"

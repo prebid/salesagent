@@ -873,7 +873,7 @@ Feature: BR-UC-002 Create Media Buy
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy success spec
     And the response should have success fields
-    And the response should NOT have an "errors" field
+    And the response should NOT contain "errors" field
 
   @T-UC-002-inv-018-2 @invariant @BR-RULE-018 @error
   Scenario: INV-2 holds -- validation failure has errors array only

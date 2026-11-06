@@ -34,6 +34,7 @@ from tests.bdd.steps._outcome_helpers import (
     wire_lookup,
 )
 from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.bdd.steps.generic._table import comma_list
 from tests.harness.capabilities import DERIVE_IDENTITY, OMIT_IDENTITY, IdentityMode
 
 #: 3.1.1 billing-party enum (dist/schemas/3.1.1/enums/billing-party.json).
@@ -103,10 +104,7 @@ def _config(ctx: dict) -> dict:
 
 def _quoted_list(text: str) -> list[str]:
     """Parse '"a", "b"' / 'display, social' step fragments into a list."""
-    quoted = re.findall(r'"([^"]+)"', text)
-    if quoted:
-        return quoted
-    return [part.strip() for part in text.split(",") if part.strip()]
+    return re.findall(r'"([^"]+)"', text) or comma_list(text)
 
 
 def _assert_schema_valid(ctx: dict) -> None:
@@ -251,10 +249,8 @@ def given_adapter_unavailable(ctx: dict) -> None:
     adapter failure's CHANNEL degradation — publisher-domain resolution is the db_fail
     and adapter_and_db_fail rows' concern, and they assert the omission directly.
     """
-    from tests.factories.core import PublisherPartnerFactory
-
     ctx["env"].make_adapter_unavailable()
-    PublisherPartnerFactory(tenant=ctx["tenant"], publisher_domain="degradation-fixture.com")
+    _seed_publisher_partners(ctx, ["degradation-fixture.com"], verified=True)
 
 
 @given("the database query fails")
@@ -284,13 +280,39 @@ def given_portfolio_channels(ctx: dict, channels: str) -> None:
     ctx["env"].set_portfolio_channels(_quoted_list(channels))
 
 
-@given(parsers.parse("the tenant has registered publisher partnerships with domains {domains}"))
-def given_publisher_partnerships(ctx: dict, domains: str) -> None:
+def _seed_publisher_partners(ctx: dict, domains: list[str], *, verified: bool) -> None:
+    """One partner row per domain, its verification stated: only a verified partner is a
+    publisher the seller may name in ``portfolio.publisher_domains``."""
     from tests.factories.core import PublisherPartnerFactory
 
-    parsed = _quoted_list(domains)
-    for domain in parsed:
-        PublisherPartnerFactory(tenant=ctx["tenant"], publisher_domain=ctx["env"].publisher_address(domain))
+    for domain in domains:
+        PublisherPartnerFactory(
+            tenant=ctx["tenant"],
+            publisher_domain=ctx["env"].publisher_address(domain),
+            is_verified=verified,
+            sync_status="success" if verified else "pending",
+        )
+
+
+@given(parsers.re(r"the tenant has (?P<state>verified|unverified) publisher partnerships with domains (?P<domains>.+)"))
+def given_publisher_partnerships(ctx: dict, state: str, domains: str) -> None:
+    _seed_publisher_partners(ctx, _quoted_list(domains), verified=state == "verified")
+
+
+@given(
+    parsers.re(
+        r'the tenant holds an authorized property on (?:"(?P<domain>[^"]+)"|(?P<own_host>its own host)) '
+        r'with verification status "(?P<status>[a-z]+)"'
+    )
+)
+def given_authorized_property(ctx: dict, domain: str | None, own_host: str | None, status: str) -> None:
+    """One property the seller sells for the publisher at *domain*, or on the tenant's own
+    host (whose stored hostname is the domain), in one of the ``ck_verification_status``
+    states (pending, verified, failed)."""
+    from tests.factories.core import AuthorizedPropertyFactory
+
+    publisher_domain = ctx["tenant"].virtual_host_name if own_host else domain
+    AuthorizedPropertyFactory(tenant=ctx["tenant"], publisher_domain=publisher_domain, verification_status=status)
 
 
 @given("the adapter provides targeting capabilities including geo")
@@ -398,7 +420,7 @@ def given_full_degradation_baseline(ctx: dict) -> None:
 
 @given("a tenant is resolvable but both adapter and DB fail")
 def given_tenant_adapter_and_db_fail(ctx: dict) -> None:
-    """adapter_and_db_fail row: both degrade — [display] channels + placeholder domain."""
+    """adapter_and_db_fail row: both degrade — [display] channels and no portfolio."""
     ctx["env"].make_adapter_unavailable()
     ctx["env"].break_tenant_config_db()
 
@@ -870,7 +892,7 @@ def then_supported_billing_nonempty(ctx: dict) -> None:
 
 @then(parsers.parse("account.supported_billing should equal {expected_set}"))
 def then_supported_billing_equals(ctx: dict, expected_set: str) -> None:
-    expected = [part.strip() for part in expected_set.strip("[]").split(",") if part.strip()]
+    expected = comma_list(expected_set.strip("[]"))
     value = wire_field(ctx, "account.supported_billing")
     assert sorted(value) == sorted(expected), f"supported_billing {value!r} != {expected!r}"
 
@@ -1580,24 +1602,8 @@ def _deg_display_default(ctx: dict) -> None:
         wire_absent(ctx, path)
 
 
-def _assert_portfolio_omitted_never_fabricated(ctx: dict) -> None:
-    """salesagent-piyo: portfolio.publisher_domains is REQUIRED+minItems:1 (pinned
-    v3.1.1 get-adcp-capabilities-response.json) whenever portfolio is present, and
-    media_buy has no required fields -- so a DB failure (no real publisher_domain
-    data read) has no spec-legal portfolio to emit. Production used to fabricate a
-    '<subdomain>.example.com' placeholder here; the honest, schema-legal response
-    omits media_buy.portfolio entirely instead.
-    """
-    wire_absent(ctx, "media_buy.portfolio")
-
-
-def _deg_db_fail(ctx: dict) -> None:
-    _assert_portfolio_omitted_never_fabricated(ctx)
-
-
 def _deg_adapter_and_db_fail(ctx: dict) -> None:
-    _assert_portfolio_omitted_never_fabricated(ctx)
-    for path in ("media_buy.audience_targeting", "media_buy.conversion_tracking"):
+    for path in ("media_buy.portfolio", "media_buy.audience_targeting", "media_buy.conversion_tracking"):
         wire_absent(ctx, path)
 
 
@@ -1621,7 +1627,9 @@ _SATISFY_TABLE: dict[str, Any] = {
     "supported_versions and idempotency": _deg_no_tenant,
     "primary_channels equals [display] and targeting equals exactly {geo_countries: true, "
     "geo_regions: true} with no reporting_delivery_methods, audience_targeting or conversion_tracking": _deg_display_default,
-    "media_buy.portfolio is omitted (no real publisher domain, never fabricated)": _deg_db_fail,
+    "media_buy.portfolio is omitted (no real publisher domain, never fabricated)": lambda ctx: wire_absent(
+        ctx, "media_buy.portfolio"
+    ),
     "media_buy.portfolio is omitted (no real publisher domain, never fabricated), "
     "adapter-dependent sections absent": _deg_adapter_and_db_fail,
     "account present with non-empty supported_billing and no optional account fields": _deg_account_degraded,
@@ -1661,10 +1669,7 @@ _VENDOR_METRIC_ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
 def _parse_bracket_list(token: str) -> list[str]:
     """Parse a Gherkin '[a, b]' fragment into a list of bare string tokens."""
-    inner = token.strip().removeprefix("[").removesuffix("]").strip()
-    if not inner:
-        return []
-    return [part.strip() for part in inner.split(",") if part.strip()]
+    return comma_list(token.strip().removeprefix("[").removesuffix("]"))
 
 
 def _grade_array_or_absent(ctx: dict, path: str, expected: str) -> None:
@@ -3092,10 +3097,3 @@ def given_advertising_policy_without_description(ctx: dict) -> None:
 def then_advertising_policies_equals(ctx: dict, expected: str) -> None:
     actual = wire_field(ctx, "media_buy.portfolio.advertising_policies")
     assert actual == expected, f"advertising_policies {actual!r} != {expected!r}"
-
-
-@then("media_buy.portfolio.advertising_policies should be omitted")
-def then_advertising_policies_omitted(ctx: dict) -> None:
-    """Omitted, never null: the pinned member is ``{"type": "string"}`` with no null arm,
-    and portfolio requires only ``publisher_domains``."""
-    wire_absent(ctx, "media_buy.portfolio.advertising_policies")
