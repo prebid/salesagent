@@ -25,7 +25,6 @@ from tests.unit._architecture_helpers import (
 COVERAGE_MAP_PATH = Path(".pre-commit-coverage-map.yml")
 MAKEFILE_PATH = Path("Makefile")
 TOX_PATH = Path("tox.ini")
-RUNNER_PATH = Path("run_all_tests.sh")
 
 ALLOWED_ENFORCED_BY = frozenset(
     {
@@ -116,15 +115,17 @@ def _schema_contract_pytest_paths(workflow: dict[str, Any] | None = None) -> lis
 
 
 def _gate_env_runs_in_the_full_suite(repo: Path, env_name: str) -> bool:
-    """True when *env_name* is a real tox env AND the gate actually runs it."""
+    """True when *env_name* has a tox section and ``env_list`` names it."""
     tox_body = (repo / TOX_PATH).read_text(encoding="utf-8")
     if f"[testenv:{env_name}]" not in tox_body:
         return False
-    env_list = re.search(r"^env_list\s*=\s*(.+)$", tox_body, re.MULTILINE)
-    if not env_list or env_name not in {part.strip() for part in env_list.group(1).split(",")}:
+    from tests.unit._architecture_helpers import all_suites_from_runner
+
+    try:
+        suites = all_suites_from_runner(repo)
+    except (OSError, ValueError):
         return False
-    all_suites = re.search(r'ALL_SUITES="([^"]+)"', (repo / RUNNER_PATH).read_text(encoding="utf-8"))
-    return bool(all_suites) and env_name in {part.strip() for part in all_suites.group(1).split(",")}
+    return env_name in suites
 
 
 def _gate_env_name(location: str) -> str | None:

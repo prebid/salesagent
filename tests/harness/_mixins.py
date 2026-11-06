@@ -209,7 +209,7 @@ def _e2e_raw_captures(env: Any) -> list[dict]:
 def _e2e_captures_since_trigger(env: Any) -> list[dict]:
     """The wire entries that arrived AFTER the scenario's delivery trigger.
 
-    The server's own background sweep (DELIVERY_WEBHOOK_INTERVAL=5) keeps delivering the
+    The server's own background sweep (the compose sweep interval) keeps delivering the
     same row for as long as the scenario runs, so an absolute capture count conflates the
     sender's retry behaviour with the scenario's wall-clock duration. The watermark is set
     by :func:`_e2e_deliver_webhook` immediately before it asks the server to deliver; with
@@ -225,7 +225,7 @@ def _e2e_attempts_at_one_delivery(env: Any) -> list[dict]:
 
     The watermark in :func:`_e2e_deliver_webhook` excludes everything the background sweep
     delivered BEFORE the trigger, but the sweep keeps running during the window too:
-    DELIVERY_WEBHOOK_INTERVAL=5 against a retry ladder that is ~4s wide means a second,
+    The compose sweep interval against a retry ladder that is ~4s wide means a second,
     independent delivery of the same row can land in the middle of the first one's retries.
     Counting the window naively conflates the two, which is how a correct 3-attempt ladder
     (``max_attempts=3`` at webhook_delivery_service.py:753, and the seam counts TOTAL
@@ -264,6 +264,33 @@ def _e2e_delivery_attempts(env: Any) -> int:
 #: the 1s doubling step, so it can never let one rung of the schedule pass for the next.
 _RECEIPT_GAP_SLOP_SECONDS = 0.75
 
+_SWEEP_INTERVAL_DEFAULT = "${DELIVERY_WEBHOOK_INTERVAL:-"
+
+
+def delivery_sweep_interval_seconds() -> int:
+    """Seconds the e2e server waits between delivery sweeps.
+
+    ``docker-compose.e2e.yml`` is the only writer. ``adcp-server`` and the
+    ``tests`` service both interpolate ``${DELIVERY_WEBHOOK_INTERVAL:-N}``,
+    and this returns ``N``.
+    """
+    from scripts.ci.workflow_helpers import load_yaml_mapping
+    from tests.unit._architecture_helpers import compose_service_environment, repo_root
+
+    compose = load_yaml_mapping(repo_root() / "docker-compose.e2e.yml")
+    parsed: list[int] = []
+    for service in ("adcp-server", "tests"):
+        raw = compose_service_environment(compose, service).get("DELIVERY_WEBHOOK_INTERVAL", "")
+        if not raw.startswith(_SWEEP_INTERVAL_DEFAULT) or not raw.endswith("}"):
+            raise ValueError(f"{service} DELIVERY_WEBHOOK_INTERVAL must be a compose default, got {raw!r}")
+        number = raw[len(_SWEEP_INTERVAL_DEFAULT) : -1]
+        if not number.isdecimal():
+            raise ValueError(f"{service} sweep default is not an integer: {raw!r}")
+        parsed.append(int(number))
+    if parsed[0] != parsed[1]:
+        raise ValueError(f"adcp-server and tests disagree on the sweep interval: {parsed[0]} vs {parsed[1]}")
+    return parsed[0]
+
 
 def _e2e_assert_retry_backoff_schedule(env: Any, *, expected_sleeps: int = 2, grade_jitter_draws: bool = False) -> None:
     """E2E realization of :meth:`assert_retry_backoff_schedule`, read off the WIRE.
@@ -282,8 +309,9 @@ def _e2e_assert_retry_backoff_schedule(env: Any, *, expected_sleeps: int = 2, gr
     that jittered outside ``uniform(0, 1)``, lands outside its window.
 
     THE GAPS ARE TAKEN WITHIN ONE DELIVERY, not across the window. The background sweep
-    runs every 5s against a ~4s ladder, so a second delivery of the same row lands among the
-    first one's retries; :func:`_e2e_attempts_at_one_delivery` separates them by body bytes,
+    runs at :func:`delivery_sweep_interval_seconds` against a ~4s ladder, so a second
+    delivery of the same row lands among the first one's retries;
+    :func:`_e2e_attempts_at_one_delivery` separates them by body bytes,
     which retries share by signature necessity. Without that, a correct 3-attempt ladder
     (``max_attempts=3``, TOTAL attempts) presents as four receipts and the count is wrong
     for a reason that has nothing to do with backoff.
@@ -305,6 +333,7 @@ def _e2e_assert_retry_backoff_schedule(env: Any, *, expected_sleeps: int = 2, gr
     """
     from tests.helpers.backoff_assertions import BR_RULE_029_BASE_DELAYS
 
+    sweep_interval = delivery_sweep_interval_seconds()
     receipts = [entry.get("received_at") for entry in _e2e_attempts_at_one_delivery(env)]
     missing = [index for index, value in enumerate(receipts) if not isinstance(value, int | float)]
     assert not missing, (
@@ -337,7 +366,8 @@ def _e2e_assert_retry_backoff_schedule(env: Any, *, expected_sleeps: int = 2, gr
             f"it on the {rung:.0f}s rung of the exponential schedule plus jitter in [0, 1), so "
             f"the wire window is [{rung:.0f}, {ceiling:.2f}). A gap below the rung means the "
             "wait was skipped or shortened; above it means the schedule stopped doubling, the "
-            "jitter range grew, or a background sweep delivery landed inside the ladder."
+            "jitter range grew, or a background sweep delivery "
+            f"(every {sweep_interval}s) landed inside the ladder."
         )
 
 
@@ -494,9 +524,9 @@ def _deliver_via_live_server(
     ``return True`` — registration performed, route never driven — the graduated
     ``T-UC-004-webhook-9421`` e2e_rest leg still PASSED, in 3.1s against 0.6s on the
     unmutated tree (bdd_e2e ``innet_210826_0257`` vs ``innet_210826_0240``, both
-    542 passed / 1 failed / 2033 xfailed / 18 xpassed / 2 skipped). ``run_all_tests.sh``
-    exports ``DELIVERY_WEBHOOK_INTERVAL=5``, so the server's OWN background delivery
-    scheduler picks the row up within about five seconds of
+    542 passed / 1 failed / 2033 xfailed / 18 xpassed / 2 skipped). docker-compose.e2e.yml
+    sets the sweep interval, so the server's OWN background delivery
+    scheduler picks the row up within about one interval of
     :func:`_attach_reporting_webhook` writing it. Both senders are the deployment under
     test, so what the receiver captures is still a real server-made delivery — but the
     route is a way to ask PROMPTLY, not the reason a delivery exists, and a scenario
@@ -527,8 +557,8 @@ def _deliver_via_live_server(
     if env.webhook_capture_key_was_handed_out:
         _attach_reporting_webhook(env, media_buy)
     # The TRIGGER WINDOW opens here, and everything the scenario counts is read relative
-    # to it. ``run_all_tests.sh`` exports DELIVERY_WEBHOOK_INTERVAL=5, so the server's own
-    # background sweep is delivering the same row every five seconds; a raw capture count
+    # to it. docker-compose.e2e.yml sets the sweep interval, so the server's own
+    # background sweep keeps delivering the same row; a raw capture count
     # therefore measures "how long the scenario took" as much as "how many attempts the
     # sender made", and the retry gaps read off those captures would include a sweep
     # interval sitting between two real retries. Watermarking is the smaller of the two

@@ -19,7 +19,6 @@ import pytest
 from tests.unit._run_all_tests_helpers import REPO_ROOT, RUNNER
 
 _HOST_RUNNER = REPO_ROOT / "run_all_tests_host.sh"
-_TOX_INI = REPO_ROOT / "tox.ini"
 _ALL_SUITES = "unit,integration,bdd,admin,e2e,ui,quality,storyboard"
 
 
@@ -55,15 +54,16 @@ def test_run_all_tests_arg_contract(args, expected):
 
 def _tox_env_list() -> set[str]:
     """Canonical parallel suite set from tox.ini (coverage runs separately)."""
-    m = re.search(r"^env_list\s*=\s*(.+)$", _TOX_INI.read_text(), re.MULTILINE)
-    assert m, "tox.ini has no env_list"
-    return {s.strip() for s in m.group(1).split(",") if s.strip()}
+    from tests.unit._architecture_helpers import all_suites_from_runner
+
+    return set(all_suites_from_runner())
 
 
 def _runner_all_suites() -> set[str]:
-    m = re.search(r'ALL_SUITES="([^"]+)"', RUNNER.read_text())
-    assert m, "run_all_tests.sh has no ALL_SUITES"
-    return {s.strip() for s in m.group(1).split(",") if s.strip()}
+    """The shell copy of the suite list. This is the one reader of that assignment."""
+    match = re.search(r'^ALL_SUITES="([^"]+)"', RUNNER.read_text(encoding="utf-8"), re.MULTILINE)
+    assert match, "run_all_tests.sh must define ALL_SUITES"
+    return {part.strip() for part in match.group(1).split(",") if part.strip()}
 
 
 def _host_runner_collect_suites() -> set[str]:
