@@ -25,14 +25,21 @@ from sqlalchemy import delete
 from src.admin.app import create_app
 from src.admin.blueprints import publisher_partners as publisher_partners_module
 from src.core.database.models import Tenant
-from tests.factories import PublisherPartnerFactory, TenantFactory
+from tests.factories import PublisherPartnerFactory, TenantFactory, UserFactory
 from tests.helpers import concurrent_commit_in_write_window
+from tests.helpers.admin_session import admin_member_session
 
 app = create_app()
 
 pytestmark = [pytest.mark.admin, pytest.mark.requires_db]
 
 DUPLICATE_DOMAIN = "contested-publisher.example.com"
+
+
+def _authorize_member(client, tenant) -> None:
+    """Production-shaped member session so require_tenant_access admits the request."""
+    user = UserFactory(tenant=tenant)
+    admin_member_session(client, tenant.tenant_id, user.email)
 
 
 @pytest.fixture
@@ -55,6 +62,7 @@ class TestAddPublisherPartnerDuplicate:
         """
         tenant = TenantFactory()
         PublisherPartnerFactory(tenant=tenant, publisher_domain=DUPLICATE_DOMAIN)
+        _authorize_member(client, tenant)
 
         response = client.post(
             f"/tenant/{tenant.tenant_id}/publisher-partners",
@@ -73,6 +81,7 @@ class TestAddPublisherPartnerDuplicate:
         answers 500 with a raw driver message.
         """
         tenant = TenantFactory()
+        _authorize_member(client, tenant)
 
         def commit_conflicting_row():
             PublisherPartnerFactory(tenant=tenant, publisher_domain=DUPLICATE_DOMAIN)
@@ -101,6 +110,7 @@ class TestAddPublisherPartnerDuplicate:
         ``tests/integration/test_integrity_resolve_or_write.py``.
         """
         tenant = TenantFactory()
+        _authorize_member(client, tenant)
 
         def delete_the_tenant():
             factory_session.execute(delete(Tenant).where(Tenant.tenant_id == tenant.tenant_id))
@@ -134,6 +144,7 @@ class TestUnexpectedDbErrorDoesNotLeakDriverInternals:
         driver name, the SQL statement, or the bound parameters.
         """
         tenant = TenantFactory()
+        _authorize_member(client, tenant)
         oversized = ("a" * 300) + ".example.com"
 
         response = client.post(

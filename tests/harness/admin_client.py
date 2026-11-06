@@ -12,7 +12,13 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from tests.helpers.admin_session import admin_auth_session, admin_test_app, authenticate_http_session
+from tests.helpers.admin_session import (
+    admin_auth_session,
+    admin_member_session,
+    admin_test_app,
+    authenticate_http_member_session,
+    authenticate_http_session,
+)
 
 
 class _CaseInsensitiveHeaders(dict):
@@ -114,6 +120,18 @@ class AdminClient:
             admin_auth_session(self._flask_client, tenant_id)
         else:
             authenticate_http_session(self._http, self._base_url or "", tenant_id)
+
+    def authenticate_as_member(self, tenant_id: str, email: str) -> None:
+        """State a production-shaped member session for *email* on *tenant_id*.
+
+        Both transports: Flask ``session_transaction`` in process, a signed cookie
+        against the live server. ``email`` is a factory address, never
+        ``test@example.com``, so the guard's ``User`` lookup actually runs.
+        """
+        if self._flask_client is not None:
+            admin_member_session(self._flask_client, tenant_id, email)
+        else:
+            authenticate_http_member_session(self._http, self._base_url or "", tenant_id, email)
 
     def clear_auth(self) -> None:
         """Drop the admin session, so the next request arrives anonymous."""
