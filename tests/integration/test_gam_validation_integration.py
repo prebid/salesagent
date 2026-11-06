@@ -12,8 +12,8 @@ import pytest
 
 from src.adapters.google_ad_manager import GoogleAdManager
 from src.core.schemas import Principal
+from tests.helpers.gam_client import build_gam_adapter, stub_gam_client_manager
 from tests.helpers.gam_client import gam_line_item as _line_item
-from tests.helpers.gam_client import stub_gam_client_manager
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -25,16 +25,9 @@ def _build_adapter(principal, config, *, line_items=()):
     ``tests/helpers/gam_client.py`` for why they must not come from the adapter's own
     unreachable fabrication branch (GH #2245).
     """
-    with patch("src.adapters.google_ad_manager.GAMClientManager") as client_manager:
-        client_manager.return_value = stub_gam_client_manager(line_items=line_items)
-        return GoogleAdManager(
-            config=config,
-            principal=principal,
-            network_code=config["network_code"],
-            advertiser_id=principal.platform_mappings["google_ad_manager"]["advertiser_id"],
-            trafficker_id=config["trafficker_id"],
-            tenant_id="test_tenant",
-        )
+    return build_gam_adapter(
+        stub_gam_client_manager(line_items=line_items), principal=principal, config=config, tenant_id="test_tenant"
+    )
 
 
 class TestGAMValidationIntegration:

@@ -222,15 +222,29 @@ The authoritative field list is the `GAMImplementationConfig` schema in `src/ada
 #### Custom targeting
 
 - **Field**: `custom_targeting_keys`
-- **Type**: JSON object
-- **Example**:
+- **Type**: JSON object in the groups format the product form's targeting widget saves
+- **Behavior**: Criteria within a group are ANDed and groups are ORed. Every line item for the product must match this targeting AND any custom targeting in the buyer's request.
+- **Example**: `(11001 is 448512 or 448513, and 11002 is not 448601) or (11003 is 448701)`
 
   ```json
   {
-    "sport": ["football", "basketball"],
-    "geo": ["us-ny", "us-ca"]
+    "groups": [
+      {
+        "criteria": [
+          {"keyId": "11001", "values": ["448512", "448513"]},
+          {"keyId": "11002", "values": ["448601"], "exclude": true}
+        ]
+      },
+      {
+        "criteria": [{"keyId": "11003", "values": ["448701"]}]
+      }
+    ]
   }
   ```
+
+  `keyId` is a numeric GAM custom targeting key ID. Each value is a numeric GAM value ID, or a value name, which is looked up in GAM and created if it does not exist.
+  Two older formats are still read: `{"<key_id>": "<value_name>"}`, and `{"include": {"<key_id>": [values]}, "exclude": {...}, "operator": "AND"}`.
+  In the first, the value can also be a list of names, which are ORed; a `NOT_<key_id>` key excludes the values, and each value is always treated as a name, even when it is all digits.
 
 #### Non-guaranteed automation
 

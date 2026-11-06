@@ -33,7 +33,7 @@ import pytest
 from src.adapters.base import AdapterCreateResult
 from src.core.database.database_session import get_db_session, get_engine
 from src.core.database.models import MediaPackage as DBMediaPackage
-from tests.helpers.gam_client import gam_line_item, stub_gam_client_manager
+from tests.helpers.gam_client import build_gam_adapter, gam_line_item, stub_gam_client_manager
 from tests.helpers.media_buy_approval import run_approval
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -476,7 +476,6 @@ class TestExecuteApprovedEnrichesSellerConcept:
     def _produce_gam_status(self, gam_order_id: str, creative_id: str, tenant_id: str):
         """Emit the AssetStatus the REAL dry-run GAM producer returns for a pushed
         creative — so a change to the GAM concept keys/values reddens this test too."""
-        from src.adapters.google_ad_manager import GoogleAdManager
         from src.core.schemas import Principal
 
         # The SCHEMA Principal, which carries no token at all — ``with_token`` is a
@@ -492,20 +491,13 @@ class TestExecuteApprovedEnrichesSellerConcept:
             "trafficker_id": "trafficker_123",
         }
         # The adapter reaches GAM on construction, so the client manager is a stand-in
-        # serving the one line item this order has. ``_init_client``, which this used to
-        # patch, is a legacy delegate the constructor no longer calls.
-        with patch("src.adapters.google_ad_manager.GAMClientManager") as client_manager:
-            client_manager.return_value = stub_gam_client_manager(
-                line_items=[gam_line_item("test_package", sizes=((970, 250),))]
-            )
-            gam = GoogleAdManager(
-                config=config,
-                principal=gam_principal,
-                network_code=config["network_code"],
-                advertiser_id="123",
-                trafficker_id=config["trafficker_id"],
-                tenant_id=tenant_id,
-            )
+        # serving the one line item this order has.
+        gam = build_gam_adapter(
+            stub_gam_client_manager(line_items=[gam_line_item("test_package", sizes=((970, 250),))]),
+            principal=gam_principal,
+            config=config,
+            tenant_id=tenant_id,
+        )
         # The order's line item accepts the asset's 970x250 (read off its format), so the
         # producer's size-vs-placeholder check passes. This asset only drives the producer
         # to emit the concept-bearing status — it is independent of the DB package the

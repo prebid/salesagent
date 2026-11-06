@@ -12,7 +12,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.adapters.gam.managers.targeting import GAMTargetingManager
+from src.adapters.gam.managers.targeting import GAMTargetingManager, and_custom_criteria
+from tests.helpers.gam_client import gam_criteria_set, gam_criterion
 
 
 @pytest.fixture
@@ -96,6 +97,16 @@ class TestEnhancedCustomTargetingStructure:
         included = [c for c in result["children"] if c["keyId"] == 11111]
         assert len(included) == 1
         assert included[0]["operator"] == "IS"
+
+    def test_legacy_format_list_of_names_is_ored(self, targeting_manager):
+        """A legacy value can be a list of names, as the targeting widget reads it: one criterion, every value."""
+        result = targeting_manager._build_custom_targeting_structure({"11111": ["sports", "news"]})
+
+        [criterion] = result["children"]
+        assert criterion["valueIds"] == [
+            targeting_manager._get_or_create_custom_targeting_value("11111", "sports"),
+            targeting_manager._get_or_create_custom_targeting_value("11111", "news"),
+        ]
 
     def test_enhanced_format_include_only(self, targeting_manager):
         """Test enhanced format with only include values."""
@@ -610,6 +621,41 @@ class TestNestedGroupsCustomTargeting:
         # Should still produce flat structure for legacy format
         assert result["logicalOperator"] == "AND"
         assert len(result["children"]) == 2
+
+
+class TestAndCustomCriteria:
+    """``and_custom_criteria``: GAM custom criteria trees ANDed into OR-of-ANDs, the one shape GAM takes."""
+
+    A, B, C, D, E = (gam_criterion(key_id, [key_id * 10]) for key_id in (1, 2, 3, 4, 5))
+
+    def test_one_and_set_is_wrapped_in_an_or(self):
+        """Legacy (or enhanced with AND) alone: GAM takes only an OR at the top."""
+        assert and_custom_criteria(gam_criteria_set("AND", [self.A, self.B])) == gam_criteria_set(
+            "OR", [gam_criteria_set("AND", [self.A, self.B])]
+        )
+
+    def test_two_and_sets_merge_into_one_branch(self):
+        """Legacy (or enhanced with AND) on both sides: one branch requiring every criterion."""
+        combined = and_custom_criteria(gam_criteria_set("AND", [self.A, self.B]), gam_criteria_set("AND", [self.C]))
+
+        assert combined == gam_criteria_set("OR", [gam_criteria_set("AND", [self.A, self.B, self.C])])
+
+    def test_or_branches_multiply_in_order(self):
+        """Enhanced with operator OR (bare criteria) AND groups: every pairing, first side outermost."""
+        enhanced_or = gam_criteria_set("OR", [self.A, self.B])
+        groups = gam_criteria_set("OR", [gam_criteria_set("AND", [self.C, self.D]), gam_criteria_set("AND", [self.E])])
+
+        combined = and_custom_criteria(enhanced_or, groups)
+
+        assert combined == gam_criteria_set(
+            "OR",
+            [
+                gam_criteria_set("AND", [self.A, self.C, self.D]),
+                gam_criteria_set("AND", [self.A, self.E]),
+                gam_criteria_set("AND", [self.B, self.C, self.D]),
+                gam_criteria_set("AND", [self.B, self.E]),
+            ],
+        )
 
 
 if __name__ == "__main__":

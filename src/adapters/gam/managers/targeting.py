@@ -5,6 +5,7 @@ Handles targeting validation, translation from AdCP targeting to GAM targeting,
 and geo mapping operations for Google Ad Manager campaigns.
 """
 
+import itertools
 import json
 import logging
 import os
@@ -357,8 +358,8 @@ class GAMTargetingManager:
 
         Supports three input formats:
 
-        Legacy format (dict[str, str]):
-            {'key_id': 'value_name', 'NOT_key_id': 'value_name'}
+        Legacy format (a value name, or a list of names OR'd together):
+            {'key_id': 'value_name', 'NOT_key_id': ['value_name', 'value_name']}
 
         Enhanced format (dict with include/exclude):
             {
@@ -397,22 +398,23 @@ class GAMTargetingManager:
         if "include" in custom_targeting_dict or "exclude" in custom_targeting_dict:
             return self._build_enhanced_custom_targeting_structure(custom_targeting_dict)
 
-        # Legacy format: {'key_id': 'value_name', 'NOT_key_id': 'value_name'}
-        for key, value_name in custom_targeting_dict.items():
+        # Legacy format: {'key_id': 'value_name', 'NOT_key_id': ['value_name', ...]}
+        for key, value_names in custom_targeting_dict.items():
             # Check for negative targeting (NOT_ prefix)
             is_negative = key.startswith("NOT_")
             key_id = key[4:] if is_negative else key  # Remove NOT_ prefix
 
-            # Build custom criteria object
-            # For custom targeting values, GAM requires value IDs (not names)
-            # We need to create or lookup the value ID for the value name
-            value_id = self._get_or_create_custom_targeting_value(key_id, value_name)
+            # GAM targets value IDs, not names: look up (or create) the ID for each name.
+            # Several names for one key are OR'd, as the targeting widget reads them.
+            if isinstance(value_names, str):
+                value_names = [value_names]
+            value_ids = [self._get_or_create_custom_targeting_value(key_id, name) for name in value_names]
 
             criteria = {
                 "xsi_type": "CustomCriteria",  # Explicit type for zeep SOAP serialization
                 "keyId": int(key_id),  # GAM expects integer key ID
                 "operator": "IS_NOT" if is_negative else "IS",
-                "valueIds": [value_id],  # Custom targeting value ID
+                "valueIds": value_ids,
             }
             children.append(criteria)
 
@@ -948,19 +950,52 @@ class GAMTargetingManager:
 
         return targeting
 
-    def add_custom_targeting(self, targeting: dict[str, Any], custom_keys: dict[str, Any]) -> dict[str, Any]:
-        """Add custom targeting keys to GAM targeting configuration.
+    def add_product_custom_targeting(
+        self, targeting: dict[str, Any], product_custom_targeting: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Return ``targeting`` with a product's ``custom_targeting_keys`` ANDed into it.
 
-        Args:
-            targeting: Existing GAM targeting configuration
-            custom_keys: Dictionary of custom targeting key-value pairs
-
-        Returns:
-            Updated targeting configuration with custom targeting
+        The product config comes in the same three formats as buyer targeting, so it goes
+        through the same builder; a line item then has to match both. Whichever side is
+        present, the result is in the one shape GAM accepts (see ``and_custom_criteria``).
         """
-        if custom_keys:
-            if "customTargeting" not in targeting:
-                targeting["customTargeting"] = {}
-            targeting["customTargeting"].update(custom_keys)
+        trees = [targeting.get("customTargeting") or {}]
+        if product_custom_targeting:
+            trees.append(self._build_custom_targeting_structure(product_custom_targeting))
+        trees = [tree for tree in trees if tree.get("children")]
+        if not trees:
+            return targeting
+        return {**targeting, "customTargeting": and_custom_criteria(*trees)}
 
-        return targeting
+
+def and_custom_criteria(*trees: dict[str, Any]) -> dict[str, Any]:
+    """AND GAM custom criteria trees into the one shape GAM accepts.
+
+    GAM allows a custom targeting tree three levels deep, and the top level can only be
+    an OR: an OR set of AND sets of ``CustomCriteria`` (``LineItemService.Targeting.customTargeting``
+    in GAM API v202602, the version the pinned googleads 49.0.0 calls). The builder's
+    legacy and enhanced formats produce a bare AND set, and an AND set holding the groups
+    format's OR would need a fourth level, so every tree is rewritten as OR branches and
+    the AND distributed over them: ``(A1 OR A2) AND B`` becomes ``(A1 AND B) OR (A2 AND B)``.
+    A single tree is only reshaped.
+
+    The OR branches multiply: n branches ANDed with m become n*m.
+    """
+    branches = _or_of_ands({"logicalOperator": "AND", "children": list(trees)})
+    return {
+        "xsi_type": "CustomCriteriaSet",
+        "logicalOperator": "OR",
+        "children": [
+            {"xsi_type": "CustomCriteriaSet", "logicalOperator": "AND", "children": branch} for branch in branches
+        ],
+    }
+
+
+def _or_of_ands(node: dict[str, Any]) -> list[list[dict[str, Any]]]:
+    """Rewrite a custom criteria tree as OR branches, each a list of CustomCriteria to AND."""
+    if node.get("xsi_type") == "CustomCriteria":
+        return [[node]]
+    child_branches = [_or_of_ands(child) for child in node["children"]]
+    if node["logicalOperator"] == "OR":
+        return [branch for branches in child_branches for branch in branches]
+    return [list(itertools.chain.from_iterable(combo)) for combo in itertools.product(*child_branches)]

@@ -3140,7 +3140,8 @@ async def _create_media_buy_impl(
         # Note: Key-value pairs are NOT aggregated here anymore.
         # Each product maintains its own custom_targeting_keys in implementation_config
         # which will be applied separately to its corresponding line item in GAM.
-        # The adapter (google_ad_manager.py) handles this per-product targeting at line 491-494
+        # GoogleAdManager.create_media_buy ANDs it into each package's targeting through
+        # GAMTargetingManager.add_product_custom_targeting.
 
         # Convert products to MediaPackages
         # CRITICAL: Iterate over req.packages, not products_in_buy, to handle multiple packages with same product_id
