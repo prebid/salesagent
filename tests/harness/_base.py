@@ -2753,13 +2753,20 @@ class BaseTestEnv:
         Returns the ``requests``/``httpx`` style response, so a step can read
         ``status_code``, ``json()`` and ``text`` the same way on either side.
         """
-        headers = credential_headers(host=host, tenant=tenant, host_resolves_nothing=host_resolves_nothing)
+        return self.get_root(
+            path, headers=credential_headers(host=host, tenant=tenant, host_resolves_nothing=host_resolves_nothing)
+        )
+
+    def get_root(
+        self, path: str, *, headers: dict[str, str] | None = None, params: dict[str, str] | None = None
+    ) -> Any:
+        """GET a root endpoint: the in-process ASGI app, or real HTTP against the live stack."""
         if self.is_e2e:
             import httpx
 
-            assert self.e2e_config is not None, "fetch_agent_card()'s e2e branch needs env.e2e_config"
-            return httpx.get(f"{self.e2e_config.base_url}{path}", headers=headers, timeout=30)
-        return self.get_rest_client().get(path, headers=headers)
+            assert self.e2e_config is not None, "get_root()'s e2e branch needs env.e2e_config"
+            return httpx.get(f"{self.e2e_config.base_url}{path}", headers=headers, params=params, timeout=30)
+        return self.get_rest_client().get(path, headers=headers, params=params)
 
     def _commit_factory_data(self) -> None:
         """Flush pending session state before calling production code.

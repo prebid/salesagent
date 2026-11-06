@@ -34,7 +34,25 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     import pytest
 
-    from src.core.config import LimitSettings
+    from src.core.config import LimitSettings, RuntimeSettings
+
+
+def _inject(monkeypatch: pytest.MonkeyPatch, group: str, overrides: dict[str, Any]) -> Any:
+    """Replace the named fields of one settings group on the cached settings; return the group."""
+    import src.core.config as config_module
+    from src.core.config import get_settings
+
+    current = get_settings()
+    group_settings = getattr(current, group)
+    unknown = set(overrides) - set(type(group_settings).model_fields)
+    if unknown:
+        raise AttributeError(f"not {type(group_settings).__name__} fields: {sorted(unknown)}")
+    # ``model_copy`` rather than a re-validated construction: the value is already typed,
+    # and re-running validation here would make this helper's behaviour depend on the
+    # constraints of fields the caller did not name.
+    updated = group_settings.model_copy(update=overrides)
+    monkeypatch.setattr(config_module, "_settings", replace(current, **{group: updated}))
+    return updated
 
 
 def inject_limits(monkeypatch: pytest.MonkeyPatch, **overrides: Any) -> LimitSettings:
@@ -51,17 +69,13 @@ def inject_limits(monkeypatch: pytest.MonkeyPatch, **overrides: Any) -> LimitSet
         The injected ``LimitSettings``, for a caller that wants to read a shipped default
         off it without a second import.
     """
-    import src.core.config as config_module
-    from src.core.config import LimitSettings, get_settings
+    return _inject(monkeypatch, "limits", overrides)
 
-    unknown = set(overrides) - set(LimitSettings.model_fields)
-    if unknown:
-        raise AttributeError(f"not LimitSettings fields: {sorted(unknown)}")
 
-    current = get_settings()
-    # ``model_copy`` rather than a re-validated construction: the value is already typed,
-    # and re-running validation here would make this helper's behaviour depend on the
-    # constraints of fields the caller did not name.
-    limits = current.limits.model_copy(update=overrides)
-    monkeypatch.setattr(config_module, "_settings", replace(current, limits=limits))
-    return limits
+def inject_runtime(monkeypatch: pytest.MonkeyPatch, **overrides: Any) -> RuntimeSettings:
+    """Put ``overrides`` on the cached settings' :class:`RuntimeSettings` and return it.
+
+    Same contract as :func:`inject_limits`: typed values, unknown names refused,
+    accumulating, restored at teardown -- e.g. ``sales_agent_domain="agent.example.com"``.
+    """
+    return _inject(monkeypatch, "runtime", overrides)

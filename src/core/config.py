@@ -63,6 +63,9 @@ class RuntimeSettings(BaseSettings):
     sales_agent_domain: str | None = None
     admin_domain: str | None = None
     super_admin_domain: str | None = None
+    # Mounts GET /tls/ask, the on-demand TLS gate a proxy such as Caddy asks before issuing a
+    # certificate. Off by default: it tells any caller whether a host is served here.
+    tls_ask_enabled: bool = False
     support_email: str = "support@example.com"
     adcp_agent_url: str | None = None
     adcp_multi_tenant: bool = False
