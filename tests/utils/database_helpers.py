@@ -7,9 +7,12 @@ timestamp handling and field validation to prevent common test issues.
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import delete
+
+if TYPE_CHECKING:
+    from src.core.resolved_identity import AccountIdentity
 
 from src.core.database.models import (
     CurrencyLimit,
@@ -432,6 +435,34 @@ def add_targeting_test_product(
             is_fixed=True,
         )
         return product
+
+
+def account_identity_for_tenant(
+    tenant_id: str,
+    principal_id: str,
+    *,
+    account_id: str = "acct_test",
+    account_name: str = "Test Account",
+) -> "AccountIdentity":
+    """The ``AccountIdentity`` an integration test hands an account-taking ``_impl``.
+
+    Derived from the committed tenant ROW (``TenantContext.load``), never fabricated: an
+    integration test has real rows for everything else, so a fabricated tenant here would
+    disagree with them. See ``tests/helpers/unit_identity.py``'s ``fabricated_account_identity``
+    for the mocked-DB counterpart, where fabrication is legitimate because there are no rows
+    to disagree with.
+    """
+    from src.core.schemas.account import Account
+    from src.core.tenant_context import TenantContext
+    from tests.factories import PrincipalFactory
+
+    tenant = TenantContext.load(tenant_id)
+    assert tenant is not None, f"no committed tenant row for {tenant_id!r} — seed it before calling this"
+    identity: AccountIdentity = PrincipalFactory.make_account_identity(
+        PrincipalFactory.make_identity(principal_id=principal_id, tenant_id=tenant_id, tenant=tenant),
+        Account(account_id=account_id, name=account_name, status="active"),
+    )
+    return identity
 
 
 def seed_media_buy_with_package(

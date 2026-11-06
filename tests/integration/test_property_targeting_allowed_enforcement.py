@@ -23,13 +23,12 @@ from src.core.schemas import (
     CreateMediaBuyRequest,
     UpdateMediaBuyRequest,
 )
-from src.core.schemas.account import Account
-from src.core.tenant_context import TenantContext
 from src.core.tools.media_buy_create import _create_media_buy_impl
 from src.core.tools.media_buy_update import _update_media_buy_impl
-from tests.factories import AccountFactory, PrincipalFactory
+from tests.factories import AccountFactory
 from tests.helpers.adcp_factories import create_test_package_request
 from tests.utils.database_helpers import (
+    account_identity_for_tenant,
     add_targeting_test_product,
     bind_factories_to_session,
     future_iso_date_range,
@@ -51,12 +50,7 @@ def _make_identity() -> AccountIdentity:
     and read ``identity.account.account_id`` directly. The tenant is the committed
     ROW, which is what the resolver would have loaded.
     """
-    tenant = TenantContext.load(TENANT_ID)
-    assert tenant is not None, "the property_targeting_tenant fixture must have committed the tenant row"
-    return PrincipalFactory.make_account_identity(
-        PrincipalFactory.make_identity(principal_id="test_adv", tenant_id=TENANT_ID, tenant=tenant),
-        Account(account_id=ACCOUNT_ID, name="Test Account", status="active"),
-    )
+    return account_identity_for_tenant(TENANT_ID, "test_adv", account_id=ACCOUNT_ID)
 
 
 @pytest.fixture
