@@ -1,6 +1,8 @@
 """Policy management blueprint."""
 
+import json
 import logging
+from typing import Any
 
 from flask import Blueprint, jsonify, redirect, render_template, request, session, url_for
 from sqlalchemy import select
@@ -15,6 +17,47 @@ logger = logging.getLogger(__name__)
 
 # Create blueprint
 policy_bp = Blueprint("policy", __name__)
+
+
+DEFAULT_PROHIBITED_CATEGORIES = [
+    "illegal_content",
+    "hate_speech",
+    "violence",
+    "adult_content",
+    "misleading_health_claims",
+    "financial_scams",
+]
+DEFAULT_PROHIBITED_TACTICS = [
+    "targeting_children_under_13",
+    "discriminatory_targeting",
+    "deceptive_claims",
+    "impersonation",
+    "privacy_violations",
+]
+
+
+def _default_policies() -> dict[str, Any]:
+    """Baseline policy every publisher starts with (same shape as ``tenant.advertising_policy``)."""
+    return {
+        "enabled": True,
+        "require_manual_review": False,
+        "default_prohibited_categories": list(DEFAULT_PROHIBITED_CATEGORIES),
+        "default_prohibited_tactics": list(DEFAULT_PROHIBITED_TACTICS),
+        "prohibited_advertisers": [],
+        "prohibited_categories": [],
+        "prohibited_tactics": [],
+    }
+
+
+def _current_advertising_policy(tenant: Tenant) -> dict[str, Any]:
+    """``tenant.advertising_policy`` as a dict (the column is JSON; legacy rows may hold a string)."""
+    value = tenant.advertising_policy
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            value = None
+    return dict(value) if isinstance(value, dict) else {}
 
 
 @policy_bp.route("/", methods=["GET"])
@@ -41,34 +84,12 @@ def index(tenant_id):
         if not config:
             return "Tenant config not found", 404
 
-        # Define default policies that all publishers start with
-        default_policies = {
-            "enabled": True,
-            "require_manual_review": False,
-            "default_prohibited_categories": [
-                "illegal_content",
-                "hate_speech",
-                "violence",
-                "adult_content",
-                "misleading_health_claims",
-                "financial_scams",
-            ],
-            "default_prohibited_tactics": [
-                "targeting_children_under_13",
-                "discriminatory_targeting",
-                "deceptive_claims",
-                "impersonation",
-                "privacy_violations",
-            ],
-            "prohibited_advertisers": [],
-            "prohibited_categories": [],
-            "prohibited_tactics": [],
-        }
-
-        # Get tenant policy settings, using defaults where not specified
-        tenant_policies = config.get("policy_settings", {})
-        policy_settings = default_policies.copy()
-        policy_settings.update(tenant_policies)
+        # The page edits ``tenant.advertising_policy`` — the column ``get_products``
+        # enforces and ``list_authorized_properties`` publishes to buyers. It used to
+        # read/write ``policy_settings``, whose validator (PolicySettingsModel) has
+        # none of these keys and silently dropped every list on save.
+        policy_settings = _default_policies()
+        policy_settings.update(_current_advertising_policy(tenant))
 
         # Get recent policy checks from audit log
         stmt = (
@@ -149,56 +170,39 @@ def update(tenant_id):
         return "Access denied", 403
 
     try:
-        # Get current config
-        config = get_tenant_config_from_db(tenant_id)
-        if not config:
-            return jsonify({"error": "Tenant not found"}), 404
-
         # Parse the form data for lists
         def parse_textarea_lines(field_name):
             """Parse textarea input into list of non-empty lines."""
             text = request.form.get(field_name, "")
             return [line.strip() for line in text.strip().split("\n") if line.strip()]
 
-        # Update policy settings
-        policy_settings = {
-            "enabled": request.form.get("enabled") == "on",
-            "require_manual_review": request.form.get("require_manual_review") == "on",
-            "prohibited_advertisers": parse_textarea_lines("prohibited_advertisers"),
-            "prohibited_categories": parse_textarea_lines("prohibited_categories"),
-            "prohibited_tactics": parse_textarea_lines("prohibited_tactics"),
-            # Keep default policies (they don't change from form)
-            "default_prohibited_categories": config.get("policy_settings", {}).get(
-                "default_prohibited_categories",
-                [
-                    "illegal_content",
-                    "hate_speech",
-                    "violence",
-                    "adult_content",
-                    "misleading_health_claims",
-                    "financial_scams",
-                ],
-            ),
-            "default_prohibited_tactics": config.get("policy_settings", {}).get(
-                "default_prohibited_tactics",
-                [
-                    "targeting_children_under_13",
-                    "discriminatory_targeting",
-                    "deceptive_claims",
-                    "impersonation",
-                    "privacy_violations",
-                ],
-            ),
-        }
-
-        config["policy_settings"] = policy_settings
-
-        # Update database
         with get_db_session() as db_session:
             tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-            if tenant:
-                tenant.policy_settings = policy_settings
-                db_session.commit()
+            if not tenant:
+                return jsonify({"error": "Tenant not found"}), 404
+
+            # Merge over the stored policy so keys this form does not carry
+            # (``description``, baseline lists edited on the Settings page) survive.
+            advertising_policy = _current_advertising_policy(tenant)
+            defaults = _default_policies()
+            advertising_policy.update(
+                {
+                    "enabled": request.form.get("enabled") == "on",
+                    "require_manual_review": request.form.get("require_manual_review") == "on",
+                    "prohibited_advertisers": parse_textarea_lines("prohibited_advertisers"),
+                    "prohibited_categories": parse_textarea_lines("prohibited_categories"),
+                    "prohibited_tactics": parse_textarea_lines("prohibited_tactics"),
+                    # Baseline lists are read-only here; keep whatever is stored.
+                    "default_prohibited_categories": advertising_policy.get(
+                        "default_prohibited_categories", defaults["default_prohibited_categories"]
+                    ),
+                    "default_prohibited_tactics": advertising_policy.get(
+                        "default_prohibited_tactics", defaults["default_prohibited_tactics"]
+                    ),
+                }
+            )
+            tenant.advertising_policy = advertising_policy
+            db_session.commit()
 
         return redirect(url_for("policy.index", tenant_id=tenant_id))
 

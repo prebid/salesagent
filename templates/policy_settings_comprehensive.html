@@ -66,7 +66,7 @@
                     </ol>
                 </nav>
             </div>
-            <div class="view-only">
+            <div class="view-only" id="policy-edit-toggle">
                 <button type="button" class="btn btn-primary" onclick="enterEditMode()">
                     <i class="fas fa-edit"></i> Edit Settings
                 </button>
@@ -76,6 +76,13 @@
 
     <div id="policy-container" class="view-mode">
         <form action="{{ request.script_root }}/tenant/{{ tenant_id }}/policy/update" method="POST" id="policy-form">
+        <div class="row mt-3 edit-only">
+            <div class="col-md-12">
+                <button type="submit" class="btn btn-primary">Save All Policy Settings</button>
+                <button type="button" class="btn btn-secondary" onclick="exitEditMode()">Cancel</button>
+                <small class="text-muted ml-2">Editing — changes are not saved until you click Save.</small>
+            </div>
+        </div>
         <div class="row mt-4">
             <!-- General Settings -->
             <div class="col-md-4">
@@ -152,7 +159,7 @@
                                 <small class="text-muted">These are enforced by default:</small>
                                 <ul class="mb-0 small">
                                 {% for category in policy_settings.default_prohibited_categories %}
-                                    <li>{{ category.replace('_', ' ').title() }}</li>
+                                    <li>{{ category if ' ' in category else category.replace('_', ' ').title() }}</li>
                                 {% endfor %}
                                 </ul>
                             </div>
@@ -198,7 +205,7 @@
                                 <small class="text-muted">These are enforced by default:</small>
                                 <ul class="mb-0 small">
                                 {% for tactic in policy_settings.default_prohibited_tactics %}
-                                    <li>{{ tactic.replace('_', ' ').title() }}</li>
+                                    <li>{{ tactic if ' ' in tactic else tactic.replace('_', ' ').title() }}</li>
                                 {% endfor %}
                                 </ul>
                             </div>
@@ -347,6 +354,7 @@ function enterEditMode() {
     const container = document.getElementById('policy-container');
     container.classList.remove('view-mode');
     container.classList.add('edit-mode');
+    document.getElementById('policy-edit-toggle').style.display = 'none';
 
     // Focus on first input
     setTimeout(() => {
@@ -361,6 +369,7 @@ function exitEditMode() {
 
     // Reset form to original values (reload page to get fresh data)
     if (confirm('Discard any unsaved changes?')) {
+        document.getElementById('policy-edit-toggle').style.display = '';
         window.location.reload();
     } else {
         // Stay in edit mode if user cancels
@@ -376,10 +385,12 @@ document.addEventListener('DOMContentLoaded', function() {
     let formChanged = false;
     let isSubmitting = false;
 
+    // 'input' fires while typing; 'change' only on blur — a reload with the cursor
+    // still in a textarea used to lose everything without the warning below.
     formElements.forEach(element => {
-        element.addEventListener('change', function() {
+        ['input', 'change'].forEach(evt => element.addEventListener(evt, function() {
             formChanged = true;
-        });
+        }));
     });
 
     // Mark form as submitting when save button is clicked
