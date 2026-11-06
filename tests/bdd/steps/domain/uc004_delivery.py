@@ -2836,16 +2836,6 @@ def then_has_deliveries_field(ctx: dict) -> None:
         )
 
 
-@then('the response should not contain "errors" field')
-def then_no_errors_field(ctx: dict) -> None:
-    """Assert response errors list is empty and no exception was raised."""
-    assert "error" not in ctx, f"Unexpected error: {ctx.get('error')}"
-    resp = payload_or_none(ctx)
-    if resp is not None:
-        errors = getattr(resp, "errors", None) or []
-        assert not errors, f"Unexpected errors in response: {errors}"
-
-
 @then('the response should contain "errors" field')
 def then_has_errors_field(ctx: dict) -> None:
     """Assert an error was produced (either response-level or exception).

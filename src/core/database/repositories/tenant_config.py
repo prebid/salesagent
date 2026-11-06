@@ -12,22 +12,39 @@ is set at construction time and injected into all queries automatically.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any, Literal
 from typing import cast as type_cast
 
+from sqlalchemy import ColumnElement, literal, select, update
 from sqlalchemy import inspect as sa_inspect
-from sqlalchemy import literal, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 
 from src.core.database.jsonb_append import jsonb_list
 from src.core.database.models import AdapterConfig, PublisherPartner, Tenant
+from src.core.database.repositories.tenant_counts import count_by_tenant
 
 AuthorizedListColumn = Literal["authorized_domains", "authorized_emails"]
 AddOutcome = Literal["added", "duplicate", "missing_tenant"]
 RemoveOutcome = Literal["removed", "absent", "missing_tenant"]
+
+
+def _partner_verified(verified: bool) -> ColumnElement[bool]:
+    """The one spelling of "this publisher partner's adagents.json check did (or did not) succeed"."""
+    return PublisherPartner.is_verified == verified
+
+
+def count_verified_publisher_partners_by_tenant(session: Session, tenant_ids: Iterable[str]) -> dict[str, int]:
+    """How many verified publisher partners each of *tenant_ids* holds, keyed by tenant_id.
+
+    Cross-tenant by design (``tenant_counts.count_by_tenant``): the bulk setup checklist
+    grades many tenants in one grouped query. A tenant with none is absent from the result.
+    The predicate is the one ``TenantConfigRepository.list_publisher_partners`` uses.
+    """
+    return count_by_tenant(session, PublisherPartner.tenant_id, tenant_ids, _partner_verified(True))
 
 
 class TenantConfigRepository:
@@ -97,15 +114,12 @@ class TenantConfigRepository:
         tenant.updated_at = datetime.now(UTC)
         return True
 
-    def list_publisher_partners(self) -> list[PublisherPartner]:
-        """Get all publisher partners for the tenant."""
+    def list_publisher_partners(self, *, verified: bool | None = None) -> list[PublisherPartner]:
+        """The tenant's publisher partners; with *verified*, only those whose adagents.json check did (or did not) succeed."""
         stmt = select(PublisherPartner).filter_by(tenant_id=self._tenant_id)
+        if verified is not None:
+            stmt = stmt.where(_partner_verified(verified))
         return list(self._session.scalars(stmt).all())
-
-    def list_publisher_domains(self) -> list[str]:
-        """Get sorted list of publisher domain strings for the tenant."""
-        partners = self.list_publisher_partners()
-        return sorted([p.publisher_domain for p in partners])
 
     # ------------------------------------------------------------------
     # Authorized-list mutation (atomic)

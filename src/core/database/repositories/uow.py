@@ -437,42 +437,20 @@ class SigningKeyUoW(BaseUoW):
     _REPOSITORIES: ClassVar[Mapping[str, type]] = {"signing_keys": SigningKeyRepository}
 
 
-class CapabilitiesUoW(BaseUoW):
-    """Unit of Work for one ``get_adcp_capabilities`` request (#1291 D1).
-
-    ONE session for everything the capabilities response reads from the database: the
-    tenant's publisher partners, its signing keys, and the ``tenants`` row itself —
-    whose stored host IS the agent identity the ``identity`` block points at.
-
-    One session because the ORM ``Tenant`` must stay attached while the identity URLs
-    are derived from it: no session in this codebase sets ``expire_on_commit=False``, so
-    handing the row out to the response-construction site would raise
-    ``DetachedInstanceError`` on the first attribute read.
-
-    Deliberately NOT :class:`TrustRootUoW`, which carries the same two repositories plus
-    ``authorized_properties``: its name asserts a different purpose, and its third
-    repository is dead weight on a per-request read path.
-
-    Added for #1291 D1 (the declarable signing family).
-    """
-
-    tenant_config: TenantConfigRepository | None
-    signing_keys: SigningKeyRepository | None
-
-    _REPOSITORIES: ClassVar[Mapping[str, type]] = {
-        "tenant_config": TenantConfigRepository,
-        "signing_keys": SigningKeyRepository,
-    }
-
-
 class TrustRootUoW(BaseUoW):
-    """Unit of Work for the trust-root documents this agent publishes (#1291 A3).
+    """Unit of Work for what this agent publishes about itself (#1291 A3, D1).
 
-    One session for all three reads a trust-root request performs — the tenant
-    (whose stored host IS the agent identity), the publishable key set, and the
-    authorized-property records that back an adagents claim. One session because
-    the JWKS and the adagents pin must describe the same key set: two sessions
-    could observe a rotation from either side of it.
+    One session over the tenant (whose stored host IS the agent identity), its
+    publishable key set, and its authorized properties. Two readers open it, and each
+    needs all three in one session:
+
+    * the trust-root documents: the JWKS and the adagents pin must describe the same
+      key set, and two sessions could observe a rotation from either side of it;
+    * ``get_adcp_capabilities``: the portfolio's verified publishers, the signing
+      posture, and the identity block derived from the ORM ``Tenant``, which must stay
+      attached while it is read. No session in this codebase sets
+      ``expire_on_commit=False``, so a row handed out of the block raises
+      ``DetachedInstanceError`` on its first attribute read.
 
     Args:
         tenant_id: Tenant scope for all repository queries.

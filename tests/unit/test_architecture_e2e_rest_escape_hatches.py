@@ -559,11 +559,8 @@ EXPECTED_UNSUPPORTED_DECLARATIONS: frozenset[tuple[str, str, str]] = frozenset(
         # and the alternative for the creative one was a nodeid entry in
         # e2e_rest_known_failures.txt, which is the registry this mechanism exists to
         # replace. Both grade fully on the three in-process transports.
-        (
-            "tests/harness/capabilities.py",
-            "make_adapter_channel_enumeration_fail",
-            "the fault is 'iterating the adapter's default_channels raises', which is a property of the in-process adapter object. Unlike 'unavailable' -- which get_adapter_class_for_tenant honours from AdapterConfig.test_behavior -- production has no read that could make channel ENUMERATION fail on a real adapter, and adding one would put a fault-injection branch in production for a test's benefit. The non-cascade it grades is transport-independent (one function's control flow in capabilities.py), so the in-process transports grade it fully",
-        ),
+        # make_adapter_channel_enumeration_fail removed — the portfolio channels are read
+        # from the product catalog, and its e2e realization fails that read in the database.
         (
             "tests/harness/creative_sync.py",
             "configure_agent_served_creative",
@@ -719,11 +716,8 @@ EXPECTED_UNSUPPORTED_DECLARATIONS: frozenset[tuple[str, str, str]] = frozenset(
             "live stack always serves the agent catalog; an empty catalog cannot be realized over e2e",
         ),
         ("tests/harness/creative_formats.py", "_validate_registry_formats", "<dynamic>"),
-        (
-            "tests/harness/capabilities.py",
-            "break_tenant_config_db",
-            "no production DB fault hook; TenantConfigUoW read failure cannot be injected over real HTTP",
-        ),
+        # break_tenant_config_db removed — its e2e realization fails the live server's
+        # capabilities read in the database (_fail_table_for_scenario), with no production hook.
         (
             "tests/harness/capabilities.py",
             "set_supported_versions",

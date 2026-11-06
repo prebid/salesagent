@@ -30,7 +30,6 @@ from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.core.database.repositories.tenant_lookup import TenantLookupRepository
 from src.core.database.repositories.uow import (
     AccountUoW,
-    CapabilitiesUoW,
     MediaBuyUoW,
     ProductUoW,
     PushNotificationConfigUoW,
@@ -47,7 +46,6 @@ __all__ = [
     "AuthorizedPropertyRepository",
     "AdapterConfigRepository",
     "TenantNotConfiguredError",
-    "CapabilitiesUoW",
     "CurrencyLimitRepository",
     "DeliverySimulationConfigRepository",
     "IdempotencyAttemptRepository",
