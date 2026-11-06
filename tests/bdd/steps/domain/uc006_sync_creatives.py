@@ -1365,6 +1365,72 @@ _SCOPE_SETUPS: dict[str, dict[str, Any]] = {
 }
 
 
+@given("a sync request that replaces the whole library")
+def given_sync_request_replaces_library(ctx: dict) -> None:
+    """One request creative and ``delete_missing``: every library creative the request does not name is archived."""
+    given_creative_with_format(ctx)
+    ctx["delete_missing"] = True
+
+
+@given(
+    parsers.re(
+        r'the library creative "(?P<creative_id>[^"]+)", absent from the request, is assigned to a package '
+        r'of a buy in status "(?P<status>[^"]+)" whose package is (?P<paused>paused|not paused)$'
+    )
+)
+def given_library_creative_on_buy(ctx: dict, creative_id: str, status: str, paused: str) -> None:
+    """A library creative the request does not name, assigned to a package whose buy is in *status*.
+
+    The buy's flight began in 2025 and runs to 2099, so a buy in a serving status is delivering.
+    """
+    from datetime import UTC, date, datetime
+
+    from tests.factories import CreativeAssignmentFactory, MediaBuyFactory, MediaPackageFactory, ProductFactory
+
+    env = ctx["env"]
+    ensure_tenant_principal(ctx, env)
+    fmt = ctx["creatives"][-1]["format_id"]
+    product = ProductFactory(tenant=ctx["tenant"], **({"product_id": _e2e_unique_id("prod")} if is_e2e(ctx) else {}))
+    media_buy = MediaBuyFactory(
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        status=status,
+        start_date=date(2025, 1, 1),
+        end_date=date(2099, 12, 31),
+        start_time=datetime(2025, 1, 1, tzinfo=UTC),
+        end_time=datetime(2099, 12, 31, 23, 59, 59, tzinfo=UTC),
+        **({"media_buy_id": _e2e_unique_id("mb")} if is_e2e(ctx) else {}),
+    )
+    package = MediaPackageFactory(
+        media_buy=media_buy,
+        package_config={"product_id": product.product_id, "budget": 1000.0, "paused": paused == "paused"},
+        **({"package_id": _e2e_unique_id("pkg")} if is_e2e(ctx) else {}),
+    )
+    creative = CreativeFactory(
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        creative_id=creative_id,
+        name="Assigned Library Creative",
+        status="approved",
+        **seeded_format_columns(env, fmt),
+    )
+    CreativeAssignmentFactory(creative=creative, media_buy=media_buy, package_id=package.package_id)
+    env._commit_factory_data()
+    ctx["absent_creative_id"] = creative_id
+
+
+@then(parsers.parse('the library creative "{creative_id}" is {state}'))
+def then_library_creative_state(ctx: dict, creative_id: str, state: str) -> None:
+    """The stored creative is ``archived``, or kept in any other status ("not archived")."""
+    from src.core.database.models import Creative
+
+    env = ctx["env"]
+    env.get_session().expire_all()  # the row this test seeded is re-read, not served from the session
+    (row,) = env.query(Creative, creative_id=creative_id, tenant_id=ctx["tenant"].tenant_id)
+    archived = row.status == "archived"
+    assert archived == (state == "archived"), f"expected the creative to be {state}; its status is {row.status!r}"
+
+
 @given(parsers.parse("a sync request whose scope is {scope_setup}"))
 def given_sync_request_scope(ctx: dict, scope_setup: str) -> None:
     _scope_request(ctx, **_SCOPE_SETUPS[scope_setup])

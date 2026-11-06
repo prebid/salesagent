@@ -6626,6 +6626,9 @@ _UC006_WIRED_SCENARIOS = frozenset(
         "T-UC-006-local-assignment-only-existing-creative",
         "T-UC-006-local-failed-creative-assignment",
         "T-UC-006-local-dryrun-parity",
+        # delete_missing and active delivery: plain syncs CreativeSyncEnv serves on every transport.
+        "T-UC-006-local-delete-missing-active-delivery",
+        "T-UC-006-local-delete-missing-not-delivering",
         # The format/validation error paths, corrected to the pinned enum (INVALID_REQUEST
         # for schema violations at the request, REFERENCE_NOT_FOUND / VALIDATION_ERROR on
         # the creative's entry, SERVICE_UNAVAILABLE for an agent that does not answer) and

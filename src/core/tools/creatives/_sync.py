@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.errors.details import CapabilityRefusalDetails, ValidationDetails
-from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPSalesAgentError, adcp_error_for
+from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPGoneError, AdCPSalesAgentError, adcp_error_for
 from src.core.format_resolver import seller_format_catalogue
 from src.core.helpers import enum_value, log_tool_activity
 from src.core.resolved_identity import AccountIdentity, ResolvedIdentity
@@ -24,7 +24,13 @@ from src.core.webhook_validator import webhook_url_for_log
 from src.core.webhooks.registration import accept_push_notification_config
 
 from ._assignments import _process_assignments
-from ._processing import _create_new_creative, _failed_sync_result, _update_existing_creative, incoming_identity_of
+from ._processing import (
+    _create_new_creative,
+    _failed_sync_result,
+    _refuse_change_in_active_delivery,
+    _update_existing_creative,
+    incoming_identity_of,
+)
 from ._validation import (
     _get_field,
     _validate_creative_input,
@@ -485,6 +491,15 @@ def sync_creatives(
 
             for db_creative in existing_creatives:
                 if db_creative.creative_id not in payload_creative_ids and db_creative.status != "archived":
+                    # sync_creatives.mdx (v3.2.7), best practice 6: creatives assigned to active,
+                    # non-paused packages "cannot be updated or deleted via delete_missing", and
+                    # the error table answers INVALID_STATE. Refused per creative, unarchived.
+                    try:
+                        _refuse_change_in_active_delivery(uow.media_buys, db_creative.creative_id, principal_id)
+                    except AdCPGoneError as refusal:
+                        failed_count += 1
+                        results.append(_failed_sync_result(db_creative.creative_id, refusal))
+                        continue
                     db_creative.status = "archived"
                     deleted_count += 1
                     results.append(
