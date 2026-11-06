@@ -365,6 +365,7 @@ def _failed_sync_result(creative_id: str, source: AdCPSalesAgentError) -> SyncCr
         # place that renders a details CLASS to its wire dict, so a typed detail shape
         # reached Error(details=...) as a model and failed validation.
         errors=[AdCPErrorDetail.from_exception(source)],
+        cause=source,
         assigned_to=None,
         assignment_errors=None,
     )

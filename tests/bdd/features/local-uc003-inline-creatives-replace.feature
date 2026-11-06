@@ -74,7 +74,7 @@ Feature: UC-003 update_media_buy — inline creatives replace the package's inli
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy error spec
     And the operation should fail
-    And the error code should be "INVALID_STATE"
+    And the refusal is INVALID_STATE for creative "cr_inline_before" on package "pkg_001" of media buy "mb_existing" in status "active"
 
   @T-UC-003-local-inline-creatives-keep-library @creatives-inline @post-s1 @post-s2
   Scenario: inline creatives on a package update leave the package's library creatives assigned

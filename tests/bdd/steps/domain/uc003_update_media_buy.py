@@ -1628,6 +1628,27 @@ def given_package_update_inline_creative_showing(ctx: dict, creative_id: str, me
     kwargs["packages"][0]["creatives"] = [_inline_creative_payload(creative_id, "Inline Creative", media_url)]
 
 
+@then(
+    parsers.parse(
+        'the refusal is INVALID_STATE for creative "{creative_id}" on package "{package}" '
+        'of media buy "{label}" in status "{status}"'
+    )
+)
+def then_refusal_names_the_delivering_package(
+    ctx: dict, creative_id: str, package: str, label: str, status: str
+) -> None:
+    """The wire error is INVALID_STATE, and its details name the creative, the buy, the package and its status."""
+    ctx["result"].assert_wire_error(
+        "INVALID_STATE",
+        details={
+            "creative_id": creative_id,
+            "media_buy_id": _resolve_media_buy_id(ctx, label),
+            "package_id": _resolve_package_id(ctx, package),
+            "current_status": status,
+        },
+    )
+
+
 @given(parsers.parse('an earlier update gave package "{package_id}" the targeting_overlay {overlay}'))
 def given_earlier_targeting_overlay(ctx: dict, package_id: str, overlay: str) -> None:
     """The package's stored overlay before the graded update, put there by an update.
