@@ -143,6 +143,12 @@ Feature: A product names the publishers whose inventory it sells
     When the buyer requests products
     Then product "stored_whole" announces publisher_properties [{"publisher_domain": "news.example", "selection_type": "all"}]
 
+  @T-UC-GET-PRODUCTS-publisher-all-inventory-by-id @publisher_domain_resolution @requires_db
+  Scenario: a stored by_id selector carrying a stray all_inventory tag stays by_id
+    Given the seller offers product "stray_tag" naming publisher_properties [{"publisher_domain": "news.example", "property_ids": ["news_home"], "property_tags": ["all_inventory"], "selection_type": "by_id"}]
+    When the buyer requests products
+    Then product "stray_tag" announces publisher_properties [{"publisher_domain": "news.example", "property_ids": ["news_home"], "selection_type": "by_id"}]
+
   @T-UC-GET-PRODUCTS-publisher-canonical-domain @publisher_domain_resolution @requires_db
   Scenario: a verified publisher stored in another spelling is named by its host
     Given the seller is authorized for property "mixed_case_home" of publisher "Mixed.Example.com" tagged "cased"

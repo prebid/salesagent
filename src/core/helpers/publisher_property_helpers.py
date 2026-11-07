@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -81,7 +81,8 @@ def ensure_selection_type(properties: list[dict]) -> list[dict] | None:
 #: ``docs/deployment/vm.md`` declares it there, and another need not. AdCP 3.1.1
 #: ``core/publisher-property-selector.json`` "Selects properties from a publisher's
 #: adagents.json", so ``by_tag`` would name nothing at a publisher that does not declare it.
-#: Selecting it therefore selects each publisher whole, on every path. ``all`` claims "all
+#: A tag selection holding it therefore selects each publisher whole, a form's choice and a
+#: stored ``by_tag`` selector alike (:func:`publisher_tag_selector`). ``all`` claims "all
 #: properties from each addressed publisher": under ``property_tags`` or ``property_ids``
 #: authorization that includes properties outside the authorized scope, and the spec does not
 #: say how a buyer treats them.
@@ -156,30 +157,36 @@ def by_id_selectors(properties: Iterable[SelectableProperty]) -> list[dict]:
     ]
 
 
-def by_tag_selectors_per_publisher(tags_by_publisher: dict[str, list[str]]) -> list[dict]:
-    """One ``by_tag`` selector per publisher domain, holding the tags chosen for it."""
-    return [
-        {"publisher_domain": domain, "property_tags": tags, "selection_type": "by_tag"}
-        for domain, tags in tags_by_publisher.items()
-    ]
+def carried_tags(properties: Iterable[SelectableProperty]) -> set[str]:
+    """The tags *properties* carry, and :data:`ALL_INVENTORY_TAG`, the seller's own, whenever any property is."""
+    props = list(properties)
+    return set().union(*(p.tags or () for p in props), {ALL_INVENTORY_TAG} if props else ())
+
+
+def publisher_tag_selector(domain: str, tags: Sequence[str]) -> dict:
+    """The selector naming *tags* of publisher *domain*: ``by_tag``, or ``all`` when *tags* hold :data:`ALL_INVENTORY_TAG`.
+
+    The one place the seller's default tag becomes ``all``, for a form's tag choice and a
+    stored ``by_tag`` selector alike.
+    """
+    if ALL_INVENTORY_TAG in tags:
+        return {"publisher_domain": domain, "selection_type": "all"}
+    return {"publisher_domain": domain, "property_tags": list(tags), "selection_type": "by_tag"}
 
 
 def by_tag_selectors(tags: Sequence[str], properties: Iterable[SelectableProperty]) -> list[dict]:
-    """One selector per publisher whose properties carry any of *tags*.
+    """One selector per publisher whose properties carry any of *tags* (:func:`publisher_tag_selector`).
 
-    Each ``by_tag`` selector lists the requested tags that publisher's properties carry, in
-    the order requested. A publisher carrying none of them is not named. ``all_inventory``
-    selects every publisher whole (:data:`ALL_INVENTORY_TAG`).
+    Each lists the requested tags that publisher's properties carry, in the order requested.
+    A publisher carrying none of them is not named.
     """
-    if ALL_INVENTORY_TAG in tags:
-        return all_selectors(properties)
-    tags_by_publisher = {}
+    selectors = []
     for domain, props in _by_publisher(properties).items():
-        carried = set().union(*(p.tags or () for p in props))
+        carried = carried_tags(props)
         matched = [tag for tag in tags if tag in carried]
         if matched:
-            tags_by_publisher[domain] = matched
-    return by_tag_selectors_per_publisher(tags_by_publisher)
+            selectors.append(publisher_tag_selector(domain, matched))
+    return selectors
 
 
 def legacy_selectors(
@@ -216,8 +223,8 @@ def authorized_selectors(selectors: list[dict] | None, properties: Iterable[Sele
     dropped -- a row the old profile form stored with the seller's own host, or a publisher
     or property never verified, is not offered (#1845).
 
-    A kept selector names its publisher canonically, as *properties* do, and one selecting
-    :data:`ALL_INVENTORY_TAG` selects the publisher whole, as :func:`by_tag_selectors` does.
+    A kept selector names its publisher canonically, as *properties* do, and a ``by_tag`` one
+    is built by :func:`publisher_tag_selector`, as a form's tag choice is.
     """
     verified = _by_publisher(properties)
     kept = []
@@ -225,27 +232,19 @@ def authorized_selectors(selectors: list[dict] | None, properties: Iterable[Sele
         domain = canonical_publisher_domain(str(selector.get("publisher_domain") or ""))
         if domain not in verified:
             continue
-        if ALL_INVENTORY_TAG in (selector.get("property_tags") or ()):
-            kept.append({"publisher_domain": domain, "selection_type": "all"})
-            continue
-        narrowed = {**selector, "publisher_domain": domain}
-        rule = _NARROWED_FIELD.get(selector["selection_type"])
-        if rule is not None:
-            field, offered_by = rule
-            offered = offered_by(verified[domain])
-            narrowed[field] = [value for value in selector.get(field) or () if value in offered]
-            if not narrowed[field]:
-                continue
-        kept.append(narrowed)
+        if selector["selection_type"] == "by_tag":
+            carried = carried_tags(verified[domain])
+            tags = [tag for tag in selector.get("property_tags") or () if tag in carried]
+            if tags:
+                kept.append(publisher_tag_selector(domain, tags))
+        elif selector["selection_type"] == "by_id":
+            ids = {p.property_id for p in verified[domain]}
+            property_ids = [i for i in selector.get("property_ids") or () if i in ids]
+            if property_ids:
+                kept.append({**selector, "publisher_domain": domain, "property_ids": property_ids})
+        else:
+            kept.append({**selector, "publisher_domain": domain})
     return kept
-
-
-#: Per selection type, the field a stored selector lists and what a publisher's verified
-#: properties offer of it (:func:`authorized_selectors`). ``all`` lists nothing.
-_NARROWED_FIELD: dict[str, tuple[str, Callable[[list[SelectableProperty]], set[str]]]] = {
-    "by_id": ("property_ids", lambda props: {p.property_id for p in props}),
-    "by_tag": ("property_tags", lambda props: {tag for p in props for tag in p.tags or ()}),
-}
 
 
 @dataclass(frozen=True)
@@ -327,7 +326,7 @@ def tag_selection(tags: Sequence[str], authorized: Sequence[SelectableProperty])
     refusal = next(filter(None, map(refuse_property_tag, tags)), None)
     if refusal:
         return [], refusal
-    carried = set().union(*(p.tags or () for p in authorized), {ALL_INVENTORY_TAG} if authorized else ())
+    carried = carried_tags(authorized)
     missing = [tag for tag in tags if tag not in carried]
     if missing:
         return [], f"No verified authorized property carries the tags: {', '.join(missing)}"
