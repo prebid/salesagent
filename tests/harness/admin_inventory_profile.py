@@ -20,6 +20,7 @@ cleanup registry closes it, so the env adds no ``__enter__``
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from bs4 import BeautifulSoup
@@ -32,22 +33,92 @@ from tests.harness.product import ProductEnv
 _PROFILE_FORMATS = json.dumps([{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"}])
 
 
-def rendered_selection(page: AdminResponse) -> dict[str, Any]:
-    """The property selection *page* submits when saved as it rendered: what a browser posts."""
+#: Input types a form submits only as its submitter, or not as text at all.
+_UNSUBMITTED_INPUT_TYPES = frozenset({"submit", "button", "reset", "image", "file"})
+
+
+def rendered_form(page: AdminResponse) -> dict[str, list[str]]:
+    """Every field *page*'s POST form submits when saved as it rendered, as a browser builds it.
+
+    The HTML form data set: each enabled, named ``input``, ``select`` and ``textarea``; a
+    checkbox or radio only when checked; a select's selected options, or its first option when
+    a single select marks none. Fields hidden by CSS are submitted, disabled ones are not. The
+    fields the page's own script lays out from data it embeds are added by
+    :func:`_script_built_fields`, since neither admin transport runs JavaScript.
+    """
     assert page.status_code == 200, f"the form answered {page.status_code}"
     soup = BeautifulSoup(page.data, "html.parser")
-    selection: dict[str, Any] = {
-        "property_mode": soup.find("input", {"name": "property_mode", "checked": True})["value"]
-    }
-    for field in ("selected_property_tags", "selected_property_ids"):
-        selection[field] = [box["value"] for box in soup.find_all("input", {"name": field, "checked": True})]
-    tags = soup.find("input", {"name": "property_tags"})
-    if tags is not None:
-        selection["property_tags"] = tags.get("value", "")
-    selectors = soup.find("textarea", {"name": "publisher_properties"})
-    if selectors is not None:
-        selection["publisher_properties"] = selectors.get_text()
-    return selection
+    forms = soup.find_all("form", method=re.compile(r"^post$", re.IGNORECASE))
+    assert len(forms) == 1, f"the page has {len(forms)} POST forms"
+    fields: dict[str, list[str]] = {}
+    for element in forms[0].find_all(["input", "select", "textarea"]):
+        name = element.get("name")
+        if not name or element.has_attr("disabled"):
+            continue
+        for value in _submitted_values(element):
+            fields.setdefault(name, []).append(value)
+    for name, values in _script_built_fields(soup).items():
+        fields.setdefault(name, []).extend(values)
+    return fields
+
+
+def _submitted_values(element: Any) -> list[str]:
+    if element.name == "textarea":
+        # A browser drops the one newline that may follow the opening tag.
+        return [element.get_text().removeprefix("\n")]
+    if element.name == "select":
+        options = element.find_all("option")
+        chosen = [o for o in options if o.has_attr("selected")]
+        if not chosen and not element.has_attr("multiple") and options:
+            chosen = options[:1]
+        return [o.get("value", o.get_text().strip()) for o in chosen]
+    kind = (element.get("type") or "text").lower()
+    if kind in _UNSUBMITTED_INPUT_TYPES:
+        return []
+    if kind in {"checkbox", "radio"}:
+        return [element.get("value", "on")] if element.has_attr("checked") else []
+    return [element.get("value", "")]
+
+
+#: The literal the product edit page's script reads its pricing options from.
+_EMBEDDED_PRICING = re.compile(r"const existingOptions = (\[.*?\]);", re.DOTALL)
+
+
+def _script_built_fields(soup: BeautifulSoup) -> dict[str, list[str]]:
+    """The pricing inputs the product edit page's ``addPricingOption`` builds from ``existingOptions``.
+
+    ``templates/edit_product.html`` renders no pricing input itself: its script lays one
+    option out per embedded entry. This posts the values that script puts in those inputs,
+    so a save posts the product's own pricing rather than a default.
+    """
+    script = next((s.get_text() for s in soup.find_all("script") if "existingOptions" in s.get_text()), None)
+    match = _EMBEDDED_PRICING.search(script or "")
+    if match is None:
+        return {}
+    fields: dict[str, list[str]] = {}
+    for index, option in enumerate(json.loads(match.group(1))):
+        model = option["pricing_model"]
+        if model == "cpm":
+            model = "cpm_fixed" if option["is_fixed"] else "cpm_auction"
+        guidance = option.get("price_guidance") or {}
+        parameters = option.get("parameters") or {}
+        values = {
+            "pricing_model": model,
+            "currency": option["currency"],
+            "rate": option.get("rate"),
+            "floor": guidance.get("floor"),
+            "min_spend": option.get("min_spend_per_package"),
+            **{p: guidance.get(p) for p in ("p25", "p50", "p75", "p90")},
+            **(
+                {"demographic": parameters.get("demographic"), "min_points": parameters.get("min_points")}
+                if model == "cpp"
+                else {}
+            ),
+            **({"view_threshold": parameters.get("view_threshold")} if model == "cpv" else {}),
+        }
+        for field, value in values.items():
+            fields[f"{field}_{index}"] = ["" if value is None else str(value)]
+    return fields
 
 
 class AdminInventoryProfileEnv(ProductEnv):
@@ -77,15 +148,17 @@ class AdminInventoryProfileEnv(ProductEnv):
 
     def rename_product_through_its_form(self, product_id: str) -> AdminResponse:
         """Open the product's edit page and save it with only the name changed, as a browser does."""
-        page = self.admin_page(f"products/{product_id}/edit")
-        return self.edit_product(product_id, name=f"Renamed {product_id}", **rendered_selection(page))
+        return self._rename_through_form(f"products/{product_id}/edit", f"Renamed {product_id}")
 
     def rename_profile_through_its_form(self, profile_id: str) -> AdminResponse:
         """Open the profile's edit page and save it with only the name changed, as a browser does."""
         stored = self.stored_inventory_profile(profile_id)
         assert stored is not None, f"no inventory profile {profile_id!r} to edit"
-        page = self.admin_page(f"inventory-profiles/{stored.id}/edit")
-        return self.edit_inventory_profile(profile_id, name=f"Renamed {profile_id}", **rendered_selection(page))
+        return self._rename_through_form(f"inventory-profiles/{stored.id}/edit", f"Renamed {profile_id}")
+
+    def _rename_through_form(self, path: str, name: str) -> AdminResponse:
+        """POST the form *path* renders, with its ``name`` field set to *name* and nothing else changed."""
+        return self._admin_request(path, {**rendered_form(self.admin_page(path)), "name": [name]})
 
     def admin_page(self, path: str) -> AdminResponse:
         """GET ``/tenant/<tenant>/<path>``."""

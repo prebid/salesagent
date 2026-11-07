@@ -50,7 +50,7 @@
             <div id="selected-ad-units" style="min-height: 60px; border: 1px solid #ddd; border-radius: 4px; padding: 0.5rem; background: #f9f9f9;">
                 <span style="color: #999;">No ad units selected</span>
             </div>
-            <textarea id="targeted_ad_unit_ids" name="targeted_ad_unit_ids" style="display: none;"></textarea>
+            <textarea id="targeted_ad_unit_ids" name="targeted_ad_unit_ids" style="display: none;">{{ (profile.inventory_config or {}).get('ad_units', []) | tojson }}</textarea>
         </div>
 
         <div class="form-group">
@@ -64,12 +64,12 @@
             <div id="selected-placements" style="min-height: 60px; border: 1px solid #ddd; border-radius: 4px; padding: 0.5rem; background: #f9f9f9;">
                 <span style="color: #999;">No placements selected</span>
             </div>
-            <textarea id="targeted_placement_ids" name="targeted_placement_ids" style="display: none;"></textarea>
+            <textarea id="targeted_placement_ids" name="targeted_placement_ids" style="display: none;">{{ (profile.inventory_config or {}).get('placements', []) | tojson }}</textarea>
         </div>
 
         <div class="form-group">
             <label>
-                <input type="checkbox" name="include_descendants" checked>
+                <input type="checkbox" name="include_descendants" {% if (profile.inventory_config or {}).get('include_descendants', True) %}checked{% endif %}>
                 Include child ad units in targeting
             </label>
         </div>
@@ -228,8 +228,8 @@ let selectedFormats = new Set();
 let allFormats = [];
 
 // Pre-populate existing data
+// The server renders the stored inventory config and selection into the form.
 const existingProfile = {
-    inventory_config: {{ profile.inventory_config | tojson | safe }},
     formats: {{ profile.format_ids | tojson | safe }},
     targeting_template: {{ profile.targeting_template | tojson | safe if profile.targeting_template else 'null' }}
 };
@@ -244,21 +244,6 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 function prePopulateData() {
-    // Pre-populate inventory config
-    if (existingProfile.inventory_config) {
-        if (existingProfile.inventory_config.ad_units) {
-            document.getElementById('targeted_ad_unit_ids').value = JSON.stringify(existingProfile.inventory_config.ad_units);
-            // TODO: Display ad unit names
-        }
-        if (existingProfile.inventory_config.placements) {
-            document.getElementById('targeted_placement_ids').value = JSON.stringify(existingProfile.inventory_config.placements);
-            // TODO: Display placement names
-        }
-        if (existingProfile.inventory_config.include_descendants !== undefined) {
-            document.querySelector('input[name="include_descendants"]').checked = existingProfile.inventory_config.include_descendants;
-        }
-    }
-
     // Pre-populate formats (will be selected after formats load)
     if (existingProfile.formats && existingProfile.formats.length > 0) {
         existingProfile.formats.forEach(fmt => {
