@@ -25,10 +25,13 @@ Feature: BR-ADMIN-INVENTORY-PROFILE-publishers Which publishers the operator's s
   # verified publishers only.
   #
   # Saving an edit form with its selection untouched changes nothing about that selection.
-  # A product page's pre-checked boxes are compared with what it posted, because the form
-  # cannot express a legacy column, a pending publisher's selector or a mix of modes. A
-  # profile page pre-fills tags or property ids only when they regenerate the stored
-  # selectors, and shows them as JSON otherwise.
+  # Each edit page embeds the selection it rendered and a digest of the stored columns, and
+  # a save is compared with what the page rendered, never with a selection recomputed when
+  # it arrives, because the form cannot express a legacy column, a pending publisher's
+  # selector or a mix of modes, and a property verified in between changes a
+  # recomputation. A page opened before its stored selection changed is refused. A profile
+  # page pre-fills tags or property ids only when they regenerate the stored selectors,
+  # and shows them as JSON otherwise.
   #
   # The products page marks a product get_products leaves out because it names no
   # verified publisher, so the operator sees the gap rather than only a server log line.
@@ -209,6 +212,33 @@ Feature: BR-ADMIN-INVENTORY-PROFILE-publishers Which publishers the operator's s
     When the operator creates inventory profile "podcasts" in JSON mode storing publisher_properties [{"publisher_domain": "podcast.example", "selection_type": "all"}]
     Then the page contains "Not verified authorized publisher selections: podcast.example"
     And no inventory profile "podcasts" is stored
+
+  @T-ADMIN-INVPROFILE-028 @admin_inventory_profile @requires_db
+  Scenario: a product edit page saved after a property verifies leaves the stored selection unchanged
+    Given the seller's property "podcast_home" of publisher "podcast.example" tagged "premium" awaits verification
+    And the seller offers product "premium" selecting property tags "premium"
+    When the operator opens the edit form of product "premium"
+    And the seller's property "podcast_home" becomes verified
+    And the operator saves the open edit form of product "premium", changing only its name
+    Then product "premium" is renamed and its stored selection is unchanged
+
+  @T-ADMIN-INVPROFILE-029 @admin_inventory_profile @requires_db
+  Scenario: a product edit page whose stored selection changed since it opened is refused
+    Given the seller offers product "news" naming publisher_properties [{"publisher_domain": "news.example", "property_ids": ["news_home"], "selection_type": "by_id"}]
+    When the operator opens the edit form of product "news"
+    And the operator edits product "news" to select properties "weather_home"
+    And the operator saves the open edit form of product "news", changing only its name
+    Then the page contains "The publishers of this product changed since this page was opened"
+    And product "news" stores publisher_properties [{"publisher_domain": "weather.example", "property_ids": ["weather_home"], "selection_type": "by_id"}]
+
+  @T-ADMIN-INVPROFILE-030 @admin_inventory_profile @requires_db
+  Scenario: a profile edit page saved after a property verifies leaves the stored selection unchanged
+    Given the seller's property "podcast_home" of publisher "podcast.example" tagged "premium" awaits verification
+    When the operator creates inventory profile "tagged" selecting tags "premium"
+    And the operator opens the edit form of inventory profile "tagged"
+    And the seller's property "podcast_home" becomes verified
+    And the operator saves the open edit form of inventory profile "tagged", changing only its name
+    Then inventory profile "tagged" is renamed and its stored selection is unchanged
 
   @T-ADMIN-INVPROFILE-025 @admin_inventory_profile @requires_db
   Scenario: the forms offer only verified properties

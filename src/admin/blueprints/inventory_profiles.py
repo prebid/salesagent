@@ -31,8 +31,12 @@ from src.core.database.models import (
 )
 from src.core.database.repositories.authorized_property import AuthorizedPropertyRepository
 from src.core.helpers.publisher_property_helpers import (
+    STALE_SELECTION_MESSAGE,
+    RenderedSelection,
     id_selection,
+    judge_selection_save,
     profile_form_prefill,
+    selection_digest,
     selector_selection,
     tag_selection,
 )
@@ -354,6 +358,18 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
 
         if request.method == "POST":
             try:
+                # The save is judged against the selection the page rendered, not one recomputed now.
+                selection_save = judge_selection_save(
+                    request.form.get("rendered_selection"),
+                    request.form.getlist,
+                    selection_digest(profile.publisher_properties),
+                )
+                if selection_save == "stale":
+                    flash(STALE_SELECTION_MESSAGE.format(subject="profile"), "error")
+                    return redirect(
+                        url_for("inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id)
+                    )
+
                 # Parse form data (same as add)
                 form_data = request.form.to_dict()
 
@@ -381,7 +397,8 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
                 # Update publisher properties based on property_mode
                 property_mode = form_data.get("property_mode", "tags")
 
-                if property_mode in {"tags", "property_ids"} | _JSON_MODES:
+                # A save posting what the page rendered leaves the stored selection as it is.
+                if property_mode in {"tags", "property_ids"} | _JSON_MODES and selection_save == "changed":
                     publisher_properties, error = _selectors_from_form(
                         session, tenant_id, property_mode, profile.publisher_properties
                     )
@@ -446,6 +463,7 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
         ).all()
 
         prefill = profile_form_prefill(profile.publisher_properties, authorized_properties)
+        rendered_selection = RenderedSelection(prefill.fields(), selection_digest(profile.publisher_properties))
 
     return render_template(
         "edit_inventory_profile.html",
@@ -453,6 +471,7 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
         tenant=tenant,
         profile=profile,
         prefill=prefill,
+        rendered_selection=rendered_selection,
         authorized_properties=authorized_properties,
         property_tags=property_tags_list,
         active_tab="inventory_profiles",

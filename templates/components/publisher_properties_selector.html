@@ -5,9 +5,9 @@
 
      Required template variables:
      - authorized_properties: the verified properties (AuthorizedPropertyRepository.list_refs), the only ones offered
-     - selected_publisher_properties: (optional) what the product sells, which picks the mode, for edit mode
-       Format: [{"publisher_domain": "...", "property_ids": [...], "selection_type": "by_id"}, ...]
-     - preselected: (optional) the boxes to check for that selection (preselected_choices), for edit mode
+     - rendered_selection: (optional, edit mode) the RenderedSelection of what the product sells:
+       its fields pick the mode and the checked boxes (product_form_fields), and it is embedded so
+       the save is judged against exactly what this page rendered (judge_selection_save)
 -->
 
 <style>
@@ -138,25 +138,31 @@
         Select which publisher properties this product can serve on.
     </p>
 
+    {% set rendered_fields = rendered_selection.fields if rendered_selection else {} %}
+    {% set rendered_mode = (rendered_fields.property_mode or ['tags'])[0] %}
+    {% if rendered_selection %}
+    <input type="hidden" name="rendered_selection" value="{{ rendered_selection.token() }}">
+    {% endif %}
+
     <!-- Mode Selection -->
     <div class="property-mode-selector">
         <label>
             <input type="radio" name="property_mode" value="tags" onchange="togglePropertyMode()"
-                   {% if not selected_publisher_properties or (selected_publisher_properties and selected_publisher_properties[0].selection_type == 'by_tag') %}checked{% endif %}>
+                   {% if rendered_mode == 'tags' %}checked{% endif %}>
             Select by Tags
             <small style="display: block; color: #666; margin-left: 1.5rem;">Choose tags from specific publishers</small>
         </label>
 
         <label>
             <input type="radio" name="property_mode" value="property_ids" onchange="togglePropertyMode()"
-                   {% if selected_publisher_properties and selected_publisher_properties[0].selection_type == 'by_id' %}checked{% endif %}>
+                   {% if rendered_mode == 'property_ids' %}checked{% endif %}>
             Select by Property IDs
             <small style="display: block; color: #666; margin-left: 1.5rem;">Choose specific properties from publishers</small>
         </label>
 
         <label>
             <input type="radio" name="property_mode" value="full" onchange="togglePropertyMode()"
-                   {% if selected_publisher_properties and selected_publisher_properties[0].selection_type not in ['by_id', 'by_tag'] %}checked{% endif %}>
+                   {% if rendered_mode == 'full' %}checked{% endif %}>
             Specify Full Properties (Legacy)
             <small style="display: block; color: #666; margin-left: 1.5rem;">Include complete property objects - for backward compatibility only.</small>
         </label>
@@ -197,7 +203,7 @@
                 <div class="property-item">
                     <input type="checkbox" name="selected_property_tags" value="{{ domain }}:{{ tag }}"
                            id="tag_{{ domain|replace('.', '_')|replace('-', '_') }}_{{ tag }}"
-                           {% if preselected and (domain ~ ':' ~ tag) in preselected.tags %}checked{% endif %}>
+                           {% if (domain ~ ':' ~ tag) in (rendered_fields.selected_property_tags or []) %}checked{% endif %}>
                     <span class="tag-badge">{{ tag }}</span>
                 </div>
                 {% endfor %}
@@ -240,7 +246,7 @@
                 {% for prop in props %}
                 <div class="property-item">
                     <input type="checkbox" name="selected_property_ids" value="{{ prop.property_id }}"
-                           id="prop_{{ prop.property_id }}" {% if preselected and prop.property_id in preselected.property_ids %}checked{% endif %}>
+                           id="prop_{{ prop.property_id }}" {% if prop.property_id in (rendered_fields.selected_property_ids or []) %}checked{% endif %}>
                     <code class="property-id-badge">{{ prop.property_id }}</code>
                     <span class="property-name">{{ prop.name }}</span>
                 </div>

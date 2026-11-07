@@ -9,9 +9,10 @@ This module provides ensure_selection_type() to normalize on read.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -274,6 +275,76 @@ def preselected_choices(selectors: Iterable[dict], authorized: Iterable[Selectab
     return PreselectedChoices(frozenset(tags), frozenset(property_ids))
 
 
+def product_form_fields(selectors: list[dict], authorized: Iterable[SelectableProperty]) -> dict[str, list[str]]:
+    """The selection fields the product edit page renders for *selectors*: its mode and checked boxes.
+
+    *selectors* are what the product sells (``Product.resolve_publisher_properties``). The
+    first one picks the mode; the full (legacy) mode checks no box.
+    """
+    choices = preselected_choices(selectors, authorized)
+    first = selectors[0]["selection_type"] if selectors else "by_tag"
+    return {
+        "property_mode": [{"by_tag": "tags", "by_id": "property_ids"}.get(first, "full")],
+        "selected_property_tags": sorted(choices.tags),
+        "selected_property_ids": sorted(choices.property_ids),
+        "full_property_ids": [],
+    }
+
+
+@dataclass(frozen=True)
+class RenderedSelection:
+    """The selection fields an edit page rendered, and a digest of the stored columns they show.
+
+    The page embeds it (:meth:`token`) and its save is judged against it
+    (:func:`judge_selection_save`), never against a selection recomputed when the save
+    arrives: a property verified in between would change that recomputation, and a save
+    that touched nothing would then rewrite what the product or profile sells.
+    """
+
+    fields: dict[str, list[str]]
+    digest: str
+
+    def token(self) -> str:
+        return json.dumps({"fields": self.fields, "digest": self.digest}, sort_keys=True)
+
+
+#: The refusal of a save whose page shows a selection that changed since it rendered.
+STALE_SELECTION_MESSAGE = (
+    "The publishers of this {subject} changed since this page was opened. Reload the page and save your changes again."
+)
+
+
+def selection_digest(*columns: object) -> str:
+    """A digest of the stored selection *columns*, to tell whether they changed under an open page."""
+    return hashlib.sha256(json.dumps(columns, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def judge_selection_save(token: str | None, posted: Callable[[str], list[str]], digest: str) -> str:
+    """``"unchanged"``, ``"stale"`` or ``"changed"``: what a save does to the stored selection.
+
+    *token* is the page's :meth:`RenderedSelection.token`, *posted* reads a field's posted
+    values, *digest* is :func:`selection_digest` of the columns as stored now. ``"stale"``:
+    the columns changed since the page rendered, so the page must not overwrite them.
+    ``"unchanged"``: every selection field posts what the page rendered. A save carrying no
+    token (a client other than the page) is ``"changed"``.
+    """
+    try:
+        rendered = json.loads(token or "")
+    except ValueError:
+        return "changed"
+    if rendered.get("digest") != digest:
+        return "stale"
+    for name, values in rendered.get("fields", {}).items():
+        if sorted(map(_form_value, posted(name))) != sorted(map(_form_value, values)):
+            return "changed"
+    return "unchanged"
+
+
+def _form_value(value: str) -> str:
+    """*value* as a comparison sees it: a browser submits a textarea's newlines as CRLF."""
+    return value.replace("\r\n", "\n").strip()
+
+
 @dataclass(frozen=True)
 class ProfileFormPrefill:
     """What the inventory-profile edit page renders for a profile's stored selectors."""
@@ -282,6 +353,15 @@ class ProfileFormPrefill:
     property_tags: str = ""
     property_ids: frozenset[str] = field(default_factory=frozenset)
     publisher_properties: str = ""
+
+    def fields(self) -> dict[str, list[str]]:
+        """The selection fields the page renders from this pre-fill, as :class:`RenderedSelection` holds them."""
+        return {
+            "property_mode": [self.property_mode],
+            "property_tags": [self.property_tags],
+            "selected_property_ids": sorted(self.property_ids),
+            "publisher_properties": [self.publisher_properties],
+        }
 
 
 def profile_form_prefill(selectors: list[dict] | None, authorized: Sequence[SelectableProperty]) -> ProfileFormPrefill:

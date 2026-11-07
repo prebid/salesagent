@@ -25,7 +25,7 @@ from typing import Any
 
 from bs4 import BeautifulSoup
 
-from src.core.database.models import InventoryProfile, Product
+from src.core.database.models import AuthorizedProperty, InventoryProfile, Product
 from tests.harness.admin_client import AdminClient, AdminResponse, guarded_admin_client
 from tests.harness.product import ProductEnv
 
@@ -125,6 +125,7 @@ class AdminInventoryProfileEnv(ProductEnv):
     """``ProductEnv`` plus the operator's inventory-profile form and products page."""
 
     _admin: AdminClient | None = None
+    _open_form: tuple[str, AdminResponse] | None = None
 
     # ── requests ───────────────────────────────────────────────────────────
 
@@ -146,19 +147,43 @@ class AdminInventoryProfileEnv(ProductEnv):
         """POST the edit form of the stored product *product_id* with a new *selection*."""
         return self._admin_request(f"products/{product_id}/edit", self._product_form(product_id, **selection))
 
-    def rename_product_through_its_form(self, product_id: str) -> AdminResponse:
-        """Open the product's edit page and save it with only the name changed, as a browser does."""
-        return self._rename_through_form(f"products/{product_id}/edit", f"Renamed {product_id}")
+    def open_product_edit_form(self, product_id: str) -> AdminResponse:
+        """GET the edit page of product *product_id*, held for :meth:`save_open_form`."""
+        return self._open(f"products/{product_id}/edit")
 
-    def rename_profile_through_its_form(self, profile_id: str) -> AdminResponse:
-        """Open the profile's edit page and save it with only the name changed, as a browser does."""
+    def open_profile_edit_form(self, profile_id: str) -> AdminResponse:
+        """GET the edit page of inventory profile *profile_id*, held for :meth:`save_open_form`."""
         stored = self.stored_inventory_profile(profile_id)
         assert stored is not None, f"no inventory profile {profile_id!r} to edit"
-        return self._rename_through_form(f"inventory-profiles/{stored.id}/edit", f"Renamed {profile_id}")
+        return self._open(f"inventory-profiles/{stored.id}/edit")
 
-    def _rename_through_form(self, path: str, name: str) -> AdminResponse:
-        """POST the form *path* renders, with its ``name`` field set to *name* and nothing else changed."""
-        return self._admin_request(path, {**rendered_form(self.admin_page(path)), "name": [name]})
+    def save_open_form(self, name: str) -> AdminResponse:
+        """POST the page last opened as it rendered, with only its ``name`` field set to *name*, as a browser does."""
+        assert self._open_form is not None, "no edit page is open"
+        path, page = self._open_form
+        return self._admin_request(path, {**rendered_form(page), "name": [name]})
+
+    def rename_product_through_its_form(self, product_id: str) -> AdminResponse:
+        """Open the product's edit page and save it with only the name changed."""
+        self.open_product_edit_form(product_id)
+        return self.save_open_form(f"Renamed {product_id}")
+
+    def rename_profile_through_its_form(self, profile_id: str) -> AdminResponse:
+        """Open the profile's edit page and save it with only the name changed."""
+        self.open_profile_edit_form(profile_id)
+        return self.save_open_form(f"Renamed {profile_id}")
+
+    def verify_property(self, property_id: str) -> None:
+        """Mark the seller's property *property_id* verified, as the verification service does."""
+        row = self._stored(AuthorizedProperty, property_id=property_id)
+        assert row is not None, f"no authorized property {property_id!r}"
+        row.verification_status = "verified"
+        self.get_session().commit()
+
+    def _open(self, path: str) -> AdminResponse:
+        page = self.admin_page(path)
+        self._open_form = (path, page)
+        return page
 
     def admin_page(self, path: str) -> AdminResponse:
         """GET ``/tenant/<tenant>/<path>``."""

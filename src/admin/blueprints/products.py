@@ -23,10 +23,13 @@ from src.core.database.repositories.authorized_property import AuthorizedPropert
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.principal import PrincipalRepository
 from src.core.helpers.publisher_property_helpers import (
-    PreselectedChoices,
+    STALE_SELECTION_MESSAGE,
+    RenderedSelection,
     id_selection,
-    preselected_choices,
+    judge_selection_save,
+    product_form_fields,
     publisher_tag_selection,
+    selection_digest,
 )
 from src.core.schemas import Format
 from src.services.gam_product_config_service import GAMProductConfigService
@@ -629,6 +632,11 @@ def list_products(tenant_id):
         logger.error(f"Error loading products: {e}", exc_info=True)
         flash("Error loading products", "error")
         return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
+
+
+def _selection_digest(product: Product) -> str:
+    """The digest of the columns a product's selection is stored in (``selection_digest``)."""
+    return selection_digest(product.properties, product.property_tags, product.property_ids)
 
 
 #: The form field holding the choices of each property mode that builds selectors. ``full``
@@ -1306,12 +1314,15 @@ def edit_product(tenant_id, product_id):
                 product.name = form_data.get("name", product.name)
                 product.description = form_data.get("description", product.description)
 
-                # Handle inventory profile association (optional)
-                # What the page pre-checked, read before this save changes what the product resolves to.
-                verified_properties = AuthorizedPropertyRepository(db_session, tenant_id).list_refs()
-                preselected = preselected_choices(
-                    product.resolve_publisher_properties(verified_properties), verified_properties
+                # The save is judged against the selection the page rendered, not one recomputed now.
+                selection_save = judge_selection_save(
+                    request.form.get("rendered_selection"), request.form.getlist, _selection_digest(product)
                 )
+                if selection_save == "stale":
+                    flash(STALE_SELECTION_MESSAGE.format(subject="product"), "error")
+                    return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
+
+                # Handle inventory profile association (optional)
 
                 # Check for inventory_profile_id directly (no need for inventory_mode radio button)
                 inventory_profile_id = form_data.get("inventory_profile_id", "").strip()
@@ -1384,17 +1395,11 @@ def edit_product(tenant_id, product_id):
 
                 # Handle publisher properties (AdCP requirement)
                 property_mode = form_data.get("property_mode", "tags")
-                if property_mode in _SELECTION_FIELDS:
-                    # An empty selection leaves the stored one as it is, and so does the selection
-                    # the page pre-checked: the boxes cannot express every stored selection, so
-                    # writing them back would rewrite what a save never touched.
-                    posted = PreselectedChoices(
-                        tags=frozenset(request.form.getlist("selected_property_tags")),
-                        property_ids=frozenset(request.form.getlist("selected_property_ids")),
-                    )
-                    # The full (legacy) mode pre-checks nothing, so any choice it posts is a change.
-                    changed = posted != preselected or property_mode == "full"
-                    if request.form.getlist(_SELECTION_FIELDS[property_mode]) and changed:
+                if property_mode in _SELECTION_FIELDS and selection_save == "changed":
+                    # An empty selection leaves the stored one as it is, and so does a save posting
+                    # what the page rendered: the boxes cannot express every stored selection, so
+                    # writing them back would rewrite what the save never touched.
+                    if request.form.getlist(_SELECTION_FIELDS[property_mode]):
                         selectors, refusal = _selectors_from_product_form(db_session, tenant_id, property_mode)
                         if refusal:
                             flash(refusal, "error")
@@ -1777,7 +1782,12 @@ def edit_product(tenant_id, product_id):
             # Offer the VERIFIED properties and pre-select what the product sells: its selectors
             # resolved against them, as list_products and get_products resolve them.
             authorized_properties_list = AuthorizedPropertyRepository(db_session, tenant_id).list_refs()
-            selected_publisher_properties = product.resolve_publisher_properties(authorized_properties_list)
+            rendered_selection = RenderedSelection(
+                product_form_fields(
+                    product.resolve_publisher_properties(authorized_properties_list), authorized_properties_list
+                ),
+                _selection_digest(product),
+            )
 
             # Show adapter-specific form
             if adapter_type == "google_ad_manager":
@@ -1865,8 +1875,7 @@ def edit_product(tenant_id, product_id):
                     inventory_profiles=inventory_profiles,
                     principals=principals_list,
                     authorized_properties=authorized_properties_list,
-                    selected_publisher_properties=selected_publisher_properties,
-                    preselected=preselected_choices(selected_publisher_properties, authorized_properties_list),
+                    rendered_selection=rendered_selection,
                 )
             else:
                 # For non-GAM adapters - use unified edit template
@@ -1881,8 +1890,7 @@ def edit_product(tenant_id, product_id):
                     currencies=currencies,
                     principals=principals_list,
                     authorized_properties=authorized_properties_list,
-                    selected_publisher_properties=selected_publisher_properties,
-                    preselected=preselected_choices(selected_publisher_properties, authorized_properties_list),
+                    rendered_selection=rendered_selection,
                 )
 
     except Exception as e:

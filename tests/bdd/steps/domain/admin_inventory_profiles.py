@@ -130,7 +130,25 @@ def when_open_add_product_form(ctx: dict) -> None:
 
 @when(parsers.parse('the operator opens the edit form of product "{product_id}"'))
 def when_open_product_edit_form(ctx: dict, product_id: str) -> None:
-    ctx["admin_page"] = _env(ctx).admin_page(f"products/{product_id}/edit")
+    ctx["admin_page"] = _env(ctx).open_product_edit_form(product_id)
+
+
+@when(parsers.parse('the seller\'s property "{property_id}" becomes verified'))
+def when_property_verified(ctx: dict, property_id: str) -> None:
+    _env(ctx).verify_property(property_id)
+
+
+@when(
+    parsers.re(
+        r'the operator saves the open edit form of (?P<kind>product|inventory profile) "(?P<subject>[^"]+)", '
+        r"changing only its name"
+    )
+)
+def when_save_open_form(ctx: dict, kind: str, subject: str) -> None:
+    env = _env(ctx)
+    stored = env.stored_product(subject) if kind == "product" else env.stored_inventory_profile(subject)
+    ctx["selection_before_save"] = (_product_selection if kind == "product" else _profile_selection)(stored)
+    ctx["admin_page"] = env.save_open_form(f"Renamed {subject}")
 
 
 @when("the operator opens the add inventory profile form")
@@ -140,10 +158,7 @@ def when_open_add_form(ctx: dict) -> None:
 
 @when(parsers.parse('the operator opens the edit form of inventory profile "{profile_id}"'))
 def when_open_edit_form(ctx: dict, profile_id: str) -> None:
-    env = _env(ctx)
-    stored = env.stored_inventory_profile(profile_id)
-    assert stored is not None, f"no inventory profile {profile_id!r}"
-    ctx["admin_page"] = env.admin_page(f"inventory-profiles/{stored.id}/edit")
+    ctx["admin_page"] = _env(ctx).open_profile_edit_form(profile_id)
 
 
 @when("the operator opens the products page")
