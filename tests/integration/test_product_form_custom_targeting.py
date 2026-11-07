@@ -1,0 +1,89 @@
+"""Integration tests: the admin product form refuses custom targeting GAM cannot take.
+
+A GAM product's ``targeting_template.key_value_pairs`` is stored as
+``implementation_config["custom_targeting_keys"]`` and parsed by
+``CustomTargeting.from_stored`` when a media buy books it. The form runs the same parser
+on save, so a seller fixes a malformed config on the product instead of a buyer's media
+buy failing later.
+
+Real PostgreSQL, real Flask app, real form POST. No format is submitted, so the creative
+agent registry is never consulted, and nothing on these paths calls GAM.
+"""
+
+import json
+
+import pytest
+
+from src.core.database.repositories.uow import ProductUoW
+from tests.factories import AuthorizedPropertyFactory, ProductFactory, PropertyTagFactory, TenantFactory
+
+pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
+
+TENANT_ID = "gam_ct_tenant"
+PUBLISHER_DOMAIN = "gam-ct.example.com"
+REFUSAL = "Custom targeting is not in a form GAM can take"
+MALFORMED = {"groups": [{"criteria": [{"keyId": "sport", "values": ["football"]}]}]}
+VALID = {"groups": [{"criteria": [{"keyId": "11001", "values": ["448512"]}]}]}
+
+
+@pytest.fixture
+def gam_tenant(bound_factory_session):
+    """A GAM tenant with the property tag the add form's tag check reads."""
+    tenant = TenantFactory(tenant_id=TENANT_ID, ad_server="google_ad_manager")
+    PropertyTagFactory(tenant=tenant, tag_id="all_inventory")
+    AuthorizedPropertyFactory(tenant=tenant, publisher_domain=PUBLISHER_DOMAIN, tags=["all_inventory"])
+    return tenant
+
+
+def _stored_products() -> dict[str, dict]:
+    """Each saved product's name mapped to its implementation_config."""
+    with ProductUoW(TENANT_ID) as uow:
+        return {p.name: p.implementation_config for p in uow.products.list_all()}
+
+
+def _form(name: str, key_value_pairs: dict) -> dict[str, str]:
+    """The product form fields both routes need before they reach custom targeting."""
+    return {
+        "name": name,
+        "formats": "[]",
+        "pricing_model_0": "cpm_fixed",
+        "currency_0": "USD",
+        "rate_0": "10.00",
+        "property_mode": "tags",
+        "selected_property_tags": f"{PUBLISHER_DOMAIN}:all_inventory",
+        "targeting_template": json.dumps({"key_value_pairs": key_value_pairs}),
+    }
+
+
+def _add_product(client, name: str, key_value_pairs: dict):
+    return client.post(f"/tenant/{TENANT_ID}/products/add", data=_form(name, key_value_pairs))
+
+
+def test_add_refuses_custom_targeting_gam_cannot_take(authenticated_admin_session, gam_tenant):
+    response = _add_product(authenticated_admin_session, "Malformed Targeting", MALFORMED)
+
+    assert response.status_code == 200
+    assert REFUSAL in response.get_data(as_text=True)
+    assert "Malformed Targeting" not in _stored_products()
+
+
+def test_add_saves_custom_targeting_gam_can_take(authenticated_admin_session, gam_tenant):
+    response = _add_product(authenticated_admin_session, "Valid Targeting", VALID)
+
+    assert response.status_code == 302
+    assert _stored_products()["Valid Targeting"]["custom_targeting_keys"] == VALID
+
+
+def test_edit_refusal_leaves_stored_custom_targeting_unchanged(authenticated_admin_session, gam_tenant):
+    product = ProductFactory(tenant=gam_tenant, name="Existing", implementation_config={"custom_targeting_keys": VALID})
+
+    response = authenticated_admin_session.post(
+        f"/tenant/{TENANT_ID}/products/{product.product_id}/edit",
+        data=_form("Existing", MALFORMED),
+    )
+
+    assert response.status_code == 302
+    with authenticated_admin_session.session_transaction() as flask_session:
+        assert any(REFUSAL in message for _, message in flask_session["_flashes"])
+    assert response.headers["Location"].endswith(f"/tenant/{TENANT_ID}/products/{product.product_id}/edit")
+    assert _stored_products()["Existing"]["custom_targeting_keys"] == VALID

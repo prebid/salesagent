@@ -243,8 +243,8 @@ The authoritative field list is the `GAMImplementationConfig` schema in `src/ada
   ```
 
   `keyId` is a numeric GAM custom targeting key ID. Each value is a numeric GAM value ID, or a value name, which is looked up in GAM and created if it does not exist.
-  Two older formats are still read: `{"<key_id>": "<value_name>"}`, and `{"include": {"<key_id>": [values]}, "exclude": {...}, "operator": "AND"}`.
-  In the first, the value can also be a list of names, which are ORed; a `NOT_<key_id>` key excludes the values, and each value is always treated as a name, even when it is all digits.
+  Two older formats are still read. In `{"<key_id>": "<value_name>"}` a `NOT_<key_id>` key excludes the value, and the value is always a name, even when it is all digits. `{"include": {"<key_id>": [values]}, "exclude": {...}, "operator": "AND"}` reads values the way the groups format does.
+  A criterion with no values and a group with no criteria are ignored. Anything else GAM cannot take, such as a key that is not a numeric key ID, is refused when the product is saved.
 
 #### Non-guaranteed automation
 

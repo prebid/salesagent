@@ -7,9 +7,8 @@ stood in, and read ``customTargeting`` off the line item handed to ``createLineI
 
 GAM allows a custom targeting tree three levels deep, with an OR at the top: an OR set of
 AND sets of ``CustomCriteria`` (API v202602, ``LineItemService.Targeting.customTargeting``).
-Every tree is sent in that shape, and buyer and product targeting are combined by
-distributing the AND over the product's OR'd groups, since an AND set holding an OR set
-would need a fourth level.
+Buyer and product targeting are read into one model of that shape (``CustomTargeting``),
+ANDed there, and rendered once.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -17,7 +16,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from src.adapters.base import AdapterCreateRequest
-from src.core.exceptions import AdCPAdapterError
+from src.core.exceptions import AdCPAdapterError, AdCPValidationError
 from src.core.schemas import MediaPackage, Principal, Targeting
 from tests.factories import ProductFactory, TenantFactory
 from tests.factories.request import CreateMediaBuyRequestFactory, PackageRequestFactory
@@ -155,5 +154,16 @@ def test_targeting_gam_refuses_leaves_no_order_behind(bound_factory_session):
 
     with pytest.raises(AdCPAdapterError):
         _create_media_buy(client_manager, {"11001": "a value GAM does not hold"})
+
+    assert client_manager.get_service("OrderService").createOrders.call_args_list == []
+
+
+def test_a_buyer_key_that_is_not_a_gam_key_id_is_the_buyers_to_correct(bound_factory_session):
+    """Buyer key-values are read into the same model, so a key GAM cannot take is refused before any order."""
+    client_manager = stub_gam_client_manager(custom_targeting_values=GAM_VALUES)
+    buyer_overlay = Targeting(custom={"gam": {"key_values": {"sport": "football"}}})
+
+    with pytest.raises(AdCPValidationError):
+        _create_media_buy(client_manager, WIDGET_GROUPS, targeting_overlay=buyer_overlay)
 
     assert client_manager.get_service("OrderService").createOrders.call_args_list == []

@@ -5,13 +5,15 @@ import json
 import logging
 import uuid
 from decimal import Decimal
+from typing import Any
 
 from adcp.exceptions import ADCPConnectionError, ADCPError, ADCPTimeoutError
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from sqlalchemy import func, inspect, select
 from sqlalchemy.orm import joinedload
 
+from src.adapters.gam_implementation_config_schema import CustomTargeting
 from src.admin.form_validation import sanitize_form_data
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
@@ -28,6 +30,34 @@ logger = logging.getLogger(__name__)
 
 # Create Blueprint
 products_bp = Blueprint("products", __name__)
+
+
+def _merge_custom_targeting_keys(stored: dict[str, Any], key_value_pairs: Any) -> Any:
+    """A product's ``custom_targeting_keys`` after the targeting widget saved ``key_value_pairs``.
+
+    The groups and include/exclude formats replace what was stored; legacy key-values are
+    merged into it.
+    """
+    if isinstance(key_value_pairs, dict) and {"groups", "include", "exclude"} & key_value_pairs.keys():
+        return key_value_pairs
+    return {**stored, **key_value_pairs}
+
+
+def _is_gam_custom_targeting(custom_targeting_keys: Any) -> bool:
+    """Whether GAM can take ``custom_targeting_keys``; when it cannot, say so on the form.
+
+    Refused here, the seller fixes it on the product rather than a buyer's media buy failing.
+    """
+    try:
+        CustomTargeting.from_stored(custom_targeting_keys)
+    except ValidationError:
+        flash(
+            "Custom targeting is not in a form GAM can take. Every key must be a GAM key ID and "
+            "every criterion needs at least one value.",
+            "error",
+        )
+        return False
+    return True
 
 
 def _format_to_dict(fmt: Format) -> dict:
@@ -936,19 +966,13 @@ def add_product(tenant_id):
 
                 # If targeting template has key_value_pairs, copy to implementation_config for GAM
                 if targeting_template.get("key_value_pairs"):
-                    if "custom_targeting_keys" not in implementation_config:
-                        implementation_config["custom_targeting_keys"] = {}
-                    # Handle different targeting formats
-                    kv_pairs = targeting_template["key_value_pairs"]
-                    if isinstance(kv_pairs, dict) and "groups" in kv_pairs:
-                        # Groups format (GAM-style nested) - pass through directly
-                        implementation_config["custom_targeting_keys"] = kv_pairs
-                    elif isinstance(kv_pairs, dict) and ("include" in kv_pairs or "exclude" in kv_pairs):
-                        # Enhanced format - pass through directly
-                        implementation_config["custom_targeting_keys"] = kv_pairs
-                    else:
-                        # Legacy format - merge as before
-                        implementation_config["custom_targeting_keys"].update(kv_pairs)
+                    implementation_config["custom_targeting_keys"] = _merge_custom_targeting_keys(
+                        implementation_config.get("custom_targeting_keys") or {}, targeting_template["key_value_pairs"]
+                    )
+                    if adapter_type == "google_ad_manager" and not _is_gam_custom_targeting(
+                        implementation_config["custom_targeting_keys"]
+                    ):
+                        return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
 
                 # Build product kwargs, excluding None values for JSON fields that have database constraints
                 product_kwargs = {
@@ -1673,19 +1697,13 @@ def edit_product(tenant_id, product_id):
 
                     # If targeting template has key_value_pairs, copy to implementation_config for GAM
                     if targeting_template.get("key_value_pairs"):
-                        if "custom_targeting_keys" not in base_config:
-                            base_config["custom_targeting_keys"] = {}
-                        # Handle different targeting formats
-                        kv_pairs = targeting_template["key_value_pairs"]
-                        if isinstance(kv_pairs, dict) and "groups" in kv_pairs:
-                            # Groups format (GAM-style nested) - pass through directly
-                            base_config["custom_targeting_keys"] = kv_pairs
-                        elif isinstance(kv_pairs, dict) and ("include" in kv_pairs or "exclude" in kv_pairs):
-                            # Enhanced format - pass through directly
-                            base_config["custom_targeting_keys"] = kv_pairs
-                        else:
-                            # Legacy format - merge as before
-                            base_config["custom_targeting_keys"].update(kv_pairs)
+                        base_config["custom_targeting_keys"] = _merge_custom_targeting_keys(
+                            base_config.get("custom_targeting_keys") or {}, targeting_template["key_value_pairs"]
+                        )
+                        if not _is_gam_custom_targeting(base_config["custom_targeting_keys"]):
+                            return redirect(
+                                url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id)
+                            )
 
                     # Store targeting_template in product
                     product.targeting_template = targeting_template

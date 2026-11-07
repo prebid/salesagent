@@ -10,7 +10,6 @@ from unittest.mock import patch
 
 import pytest
 
-from src.adapters.google_ad_manager import GoogleAdManager
 from src.core.schemas import Principal
 from tests.helpers.gam_client import build_gam_adapter, stub_gam_client_manager
 from tests.helpers.gam_client import gam_line_item as _line_item
@@ -283,29 +282,18 @@ class TestGAMValidationIntegration:
             "package_assignments": ["mock_package"],  # Assign to mock package
         }
 
-        with patch("src.adapters.google_ad_manager.GAMClientManager"):
-            # Mock the log method before creating adapter so it gets the mocked version
-            with patch.object(GoogleAdManager, "log") as mock_log:
-                adapter = GoogleAdManager(
-                    config=self.config,
-                    principal=self.principal,
-                    network_code=self.config["network_code"],
-                    advertiser_id=self.principal.platform_mappings["google_ad_manager"]["advertiser_id"],
-                    trafficker_id=self.config["trafficker_id"],
-                    tenant_id="test_tenant",
-                )
+        adapter = _build_adapter(self.principal, self.config)
 
-                result = adapter.add_creative_assets("123", [invalid_asset], None)
+        result = adapter.add_creative_assets("123", [invalid_asset], None)
 
-                # Check that validation error was detected
-                assert result[0].status == "failed"
+        # Check that validation error was detected
+        assert result[0].status == "failed"
 
-                # The log assertion that stood here was wrapped in ``if mock_log.called:``,
-                # so it passed whenever the log had NOT been written — the one outcome it
-                # existed to catch. Removed rather than unwrapped: the manager captures
-                # ``self.log`` at construction, so what reaches it is an implementation
-                # detail of the wiring, and the failed status above is the buyer-visible
-                # fact.
+        # The log assertion that stood here was wrapped in ``if mock_log.called:``, so it
+        # passed whenever the log had NOT been written — the one outcome it existed to
+        # catch. Removed rather than unwrapped: the manager captures ``self.log`` at
+        # construction, so what reaches it is an implementation detail of the wiring, and
+        # the failed status above is the buyer-visible fact.
 
 
 class TestGAMValidationPerformance:

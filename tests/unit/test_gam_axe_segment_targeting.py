@@ -70,10 +70,12 @@ def test_axe_include_segment_translates_to_custom_targeting(mock_adapter_config_
 
         # Should have CustomCriteriaSet structure with children
         assert custom_targeting["xsi_type"] == "CustomCriteriaSet"
-        assert "children" in custom_targeting
+        assert custom_targeting["logicalOperator"] == "OR"
+        # GAM takes an OR of AND sets; the buyer's key-values and segments are one AND set.
+        [branch] = custom_targeting["children"]
 
         # Find the audience_include criteria by keyId (12345 from fixture)
-        criteria = [c for c in custom_targeting["children"] if c.get("keyId") == 12345]
+        criteria = [c for c in branch["children"] if c.get("keyId") == 12345]
         assert len(criteria) > 0, "Should have audience_include custom targeting criteria"
         assert criteria[0]["operator"] == "IS"  # Include segment uses IS operator
 
@@ -102,10 +104,12 @@ def test_axe_exclude_segment_translates_to_negative_custom_targeting(mock_adapte
 
         # Should have CustomCriteriaSet structure with children
         assert custom_targeting["xsi_type"] == "CustomCriteriaSet"
-        assert "children" in custom_targeting
+        assert custom_targeting["logicalOperator"] == "OR"
+        # GAM takes an OR of AND sets; the buyer's key-values and segments are one AND set.
+        [branch] = custom_targeting["children"]
 
         # Find the audience_exclude criteria by keyId (67890 from fixture)
-        criteria = [c for c in custom_targeting["children"] if c.get("keyId") == 67890]
+        criteria = [c for c in branch["children"] if c.get("keyId") == 67890]
         assert len(criteria) > 0, "Should have audience_exclude custom targeting criteria"
         assert criteria[0]["operator"] == "IS_NOT"  # Exclude segment uses IS_NOT operator
 
@@ -135,11 +139,13 @@ def test_axe_segments_both_include_and_exclude(mock_adapter_config_three_keys):
 
         # Should have CustomCriteriaSet structure with children
         assert custom_targeting["xsi_type"] == "CustomCriteriaSet"
-        assert "children" in custom_targeting
+        assert custom_targeting["logicalOperator"] == "OR"
+        # GAM takes an OR of AND sets; the buyer's key-values and segments are one AND set.
+        [branch] = custom_targeting["children"]
 
         # Find both include and exclude criteria by keyId
-        include_criteria = [c for c in custom_targeting["children"] if c.get("keyId") == 12345]
-        exclude_criteria = [c for c in custom_targeting["children"] if c.get("keyId") == 67890]
+        include_criteria = [c for c in branch["children"] if c.get("keyId") == 12345]
+        exclude_criteria = [c for c in branch["children"] if c.get("keyId") == 67890]
 
         assert len(include_criteria) > 0, "Should have audience_include custom targeting criteria"
         assert include_criteria[0]["operator"] == "IS"
@@ -174,10 +180,12 @@ def test_axe_segments_combine_with_other_custom_targeting(mock_adapter_config_th
 
         # Should have CustomCriteriaSet structure with children
         assert custom_targeting["xsi_type"] == "CustomCriteriaSet"
-        assert "children" in custom_targeting
+        assert custom_targeting["logicalOperator"] == "OR"
+        # GAM takes an OR of AND sets; the buyer's key-values and segments are one AND set.
+        [branch] = custom_targeting["children"]
 
         # Verify we have criteria for AXE include segment
-        include_criteria = [c for c in custom_targeting["children"] if c.get("keyId") == 12345]
+        include_criteria = [c for c in branch["children"] if c.get("keyId") == 12345]
         assert len(include_criteria) > 0, "Should have audience_include custom targeting criteria"
 
 

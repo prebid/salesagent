@@ -51,6 +51,7 @@ from src.adapters.gam.managers.orders import (
 )
 from src.adapters.gam.pricing_compatibility import PricingCompatibility
 from src.adapters.gam_data_freshness import validate_and_log_freshness
+from src.adapters.gam_implementation_config_schema import CustomTargeting
 from src.core.audit_logger import AuditLogger
 from src.core.errors.codes import AppErrorCode
 from src.core.errors.details import (
@@ -241,9 +242,9 @@ class GoogleAdManager(AdServerAdapter):
         """Validate targeting and return unsupported features (delegated to targeting manager)."""
         return self.targeting_manager.validate_targeting(targeting_overlay)
 
-    def _build_targeting(self, targeting_overlay):
+    def _build_targeting(self, targeting_overlay, product_custom_targeting: CustomTargeting | None = None):
         """Build GAM targeting criteria from AdCP targeting (delegated to targeting manager)."""
-        return self.targeting_manager.build_targeting(targeting_overlay)
+        return self.targeting_manager.build_targeting(targeting_overlay, product_custom_targeting)
 
     # HITL (Human-in-the-Loop) support methods
     def _requires_manual_approval(self, operation: str) -> bool:
@@ -623,14 +624,14 @@ class GoogleAdManager(AdServerAdapter):
 
         # Build targeting for each package (per AdCP spec, targeting is at package level):
         # the buyer's overlay, ANDed with the product's own custom targeting. Built before
-        # the order so a targeting config GAM cannot take is refused with no order left behind.
+        # the order, so targeting GAM refuses leaves no order behind.
         package_targeting = {}
         for package in packages:
-            targeting = self._build_targeting(package.targeting_overlay) if package.targeting_overlay else {}
             product_impl_config = cast(dict[str, Any], products_map[package.package_id]["implementation_config"])
-            targeting = self.targeting_manager.add_product_custom_targeting(
-                targeting, product_impl_config.get("custom_targeting_keys") or {}
+            product_custom_targeting = CustomTargeting.from_stored(
+                product_impl_config.get("custom_targeting_keys") or {}
             )
+            targeting = self._build_targeting(package.targeting_overlay, product_custom_targeting)
             if targeting:
                 package_targeting[package.package_id] = targeting
 
