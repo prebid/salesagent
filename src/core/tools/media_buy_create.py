@@ -19,7 +19,6 @@ from typing import TYPE_CHECKING, Any, Literal, NoReturn, TypedDict, cast
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import selectinload
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -83,7 +82,6 @@ from src.core.database.models import AdapterConfig, CurrencyLimit, MediaBuy, Per
 from src.core.database.models import Creative as DBCreative
 from src.core.database.models import MediaPackage as DBMediaPackage
 from src.core.database.models import Product as ModelProduct
-from src.core.database.models import Product as ProductModel
 from src.core.helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.helpers.creative_helpers import (
@@ -2283,13 +2281,10 @@ async def _create_media_buy_impl(
             # FIXME(#1119): raw session usages below should migrate to repository methods
             assert validation_uow.session is not None
             session = validation_uow.session
-            # Get products from database
-            products_stmt = (
-                select(ProductModel)
-                .where(ProductModel.tenant_id == tenant.tenant_id, ProductModel.product_id.in_(product_ids))
-                .options(selectinload(ProductModel.pricing_options))
-            )
-            products = session.scalars(products_stmt).all()
+            # The products buyers are offered, through the read get_products and the catalog
+            # use: a product no verified property backs is unknown here too, on the path that
+            # holds the buy for review as much as on the auto-approved one (#1845).
+            products = [offered.product for offered in validation_uow.list_offered(product_ids)]
 
             # Build product lookup map
             product_map = {p.product_id: p for p in products}
@@ -2302,9 +2297,10 @@ async def _create_media_buy_impl(
                 # which ids were missing (salesagent-rfxfu).
                 #
                 # OPERATOR-FACING, never on the wire. The typed details name what the
-                # buyer asked for; only the log can say what the tenant actually holds,
+                # buyer asked for; only the log can say what the tenant actually offers,
                 # which is the difference between "the buyer sent a bad id" and "this
-                # deployment's catalog was never seeded".
+                # deployment's catalog was never seeded" (a product it holds but does not
+                # offer is logged by offered_products).
                 logger.warning(
                     "product miss: tenant=%s requested=%s missing=%s available=%s",
                     tenant.tenant_id,
@@ -3167,9 +3163,9 @@ async def _create_media_buy_impl(
                     break
 
             if not pkg_product:
-                # The product row exists (the check above reads the table), but the
-                # catalog leaves it out: it names no verified publisher, so buyers are
-                # not offered it (#1845). Graded by @T-UC-002-ext-unoffered-product.
+                # The existence check above reads the same offered products
+                # (list_offered), so this is reached only when a product stops being
+                # offered between that read and this one (#1845).
                 raise AdCPProductNotFoundError(
                     details=ProductRefDetails(package_index=idx, product_id=pkg_product_id),
                     field=package_field_path("product_id", pkg_index),

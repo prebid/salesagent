@@ -785,7 +785,7 @@ class TestProductConversionNegativeCardinality:
         mock_model.effective_format_ids = []
 
         with pytest.raises(ValueError, match="no format_ids"):
-            convert_product_model_to_schema(mock_model, authorized_properties=[])
+            convert_product_model_to_schema(mock_model, publisher_properties=[])
 
     def test_zero_pricing_options_raises_value_error(self):
         """product_conversion with 0 pricing_options -> ValueError."""
@@ -803,7 +803,7 @@ class TestProductConversionNegativeCardinality:
         mock_model.pricing_options = []
 
         with pytest.raises(ValueError, match="no pricing_options"):
-            convert_product_model_to_schema(mock_model, authorized_properties=[])
+            convert_product_model_to_schema(mock_model, publisher_properties=[])
 
 
 # ---------------------------------------------------------------------------

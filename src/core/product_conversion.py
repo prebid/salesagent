@@ -12,14 +12,11 @@ V3 Migration Notes:
 """
 
 import logging
-from collections.abc import Sequence
 
 from adcp import EventType, TimeUnit
 from adcp.types import ReportingCapabilities as LibraryReportingCapabilities
 from adcp.types._generated import MediaChannel
 from adcp.types.generated_poc.pricing_options.time_option import Parameters as TimeParameters
-
-from src.core.helpers.publisher_property_helpers import SelectableProperty
 
 # Import our extended Product (includes implementation_config) and the local
 # pricing member subclasses (our extra policy + internal adapter annotations)
@@ -377,28 +374,21 @@ def convert_product_model_to_schema(
     product_model,
     adapter_type: str | None = None,
     *,
-    authorized_properties: Sequence[SelectableProperty],
-) -> Product | None:
-    """Convert database Product model to Product schema, or ``None`` when it is not offered.
+    publisher_properties: list[dict],
+) -> Product:
+    """Convert an offered database Product model to the Product schema.
 
     Args:
         product_model: Product database model
         adapter_type: Adapter type for the tenant (e.g., "google_ad_manager", "mock").
             Used to determine the default delivery_measurement when the product
             does not have one configured. If None, falls back to generic "publisher".
-        authorized_properties: The tenant's verified authorized properties, loaded ONCE per
-            request (``AuthorizedPropertyRepository.list_refs``). A product names only the
-            publishers of these properties (``Product.resolve_publisher_properties``).
+        publisher_properties: The selectors the product names, resolved once by the read that
+            decided it is offered (``OfferedProduct.publisher_properties``, from
+            ``offered_products``); a product resolving to none is never converted.
 
     Returns:
-        Product schema object, or ``None`` when the product names no publisher the seller
-        holds a verified authorized property of. AdCP 3.1.1 ``core/product.json`` requires
-        ``publisher_properties`` with ``minItems: 1``, and each entry names the publisher
-        whose adagents.json a buyer verifies the seller against
-        (``governance/property/authorized-properties.mdx``), so such a product has no entry
-        it can truthfully make. It is a seller-side configuration gap: logged, marked "Not
-        offered to buyers" on the admin products page, and the caller leaves the product out,
-        as it leaves out a product hidden from a principal.
+        Product schema object.
 
     Raises:
         ValueError: In non-production environments, if delivery_measurement is missing
@@ -425,14 +415,6 @@ def convert_product_model_to_schema(
     product_data["format_ids"] = effective_formats
 
     # publisher_properties: one selector per publisher, never the seller's own host (#1845)
-    publisher_properties = product_model.resolve_publisher_properties(authorized_properties)
-    if not publisher_properties:
-        logger.warning(
-            "Product %s is not offered: its property selection names no publisher this seller holds a "
-            "verified authorized property of. Add and verify the publisher's properties under Authorized Properties.",
-            product_model.product_id,
-        )
-        return None
     product_data["publisher_properties"] = publisher_properties
 
     # delivery_measurement: REQUIRED per AdCP spec.

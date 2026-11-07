@@ -26,7 +26,11 @@ def _served(row) -> dict:
     """The product as the buyer receives it: converted, then through the wire function."""
     (product,) = to_wire(
         GetProductsResponse(
-            products=[convert_product_model_to_schema(row, authorized_properties=ONE_AUTHORIZED_PROPERTY)]
+            products=[
+                convert_product_model_to_schema(
+                    row, publisher_properties=row.resolve_publisher_properties(ONE_AUTHORIZED_PROPERTY)
+                )
+            ]
         )
     )["products"]
     return product

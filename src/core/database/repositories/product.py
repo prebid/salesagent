@@ -8,14 +8,57 @@ is set at construction time and injected into all queries automatically.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from collections.abc import Collection, Iterable, Sequence
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from src.core.database.models import PricingOption, Product
 
+if TYPE_CHECKING:
+    from src.core.helpers.publisher_property_helpers import SelectableProperty
+
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class OfferedProduct:
+    """A product buyers are offered, with the ``publisher_properties`` it names (#1845)."""
+
+    product: Product
+    publisher_properties: list[dict]
+
+
+def offered_products(
+    products: Iterable[Product], authorized_properties: Sequence[SelectableProperty]
+) -> list[OfferedProduct]:
+    """The *products* buyers are offered: each naming a publisher of the *authorized_properties*.
+
+    *authorized_properties* are the tenant's VERIFIED properties
+    (``AuthorizedPropertyRepository.list_refs``). AdCP 3.1.1 ``core/product.json`` requires
+    ``publisher_properties`` with ``minItems: 1``, and each entry names the publisher whose
+    adagents.json a buyer verifies the seller against
+    (``governance/property/authorized-properties.mdx``), so a product resolving to none has no
+    entry it can truthfully make. It is a seller-side configuration gap: logged, marked "Not
+    offered to buyers" on the admin products page, and left out here, so every reader that
+    goes through this function -- ``get_products``, the catalog, ``create_media_buy`` -- treats
+    it as unknown.
+    """
+    offered = []
+    for product in products:
+        publisher_properties = product.resolve_publisher_properties(authorized_properties)
+        if publisher_properties:
+            offered.append(OfferedProduct(product, publisher_properties))
+        else:
+            logger.warning(
+                "Product %s is not offered: its property selection names no publisher this seller holds a "
+                "verified authorized property of. Add and verify the publisher's properties under Authorized "
+                "Properties.",
+                product.product_id,
+            )
+    return offered
 
 
 class ProductRepository:
@@ -83,10 +126,10 @@ class ProductRepository:
         )
         return list(self._session.execute(stmt).unique().scalars().all())
 
-    def list_all_with_inventory(self) -> list[Product]:
-        """Get all products with pricing, inventory profile, and tenant loaded.
+    def list_for_offer(self, product_ids: Collection[str] | None = None) -> list[Product]:
+        """The tenant's products, or only *product_ids*, loaded for :func:`offered_products` and conversion.
 
-        Used by get_product_catalog which needs full product data for conversion.
+        Pricing options, inventory profile and tenant are loaded eagerly, ordered by product_id.
         """
         stmt = (
             select(Product)
@@ -96,7 +139,10 @@ class ProductRepository:
                 selectinload(Product.tenant),
             )
             .where(Product.tenant_id == self._tenant_id)
+            .order_by(Product.product_id)
         )
+        if product_ids is not None:
+            stmt = stmt.where(Product.product_id.in_(list(product_ids)))
         return list(self._session.scalars(stmt).all())
 
     def list_by_ids(self, product_ids: list[str]) -> list[Product]:

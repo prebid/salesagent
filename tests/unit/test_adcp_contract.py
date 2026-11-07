@@ -733,12 +733,12 @@ class TestAdCPContract:
 
         # Conversion should fail with a clear error message
         with pytest.raises(ValueError, match="has no format_ids configured"):
-            convert_product_model_to_schema(product_model, authorized_properties=[])
+            convert_product_model_to_schema(product_model, publisher_properties=[])
 
         # Also test with None (another way format_ids might be missing)
         product_model.effective_format_ids = None
         with pytest.raises(ValueError, match="has no format_ids configured"):
-            convert_product_model_to_schema(product_model, authorized_properties=[])
+            convert_product_model_to_schema(product_model, publisher_properties=[])
 
     def test_adcp_create_media_buy_request(self):
         """Test AdCP create_media_buy request structure."""

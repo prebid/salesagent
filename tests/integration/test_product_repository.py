@@ -166,7 +166,9 @@ class TestProductRepositoryGetAllForTenant:
             products = repo.list_all()
 
         # Should convert to Pydantic schema without errors
-        schema = convert_product_model_to_schema(products[0], authorized_properties=ONE_AUTHORIZED_PROPERTY)
+        schema = convert_product_model_to_schema(
+            products[0], publisher_properties=products[0].resolve_publisher_properties(ONE_AUTHORIZED_PROPERTY)
+        )
         assert isinstance(schema, ProductSchema)
         assert schema.product_id == f"prod-{uid}"
         assert len(schema.pricing_options) > 0
@@ -495,8 +497,8 @@ class TestProductRepositoryUpdateFields:
 
 
 @pytest.mark.requires_db
-class TestProductRepositoryListAllWithInventory:
-    """ProductRepository.list_all_with_inventory returns products with inventory relationship loaded."""
+class TestProductRepositoryListForOffer:
+    """ProductRepository.list_for_offer returns products with their relationships loaded."""
 
     def test_returns_products_with_pricing_loaded(self, integration_db):
         """Products returned have pricing_options accessible outside session."""
@@ -509,7 +511,7 @@ class TestProductRepositoryListAllWithInventory:
 
         with get_db_session() as session:
             repo = ProductRepository(session, f"test-tenant-{uid}")
-            products = repo.list_all_with_inventory()
+            products = repo.list_for_offer()
 
         assert len(products) == 1
         product = products[0]
@@ -531,7 +533,7 @@ class TestProductRepositoryListAllWithInventory:
 
         with get_db_session() as session:
             repo_a = ProductRepository(session, tenant_a_id)
-            products_a = repo_a.list_all_with_inventory()
+            products_a = repo_a.list_for_offer()
 
         assert len(products_a) == 1
         assert products_a[0].product_id == f"prod-a-{uid}"
@@ -546,6 +548,6 @@ class TestProductRepositoryListAllWithInventory:
 
         with get_db_session() as session:
             repo = ProductRepository(session, f"test-tenant-{uid}")
-            products = repo.list_all_with_inventory()
+            products = repo.list_for_offer()
 
         assert products == []

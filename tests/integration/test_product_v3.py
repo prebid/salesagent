@@ -1523,7 +1523,9 @@ class TestProductRepository:
             products = uow.products.list_all()
             authorized_properties = uow.authorized_properties.list_refs()
             for product in products:
-                schema = convert_product_model_to_schema(product, authorized_properties=authorized_properties)
+                schema = convert_product_model_to_schema(
+                    product, publisher_properties=product.resolve_publisher_properties(authorized_properties)
+                )
                 assert schema.product_id == product.product_id
                 assert schema.name == product.name
                 assert len(schema.pricing_options) > 0

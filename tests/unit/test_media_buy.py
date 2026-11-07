@@ -24,6 +24,7 @@ import pytest
 from pydantic import ValidationError
 
 from src.adapters.base import AdapterCreateRequest, AdapterUpdateResult
+from src.core.database.repositories.product import OfferedProduct
 from src.core.exceptions import (
     AdCPAuthorizationError,
     AdCPBudgetExceededError,
@@ -472,18 +473,15 @@ class TestCreateMediaBuyValidation:
         # in for the row: the impl reads it off ``identity.tenant`` in production too.
         identity = fabricated_account_identity(principal_id="principal_1", human_review_required=False)
 
-        # Build a mock UoW that provides session via context manager
+        # Build a mock UoW: the offered product, and a session whose .first() returns the
+        # currency limit then None
         session = MagicMock()
-        # .all() returns products; .first() returns currency_limit then None
-        all_mock = MagicMock()
-        all_mock.all.return_value = [product]
-        first_mock = MagicMock(side_effect=[cl, None])
         scalars_result = MagicMock()
-        scalars_result.all = all_mock.all
-        scalars_result.first = first_mock
+        scalars_result.first = MagicMock(side_effect=[cl, None])
         session.scalars.return_value = scalars_result
 
         mock_uow = MagicMock()
+        mock_uow.list_offered.return_value = [OfferedProduct(product, [])]
         mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
         mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
         mock_uow.idempotency_attempts.count_active.return_value = (0, None)

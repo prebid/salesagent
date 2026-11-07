@@ -967,7 +967,7 @@ def create_test_db_product_with_pricing(
 
             # Product can now be converted to AdCP schema
             from src.core.product_conversion import convert_product_model_to_schema
-            adcp_product = convert_product_model_to_schema(product, authorized_properties=ONE_AUTHORIZED_PROPERTY)
+            adcp_product = convert_product_model_to_schema(product, publisher_properties=product.resolve_publisher_properties(ONE_AUTHORIZED_PROPERTY))
     """
     from decimal import Decimal
 

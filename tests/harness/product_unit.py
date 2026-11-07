@@ -1,6 +1,6 @@
 """ProductEnv — unit test environment for _get_products_impl.
 
-Patches: ProductUoW, convert_product_model_to_schema, PolicyCheckService,
+Patches: ProductUoW, convert_product_model_to_schema, offered_products, PolicyCheckService,
          generate_variants_for_brief, DynamicPricingService, get_factory (ranking),
          resolve_property_list, get_adapter.
 
@@ -15,6 +15,7 @@ Usage::
 Available mocks via env.mock:
     "uow"                  -- ProductUoW class mock
     "convert"              -- convert_product_model_to_schema mock (identity)
+    "offered"              -- offered_products mock (offers every product it is given)
     "policy_service"       -- PolicyCheckService class mock
     "dynamic_variants"     -- generate_variants_for_brief AsyncMock
     "ranking_factory"      -- get_factory mock (AI ranking)
@@ -28,6 +29,7 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import MagicMock
 
+from src.core.database.repositories.product import OfferedProduct
 from src.core.product_conversion import default_reporting_capabilities
 from src.core.schemas import Product
 from tests.factories.product import PricingOptionRequestFactory, default_publisher_properties
@@ -104,6 +106,7 @@ class ProductEnv(ProductMixin, BaseTestEnv):
     EXTERNAL_PATCHES = {
         "uow": "src.core.database.repositories.uow.ProductUoW",
         "convert": f"{MODULE}.convert_product_model_to_schema",
+        "offered": f"{MODULE}.offered_products",
         "policy_service": f"{MODULE}.PolicyCheckService",
         "dynamic_variants": "src.services.dynamic_products.generate_variants_for_brief",
         "ranking_factory": "src.services.ai.factory.get_factory",
@@ -123,13 +126,17 @@ class ProductEnv(ProductMixin, BaseTestEnv):
         # UoW: context manager with product repository
         self._uow_instance = MagicMock()
         self._uow_instance.products = MagicMock()
-        self._uow_instance.products.list_all.return_value = []
+        self._uow_instance.list_offered.return_value = []
         self._uow_instance.__enter__ = MagicMock(return_value=self._uow_instance)
         self._uow_instance.__exit__ = MagicMock(return_value=False)
         self.mock["uow"].return_value = self._uow_instance
 
-        # Convert: identity function (return product as-is)
+        # Convert: identity function (return product as-is). The products here are already
+        # schema Products, so every one is offered, with the publisher_properties it carries.
         self.mock["convert"].side_effect = lambda product_obj, **kw: product_obj
+        self.mock["offered"].side_effect = lambda products, _refs: [
+            OfferedProduct(p, p.publisher_properties) for p in products
+        ]
 
         # Adapter: mock with supported pricing models
         mock_adapter = MagicMock()
@@ -178,6 +185,8 @@ class ProductEnv(ProductMixin, BaseTestEnv):
 
         # Update UoW repo mock
         if self._uow_instance is not None:
-            self._uow_instance.products.list_all.return_value = list(self._products)
+            self._uow_instance.list_offered.return_value = [
+                OfferedProduct(p, p.publisher_properties) for p in self._products
+            ]
 
         return product

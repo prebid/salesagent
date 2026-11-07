@@ -163,11 +163,15 @@ class TestPropertyTargetingAllowedConversion:
     def test_conversion_includes_property_targeting_allowed_true(self):
         """property_targeting_allowed=True on DB model should appear in converted schema."""
         product_model = _make_db_product_for_conversion(property_targeting_allowed=True)
-        product = convert_product_model_to_schema(product_model, authorized_properties=ONE_AUTHORIZED_PROPERTY)
+        product = convert_product_model_to_schema(
+            product_model, publisher_properties=product_model.resolve_publisher_properties(ONE_AUTHORIZED_PROPERTY)
+        )
         assert product.property_targeting_allowed is True
 
     def test_conversion_defaults_to_false_when_not_set(self):
         """property_targeting_allowed=False on DB model results in False (library default)."""
         product_model = _make_db_product_for_conversion()
-        product = convert_product_model_to_schema(product_model, authorized_properties=ONE_AUTHORIZED_PROPERTY)
+        product = convert_product_model_to_schema(
+            product_model, publisher_properties=product_model.resolve_publisher_properties(ONE_AUTHORIZED_PROPERTY)
+        )
         assert product.property_targeting_allowed is False

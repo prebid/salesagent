@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import logging
 import warnings
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from types import TracebackType
 from typing import Any, ClassVar, Self
 
@@ -41,7 +41,7 @@ from src.core.database.repositories.currency_limit import CurrencyLimitRepositor
 from src.core.database.repositories.effects import begin_effects, drain_after_commit, end_effects
 from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
 from src.core.database.repositories.media_buy import MediaBuyRepository
-from src.core.database.repositories.product import ProductRepository
+from src.core.database.repositories.product import OfferedProduct, ProductRepository, offered_products
 from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
 from src.core.database.repositories.signing_key import SigningKeyRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
@@ -191,7 +191,24 @@ class BaseUoW:
             setattr(self, attribute, None)
 
 
-class MediaBuyUoW(BaseUoW):
+class _OffersProducts:
+    """The one read of the products buyers are offered, for a UoW holding both repositories it needs."""
+
+    products: ProductRepository | None
+    authorized_properties: AuthorizedPropertyRepository | None
+
+    def list_offered(self, product_ids: Collection[str] | None = None) -> list[OfferedProduct]:
+        """The tenant's offered products (:func:`offered_products`), or only those of *product_ids*.
+
+        ``get_products``, ``get_product_catalog`` and ``create_media_buy`` all read products
+        here, so a product one of them refuses as unknown is unknown to the others too.
+        """
+        assert self.products is not None
+        assert self.authorized_properties is not None
+        return offered_products(self.products.list_for_offer(product_ids), self.authorized_properties.list_refs())
+
+
+class MediaBuyUoW(_OffersProducts, BaseUoW):
     """Unit of Work for MediaBuy operations.
 
     Wraps a database session and provides tenant-scoped repositories for
@@ -205,6 +222,7 @@ class MediaBuyUoW(BaseUoW):
 
     media_buys: MediaBuyRepository | None
     products: ProductRepository | None
+    authorized_properties: AuthorizedPropertyRepository | None
     creatives: CreativeRepository | None
     # create_media_buy and update_media_buy both write a package's creative
     # assignments in the same transaction as the buy itself. They used to do it
@@ -219,6 +237,7 @@ class MediaBuyUoW(BaseUoW):
         assert self._session is not None
         self.media_buys = MediaBuyRepository(self._session, self._tenant_id)
         self.products = ProductRepository(self._session, self._tenant_id)
+        self.authorized_properties = AuthorizedPropertyRepository(self._session, self._tenant_id)
         self.creatives = CreativeRepository(self._session, self._tenant_id)
         self.assignments = CreativeAssignmentRepository(self._session, self._tenant_id)
         self.currency_limits = CurrencyLimitRepository(self._session, self._tenant_id)
@@ -227,13 +246,14 @@ class MediaBuyUoW(BaseUoW):
     def _clear_repos(self) -> None:
         self.media_buys = None
         self.products = None
+        self.authorized_properties = None
         self.creatives = None
         self.assignments = None
         self.currency_limits = None
         self.idempotency_attempts = None
 
 
-class ProductUoW(BaseUoW):
+class ProductUoW(_OffersProducts, BaseUoW):
     """Unit of Work for Product operations.
 
     Wraps a database session and provides a tenant-scoped ProductRepository, plus the
