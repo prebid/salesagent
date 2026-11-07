@@ -210,7 +210,7 @@
             <label for="targeting_template">Targeting Template (JSON)</label>
             <textarea id="targeting_template" name="targeting_template" rows="6"
                       placeholder='{"geo_countries": ["US"], "device_type_any_of": ["desktop", "mobile"]}'
-                      style="font-family: monospace; font-size: 0.9rem;">{{ prefill.publisher_properties }}</textarea>
+                      style="font-family: monospace; font-size: 0.9rem;">{{ profile.targeting_template | tojson(indent=2) if profile.targeting_template else '' }}</textarea>
             <small style="color: #666;">Optional. Products using this profile can inherit or override these targeting rules.</small>
         </div>
 
@@ -228,10 +228,9 @@ let selectedFormats = new Set();
 let allFormats = [];
 
 // Pre-populate existing data
-// The server renders the stored inventory config and selection into the form.
+// The server renders the stored inventory config, selection and targeting template into the form.
 const existingProfile = {
-    formats: {{ profile.format_ids | tojson | safe }},
-    targeting_template: {{ profile.targeting_template | tojson | safe if profile.targeting_template else 'null' }}
+    formats: {{ profile.format_ids | tojson | safe }}
 };
 
 // Load formats from API on page load
@@ -253,11 +252,6 @@ function prePopulateData() {
 
     // The server rendered the property selection (profile_form_prefill); show its section.
     togglePropertyMode();
-
-    // Pre-populate targeting template
-    if (existingProfile.targeting_template) {
-        document.getElementById('targeting_template').value = JSON.stringify(existingProfile.targeting_template, null, 2);
-    }
 }
 
 async function loadFormats() {
