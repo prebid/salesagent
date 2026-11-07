@@ -19,6 +19,7 @@ from datetime import UTC, date, datetime
 
 import pytest
 
+from scripts.setup.seed_products import publishers_whole
 from src.core.exceptions import (
     AdCPAuthRequiredError,
     AdCPValidationError,
@@ -1482,7 +1483,7 @@ class TestPricingOptionStringLookup:
                 product_id="prod1",
                 name="Test Product",
                 format_ids=[],
-                property_tags=["all_inventory"],
+                properties=publishers_whole(session, "t1"),
                 targeting_template={},
                 delivery_type="standard",
             )
@@ -1535,7 +1536,7 @@ class TestPricingOptionStringLookup:
                 product_id="prod1",
                 name="Test Product",
                 format_ids=[],
-                property_tags=["all_inventory"],
+                properties=publishers_whole(session, "t1"),
                 targeting_template={},
                 delivery_type="standard",
             )
@@ -1642,7 +1643,7 @@ class TestPricingOptionStringToIntComparisonRejected:
                 product_id="prod1",
                 name="Test Product",
                 format_ids=[],
-                property_tags=["all_inventory"],
+                properties=publishers_whole(session, "t1"),
                 targeting_template={},
                 delivery_type="standard",
             )
@@ -1698,7 +1699,7 @@ class TestPricingOptionStringToIntComparisonRejected:
                 product_id="prod1",
                 name="Test Product",
                 format_ids=[],
-                property_tags=["all_inventory"],
+                properties=publishers_whole(session, "t1"),
                 targeting_template={},
                 delivery_type="standard",
             )

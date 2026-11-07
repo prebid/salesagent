@@ -182,7 +182,6 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
             product_id=product_id,
             delivery_type="non_guaranteed",
             format_ids=format_ids,
-            property_tags=["all_inventory"],
         )
         pricing_option = None
         if with_pricing:

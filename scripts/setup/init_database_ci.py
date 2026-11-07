@@ -497,7 +497,7 @@ def init_db_ci():
             saved_products = session.scalars(stmt_verify).all()
             print(f"\n✅ Verification: {len(saved_products)} products found in database for tenant {tenant_id}")
             for prod in saved_products:
-                print(f"   - {prod.product_id}: {prod.name}, property_tags={prod.property_tags}")
+                print(f"   - {prod.product_id}: {prod.name}, properties={prod.properties}")
 
             # Also verify pricing_options exist
             from src.core.database.models import PricingOption as PricingOptionModel
@@ -515,11 +515,10 @@ def init_db_ci():
 
             # CRITICAL: Fail if products missing property authorization
             for prod in saved_products:
-                if not prod.property_tags and not prod.properties:
-                    print(f"\n❌ CRITICAL ERROR: Product {prod.product_id} missing property authorization!")
-                    print(f"   property_tags: {prod.property_tags}")
+                if not prod.properties:
+                    print(f"\n❌ CRITICAL ERROR: Product {prod.product_id} names no publisher!")
                     print(f"   properties: {prod.properties}")
-                    print("   Products must have either property_tags or properties per AdCP spec")
+                    print("   Products must name their publishers in properties per AdCP spec")
                     sys.exit(1)
 
             print("\n✅ Database initialization complete:")

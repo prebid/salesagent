@@ -8,6 +8,7 @@ from decimal import Decimal
 
 import pytest
 
+from scripts.setup.seed_products import publishers_whole
 from src.core.database.database_session import get_db_session
 from src.core.database.models import CurrencyLimit, PricingOption, Principal, Product, PropertyTag, Tenant
 from src.core.exceptions import AdCPValidationError
@@ -125,7 +126,7 @@ def setup_tenant_with_pricing_products(integration_db):
             delivery_type="guaranteed",
             targeting_template={},
             implementation_config={},
-            property_tags=["all_inventory"],
+            properties=publishers_whole(session, "test_pricing_tenant"),
         )
         session.add(product_cpm_fixed)
         session.flush()
@@ -150,7 +151,7 @@ def setup_tenant_with_pricing_products(integration_db):
             delivery_type="non_guaranteed",
             targeting_template={},
             implementation_config={},
-            property_tags=["all_inventory"],
+            properties=publishers_whole(session, "test_pricing_tenant"),
         )
         session.add(product_cpm_auction)
         session.flush()
@@ -176,7 +177,7 @@ def setup_tenant_with_pricing_products(integration_db):
             delivery_type="non_guaranteed",
             targeting_template={},
             implementation_config={},
-            property_tags=["all_inventory"],
+            properties=publishers_whole(session, "test_pricing_tenant"),
         )
         session.add(product_cpcv)
         session.flush()
@@ -205,7 +206,7 @@ def setup_tenant_with_pricing_products(integration_db):
             delivery_type="non_guaranteed",
             targeting_template={},
             implementation_config={},
-            property_tags=["all_inventory"],
+            properties=publishers_whole(session, "test_pricing_tenant"),
         )
         session.add(product_multi)
         session.flush()

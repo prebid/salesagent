@@ -961,14 +961,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
         "tests/integration/test_inventory_profile_effective_properties.py",
         "test_effective_values_load_the_profile_relationship_on_access",
     ),
-    (
-        "tests/integration/test_inventory_profile_effective_properties.py",
-        "test_effective_property_tags_returns_custom_tags_when_profile_not_set",
-    ),
-    (
-        "tests/integration/test_inventory_profile_effective_properties.py",
-        "test_effective_property_tags_returns_none_when_profile_set",
-    ),
     ("tests/integration/test_inventory_profile_effective_properties.py", "test_product_custom"),
     ("tests/integration/test_inventory_profile_effective_properties.py", "test_product_with_profile"),
     ("tests/integration/test_inventory_profile_effective_properties.py", "test_profile"),

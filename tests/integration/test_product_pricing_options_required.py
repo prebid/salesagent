@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 import pytest
 from sqlalchemy import select
 
+from scripts.setup.seed_products import publishers_whole
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AuthorizedProperty
 from src.core.database.models import Principal as PrincipalModel
@@ -143,7 +144,7 @@ def test_product_query_with_eager_loading(integration_db):
             format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
             targeting_template={},
             delivery_type="guaranteed",
-            property_tags=["all_inventory"],
+            properties=publishers_whole(session, tenant.tenant_id),
             delivery_measurement={"provider": "publisher", "notes": "Test measurement"},
         )
         session.add(product)
@@ -220,7 +221,7 @@ def test_product_without_eager_loading_fails_validation(integration_db):
             format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
             targeting_template={},
             delivery_type="guaranteed",
-            property_tags=["all_inventory"],
+            properties=publishers_whole(session, tenant.tenant_id),
             delivery_measurement={"provider": "publisher", "notes": "Test measurement"},
         )
         session.add(product)
@@ -376,7 +377,7 @@ def test_create_media_buy_loads_pricing_options(integration_db):
             format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
             targeting_template={},
             delivery_type="guaranteed",
-            property_tags=["all_inventory"],
+            properties=publishers_whole(session, tenant.tenant_id),
             delivery_measurement={"provider": "publisher", "notes": "Test measurement"},
         )
         session.add(product)

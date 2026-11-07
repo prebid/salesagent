@@ -21,6 +21,7 @@ from adcp.types import MediaBuyStatus
 from pydantic import ValidationError
 from sqlalchemy import func, select
 
+from scripts.setup.seed_products import publishers_whole
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, WorkflowStep
 from src.core.database.models import MediaPackage as DBMediaPackage
@@ -223,7 +224,7 @@ class TestCreateMediaBuyCurrencyValidation:
                 format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
                 targeting_template={},
                 delivery_type="guaranteed",
-                property_tags=["all_inventory"],
+                properties=publishers_whole(session, mb_tenant["tenant_id"]),
                 is_custom=False,
                 countries=["DE"],
             )

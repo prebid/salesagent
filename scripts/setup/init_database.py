@@ -5,6 +5,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 from scripts.ops.migrate import run_migrations
+from scripts.setup.seed_products import publishers_whole
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AdapterConfig, Product, Tenant, TenantManagementConfig
@@ -323,7 +324,7 @@ def init_db(exit_on_error=False):
                         cpm=p.get("cpm"),
                         price_guidance=p.get("price_guidance"),
                         implementation_config=p.get("implementation_config"),
-                        property_tags=["all_inventory"],  # Required per AdCP spec
+                        properties=publishers_whole(session, "default"),
                     )
                     session.add(product)
 

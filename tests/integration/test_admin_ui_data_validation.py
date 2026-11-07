@@ -50,7 +50,6 @@ class TestProductsDataValidation:
                 countries=["US"],
                 format_ids=[],
                 targeting_template={},
-                property_tags=["all_inventory"],  # Required per AdCP spec
                 pricing_model="cpm",
                 rate=10.0,
                 is_fixed=True,
@@ -120,7 +119,6 @@ class TestProductsDataValidation:
                     countries=["US"],
                     format_ids=[],
                     targeting_template={},
-                    property_tags=["all_inventory"],  # Required per AdCP spec
                     pricing_model="cpm",
                     rate=15.0,
                     is_fixed=True,
@@ -171,7 +169,6 @@ class TestProductsDataValidation:
                 countries=["US"],
                 format_ids=[],
                 targeting_template={},
-                property_tags=["all_inventory"],  # Required per AdCP spec
             )
             db_session.commit()
 

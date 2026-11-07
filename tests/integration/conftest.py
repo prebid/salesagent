@@ -14,6 +14,7 @@ import pytest
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 from sqlalchemy import create_engine, delete, select
 
+from scripts.setup.seed_products import publishers_whole
 from src.admin.app import create_app
 
 # Registers the ci-test tenant/principal fixture for this package. Imported by
@@ -551,14 +552,13 @@ def sample_products(integration_db, sample_tenant):
                 ],
                 targeting_template={"geo_country": {"values": ["US"], "required": False}},
                 delivery_type="guaranteed",
-                property_tags=["all_inventory"],  # Required per AdCP spec
+                properties=publishers_whole(session, sample_tenant["tenant_id"]),
                 is_custom=False,
                 countries=["US"],
                 measurement=None,
                 creative_policy=None,
                 price_guidance=None,
                 implementation_config=None,
-                properties=None,
                 # Placements for placement-targeting validation (adcp#208)
                 placements=[
                     {
@@ -598,14 +598,13 @@ def sample_products(integration_db, sample_tenant):
                 ],
                 targeting_template={},
                 delivery_type="non_guaranteed",
-                property_tags=["all_inventory"],  # Required per AdCP spec
+                properties=publishers_whole(session, sample_tenant["tenant_id"]),
                 price_guidance={"floor": 10.0, "p50": 20.0, "p75": 30.0, "p90": 40.0},
                 is_custom=False,
                 countries=["US", "CA"],
                 measurement=None,
                 creative_policy=None,
                 implementation_config=None,
-                properties=None,
             ),
         ]
 
@@ -779,7 +778,6 @@ def create_test_product_with_pricing(
     format_ids: list[dict[str, str]] | None = None,
     targeting_template: dict | None = None,
     delivery_type: str = "guaranteed_impressions",
-    property_tags: list[str] | None = None,
     **product_kwargs,
 ):
     """Create a Product with pricing_options using the new pricing model."""
@@ -823,8 +821,9 @@ def create_test_product_with_pricing(
             "notes": "MRC-accredited viewability",
         }
 
-    if property_tags is None and "properties" not in product_kwargs:
-        property_tags = ["all_inventory"]
+    if "properties" not in product_kwargs:
+        # Every publisher of the tenant whole, as a seeded product names them.
+        product_kwargs["properties"] = publishers_whole(session, tenant_id)
 
     # Fix measurement - remove invalid fields
     if "measurement" in product_kwargs and isinstance(product_kwargs["measurement"], dict):
@@ -862,7 +861,6 @@ def create_test_product_with_pricing(
         format_ids=format_ids,
         targeting_template=targeting_template,
         delivery_type=delivery_type,
-        property_tags=property_tags,
         **product_kwargs,
     )
     session.add(product)
@@ -1132,7 +1130,7 @@ def seed_error_test_tenant(
         human_review_required=False,
         is_active=True,
     )
-    product = ProductFactory(tenant=tenant, product_id=product_id, property_tags=["all_inventory"])
+    product = ProductFactory(tenant=tenant, product_id=product_id)
     PricingOptionFactory(product=product)
     # No access_token=: the row keeps sha256 plus a display prefix, and the factory
     # derives both from ``plaintext_token_for(principal_id)``. The token a caller

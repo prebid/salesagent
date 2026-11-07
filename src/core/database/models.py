@@ -378,14 +378,10 @@ class Product(Base, JSONValidatorMixin):
     channels: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
     # Type hint: implementation config dict
     implementation_config: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
-    # AdCP property authorization fields (at least one required per spec)
-    # XOR constraint: exactly one of (properties, property_ids, property_tags) must be set
-    # Type hint: list of Property dicts for validation (legacy, full objects)
-    properties: Mapped[list[dict] | None] = mapped_column(JSONType, nullable=True)
-    # Type hint: list of property ID strings (AdCP 2.0.0 by_id variant)
-    property_ids: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
-    # Type hint: list of tag strings (AdCP 2.0.0 by_tag variant)
-    property_tags: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
+    # The publishers the product sells: AdCP publisher-property selectors, one per publisher
+    # (core/product.json publisher_properties). Revision 3c38b1ee241f converted the legacy
+    # property_tags / property_ids columns into these and dropped them.
+    properties: Mapped[list[dict]] = mapped_column(JSONType, nullable=False)
     # Note: PR #79 fields (estimated_exposures, floor_cpm, recommended_cpm) are NOT stored in database
     # They are calculated dynamically from product_performance_metrics table
 
@@ -486,36 +482,19 @@ class Product(Base, JSONValidatorMixin):
 
         *authorized_properties* are the seller's VERIFIED authorized properties, loaded once
         per request by the caller (``AuthorizedPropertyRepository.list_refs``). An inventory
-        profile's selectors, or the product's own ``properties``, already name their
-        publishers and keep only those this list holds. The legacy ``property_ids`` /
-        ``property_tags`` columns name none, so they resolve against it.
+        profile's selectors, or else the product's own ``properties``, name their publishers,
+        and are narrowed to the verified properties they name (``authorized_selectors``).
 
         A tenant is a SELLER: its host is where its agent answers, not a publisher, and a
         buyer verifies a product at ``https://<publisher_domain>/.well-known/adagents.json``
         (#1845). So a product no verified property backs resolves to ``[]`` rather than
         borrowing the host; the caller does not offer it.
         """
-        from src.core.helpers.publisher_property_helpers import authorized_selectors, legacy_selectors
+        from src.core.helpers.publisher_property_helpers import authorized_selectors
 
         if self.inventory_profile_id and self.inventory_profile:
             return authorized_selectors(self.inventory_profile.publisher_properties, authorized_properties)
-        if self.properties:
-            return authorized_selectors(self.properties, authorized_properties)
-        return legacy_selectors(self.property_ids, self.property_tags, authorized_properties)
-
-    @property
-    def effective_property_tags(self) -> list[str] | None:
-        """Get property tags from inventory profile (if set) or product itself.
-
-        Returns property_tags array (list of tag strings).
-        When inventory_profile_id is set, derives tags from profile's properties (auto-updates).
-        When inventory_profile_id is null, returns product's own property_tags (legacy).
-        """
-        if self.inventory_profile_id and self.inventory_profile:
-            # For profile-based products, we use properties not tags
-            # Return None to indicate properties should be used instead
-            return None
-        return self.property_tags
+        return authorized_selectors(self.properties, authorized_properties)
 
     @property
     def effective_implementation_config(self) -> dict:
@@ -540,14 +519,7 @@ class Product(Base, JSONValidatorMixin):
             }
         return self.implementation_config or {}
 
-    __table_args__ = (
-        Index("idx_products_tenant", "tenant_id"),
-        # Enforce AdCP spec: products must have EITHER properties OR property_tags (not both, not neither)
-        CheckConstraint(
-            "(properties IS NOT NULL AND property_tags IS NULL) OR (properties IS NULL AND property_tags IS NOT NULL)",
-            name="ck_product_properties_xor",
-        ),
-    )
+    __table_args__ = (Index("idx_products_tenant", "tenant_id"),)
 
 
 class PricingOption(Base):

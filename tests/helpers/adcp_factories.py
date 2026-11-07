@@ -837,8 +837,6 @@ def create_test_db_product(
     name: str = "Test Product",
     description: str = "Test product description",
     format_ids: list[dict[str, str]] | None = None,
-    property_tags: list[str] | None = None,
-    property_ids: list[str] | None = None,
     properties: list[dict] | None = None,
     delivery_type: str = "guaranteed",
     targeting_template: dict[str, Any] | None = None,
@@ -848,9 +846,8 @@ def create_test_db_product(
     """Create a test Product database record with tenant_id.
 
     This factory creates database Product records (from src.core.database.models.Product)
-    for tests that need to insert Products into the database. The database Product model
-    uses legacy field names (property_tags, property_ids, properties) that get converted
-    to publisher_properties when serializing to AdCP format.
+    for tests that need to insert Products into the database. The model stores its
+    publishers as selectors in ``properties``, announced as ``publisher_properties``.
 
     Use this factory for integration tests that create Product database records.
     Use create_test_product() for AdCP-compliant Product objects without tenant_id.
@@ -861,10 +858,7 @@ def create_test_db_product(
         name: Product name
         description: Product description
         format_ids: List of format ID dicts with {agent_url: str, id: str}. Defaults to display_300x250
-        property_tags: List of property tags (e.g., ["all_inventory", "premium"]), resolved against the
-            tenant's authorized properties (alternative to properties)
-        property_ids: List of property IDs (alternative to property_tags)
-        properties: Explicit publisher_properties selectors. Default: default_publisher_properties()
+        properties: Publisher property selectors. Default: default_publisher_properties()
         delivery_type: "guaranteed" or "non_guaranteed"
         targeting_template: Targeting template dict. Defaults to empty dict
         inventory_profile_id: Optional inventory profile ID to link
@@ -883,7 +877,6 @@ def create_test_db_product(
             tenant_id="test_tenant",
             product_id="video_premium",
             format_ids=[{"agent_url": "https://creative.example.com", "id": "video_1920x1080"}],
-            property_tags=["premium", "sports"],
             inventory_profile_id=123
         )
 
@@ -906,7 +899,7 @@ def create_test_db_product(
 
     # An explicit selector if no property authorization provided. It is offered only where the
     # tenant holds the verified property ONE_AUTHORIZED_PROPERTY names (#1845)
-    if property_tags is None and property_ids is None and properties is None:
+    if properties is None:
         properties = default_publisher_properties()
 
     # Default targeting_template
@@ -919,8 +912,6 @@ def create_test_db_product(
         name=name,
         description=description,
         format_ids=format_ids,
-        property_tags=property_tags,
-        property_ids=property_ids,
         properties=properties,
         delivery_type=delivery_type,
         targeting_template=targeting_template,

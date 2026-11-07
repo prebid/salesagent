@@ -805,7 +805,6 @@ def given_duplicate_product(ctx: dict, product_id: str) -> None:
         ProductFactory(
             tenant=ctx["tenant"],
             product_id=product_id,
-            property_tags=["all_inventory"],
         )
         env._commit_factory_data()
     for pkg in packages:
@@ -1215,7 +1214,6 @@ def _setup_multi_package_request(ctx: dict, currencies: list[str]) -> None:
             product = ProductFactory(
                 tenant=ctx["tenant"],
                 product_id=f"product_{currency.lower()}_{i}",
-                property_tags=["all_inventory"],
             )
         po = PricingOptionFactory(
             product=product,
@@ -1369,7 +1367,6 @@ def _setup_multi_product_request(ctx: dict, product_ids: list[str]) -> None:
                 product = ProductFactory(
                     tenant=ctx["tenant"],
                     product_id=pid,
-                    property_tags=["all_inventory"],
                 )
                 ctx[f"_product_{pid}"] = product
 

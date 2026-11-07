@@ -19,9 +19,9 @@ from tests.bdd.steps.generic._table import comma_list
 from tests.factories import AuthorizedPropertyFactory, InventoryProfileFactory, PricingOptionFactory, ProductFactory
 
 
-def _offer(ctx: dict, product_id: str, **legacy_selection: list[str]) -> None:
-    """Store a priced product selecting its properties by a legacy ``property_tags`` / ``property_ids`` column."""
-    product = ProductFactory(tenant=ctx["tenant"], product_id=product_id, **legacy_selection)
+def _offer(ctx: dict, product_id: str, selectors: list[dict]) -> None:
+    """Store a priced product selling the publishers *selectors* name."""
+    product = ProductFactory(tenant=ctx["tenant"], product_id=product_id, properties=selectors)
     PricingOptionFactory(product=product)
 
 
@@ -47,26 +47,28 @@ def given_pending_property(ctx: dict, property_id: str, domain: str, tag: str) -
     )
 
 
-@given(parsers.parse('the seller offers product "{product_id}" selecting property tags "{tags}"'))
-def given_product_by_tags(ctx: dict, product_id: str, tags: str) -> None:
-    _offer(ctx, product_id, property_tags=comma_list(tags))
+@given(parsers.parse('the seller offers product "{product_id}" migrated from legacy property tags "{tags}"'))
+def given_product_migrated_from_tags(ctx: dict, product_id: str, tags: str) -> None:
+    """A product the legacy-selection migration converted from its ``property_tags`` column."""
+    _offer(ctx, product_id, ctx["env"].migrated_selection(property_tags=comma_list(tags)))
 
 
-@given(parsers.parse('the seller offers product "{product_id}" selecting property ids "{property_ids}"'))
-def given_product_by_ids(ctx: dict, product_id: str, property_ids: str) -> None:
-    # An empty tag list because ck_product_properties_xor wants one of properties / property_tags.
-    _offer(ctx, product_id, property_ids=comma_list(property_ids), property_tags=[])
+@given(parsers.parse('the seller offers product "{product_id}" migrated from legacy property ids "{property_ids}"'))
+def given_product_migrated_from_ids(ctx: dict, product_id: str, property_ids: str) -> None:
+    """A product the legacy-selection migration converted from its ``property_ids`` column."""
+    _offer(ctx, product_id, ctx["env"].migrated_selection(property_ids=comma_list(property_ids)))
 
 
-@given(parsers.parse('the seller offers product "{product_id}" selecting no properties'))
-def given_product_selecting_nothing(ctx: dict, product_id: str) -> None:
-    # An empty tag list is how the admin form stores "nothing selected".
-    _offer(ctx, product_id, property_tags=[])
+@given(parsers.parse('the seller offers product "{product_id}" migrated from a legacy selection of no properties'))
+def given_product_migrated_from_nothing(ctx: dict, product_id: str) -> None:
+    """A product the migration converted from an empty ``property_tags``, which selected every publisher."""
+    _offer(ctx, product_id, ctx["env"].migrated_selection(property_tags=[]))
 
 
 @given(parsers.parse('the tenant also holds product "{product_id}" that no verified property backs'))
 def given_unoffered_product(ctx: dict, product_id: str) -> None:
-    _offer(ctx, product_id, property_tags=["no_verified_property_carries_this"])
+    # A publisher the tenant holds no property of, so ProductFactory seeds none for it.
+    _offer(ctx, product_id, [{"publisher_domain": "unbacked-publisher.example", "selection_type": "all"}])
 
 
 @given(parsers.parse('the seller offers product "{product_id}" naming publisher_properties {selectors}'))

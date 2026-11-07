@@ -178,8 +178,8 @@ def when_open_products_page(ctx: dict) -> None:
 
 
 def _product_selection(row: Any) -> str:
-    """Every column a product's selection is stored in, as the bytes a comparison can hold."""
-    return json.dumps([row.properties, row.property_tags, row.property_ids])
+    """The column a product's selection is stored in, as the bytes a comparison can hold."""
+    return json.dumps(row.properties)
 
 
 def _profile_selection(row: Any) -> str:

@@ -29,7 +29,6 @@ from src.core.helpers.publisher_property_helpers import (
     judge_selection_save,
     kept_choices,
     kept_selectors,
-    legacy_selectors,
     product_form_fields,
     publisher_tag_selection,
     selection_digest,
@@ -643,23 +642,9 @@ def _offered_and_known(db_session, tenant_id: str) -> tuple[list, list]:
     return repository.list_refs(), repository.list_refs(include_unverified=True)
 
 
-def _stored_choice(product: Product, verified: list, known: list) -> list[dict]:
-    """What *product* stores, as the selectors :func:`kept_choices` reads.
-
-    Its own selectors; or its legacy columns over the properties the page cannot show, the
-    unverified ones (the verified part is what the boxes show checked); or nothing, for a
-    product selecting every publisher, which a choice of boxes narrows.
-    """
-    if product.properties:
-        return product.properties
-    if product.property_ids or product.property_tags:
-        return legacy_selectors(product.property_ids, product.property_tags, [p for p in known if p not in verified])
-    return []
-
-
 def _selection_digest(product: Product) -> str:
-    """The digest of the columns a product's selection is stored in (``selection_digest``)."""
-    return selection_digest(product.properties, product.property_tags, product.property_ids)
+    """The digest of the column a product's selection is stored in (``selection_digest``)."""
+    return selection_digest(product.properties)
 
 
 #: The form field holding the choices of each property mode that builds selectors. ``full``
@@ -1091,20 +1076,16 @@ def add_product(tenant_id):
                             product_kwargs["product_card"]["manifest"]["pricing_amount"] = str(first_option.rate)
                             product_kwargs["product_card"]["manifest"]["pricing_currency"] = first_option.currency
 
-                # Handle property authorization (AdCP requirement)
-                # Default to empty property_tags if not specified (satisfies DB constraint)
+                # The publishers the product sells (AdCP requirement): every mode builds selectors.
                 property_mode = form_data.get("property_mode", "tags")
-                if property_mode in _SELECTION_FIELDS:
-                    selectors, refusal = _selectors_from_product_form(db_session, tenant_id, property_mode)
-                    if refusal:
-                        flash(refusal, "error")
-                        return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
-                    product_kwargs["properties"] = selectors
-
-                # Ensure either properties or property_tags is set (DB constraint requirement)
-                if "properties" not in product_kwargs and "property_tags" not in product_kwargs:
-                    # Default to empty property_tags list if neither was set
-                    product_kwargs["property_tags"] = []
+                if property_mode not in _SELECTION_FIELDS:
+                    flash(f"Unknown property selection mode: {property_mode}", "error")
+                    return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
+                selectors, refusal = _selectors_from_product_form(db_session, tenant_id, property_mode)
+                if refusal:
+                    flash(refusal, "error")
+                    return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
+                product_kwargs["properties"] = selectors
 
                 # Handle dynamic product fields
                 is_dynamic = form_data.get("is_dynamic") in [True, "true", "on", 1, "1"]
@@ -1431,10 +1412,8 @@ def edit_product(tenant_id, product_id):
                             )
                         # A stored choice this section shows no box for is kept (kept_choices).
                         verified, known = _offered_and_known(db_session, tenant_id)
-                        kept = kept_choices(_stored_choice(product, verified, known), verified, known, property_mode)
+                        kept = kept_choices(product.properties, verified, known, property_mode)
                         product.properties = kept_selectors(selectors, kept)
-                        product.property_tags = None
-                        product.property_ids = None
                         attributes.flag_modified(product, "properties")
 
                 # Get pricing based on line item type (GAM form) or delivery type (other adapters)
@@ -1815,9 +1794,8 @@ def edit_product(tenant_id, product_id):
                 _selection_digest(product),
             )
             # What each section shows disabled: the stored choices it has no box for.
-            stored_choice = _stored_choice(product, authorized_properties_list, known_properties)
             kept_by_mode = {
-                mode: kept_choices(stored_choice, authorized_properties_list, known_properties, mode)
+                mode: kept_choices(product.properties, authorized_properties_list, known_properties, mode)
                 for mode in ("tags", "property_ids")
             }
 

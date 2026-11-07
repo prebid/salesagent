@@ -71,12 +71,11 @@ DEFAULT_PUBLISHER_DOMAIN = ONE_AUTHORIZED_PROPERTY[0].publisher_domain
 
 
 def default_publisher_properties() -> list[dict]:
-    """The explicit selector a test product carries unless it asks for the legacy columns.
+    """The selector a test product carries unless it names its own ``properties``.
 
     The shape the admin product form stores: it names its publisher, and the product is
     offered because ``ProductFactory`` also seeds the seller's verified property there
-    (:class:`DefaultPublisherPropertyFactory`). A legacy ``property_tags`` product names
-    no publisher and resolves against the tenant's verified properties instead.
+    (:class:`DefaultPublisherPropertyFactory`).
     """
     return [{"publisher_domain": DEFAULT_PUBLISHER_DOMAIN, "selection_type": "all"}]
 
@@ -116,14 +115,7 @@ class ProductFactory(factory.alchemy.SQLAlchemyModelFactory):
     )
     targeting_template = factory.LazyFunction(lambda: {"geo": ["US"]})
     delivery_type = "guaranteed"
-    #: ``default_publisher_properties()`` unless the test names a legacy column, which then
-    #: comes with ``properties=None``: the table holds exactly one of ``properties`` /
-    #: ``property_tags`` (``ck_product_properties_xor``).
-    property_tags = None
-    property_ids = None
-    properties = LazyAttribute(
-        lambda o: None if o.property_tags is not None or o.property_ids is not None else default_publisher_properties()
-    )
+    properties = factory.LazyFunction(default_publisher_properties)
     delivery_measurement = factory.LazyFunction(lambda: {"provider": "publisher"})
 
     @factory.post_generation

@@ -20,6 +20,7 @@ from src.core.database.models import Product as ProductModel
 from src.core.product_conversion import default_reporting_capabilities
 from src.core.schemas import Principal as PrincipalSchema
 from src.core.schemas import Product
+from tests.factories.product import default_publisher_properties
 from tests.helpers.adcp_factories import create_test_db_product
 from tests.utils.database_helpers import (
     create_tenant_with_timestamps,
@@ -49,8 +50,8 @@ class TestSchemaFieldMapping:
             "recommended_cpm",  # Suggested CPM based on goals and historical data
             # PR#88 field - populated from database relationship, not a column
             "pricing_options",  # List of PricingOption objects from pricing_options table
-            # AdCP library field - mapped from property_tags database column
-            "publisher_properties",  # Populated from property_tags database column
+            # AdCP library field - resolved from the properties database column
+            "publisher_properties",  # Resolved from the properties database column
             # AdCP 2.12.0+ protocol extension field - not stored in database
             "ext",  # Protocol extension field for future protocol additions
             # Device type targeting - populated from targeting_template.device_targets during conversion
@@ -203,7 +204,6 @@ class TestSchemaFieldMapping:
             product = create_test_db_product(
                 tenant_id=tenant_id,
                 product_id="conversion_test_001",
-                property_tags=["all_inventory"],
                 name="Conversion Test Product",
                 description="Product for testing safe conversion",
                 format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
@@ -220,7 +220,7 @@ class TestSchemaFieldMapping:
                 "description",
                 "format_ids",
                 "delivery_type",
-                "property_tags",
+                "properties",
             ]
 
             conversion_data = {}
@@ -233,7 +233,7 @@ class TestSchemaFieldMapping:
             # Verify we got the expected data
             assert conversion_data["product_id"] == "conversion_test_001"
             assert conversion_data["name"] == "Conversion Test Product"
-            assert conversion_data["property_tags"] == ["all_inventory"]
+            assert conversion_data["properties"] == default_publisher_properties()
 
             # Test that unsafe field access (what caused the bug) fails predictably
             unsafe_fields = ["pricing", "cost_basis", "margin"]
@@ -395,7 +395,6 @@ class TestSchemaFieldMapping:
             product = create_test_db_product(
                 tenant_id=tenant_id,
                 product_id="validation_test_001",
-                property_tags=["all_inventory"],
                 name="Schema Validation Product",
                 description="Testing schema validation with database data",
                 format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
@@ -417,7 +416,7 @@ class TestSchemaFieldMapping:
                     {
                         "selection_type": "by_id",
                         "publisher_domain": "example.com",
-                        "property_ids": getattr(product, "property_tags", ["all_inventory"]),
+                        "property_ids": ["example_com"],
                     }
                 ],
                 "pricing_options": [

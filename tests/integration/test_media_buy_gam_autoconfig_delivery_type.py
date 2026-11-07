@@ -74,7 +74,6 @@ class TestGAMAutoConfigDeliveryTypeNormalization:
                 product_id="prod_guar",
                 delivery_type="guaranteed",
                 implementation_config=None,  # force the auto-config branch
-                property_tags=["all_inventory"],
             )
             PricingOptionFactory(product=product, pricing_model="cpm", currency="USD", is_fixed=True)
 

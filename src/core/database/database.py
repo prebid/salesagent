@@ -265,7 +265,6 @@ def init_db(exit_on_error=False):
                             "allow_adult_content": False,
                             "targeting": {"geo_countries": ["US", "CA"]},
                         },
-                        "property_tags": ["all_inventory"],  # Required per AdCP spec
                         "pricing_option": {
                             "pricing_model": "cpm",
                             "currency": "USD",
@@ -286,7 +285,6 @@ def init_db(exit_on_error=False):
                         "targeting_template": {
                             "targeting": {"geo_countries": ["US", "CA"]},
                         },
-                        "property_tags": ["all_inventory"],  # Required per AdCP spec
                         "pricing_option": {
                             "pricing_model": "cpm",
                             "rate": 2.5,
@@ -309,7 +307,8 @@ def init_db(exit_on_error=False):
                         format_ids=p["formats"],
                         targeting_template=p["targeting_template"],
                         implementation_config=p.get("implementation_config"),
-                        property_tags=p.get("property_tags"),
+                        # Every publisher of the demo tenant whole: its one property above.
+                        properties=[{"publisher_domain": "example.com", "selection_type": "all"}],
                         delivery_type="guaranteed" if is_fixed else "non_guaranteed",
                     )
                     db_session.add(new_product)

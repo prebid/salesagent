@@ -77,7 +77,6 @@ class TestPropertyListResolution:
                 tenant=tenant,
                 product_id="prop_matching",
                 name="Matching Product",
-                property_tags=None,
                 properties=[
                     {
                         "publisher_domain": "example.com",
@@ -95,7 +94,6 @@ class TestPropertyListResolution:
                 tenant=tenant,
                 product_id="prop_nonmatch",
                 name="Non-Matching Product",
-                property_tags=None,
                 properties=[
                     {
                         "publisher_domain": "other.com",
@@ -113,7 +111,6 @@ class TestPropertyListResolution:
                 tenant=tenant,
                 product_id="prop_all",
                 name="All Properties Product",
-                property_tags=None,
                 properties=[
                     {
                         "publisher_domain": "example.com",
@@ -250,7 +247,6 @@ class TestPropertyListResolution:
                 tenant=tenant,
                 product_id="us_sites_product",
                 name="US Sites Only",
-                property_tags=None,
                 properties=[
                     {
                         "publisher_domain": "us-publisher.com",
@@ -269,7 +265,6 @@ class TestPropertyListResolution:
                 tenant=tenant,
                 product_id="eu_sites_product",
                 name="EU Sites Only",
-                property_tags=None,
                 properties=[
                     {
                         "publisher_domain": "eu-publisher.com",
@@ -288,7 +283,6 @@ class TestPropertyListResolution:
                 tenant=tenant,
                 product_id="mixed_sites_product",
                 name="Mixed Sites",
-                property_tags=None,
                 properties=[
                     {
                         "publisher_domain": "us-publisher.com",
@@ -341,7 +335,6 @@ class TestPropertyListResolution:
                 tenant=tenant,
                 product_id="all_selector_product",
                 name="All Properties",
-                property_tags=None,
                 properties=[
                     {
                         "publisher_domain": "example.com",
@@ -357,7 +350,6 @@ class TestPropertyListResolution:
                 tenant=tenant,
                 product_id="specific_product",
                 name="Specific Properties",
-                property_tags=None,
                 properties=[
                     {
                         "publisher_domain": "example.com",

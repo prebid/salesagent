@@ -17,6 +17,7 @@ from sqlalchemy import delete, select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import InventoryProfile, Product, Tenant
+from tests.factories.product import default_publisher_properties
 
 
 @pytest.mark.integration
@@ -129,8 +130,7 @@ class TestInventoryProfileTransitions:
             "format_ids": [],
             "targeting_template": {},
             "delivery_type": "standard",
-            "properties": None,
-            "property_tags": ["all_inventory"],
+            "properties": default_publisher_properties(),
         }
         defaults.update(kwargs)
 
@@ -167,7 +167,6 @@ class TestInventoryProfileTransitions:
             name="Custom to Profile Test",
             format_ids=custom_formats,
             properties=custom_properties,
-            property_tags=None,  # Using properties instead of tags
         )
 
         # Verify original custom data and then switch to profile
@@ -253,7 +252,6 @@ class TestInventoryProfileTransitions:
 
             product.format_ids = custom_formats
             product.properties = custom_properties
-            product.property_tags = None
 
             session.commit()
             session.refresh(product)
@@ -347,8 +345,6 @@ class TestInventoryProfileTransitions:
             name="Clear Profile Test",
             inventory_profile_id=profile_a,
             format_ids=[],  # Empty custom formats
-            properties=None,
-            property_tags=["all_inventory"],
         )
 
         with get_db_session() as session:
@@ -469,4 +465,4 @@ class TestInventoryProfileTransitions:
         # - Products are NOT deleted (no CASCADE)
         # - inventory_profile_id is set to NULL
         # - Products remain valid and functional
-        # - Products fall back to custom config (formats, properties, property_tags)
+        # - Products fall back to custom config (formats, properties)

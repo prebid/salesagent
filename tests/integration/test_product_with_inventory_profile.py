@@ -7,6 +7,7 @@ to catch bugs like the session variable issue found in production.
 import pytest
 from sqlalchemy import select
 
+from scripts.setup.seed_products import publishers_whole
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
     CurrencyLimit,
@@ -69,7 +70,7 @@ def test_create_product_with_inventory_profile(integration_db):
             delivery_type="guaranteed",
             targeting_template={},
             implementation_config={},
-            property_tags=["all_inventory"],
+            properties=publishers_whole(session, tenant_id),
         )
         session.add(product)
         session.commit()

@@ -19,8 +19,10 @@ cleanup registry closes it, so the env adds no ``__enter__``
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import re
+from pathlib import Path
 from typing import Any
 
 from bs4 import BeautifulSoup
@@ -121,6 +123,20 @@ def _script_built_fields(soup: BeautifulSoup) -> dict[str, list[str]]:
     return fields
 
 
+def _legacy_selection_migration() -> Any:
+    """The alembic revision that converts legacy publisher selections, loaded as a module."""
+    path = Path(__file__).resolve().parents[2] / "alembic" / "versions" / _LEGACY_SELECTION_REVISION
+    spec = importlib.util.spec_from_file_location("legacy_selection_migration", path)
+    assert spec is not None and spec.loader is not None, f"no migration at {path}"
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+#: The revision file whose ``legacy_selectors`` a migrated product is built with.
+_LEGACY_SELECTION_REVISION = "3c38b1ee241f_legacy_publisher_selections_to_selectors.py"
+
+
 class AdminInventoryProfileEnv(ProductEnv):
     """``ProductEnv`` plus the operator's inventory-profile form and products page."""
 
@@ -185,6 +201,23 @@ class AdminInventoryProfileEnv(ProductEnv):
         assert row is not None, f"no authorized property {property_id!r}"
         row.verification_status = "verified"
         self.get_session().commit()
+
+    def migrated_selection(
+        self, *, property_tags: list[str] | None = None, property_ids: list[str] | None = None
+    ) -> list[dict]:
+        """The selectors revision 3c38b1ee241f converts a legacy selection to, over this tenant's properties.
+
+        The migration's own conversion, run on the authorized properties the scenario stored,
+        so a scenario grades the product the upgrade leaves behind. A selection the migration
+        would refuse fails here, as the upgrade would.
+        """
+        rows = [
+            (row.property_id, row.publisher_domain, row.tags or [])
+            for row in self.query(AuthorizedProperty, tenant_id=self.tenant_id)
+        ]
+        selectors = _legacy_selection_migration().legacy_selectors(property_tags, property_ids, rows)
+        assert selectors, f"the migration refuses this selection: it matches no authorized property ({rows})"
+        return selectors
 
     def _open(self, path: str) -> AdminResponse:
         page = self.admin_page(path)

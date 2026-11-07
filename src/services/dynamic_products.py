@@ -293,7 +293,6 @@ def create_variant_from_template(
         "countries": template.countries,
         "implementation_config": template.implementation_config,
         "properties": template.properties,
-        "property_tags": template.property_tags,
         "delivery_measurement": template.delivery_measurement,
         "product_card": template.product_card,
         "product_card_detailed": template.product_card_detailed,

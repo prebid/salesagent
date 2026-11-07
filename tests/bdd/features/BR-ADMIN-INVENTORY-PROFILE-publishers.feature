@@ -27,9 +27,10 @@ Feature: BR-ADMIN-INVENTORY-PROFILE-publishers Which publishers the operator's s
   # Saving an edit form with its selection untouched changes nothing about that selection.
   # Each edit page embeds the selection it rendered and a digest of the stored columns, and
   # a save is compared with what the page rendered, never with a selection recomputed when
-  # it arrives, because the form cannot express a legacy column, a pending publisher's
+  # it arrives, because the form cannot express a pending publisher's selector, an all
   # selector or a mix of modes, and a property verified in between changes a
-  # recomputation. A page opened before its stored selection changed is refused. A profile
+  # recomputation. A save that changes the boxes keeps the stored choices the saving
+  # section has no box for, shown disabled with their status. A page opened before its stored selection changed is refused. A profile
   # page pre-fills tags or property ids only when they regenerate the stored selectors,
   # and shows them as JSON otherwise.
   #
@@ -89,8 +90,8 @@ Feature: BR-ADMIN-INVENTORY-PROFILE-publishers Which publishers the operator's s
 
   @T-ADMIN-INVPROFILE-008 @admin_inventory_profile @requires_db
   Scenario: the products page marks a product buyers are not offered
-    Given the seller offers product "premium" selecting property tags "premium"
-    And the seller offers product "orphan" selecting property tags "podcast"
+    Given the seller offers product "premium" migrated from legacy property tags "premium"
+    And the seller offers product "orphan" naming publisher_properties [{"publisher_domain": "podcast.example", "property_tags": ["podcast"], "selection_type": "by_tag"}]
     When the operator opens the products page
     Then the products page marks exactly the products "orphan" as not offered to buyers
 
@@ -142,8 +143,8 @@ Feature: BR-ADMIN-INVENTORY-PROFILE-publishers Which publishers the operator's s
     Then the form preselects exactly the properties "news_home"
 
   @T-ADMIN-INVPROFILE-016 @admin_inventory_profile @requires_db
-  Scenario: saving a product edit form keeps a legacy tag selection
-    Given the seller offers product "premium" selecting property tags "premium"
+  Scenario: saving a product edit form keeps a migrated tag selection
+    Given the seller offers product "premium" migrated from legacy property tags "premium"
     When the operator renames product "premium" through its edit form, changing nothing else
     Then product "premium" is renamed and its stored selection is unchanged
 
@@ -155,9 +156,9 @@ Feature: BR-ADMIN-INVENTORY-PROFILE-publishers Which publishers the operator's s
     Then product "mixed" is renamed and its stored selection is unchanged
 
   @T-ADMIN-INVPROFILE-018 @admin_inventory_profile @requires_db
-  Scenario: saving a product edit form keeps a legacy property id selection with a pending id
+  Scenario: saving a product edit form keeps a migrated property id selection with a pending id
     Given the seller's property "news_extra" of publisher "news.example" tagged "premium" awaits verification
-    And the seller offers product "ids" selecting property ids "news_home, news_extra"
+    And the seller offers product "ids" migrated from legacy property ids "news_home, news_extra"
     When the operator renames product "ids" through its edit form, changing nothing else
     Then product "ids" is renamed and its stored selection is unchanged
 
@@ -176,7 +177,7 @@ Feature: BR-ADMIN-INVENTORY-PROFILE-publishers Which publishers the operator's s
 
   @T-ADMIN-INVPROFILE-021 @admin_inventory_profile @requires_db
   Scenario: saving a product edit form keeps a selection of all_inventory
-    Given the seller offers product "whole" selecting property tags "all_inventory"
+    Given the seller offers product "whole" migrated from legacy property tags "all_inventory"
     When the operator renames product "whole" through its edit form, changing nothing else
     Then product "whole" is renamed and its stored selection is unchanged
 
@@ -216,7 +217,7 @@ Feature: BR-ADMIN-INVENTORY-PROFILE-publishers Which publishers the operator's s
   @T-ADMIN-INVPROFILE-028 @admin_inventory_profile @requires_db
   Scenario: a product edit page saved after a property verifies leaves the stored selection unchanged
     Given the seller's property "podcast_home" of publisher "podcast.example" tagged "premium" awaits verification
-    And the seller offers product "premium" selecting property tags "premium"
+    And the seller offers product "premium" migrated from legacy property tags "premium"
     When the operator opens the edit form of product "premium"
     And the seller's property "podcast_home" becomes verified
     And the operator saves the open edit form of product "premium", changing only its name
@@ -260,7 +261,7 @@ Feature: BR-ADMIN-INVENTORY-PROFILE-publishers Which publishers the operator's s
   @T-ADMIN-INVPROFILE-025 @admin_inventory_profile @requires_db
   Scenario: the forms offer only verified properties
     Given the seller's property "podcast_home" of publisher "podcast.example" tagged "podcast" awaits verification
-    And the seller offers product "premium" selecting property tags "premium"
+    And the seller offers product "premium" migrated from legacy property tags "premium"
     And an inventory profile "existing" exists
     When the operator opens the add product form
     Then the form offers exactly the properties "news_home, sports_home, weather_home"

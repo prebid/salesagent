@@ -51,13 +51,12 @@ def seed_product(session, tenant_id: str, spec: ProductSpec) -> bool:
             format_ids=spec["formats"],
             targeting_template=spec["targeting_template"],
             delivery_type=spec["delivery_type"],
-            property_tags=["all_inventory"],  # Required per AdCP spec
             measurement=None,
             creative_policy=None,
             price_guidance=None,
             countries=None,
             implementation_config=None,
-            properties=None,  # property_tags instead
+            properties=publishers_whole(session, tenant_id),
         )
     )
     pricing = spec["pricing"]
@@ -73,6 +72,18 @@ def seed_product(session, tenant_id: str, spec: ProductSpec) -> bool:
         )
     )
     return True
+
+
+def publishers_whole(session, tenant_id: str) -> list[dict]:
+    """One ``all`` selector per publisher *tenant_id* holds an authorized property of.
+
+    What a seeded product sells: every publisher whole, each named explicitly (#1845). Seed
+    the properties first; a tenant with none gets ``[]``, a product buyers are not offered.
+    """
+    domains = session.scalars(
+        select(AuthorizedProperty.publisher_domain).filter_by(tenant_id=tenant_id).distinct()
+    ).all()
+    return [{"publisher_domain": domain, "selection_type": "all"} for domain in sorted(domains)]
 
 
 def seed_verified_website(session, tenant_id: str, domain: str, name: str | None = None) -> bool:

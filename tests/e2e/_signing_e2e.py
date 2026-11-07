@@ -385,9 +385,8 @@ def _seed_buying_surface(env: Any, tenant: Any, *, access_token: str) -> None:
     USD one through its ``currency_usd`` ``RelatedFactory``, and a second insert would
     collide rather than help.
 
-    ``PropertyTagFactory``'s ``tag_id`` is a ``Sequence`` (``tag_0001``), while
-    ``ProductFactory.property_tags`` defaults to ``["all_inventory"]`` — so the id is
-    passed explicitly or the product's tag reference dangles.
+    ``PropertyTagFactory``'s ``tag_id`` is a ``Sequence`` (``tag_0001``), so the
+    tenant's ``all_inventory`` tag is passed explicitly.
 
     The access token is handed IN as a caller-supplied literal rather than read back
     out of the created row — which is now the only way round it can travel, since the row

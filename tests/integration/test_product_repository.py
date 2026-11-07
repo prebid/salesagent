@@ -21,7 +21,7 @@ from src.core.database.repositories.uow import ProductUoW
 from src.core.product_conversion import convert_product_model_to_schema
 from src.core.schemas import Product as ProductSchema
 from tests.factories import PricingOptionFactory
-from tests.factories.product import ONE_AUTHORIZED_PROPERTY
+from tests.factories.product import ONE_AUTHORIZED_PROPERTY, default_publisher_properties
 
 
 def _create_test_tenant(session, unique_id: str) -> TenantModel:
@@ -63,7 +63,7 @@ def _create_test_product(
         format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
         targeting_template={},
         delivery_type=delivery_type,
-        property_tags=["all_inventory"],
+        properties=default_publisher_properties(),
         delivery_measurement={"provider": "publisher", "notes": "Test measurement"},
     )
     session.add(product)
@@ -352,7 +352,7 @@ class TestProductRepositoryCreate:
                 format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
                 targeting_template={},
                 delivery_type="guaranteed",
-                property_tags=["all_inventory"],
+                properties=default_publisher_properties(),
                 delivery_measurement={"provider": "publisher", "notes": "Test"},
             )
             result = uow.products.create(product)
@@ -386,7 +386,7 @@ class TestProductRepositoryCreate:
                     format_ids=[],
                     targeting_template={},
                     delivery_type="guaranteed",
-                    property_tags=[],
+                    properties=default_publisher_properties(),
                     delivery_measurement={"provider": "publisher", "notes": "Test"},
                 )
                 uow.products.create(product)
@@ -410,7 +410,7 @@ class TestProductRepositoryCreate:
                 format_ids=[],
                 targeting_template={},
                 delivery_type="guaranteed",
-                property_tags=[],
+                properties=default_publisher_properties(),
                 delivery_measurement={"provider": "publisher", "notes": "Test"},
             )
             uow.products.create(product)

@@ -141,11 +141,6 @@ def _by_publisher(properties: Iterable[SelectableProperty]) -> dict[str, list[Se
     return grouped
 
 
-def all_selectors(properties: Iterable[SelectableProperty]) -> list[dict]:
-    """One ``all`` selector per publisher of *properties*: each publisher offered whole."""
-    return [{"publisher_domain": domain, "selection_type": "all"} for domain in _by_publisher(properties)]
-
-
 def by_id_selectors(properties: Iterable[SelectableProperty]) -> list[dict]:
     """One ``by_id`` selector per publisher, holding the IDs of that publisher's properties.
 
@@ -188,26 +183,6 @@ def by_tag_selectors(tags: Sequence[str], properties: Iterable[SelectablePropert
         if matched:
             selectors.append(publisher_tag_selector(domain, matched))
     return selectors
-
-
-def legacy_selectors(
-    property_ids: Sequence[str] | None,
-    property_tags: Sequence[str] | None,
-    properties: Sequence[SelectableProperty],
-) -> list[dict]:
-    """The ``publisher_properties`` of a product selecting by the legacy columns.
-
-    Resolved against the seller's *properties*, one selector per publisher (AdCP 3.1.1
-    ``core/product.json`` admits only the singular ``publisher_domain`` form on a product).
-    A product that selects nothing offers every authorized publisher whole. Returns ``[]``
-    when no authorized property backs the selection: there is then no publisher to name.
-    """
-    if property_ids:
-        wanted = set(property_ids)
-        return by_id_selectors(p for p in properties if p.property_id in wanted)
-    if property_tags:
-        return by_tag_selectors(property_tags, properties)
-    return all_selectors(properties)
 
 
 def authorized_selectors(selectors: list[dict] | None, properties: Iterable[SelectableProperty]) -> list[dict]:
@@ -260,8 +235,8 @@ def preselected_choices(selectors: Iterable[dict], authorized: Iterable[Selectab
     """The boxes the product edit page checks for *selectors*, among those it offers.
 
     It offers the *authorized* (verified) properties, and the boxes cannot express every
-    stored selection: a legacy column, a pending publisher's selector, ``all``. So a form that
-    posts exactly these boxes has changed nothing, whatever it would regenerate.
+    stored selection: a pending publisher's selector, ``all``, a mix of modes. Those are shown
+    disabled and kept (:func:`kept_choices`).
     """
     authorized = list(authorized)
     tags, property_ids = set(), set()
@@ -452,7 +427,7 @@ def profile_form_prefill(selectors: list[dict] | None, authorized: Sequence[Sele
     """The mode and values that save *selectors* back exactly as they are stored.
 
     A tags or property-ids pre-fill is used only when submitting it regenerates *selectors*.
-    Anything else (a pending publisher's selector, a mix of modes, ``all``, a legacy row) is
+    Anything else (a pending publisher's selector, a mix of modes, ``all``, a hand-written entry) is
     shown whole as JSON, the one mode that can hold it, so saving the page cannot lose it.
     """
     if not selectors:

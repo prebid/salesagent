@@ -153,7 +153,6 @@ class TestPropertyListFilteringAllSelectorE2E:
                 tenant=tenant,
                 product_id="all_selector",
                 name="All Properties Product",
-                property_tags=None,
                 properties=[{"publisher_domain": "example.com", "selection_type": "all"}],
             )
             PricingOptionFactory(product=p, pricing_model="cpm", rate=Decimal("5.00"), is_fixed=True)
@@ -186,7 +185,6 @@ class TestPropertyListFilteringNoOverlapE2E:
                 tenant=tenant,
                 product_id="no_overlap",
                 name="No Overlap Product",
-                property_tags=None,
                 properties=[
                     {
                         "publisher_domain": "example.com",
@@ -226,7 +224,6 @@ class TestPropertyListFilteringTargetingAllowedE2E:
                 tenant=tenant,
                 product_id="partial_allowed",
                 name="Partial Overlap Product",
-                property_tags=None,
                 properties=[
                     {
                         "publisher_domain": "example.com",
@@ -266,7 +263,6 @@ class TestPropertyListFilteringTargetingNotAllowedE2E:
                 tenant=tenant,
                 product_id="strict_partial",
                 name="Strict Partial Product",
-                property_tags=None,
                 properties=[
                     {
                         "publisher_domain": "example.com",
@@ -302,7 +298,6 @@ class TestPropertyListFilteringTargetingNotAllowedE2E:
                 tenant=tenant,
                 product_id="strict_subset",
                 name="Strict Full Subset Product",
-                property_tags=None,
                 properties=[
                     {
                         "publisher_domain": "example.com",
@@ -338,7 +333,6 @@ class TestPropertyListFilteringTargetingNotAllowedE2E:
                 tenant=tenant,
                 product_id="strict_exact",
                 name="Strict Exact Match Product",
-                property_tags=None,
                 properties=[
                     {
                         "publisher_domain": "example.com",
@@ -378,7 +372,6 @@ class TestPropertyListFilteringEmptyResolvedListE2E:
                 tenant=tenant,
                 product_id="all_selector_empty",
                 name="All Selector Product",
-                property_tags=None,
                 properties=[{"publisher_domain": "example.com", "selection_type": "all"}],
             )
             PricingOptionFactory(product=p_all, pricing_model="cpm", rate=Decimal("5.00"), is_fixed=True)
@@ -388,7 +381,6 @@ class TestPropertyListFilteringEmptyResolvedListE2E:
                 tenant=tenant,
                 product_id="specific_empty",
                 name="Specific ID Product",
-                property_tags=None,
                 properties=[
                     {
                         "publisher_domain": "example.com",
@@ -429,7 +421,6 @@ class TestPropertyListFilteringCombinedE2E:
                 tenant=tenant,
                 product_id="combo_all",
                 name="All Properties",
-                property_tags=None,
                 properties=[{"publisher_domain": "example.com", "selection_type": "all"}],
             )
             PricingOptionFactory(product=p1, pricing_model="cpm", rate=Decimal("5.00"), is_fixed=True)
@@ -440,7 +431,6 @@ class TestPropertyListFilteringCombinedE2E:
                 tenant=tenant,
                 product_id="combo_match",
                 name="Matching Product",
-                property_tags=None,
                 properties=[
                     {
                         "publisher_domain": "example.com",
@@ -458,7 +448,6 @@ class TestPropertyListFilteringCombinedE2E:
                 tenant=tenant,
                 product_id="combo_no_match",
                 name="No Match Product",
-                property_tags=None,
                 properties=[
                     {
                         "publisher_domain": "other.com",
@@ -475,7 +464,6 @@ class TestPropertyListFilteringCombinedE2E:
                 tenant=tenant,
                 product_id="combo_partial_ok",
                 name="Partial With Targeting",
-                property_tags=None,
                 properties=[
                     {
                         "publisher_domain": "example.com",
@@ -493,7 +481,6 @@ class TestPropertyListFilteringCombinedE2E:
                 tenant=tenant,
                 product_id="combo_partial_no",
                 name="Partial Without Targeting",
-                property_tags=None,
                 properties=[
                     {
                         "publisher_domain": "example.com",

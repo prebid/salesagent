@@ -417,7 +417,6 @@ def add_targeting_test_product(
             delivery_type="guaranteed",
             targeting_template={},
             implementation_config={},
-            property_tags=["all_inventory"],
             property_targeting_allowed=property_targeting_allowed,
         )
         session.flush()

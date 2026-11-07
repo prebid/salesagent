@@ -64,6 +64,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
+from scripts.setup.seed_products import publishers_whole  # noqa: E402
 from scripts.setup.seed_storyboard_tenant import STORYBOARD_TOKEN  # noqa: E402
 from scripts.setup.seed_storyboard_tenant import (  # noqa: E402
     STORYBOARD_VIRTUAL_HOST as _SEEDED_STORYBOARD_VIRTUAL_HOST,
@@ -485,7 +486,7 @@ def _seed_vector_product(session: Session, tenant_id: str) -> None:
             format_ids=format_ids,
             targeting_template={},
             delivery_type="non_guaranteed",
-            property_tags=["all_inventory"],
+            properties=publishers_whole(session, tenant_id),
             # `media_buy_seller/inventory_list_targeting` buys this product with a
             # property_list overlay, and a product that forbids it is refused before the
             # storyboard's own subject is reached. Nothing about this product is a

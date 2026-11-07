@@ -6,6 +6,8 @@ import time
 from datetime import UTC
 from pathlib import Path
 
+from scripts.setup.seed_products import publishers_whole
+
 #: Used by the table-cleanup except blocks below, which referenced it undefined --
 #: a NameError there would have masked the delete failure it exists to report.
 logger = logging.getLogger(__name__)
@@ -309,7 +311,7 @@ def test_product(db_session, test_tenant):
         ],
         targeting_template={},
         delivery_type="guaranteed",
-        property_tags=["all_inventory"],  # Required: products must have properties OR property_tags
+        properties=publishers_whole(db_session, test_tenant.tenant_id),
     )
     db_session.add(product)
     db_session.commit()
