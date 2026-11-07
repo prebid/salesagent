@@ -244,9 +244,16 @@ class TestCreativeLifecycleMCP:
             session.add(package_2)
             session.add(package_buyer_ref)
 
-            # Create test product for create_media_buy tests
-            # (create_media_buy queries DB directly, not get_product_catalog)
-            # Include all formats from sample_creatives fixture
+            # Create test product for create_media_buy tests, offered because the seller holds
+            # a verified property of the publisher it names (create_media_buy reads offered
+            # products only, #1845). Include all formats from sample_creatives fixture.
+            from src.core.database.models import AuthorizedProperty
+
+            session.add(
+                AuthorizedProperty.verified_website(
+                    tenant_id="creative_test", property_id="test_com", domain="test.com", name="test.com"
+                )
+            )
             test_product = DBProduct(
                 tenant_id="creative_test",
                 product_id="prod_1",

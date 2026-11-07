@@ -394,6 +394,11 @@ def init_db_ci():
 
             print("All prerequisites validated successfully")
 
+            # The authorized property first: a seeded product names every publisher the tenant
+            # holds a property of (seed_products.publishers_whole), and it is the setup checklist's too.
+            print("\nCreating authorized property for setup checklist...")
+            _ensure_example_property(session, tenant_id)
+
             # Create default products for testing.
             # KEEP IN SYNC: tests/e2e/test_tenant_isolation.py CI_TEST_PRODUCT_IDS
             # asserts the ci-test tenant sees EXACTLY this product-id set. If you
@@ -434,10 +439,6 @@ def init_db_ci():
                     print(f"  ℹ️  Product already exists: {p['name']}")
 
             session.commit()
-
-            # Create authorized property for setup checklist completion
-            print("\nCreating authorized property for setup checklist...")
-            _ensure_example_property(session, tenant_id)
 
             # Create GAM inventory for setup checklist completion (inventory sync)
             print("\nCreating GAM inventory for setup checklist...")

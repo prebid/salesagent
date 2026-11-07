@@ -80,6 +80,7 @@ def publishers_whole(session, tenant_id: str) -> list[dict]:
     What a seeded product sells: every publisher whole, each named explicitly (#1845). Seed
     the properties first; a tenant with none gets ``[]``, a product buyers are not offered.
     """
+    session.flush()  # the session may not autoflush, and the caller has just added the properties
     domains = session.scalars(
         select(AuthorizedProperty.publisher_domain).filter_by(tenant_id=tenant_id).distinct()
     ).all()

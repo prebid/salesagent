@@ -122,7 +122,9 @@ def test_add_product_json_encoding(client, test_tenant, integration_db):
             ("currency_0", "USD"),
             ("floor_0", "5.0"),
             ("min_spend_0", "1000"),
-            ("property_mode", "none"),  # Bypass property tag validation — this test is about JSON encoding
+            # The verified property add_required_setup_data stores: every product names its publishers.
+            ("property_mode", "property_ids"),
+            ("selected_property_ids", "test_product_tenant_property_1"),
         ]
     )
 
