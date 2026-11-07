@@ -27,6 +27,9 @@ from src.core.helpers.publisher_property_helpers import (
     RenderedSelection,
     id_selection,
     judge_selection_save,
+    kept_choices,
+    kept_selectors,
+    legacy_selectors,
     product_form_fields,
     publisher_tag_selection,
     selection_digest,
@@ -632,6 +635,26 @@ def list_products(tenant_id):
         logger.error(f"Error loading products: {e}", exc_info=True)
         flash("Error loading products", "error")
         return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
+
+
+def _offered_and_known(db_session, tenant_id: str) -> tuple[list, list]:
+    """The seller's verified properties, which the edit page offers, and all of them, pending included."""
+    repository = AuthorizedPropertyRepository(db_session, tenant_id)
+    return repository.list_refs(), repository.list_refs(include_unverified=True)
+
+
+def _stored_choice(product: Product, verified: list, known: list) -> list[dict]:
+    """What *product* stores, as the selectors :func:`kept_choices` reads.
+
+    Its own selectors; or its legacy columns over the properties the page cannot show, the
+    unverified ones (the verified part is what the boxes show checked); or nothing, for a
+    product selecting every publisher, which a choice of boxes narrows.
+    """
+    if product.properties:
+        return product.properties
+    if product.property_ids or product.property_tags:
+        return legacy_selectors(product.property_ids, product.property_tags, [p for p in known if p not in verified])
+    return []
 
 
 def _selection_digest(product: Product) -> str:
@@ -1406,7 +1429,10 @@ def edit_product(tenant_id, product_id):
                             return redirect(
                                 url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id)
                             )
-                        product.properties = selectors
+                        # A stored choice this section shows no box for is kept (kept_choices).
+                        verified, known = _offered_and_known(db_session, tenant_id)
+                        kept = kept_choices(_stored_choice(product, verified, known), verified, known, property_mode)
+                        product.properties = kept_selectors(selectors, kept)
                         product.property_tags = None
                         product.property_ids = None
                         attributes.flag_modified(product, "properties")
@@ -1781,13 +1807,19 @@ def edit_product(tenant_id, product_id):
 
             # Offer the VERIFIED properties and pre-select what the product sells: its selectors
             # resolved against them, as list_products and get_products resolve them.
-            authorized_properties_list = AuthorizedPropertyRepository(db_session, tenant_id).list_refs()
+            authorized_properties_list, known_properties = _offered_and_known(db_session, tenant_id)
             rendered_selection = RenderedSelection(
                 product_form_fields(
                     product.resolve_publisher_properties(authorized_properties_list), authorized_properties_list
                 ),
                 _selection_digest(product),
             )
+            # What each section shows disabled: the stored choices it has no box for.
+            stored_choice = _stored_choice(product, authorized_properties_list, known_properties)
+            kept_by_mode = {
+                mode: kept_choices(stored_choice, authorized_properties_list, known_properties, mode)
+                for mode in ("tags", "property_ids")
+            }
 
             # Show adapter-specific form
             if adapter_type == "google_ad_manager":
@@ -1876,6 +1908,7 @@ def edit_product(tenant_id, product_id):
                     principals=principals_list,
                     authorized_properties=authorized_properties_list,
                     rendered_selection=rendered_selection,
+                    kept_by_mode=kept_by_mode,
                 )
             else:
                 # For non-GAM adapters - use unified edit template
@@ -1891,6 +1924,7 @@ def edit_product(tenant_id, product_id):
                     principals=principals_list,
                     authorized_properties=authorized_properties_list,
                     rendered_selection=rendered_selection,
+                    kept_by_mode=kept_by_mode,
                 )
 
     except Exception as e:

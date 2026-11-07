@@ -104,8 +104,8 @@ class AuthorizedPropertyRepository:
         prop.verification_error = error
         prop.updated_at = now
 
-    def list_refs(self) -> list[AuthorizedPropertyRef]:
-        """This tenant's VERIFIED properties, as values, by publisher.
+    def list_refs(self, *, include_unverified: bool = False) -> list[AuthorizedPropertyRef]:
+        """This tenant's VERIFIED properties, as values, by publisher; every property with *include_unverified*.
 
         What a product's selectors resolve against (#1845): a product names the publishers
         these rows belong to, never the tenant's own host. Composes :meth:`_verified`, so a
@@ -118,9 +118,13 @@ class AuthorizedPropertyRepository:
         exists for (a port, an empty domain) is logged and left out, so it costs that publisher
         and not every read of the catalog; a product naming no other publisher is then not
         offered.
+
+        *include_unverified* is for the admin edit page alone, which shows a product's stored
+        choice of a pending property as such rather than as an unknown one.
         """
+        scope = self._scope_prefix() if include_unverified else self._verified()
         refs = []
-        for row in self._session.scalars(select(AuthorizedProperty).where(*self._verified())):
+        for row in self._session.scalars(select(AuthorizedProperty).where(*scope)):
             domain = publisher_domain_on_wire(row.publisher_domain)
             if domain is None:
                 logger.warning(

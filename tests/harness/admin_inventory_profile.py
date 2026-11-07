@@ -157,11 +157,17 @@ class AdminInventoryProfileEnv(ProductEnv):
         assert stored is not None, f"no inventory profile {profile_id!r} to edit"
         return self._open(f"inventory-profiles/{stored.id}/edit")
 
-    def save_open_form(self, name: str) -> AdminResponse:
-        """POST the page last opened as it rendered, with only its ``name`` field set to *name*, as a browser does."""
+    def save_open_form(self, name: str, **checked: list[str]) -> AdminResponse:
+        """POST the page last opened as it rendered, with its ``name`` set to *name*, as a browser does.
+
+        *checked* adds boxes the operator checks before saving, by field name.
+        """
         assert self._open_form is not None, "no edit page is open"
         path, page = self._open_form
-        return self._admin_request(path, {**rendered_form(page), "name": [name]})
+        form = {**rendered_form(page), "name": [name]}
+        for field_name, values in checked.items():
+            form[field_name] = [*form.get(field_name, []), *values]
+        return self._admin_request(path, form)
 
     def rename_product_through_its_form(self, product_id: str) -> AdminResponse:
         """Open the product's edit page and save it with only the name changed."""

@@ -275,6 +275,90 @@ def preselected_choices(selectors: Iterable[dict], authorized: Iterable[Selectab
     return PreselectedChoices(frozenset(tags), frozenset(property_ids))
 
 
+#: The product edit page's sections, by the property mode that submits them, and the kind of
+#: stored choice each offers a box for. The full (legacy) mode offers property ids too.
+_SECTION_KIND = {"tags": "tag", "property_ids": "id", "full": "id"}
+
+
+@dataclass(frozen=True)
+class KeptChoice:
+    """A stored tag, property id or whole publisher a product edit page section has no box for.
+
+    The section renders it disabled with its *status*, and a save that changes the section's
+    boxes keeps it (:func:`kept_selectors`): the operator cannot see it there to drop it.
+    """
+
+    publisher_domain: str
+    kind: str  # "tag", "id" or "all"
+    value: str
+    status: str
+
+
+def kept_choices(
+    stored: list[dict] | None, verified: Sequence[SelectableProperty], known: Sequence[SelectableProperty], mode: str
+) -> list[KeptChoice]:
+    """The choices of the *stored* selectors the product edit page's *mode* section has no box for.
+
+    The page offers a box per tag a *verified* property carries (tags section) and per verified
+    property id (the ids and full sections). A stored choice with no box in the section the
+    save comes from -- a pending property, one the other mode selects, an ``all`` selector --
+    is kept. *known* are all the seller's properties, pending ones included, for the status.
+    """
+    boxes = {
+        "tag": {(p.publisher_domain, tag) for p in verified for tag in p.tags or ()},
+        "id": {(p.publisher_domain, p.property_id) for p in verified},
+    }
+    pending = {(p.publisher_domain, tag) for p in known for tag in p.tags or ()} | {
+        (p.publisher_domain, p.property_id) for p in known
+    }
+    section = _SECTION_KIND.get(mode)
+    kept = []
+    for selector in ensure_selection_type(stored or []) or []:
+        domain = canonical_publisher_domain(str(selector.get("publisher_domain") or ""))
+        kind = {"by_tag": "tag", "by_id": "id"}.get(selector["selection_type"])
+        if kind is None:
+            kept.append(KeptChoice(domain, "all", "", "every property of the publisher"))
+            continue
+        for value in selector.get("property_tags" if kind == "tag" else "property_ids") or ():
+            if kind == section and (domain, value) in boxes[kind]:
+                continue
+            if (domain, value) in boxes[kind]:
+                status = "selected in the other selection mode"
+            elif (domain, value) in pending:
+                status = "awaiting verification"
+            else:
+                status = "not an authorized property"
+            kept.append(KeptChoice(domain, kind, value, status))
+    return kept
+
+
+def kept_selectors(chosen: list[dict], kept: Iterable[KeptChoice]) -> list[dict]:
+    """The *chosen* selectors with the *kept* choices merged in, one selector per publisher and kind."""
+    merged = [dict(selector) for selector in chosen]
+    for choice in kept:
+        if choice.kind == "all":
+            if not any(
+                s["publisher_domain"] == choice.publisher_domain and s["selection_type"] == "all" for s in merged
+            ):
+                merged.append({"publisher_domain": choice.publisher_domain, "selection_type": "all"})
+            continue
+        field_name, selection_type = ("property_tags", "by_tag") if choice.kind == "tag" else ("property_ids", "by_id")
+        target = next(
+            (
+                s
+                for s in merged
+                if s["publisher_domain"] == choice.publisher_domain and s["selection_type"] == selection_type
+            ),
+            None,
+        )
+        if target is None:
+            target = {"publisher_domain": choice.publisher_domain, field_name: [], "selection_type": selection_type}
+            merged.append(target)
+        if choice.value not in target[field_name]:
+            target[field_name] = [*target[field_name], choice.value]
+    return merged
+
+
 def product_form_fields(selectors: list[dict], authorized: Iterable[SelectableProperty]) -> dict[str, list[str]]:
     """The selection fields the product edit page renders for *selectors*: its mode and checked boxes.
 

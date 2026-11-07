@@ -240,6 +240,23 @@ Feature: BR-ADMIN-INVENTORY-PROFILE-publishers Which publishers the operator's s
     And the operator saves the open edit form of inventory profile "tagged", changing only its name
     Then inventory profile "tagged" is renamed and its stored selection is unchanged
 
+  @T-ADMIN-INVPROFILE-031 @admin_inventory_profile @requires_db
+  Scenario: a changed product edit save keeps a pending publisher's stored selector
+    Given the seller's property "podcast_home" of publisher "podcast.example" tagged "premium" awaits verification
+    And the seller offers product "mixed" naming publisher_properties [{"publisher_domain": "news.example", "property_tags": ["premium"], "selection_type": "by_tag"}, {"publisher_domain": "podcast.example", "property_tags": ["premium"], "selection_type": "by_tag"}]
+    When the operator opens the edit form of product "mixed"
+    Then the form shows "podcast.example:premium" kept as stored, with the status "awaiting verification"
+    When the operator saves the open edit form of product "mixed", also checking tags "sports.example:premium"
+    Then product "mixed" stores publisher_properties [{"publisher_domain": "news.example", "property_tags": ["premium"], "selection_type": "by_tag"}, {"publisher_domain": "sports.example", "property_tags": ["premium"], "selection_type": "by_tag"}, {"publisher_domain": "podcast.example", "property_tags": ["premium"], "selection_type": "by_tag"}]
+
+  @T-ADMIN-INVPROFILE-032 @admin_inventory_profile @requires_db
+  Scenario: a changed product edit save keeps a stored selector of the other selection mode
+    Given the seller offers product "both" naming publisher_properties [{"publisher_domain": "news.example", "property_tags": ["premium"], "selection_type": "by_tag"}, {"publisher_domain": "weather.example", "property_ids": ["weather_home"], "selection_type": "by_id"}]
+    When the operator opens the edit form of product "both"
+    Then the form shows "weather.example:weather_home" kept as stored, with the status "selected in the other selection mode"
+    When the operator saves the open edit form of product "both", also checking tags "sports.example:premium"
+    Then product "both" stores publisher_properties [{"publisher_domain": "news.example", "property_tags": ["premium"], "selection_type": "by_tag"}, {"publisher_domain": "sports.example", "property_tags": ["premium"], "selection_type": "by_tag"}, {"publisher_domain": "weather.example", "property_ids": ["weather_home"], "selection_type": "by_id"}]
+
   @T-ADMIN-INVPROFILE-025 @admin_inventory_profile @requires_db
   Scenario: the forms offer only verified properties
     Given the seller's property "podcast_home" of publisher "podcast.example" tagged "podcast" awaits verification

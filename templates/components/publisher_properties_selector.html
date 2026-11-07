@@ -5,6 +5,7 @@
 
      Required template variables:
      - authorized_properties: the verified properties (AuthorizedPropertyRepository.list_refs), the only ones offered
+     - kept_by_mode: (optional, edit mode) per section mode, the stored choices it shows disabled (kept_choices)
      - rendered_selection: (optional, edit mode) the RenderedSelection of what the product sells:
        its fields pick the mode and the checked boxes (product_form_fields), and it is embedded so
        the save is judged against exactly what this page rendered (judge_selection_save)
@@ -132,6 +133,23 @@
 }
 </style>
 
+{# The stored choices a section has no box for (kept_choices): shown disabled, so not submitted,
+   and kept by a save that changes the section's boxes. #}
+{% macro kept_choices_list(choices) %}
+{% if choices %}
+<div class="kept-choices" style="margin-top: 0.5rem;">
+    <small style="color: #666; display: block; margin-bottom: 0.25rem;">Kept as stored: saving from this section does not change these.</small>
+    {% for choice in choices %}
+    <div class="property-item">
+        <input type="checkbox" checked disabled data-kept="{{ choice.publisher_domain }}{% if choice.value %}:{{ choice.value }}{% endif %}" data-kept-status="{{ choice.status }}">
+        <span class="tag-badge">{{ choice.publisher_domain }}{% if choice.value %}: {{ choice.value }}{% endif %}</span>
+        <span class="property-name">{{ choice.status }}</span>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+{% endmacro %}
+
 <div class="publisher-props-widget">
     <h4><i class="fas fa-building"></i> Publisher Properties</h4>
     <p style="color: #666; font-size: 0.9rem; margin-bottom: 1rem;">
@@ -218,6 +236,7 @@
             </small>
         </div>
         {% endif %}
+        {{ kept_choices_list((kept_by_mode or {}).get('tags')) }}
     </div>
 
     <!-- Property IDs Section -->
@@ -262,6 +281,7 @@
             </small>
         </div>
         {% endif %}
+        {{ kept_choices_list((kept_by_mode or {}).get('property_ids')) }}
     </div>
 
     <!-- Full Properties Section (Legacy) -->

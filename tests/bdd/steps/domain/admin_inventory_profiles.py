@@ -12,6 +12,7 @@ import json
 import re
 from typing import TYPE_CHECKING, Any
 
+from bs4 import BeautifulSoup
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps.domain.admin_accounts import _require_admin_page
@@ -151,6 +152,13 @@ def when_save_open_form(ctx: dict, kind: str, subject: str) -> None:
     ctx["admin_page"] = env.save_open_form(f"Renamed {subject}")
 
 
+@when(
+    parsers.parse('the operator saves the open edit form of product "{product_id}", also checking tags "{selections}"')
+)
+def when_save_open_form_checking_tags(ctx: dict, product_id: str, selections: str) -> None:
+    ctx["admin_page"] = _env(ctx).save_open_form(f"Renamed {product_id}", selected_property_tags=comma_list(selections))
+
+
 @when("the operator opens the add inventory profile form")
 def when_open_add_form(ctx: dict) -> None:
     ctx["admin_page"] = _env(ctx).admin_page("inventory-profiles/add")
@@ -227,6 +235,18 @@ def then_form_preselects(ctx: dict, property_ids: str) -> None:
     assert checkboxes, "the form offers no property checkboxes"
     checked = {value for value, attributes in checkboxes if re.search(r"\bchecked\b", attributes)}
     assert checked == set(comma_list(property_ids)), f"the form preselects {sorted(checked)}"
+
+
+@then(parsers.parse('the form shows "{choice}" kept as stored, with the status "{status}"'))
+def then_form_shows_kept(ctx: dict, choice: str, status: str) -> None:
+    page = _require_admin_page(ctx)
+    assert page.status_code == 200, f"the form answered {page.status_code}"
+    soup = BeautifulSoup(page.data, "html.parser")
+    kept = {box["data-kept"]: box["data-kept-status"] for box in soup.find_all("input", attrs={"data-kept": True})}
+    assert kept.get(choice) == status, f"the form keeps {kept}"
+    assert all(box.has_attr("disabled") for box in soup.find_all("input", attrs={"data-kept": True})), (
+        "a kept box is editable"
+    )
 
 
 @then(parsers.parse('the form offers exactly the properties "{property_ids}"'))
