@@ -200,6 +200,7 @@ Feature: UC-006 a Google Ad Manager seller traffics assigned creatives onto its 
     When the seller approves creative "cr-banner"
     Then Google Ad Manager updated that creative, once, to show "https://example.com/banner-v2.png"
     And Google Ad Manager holds that creative on line items "5000005" as serving
+    And Google Ad Manager was asked to stop serving that creative, then to serve it again
 
     Examples:
       | state          | status        | paused |

@@ -857,6 +857,22 @@ def then_gam_association_serving(ctx: dict, line_items: str, status: str) -> Non
     assert held == expected, f"expected GAM to hold that creative as {expected}; it holds {held}"
 
 
+@then("Google Ad Manager was asked to stop serving that creative, then to serve it again")
+def then_gam_serving_actions(ctx: dict) -> None:
+    """GAM received exactly a deactivate and then an activate of the associations of the one creative it created."""
+    (creative,) = _creatives_created(ctx)
+    lica = ctx["env"].mock["gam_client"].return_value.GetService("LineItemCreativeAssociationService")
+    sent = [
+        (call.args[0]["xsi_type"], [v["value"]["value"] for v in call.args[1]["values"] if v["key"] == "creativeId"])
+        for call in lica.performLineItemCreativeAssociationAction.call_args_list
+    ]
+    expected = [
+        ("DeactivateLineItemCreativeAssociations", [int(creative["id"])]),
+        ("ActivateLineItemCreativeAssociations", [int(creative["id"])]),
+    ]
+    assert sent == expected, f"expected GAM to receive {expected}; it received {sent}"
+
+
 @then("Google Ad Manager was asked to change no association's serving")
 def then_gam_no_serving_change(ctx: dict) -> None:
     """Nothing reached GAM's association activate or deactivate action."""
