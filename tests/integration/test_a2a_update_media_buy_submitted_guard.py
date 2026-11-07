@@ -67,7 +67,7 @@ def test_manual_approval_update_via_real_a2a_pipeline_is_submitted_task_without_
                 account={"account_id": "acct_test"},
                 idempotency_key="test-idem-key-0001",
                 media_buy_id=_MEDIA_BUY_ID,
-                end_time="2026-12-01T00:00:00Z",
+                end_time="2099-12-01T00:00:00Z",
             )
         )
 

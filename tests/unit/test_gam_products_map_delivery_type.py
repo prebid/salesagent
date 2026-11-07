@@ -61,6 +61,7 @@ def test_products_map_includes_delivery_type():
     mock_adapter.trafficker_id = "traff_123"
     mock_adapter.log = Mock()
     mock_adapter.orders_manager = Mock()
+    mock_adapter.client_manager = Mock()
     mock_adapter.workflow_manager = Mock()
     mock_adapter._requires_manual_approval = Mock(return_value=False)
     mock_adapter._validate_targeting = Mock(return_value=[])

@@ -26,8 +26,8 @@ from src.core.database.models import MediaBuy, WorkflowStep
 from src.core.database.models import MediaPackage as DBMediaPackage
 from src.core.exceptions import (
     AdCPAuthenticationError,
-    AdCPAuthorizationError,
     AdCPCapabilityNotSupportedError,
+    AdCPMediaBuyNotFoundError,
     AdCPValidationError,
     first_validation_error_field,
 )
@@ -36,6 +36,7 @@ from src.core.schemas import (
     UpdateMediaBuyRequest,
 )
 from src.core.schemas.account import Account
+from tests.factories import stamp_format_identity
 from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID, seed_default_account
 from tests.factories.principal import PrincipalFactory, plaintext_token_for
 from tests.helpers.media_buy_approval import run_approval
@@ -178,17 +179,15 @@ def mb_creatives(integration_db, mb_identity):
                 )
             ).first()
             if not existing:
-                session.add(
-                    DBCreative(
-                        creative_id=cid,
-                        tenant_id=mb_identity.tenant_id,
-                        principal_id=mb_identity.principal_id,
-                        name=f"Test Creative {cid}",
-                        agent_url="https://creative.adcontextprotocol.org",
-                        format="display_300x250",
-                        data={},
-                    )
+                creative = DBCreative(
+                    creative_id=cid,
+                    tenant_id=mb_identity.tenant_id,
+                    principal_id=mb_identity.principal_id,
+                    name=f"Test Creative {cid}",
+                    data={},
                 )
+                stamp_format_identity(creative, format_id="display_300x250")
+                session.add(creative)
         session.commit()
     return creative_ids
 
@@ -825,7 +824,7 @@ class TestUpdateMediaBuyOwnership:
 
     @pytest.mark.asyncio
     async def test_ownership_mismatch_rejected(self, mb_tenant, mb_principal, mb_products, mb_identity, integration_db):
-        """UC-003-OW01: non-owner gets permission error.
+        """UC-003-OW01: a non-owner gets the absent-buy answer, MEDIA_BUY_NOT_FOUND.
 
         Covers: UC-003-EXT-C-01
         Integration equivalent of UNSPECIFIED test_ownership_mismatch_rejected.
@@ -865,9 +864,9 @@ class TestUpdateMediaBuyOwnership:
             paused=True,
         )
 
-        # _update_media_buy_impl raises AdCPAuthorizationError for ownership mismatch
-        # (rather than returning error response)
-        with pytest.raises(AdCPAuthorizationError):
+        # Ownership mismatch answers as an absent buy does: L1/security.mdx (3.2.7) forbids
+        # a body that distinguishes "unauthorized" from "not found".
+        with pytest.raises(AdCPMediaBuyNotFoundError):
             _update_media_buy_impl(req=update_req, identity=other_identity)
 
 

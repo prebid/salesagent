@@ -49,7 +49,6 @@ def pending_media_buy_with_package(integration_db):
         AccountFactory,
         AgentAccountAccessFactory,
         MediaBuyFactory,
-        MediaPackageFactory,
         PricingOptionFactory,
         PrincipalFactory,
         ProductFactory,
@@ -110,24 +109,15 @@ def pending_media_buy_with_package(integration_db):
                 "brand": {"domain": "testbrand.com"},
                 "start_time": start.isoformat(),
                 "end_time": end.isoformat(),
+                # MediaBuyFactory writes each named package's row, as the pending writer does.
                 "packages": [
                     {
+                        "package_id": "pkg_001",
                         "product_id": "guaranteed_display",
-                        "pricing_option_id": "po_1",
+                        "pricing_option_id": "cpm_usd_fixed",
                         "budget": 5000.0,
                     }
                 ],
-            },
-        )
-
-        MediaPackageFactory(
-            media_buy=mb,
-            package_id="pkg_001",
-            package_config={
-                "product_id": "guaranteed_display",
-                "name": "Guaranteed Display Ads",
-                "budget": 5000.0,
-                "pricing_model": "cpm",
             },
         )
 
@@ -152,7 +142,6 @@ def pending_media_buy_with_two_packages(integration_db):
         AccountFactory,
         AgentAccountAccessFactory,
         MediaBuyFactory,
-        MediaPackageFactory,
         PricingOptionFactory,
         PrincipalFactory,
         ProductFactory,
@@ -206,30 +195,22 @@ def pending_media_buy_with_two_packages(integration_db):
                 "brand": {"domain": "testbrand.com"},
                 "start_time": start.isoformat(),
                 "end_time": end.isoformat(),
+                # MediaBuyFactory writes each named package's row, as the pending writer does.
                 "packages": [
                     {
+                        "package_id": "pkg_A",
                         "product_id": "guaranteed_display",
-                        "pricing_option_id": "po_1",
+                        "pricing_option_id": "cpm_usd_fixed",
                         "budget": 3000.0,
                     },
                     {
+                        "package_id": "pkg_B",
                         "product_id": "guaranteed_display",
-                        "pricing_option_id": "po_1",
+                        "pricing_option_id": "cpm_usd_fixed",
                         "budget": 2000.0,
                     },
                 ],
             },
-        )
-
-        MediaPackageFactory(
-            media_buy=mb,
-            package_id="pkg_A",
-            package_config={"product_id": "guaranteed_display", "name": "Package A", "budget": 3000.0},
-        )
-        MediaPackageFactory(
-            media_buy=mb,
-            package_id="pkg_B",
-            package_config={"product_id": "guaranteed_display", "name": "Package B", "budget": 2000.0},
         )
 
         yield {
@@ -516,7 +497,7 @@ class TestExecuteApprovedEnrichesSellerConcept:
             "format": "display_970x250",
             "media_url": "https://example.com/creative.html",
             "click_url": "https://example.com/landing",
-            "package_assignments": ["test_package"],
+            "package_assignments": [{"package_id": "test_package", "weight": 100, "platform_line_item_id": "1001"}],
         }
         with patch.object(gam, "_validate_creative_for_gam", return_value=[]):
             statuses = gam.add_creative_assets(gam_order_id, [gam_asset], datetime.now(UTC))
@@ -587,8 +568,9 @@ class TestExecuteApprovedEnrichesSellerConcept:
             assert creative.data.get("concept_id") == expected_concept
             assert creative.data.get("concept_name") == f"GAM Order {gam_order_id}"
             assert creative.data.get("concept_source") == "gam_order"
-            # The platform_creative_id half is filled on the same path.
-            assert creative.data.get("platform_creative_id") == creative_id
+            # The platform_creative_id half is filled on the same path, with the id GAM
+            # returned from createCreatives (stub_gam_client_manager numbers them from 9000001).
+            assert creative.data.get("ad_server_creative_id") == "9000001"
             # Fill-only-when-absent preserved the pre-existing assets blob.
             assert creative.data.get("assets") is not None
 

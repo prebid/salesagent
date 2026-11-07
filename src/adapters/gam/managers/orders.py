@@ -6,13 +6,16 @@ for Google Ad Manager orders.
 """
 
 import logging
+import math
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from googleads import ad_manager
 
+from src.adapters.gam.pricing_compatibility import PricingCompatibility
 from src.adapters.gam.utils.error_handler import map_gam_exception
+from src.adapters.gam.utils.formatters import format_datetime_for_gam
 from src.adapters.gam.utils.timeout_handler import timeout
 from src.core.errors.details import CapabilityRefusalDetails
 from src.core.exceptions import (
@@ -21,8 +24,9 @@ from src.core.exceptions import (
     AdCPConfigurationError,
     AdCPNotFoundError,
     AdCPSalesAgentError,
-    AdCPValidationError,
 )
+from src.core.helpers.pricing_helpers import impressions_for_budget, unit_price
+from src.core.utils.frequency_cap import suppress_cooldown_minutes
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +35,103 @@ GUARANTEED_LINE_ITEM_TYPES = {"STANDARD", "SPONSORSHIP"}
 NON_GUARANTEED_LINE_ITEM_TYPES = {"NETWORK", "BULK", "PRICE_PRIORITY", "HOUSE"}
 
 
+def _gam_placeholder(slot: dict[str, Any]) -> dict[str, Any]:
+    """One GAM ``creativePlaceholder`` from a slot in this seller's own vocabulary.
+
+    The slot shape -- ``{width, height, expected_creative_count, is_native}`` -- is what
+    ``gam_product_config_service`` produces, both when it SEEDS a product's
+    ``implementation_config["creative_placeholders"]`` and when it reads a format
+    declaration's params. One translation serves both, which is what keeps a seeded slot and
+    a declared slot from reaching GAM in two different shapes: the conversion used to be
+    inline in the ``implementation_config`` fallback only, so the declaration path had no
+    way to reuse it.
+
+    ``creativeSizeType`` is GAM's, and the native row of
+    ``gam_product_config_service._GAM_FAMILY_BY_KIND`` is where ``is_native`` is decided --
+    a native line item takes a 1x1 slot and lets its creative template size the render.
+    """
+    return {
+        "size": {"width": slot["width"], "height": slot["height"]},
+        "expectedCreativeCount": slot.get("expected_creative_count", 1),
+        "creativeSizeType": "NATIVE" if slot.get("is_native") else "PIXEL",
+    }
+
+
+def _line_item_flight(start_time: datetime, end_time: datetime, time_zone: str) -> dict[str, Any]:
+    """A line item's flight, written in the network's time zone.
+
+    GAM requires ``startDateTime`` to be in the future, so a start that is not (an "asap"
+    buy, a buy approved after its start) starts ``IMMEDIATELY``, with no ``startDateTime``.
+
+    Ceiling: the comparison reads this server's clock as the line item is built. A start a
+    few seconds ahead of that moment is sent as an explicit ``startDateTime`` and can have
+    passed by the time GAM receives it, and GAM then refuses it. A margin would close that
+    window at the cost of starting such a buy early by the margin.
+    """
+    flight: dict[str, Any] = {"endDateTime": format_datetime_for_gam(end_time, time_zone)}
+    if start_time <= datetime.now(UTC):
+        flight["startDateTimeType"] = "IMMEDIATELY"
+    else:
+        flight["startDateTime"] = format_datetime_for_gam(start_time, time_zone)
+    return flight
+
+
 class GAMOrdersManager:
     """Manages Google Ad Manager order operations."""
+
+    @staticmethod
+    def _refuse_unsupported_declared_families(package, impl_config: dict[str, Any], log: Callable) -> None:
+        """Refuse a package whose RECORDED declarations name a family GAM will not traffic.
+
+        The same gate the deprecated arm has always applied, reached through the canonical
+        identifier instead of a guess at one. Two refusals, both already raised on the legacy
+        path for the same two facts:
+
+        * AUDIO. GAM has no standalone audio line item -- audio is only a companion to video
+          -- so a package declaring an audio kind cannot be placed at all.
+        * A FAMILY THE OPERATOR EXCLUDED. ``implementation_config["supported_format_types"]``
+          is the product's own statement of what it traffics, and a declaration outside it is
+          a configuration disagreement to surface rather than silently place.
+
+        A kind the family table does not classify is NOT refused, and the table says why: GAM
+        makes no claim it cannot place a composition contract or a seller-defined ``custom``
+        shape, so a refusal would have nothing to cite. Such a declaration simply contributes
+        no slot, and the deprecated arm or the product's seeded config answers.
+
+        Raised rather than logged, per ``.claude/rules/patterns/code-patterns.md`` § No Quiet
+        Failures: the alternative is a line item whose slot contradicts the creative the
+        buyer is about to send.
+        """
+        from src.services.gam_product_config_service import gam_format_family
+
+        supported = impl_config.get("supported_format_types", ["display", "video", "native"])
+        for declaration in package.formats_to_provide or ():
+            kind = str(declaration.format_kind)
+            family = gam_format_family(kind)
+            if family is None:
+                continue
+
+            if family == "audio":
+                log(
+                    f"[red]Error: declared format kind '{kind}' is audio. GAM does not support "
+                    f"standalone audio line items; audio can only be a companion to video.[/red]"
+                )
+                raise AdCPCapabilityNotSupportedError(
+                    details=CapabilityRefusalDetails(capability="format", rejected_value=kind)
+                )
+
+            if family not in supported:
+                log(
+                    f"[red]Error: declared format kind '{kind}' is a {family} format, which product "
+                    f"{package.package_id} does not support.[/red]"
+                )
+                raise AdCPCapabilityNotSupportedError(
+                    details=CapabilityRefusalDetails(
+                        capability="format",
+                        rejected_value=kind,
+                        accepted_values=sorted(supported),
+                    )
+                )
 
     def __init__(self, client_manager, advertiser_id: str | None = None, trafficker_id: str | None = None):
         """Initialize orders manager.
@@ -51,8 +150,6 @@ class GAMOrdersManager:
         self,
         order_name: str,
         total_budget: float,
-        start_time: datetime,
-        end_time: datetime,
         currency: str = "USD",
         applied_team_ids: list[str] | None = None,
         po_number: str | None = None,
@@ -62,8 +159,6 @@ class GAMOrdersManager:
         Args:
             order_name: Name for the order
             total_budget: Total budget amount
-            start_time: Order start datetime
-            end_time: Order end datetime
             currency: Currency code for budget (ISO 4217, default: USD)
             applied_team_ids: Optional list of team IDs to apply
             po_number: Optional PO number
@@ -86,18 +181,7 @@ class GAMOrdersManager:
             "traffickerId": self.trafficker_id,
             "status": "DRAFT",  # Start as DRAFT - will approve after line items are created
             "totalBudget": {"currencyCode": currency, "microAmount": int(total_budget * 1_000_000)},
-            "startDateTime": {
-                "date": {"year": start_time.year, "month": start_time.month, "day": start_time.day},
-                "hour": start_time.hour,
-                "minute": start_time.minute,
-                "second": start_time.second,
-            },
-            "endDateTime": {
-                "date": {"year": end_time.year, "month": end_time.month, "day": end_time.day},
-                "hour": end_time.hour,
-                "minute": end_time.minute,
-                "second": end_time.second,
-            },
+            # No startDateTime/endDateTime: GAM derives an order's flight from its line items.
         }
 
         # Add PO number if provided
@@ -117,7 +201,7 @@ class GAMOrdersManager:
         except Exception as fault:
             # The ad server refused. Classify the SOAP fault into the code the
             # buyer should act on -- a quota is not a permission problem is not
-            # a missing ad unit. AdCP 3.1.1 transport-errors.mdx Rule 1:
+            # a missing ad unit. The spec's transport-errors.mdx Rule 1:
             # "Translate upstream errors into AdCP error codes. Do not pass
             # through raw upstream errors."
             #
@@ -338,6 +422,7 @@ class GAMOrdersManager:
         packages: list,
         start_time: datetime,
         end_time: datetime,
+        network_time_zone: str,
         products_map: dict[str, Any],
         log_func: Callable | None = None,
         tenant_id: str | None = None,
@@ -353,6 +438,7 @@ class GAMOrdersManager:
             packages: List of MediaPackage objects (each has targeting_overlay)
             start_time: Flight start datetime
             end_time: Flight end datetime
+            network_time_zone: The network's time zone, from ``current_network_time_zone``
             products_map: Map of product_id to product config
             log_func: Optional logging function
             tenant_id: Tenant ID for fetching naming templates
@@ -383,7 +469,10 @@ class GAMOrdersManager:
             line_item_name_template = "{product_name}"
 
         created_line_item_ids: list[str] = []
-        flight_duration_days = (end_time - start_time).days
+        # The line item serves from this instant, so its per-day figures are sized from it too. Part
+        # of a day counts as a day: rounding down would spread more than was sold over the days served.
+        serving_start = max(start_time, datetime.now(UTC))
+        flight_duration_days = max(math.ceil((end_time - serving_start) / timedelta(days=1)), 1)
 
         for package_index, package in enumerate(packages, start=1):
             # Get product-specific configuration
@@ -454,12 +543,53 @@ class GAMOrdersManager:
                             f"[yellow]Product config custom targeting key '{key}' conflicts with buyer targeting, keeping buyer value[/yellow]"
                         )
 
-            # Build creative placeholders from format_ids
-            # First try to get from package.format_ids (buyer-specified)
-            creative_placeholders: list[dict[str, Any]] = []
+            # --- Creative placeholders, canonical arm first ----------------------------
+            #
+            # THE PACKAGE'S OWN RECORDED CONTRACT ANSWERS BEFORE THE DEPRECATED ARM.
+            # ``core/package.json`` calls ``formats_to_provide`` the package's "immutable
+            # canonical creative contracts" and says "the live Product is never substituted
+            # for the package snapshot", and each snapshot states its slot in ``params``,
+            # where width and height are first-class. So this needs no format lookup, no
+            # type inference from an id substring, and no regex: it reads what the seller
+            # selected when the request was graded.
+            #
+            # WHY THE PRECEDENCE MATTERS RATHER THAN BEING TIDIER. A canonical-only
+            # declaration -- one asserting no ``v1_format_ref`` -- cannot be expressed in
+            # ``package.format_ids`` at all, so such a package used to arrive here with an
+            # empty legacy arm and fall through to ``impl_config["creative_placeholders"]``
+            # at the bottom of this block: the PRODUCT's seeded slot, trafficked for a
+            # package whose own declaration may state a different size. That is the one
+            # substitution the snapshot exists to prevent.
+            #
+            # ``declared_gam_slots`` is the same reader that seeds that config, so a
+            # declaration reaching GAM through a package and the same declaration reaching
+            # it through a seeded product cannot disagree (CLAUDE.md § DRY). A declaration
+            # stating only a RANGE, or one of the four kinds GAM has no creative family for,
+            # yields no slot -- and then the two branches below answer exactly as before.
+            from src.services.gam_product_config_service import declared_gam_slots
 
-            if package.format_ids:
-                from src.core.format_resolver import get_format
+            # The operator's gate runs on BOTH arms, which is the reason the kind -> family
+            # table exists rather than a bare native check. Letting the canonical arm answer
+            # ahead of the deprecated one would otherwise BYPASS this gate for a package
+            # carrying both: the check below used to be reachable only inside the
+            # ``package.format_ids`` branch, so a dual-armed package would have stopped being
+            # gated the moment the snapshot answered first. The gate reads the same way on
+            # either arm; what differs is the input, and on this arm it is the kind the seller
+            # recorded rather than a substring of a format's name.
+            self._refuse_unsupported_declared_families(package, impl_config, log)
+
+            creative_placeholders: list[dict[str, Any]] = [
+                _gam_placeholder(slot) for slot in declared_gam_slots(package.formats_to_provide or ())
+            ]
+            if creative_placeholders:
+                log(
+                    f"  [blue]{len(creative_placeholders)} placeholder(s) from the package's "
+                    f"recorded format declarations[/blue]"
+                )
+
+            if not creative_placeholders and package.format_ids:
+                from src.core.format_resolver import format_display as spell_format
+                from src.core.format_resolver import format_id_identity, get_format
 
                 # Validate format types against product supported types
                 supported_format_types = impl_config.get("supported_format_types", ["display", "video", "native"])
@@ -470,9 +600,16 @@ class GAMOrdersManager:
                     format_id_str = format_id_obj.id
                     agent_url = format_id_obj.agent_url
 
-                    # Use format resolver to support custom formats and product overrides
-                    # Include agent_url in format strings for clarity (different agents may have same format IDs)
-                    format_display = f"{agent_url}/{format_id_str}" if agent_url else format_id_str
+                    # How this format is spelled in every refusal below, asked of the ONE
+                    # renderer rather than rebuilt here. The local f-string this replaces
+                    # joined the RAW agent_url, so a canonical URL with an empty path --
+                    # which the canonicalization leaves ending in "/" -- rendered
+                    # "https://x.org//display_300x250" in the capability refusals at the
+                    # bottom of this loop, spelled differently from the identity the request
+                    # was actually compared on. ``format_display``'s docstring exists to make
+                    # one format spell the same way in every refusal; shadowing its name with
+                    # a different rule in this file defeated that (audit P3).
+                    format_display = spell_format(format_id_identity(format_id_obj))
 
                     try:
                         # Pass product_id (not package_id) to enable format_overrides lookup
@@ -490,7 +627,7 @@ class GAMOrdersManager:
                         raise
 
                     # Check if format type is supported by product
-                    # adcp 3.12: Format.type removed. Infer from format_id string.
+                    # the pinned SDK: Format.type removed. Infer from format_id string.
                     fid_str = (
                         format_obj.format_id.id if hasattr(format_obj.format_id, "id") else str(format_obj.format_id)
                     )
@@ -564,10 +701,10 @@ class GAMOrdersManager:
                             requirements = format_obj.requirements or {}
                             width = requirements.get("width")
                             height = requirements.get("height")
-                            # Infer creative size type from format_id name since Format.type was removed in adcp 3.12
+                            # Infer creative size type from format_id name since Format.type was removed in the pinned SDK
                             creative_size_type = "NATIVE" if "native" in format_id_str.lower() else "PIXEL"
 
-                        # Check FormatId parameters (AdCP 2.5 parameterized formats)
+                        # Check FormatId parameters (parameterized formats)
                         # The buyer can specify width/height directly in the FormatId object
                         if not (width and height):
                             # Handle both FormatId objects and dicts (from database JSONB)
@@ -620,16 +757,12 @@ class GAMOrdersManager:
 
                     creative_placeholders.append(placeholder)
 
-            # Fall back to product config only if no valid placeholders from format_ids
+            # Fall back to the PRODUCT's seeded slots only when the package declared none
+            # of its own on either arm. ``gam_product_config_service`` seeds them in the
+            # same vocabulary ``_gam_placeholder`` translates, which is why this is now one
+            # call rather than a second spelling of the same three keys.
             if not creative_placeholders and impl_config.get("creative_placeholders"):
-                for placeholder in impl_config["creative_placeholders"]:
-                    creative_placeholders.append(
-                        {
-                            "size": {"width": placeholder["width"], "height": placeholder["height"]},
-                            "expectedCreativeCount": placeholder.get("expected_creative_count", 1),
-                            "creativeSizeType": "NATIVE" if placeholder.get("is_native") else "PIXEL",
-                        }
-                    )
+                creative_placeholders.extend(_gam_placeholder(slot) for slot in impl_config["creative_placeholders"])
 
             # If package has creatives, filter placeholders to match actual creative sizes
             # This prevents "X out of Y expected" issues and ensures one placeholder per unique size
@@ -714,19 +847,6 @@ class GAMOrdersManager:
             elif not creative_placeholders:
                 log("  [yellow]No creatives and no format_ids - line item will have no creative placeholders[/yellow]")
 
-            # Determine goal type and units
-            goal_type = impl_config.get("primary_goal_type", "LIFETIME")
-            goal_unit_type = impl_config.get("primary_goal_unit_type", "IMPRESSIONS")
-
-            if goal_type == "LIFETIME":
-                goal_units = package.impressions
-            elif goal_type == "DAILY":
-                # For DAILY goals, divide total impressions by flight days
-                goal_units = int(package.impressions / max(flight_duration_days, 1))
-            else:
-                # For other goal types (NONE, etc), use package impressions
-                goal_units = package.impressions
-
             # Apply line item naming template
             from src.adapters.gam.utils.constants import GAM_NAME_LIMITS
             from src.adapters.gam.utils.naming import truncate_name_with_suffix
@@ -748,132 +868,49 @@ class GAMOrdersManager:
                 full_line_item_name, GAM_NAME_LIMITS["max_line_item_name_length"]
             )
 
-            # Determine pricing configuration - use package_pricing_info if available, else fallback
+            # The package's validated pricing, from the request's selected pricing option
             pricing_info = package_pricing_info.get(package.package_id) if package_pricing_info else None
-
-            if pricing_info:
-                # Use pricing info from AdCP request (AdCP PR #88)
-                from src.adapters.gam.pricing_compatibility import PricingCompatibility
-
-                pricing_model = pricing_info["pricing_model"]
-                is_fixed_price = pricing_info["is_fixed"]  # Fixed vs auction pricing (pricing type)
-                currency = pricing_info["currency"]
-
-                # Determine delivery guarantee from product (not pricing)
-                # IMPORTANT: delivery_type (guaranteed/non-guaranteed inventory) is SEPARATE from
-                # is_fixed (fixed vs auction pricing). A product can be:
-                # - guaranteed inventory with fixed pricing (STANDARD with CPM)
-                # - guaranteed inventory with auction pricing (STANDARD with bid_price)
-                # - non-guaranteed inventory with fixed pricing (PRICE_PRIORITY with CPM)
-                # - non-guaranteed inventory with auction pricing (PRICE_PRIORITY with bid_price)
-                delivery_type = product.get("delivery_type") if product else None
-                is_guaranteed = delivery_type == "guaranteed"
-
-                # Determine rate based on pricing type (fixed vs auction)
-                if is_fixed_price:
-                    # Fixed pricing: use rate directly
-                    rate = pricing_info["rate"]
-                else:
-                    # Auction pricing: bid_price is REQUIRED
-                    rate = pricing_info.get("bid_price")
-                    if rate is None:
-                        # No fallback - this is a client error
-                        error_msg = (
-                            f"Package '{package.package_id}' has auction pricing but no bid_price provided. "
-                            f"Auction pricing (is_fixed=False) requires explicit bid_price in the request. "
-                            f"Either provide bid_price or use fixed pricing."
-                        )
-                        log(f"[red]Error: {error_msg}[/red]")
-                        raise AdCPValidationError(field=f"packages[{package.package_id}].bid_price")
-
-                # Validate rate is not None
-                if rate is None:
-                    error_msg = f"Package '{package.package_id}' has no valid rate. Pricing info: {pricing_info}"
-                    log(f"[red]Error: {error_msg}[/red]")
-                    raise AdCPConfigurationError()
-
-                # Map AdCP pricing model to GAM cost type
-                gam_cost_type = PricingCompatibility.get_gam_cost_type(pricing_model)
-
-                # Handle FLAT_RATE → CPD conversion
-                # AdCP FLAT_RATE rate = total campaign cost (e.g., $100 for entire campaign)
-                # GAM CPD = cost per day (e.g., $10/day for 10-day campaign)
-                if pricing_model == "flat_rate":
-                    campaign_days = (end_time - start_time).days
-                    campaign_days = max(campaign_days, 1)  # Minimum 1 day for same-day campaigns
-
-                    cpd_rate = rate / campaign_days
-                    log(f"  FLAT_RATE: ${rate:,.2f} total cost / {campaign_days} days → ${cpd_rate:,.2f} CPD")
-                    cost_type = "CPD"
-                    cost_per_unit_micro = int(cpd_rate * 1_000_000)
-                else:
-                    # For other pricing models, use rate directly (CPM, CPC, VCPM)
-                    cost_type = gam_cost_type
-                    cost_per_unit_micro = int(rate * 1_000_000)
-                    log(f"  Pricing: {pricing_model.upper()} @ ${rate:,.2f} {currency} → GAM {cost_type}")
-
-                # Select appropriate line item type based on pricing + guarantees
-                # Automatically select based on pricing model and product's delivery guarantee
-                # The select_line_item_type method ensures compatibility between pricing and line item type
-                line_item_type = PricingCompatibility.select_line_item_type(pricing_model, is_guaranteed)
-                priority = PricingCompatibility.get_default_priority(line_item_type)
-
-                # Set goal type based on line item type (per GAM API documentation)
-                # SPONSORSHIP: Only supports DAILY goal type (percentage-based)
-                # NETWORK: Only supports DAILY goal type (percentage-based)
-                # STANDARD: Supports LIFETIME goal type (impression-based)
-                # PRICE_PRIORITY: Supports NONE, LIFETIME, DAILY goal types (impression-based)
-                if line_item_type == "SPONSORSHIP":
-                    # SPONSORSHIP line items require DAILY goals with percentage-based units
-                    goal_type = "DAILY"
-
-                    # For FLAT_RATE (CPD pricing), use 100% impression share
-                    # This means: serve on 100% of matching ad requests
-                    if pricing_model == "flat_rate":
-                        goal_unit_type = "IMPRESSIONS"
-                        goal_units = 100  # 100% impression share for flat rate sponsorships
-                        log(
-                            "  SPONSORSHIP (FLAT_RATE): DAILY goal with 100% impression share (serves on all matching requests)"
-                        )
-                    else:
-                        log(f"  {line_item_type} line item: Using DAILY goal type (required by GAM API)")
-                elif line_item_type == "STANDARD":
-                    # STANDARD line items use LIFETIME goals for guaranteed delivery
-                    goal_type = "LIFETIME"
-                else:
-                    # PRICE_PRIORITY, BULK, HOUSE can use configured goal type or default to LIFETIME
-                    pass  # Keep goal_type from impl_config (set earlier)
-
-                # Update goal units based on pricing model (for non-SPONSORSHIP or non-FLAT_RATE)
-                if pricing_model != "flat_rate":
-                    if pricing_model == "cpc":
-                        # CPC: goal should be in clicks, not impressions
-                        goal_unit_type = "CLICKS"
-                        # Keep goal_units as-is (package.impressions serves as click goal)
-                    elif pricing_model == "vcpm":
-                        # VCPM: goal should be in viewable impressions
-                        goal_unit_type = "VIEWABLE_IMPRESSIONS"
-                        # Keep goal_units as-is (package.impressions serves as viewable impression goal)
-                    else:
-                        # CPM: use impressions (already set above)
-                        pass
-
-                log(
-                    f"  Package pricing: {pricing_model.upper()} @ ${rate:,.2f} {currency} "
-                    f"→ GAM {cost_type} @ ${rate:,.2f}, line_item_type={line_item_type}, priority={priority}"
-                )
-            else:
-                # No pricing info provided - this is an error
-                # We require explicit pricing info (either from request or product pricing options)
-                error_msg = (
-                    f"Package '{package.package_id}' has no pricing information. "
-                    f"Pricing info must be provided either:\n"
-                    f"  1. In the request (bid_price for auction pricing)\n"
-                    f"  2. Via product pricing_options in database\n"
-                    f"This package has no valid pricing configuration."
-                )
-                log(f"[red]Error: {error_msg}[/red]")
+            if not pricing_info:
+                log(f"[red]Error: Package '{package.package_id}' has no pricing information[/red]")
                 raise AdCPConfigurationError()
+            pricing_model = pricing_info["pricing_model"]
+            currency = pricing_info["currency"]
+            rate = unit_price(pricing_info)
+
+            # Handle FLAT_RATE → CPD conversion
+            # AdCP FLAT_RATE rate = total campaign cost (e.g., $100 for entire campaign)
+            # GAM CPD = cost per day (e.g., $10/day for 10-day campaign)
+            if pricing_model == "flat_rate":
+                cpd_rate = rate / flight_duration_days
+                log(f"  FLAT_RATE: ${rate:,.2f} total cost / {flight_duration_days} days → ${cpd_rate:,.2f} CPD")
+                cost_type = "CPD"
+                cost_per_unit_micro = int(cpd_rate * 1_000_000)
+            else:
+                # For other pricing models, use rate directly (CPM, CPC, VCPM)
+                cost_type = PricingCompatibility.get_gam_cost_type(pricing_model)
+                cost_per_unit_micro = int(rate * 1_000_000)
+                log(f"  Pricing: {pricing_model.upper()} @ ${rate:,.2f} {currency} → GAM {cost_type}")
+
+            # Type, priority, goal type and unit type are decided first; the goal units
+            # follow the planned goal type, from the core's lifetime volume.
+            # delivery_type (guaranteed or not) is the product's, separate from fixed vs auction pricing.
+            plan = PricingCompatibility.plan_line_item(
+                pricing_model,
+                is_guaranteed=(product.get("delivery_type") if product else None) == "guaranteed",
+                implementation_config=impl_config,
+                product_id=product_name,
+            )
+            goal = {
+                "goalType": plan.goal_type,
+                "unitType": plan.unit_type,
+                "units": PricingCompatibility.goal_units(
+                    plan, lifetime_units=package.impressions, flight_days=flight_duration_days
+                ),
+            }
+            log(
+                f"  Package pricing: {pricing_model.upper()} @ ${rate:,.2f} {currency} → GAM {cost_type}, "
+                f"line_item_type={plan.line_item_type}, priority={plan.priority}, goal={goal}"
+            )
 
             # Build line item object
             line_item = {
@@ -881,34 +918,20 @@ class GAMOrdersManager:
                 "orderId": int(order_id),
                 "targeting": line_item_targeting,
                 "creativePlaceholders": creative_placeholders,
-                "lineItemType": line_item_type,
-                "priority": priority,
+                "lineItemType": plan.line_item_type,
+                "priority": plan.priority,
                 "costType": cost_type,
                 "costPerUnit": {"currencyCode": currency, "microAmount": cost_per_unit_micro},
-                "primaryGoal": {
-                    "goalType": goal_type,
-                    "unitType": goal_unit_type,
-                    "units": goal_units,
-                },
+                "primaryGoal": goal,
                 "creativeRotationType": impl_config.get("creative_rotation_type", "EVEN"),
                 "deliveryRateType": impl_config.get("delivery_rate_type", "EVENLY"),
-                "startDateTime": {
-                    "date": {"year": start_time.year, "month": start_time.month, "day": start_time.day},
-                    "hour": start_time.hour,
-                    "minute": start_time.minute,
-                    "second": start_time.second,
-                    "timeZoneId": impl_config.get("time_zone", "America/New_York"),
-                },
-                "endDateTime": {
-                    "date": {"year": end_time.year, "month": end_time.month, "day": end_time.day},
-                    "hour": end_time.hour,
-                    "minute": end_time.minute,
-                    "second": end_time.second,
-                    "timeZoneId": impl_config.get("time_zone", "America/New_York"),
-                },
-                # Set status based on whether manual approval is required
-                # DRAFT = needs manual approval, READY = ready to serve (when creatives added)
-                "status": "READY",  # Always create as READY since creatives will be added
+                **_line_item_flight(serving_start, end_time, network_time_zone),
+                # READY = ready to serve once creatives are added; PAUSED = created held,
+                # which is what media-buy/package-request.json's create-time ``paused``
+                # means ("Paused packages do not deliver impressions"). Reporting the ask
+                # without setting this would have been worse than ignoring it: the buyer
+                # would read paused=true off a line item GAM was serving.
+                "status": "PAUSED" if package.paused else "READY",
             }
 
             # Add frequency caps - merge buyer's frequency cap with product config
@@ -932,30 +955,38 @@ class GAMOrdersManager:
                 and package.targeting_overlay.frequency_cap
             ):
                 freq_cap = package.targeting_overlay.frequency_cap
-                # Convert AdCP FrequencyCap (suppress_minutes) to GAM format
-                # AdCP: suppress_minutes (e.g., 60 = 1 hour)
+                # Convert the cap's COOLDOWN to GAM's shape.
+                # AdCP: suppress (a duration) or the deprecated suppress_minutes
                 # GAM: maxImpressions=1, numTimeUnits=X, timeUnit="MINUTE"/"HOUR"/"DAY"
-
-                # Determine best GAM time unit (int() cast needed because
-                # suppress_minutes is float after library type inheritance, GAM API expects int)
-                if freq_cap.suppress_minutes < 60:
-                    time_unit = "MINUTE"
-                    num_time_units = int(freq_cap.suppress_minutes)
-                elif freq_cap.suppress_minutes < 1440:  # Less than 24 hours
-                    time_unit = "HOUR"
-                    num_time_units = int(freq_cap.suppress_minutes // 60)
+                #
+                # Read through the shared helper rather than off ``suppress_minutes``: the pin
+                # deprecates that field in favour of ``suppress``, and types it nullable, so a
+                # cap sent the preferred way was ignored here and a max_impressions-only cap
+                # (valid per the schema's anyOf) raised TypeError comparing None to an int.
+                cooldown_minutes = suppress_cooldown_minutes(freq_cap)
+                if cooldown_minutes is None:
+                    log("Buyer frequency cap carries no cooldown to translate; omitting GAM frequencyCap")
                 else:
-                    time_unit = "DAY"
-                    num_time_units = int(freq_cap.suppress_minutes // 1440)
+                    # Determine best GAM time unit (int() cast because the cooldown is a
+                    # float and the GAM API expects an int)
+                    if cooldown_minutes < 60:
+                        time_unit = "MINUTE"
+                        num_time_units = int(cooldown_minutes)
+                    elif cooldown_minutes < 1440:  # Less than 24 hours
+                        time_unit = "HOUR"
+                        num_time_units = int(cooldown_minutes // 60)
+                    else:
+                        time_unit = "DAY"
+                        num_time_units = int(cooldown_minutes // 1440)
 
-                frequency_caps.append(
-                    {
-                        "maxImpressions": 1,  # Suppress after 1 impression
-                        "numTimeUnits": num_time_units,
-                        "timeUnit": time_unit,
-                    }
-                )
-                log(f"Added buyer frequency cap: 1 impression per {num_time_units} {time_unit.lower()}(s)")
+                    frequency_caps.append(
+                        {
+                            "maxImpressions": 1,  # Suppress after 1 impression
+                            "numTimeUnits": num_time_units,
+                            "timeUnit": time_unit,
+                        }
+                    )
+                    log(f"Added buyer frequency cap: 1 impression per {num_time_units} {time_unit.lower()}(s)")
 
             if frequency_caps:
                 line_item["frequencyCaps"] = frequency_caps
@@ -1107,7 +1138,7 @@ class GAMOrdersManager:
                 # Calculate new goal units based on pricing model
                 if pricing_model in ["cpm", "vcpm"]:
                     # CPM/VCPM: budget = (rate / 1000) * impressions → impressions = budget / (rate / 1000)
-                    new_goal_units = int((new_budget * 1000) / current_cost_per_unit)
+                    new_goal_units = impressions_for_budget(new_budget, current_cost_per_unit)
                 elif pricing_model == "cpc":
                     # CPC: budget = rate * clicks → clicks = budget / rate
                     new_goal_units = int(new_budget / current_cost_per_unit)

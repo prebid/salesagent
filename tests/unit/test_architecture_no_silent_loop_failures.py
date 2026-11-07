@@ -98,13 +98,9 @@ def _ordinal_keys(found: list[tuple[str, str, int]]) -> list[tuple[str, str, int
 
 # Pre-existing violations, keyed (repo-relative file, enclosing function, ordinal
 # of the silent handler within that function). Each has a FIXME(#gh-issue) comment
-# at the source. Shrink-only.
-SILENT_LOOP_HANDLER_ALLOWLIST: set[tuple[str, str, int]] = {
-    # FIXME(#1566): unparseable Broadstreet template dropped from formats silently
-    ("src/core/tools/creative_formats.py", "_list_creative_formats_impl", 0),
-    # FIXME(#1566): creative-association failure logged only, absent from response
-    ("src/core/tools/media_buy_create.py", "_create_media_buy_impl", 0),
-}
+# at the source. Shrink-only, and it has shrunk to nothing: a new silent loop handler
+# gets fixed, not listed here.
+SILENT_LOOP_HANDLER_ALLOWLIST: set[tuple[str, str, int]] = set()
 
 #: Logger method names. Used by BOTH rules: a handler that calls one is admitting
 #: something went wrong, which is what disqualifies the otherwise-exempt silent
@@ -389,8 +385,7 @@ class TestNoSilentLoopFailuresInImpl:
 # the request (`errors=property_list_unsupported_advisories(req.packages, adapter)`)
 # and holds no container, so it is out of scope and no longer allowlisted. Its
 # best-effort Slack / activity-feed / audit-log handlers were never this guard's
-# business; the per-item row in SILENT_LOOP_HANDLER_ALLOWLIST above still covers
-# the one loop-shaped swallow it does have.
+# business.
 
 _ADVISORY_FIX_HINT_HAS_LIST = (
     "This _impl builds an advisory list passed to a response errors= argument, so "
@@ -436,21 +431,22 @@ def _advisory_fix_hint(violations: list[tuple[str, str, int]]) -> str:
 # all five of its sites, and that absence is what makes this guard a pin on the
 # fix rather than a description of it.
 SILENT_ADVISORY_HANDLER_ALLOWLIST: set[tuple[str, str, int]] = {
-    # FIXME(#1566): exactly TWO handlers, both response-degrading and both with a
-    # FIXME at the source: creative_formats.py:297 drops the adapter's formats and
-    # :487 drops the creative-agent referrals, each with nothing but a log line, so
-    # the buyer reads "this seller has none" off a failed lookup. Same disease as
-    # the loop-shaped row already allowlisted for this function above.
-    # They are now TWO entries (ordinals 0 and 1) rather than one (file, function)
-    # key covering both: a single key made a third violation in this function
-    # invisible — see `_ordinal_keys`.
+    # FIXME(#1566): ONE handler left, response-degrading, with a FIXME at the source:
+    # it drops the creative-agent referrals with nothing but a log line, so the buyer
+    # reads "this seller federates to no creative agents" off a failed lookup.
     #
-    # (The other two handlers in this function — the :225 event-loop retry and the
-    # :447 cursor reset — are silent fallbacks the detector now exempts, and
-    # `_create_media_buy_impl` is gone from this list entirely: it has no advisory
-    # container at all, so it was never in scope. See the two notes below.)
+    # It used to be TWO. The sibling at ordinal 0 wrapped the inline Broadstreet
+    # format-building block, which is GONE: the adapter declares its own catalogue and
+    # the registry serves it to discovery and to sync alike (salesagent-zthsk), so the
+    # lookup that could silently degrade no longer happens in this function. The
+    # referral handler moves down to ordinal 0 -- ordinals are positional within the
+    # function, which is the property that makes a NEW third violation visible here.
+    #
+    # (The other two handlers in this function -- the event-loop retry and the cursor
+    # reset -- are silent fallbacks the detector exempts, and `_create_media_buy_impl`
+    # is absent entirely: it has no advisory container at all, so it was never in
+    # scope. See the two notes below.)
     ("src/core/tools/creative_formats.py", "_list_creative_formats_impl", 0),
-    ("src/core/tools/creative_formats.py", "_list_creative_formats_impl", 1),
 }
 
 
@@ -1021,6 +1017,22 @@ class TestStraightLineScopeCoversResponseErrors:
         )
 
 
+_IN_SCOPE_FOR_BOTH_RULES = (
+    "def _both_impl(req):\n"
+    "    advisories = []\n"
+    "    for item in req.items:\n"
+    "        try:\n"
+    "            results.append(process(item))\n"
+    "        except Exception as e:\n"
+    "            logger.warning(e)\n"
+    "    try:\n"
+    "        lookup()\n"
+    "    except Exception as e:\n"
+    "        logger.warning(e)\n"
+    "    return Response(errors=advisories or None)\n"
+)
+
+
 class TestSilentHandlerRulePartition:
     """The two rules partition the handler space — neither allowlist can cover the other."""
 
@@ -1034,13 +1046,17 @@ class TestSilentHandlerRulePartition:
         forbids it. Widening the straight-line rule changes only its FUNCTION-scope
         predicate and never touches `in_loop`, so it cannot create overlap; this test
         is what makes that argument checkable instead of asserted in a comment.
+
+        The population comes from a snippet, because the tree cannot supply one: the loop
+        allowlist is empty, so a clean tree has no loop site to compare. The snippet's
+        function is in scope for both rules, so only `in_loop` separates its two handlers.
         """
+        tree = ast.parse(_IN_SCOPE_FOR_BOTH_RULES)
+        assert [line for _, _, line in find_silent_loop_handlers(tree, "<snippet>")] == [6]
+        assert [line for _, _, line in find_silent_advisory_handlers(tree, "<snippet>")] == [10]
+
         loop_sites = {(f, line) for f, _, line in _scan_all()}
         straight_sites = {(f, line) for f, _, line in _scan_all_advisory()}
-        assert loop_sites and straight_sites, (
-            "both rules must report at least one site for this partition check to mean anything; "
-            f"loop={sorted(loop_sites)} straight-line={sorted(straight_sites)}"
-        )
         overlap = loop_sites & straight_sites
         assert not overlap, format_failure(
             summary=f"{len(overlap)} handler(s) reported by BOTH rules — the allowlists now overlap:",

@@ -37,11 +37,8 @@ def gam_manager():
         manager.custom_targeting_key_ids = {}
         # Test geo mappings
         manager.geo_country_map = {"US": "2840", "CA": "2124", "GB": "2826"}
-        manager.geo_region_map = {
-            "US": {"CA": "21137", "NY": "21167", "TX": "21176"},
-            "GB": {"ENG": "20339"},
-        }
-        manager.geo_metro_map = {"501": "1003374", "803": "1003389"}
+        manager.geo_region_map = {"US-CA": "21137", "US-NY": "21167", "US-TX": "21176", "GB-ENG": "20339"}
+        manager.geo_metro_map = {"501": "200501", "803": "200803"}
         return manager
 
 
@@ -62,13 +59,10 @@ class TestBuildTargetingGeoCountries:
         excluded = result["geoTargeting"]["excludedLocations"]
         assert any(loc["id"] == "2826" for loc in excluded)
 
-    def test_unknown_country_skipped(self, gam_manager):
+    def test_unknown_country_refused(self, gam_manager):
         targeting = Targeting(geo_countries=["ZZ"])
-        result = gam_manager.build_targeting(targeting)
-        # No targeted locations since ZZ is unknown
-        geo = result.get("geoTargeting", {})
-        locations = geo.get("targetedLocations", [])
-        assert len(locations) == 0
+        with pytest.raises(AdCPCapabilityNotSupportedError):
+            gam_manager.build_targeting(targeting)
 
 
 class TestBuildTargetingGeoRegions:
@@ -87,34 +81,10 @@ class TestBuildTargetingGeoRegions:
         excluded = result["geoTargeting"]["excludedLocations"]
         assert any(loc["id"] == "21167" for loc in excluded)
 
-    def test_unknown_region_skipped(self, gam_manager):
+    def test_unknown_region_refused(self, gam_manager):
         targeting = Targeting(geo_countries=["US"], geo_regions=["US-ZZ"])
-        result = gam_manager.build_targeting(targeting)
-        geo = result.get("geoTargeting", {})
-        # Only country location, no region
-        locations = geo.get("targetedLocations", [])
-        region_ids = [loc["id"] for loc in locations if loc["id"] != "2840"]
-        assert len(region_ids) == 0
-
-
-class TestLookupRegionIdISO:
-    """_lookup_region_id must accept ISO 3166-2 format."""
-
-    def test_iso_format_splits(self, gam_manager):
-        assert gam_manager._lookup_region_id("US-CA") == "21137"
-
-    def test_iso_format_gb(self, gam_manager):
-        assert gam_manager._lookup_region_id("GB-ENG") == "20339"
-
-    def test_bare_code_still_works(self, gam_manager):
-        """Backward compat: bare region code searched across all countries."""
-        assert gam_manager._lookup_region_id("CA") == "21137"
-
-    def test_unknown_returns_none(self, gam_manager):
-        assert gam_manager._lookup_region_id("US-ZZ") is None
-
-    def test_unknown_country_returns_none(self, gam_manager):
-        assert gam_manager._lookup_region_id("XX-CA") is None
+        with pytest.raises(AdCPCapabilityNotSupportedError):
+            gam_manager.build_targeting(targeting)
 
 
 class TestBuildTargetingGeoMetros:
@@ -128,8 +98,8 @@ class TestBuildTargetingGeoMetros:
         result = gam_manager.build_targeting(targeting)
         locations = result["geoTargeting"]["targetedLocations"]
         ids = [loc["id"] for loc in locations]
-        assert "1003374" in ids  # DMA 501
-        assert "1003389" in ids  # DMA 803
+        assert "200501" in ids  # DMA 501
+        assert "200803" in ids  # DMA 803
 
     def test_nielsen_dma_excluded(self, gam_manager):
         targeting = Targeting(
@@ -138,7 +108,7 @@ class TestBuildTargetingGeoMetros:
         )
         result = gam_manager.build_targeting(targeting)
         excluded = result["geoTargeting"]["excludedLocations"]
-        assert any(loc["id"] == "1003374" for loc in excluded)
+        assert any(loc["id"] == "200501" for loc in excluded)
 
     def test_unsupported_metro_system_raises(self, gam_manager):
         targeting = Targeting(
@@ -158,17 +128,13 @@ class TestBuildTargetingGeoMetros:
             gam_manager.build_targeting(targeting)
         # The identifier is STRUCTURED now: details/field, not prose.
 
-    def test_unknown_dma_code_skipped(self, gam_manager):
+    def test_unknown_dma_code_refused(self, gam_manager):
         targeting = Targeting(
             geo_countries=["US"],
             geo_metros=[{"system": "nielsen_dma", "values": ["999"]}],
         )
-        result = gam_manager.build_targeting(targeting)
-        geo = result.get("geoTargeting", {})
-        locations = geo.get("targetedLocations", [])
-        # Only country, no metro (999 not in map)
-        metro_ids = [loc["id"] for loc in locations if loc["id"] != "2840"]
-        assert len(metro_ids) == 0
+        with pytest.raises(AdCPCapabilityNotSupportedError):
+            gam_manager.build_targeting(targeting)
 
 
 class TestBuildTargetingGeoPostalAreas:

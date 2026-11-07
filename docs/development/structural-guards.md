@@ -157,31 +157,6 @@ These guards enforce Critical Pattern #5: shared `_impl` functions are
 transport-agnostic. They don't know whether they're called from MCP, A2A, or
 a REST endpoint.
 
-### Schema inheritance guard
-
-**File:** `tests/unit/test_architecture_schema_inheritance.py`
-
-**What it enforces:** A local schema class that redeclares a field of its
-adcp library parent must keep the parent's shape: same annotation (or a
-subclass), no added nullability, `is_required()` not relaxed, metadata a
-superset, no introduced default. A redeclaration that reshapes or weakens a
-field needs an allowlist row naming the weakened axis.
-
-**How it works:** The redefinition rule
-(`test_no_field_redefinition_in_subclasses`) walks the live MRO of each
-local schema class and tests `__module__` to find fields redeclared over a
-library parent, so it consults no import spelling. The companion
-`test_all_library_types_have_local_subclass` discovers `Library*` aliases in
-`src/core/schemas` and asserts that the local class with the unprefixed name
-inherits from the library type; that half is alias-keyed, and an import
-under a different alias goes unexamined by it.
-This guard is the only grader of redeclarations. The alignment suite that
-used to be the backstop — `test_pydantic_schema_alignment.py`, which graded
-declared fields and `model_dump` survival against the pinned schema — was
-deleted in full ([Building a tool](building-tools.md)),
-because a design in which the DTO IS the pinned model minus a declared
-omission leaves it nothing to compare.
-
 ### Implementation signature
 
 **Where:** the `ToolImpl` protocol typing `ToolSpec.impl` in `src/core/tools/registry.py`,
@@ -762,7 +737,7 @@ make quality
 uv run pytest tests/unit/test_architecture_*.py tests/unit/test_*impl*.py -v
 
 # Single guard
-uv run pytest tests/unit/test_architecture_schema_inheritance.py -v
+uv run pytest tests/unit/test_architecture_no_raw_select.py -v
 ```
 
 ## Relationship to other quality mechanisms

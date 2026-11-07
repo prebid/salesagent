@@ -1,10 +1,25 @@
 """Pricing option helper utilities.
 
-Handles the RootModel wrapper pattern used by adcp 2.14.0+ for discriminated unions,
-and owns the ``pricing_info`` projection a package row stores.
+Owns the ``pricing_info`` projection a package row stores.
+
+NO ROOTMODEL UNWRAP. Both functions below opened with
+``getattr(pricing_option, "root", pricing_option)`` for the wrapper the pinned SDK shipped,
+and neither kind of argument they receive has a ``root`` attribute, so both hops returned
+their own argument.
+
+``pricing_info_for`` TAKES THE ORM ROW, not a schema pricing option, and that is not
+interchangeable: ``rate`` and ``is_fixed`` are COLUMNS on ``PricingOption``
+(``src/core/database/models.py``) and are fields of no member of the V3 discriminated
+union, so handing it a schema member raises ``AttributeError`` on ``rate``. Every caller
+passes a row: the three in ``media_buy_create`` read ``product.pricing_options`` off a
+``ProductModel``, and the test callers build through ``PricingOptionFactory``.
 """
 
+from collections.abc import Mapping
 from typing import Any
+
+from src.core.errors.details import ConfigurationDetails
+from src.core.exceptions import AdCPConfigurationError, AdCPValidationError
 
 
 def pricing_info_for(pricing_option: Any, *, bid_price: float | None = None) -> dict[str, Any]:
@@ -12,22 +27,63 @@ def pricing_info_for(pricing_option: Any, *, bid_price: float | None = None) -> 
 
     NOT a spec shape: ``pricing_info`` appears in no pinned schema and is never received
     from a buyer — ``package_config`` is an internal JSON column. What makes the shape
-    binding is its READERS: the GAM order manager and ``src/adapters/utils/pricing.py``
-    take a package's rate from ``pricing_info["bid_price"]``, so a writer that omits a key
-    silently sends every auction package down a ``.get()`` default.
+    binding is its READERS: ``unit_price`` below is the one reader of ``rate`` and
+    ``bid_price``, and the GAM order manager reads ``pricing_model``, ``is_fixed`` and
+    ``currency``, so a writer that omits a key silently sends a package down a default.
 
     ``bid_price`` is not a property of the option — it is what THIS package bid — so it is
     supplied by the caller rather than projected. Everything else is the option's own
-    terms, unwrapped for the RootModel members adcp 2.14.0+ uses.
+    terms, read off it directly (see the module docstring on the unwrap that was removed).
     """
-    option = getattr(pricing_option, "root", pricing_option)
     return {
-        "pricing_model": option.pricing_model,
-        "rate": float(option.rate) if option.rate else None,
-        "currency": option.currency,
-        "is_fixed": option.is_fixed,
+        "pricing_model": pricing_option.pricing_model,
+        "rate": float(pricing_option.rate) if pricing_option.rate else None,
+        "currency": pricing_option.currency,
+        "is_fixed": pricing_option.is_fixed,
         "bid_price": bid_price,
     }
+
+
+def unit_price(pricing_info: Mapping[str, Any]) -> float:
+    """What one unit costs a package: the option's rate when fixed, the package's bid when auction.
+
+    The one reader of ``rate`` and ``bid_price`` in ``pricing_info``. Both refusals restate
+    ``_validate_pricing_model_selection`` (``media_buy_create.py``), which writes every
+    stored ``pricing_info`` and refuses a fixed option with no rate and an auction package
+    with no bid; they fire only on a row that validator did not write. The result is > 0.
+
+    Raises:
+        AdCPConfigurationError: a fixed option with no rate (the seller's option is incomplete).
+        AdCPValidationError: an auction package with no bid (the buyer must send ``bid_price``).
+    """
+    if pricing_info["is_fixed"]:
+        rate = pricing_info["rate"]
+        if not rate:
+            raise AdCPConfigurationError(details=ConfigurationDetails(capability="pricing_option_rate"))
+        return float(rate)
+    bid_price = pricing_info["bid_price"]
+    if not bid_price:
+        raise AdCPValidationError(field="bid_price")
+    return float(bid_price)
+
+
+def impressions_for_budget(budget: float, price: float) -> int:
+    """The volume a budget buys at a per-mille price: ``budget * 1000 / price``.
+
+    Floored, so the volume never costs more than the budget.
+    """
+    return int(budget * 1000 / price)
+
+
+def package_volume(budget: float, pricing_info: Mapping[str, Any]) -> tuple[float, int]:
+    """A package's unit price, and the volume its own budget buys at that price.
+
+    The one call both package builders make (the tool's create path and the approval
+    path), so ``MediaPackage.cpm`` and ``MediaPackage.impressions`` have one rule. The
+    volume is per mille for every pricing model; what that count means for CPC is #2394.
+    """
+    price = unit_price(pricing_info)
+    return price, impressions_for_budget(budget, price)
 
 
 def pricing_option_has_rate(pricing_option: Any) -> bool:
@@ -44,8 +100,7 @@ def pricing_option_has_rate(pricing_option: Any) -> bool:
 
     Handles multiple formats:
     - Dict format (from JSON/serialization): checks fixed_price, then rate
-    - Pydantic RootModel wrapper: checks the wrapped member's fixed_price
-    - Direct attribute access (SQLAlchemy models): checks fixed_price, then rate
+    - Direct attribute access (schema union member or SQLAlchemy row): fixed_price, then rate
 
     Args:
         pricing_option: A pricing option in any supported format
@@ -57,8 +112,10 @@ def pricing_option_has_rate(pricing_option: Any) -> bool:
     if isinstance(pricing_option, dict):
         return pricing_option.get("fixed_price", pricing_option.get("rate")) is not None
 
-    # Unwrap RootModel wrapper if present, then check the model/row attributes
-    target = getattr(pricing_option, "root", pricing_option)
-    if getattr(target, "fixed_price", None) is not None:
+    # Model or row attributes, and BOTH getattrs are load-carrying because the two shapes
+    # spell the fixed rate disjointly: ``fixed_price`` is declared by all nine union members
+    # and is NOT a column, while ``rate`` is a column and is a field of no member. So each
+    # read misses on exactly one of the two kinds this function accepts.
+    if getattr(pricing_option, "fixed_price", None) is not None:
         return True
-    return getattr(target, "rate", None) is not None
+    return getattr(pricing_option, "rate", None) is not None

@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from decimal import Decimal
+from typing import Any
 
 import factory
 from factory import LazyAttribute, Sequence, SubFactory
 
 from src.core.database.models import PricingOption, Product
-from src.core.schemas.pricing import PricingOption as PricingOptionSchema
+from src.core.schemas.pricing import CpmPricingOption
 from tests.factories.core import TenantFactory
 from tests.factories.request import _RequestFactory
 
@@ -31,10 +33,58 @@ class ProductFactory(factory.alchemy.SQLAlchemyModelFactory):
     format_ids = factory.LazyFunction(
         lambda: [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"}]
     )
+    # The CANONICAL arm of core/product.json's root anyOf, defaulted to None so every
+    # existing scenario keeps the legacy-only shape it was written against.
+    #
+    # A canonically-authored product is seeded by overriding BOTH -- the canonical arm on
+    # and the legacy arm off:
+    #
+    #     ProductFactory(format_options=[{"format_kind": "image", "params": {...}}],
+    #                    format_ids=None)
+    #
+    # Passing only ``format_options`` builds a DUAL-authored product, which is a third
+    # legal shape under the anyOf and a different scenario -- so the knob deliberately
+    # does not clear ``format_ids`` for you. A scenario that means "canonical only" says
+    # so, and one that means "both" says that.
+    format_options = None
     targeting_template = factory.LazyFunction(lambda: {"geo": ["US"]})
     delivery_type = "guaranteed"
     property_tags = factory.LazyFunction(lambda: ["all_inventory"])
     delivery_measurement = factory.LazyFunction(lambda: {"provider": "publisher"})
+
+
+class StoredPlacementFactory(factory.DictFactory):
+    """One ``products.placements`` document, stating every member the pin requires.
+
+    ``core/placement.json`` requires ``kind``, ``placement_id`` and ``mode``, and ``name`` of
+    a ``seller_inline`` placement; ``ck_products_placements_explicit`` refuses a stored
+    placement that omits one, and nothing fills it in when the row is read. Any other member
+    (``description``, ``format_ids``, ``format_options``) is passed through as given.
+    """
+
+    kind = "seller_inline"
+    placement_id = Sequence(lambda n: f"plc_{n:04d}")
+    name = LazyAttribute(lambda o: o.placement_id.title())
+    mode = "targetable"
+
+
+#: The data the common-intersection rule is graded on (``core/product.json``
+#: ``format_options``: a multi-publisher product without ``placements[]`` "MUST ... be the
+#: common intersection accepted across every selected publisher/property scope"): two
+#: publishers' ``publisher_properties``, a product-local option every scope accepts, and an
+#: option scoped to the first publisher, which the second does not.
+FIRST_PUBLISHER_DOMAIN = "first-publisher.example"
+TWO_PUBLISHER_PROPERTIES = [
+    {"publisher_domain": domain, "selection_type": "all"}
+    for domain in (FIRST_PUBLISHER_DOMAIN, "second-publisher.example")
+]
+PRODUCT_LOCAL_MREC = {"format_kind": "image", "format_option_id": "mrec", "params": {"width": 300, "height": 250}}
+FIRST_PUBLISHER_LEADERBOARD = {
+    "format_kind": "image",
+    "format_option_id": "leaderboard",
+    "params": {"width": 728, "height": 90},
+    "publisher_domain": FIRST_PUBLISHER_DOMAIN,
+}
 
 
 class PricingOptionFactory(factory.alchemy.SQLAlchemyModelFactory):
@@ -94,6 +144,23 @@ class PricingOptionFactory(factory.alchemy.SQLAlchemyModelFactory):
         return kwargs
 
 
+def priced_product(
+    tenant: Any,
+    *,
+    pricing_options: Iterable[Mapping[str, Any]] = ({},),
+    **product_fields: Any,
+) -> tuple[Product, list[PricingOption]]:
+    """A ``Product`` row and its ``PricingOption`` rows, in the order *pricing_options* lists them.
+
+    Each mapping is the ``PricingOptionFactory`` fields of one option; ``{}`` is the
+    factory's fixed USD CPM option. *product_fields* go to ``ProductFactory``. The one
+    writer of a product with its pricing, which the env's ``setup_product_chain`` and the
+    scenario Givens call.
+    """
+    product = ProductFactory(tenant=tenant, **product_fields)
+    return product, [PricingOptionFactory(product=product, **terms) for terms in pricing_options]
+
+
 #: The id a default-shaped pricing option carries, read off the factory rather than
 #: restated. ``PackageRequestFactory`` names it, so a fixture package and the option row
 #: it selects cannot drift apart.
@@ -115,12 +182,15 @@ class PricingOptionRequestFactory(_RequestFactory):
     type, and because the fifteen pricing mutators that would make it earn its keep are
     scheduled work that needs the name to exist first (salesagent-b341x.4).
 
-    IT BINDS A ``RootModel``. ``src.core.schemas.pricing.PricingOption.model_fields`` is
-    ``{'root': ...}`` — a nine-member discriminated union — so this factory works through
-    pydantic's ``RootModel(**data)`` kwargs path: ``build()`` returns the RootModel and
-    ``model_dump()`` returns the root dict. The declared attributes below are the CPM
-    member's fields; a ``pricing_model="cpc"`` variant selects a different member and
-    needs that member's own companion fields supplied at ``build()`` time.
+    IT BINDS ONE UNION MEMBER, ``CpmPricingOption``, because the declared attributes below
+    ARE the CPM member's fields. A ``pricing_model="cpc"`` variant is a different member
+    and needs its own factory rather than kwargs here.
+
+    It used to bind a local ``RootModel`` wrapper over the nine-member union, reaching the
+    member through pydantic's ``RootModel(**data)`` kwargs path. The wrapper is deleted
+    (nothing ever held one: ``Product.pricing_options`` is typed with the arms), and the
+    payload is byte-identical either way — ``model_dump()`` on the wrapper returned the
+    root dict, which is what dumping the member directly returns.
 
     ``payload()`` carries ``max_bid: False``, which the hand-written literal it replaces
     did not. That is the pinned model's OWN default for the field surfaced by the dump
@@ -129,7 +199,7 @@ class PricingOptionRequestFactory(_RequestFactory):
     """
 
     class Meta:
-        model = PricingOptionSchema
+        model = CpmPricingOption
 
     pricing_option_id = "po_default"
     pricing_model = "cpm"

@@ -64,7 +64,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from scripts.setup.seed_storyboard_tenant import STORYBOARD_TOKEN  # noqa: E402
+from scripts.setup.seed_storyboard_tenant import STORYBOARD_TOKEN, kit_runner_is_passthrough_only  # noqa: E402
 from scripts.setup.seed_storyboard_tenant import (  # noqa: E402
     STORYBOARD_VIRTUAL_HOST as _SEEDED_STORYBOARD_VIRTUAL_HOST,
 )
@@ -114,27 +114,26 @@ COUNTERPARTY_PRINCIPAL_TOKEN = "storyboard-conformance-runner-token-not-presente
 #: promise to buyers that nothing here checks.
 REQUIRED_FOR = ("create_media_buy",)
 
-#: ``covers_content_digest``. The corpus asks for all three values and an agent has ONE:
-#: ``negative/007`` needs ``required`` (a signature omitting content-digest must be
-#: refused), ``negative/018`` needs ``forbidden`` (one covering it must be refused), and
-#: every other vector is written against ``either``.
+#: ``covers_content_digest``. NOT a choice at the 3.2 pin, and not this script's to make:
+#: the response schema requires ``required`` with a ``const`` wherever
+#: ``request_signing.supported`` is true and the document speaks 3.2 or later, so
+#: ``RequestSigningPosture`` derives it and ``CapabilityDeclarations`` refuses the other two.
+#: Declared here anyway, literally, because this is the storyboard's own capability document
+#: and the corpus reads the value off it — ``profile-3.2/negative/007`` carries
+#: ``verifier_capability.covers_content_digest: "required"`` and expects
+#: ``request_signature_components_incomplete``.
 #:
-#: ``either`` is the value that grades the most and mis-grades nothing, and the arithmetic
-#: was re-measured against the runner's own gate (``request-signing/grader.mjs``
-#: ``contentDigestDeclarationMismatch`` + ``contentDigestStructuralMismatch`` at
-#: @adcp/sdk 14.0.0-rc.42) rather than inferred from what each vector declares:
-#:
-#: * under ``either`` the runner skips 007 and 018 (their expected codes are the two
-#:   content-digest POLICY refusals) and grades 010, 023 and ``positive/002``;
-#: * ``required`` would NOT add 007 back — the structural rule skips a vector whose
-#:   Signature-Input omits content-digest, which is 007's whole shape — while removing
-#:   ELEVEN of the twelve positives, every one that signs without a digest;
-#: * ``forbidden`` would drop ``positive/002``, which covers one.
-#:
-#: So ``either`` is not a compromise between the vectors; it is the only value under which
-#: the happy path is graded at all. A property of the corpus, not a gap in this agent —
-#: reported with the fixture PR.
-COVERS_CONTENT_DIGEST = "either"
+#: What this costs TODAY, stated because it is a real loss and not a rounding error: the
+#: root corpus signs 36 of its 40 vectors WITHOUT content-digest, so a ``required`` verifier
+#: cannot grade them — the runner's structural gate skips them (it does not fail them).
+#: ``profile-3.2/`` exists to restore exactly that coverage and all 11 of its positives
+#: cover content-digest, but ``compliance/universal/signed-requests.yaml`` says of itself:
+#: "This storyboard's current black-box runner contract is 3.1-compatible. It does not claim
+#: 3.2 certification ... while runner-side profile selection is added." So until the runner
+#: selects the 3.2 profile, the signed-requests card grades fewer vectors than it did under
+#: the 3.1.1 pin. The measurement that argued for ``either`` is kept in
+#: ``docs/design/request-signing-subset.md`` §3 with what the 3.2 pin does to its premise.
+COVERS_CONTENT_DIGEST = "required"
 
 #: Test-kit ``stateful_vector_contract.revocation.pre_revoked_keyid``.
 REVOKED_KEYID = "test-revoked-2026"
@@ -162,13 +161,28 @@ GRADING_PER_KEYID_CAP = 100
 #: ``src/core/signing/replay_store.py`` carries the same derivation from the store's side.
 GRADING_REPLAY_TTL_SECONDS = 70
 
+
 #: Where the runner's keypairs are published. The VENDORED snapshot, not the downloaded
 #: bundle: this module is read by ``scripts/test-stack.sh`` at compose time, before
 #: anything has materialized a bundle, and the vendored tree is committed and sha256-pinned
 #: by ``MANIFEST.json`` — so it is both always present and not a second copy of the keys.
-_KEYS_JSON = (
-    _PROJECT_ROOT / "tests" / "fixtures" / "adcp_conformance_vectors" / "3.1.1" / "request-signing" / "keys.json"
-)
+#:
+#: The version segment is never spelled here, and it is not read from the SDK either: this
+#: module runs under a bare ``python3`` on the in-network job, which has no ``adcp`` installed.
+#: The vendored vector tree holds exactly ONE version directory, and
+#: ``tests/unit/test_adcp_conformance_vectors_pin.py`` keeps that directory equal to the SDK's
+#: pin, so the one directory present IS the pin. More or fewer than one is refused rather than
+#: guessed: a stale second tree is how the 3.2.1 re-vendor once left this path pointing at the
+#: wrong version.
+def _vendored_vectors_dir() -> Path:
+    root = _PROJECT_ROOT / "tests" / "fixtures" / "adcp_conformance_vectors"
+    versions = sorted(p for p in root.iterdir() if p.is_dir() and not p.name.startswith(("_", ".")))
+    if len(versions) != 1:
+        raise RuntimeError(f"expected exactly one vendored conformance-vector version under {root}, found {versions}")
+    return versions[0]
+
+
+_KEYS_JSON = _vendored_vectors_dir() / "request-signing" / "keys.json"
 
 #: Members of a published JWK that are not part of the public key.
 _PRIVATE_MEMBERS = ("_private_d_for_test_only", "$comment")
@@ -334,6 +348,10 @@ def seed() -> None:
         print(f"Storyboard tenant {tenant.tenant_id} answers to {STORYBOARD_VIRTUAL_HOST}")
         print(f"   posture: required_for={list(REQUIRED_FOR)} covers_content_digest={COVERS_CONTENT_DIGEST}")
 
+        # The runner's commercial state, recorded on BOTH principals it can resolve as --
+        # the same reason both get the account grants below: which one carries a request
+        # depends on whether it was signed, and the billing-gate kit describes the caller.
+        passthrough_only = kit_runner_is_passthrough_only()
         principals = PrincipalRepository(session, tenant.tenant_id)
         counterparty = principals.find_by_agent_url(COUNTERPARTY_AGENT_URL)
         if counterparty is None:
@@ -343,9 +361,11 @@ def seed() -> None:
                 name="Storyboard conformance runner",
                 platform_mappings={"mock": {"advertiser_id": "storyboard-conformance-runner"}},
                 agent_url=COUNTERPARTY_AGENT_URL,
+                billing_passthrough_only=passthrough_only,
             )
             print(f"   counterparty principal created at {COUNTERPARTY_AGENT_URL}")
         else:
+            counterparty.billing_passthrough_only = passthrough_only
             print(f"   counterparty principal already at {COUNTERPARTY_AGENT_URL}")
 
         _seed_webhook_storyboard_account(session, tenant.tenant_id)
@@ -458,21 +478,26 @@ def _seed_vector_product(session: Session, tenant_id: str) -> None:
     """
     from sqlalchemy import select
 
+    from scripts.setup.seed_products import canonical_declaration
     from src.core.database.models import PricingOption, Product
-    from tests.factories.product import DEFAULT_PRICING_OPTION_ID, ProductFactory
+    from tests.factories.product import DEFAULT_PRICING_OPTION_ID
     from tests.factories.request import PackageRequestFactory
 
     product_id = PackageRequestFactory.product_id
-    # `format_ids` is object-shaped ({agent_url, id}) and a DB trigger enforces it. Read
-    # the factory's own default rather than restating an id: #1418 already moved this one
-    # once, from "display_300x250" to the catalog's "display_300x250_image".
-    format_ids = ProductFactory.format_ids.function()
+    # Authored canonically, as every seeder authors a product (core/product.json: "New
+    # products MUST author canonical format_options[] ... Do not author a new product from
+    # format_ids alone"). The declaration asserts the named format the signed vectors were
+    # written against, so a legacy buyer is still served that `format_ids` entry, derived
+    # from the declaration's `v1_format_ref`.
+    format_options = [canonical_declaration("image", "display_300x250_image", width=300, height=250)]
     existing = session.scalars(select(Product).filter_by(tenant_id=tenant_id, product_id=product_id)).first()
     if existing is not None:
         # Re-apply the capabilities rather than returning: a row left by an earlier
         # revision of this function would otherwise keep that revision's capabilities
         # forever, and the run would grade a product nobody in this tree described.
         existing.property_targeting_allowed = True
+        existing.format_options = format_options
+        existing.format_ids = None
         session.flush()
         print(f"   vector product refreshed: {product_id}")
         return
@@ -482,7 +507,7 @@ def _seed_vector_product(session: Session, tenant_id: str) -> None:
             product_id=product_id,
             name="Storyboard signed-vector product",
             description="Named by the corrected request-signing create_media_buy bodies.",
-            format_ids=format_ids,
+            format_options=format_options,
             targeting_template={},
             delivery_type="non_guaranteed",
             property_tags=["all_inventory"],

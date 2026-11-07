@@ -19,6 +19,7 @@ from urllib.parse import urlparse
 
 import pytz
 
+from src.adapters.gam.client import current_network_time_zone
 from src.core.exceptions import AdCPAdapterError, AdCPSalesAgentError
 from src.core.security.outbound_http import OperatorEndpoint, OutboundError, send
 
@@ -79,9 +80,7 @@ class GAMReportingService:
             self.network_timezone = network_timezone
         else:
             try:
-                network_service = self.client.GetService("NetworkService")
-                network = network_service.getCurrentNetwork()
-                self.network_timezone = network.timeZone
+                self.network_timezone = current_network_time_zone(self.client)
             except Exception:
                 # Fallback to Eastern Time if we can't get network timezone
                 self.network_timezone = "America/New_York"

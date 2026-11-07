@@ -24,7 +24,7 @@ from src.core.database.models import (
     Tenant,
 )
 from src.core.tools.media_buy_create import ApprovalOutcome
-from tests.factories import PricingOptionFactory
+from tests.factories import MediaPackageFactory, PricingOptionFactory
 from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID as ACCOUNT_ID
 from tests.factories.account import seed_default_account
 from tests.factories.principal import plaintext_token_for
@@ -33,33 +33,16 @@ from tests.helpers.media_buy_approval import run_approval
 from tests.utils.database_helpers import bind_factories_to_session, vhost_for
 
 
-def create_media_package(
-    media_buy_id: str,
-    package_id: str,
-    product_id: str,
-    budget: float,
-    tenant_id: str,
-    pricing_option_id: str = "pricing_opt_1",
-):
-    """Helper function to create MediaPackage record (required for execute_approved_media_buy).
+def create_media_package(media_buy_id: str, package_id: str) -> None:
+    """The buy's persisted package row, which execute_approved_media_buy reconstructs from.
 
-    Note: package_config stores the PackageRequest fields per AdCP spec.
-    package_id is an internal field stored separately on MediaPackage, not in package_config.
+    Built by ``MediaPackageFactory`` from the buy's ``raw_request`` package, so the row
+    carries what the pending writer stores: the typed budget and a ``package_config`` with
+    the ``pricing_info`` the approval books the package's volume from.
     """
-    with get_db_session() as session:
-        media_package = MediaPackage(
-            media_buy_id=media_buy_id,
-            package_id=package_id,
-            budget=Decimal(str(budget)),
-            package_config={
-                # AdCP PackageRequest fields only - package_id is internal
-                "product_id": product_id,
-                "budget": budget,
-                "pricing_option_id": pricing_option_id,
-            },
-        )
-        session.add(media_package)
-        session.commit()
+    with get_db_session() as session, bind_factories_to_session(session):
+        media_buy = session.scalars(select(MediaBuy).filter_by(media_buy_id=media_buy_id)).one()
+        MediaPackageFactory(media_buy=media_buy, package_id=package_id)
 
 
 def _assert_approval_failed(result, because: str) -> str:
@@ -260,7 +243,7 @@ class TestFormatConversionApproval:
                             # package_id is internal, not in AdCP PackageRequest spec
                             "product_id": product_id,
                             "budget": 1000.0,
-                            "pricing_option_id": "pricing_opt_1",
+                            "pricing_option_id": "cpm_usd_fixed",
                         }
                     ],
                 },
@@ -269,7 +252,7 @@ class TestFormatConversionApproval:
             session.commit()
 
         # Create MediaPackage record (required by execute_approved_media_buy)
-        create_media_package(media_buy_id, "pkg_1", product_id, 1000.0, test_tenant)
+        create_media_package(media_buy_id, "pkg_1")
 
         # Execute approval
         result = run_approval(media_buy_id, test_tenant)
@@ -364,7 +347,7 @@ class TestFormatConversionApproval:
                             # package_id is internal, not in AdCP PackageRequest spec
                             "product_id": product_id,
                             "budget": 1000.0,
-                            "pricing_option_id": "pricing_opt_1",
+                            "pricing_option_id": "cpm_usd_fixed",
                         }
                     ],
                 },
@@ -373,7 +356,7 @@ class TestFormatConversionApproval:
             session.commit()
 
         # Create MediaPackage record (required by execute_approved_media_buy)
-        create_media_package(media_buy_id, "pkg_1", product_id, 1000.0, test_tenant)
+        create_media_package(media_buy_id, "pkg_1")
 
         # Execute approval - should fail
         result = run_approval(media_buy_id, test_tenant)
@@ -468,7 +451,7 @@ class TestFormatConversionApproval:
                             # package_id is internal, not in AdCP PackageRequest spec
                             "product_id": product_id,
                             "budget": 1000.0,
-                            "pricing_option_id": "pricing_opt_1",
+                            "pricing_option_id": "cpm_usd_fixed",
                         }
                     ],
                 },
@@ -477,7 +460,7 @@ class TestFormatConversionApproval:
             session.commit()
 
         # Create MediaPackage record (required by execute_approved_media_buy)
-        create_media_package(media_buy_id, "pkg_1", product_id, 1000.0, test_tenant)
+        create_media_package(media_buy_id, "pkg_1")
 
         # Execute approval - should fail
         result = run_approval(media_buy_id, test_tenant)
@@ -571,7 +554,7 @@ class TestFormatConversionApproval:
                             # package_id is internal, not in AdCP PackageRequest spec
                             "product_id": product_id,
                             "budget": 1000.0,
-                            "pricing_option_id": "pricing_opt_1",
+                            "pricing_option_id": "cpm_usd_fixed",
                         }
                     ],
                 },
@@ -580,7 +563,7 @@ class TestFormatConversionApproval:
             session.commit()
 
         # Create MediaPackage record (required by execute_approved_media_buy)
-        create_media_package(media_buy_id, "pkg_1", product_id, 1000.0, test_tenant)
+        create_media_package(media_buy_id, "pkg_1")
 
         # Execute approval - should fail
         result = run_approval(media_buy_id, test_tenant)
@@ -677,7 +660,7 @@ class TestFormatConversionApproval:
                             # package_id is internal, not in AdCP PackageRequest spec
                             "product_id": product_id,
                             "budget": 1000.0,
-                            "pricing_option_id": "pricing_opt_1",
+                            "pricing_option_id": "cpm_usd_fixed",
                         }
                     ],
                 },
@@ -686,7 +669,7 @@ class TestFormatConversionApproval:
             session.commit()
 
         # Create MediaPackage record (required by execute_approved_media_buy)
-        create_media_package(media_buy_id, "pkg_1", product_id, 1000.0, test_tenant)
+        create_media_package(media_buy_id, "pkg_1")
 
         # Execute approval - should fail
         result = run_approval(media_buy_id, test_tenant)
@@ -781,7 +764,7 @@ class TestFormatConversionApproval:
                             # package_id is internal, not in AdCP PackageRequest spec
                             "product_id": product_id,
                             "budget": 1500.0,
-                            "pricing_option_id": "pricing_opt_1",
+                            "pricing_option_id": "cpm_usd_fixed",
                         }
                     ],
                 },
@@ -790,7 +773,7 @@ class TestFormatConversionApproval:
             session.commit()
 
         # Create MediaPackage record (required by execute_approved_media_buy)
-        create_media_package(media_buy_id, "pkg_1", product_id, 1000.0, test_tenant)
+        create_media_package(media_buy_id, "pkg_1")
 
         # Execute approval
         result = run_approval(media_buy_id, test_tenant)
@@ -883,7 +866,7 @@ class TestFormatConversionApproval:
                             # package_id is internal, not in AdCP PackageRequest spec
                             "product_id": product_id,
                             "budget": 1000.0,
-                            "pricing_option_id": "pricing_opt_1",
+                            "pricing_option_id": "cpm_usd_fixed",
                         }
                     ],
                 },
@@ -892,7 +875,7 @@ class TestFormatConversionApproval:
             session.commit()
 
         # Create MediaPackage record (required by execute_approved_media_buy)
-        create_media_package(media_buy_id, "pkg_1", product_id, 1000.0, test_tenant)
+        create_media_package(media_buy_id, "pkg_1")
 
         # Execute approval - should fail
         result = run_approval(media_buy_id, test_tenant)
@@ -981,7 +964,7 @@ class TestFormatConversionApproval:
                             # package_id is internal, not in AdCP PackageRequest spec
                             "product_id": product_id,
                             "budget": 1000.0,
-                            "pricing_option_id": "pricing_opt_1",
+                            "pricing_option_id": "cpm_usd_fixed",
                         }
                     ],
                 },
@@ -990,7 +973,7 @@ class TestFormatConversionApproval:
             session.commit()
 
         # Create MediaPackage record (required by execute_approved_media_buy)
-        create_media_package(media_buy_id, "pkg_1", product_id, 1000.0, test_tenant)
+        create_media_package(media_buy_id, "pkg_1")
 
         # Execute approval - should fail
         result = run_approval(media_buy_id, test_tenant)
@@ -1095,7 +1078,7 @@ class TestFormatConversionApproval:
                             # package_id is internal, not in AdCP PackageRequest spec
                             "product_id": product_id,
                             "budget": 2000.0,
-                            "pricing_option_id": "pricing_opt_1",
+                            "pricing_option_id": "cpm_usd_fixed",
                         }
                     ],
                 },
@@ -1104,7 +1087,7 @@ class TestFormatConversionApproval:
             session.commit()
 
         # Create MediaPackage record (required by execute_approved_media_buy)
-        create_media_package(media_buy_id, "pkg_1", product_id, 1000.0, test_tenant)
+        create_media_package(media_buy_id, "pkg_1")
 
         # Execute approval - should succeed
         result = run_approval(media_buy_id, test_tenant)
@@ -1193,7 +1176,7 @@ class TestFormatConversionApproval:
                             # package_id is internal, not in AdCP PackageRequest spec
                             "product_id": product_id,
                             "budget": 1000.0,
-                            "pricing_option_id": "pricing_opt_1",
+                            "pricing_option_id": "cpm_usd_fixed",
                         }
                     ],
                 },
@@ -1202,7 +1185,7 @@ class TestFormatConversionApproval:
             session.commit()
 
         # Create MediaPackage record (required by execute_approved_media_buy)
-        create_media_package(media_buy_id, "pkg_1", product_id, 1000.0, test_tenant)
+        create_media_package(media_buy_id, "pkg_1")
 
         # Execute approval - should fail
         result = run_approval(media_buy_id, test_tenant)

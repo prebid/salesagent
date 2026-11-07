@@ -48,7 +48,7 @@ enforcement. It is not one now, on both halves:
   this verifier never sees;
 * the escalation the namespace was worth protecting —
   ``tasks/pushNotificationConfig/set`` registering a webhook and its credentials outside
-  any skill invocation (security.mdx @ v3.1.1 :1462-1465) — is a channel this agent
+  any skill invocation (security.mdx :1462-1465) — is a channel this agent
   DECLINES wholesale: the card advertises ``push_notifications=False``, all four
   ``tasks/pushNotificationConfig/*`` handlers refuse, and the ``message/send`` envelope
   field is refused too (``src.a2a_server.adcp_a2a_server._refuse_envelope_push_config``).
@@ -56,10 +56,10 @@ enforcement. It is not one now, on both halves:
   body, where the escalation IS enforced (:mod:`src.core.signing.webhook_credentials`,
   read off the validated request).
 
-Spec grounding: AdCP 3.1.1 via ``adcp==6.6.0``;
-``v3.1.1:docs/building/by-layer/L1/security.mdx`` (there is no ``dist/docs/3.1.1/`` at that
+Spec grounding: via ``adcp==6.6.0``;
+``<pin>:docs/building/by-layer/L1/security.mdx`` (there is no ``dist/docs/<pin>/`` at that
 tag — ``dist/docs/`` stops at 3.1.0) and
-``v3.1.1:dist/compliance/3.1.1/universal/signed-requests.yaml`` (12 positive / 28 negative
+``<pin>:dist/compliance/<pin>/universal/signed-requests.yaml`` (its positive and negative
 vectors, graded on 2xx / 401 + the ``WWW-Authenticate`` code byte-for-byte).
 """
 
@@ -72,17 +72,15 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
-from adcp.signing.agent_resolver import AgentResolution, AgentResolverError, resolve_agent
+from adcp.signing.agent_resolver import (
+    AgentResolution,
+    AgentResolverError,
+    request_signature_code,
+    resolve_agent,
+)
 from adcp.signing.canonical import split_structured_field
 from adcp.signing.errors import (
-    REQUEST_SIGNATURE_AGENT_NOT_IN_BRAND_JSON,
-    REQUEST_SIGNATURE_BRAND_JSON_AMBIGUOUS,
-    REQUEST_SIGNATURE_BRAND_JSON_MALFORMED,
-    REQUEST_SIGNATURE_BRAND_JSON_UNREACHABLE,
-    REQUEST_SIGNATURE_BRAND_JSON_URL_MISSING,
-    REQUEST_SIGNATURE_CAPABILITIES_UNREACHABLE,
     REQUEST_SIGNATURE_HEADER_MALFORMED,
-    REQUEST_SIGNATURE_JWKS_UNAVAILABLE,
     REQUEST_SIGNATURE_JWKS_UNTRUSTED,
     REQUEST_SIGNATURE_REQUIRED,
     SignatureVerificationError,
@@ -105,7 +103,8 @@ from src.core.exceptions import adcp_error_for
 from src.core.metrics import record_request_unsigned, record_signature_failed, record_signature_verified
 from src.core.schemas import Principal
 from src.core.signing.agent_cache import AGENT_RESOLUTION_CACHE
-from src.core.signing.canonical import malformed_authority_reason, origin_of, reject_malformed_target
+from src.core.signing.algorithms import request_signing_profile
+from src.core.signing.canonical import origin_of, reject_malformed_target
 from src.core.signing.capture import HttpExchange, SignatureSubject
 from src.core.signing.posture import PostureBucket, RequestSigningPosture, posture_for_tenant
 from src.core.signing.replay_store import PostgresReplayStore
@@ -254,7 +253,7 @@ def _refuse_unsigned_if_required(
     *,
     authenticated: bool,
 ) -> None:
-    """The composition rule, security.mdx @ v3.1.1 :1268-1271.
+    """The composition rule, security.mdx :1268-1271.
 
     The SDK cannot decide this — its ``_precheck_presence`` raises
     ``request_signature_required`` on the absent branch UNCONDITIONALLY, which is the strict
@@ -368,7 +367,7 @@ def _verify_signed(
 def _handle_rejection(exc: SignatureVerificationError, operation: str, bucket: PostureBucket) -> VerifiedSigner | None:
     """The ONE owner of rejection policy: the spec's two phases, as one branch.
 
-    AdCP 3.1.1 ``security.mdx`` puts header well-formedness in a PRE-CHECK above the operation
+    ``security.mdx`` puts header well-formedness in a PRE-CHECK above the operation
     bucket (:1226) and signature validity in a checklist inside it. The SDK collapses presence
     and parse into a single call, so the phase boundary cannot be drawn by ordering two calls.
     It is drawn on WHICH EXCEPTION bypasses the narrowed ``none`` bucket's pass-through —
@@ -416,7 +415,7 @@ def _refuse(exc: SignatureVerificationError, operation: str, *, recorded: bool =
     ``AdCPSalesAgentError.__new__`` had an exception in it. Nothing names a code now.
 
     The SDK's exception goes to ``internal_detail``: it carries the checklist step and a
-    diagnostic sentence, which are server-log facts. AdCP 3.1.1 ``transport-errors.mdx``
+    diagnostic sentence, which are server-log facts. ``transport-errors.mdx``
     § Security Considerations forbids them reaching the buyer, and on #1721 there is nowhere
     for them to leak to — ``AdCPSalesAgentError`` has no ``message`` parameter at all.
     """
@@ -467,7 +466,7 @@ def build_registry_resolution(entry: CounterpartyRegistryEntry) -> AgentResoluti
 def _jwks_is_well_known(resolution: AgentResolution) -> bool:
     """Is the resolved JWKS at the ONE place this seller accepts keys from?
 
-    ``<agent origin>/.well-known/jwks.json``, and nowhere else. security.mdx @ v3.1.1
+    ``<agent origin>/.well-known/jwks.json``, and nowhere else. security.mdx
     step 6 makes that the DEFAULT — "defaulting to ``/.well-known/jwks.json`` at the
     origin of ``A`` when absent" — and permits ``agents[].jwks_uri`` to name somewhere
     else instead. This seller declines the second half, so key discovery is a pure
@@ -495,10 +494,12 @@ def _jwks_is_well_known(resolution: AgentResolution) -> bool:
 
     So nothing here reads ``identity.key_origins``. With one possible location there is
     no origin to pin: the map's whole purpose is to declare where keys live when that can
-    vary. The subset this seller implements -- this narrowing, the enforcement narrowing
-    beside it, and the one that was MEASURED AND NOT TAKEN (``covers_content_digest`` stays
-    ``either``) -- is stated with its measurements in
-    ``docs/design/request-signing-subset.md``.
+    vary. The subset this seller implements -- this narrowing and the enforcement narrowing
+    beside it -- is stated with its measurements in
+    ``docs/design/request-signing-subset.md``. ``covers_content_digest`` used to be listed
+    here as a third narrowing, measured and not taken; it is no longer one of them, because
+    the 3.2 pin leaves a verifier that advertises signing exactly one value and the posture
+    derives it (``src/core/signing/posture.py``).
     """
     origin = origin_of(resolution.agent_url)
     return bool(origin) and resolution.jwks_uri == f"{origin}{WELL_KNOWN_JWKS_PATH}"
@@ -601,53 +602,55 @@ def _resolution_for(
 
 
 def _map_agent_resolver_error(exc: AgentResolverError) -> str:
-    """``AgentResolverError.code`` -> the ``request_signature_*`` code security.mdx assigns it.
+    """``AgentResolverError`` -> the ``request_signature_*`` code security.mdx assigns it.
 
-    ``adcp/signing/errors.py``'s "brand.json discovery chain" block gives each hop of the
-    3-hop walk its own code precisely so a caller can tell a retryable transport failure
-    (``*_unreachable``) apart from a misconfiguration (``*_missing`` / ``*_malformed``) —
-    collapsing all of them onto ``request_signature_key_unknown`` erases that distinction and
-    gives a counterparty with a briefly unreachable capabilities endpoint the wrong diagnosis
-    AND the wrong retry advice.
+    Delegation, because the SDK owns this table and reads one thing a copy here cannot:
+    ``request_signature_code`` consults ``exc.signature_code`` FIRST and only then the
+    per-resolver-code table (``adcp/signing/agent_resolver.py``). That precedence is the
+    whole mechanism — one resolver code fans out to several spec codes, so the resolver
+    attaches the hop's specific outcome to the exception, and a caller re-deriving from
+    ``exc.code`` alone cannot see it.
+
+    Which is what the hand-written copy this replaces got wrong. Keying on ``exc.code``
+    only, it answered an https ``agent_url`` pointing at a private destination with
+    ``request_signature_capabilities_unreachable`` — the resolver code — while the
+    exception carried ``signature_code=request_signature_jwks_untrusted``, because an
+    SSRF-refused destination is terminal. The pinned enum classifies
+    ``capabilities_unreachable`` as ``transient`` with "retry once after a 1-5 s jittered
+    backoff", so the copy told a caller to retry a destination this verifier refuses every
+    time. Giving a discovery failure the wrong retry advice is the exact disease this
+    mapping exists to cure; the copy had it pointing the other way.
+
+    ONE row moves by adopting the SDK's table, recorded here because nothing else records
+    it: ``brand_json_resolution_failed`` carrying ``jwks_origin_mismatch`` now answers
+    ``request_signature_brand_json_unreachable`` rather than
+    ``request_signature_jwks_unavailable``. The SDK leaves that outcome out of its
+    brand.json table deliberately (``_BRAND_JSON_SPEC_CODES``' own comment, ``agent_resolver.py``
+    :988-993 — the document parsed and matched, and no ``jwks_uri`` could be derived from the
+    matched entry, which the discovery-chain table does not describe), so it falls through to the brand.json hop's
+    own code. Both codes carry ``recovery: transient`` in the pinned enum, so the recovery
+    class does NOT change and no caller's retry behaviour moves with this row.
+
+    AND THE CORRECT CODE FOR THAT OUTCOME IS AN OPEN QUESTION, filed as
+    prebid/salesagent#2346. Neither candidate's pinned description is true of it:
+    ``brand_json_unreachable`` is "a DNS, TCP, TLS, timeout, or non-2xx failure" and the
+    document WAS fetched and parsed; ``jwks_unavailable`` is "a transient network or
+    service failure" and no JWKS fetch was attempted. Both say ``transient``, while an
+    origin mismatch is an operator misconfiguration that no retry can fix, so the real
+    defect is the recovery class and it is the same inversion this function fixes one row
+    over. Two terminal codes are shaped like the condition
+    (``key_origin_mismatch``, ``brand_origin_mismatch``) and the comment deleted with the
+    hand-written table had already rejected the first on step-7 grounds. Choosing between
+    them is a protocol-behaviour decision needing the spec text and a version citation, so
+    this function does not make it.
+
+    No default arm, also deliberately. ``_SPEC_CODE_BY_RESOLVER_CODE`` has a row for every
+    member of ``AgentResolverErrorCode`` and the SDK's lookup takes no default, so a
+    resolver code added upstream fails loudly here instead of being absorbed into whichever
+    code a fallback happened to name — which is how a failed capabilities fetch came to be
+    reported as ``jwks_unavailable`` in the first place.
     """
-    if exc.code == "invalid_agent_url":
-        # Trust-boundary rejection (URL wouldn't canonicalize / SSRF-banned host) — matches
-        # the SDK's own reference choice for this ONE code, even though that function's
-        # blanket JWKS_UNAVAILABLE treatment of everything else is the disease this fixes.
-        return REQUEST_SIGNATURE_JWKS_UNTRUSTED
-    if exc.code == "capabilities_unreachable":
-        return REQUEST_SIGNATURE_CAPABILITIES_UNREACHABLE
-    if exc.code in ("capabilities_invalid", "brand_json_url_missing"):
-        # Step 2 reads identity.brand_json_url off the capabilities body; a body we cannot
-        # parse at all means that field was never obtainable either.
-        return REQUEST_SIGNATURE_BRAND_JSON_URL_MISSING
-    if exc.code == "jwks_fetch_failed":
-        return REQUEST_SIGNATURE_JWKS_UNAVAILABLE
-    if exc.code == "brand_json_resolution_failed":
-        return _map_brand_json_resolver_error(exc.__cause__)
-    logger.warning("Unmapped AgentResolverError code %r; defaulting to JWKS_UNAVAILABLE", exc.code)
-    return REQUEST_SIGNATURE_JWKS_UNAVAILABLE
-
-
-def _map_brand_json_resolver_error(cause: BaseException | None) -> str:
-    """``BrandJsonResolverError.code`` -> the ``request_signature_*`` code security.mdx assigns it."""
-    code = getattr(cause, "code", None)
-    if code in ("fetch_failed", "redirect_loop", "redirect_depth_exceeded"):
-        return REQUEST_SIGNATURE_BRAND_JSON_UNREACHABLE
-    if code in ("invalid_body", "schema_invalid", "invalid_house", "invalid_url"):
-        return REQUEST_SIGNATURE_BRAND_JSON_MALFORMED
-    if code == "agent_ambiguous":
-        return REQUEST_SIGNATURE_BRAND_JSON_AMBIGUOUS
-    if code == "agent_not_found":
-        return REQUEST_SIGNATURE_AGENT_NOT_IN_BRAND_JSON
-    if code == "jwks_origin_mismatch":
-        # Fires when agent.url's origin != brand.json's origin and the agents[] entry declares
-        # no explicit jwks_uri — genuinely "no valid jwks_uri could be derived" rather than a
-        # key-origin consistency failure on an already-resolved key (that check is separate,
-        # step 7, and runs on a resolution this failure never produces).
-        return REQUEST_SIGNATURE_JWKS_UNAVAILABLE
-    logger.warning("Unmapped BrandJsonResolverError code %r; defaulting to JWKS_UNAVAILABLE", code)
-    return REQUEST_SIGNATURE_JWKS_UNAVAILABLE
+    return request_signature_code(exc)
 
 
 def _jwks_resolver(resolution: AgentResolution | None, *, agent_url: str | None = None) -> Any:
@@ -719,6 +722,14 @@ def _run_verifier(
             signing_purpose=_SIGNING_PURPOSE,
             posture=bucket,
             revocation_checker=revocation_checker,
+            # ``VerifyOptions`` DEFAULTS this to "3.1", and the default is the one keyword
+            # whose omission is silently wrong rather than loud: it leaves the SDK's
+            # ``allow_legacy_base64url`` fallback on, so step 1 accepts a Base64URL
+            # ``sf-binary`` that requires it to reject as
+            # ``request_signature_header_malformed`` — and accepts it with a signature that
+            # is cryptographically VALID for the base, so nothing downstream notices.
+            # Read from the same function the outbound signer reads.
+            signing_profile_version=request_signing_profile(),
         )
         return verify_request_signature(
             method=exchange.method, url=exchange.url, headers=headers, body=exchange.body, options=options
@@ -855,20 +866,22 @@ def _duplicate_digest_algorithm(value: str) -> str | None:
     return None
 
 
-#: ``header -> what makes ONE of its values malformed``. A table rather than five
+#: ``header -> what makes ONE of its values malformed``. A table rather than four
 #: near-identical blocks: each rule is the same shape (read a value, name a reason or pass),
-#: and five copies is five chances for one of them to stop rejecting.
+#: and four copies is four chances for one of them to stop rejecting.
 #:
-#: ``host`` shares :func:`~src.core.signing.canonical.malformed_authority_reason` with the
-#: canonicalization seam so the authority rule has exactly ONE definition. Only the CODE
-#: differs by caller — checklist step 1 here, ``request_target_uri_malformed`` there — and
-#: that difference is deliberate (``negative/026`` grades the former).
+#: ``host`` is deliberately NOT a row. A malformed authority is not a malformed signature
+#: header: security.mdx's error table files "raw non-ASCII host" and "bare IPv6" under
+#: ``request_target_uri_malformed``, and checklist step 10 is where ``@authority`` is derived
+#: from the as-received ``Host``. :func:`~src.core.signing.capture._target_uri` builds the URL
+#: FROM that header, so :func:`~src.core.signing.canonical.reject_malformed_target` judges the
+#: header's value with the one authority rule and the one code (``negative/026``,
+#: ``negative/031``).
 _MALFORMED_VALUE_RULES: tuple[tuple[bytes, Callable[[str], str | None]], ...] = (
     (b"signature", _duplicate_signature_label),
     (b"signature-input", _duplicate_signature_input_label),
     (b"content-type", _multi_valued_content_type),
     (b"content-digest", _duplicate_digest_algorithm),
-    (b"host", malformed_authority_reason),
 )
 
 #: Headers that MUST arrive on exactly one line when a signature covers the request. Not a
@@ -878,10 +891,12 @@ _MALFORMED_VALUE_RULES: tuple[tuple[bytes, Callable[[str], str | None]], ...] = 
 #: last on MCP. The join makes the repeat visible; this list is what refuses it, on the fields
 #: where a silently-chosen line changes what was verified.
 #:
-#: DERIVED from the table above, so a field gains both rules at once. ``signature`` was the
-#: field that had neither: the header carrying the credential itself was the one repeat
-#: nothing checked.
-_SINGLE_LINE_SIGNED_HEADERS: tuple[bytes, ...] = tuple(name for name, _rule in _MALFORMED_VALUE_RULES)
+#: The table's fields, so a field gains both rules at once, plus ``host``: its VALUE is the
+#: target gate's to judge, but a second ``Host`` line joins into an authority no value rule
+#: refuses, so the repeat itself is refused here — the same field set the SDK's own step-1
+#: precheck holds singular. ``signature`` was the field that had neither: the header carrying
+#: the credential itself was the one repeat nothing checked.
+_SINGLE_LINE_SIGNED_HEADERS: tuple[bytes, ...] = (*(name for name, _rule in _MALFORMED_VALUE_RULES), b"host")
 
 
 def _strict_header_precheck(raw_headers: tuple[tuple[bytes, bytes], ...]) -> None:
@@ -893,19 +908,19 @@ def _strict_header_precheck(raw_headers: tuple[tuple[bytes, bytes], ...]) -> Non
     four of them while missing the threat their ``$comment``s actually describe: a SECOND
     header LINE, which last-wins before any check runs.
 
-    Why OURS and not the SDK's: measured against ``adcp==6.6.0``, the SDK answers these four
-    vectors with the wrong graded artifact — ``request_signature_components_incomplete`` for
-    ``negative/021`` (its RFC 8941 parser last-wins on the duplicate dictionary key) and
-    ``request_signature_invalid`` for ``022``/``023``/``026`` (no single-value check on a
-    covered non-list field, no RFC 9530 duplicate-algorithm check, no A-label enforcement
-    anywhere on the authority path). Filed upstream as SDK divergence #6.
+    Why it runs HERE as well as inside the SDK: the pinned SDK's ``verify_request_signature``
+    carries an equivalent step-1 check, but it runs after :func:`_resolution_for` has already
+    walked the counterparty's discovery chain. Refusing first spares an unresolved counterparty
+    a three-hop outbound walk on a request that cannot be accepted. It was written when the SDK
+    answered ``021``/``022``/``023`` with the wrong code (SDK divergence #6).
+
+    It judges no AUTHORITY. ``Host``'s value is the target gate's (see
+    :data:`_MALFORMED_VALUE_RULES`); only a repeated ``Host`` line is refused here.
 
     Spec grounding, stated honestly rather than implied:
 
-    * the non-ASCII authority and the malformed-authority family are well grounded —
-      ``url-canonicalization.mdx`` steps 2-3, MUST-reject, shared with
-      :mod:`src.core.signing.canonical` so the rule has ONE definition;
-    * ``negative/023`` rests on RFC 9530 §2's Dictionary semantics;
+    * ``negative/023``, ``029`` and ``030`` rest on the Dictionary semantics of RFC 9530 §2 and
+      RFC 9421 §4.2, whose keys RFC 8941 §3.2 makes unique and §3.1.2 lowercase;
     * ``negative/021`` and ``negative/022`` are grounded ONLY in the vectors' own ``$comment``
       plus checklist step 1's bare "Reject if malformed" — no prose enumerates them. Do not
       cite prose support that is not there.

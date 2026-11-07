@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import uuid
 
-from pytest_bdd import given, then
+from pytest_bdd import given, parsers, then
 
 from tests.bdd.steps._outcome_helpers import payload_or_none, require_payload
 from tests.bdd.steps.generic._dispatch import dispatch_request
@@ -119,23 +119,13 @@ def then_no_adapter_calls(ctx: dict) -> None:
 
 @then("the error should indicate minimum spend requirement")
 def then_error_minimum_spend(ctx: dict) -> None:
-    """Assert the error message mentions minimum spend enforcement."""
-    error = ctx.get("error")
-    resp = payload_or_none(ctx)
+    """Assert the wire refusal is BUDGET_TOO_LOW, pointed at the refused package budget.
 
-    error_str = ""
-    if error is not None:
-        error_str = str(error).lower()
-    elif resp is not None:
-        # Some transports wrap errors in the response
-        from tests.bdd.steps.generic.then_media_buy import _get_response_field
-
-        msg = _get_response_field(resp, "message") or _get_response_field(resp, "error") or ""
-        error_str = str(msg).lower()
-
-    assert "minimum" in error_str or "min" in error_str or "spend" in error_str, (
-        f"Expected error to indicate minimum spend requirement, got: {error or resp}"
-    )
+    enums/error-code.json: BUDGET_TOO_LOW is "Budget is below the seller's minimum". The
+    code is the assertion; the buyer-facing sentence is a function of it through
+    CODE_TABLE, so reading the message for "minimum" graded the table, not the seller.
+    """
+    ctx["result"].assert_wire_error("BUDGET_TOO_LOW", field="packages[0].budget")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -363,58 +353,29 @@ def then_adapter_execution_logged(ctx: dict) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-@then("the response should be returned within 15 seconds (p95)")
-def then_response_within_sla(ctx: dict) -> None:
-    """Assert the request-path architecture supports the 15s p95 SLA.
+@then(parsers.parse("the response should be returned within {seconds:d} seconds (p95)"))
+def then_response_within_sla(ctx: dict, seconds: int) -> None:
+    """NFR-004: the create answered as a completed synchronous success, inside the bound.
 
-    A single-call BDD harness cannot measure p95 latency. The controllable
-    latency risk is synchronous adapter I/O (GAM SOAP, etc.) blocking the
-    request thread. This step asserts:
-    1. The request completed successfully (full pipeline ran).
-    2. The adapter was not called synchronously on the request thread
-       (the actual SLA risk). Currently xfailed because production DOES
-       call adapter I/O in-line.
+    The answer must be the created buy, not a fast refusal: the synchronous success with
+    ``media_buy_id`` and the requested ``packages``, whose wire status is ``completed``, the
+    pinned task status for "Done immediately" (create_media_buy.mdx, "Asynchronous
+    Operations"). ``success`` is not a member of enums/task-status.json.
 
-    True p95 enforcement belongs in production monitoring/alerting.
+    One dispatch is one sample, so this grades that sample against the bound rather than a
+    percentile: a create that takes longer than the p95 bound on its own fails here. The
+    time is the When's wall time from dispatch to the recorded result, on the scenario's
+    transport.
 
-    FIXME: Move adapter I/O to background workers
-    so latency SLA is enforceable at the application layer.
+    The step used to assert instead that the adapter was not called on the request thread.
+    That is a design the pin does not require, measured no time at all, and failed a seller
+    that answers in milliseconds.
     """
+    from tests.bdd.steps.domain.uc002_invariants import then_media_buy_created
 
-    from src.core.schemas._base import CreateMediaBuySuccess
-
-    env = ctx["env"]
-
-    # --- Part 1: Verify the original request completed successfully ---
-    error = ctx.get("error")
-    assert error is None, f"Expected a successful response to verify SLA, got error: {error}"
-    result = require_payload(ctx)
-    assert result.status == "success", f"Expected status='success' (full pipeline completed), got '{result.status}'"
-    assert isinstance(result, CreateMediaBuySuccess), f"Expected CreateMediaBuySuccess, got {type(result).__name__}"
-
-    # Production-computed: media_buy_id proves the pipeline completed end-to-end
-    assert result.media_buy_id, "media_buy_id is empty — pipeline did not complete (fast error is not SLA compliance)"
-    # Production-computed: packages prove adapter + persistence completed
-    assert result.packages, "packages list is empty — adapter/persistence did not complete"
-
-    # --- Part 2: Assert no synchronous adapter I/O on request thread ---
-    # The controllable latency risk for p95 SLA is synchronous external
-    # calls (GAM SOAP, Kevel API) blocking the request thread. When
-    # adapters run in background workers, the adapter mock should NOT be
-    # called during the request cycle.
-    mock_adapter = env.mock["adapter"].return_value
-    adapter_called_sync = mock_adapter.create_media_buy.called
-
-    # The xfail that stood here was `if adapter_called_sync: pytest.xfail(...)` directly
-    # above this assert — so the assert was UNREACHABLE in the only case it was written
-    # for, and the step reported an expected failure instead of the finding.
-    # Adapter I/O still runs synchronously on the request thread; the
-    # architecture direction is background workers returning 201 pending, and until then
-    # this assertion is the thing that says so out loud.
-    assert not adapter_called_sync, (
-        "Adapter.create_media_buy was called on the request thread — "
-        "synchronous adapter I/O is the primary latency risk for SLA compliance"
-    )
+    then_media_buy_created(ctx)
+    elapsed = ctx["create_response_seconds"]
+    assert elapsed <= seconds, f"the create took {elapsed:.2f}s, over the {seconds}s NFR-004 bound"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -493,9 +454,8 @@ def given_observe_high_value_alerts(ctx: dict) -> None:
     """Make the >$10k high-value audit alert observable at the Seller boundary.
 
     The high-value alert fires inside the REAL AuditLogger (notify_audit_log),
-    which the create harness no-ops by default. This swaps in the real audit
-    logger so the budget gate actually runs, and spies its external Slack
-    boundary (the same Slack-boundary idiom as 'a Slack notification should be
+    which the create harness runs unpatched, so the budget gate runs for real. This
+    spies its external Slack boundary (the same Slack-boundary idiom as 'a Slack notification should be
     sent to the Seller', which asserts notify_media_buy_event). The spy is
     registered on the env's patcher list so it is torn down on env __exit__.
 
@@ -509,11 +469,7 @@ def given_observe_high_value_alerts(ctx: dict) -> None:
 
     from unittest import mock
 
-    from src.core.audit_logger import get_audit_logger
-
     env = ctx["env"]
-    # Real audit logger -> the high-value notification gate executes for real.
-    env.mock["audit"].side_effect = get_audit_logger
     # Spy the audit logger's external Slack boundary; tie teardown to env lifecycle.
     patcher = mock.patch("src.services.slack_notifier.get_slack_notifier")
     notifier_factory = patcher.start()

@@ -78,6 +78,7 @@ def make_media_buy(
     confirmed_at=datetime(2025, 1, 1, tzinfo=UTC),
 ):
     buy = MagicMock()
+    buy.name = None
     buy.media_buy_id = media_buy_id
     buy.principal_id = principal_id
     buy.tenant_id = tenant_id

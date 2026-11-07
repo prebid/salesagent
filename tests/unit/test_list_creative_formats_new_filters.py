@@ -88,7 +88,7 @@ class TestListCreativeFormatsNewFilters:
 
     def test_new_filters_inherited_from_library(self):
         """Verify that new filters come from adcp library (not hand-coded)."""
-        from adcp import ListCreativeFormatsRequest as LibraryRequest
+        from adcp import LegacyListCreativeFormatsRequest as LibraryRequest
 
         # Verify the library has these fields
         lib_fields = LibraryRequest.model_fields
