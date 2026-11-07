@@ -17,12 +17,6 @@ from sqlalchemy import delete, select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import InventoryProfile, Product, Tenant
-from tests.factories.product import authorized_refs
-from tests.helpers import assert_selectors_normalized
-
-#: The seller's verified properties on every publisher these profiles and products name, so
-#: the selectors are read back whole.
-_AUTHORIZED = authorized_refs("site-a.com", "site-b.com", "custom-site.com", "new-custom-site.com")
 
 
 @pytest.mark.integration
@@ -167,15 +161,6 @@ class TestInventoryProfileTransitions:
                 "property_ids": ["custom_property"],
             }
         ]
-        # resolve_publisher_properties adds selection_type when converting legacy format
-        expected_effective_properties = [
-            {
-                "publisher_domain": "custom-site.com",
-                "property_ids": ["custom_property"],
-                "selection_type": "by_id",
-            }
-        ]
-
         self.create_product(
             tenant_id=tenant,
             product_id="test_custom_to_profile",
@@ -196,13 +181,11 @@ class TestInventoryProfileTransitions:
             assert product.format_ids == custom_formats
             assert product.properties == custom_properties
             assert product.effective_format_ids == custom_formats
-            assert product.resolve_publisher_properties(_AUTHORIZED) == expected_effective_properties
 
             # Get profile data for comparison
             stmt = select(InventoryProfile).where(InventoryProfile.id == profile_a)
             profile = session.scalars(stmt).first()
             profile_formats = profile.format_ids
-            profile_properties = profile.publisher_properties
 
             # Set inventory_profile_id to existing profile
             product.inventory_profile_id = profile_a
@@ -213,12 +196,6 @@ class TestInventoryProfileTransitions:
             # Assert effective_formats returns profile data
             assert product.effective_format_ids == profile_formats
             assert product.effective_format_ids != custom_formats
-
-            # Assert resolve_publisher_properties returns profile data + selection_type (non-destructive)
-            assert_selectors_normalized(
-                product.resolve_publisher_properties(_AUTHORIZED), profile_properties, expected_selection_type="by_id"
-            )
-            assert product.resolve_publisher_properties(_AUTHORIZED) != expected_effective_properties
 
             # Assert custom data still exists in database (not deleted)
             assert product.format_ids == custom_formats
@@ -261,11 +238,6 @@ class TestInventoryProfileTransitions:
             # Initially using profile
             assert product.inventory_profile_id == profile_a
             assert product.effective_format_ids == profile.format_ids
-            assert_selectors_normalized(
-                product.resolve_publisher_properties(_AUTHORIZED),
-                profile.publisher_properties,
-                expected_selection_type="by_id",
-            )
 
             # Clear inventory_profile_id (set to None)
             product.inventory_profile_id = None
@@ -276,14 +248,6 @@ class TestInventoryProfileTransitions:
                 {
                     "publisher_domain": "new-custom-site.com",
                     "property_ids": ["new_custom_property"],
-                }
-            ]
-            # resolve_publisher_properties adds selection_type when converting legacy format
-            expected_effective_properties = [
-                {
-                    "publisher_domain": "new-custom-site.com",
-                    "property_ids": ["new_custom_property"],
-                    "selection_type": "by_id",
                 }
             ]
 
@@ -297,9 +261,6 @@ class TestInventoryProfileTransitions:
             # Assert effective_formats returns custom data
             assert product.effective_format_ids == custom_formats
 
-            # Assert resolve_publisher_properties returns custom data (with selection_type added)
-            assert product.resolve_publisher_properties(_AUTHORIZED) == expected_effective_properties
-
         # Cleanup
         with get_db_session() as session:
             stmt = delete(Product).where(
@@ -309,7 +270,7 @@ class TestInventoryProfileTransitions:
             session.execute(stmt)
             session.commit()
 
-    def test_switching_profiles_updates_effective_properties(self, tenant, profile_a, profile_b):
+    def test_switching_profiles_updates_effective_formats(self, tenant, profile_a, profile_b):
         """Test switching between different inventory profiles.
 
         Scenario: Product uses profile_a, then switches to profile_b.
@@ -339,11 +300,6 @@ class TestInventoryProfileTransitions:
 
             # Assert effective_formats returns profile_a formats
             assert product.effective_format_ids == profile_a_obj.format_ids
-            assert_selectors_normalized(
-                product.resolve_publisher_properties(_AUTHORIZED),
-                profile_a_obj.publisher_properties,
-                expected_selection_type="by_id",
-            )
 
             # Verify we have the expected profile_a data
             profile_a_format_ids = [f["id"] for f in profile_a_obj.format_ids]
@@ -358,11 +314,6 @@ class TestInventoryProfileTransitions:
 
             # Assert effective_formats returns profile_b formats
             assert product.effective_format_ids == profile_b_obj.format_ids
-            assert_selectors_normalized(
-                product.resolve_publisher_properties(_AUTHORIZED),
-                profile_b_obj.publisher_properties,
-                expected_selection_type="by_id",
-            )
 
             # Verify we now have profile_b data
             profile_b_format_ids = [f["id"] for f in profile_b_obj.format_ids]
@@ -387,7 +338,7 @@ class TestInventoryProfileTransitions:
         """Test clearing profile without setting custom config.
 
         Scenario: Product uses profile, profile_id cleared, no custom config set.
-        Expected: property_tags resolves against the verified properties, all_inventory naming each publisher whole.
+        Expected: effective_format_ids falls back to the product's own (empty) formats.
         """
         # Create product with inventory_profile_id (no custom config)
         self.create_product(
@@ -420,7 +371,7 @@ class TestInventoryProfileTransitions:
             session.commit()
             session.refresh(product)
 
-            # Check effective_formats and resolve_publisher_properties
+            # Check effective_formats
             # System should return custom config gracefully
             assert product.inventory_profile_id is None
 
@@ -428,11 +379,6 @@ class TestInventoryProfileTransitions:
             effective_formats = product.effective_format_ids
             assert isinstance(effective_formats, list)
             assert effective_formats == []
-
-            # property_tags resolves against the verified properties: all_inventory, each publisher whole
-            assert product.resolve_publisher_properties(authorized_refs("news.example")) == [
-                {"publisher_domain": "news.example", "selection_type": "all"}
-            ]
 
             # Verify system handles gracefully (no exceptions)
             # Product is valid even without profile or custom config

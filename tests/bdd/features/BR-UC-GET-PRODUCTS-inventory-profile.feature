@@ -6,10 +6,10 @@ Feature: Product discovery with inventory profile publisher_properties
   So that I can purchase ad placements even when profile data lacks the selection_type discriminator
 
   # Issue: #1162
-  # Root cause: Product.effective_properties returns raw inventory profile
-  # publisher_properties without inferring selection_type. AdCP 2.13.0+
-  # requires the PublisherPropertySelector discriminated union to have
-  # selection_type ("all", "by_id", or "by_tag").
+  # A profile's stored publisher_properties may lack selection_type, and AdCP
+  # 2.13.0+ requires the PublisherPropertySelector discriminated union to have
+  # it ("all", "by_id", or "by_tag"), so Product.resolve_publisher_properties
+  # infers it.
 
   # A profile's selectors are offered only for a publisher the seller holds a verified
   # property of (#1845; BR-UC-GET-PRODUCTS-publisher-domain.feature), so every profile

@@ -217,7 +217,7 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration/test_inventory_profile_effective_properties.py", "test_product_with_profile"),
     (
         "tests/integration/test_inventory_profile_effective_properties.py",
-        "test_effective_properties_handle_none_profile_relationship",
+        "test_effective_values_load_the_profile_relationship_on_access",
     ),
     # tests/integration/test_inventory_profile_media_buy.py
     ("tests/integration/test_inventory_profile_media_buy.py", "test_create_media_buy_with_profile_based_product"),
@@ -964,15 +964,7 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ),
     (
         "tests/integration/test_inventory_profile_effective_properties.py",
-        "test_effective_properties_handle_none_profile_relationship",
-    ),
-    (
-        "tests/integration/test_inventory_profile_effective_properties.py",
-        "test_effective_properties_returns_custom_properties_when_profile_not_set",
-    ),
-    (
-        "tests/integration/test_inventory_profile_effective_properties.py",
-        "test_effective_properties_returns_profile_properties_when_profile_set",
+        "test_effective_values_load_the_profile_relationship_on_access",
     ),
     (
         "tests/integration/test_inventory_profile_effective_properties.py",
@@ -1017,7 +1009,7 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
         "tests/integration/test_inventory_profile_transitions.py",
         "test_switching_from_profile_to_custom_uses_custom_config",
     ),
-    ("tests/integration/test_inventory_profile_transitions.py", "test_switching_profiles_updates_effective_properties"),
+    ("tests/integration/test_inventory_profile_transitions.py", "test_switching_profiles_updates_effective_formats"),
     ("tests/integration/test_inventory_profile_updates.py", "test_updating_profile_formats_affects_all_products"),
     (
         "tests/integration/test_inventory_profile_updates.py",
