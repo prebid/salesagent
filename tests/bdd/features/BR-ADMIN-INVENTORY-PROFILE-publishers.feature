@@ -196,6 +196,20 @@ Feature: BR-ADMIN-INVENTORY-PROFILE-publishers Which publishers the operator's s
     When the operator renames inventory profile "stored" through its edit form, changing nothing else
     Then inventory profile "stored" is renamed and its stored selection is unchanged
 
+  @T-ADMIN-INVPROFILE-026 @admin_inventory_profile @requires_db
+  Scenario: the product form's full mode refuses a property awaiting verification
+    Given the seller's property "podcast_home" of publisher "podcast.example" tagged "podcast" awaits verification
+    When the operator creates product "legacy" in full mode selecting properties "podcast_home"
+    Then the page contains "Not verified authorized properties: podcast_home"
+    And no product "legacy" is stored
+
+  @T-ADMIN-INVPROFILE-027 @admin_inventory_profile @requires_db
+  Scenario: the profile form's JSON mode refuses a publisher awaiting verification
+    Given the seller's property "podcast_home" of publisher "podcast.example" tagged "podcast" awaits verification
+    When the operator creates inventory profile "podcasts" in JSON mode storing publisher_properties [{"publisher_domain": "podcast.example", "selection_type": "all"}]
+    Then the page contains "Not verified authorized publisher selections: podcast.example"
+    And no inventory profile "podcasts" is stored
+
   @T-ADMIN-INVPROFILE-025 @admin_inventory_profile @requires_db
   Scenario: the forms offer only verified properties
     Given the seller's property "podcast_home" of publisher "podcast.example" tagged "podcast" awaits verification

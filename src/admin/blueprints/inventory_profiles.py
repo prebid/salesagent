@@ -30,7 +30,12 @@ from src.core.database.models import (
     Tenant,
 )
 from src.core.database.repositories.authorized_property import AuthorizedPropertyRepository
-from src.core.helpers.publisher_property_helpers import id_selection, profile_form_prefill, tag_selection
+from src.core.helpers.publisher_property_helpers import (
+    id_selection,
+    profile_form_prefill,
+    selector_selection,
+    tag_selection,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -55,15 +60,25 @@ def _generate_profile_id(name: str) -> str:
     return profile_id
 
 
-def _selectors_from_form(session: Session, tenant_id: str, property_mode: str) -> tuple[list[dict], str | None]:
-    """The ``tags`` / ``property_ids`` form selection as selectors, one per publisher.
+#: The property modes whose form field holds the selectors as JSON. ``all`` and ``specific``
+#: are what the unified inventory page sends; ``full`` is the profile pages' legacy mode.
+_JSON_MODES = frozenset({"full", "all", "specific"})
+
+
+def _selectors_from_form(
+    session: Session, tenant_id: str, property_mode: str, stored: list | None = None
+) -> tuple[list[dict], str | None]:
+    """The form's property selection as selectors, one per publisher, in any of its modes.
 
     Each selector names the publisher whose verified authorized properties it matches,
     never the tenant's own host: a tenant is a seller representing many publishers (#1845),
     and AdCP 3.1.1 ``core/publisher-property-selector.json`` makes property IDs
     publisher-scoped. A pending property is not offered, and is refused if submitted anyway,
     because a product would not sell it (``AuthorizedPropertyRepository.list_refs``). The
-    product forms validate through the same ``tag_selection`` / ``id_selection``.
+    product forms validate through the same ``tag_selection`` / ``id_selection``. The JSON
+    modes are held to the rule ``get_products`` sells stored selectors by
+    (``selector_selection``), so every mode offers what it accepts; a selector the profile
+    already *stored* is carried as it is.
 
     Returns ``(selectors, None)``, or ``([], message)`` when the selection is unusable.
     """
@@ -71,6 +86,12 @@ def _selectors_from_form(session: Session, tenant_id: str, property_mode: str) -
     if property_mode == "tags":
         tags = [tag for tag in (t.strip().lower() for t in request.form.get("property_tags", "").split(",")) if tag]
         return tag_selection(tags, authorized)
+    if property_mode in _JSON_MODES:
+        raw = request.form.get("publisher_properties", "").strip()
+        try:
+            return selector_selection(json.loads(raw) if raw else [], authorized, stored or [])
+        except json.JSONDecodeError as e:
+            return [], f"Invalid publisher properties JSON: {e}"
     return id_selection(request.form.getlist("selected_property_ids"), authorized)
 
 
@@ -236,26 +257,10 @@ def add_inventory_profile(tenant_id: str):
             property_mode = form_data.get("property_mode", "tags")
 
             with get_db_session() as prop_session:
-                if property_mode in {"tags", "property_ids"}:
+                if property_mode in {"tags", "property_ids"} | _JSON_MODES:
                     publisher_properties, error = _selectors_from_form(prop_session, tenant_id, property_mode)
                     if error:
                         flash(error, "error")
-                        return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
-
-                elif property_mode in {"full", "all", "specific"}:
-                    # "full" is legacy textarea JSON mode
-                    # "all"/"specific" are used by the unified inventory page and
-                    # send complete publisher_properties JSON in the form field.
-                    publisher_properties_json = form_data.get("publisher_properties", "").strip()
-                    if publisher_properties_json:
-                        try:
-                            publisher_properties = json.loads(publisher_properties_json)
-                        except json.JSONDecodeError as e:
-                            flash(f"Invalid publisher properties JSON: {e}", "error")
-                            return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
-
-                    if not publisher_properties:
-                        flash("Publisher properties are required", "error")
                         return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
 
             # Parse targeting template (optional)
@@ -376,8 +381,10 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
                 # Update publisher properties based on property_mode
                 property_mode = form_data.get("property_mode", "tags")
 
-                if property_mode in {"tags", "property_ids"}:
-                    publisher_properties, error = _selectors_from_form(session, tenant_id, property_mode)
+                if property_mode in {"tags", "property_ids"} | _JSON_MODES:
+                    publisher_properties, error = _selectors_from_form(
+                        session, tenant_id, property_mode, profile.publisher_properties
+                    )
                     if error:
                         flash(error, "error")
                         return redirect(
@@ -386,23 +393,6 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
                             )
                         )
                     profile.publisher_properties = publisher_properties
-
-                elif property_mode == "full":
-                    # Legacy full mode: Parse JSON from textarea
-                    publisher_properties_json = form_data.get("publisher_properties", "").strip()
-                    if publisher_properties_json:
-                        try:
-                            publisher_properties = json.loads(publisher_properties_json)
-                            profile.publisher_properties = publisher_properties
-                        except json.JSONDecodeError as e:
-                            flash(f"Invalid publisher properties JSON: {e}", "error")
-                            return redirect(
-                                url_for(
-                                    "inventory_profiles.edit_inventory_profile",
-                                    tenant_id=tenant_id,
-                                    profile_id=profile_id,
-                                )
-                            )
 
                 # Update targeting template
                 targeting_json = form_data.get("targeting_template", "").strip()

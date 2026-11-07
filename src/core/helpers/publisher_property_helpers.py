@@ -359,6 +359,44 @@ def publisher_tag_selection(
     return selectors, None
 
 
+def selector_selection(
+    selectors: object, authorized: Sequence[SelectableProperty], stored: Sequence[object] = ()
+) -> tuple[list[dict], str | None]:
+    """An admin form's JSON selectors, accepted only when each is sold as written, or why not.
+
+    *authorized* are the VERIFIED properties, and each selector is resolved by
+    :func:`authorized_selectors`, the rule ``get_products`` applies to a stored selector. One
+    it would drop, or narrow by an id or a tag, names something no verified property backs,
+    so it is refused rather than stored and then silently not sold. A selector already
+    *stored* is kept as it is: an edit form carries over what it did not change.
+
+    Returns ``(selectors, None)``, or ``([], refusal)``.
+    """
+    if not isinstance(selectors, list) or not selectors:
+        return [], "Publisher properties are required"
+    refused = [
+        str(selector.get("publisher_domain")) if isinstance(selector, dict) else json.dumps(selector)
+        for selector in selectors
+        if selector not in stored and not _sold_as_written(selector, authorized)
+    ]
+    if refused:
+        return [], f"Not verified authorized publisher selections: {', '.join(refused)}"
+    return selectors, None
+
+
+def _sold_as_written(selector: object, authorized: Sequence[SelectableProperty]) -> bool:
+    """Whether :func:`authorized_selectors` keeps *selector* with every id and tag it lists."""
+    if not isinstance(selector, dict):
+        return False
+    kept = authorized_selectors([selector], authorized)
+    if not kept:
+        return False
+    written = (ensure_selection_type([selector]) or [{}])[0]
+    if kept[0]["selection_type"] != written["selection_type"]:
+        return True  # a tag selection of all_inventory, sold whole (publisher_tag_selector)
+    return all(kept[0].get(field) == written.get(field) for field in ("property_ids", "property_tags"))
+
+
 def id_selection(
     property_ids: Sequence[str], authorized: Sequence[SelectableProperty]
 ) -> tuple[list[dict], str | None]:

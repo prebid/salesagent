@@ -75,6 +75,24 @@ def when_create_product_by_ids(ctx: dict, product_id: str, property_ids: str) ->
     )
 
 
+@when(parsers.parse('the operator creates product "{product_id}" in full mode selecting properties "{property_ids}"'))
+def when_create_product_full_mode(ctx: dict, product_id: str, property_ids: str) -> None:
+    ctx["admin_page"] = _env(ctx).create_product(
+        product_id, property_mode="full", full_property_ids=comma_list(property_ids)
+    )
+
+
+@when(
+    parsers.parse(
+        'the operator creates inventory profile "{profile_id}" in JSON mode storing publisher_properties {selectors}'
+    )
+)
+def when_create_profile_json_mode(ctx: dict, profile_id: str, selectors: str) -> None:
+    ctx["admin_page"] = _env(ctx).create_inventory_profile(
+        profile_id, property_mode="full", publisher_properties=selectors
+    )
+
+
 @when(parsers.parse('the operator edits product "{product_id}" to select tags "{selections}"'))
 def when_edit_product_by_tags(ctx: dict, product_id: str, selections: str) -> None:
     ctx["admin_page"] = _env(ctx).edit_product(

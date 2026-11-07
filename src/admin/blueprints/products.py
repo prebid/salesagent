@@ -631,8 +631,13 @@ def list_products(tenant_id):
         return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
 
 
-#: The form field holding the choices of each property mode that builds selectors.
-_SELECTION_FIELDS = {"tags": "selected_property_tags", "property_ids": "selected_property_ids"}
+#: The form field holding the choices of each property mode that builds selectors. ``full``
+#: (legacy) is a choice of property ids, held to the same check as ``property_ids``.
+_SELECTION_FIELDS = {
+    "tags": "selected_property_tags",
+    "property_ids": "selected_property_ids",
+    "full": "full_property_ids",
+}
 
 
 def _selectors_from_product_form(db_session, tenant_id: str, property_mode: str) -> tuple[list[dict], str | None]:
@@ -1064,45 +1069,6 @@ def add_product(tenant_id):
                         flash(refusal, "error")
                         return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
                     product_kwargs["properties"] = selectors
-                elif property_mode == "full":
-                    # Get selected property IDs and load full property objects (legacy mode)
-                    property_ids_list = request.form.getlist("full_property_ids")
-
-                    if not property_ids_list:
-                        # No properties selected, default to empty property_tags to satisfy DB constraint
-                        product_kwargs["property_tags"] = []
-                    else:
-                        from src.core.database.models import AuthorizedProperty
-
-                        # Query by property_id (string), not integer id
-                        properties = db_session.scalars(
-                            select(AuthorizedProperty).filter(
-                                AuthorizedProperty.property_id.in_(property_ids_list),
-                                AuthorizedProperty.tenant_id == tenant_id,
-                            )
-                        ).all()
-
-                        # Verify all requested IDs were found (prevent TOCTOU)
-                        if len(properties) != len(property_ids_list):
-                            flash("One or more selected properties not found or not authorized", "error")
-                            return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
-
-                        if properties:
-                            # Convert to dict format for JSONB storage (legacy format)
-                            properties_data = []
-                            for prop in properties:
-                                prop_dict = {
-                                    "property_type": prop.property_type,
-                                    "name": prop.name,
-                                    "identifiers": prop.identifiers or [],
-                                    "tags": prop.tags or [],
-                                    "publisher_domain": prop.publisher_domain,
-                                }
-                                properties_data.append(prop_dict)
-                            product_kwargs["properties"] = properties_data
-                        else:
-                            # No properties found, default to empty property_tags to satisfy DB constraint
-                            product_kwargs["property_tags"] = []
 
                 # Ensure either properties or property_tags is set (DB constraint requirement)
                 if "properties" not in product_kwargs and "property_tags" not in product_kwargs:
@@ -1426,7 +1392,9 @@ def edit_product(tenant_id, product_id):
                         tags=frozenset(request.form.getlist("selected_property_tags")),
                         property_ids=frozenset(request.form.getlist("selected_property_ids")),
                     )
-                    if request.form.getlist(_SELECTION_FIELDS[property_mode]) and posted != preselected:
+                    # The full (legacy) mode pre-checks nothing, so any choice it posts is a change.
+                    changed = posted != preselected or property_mode == "full"
+                    if request.form.getlist(_SELECTION_FIELDS[property_mode]) and changed:
                         selectors, refusal = _selectors_from_product_form(db_session, tenant_id, property_mode)
                         if refusal:
                             flash(refusal, "error")
@@ -1437,36 +1405,6 @@ def edit_product(tenant_id, product_id):
                         product.property_tags = None
                         product.property_ids = None
                         attributes.flag_modified(product, "properties")
-
-                elif property_mode == "full":
-                    # Get selected full property IDs (legacy mode)
-                    property_ids_list = request.form.getlist("full_property_ids")
-                    if property_ids_list:
-                        from src.core.database.models import AuthorizedProperty
-
-                        properties = db_session.scalars(
-                            select(AuthorizedProperty).filter(
-                                AuthorizedProperty.property_id.in_(property_ids_list),
-                                AuthorizedProperty.tenant_id == tenant_id,
-                            )
-                        ).all()
-
-                        if properties:
-                            properties_data = []
-                            for prop in properties:
-                                prop_dict = {
-                                    "property_type": prop.property_type,
-                                    "name": prop.name,
-                                    "identifiers": prop.identifiers or [],
-                                    "tags": prop.tags or [],
-                                    "publisher_domain": prop.publisher_domain,
-                                }
-                                properties_data.append(prop_dict)
-
-                            product.properties = properties_data
-                            product.property_tags = None
-                            product.property_ids = None
-                            attributes.flag_modified(product, "properties")
 
                 # Get pricing based on line item type (GAM form) or delivery type (other adapters)
                 line_item_type = form_data.get("line_item_type")
