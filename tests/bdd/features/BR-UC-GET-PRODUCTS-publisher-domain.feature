@@ -23,9 +23,10 @@ Feature: A product names the publishers whose inventory it sells
   # publishers only (AuthorizedPropertyRepository._verified), so a product naming a
   # pending publisher would send the buyer to a file that refuses it. A selector the
   # product or its inventory profile stores explicitly is held to the same rule per
-  # publisher: it stays whole when its publisher has a verified property, because the
-  # verification fetches the publisher's file, and the seller's rows need not list every
-  # id or tag that file declares.
+  # property, as verification is per property: a by_id selector keeps the ids of its
+  # publisher's verified properties, a by_tag selector keeps the tags a verified property
+  # of its publisher carries, and an "all" selector stays while its publisher has a
+  # verified property. A selector left with nothing is dropped.
   #
   # core/product.json requires publisher_properties with minItems 1, so a product no
   # verified property backs has nothing it may truthfully claim and is not offered.
@@ -105,6 +106,21 @@ Feature: A product names the publishers whose inventory it sells
     When the buyer requests products
     Then the buyer receives exactly the products "mixed"
     And product "mixed" announces publisher_properties [{"publisher_domain": "news.example", "selection_type": "all"}]
+
+  @T-UC-GET-PRODUCTS-publisher-stored-ids-per-property @publisher_domain_resolution @requires_db
+  Scenario: a stored by_id selector names only its publisher's verified properties
+    Given the seller's property "news_live" of publisher "news.example" tagged "live" awaits verification
+    And the seller offers product "ids" naming publisher_properties [{"publisher_domain": "news.example", "property_ids": ["news_home", "news_live"], "selection_type": "by_id"}]
+    When the buyer requests products
+    Then product "ids" announces publisher_properties [{"publisher_domain": "news.example", "property_ids": ["news_home"], "selection_type": "by_id"}]
+
+  @T-UC-GET-PRODUCTS-publisher-stored-tag-per-property @publisher_domain_resolution @requires_db
+  Scenario: a stored by_tag selector whose tag only a pending property carries is not offered
+    Given the seller's property "news_live" of publisher "news.example" tagged "live" awaits verification
+    And the seller offers product "premium" selecting property tags "premium"
+    And the seller offers product "live" naming publisher_properties [{"publisher_domain": "news.example", "property_tags": ["live"], "selection_type": "by_tag"}]
+    When the buyer requests products
+    Then the buyer receives exactly the products "premium"
 
   @T-UC-GET-PRODUCTS-publisher-profile-agent-host @publisher_domain_resolution @requires_db
   Scenario: an inventory profile the old form saved with the seller's own host stops naming it

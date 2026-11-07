@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from decimal import Decimal
 
 import factory
@@ -36,6 +37,30 @@ def authorize_publishers(tenant, *domains: str) -> None:
     """
     for domain in domains:
         AuthorizedPropertyFactory(tenant=tenant, publisher_domain=domain)
+
+
+def authorize_selected_properties(tenant, selectors: Iterable[dict]) -> None:
+    """Store *tenant*'s verified property behind every id and tag *selectors* name.
+
+    A stored selector is sold per property (#1845): ``by_id`` keeps only the ids of its
+    publisher's verified properties and ``by_tag`` only the tags one of them carries. So a
+    test storing such selectors seeds those properties. Property ids are unique per tenant,
+    so two publishers' selectors cannot share one; two selectors of one publisher can.
+    """
+    for selector in selectors:
+        domain = selector["publisher_domain"]
+        for property_id in selector.get("property_ids") or ():
+            _SelectedPropertyFactory(tenant=tenant, property_id=property_id, publisher_domain=domain)
+        for tag in selector.get("property_tags") or ():
+            _SelectedPropertyFactory(tenant=tenant, property_id=f"{tag}_carrier", publisher_domain=domain, tags=[tag])
+
+
+class _SelectedPropertyFactory(AuthorizedPropertyFactory):
+    """:class:`AuthorizedPropertyFactory` reusing a property already stored, for :func:`authorize_selected_properties`."""
+
+    class Meta:
+        sqlalchemy_get_or_create = ("tenant_id", "property_id")
+        sqlalchemy_session_factory = lambda: AuthorizedPropertyFactory._meta.sqlalchemy_session  # noqa: E731
 
 
 #: The seller's one verified property on the publisher a test product sells. The ONE

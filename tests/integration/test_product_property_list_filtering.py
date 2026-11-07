@@ -31,7 +31,7 @@ from adcp.types.generated_poc.core.publisher_property_selector import (  # TODO:
 )
 
 from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
-from tests.factories.product import authorize_publishers
+from tests.factories.product import authorize_publishers, authorize_selected_properties
 from tests.harness.product import ProductEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -157,6 +157,7 @@ class TestPropertyListFilteringAllSelectorE2E:
                 properties=[{"publisher_domain": "example.com", "selection_type": "all"}],
             )
             PricingOptionFactory(product=p, pricing_model="cpm", rate=Decimal("5.00"), is_fixed=True)
+            authorize_selected_properties(tenant, p.properties)
 
             # Resolve returns a narrow set — all-selector should still be included
             env.set_property_list(["prop_x", "prop_y"])
@@ -196,6 +197,7 @@ class TestPropertyListFilteringNoOverlapE2E:
                 property_targeting_allowed=True,
             )
             PricingOptionFactory(product=p, pricing_model="cpm", rate=Decimal("5.00"), is_fixed=True)
+            authorize_selected_properties(tenant, p.properties)
 
             # Resolved list has completely different property IDs
             env.set_property_list(["prop_x", "prop_y"])
@@ -235,6 +237,7 @@ class TestPropertyListFilteringTargetingAllowedE2E:
                 property_targeting_allowed=True,
             )
             PricingOptionFactory(product=p, pricing_model="cpm", rate=Decimal("5.00"), is_fixed=True)
+            authorize_selected_properties(tenant, p.properties)
 
             # Resolved list has only one matching property ID
             env.set_property_list(["prop_a"])
@@ -274,6 +277,7 @@ class TestPropertyListFilteringTargetingNotAllowedE2E:
                 property_targeting_allowed=False,
             )
             PricingOptionFactory(product=p, pricing_model="cpm", rate=Decimal("5.00"), is_fixed=True)
+            authorize_selected_properties(tenant, p.properties)
 
             # Resolved list has prop_a but not prop_b — partial overlap
             env.set_property_list(["prop_a", "prop_c"])
@@ -309,6 +313,7 @@ class TestPropertyListFilteringTargetingNotAllowedE2E:
                 property_targeting_allowed=False,
             )
             PricingOptionFactory(product=p, pricing_model="cpm", rate=Decimal("5.00"), is_fixed=True)
+            authorize_selected_properties(tenant, p.properties)
 
             # Resolved list contains all product IDs plus extras
             env.set_property_list(["prop_a", "prop_b", "prop_c"])
@@ -344,6 +349,7 @@ class TestPropertyListFilteringTargetingNotAllowedE2E:
                 property_targeting_allowed=False,
             )
             PricingOptionFactory(product=p, pricing_model="cpm", rate=Decimal("5.00"), is_fixed=True)
+            authorize_selected_properties(tenant, p.properties)
 
             # Resolved list exactly matches product IDs
             env.set_property_list(["prop_a"])
@@ -376,6 +382,7 @@ class TestPropertyListFilteringEmptyResolvedListE2E:
                 properties=[{"publisher_domain": "example.com", "selection_type": "all"}],
             )
             PricingOptionFactory(product=p_all, pricing_model="cpm", rate=Decimal("5.00"), is_fixed=True)
+            authorize_selected_properties(tenant, p_all.properties)
 
             p_specific = ProductFactory(
                 tenant=tenant,
@@ -391,6 +398,7 @@ class TestPropertyListFilteringEmptyResolvedListE2E:
                 ],
             )
             PricingOptionFactory(product=p_specific, pricing_model="cpm", rate=Decimal("5.00"), is_fixed=True)
+            authorize_selected_properties(tenant, p_specific.properties)
 
             # Empty resolved list
             env.set_property_list([])
@@ -425,6 +433,7 @@ class TestPropertyListFilteringCombinedE2E:
                 properties=[{"publisher_domain": "example.com", "selection_type": "all"}],
             )
             PricingOptionFactory(product=p1, pricing_model="cpm", rate=Decimal("5.00"), is_fixed=True)
+            authorize_selected_properties(tenant, p1.properties)
 
             # 2. Exact match with targeting_not_allowed — should match
             p2 = ProductFactory(
@@ -442,6 +451,7 @@ class TestPropertyListFilteringCombinedE2E:
                 property_targeting_allowed=False,
             )
             PricingOptionFactory(product=p2, pricing_model="cpm", rate=Decimal("5.00"), is_fixed=True)
+            authorize_selected_properties(tenant, p2.properties)
 
             # 3. No overlap — should be excluded
             p3 = ProductFactory(
@@ -458,6 +468,7 @@ class TestPropertyListFilteringCombinedE2E:
                 ],
             )
             PricingOptionFactory(product=p3, pricing_model="cpm", rate=Decimal("5.00"), is_fixed=True)
+            authorize_selected_properties(tenant, p3.properties)
 
             # 4. Partial overlap + targeting_allowed=True — should match
             p4 = ProductFactory(
@@ -475,6 +486,7 @@ class TestPropertyListFilteringCombinedE2E:
                 property_targeting_allowed=True,
             )
             PricingOptionFactory(product=p4, pricing_model="cpm", rate=Decimal("5.00"), is_fixed=True)
+            authorize_selected_properties(tenant, p4.properties)
 
             # 5. Partial overlap + targeting_allowed=False — should be excluded
             p5 = ProductFactory(
@@ -492,6 +504,7 @@ class TestPropertyListFilteringCombinedE2E:
                 property_targeting_allowed=False,
             )
             PricingOptionFactory(product=p5, pricing_model="cpm", rate=Decimal("5.00"), is_fixed=True)
+            authorize_selected_properties(tenant, p5.properties)
 
             # Resolved property list: only prop_a
             env.set_property_list(["prop_a"])

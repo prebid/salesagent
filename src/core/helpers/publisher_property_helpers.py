@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -203,31 +203,49 @@ def legacy_selectors(
 
 
 def authorized_selectors(selectors: list[dict] | None, properties: Iterable[SelectableProperty]) -> list[dict]:
-    """Stored selectors that name a publisher of *properties*; the rest are dropped.
+    """Stored selectors narrowed to the verified *properties* they name; the rest are dropped.
 
     An inventory profile or a product's own ``properties`` already name their publishers,
     and a buyer verifies each one at ``https://<publisher_domain>/.well-known/adagents.json``
-    (AdCP 3.1.1 ``governance/property/authorized-properties.mdx``). So a selector is kept
-    only for a publisher the seller holds a verified property of -- a row the old profile
-    form stored with the seller's own host, or a publisher whose property was never
-    verified, is not offered (#1845). The check is per publisher: the ids and tags inside a
-    kept selector are not checked, because verification fetches the publisher's file and the
-    seller's rows need not list everything it declares.
+    (AdCP 3.1.1 ``governance/property/authorized-properties.mdx``). The seller's verified
+    row is its proof of authorization for that one property, so the check is per property,
+    as :func:`id_selection` and :func:`tag_selection` check a form's choice: a ``by_id``
+    selector keeps the ids of its publisher's verified properties, a ``by_tag`` selector
+    keeps the tags a verified property of its publisher carries, and an ``all`` selector
+    stays while its publisher has a verified property. A selector left naming nothing is
+    dropped -- a row the old profile form stored with the seller's own host, or a publisher
+    or property never verified, is not offered (#1845).
 
     A kept selector names its publisher canonically, as *properties* do, and one selecting
     :data:`ALL_INVENTORY_TAG` selects the publisher whole, as :func:`by_tag_selectors` does.
     """
-    domains = {p.publisher_domain for p in properties}
+    verified = _by_publisher(properties)
     kept = []
     for selector in ensure_selection_type(selectors or []) or []:
         domain = canonical_publisher_domain(str(selector.get("publisher_domain") or ""))
-        if domain not in domains:
+        if domain not in verified:
             continue
         if ALL_INVENTORY_TAG in (selector.get("property_tags") or ()):
             kept.append({"publisher_domain": domain, "selection_type": "all"})
-        else:
-            kept.append({**selector, "publisher_domain": domain})
+            continue
+        narrowed = {**selector, "publisher_domain": domain}
+        rule = _NARROWED_FIELD.get(selector["selection_type"])
+        if rule is not None:
+            field, offered_by = rule
+            offered = offered_by(verified[domain])
+            narrowed[field] = [value for value in selector.get(field) or () if value in offered]
+            if not narrowed[field]:
+                continue
+        kept.append(narrowed)
     return kept
+
+
+#: Per selection type, the field a stored selector lists and what a publisher's verified
+#: properties offer of it (:func:`authorized_selectors`). ``all`` lists nothing.
+_NARROWED_FIELD: dict[str, tuple[str, Callable[[list[SelectableProperty]], set[str]]]] = {
+    "by_id": ("property_ids", lambda props: {p.property_id for p in props}),
+    "by_tag": ("property_tags", lambda props: {tag for p in props for tag in p.tags or ()}),
+}
 
 
 @dataclass(frozen=True)

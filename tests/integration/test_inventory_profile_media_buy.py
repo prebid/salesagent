@@ -278,7 +278,7 @@ async def test_multiple_products_same_profile_in_media_buy(sample_tenant):
                 {
                     "selection_type": "by_id",
                     "publisher_domain": "example.com",
-                    "property_ids": ["prop_shared"],
+                    "property_ids": ["example_property"],
                 }
             ],
         )
@@ -430,14 +430,14 @@ async def test_media_buy_reflects_profile_updates(sample_tenant):
             "placements": ["new_placement"],
             "include_descendants": True,
         }
-        # The updated profile names the publisher sample_tenant holds a verified property
-        # of; the original names one it does not. So the buy below succeeds only if the
+        # The updated profile names the property sample_tenant holds verified; the
+        # original names one it does not. So the buy below succeeds only if the
         # catalogue reads the CURRENT profile (#1845).
         profile.publisher_properties = [
             {
                 "selection_type": "by_id",
                 "publisher_domain": "example.com",
-                "property_ids": ["new_property"],
+                "property_ids": ["example_property"],
             }
         ]
         session.commit()
