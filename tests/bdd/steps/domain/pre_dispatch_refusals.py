@@ -16,6 +16,8 @@ ctx writer every other dispatch uses.
 
 from __future__ import annotations
 
+import json
+
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._outcome_helpers import error_envelope_or_none
@@ -59,6 +61,11 @@ def given_two_skills(ctx: dict) -> None:
         tool=_TOOL,
         a2a_parts=({"skill": _TOOL, "input": {}}, {"skill": "list_creative_formats", "input": {}}),
     )
+
+
+@given(parsers.parse("the buyer's A2A message names skill {skill_json}"))
+def given_malformed_skill(ctx: dict, skill_json: str) -> None:
+    ctx[_DOCUMENT] = RawDocument(tool=_TOOL, a2a_parts=({"skill": json.loads(skill_json), "input": {}},))
 
 
 @given("the buyer names a tool the seller does not have")

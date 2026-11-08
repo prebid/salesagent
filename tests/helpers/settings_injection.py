@@ -39,6 +39,10 @@ if TYPE_CHECKING:
 
 def _inject(monkeypatch: pytest.MonkeyPatch, group: str, overrides: dict[str, Any]) -> Any:
     """Replace the named fields of one settings group on the cached settings; return the group."""
+    # Compose the app first. src.app calls load_settings() when it is imported, which
+    # replaces the settings object, so an injection made before a later first import of it (an
+    # env entered after this call, say) would be discarded.
+    import src.app  # noqa: F401
     import src.core.config as config_module
     from src.core.config import get_settings
 

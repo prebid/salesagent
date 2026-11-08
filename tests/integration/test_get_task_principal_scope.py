@@ -343,8 +343,16 @@ class TestTaskIsScopedToItsPrincipal:
     def test_the_owner_still_reads_their_own(self, tenant_id):
         """The other half: scoping must not have locked the owner out.
 
-        Asserted on the request payload, not merely on task_id, because a fix that
-        returned the row stripped of its contents would satisfy an id check.
+        Asserted on the opening request's CONTENTS, not merely on task_id, because a fix
+        that returned the row stripped of its contents would satisfy an id check.
+
+        Read through the PIN's channel for it. ``history`` is where
+        ``protocol/get-task-status-response.json`` puts a task's exchanges
+        (``{timestamp, type, data}`` per entry), and ``include_history`` is the flag that
+        asks for them. This used to read a top-level ``request_data``, a field the pinned
+        node does not declare -- so the positive control was asserting a non-spec field, and
+        an UNGATED one: it shipped the opening request on every poll, past the flag whose
+        whole job is to withhold it.
 
         Reading only. The listing half of this pair moved INTO
         :meth:`test_listing_does_not_show_another_principals_task`, where it does work as
@@ -353,8 +361,19 @@ class TestTaskIsScopedToItsPrincipal:
         """
         with _GetTaskEnv(tenant_id=tenant_id, principal_id=OWNER_ID) as env:
             task_id = _seed(env, tenant_id, OWNER_ID)
-            read = env.call_via(Transport.MCP, task_id=task_id)
+            read = env.call_via(Transport.MCP, task_id=task_id, include_history=True)
+            unasked = env.call_via(Transport.MCP, task_id=task_id)
 
         assert not read.is_error, f"the owner could not read their own task: {read}"
         assert read.payload["task_id"] == task_id
-        assert read.payload["request_data"] == {"secret_brief": "the other buyer's brief"}
+        requests = [entry for entry in read.payload["history"] if entry["type"] == "request"]
+        assert [entry["data"] for entry in requests] == [{"secret_brief": "the other buyer's brief"}], (
+            f"the owner's own opening request is missing from their task's history: {read.payload.get('history')!r}"
+        )
+        # The gate, asserted in the same place as the content it gates: without
+        # include_history the exchange is withheld, which is what the pin asks of a
+        # "lightweight status-only poll" and what the deleted top-level field defeated.
+        assert not unasked.is_error, f"the owner could not poll their own task: {unasked}"
+        assert "history" not in unasked.payload, (
+            f"the opening request shipped on a poll that did not ask for history: {unasked.payload!r}"
+        )

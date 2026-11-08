@@ -93,7 +93,7 @@ class TestListCreativesPluralFilters:
 
     def test_creative_filters_accepts_plural_media_buy_ids(self):
         """Test CreativeFilters accepts plural media_buy_ids parameter."""
-        from adcp.types import CreativeFilters as LibraryCreativeFilters
+        from adcp.types import LegacyCreativeFilters as LibraryCreativeFilters
 
         from src.core.schemas import ListCreativesRequest
 
@@ -115,7 +115,7 @@ class TestUpdateMediaBuyInlineCreatives:
     def test_update_media_buy_package_creatives_field_exists(self):
         """Verify update_media_buy accepts package.creatives field."""
         # adcp 3.9: PackageUpdate1/PackageUpdate2 union variants merged into single PackageUpdate
-        from adcp.types import PackageUpdate
+        from adcp.types import LegacyPackageUpdate as PackageUpdate
 
         # Check PackageUpdate structure has creatives field
         fields = PackageUpdate.model_fields
@@ -226,7 +226,7 @@ class TestAdCP25SchemaCompliance:
 
     def test_adcp_library_sync_creatives_request_compatibility(self):
         """Verify our schema matches adcp library's SyncCreativesRequest."""
-        from adcp.types import SyncCreativesRequest as LibrarySyncCreativesRequest
+        from adcp.types import LegacySyncCreativesRequest as LibrarySyncCreativesRequest
 
         lib_fields = LibrarySyncCreativesRequest.model_fields
 
@@ -236,7 +236,7 @@ class TestAdCP25SchemaCompliance:
 
     def test_adcp_library_creative_filters_has_plural_fields(self):
         """Verify adcp library's CreativeFilters has plural filter fields."""
-        from adcp.types import CreativeFilters
+        from adcp.types import LegacyCreativeFilters as CreativeFilters
 
         fields = CreativeFilters.model_fields
 
@@ -395,7 +395,7 @@ class TestListCreativesErrorCases:
         - media_buy_ids=None: No filter on media_buy_ids
         - media_buy_ids=[id, ...]: Filter to specific media buy IDs
         """
-        from adcp.types import CreativeFilters as LibraryCreativeFilters
+        from adcp.types import LegacyCreativeFilters as LibraryCreativeFilters
 
         from src.core.schemas import ListCreativesRequest
 

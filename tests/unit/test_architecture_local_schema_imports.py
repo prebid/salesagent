@@ -12,12 +12,12 @@ Legitimate exceptions:
   - Explicit allowlist entries for code that intentionally needs the raw SDK type
 
 Scanning approach: AST parse all .py files in src/ (excluding src/core/schemas/).
-For each ``from adcp.types import X`` or ``from adcp.types.generated_poc... import X``,
+For each ``from adcp.types import X`` or ``from adcp.types.domains... import X``,
 check if X matches a locally-exported schema name AND the imported SDK class is
 actually an ancestor of that local schema class -- the SDK's flat namespace has
 name collisions (e.g. two distinct ``Account`` types: the sync_accounts domain
 entity at ``adcp.types.Account`` and the capabilities response's embedded
-account-block at ``adcp.types.generated_poc.protocol.get_adcp_capabilities_response.Account``)
+account-block at ``adcp.types.domains.protocol.get_adcp_capabilities_response.Account``)
 so bare-name matching alone produces false positives. If so, flag it.
 """
 
@@ -54,20 +54,30 @@ def _get_local_schema_names() -> set[str]:
     return set(_get_local_schema_classes().keys())
 
 
-def _shadows_local_schema(module: str, imported_name: str, local_classes: dict[str, type]) -> bool:
+def _shadows_local_schema(module: str, sdk_name: str, local_name: str, local_classes: dict[str, type]) -> bool:
     """True only if the imported SDK class is an actual ancestor of the local subclass.
 
     Bare-name equality isn't enough -- the SDK's flat namespace has two distinct
     types both named ``Account`` (and potentially other collisions). Resolve the
     imported symbol from its exact module and check the real subclass
     relationship before flagging.
+
+    Two names, and the distinction is the whole point. ``local_name`` is what the
+    import BINDS in the importing module, so it is the only name that can shadow a
+    local schema class, and it is the key for the local lookup. ``sdk_name`` is what
+    was actually imported, so it is the only name that resolves against ``module``.
+    For an unaliased import the two are equal. For
+    ``from adcp.types import LegacyProduct as Product`` they are not, and resolving
+    the ALIAS yields ``adcp.types.Product`` -- a SIBLING of the class the statement
+    really imported. A sibling is an ancestor of nothing, so the check returned
+    False and the violation was invisible (salesagent-ol033.15).
     """
-    local_cls = local_classes.get(imported_name)
+    local_cls = local_classes.get(local_name)
     if local_cls is None:
         return False
     try:
         imported_module = importlib.import_module(module)
-        imported_cls = getattr(imported_module, imported_name)
+        imported_cls = getattr(imported_module, sdk_name)
     except (ImportError, AttributeError):
         # Can't resolve -- fall back to the pre-existing bare-name behavior
         # rather than silently skip a potential real violation.
@@ -88,16 +98,25 @@ ALLOWLIST: set[tuple[str, str]] = {
     # check (_shadows_local_schema) proved neither is a real Pattern #1 violation:
     # both are SDK flat-namespace name collisions with an UNRELATED local schema
     # class of the same bare name, not the actual SDK parent the local class extends.
-    # FIXME(#1388): admin blueprints import SDK types directly
-    ("src/admin/blueprints/operations.py", "Package"),
+    # Three rows removed at the adcp 9 bump: operations.py's ``Package``,
+    # schema_helpers.py's ``GetProductsResponse`` and ``Product``. The removal was
+    # recorded as "violation FIXED rather than re-allowlisted" on the reasoning that
+    # AdCP 3.2 repointed those unprefixed ``adcp.types`` names at the canonical models,
+    # so each import had to name ``Legacy*`` explicitly and "the subclass-identity check
+    # reads the explicit name as no longer shadowing the local schema class".
+    #
+    # THAT REASONING WAS A DESCRIPTION OF THIS GUARD'S BUG, not of a fix. The check read
+    # the explicit name as no longer shadowing because it resolved the ALIAS instead of
+    # the imported name (see ``_shadows_local_schema``), so all three became invisible
+    # while staying real. The tell was left in place and not believed: both files kept
+    # their ``FIXME(#1388)``, and a fixed violation does not keep its FIXME.
+    #
+    # All three are NOW fixed, by the code and not by the comment
+    # (salesagent-ol033.15): schema_helpers.py's two were dead ``__all__`` re-exports
+    # with no importer and are deleted; operations.py constructs its ``Package`` and now
+    # imports the local subclass. The allowlist shrinks; it is never grown.
     # FIXME(#1388): core modules import SDK types directly
     ("src/core/creative_agent_registry.py", "ListCreativeFormatsRequest"),
-    ("src/core/schema_helpers.py", "GetProductsResponse"),
-    ("src/core/schema_helpers.py", "Product"),
-    # FIXME(#1388): tools import SDK types directly
-    ("src/core/tools/products.py", "FormatId"),
-    # FIXME(#1388): services import SDK types directly
-    ("src/services/dynamic_pricing_service.py", "FormatId"),
 }
 
 
@@ -145,54 +164,64 @@ def _is_library_alias_import(alias: ast.alias) -> bool:
     return alias.asname is not None and alias.asname.startswith("Library")
 
 
+def _collect_shadowing_imports() -> list[tuple[str, str, int, str]]:
+    """Every adcp import under src/ that shadows a local schema class.
+
+    Returns ``(rel_path, local_name, lineno, module)`` rows, allowlist NOT applied.
+    One walk for both tests: they had identical copies of it, so the alias-resolution
+    bug had to be fixed in two places and a future fix to one would silently leave the
+    other blind.
+    """
+    local_classes = _get_local_schema_classes()
+    found: list[tuple[str, str, int, str]] = []
+
+    for src_file in _get_src_files():
+        source = src_file.read_text()
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            continue
+
+        rel_path = str(src_file)
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom):
+                continue
+
+            # Only check adcp imports
+            module = node.module or ""
+            if not module.startswith("adcp"):
+                continue
+
+            # Skip TYPE_CHECKING blocks
+            if _is_inside_type_checking_block(node, tree):
+                continue
+
+            for alias in node.names:
+                # Skip Library* alias imports (used for defining subclasses)
+                if _is_library_alias_import(alias):
+                    continue
+
+                # The bound name is what shadows; the imported name is what resolves.
+                local_name = alias.asname or alias.name
+                if _shadows_local_schema(module, alias.name, local_name, local_classes):
+                    found.append((rel_path, local_name, node.lineno, module))
+
+    return found
+
+
 class TestLocalSchemaImports:
     """src/ files must import local schema subclasses, not raw SDK types."""
 
     def test_no_sdk_import_when_local_exists(self):
         """No src/ file imports an adcp type that has a local subclass in schemas."""
-        local_classes = _get_local_schema_classes()
-        violations = []
-
-        for src_file in _get_src_files():
-            source = src_file.read_text()
-            try:
-                tree = ast.parse(source)
-            except SyntaxError:
-                continue
-
-            rel_path = str(src_file)
-
-            for node in ast.walk(tree):
-                if not isinstance(node, ast.ImportFrom):
-                    continue
-
-                # Only check adcp imports
-                module = node.module or ""
-                if not module.startswith("adcp"):
-                    continue
-
-                # Skip TYPE_CHECKING blocks
-                if _is_inside_type_checking_block(node, tree):
-                    continue
-
-                for alias in node.names:
-                    imported_name = alias.asname or alias.name
-
-                    # Skip Library* alias imports (used for defining subclasses)
-                    if _is_library_alias_import(alias):
-                        continue
-
-                    # Check if this imported name shadows a local schema (by
-                    # actual subclass relationship, not bare-name collision)
-                    if _shadows_local_schema(module, imported_name, local_classes):
-                        key = (rel_path, imported_name)
-                        if key in ALLOWLIST:
-                            continue
-                        violations.append(
-                            f"{rel_path}:{node.lineno} imports '{imported_name}' "
-                            f"from '{module}' but src.core.schemas exports a local "
-                            f"subclass. Use: from src.core.schemas import {imported_name}"
-                        )
+        violations = [
+            f"{rel_path}:{lineno} imports '{local_name}' "
+            f"from '{module}' but src.core.schemas exports a local "
+            f"subclass. Use: from src.core.schemas import {local_name}"
+            for rel_path, local_name, lineno, module in _collect_shadowing_imports()
+            if (rel_path, local_name) not in ALLOWLIST
+        ]
 
         assert not violations, (
             "src/ files importing SDK types that have local schema subclasses "
@@ -207,32 +236,7 @@ class TestLocalSchemaImports:
         if not ALLOWLIST:
             return  # Nothing to check
 
-        local_classes = _get_local_schema_classes()
-        still_violations = set()
-
-        for src_file in _get_src_files():
-            source = src_file.read_text()
-            try:
-                tree = ast.parse(source)
-            except SyntaxError:
-                continue
-
-            rel_path = str(src_file)
-
-            for node in ast.walk(tree):
-                if not isinstance(node, ast.ImportFrom):
-                    continue
-                module = node.module or ""
-                if not module.startswith("adcp"):
-                    continue
-                if _is_inside_type_checking_block(node, tree):
-                    continue
-                for alias in node.names:
-                    imported_name = alias.asname or alias.name
-                    if _is_library_alias_import(alias):
-                        continue
-                    if _shadows_local_schema(module, imported_name, local_classes):
-                        still_violations.add((rel_path, imported_name))
+        still_violations = {(rel_path, local_name) for rel_path, local_name, _, _ in _collect_shadowing_imports()}
 
         assert_violations_match_allowlist(
             still_violations,

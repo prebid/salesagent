@@ -2,8 +2,9 @@
 
 This is the ENVIRONMENT spelling of the private-range hatch, for the surfaces that hand
 the variable to something that will read it through the settings loader: the
-webhook-delivery envs that run a real local origin (``LocalOriginMixin``) and the unit
-suite that patches ``os.environ`` wholesale (``test_protocol_webhook_ssrf``).
+webhook-delivery envs that run a real local origin (``LocalOriginMixin``), whose settings a
+step may rebuild, and the unit suite that patches ``os.environ`` wholesale
+(``test_protocol_webhook_ssrf``).
 
 **A test running in this process should not use it.** ``src/core/security/outbound_http.py``
 reads no environment variable — it reads
