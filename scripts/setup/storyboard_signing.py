@@ -296,14 +296,11 @@ def seed() -> None:
     kit's published private keys could sign as that principal. That is the conformance
     contract on a grading target and a key-trust bypass on a deployment.
     """
-    from src.core.config import get_settings
+    from scripts.setup.production_guard import refuse_on_production
 
-    if get_settings().runtime.is_production:
-        raise SystemExit(
-            "Refusing to seed the signed-requests test kit on a production deployment "
-            "(PRODUCTION, ENVIRONMENT=production or FLY_APP_NAME is set): it would make a "
-            "principal trust the kit's published keys."
-        )
+    refuse_on_production(
+        "seed the signed-requests test kit", "it would make a principal trust the kit's published keys"
+    )
 
     from sqlalchemy import select
 

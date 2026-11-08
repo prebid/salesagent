@@ -224,7 +224,18 @@ def account_id_for(brand_domain: str, sandbox: bool) -> str:
 
 
 def seed_storyboard_tenant() -> str:
-    """Create (or converge) the storyboard tenant and everything it needs. Returns its id."""
+    """Create (or converge) the storyboard tenant and everything it needs. Returns its id.
+
+    REFUSES on a production deployment, before it reads the bundle or opens a session: the
+    principal it creates authenticates with :data:`STORYBOARD_TOKEN`, which is written in
+    this repository.
+    """
+    from scripts.setup.production_guard import refuse_on_production
+
+    refuse_on_production(
+        "seed the storyboard tenant", "it would create a principal whose bearer token is published in this repository"
+    )
+
     import uuid
     from datetime import UTC, datetime
 
@@ -478,6 +489,9 @@ def seed_storyboard_tenant() -> str:
 
 
 if __name__ == "__main__":
+    from src.core.config import load_settings
+
+    load_settings()
     try:
         seed_storyboard_tenant()
     except Exception as e:
