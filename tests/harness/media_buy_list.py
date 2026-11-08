@@ -193,7 +193,7 @@ class MediaBuyListDispatchMixin:
         Kept as a named helper because the dual envs select it by which verb they
         dispatched, which the base cannot express. Through ``revive`` for the same reason
         the base uses it: a served document carries the context the boundary stamped, and
-        ``AdcpResponse`` refuses that field on construction.
+        ``SalesAgentAdcpResponse`` refuses that field on construction.
         """
         return cast("GetMediaBuysResponse", GetMediaBuysResponse.revive(data))
 

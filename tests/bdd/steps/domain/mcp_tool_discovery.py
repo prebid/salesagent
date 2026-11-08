@@ -21,7 +21,7 @@ def when_list_mcp_tools(ctx: dict) -> None:
 
 @then("each listed input schema is the tool's request model JSON Schema")
 def then_listed_schema_is_request_model_schema(ctx: dict) -> None:
-    listed = {tool.name: tool.inputSchema for tool in ctx["mcp_tools"]}
+    listed = {name: tool.input_schema for name, tool in ctx["mcp_tools"].items()}
     assert TOOLS, "the registry declares no tools, so there is nothing to grade"
     differing = []
     for name, spec in sorted(TOOLS.items()):

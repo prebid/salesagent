@@ -74,7 +74,7 @@ setting if you edit `compose.yml` or move the app's environment into `.env`.
 - Inbound TCP 80 and 443 from anywhere. Let's Encrypt validates over them, and buyers' agents
   connect on 443. Inbound 22 only from where you administer it.
 - The VM must reach its own public address on 443. The app reaches the creative agent through
-  Caddy at `https://<apex>/api/creative-agent`, because its outbound HTTP is HTTPS-only.
+  Caddy at `https://<apex>/api/creative-agent/mcp`, because its outbound HTTP is HTTPS-only.
 
 ## Step 2: DNS
 

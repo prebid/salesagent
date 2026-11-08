@@ -58,8 +58,9 @@ _T = TypeVar("_T")
 # jsonschema's own _WrappedReferencingError, which subclasses it), but
 # Unretrievable and NoSuchResource subclass KeyError instead. Unretrievable is
 # the one this repo actually produces at runtime — referencing wraps any
-# exception out of a registry retrieve callable, and pinned_schema._retrieve
-# raises PinnedSchemaError for a schema outside the pinned tree.
+# exception out of a registry retrieve callable, and the callback
+# pinned_schema._retrieve_in binds to a source raises PinnedSchemaError for a
+# schema outside that source's pinned tree, or missing from it.
 _INSTRUMENT_FAILURES = (
     jsonschema.exceptions.SchemaError,
     referencing.exceptions.Unresolvable,
@@ -109,13 +110,26 @@ class AdCPSchemaValidator:
             return json.load(f)
 
     def _normalize_ref(self, schema_ref: str) -> str:
-        """Normalize via ``pinned_schema.normalize_ref``, in this module's error type.
+        """Normalize via ``pinned_schema``, in this module's error type.
 
         The rules live in ``pinned_schema`` so there is exactly one of them;
         this only translates the failure into ``SchemaError``, which is what
         this module's callers branch on.
+
+        TWO steps, because upstream changed how it spells a ref. At 3.1 every
+        ``index.json`` ``$ref`` was tree-relative; at 3.2 all 633 moved behind
+        upstream's own origin naming the spec version, and ``normalize_ref``
+        refuses a ref carrying ``"://"`` by design. ``tree_ref_for_index_ref``
+        maps that form back — verifying the version it names rather than
+        stripping it — and is the identity for a ref that is already relative,
+        so every ref that resolved before still resolves unchanged.
+
+        It belongs HERE rather than at the index read, because this is the one
+        funnel every ref passes through on its way to a resolver: a ref a caller
+        hands in directly gets the same treatment as one read from the index,
+        and ``_find_schema_ref_for_task`` stays a pure reader of the index.
         """
-        return self._wrap_pinned(lambda: pinned_schema.normalize_ref(schema_ref))
+        return self._wrap_pinned(lambda: pinned_schema.normalize_ref(pinned_schema.tree_ref_for_index_ref(schema_ref)))
 
     async def get_schema_index(self) -> dict[str, Any]:
         """Get the pinned schema index."""
@@ -166,6 +180,14 @@ class AdCPSchemaValidator:
         format_ids+creative_agents list vs. creative's authoritative full
         format definitions. Index order puts media-buy first, so that's the
         match returned; re-sorting the sections would silently flip it.
+
+        Returns the index's ``$ref`` VERBATIM. Translating upstream's spelling into one
+        the resolvers accept happens in :meth:`_normalize_ref`, not here, so this stays a
+        pure reader of the index — which is what
+        ``test_adcp_schema_validator_task_ref_resolution`` grades by building its own
+        expectation from the index and comparing. Mapping here instead broke those four
+        assertions, and repairing them by teaching the oracle the same mapping would have
+        made the expectation derive from the thing under test.
         """
         index = await self.get_schema_index()
 

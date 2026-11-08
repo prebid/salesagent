@@ -37,6 +37,8 @@ Transport support:
     call_mcp(**kw)           -- get_products via the registered MCP client
     build_rest_body(**kw)    -- POST /api/v1/products body
     parse_rest_response(d)   -- JSON -> GetProductsResponse
+    admin_request(...)       -- an operator's admin action, on the same transport
+                                (AdminOperatorMixin)
 """
 
 from __future__ import annotations
@@ -48,11 +50,12 @@ from unittest.mock import MagicMock
 from src.core.schemas import GetProductsResponse
 from tests.harness._base import IntegrationEnv
 from tests.harness._mixins import ProductMixin
+from tests.harness.admin_client import AdminOperatorMixin
 from tests.harness.database_faults import DatabaseFaultMixin
 from tests.harness.egress import EgressHatchMixin
 
 
-class ProductEnv(DatabaseFaultMixin, ProductMixin, IntegrationEnv):
+class ProductEnv(AdminOperatorMixin, DatabaseFaultMixin, ProductMixin, IntegrationEnv):
     """Integration test environment for _get_products_impl.
 
     Only mocks external services (policy, dynamic variants,
