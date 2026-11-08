@@ -20,7 +20,7 @@ from src.core.database.jsonb_append import jsonb_list_append
 from src.core.database.models import Context, ObjectWorkflowMapping, WorkflowStep
 from src.core.database.models import Context as DBContext
 from src.core.database.repositories.workflow import append_step_comment, build_context, build_workflow_step
-from src.core.exceptions import AdCPValidationError, adcp_error_for
+from src.core.exceptions import AdCPSalesAgentError, AdCPValidationError, adcp_error_for
 from src.core.schemas._base import AdcpErrorResponse
 from src.core.security.outbound_http import OutboundError
 from src.core.tools._wire import to_wire
@@ -47,6 +47,44 @@ def _log_webhook_send_outcome(config_url: str, sent: bool) -> None:
         console.print(f"[green]✅ Webhook sent successfully for {safe_url}[/green]")
     else:
         console.print(f"[red]❌ Webhook not delivered for {safe_url} (send_notification returned False)[/red]")
+
+
+def _log_webhook_refusal(
+    refusal: AdCPSalesAgentError,
+    *,
+    config_url: str,
+    tenant_id: str | None,
+    principal_id: str | None,
+    step_id: str | None,
+) -> None:
+    """Record a SELLER'S REFUSAL of a push notification, enumerably.
+
+    One function because the refusal arrives on BOTH send arms — raised inline when
+    there is no running loop, and raised inside the scheduled task when there is —
+    and a record spelled twice is a record that drifts. The async arm reaches it
+    through ``_log_task_result``.
+
+    ``logger.error``, not ``console.print``, for the reason the sibling
+    stash-refusal branch gives: this path produces no ``WebhookDeliveryOutcome``
+    and no ``webhook_delivery_log`` row, so this line is the refusal's ONLY
+    surface, and an operator has to be able to list which buyers stopped
+    receiving webhooks and why.
+
+    The refusal's CODE and FIELD are those enumerable facts. No text is read off
+    it: ``message``, ``recovery`` and ``suggestion`` are read-only properties over
+    ``CODE_TABLE`` (ADR-010), so they are a function of the code and name nothing
+    specific to this registration. The URL is sanitized to ``scheme://host/path``
+    (AdCP L1 SSRF log hygiene) — a token can ride in userinfo or the query.
+    """
+    logger.error(
+        "Refusing to send push notification: %s on %s (tenant=%s, principal=%s, step=%s, url=%s)",
+        refusal.error_code,
+        refusal.field or "the registration",
+        tenant_id,
+        principal_id,
+        step_id,
+        webhook_url_for_log(config_url),
+    )
 
 
 # Fire-and-forget webhook tasks are pinned against asyncio's weak-ref GC via
@@ -779,7 +817,7 @@ class ContextManager(DatabaseManager):
             # the loop variable was never read. Every operation registers a config, so the
             # rows accumulate and the duplication grows with them: measured on the
             # storyboard tenant (run innet_200926_0647), one create emitted the same
-            # payload to the same URL 3 times within 17ms, and AdCP 3.1.1
+            # payload to the same URL 3 times within 17ms, and AdCP.1
             # `compliance/universal/webhook-emission.yaml`'s
             # `expect_no_duplicate_webhook_on_replay` caps a logical event at one delivery.
             #
@@ -914,6 +952,9 @@ class ContextManager(DatabaseManager):
                             t: asyncio.Task,
                             raw_url: str = push_notification_config.url,
                             safe_url: str = safe_webhook_url,
+                            tenant_id_for_log: str | None = derived_tenant_id,
+                            principal_id_for_log: str | None = derived_principal_id,
+                            step_id_for_log: str | None = step.step_id,
                         ) -> None:
                             # Runs AFTER pin_task's discard (see pin_task
                             # docstring), so this log-and-swallow can't hold
@@ -921,6 +962,23 @@ class ContextManager(DatabaseManager):
                             # Pass raw URL — _log_webhook_send_outcome owns sanitize.
                             try:
                                 _log_webhook_send_outcome(raw_url, t.result())
+                            except AdCPSalesAgentError as refusal:
+                                # THE ASYNC ARM of the same refusal the inline arm
+                                # handles below. The envelope is built inside
+                                # ``notify``, which on this branch runs in the
+                                # scheduled task — so a deliberate refusal surfaces
+                                # HERE, at ``t.result()``, not at the ``create_task``
+                                # call. Until this arm existed it fell into the
+                                # ``except Exception`` beneath it and was printed as
+                                # "Webhook failed", indistinguishable from a dropped
+                                # socket and with no enumerable record.
+                                _log_webhook_refusal(
+                                    refusal,
+                                    config_url=raw_url,
+                                    tenant_id=tenant_id_for_log,
+                                    principal_id=principal_id_for_log,
+                                    step_id=step_id_for_log,
+                                )
                             except Exception as e:
                                 console.print(f"[red]❌ Webhook failed for {safe_url}: {str(e)}[/red]")
 
@@ -953,6 +1011,34 @@ class ContextManager(DatabaseManager):
                     # success. Kept as a safety net; the URL is sanitized to
                     # scheme://host/path for the log (AdCP L1 SSRF log hygiene).
                     console.print(f"[red]❌ Webhook failed for {safe_webhook_url}: {str(e)}[/red]")
+
+                except AdCPSalesAgentError as refusal:
+                    # A SELLER'S REFUSAL, told apart from a failure to send, and that
+                    # separation is what narrows the ``except Exception`` below to the
+                    # thing it was written for: "Don't fail the workflow update if
+                    # notifications fail". Until this arm existed that handler also
+                    # absorbed every deliberate refusal raised under the send — above
+                    # all the one envelope builder's missing-``operation_id`` refusal,
+                    # which it printed as "Error sending push notifications" with a
+                    # traceback, to stdout, with no enumerable record anywhere. A buyer
+                    # whose registration carried no correlation id therefore got
+                    # permanent silence and the seller's own reason went to a console.
+                    #
+                    # The registration gate now refuses such a registration at ingest
+                    # (``webhooks/registration.py``, L3/webhooks.mdx :141), so a NEW one
+                    # cannot reach here. This arm is what rows written before that gate
+                    # get: ``from_stash`` deliberately does not re-validate a stored
+                    # document, so an old row still arrives, and there is no buyer left
+                    # to answer — which makes an enumerable operator record the only
+                    # honest surface the refusal has. ``_log_webhook_refusal`` writes
+                    # it, shared with the async arm above so the two cannot drift.
+                    _log_webhook_refusal(
+                        refusal,
+                        config_url=push_notification_config.url,
+                        tenant_id=derived_tenant_id,
+                        principal_id=derived_principal_id,
+                        step_id=step.step_id,
+                    )
 
         except Exception as e:
             console.print(f"[red]Error sending push notifications: {e}[/red]")

@@ -11,7 +11,7 @@ This module follows the MCP/A2A shared implementation pattern from CLAUDE.md.
 import logging
 from datetime import UTC, datetime
 
-from adcp.types.generated_poc.protocol.get_adcp_capabilities_request import Protocol as RequestProtocol
+from adcp.types.domains.protocol.get_adcp_capabilities_request import Protocol as RequestProtocol
 
 from src.core.helpers import enum_value
 from src.core.helpers.activity_helpers import log_tool_activity

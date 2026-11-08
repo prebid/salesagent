@@ -31,6 +31,7 @@ from tests.bdd.steps._outcome_helpers import (
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.then_error import _get_error_message
 from tests.bdd.steps.generic.then_payload import register_boundary_handler
+from tests.factories.request import CreateMediaBuyRequestFactory
 from tests.factories.webhook import ReportingWebhookRequestFactory
 from tests.harness._mixins import LocalOriginMixin
 from tests.helpers import locate_envelope_error
@@ -789,6 +790,57 @@ def given_webhook_configured(ctx: dict, mb_id: str) -> None:
 def given_no_webhook(ctx: dict, mb_id: str) -> None:
     """Media buy has no webhook configured."""
     ctx.setdefault("webhook_config", {})[mb_id] = {"active": False}
+
+
+@given(parsers.parse('the reporting_webhook on "{mb_id}" carries no operation_id'))
+def given_reporting_webhook_without_operation_id(ctx: dict, mb_id: str) -> None:
+    """The buy's STORED reporting registration has no correlation id.
+
+    Written into ``media_buys.raw_request["reporting_webhook"]``, which is where the
+    scheduler and the delivery read both look — not into a ``PushNotificationConfig``
+    row. AdCP 3.2.1 ``L3/webhooks.mdx`` :669 is explicit that a reporting stream's id
+    "is independent of any task-status ``push_notification_config.operation_id``", so
+    seeding the row instead would seed a DIFFERENT value and grade nothing.
+
+    The document comes from ``ReportingWebhookRequestFactory`` with ``operation_id``
+    OMITTED, so everything else about it is a registration the pinned schema accepts
+    (``url``, ``authentication`` and ``reporting_frequency`` are all required on
+    ``core/reporting-webhook.json``). A hand-written dict here is how two sites came to
+    spell the cadence ``frequency`` and configure nothing; and ``OMIT`` rather than
+    ``None`` because the key must be ABSENT, which is what a buyer who never supplied
+    one sends.
+
+    This is the state :666 governs — a registration the published 3.2.1 schema accepts,
+    carrying no stream id, which this seller must neither fabricate an id for nor read
+    one off the URL. The scheduler suppresses its scheduled sends; the read flags it.
+
+    NO ``hasattr(env, "_session")`` PROBE, unlike the older seeding helpers in this
+    module. This is a step function, and ``test_architecture_bdd_no_silent_env``
+    forbids one here with an EMPTY allowlist — that debt was paid, and the reason is
+    this step: a probe that returns early when the env has no session turns a scenario
+    whose whole subject is a STORED registration into a green no-op. The scenario needs
+    a database, its route gives it one, and an env without one must fail loudly rather
+    than pass vacuously.
+    """
+    env = ctx["env"]
+
+    from sqlalchemy import select
+    from sqlalchemy.orm import attributes
+
+    from src.core.database.models import MediaBuy
+    from tests.factories.request import OMIT
+    from tests.factories.webhook import ReportingWebhookRequestFactory
+
+    session = env._session
+    buy = session.scalars(select(MediaBuy).filter_by(media_buy_id=mb_id)).first()
+    assert buy is not None, f"media buy {mb_id!r} was not seeded into the database"
+
+    buy.raw_request = {
+        **(buy.raw_request or {}),
+        "reporting_webhook": ReportingWebhookRequestFactory.payload(operation_id=OMIT),
+    }
+    attributes.flag_modified(buy, "raw_request")
+    session.commit()
 
 
 @given(parsers.parse('the reporting_frequency is "{frequency}"'))
@@ -3296,6 +3348,36 @@ def then_placement_sorted_fallback(ctx: dict, metric: str) -> None:
     _assert_placements_sorted_by(packages, metric, fallback=True)
 
 
+@then(parsers.re(r"the response placement breakdown should be ordered (?P<order>.+)"))
+def then_placement_ordered(ctx: dict, order: str) -> None:
+    """Assert the placement_ids come back in exactly the order the scenario names.
+
+    The discriminating half of a sort assertion. "sorted by X descending" is
+    satisfied by any metric whenever the reported placements happen to rank
+    identically on all of them, which is what the seller's synthesized split does
+    (one weight vector) — so a scenario that names its own non-rank-correlated
+    metrics and then pins the resulting SEQUENCE is the only form that fails when
+    the seller sorts by the wrong metric (GH #2059).
+    """
+    expected = [segment.strip().strip('"') for segment in order.split(",")]
+    assert "error" not in ctx, f"Expected valid response but got error: {ctx.get('error')}"
+    resp = require_payload(ctx)
+    checked = False
+    for pkg in _collect_all_packages(resp):
+        placements = getattr(pkg, "by_placement", None) or []
+        if not placements:
+            continue
+        actual = [
+            p.get("placement_id") if isinstance(p, dict) else getattr(p, "placement_id", None) for p in placements
+        ]
+        assert actual == expected, f"placement breakdown order {actual} is not the expected {expected}"
+        checked = True
+    assert checked, (
+        "no package carried by_placement data, so the ordering claim graded nothing. A seller "
+        "that stopped emitting placement breakdowns entirely would reach this line."
+    )
+
+
 @then(parsers.parse('the response placement breakdown should be sorted by "{metric}"'))
 def then_placement_sorted(ctx: dict, metric: str) -> None:
     """Assert placement breakdown is sorted by the given metric descending.
@@ -3447,7 +3529,7 @@ def then_attribution_has_model(ctx: dict) -> None:
     BR-RULE-092 invariant: every delivery response must echo the applied
     attribution window with a non-null model from the spec-allowed values.
     """
-    from adcp.types.generated_poc.enums.attribution_model import AttributionModel
+    from adcp.types.domains.enums.attribution_model import AttributionModel
 
     assert "error" not in ctx, f"Expected valid response but got error: {ctx.get('error')}"
     resp = require_payload(ctx)
@@ -4138,11 +4220,7 @@ def _validate_reporting_webhook_credentials(ctx: dict, auth_scheme: str, credent
     all transports" — they do, but only because this constructor check is
     transport-independent. That is the gap #2109 names, not evidence of coverage.
     """
-    from datetime import UTC, datetime
-
     from pydantic import ValidationError
-
-    from src.core.schemas import CreateMediaBuyRequest
 
     reporting_webhook = ReportingWebhookRequestFactory.payload(
         url="https://buyer.example.com/reporting",
@@ -4154,15 +4232,18 @@ def _validate_reporting_webhook_credentials(ctx: dict, auth_scheme: str, credent
         # NOT ctx["response"]: this is the constructed REQUEST, not a response.
         # It shared the key with dispatch responses, so a Then could read a
         # request believing it had a response — the ambiguity lane gra7.5 removes.
-        ctx["constructed_request"] = CreateMediaBuyRequest(
-            account={"account_id": "acct_test"},
-            brand={"domain": "buyer.example.com"},
-            start_time=datetime(2025, 1, 1, tzinfo=UTC),
-            end_time=datetime(2025, 2, 1, tzinfo=UTC),
+        #
+        # The base comes from CreateMediaBuyRequestFactory rather than a field list
+        # written out here. A hand-listed base was what broke at the AdCP 3.2.1 pin:
+        # create-media-buy-request.json has no `anyOf` at 3.1 and gains a three-branch
+        # one at 3.2 — `packages` (each item requiring budget, and no proposal_id) /
+        # `packages`+`total_budget`+`budget_allocation` / `proposal_id`+`total_budget` —
+        # and a base carrying none of the three is refused before the webhook under test
+        # is ever looked at. The factory is DERIVED from the DTO and already carries a
+        # branch-0 `packages` item, so it tracks the pin; one more copy of the field list
+        # would just be the next thing to go stale.
+        ctx["constructed_request"] = CreateMediaBuyRequestFactory.build(
             reporting_webhook=reporting_webhook,
-            # Required field — a valid key keeps this step's ValidationError
-            # assertions scoped to the webhook credentials under test.
-            idempotency_key="bdd-webhook-cred-key-0001",
         )
     except ValidationError as exc:
         offending = {".".join(str(p) for p in err["loc"]) for err in exc.errors()}
@@ -4446,34 +4527,37 @@ def _call_webhook_service(
     return env.deliver_webhook(media_buy_id=mb_id, notification_type=report_type)
 
 
-_DEFAULT_PLACEMENT_DATA: list[dict[str, Any]] = [
-    {"placement_id": "pl-A", "impressions": 3000.0, "spend": 150.0, "clicks": 30.0},
-    {"placement_id": "pl-B", "impressions": 1500.0, "spend": 200.0, "clicks": 10.0},
-    {"placement_id": "pl-C", "impressions": 500.0, "spend": 50.0, "clicks": 50.0},
-]
+@given(
+    parsers.parse(
+        'the seller reports placement "{placement_id}" with {impressions:g} impressions, '
+        "{spend:g} spend and {clicks:g} clicks"
+    )
+)
+def given_seller_reports_placement(
+    ctx: dict, placement_id: str, impressions: float, spend: float, clicks: float
+) -> None:
+    """The seller reports these per-placement metrics for the seeded buy.
 
+    Accumulating: each call adds one row and re-registers the adapter response, so
+    a scenario names its placements one line at a time and the values live in the
+    scenario rather than in a module constant. ``set_adapter_response`` carries
+    them to BOTH branches — in-process onto the adapter mock, and over e2e into the
+    ``delivery_simulation_configs`` row the live server reads back — so every
+    transport sorts the same numbers.
 
-def _inject_placement_data(ctx: dict) -> None:
-    """Ensure adapter responses include placement breakdown data.
+    All three metrics are required, not a convenience: ``PlacementBreakdown``
+    inherits the pinned ``by_placement`` item, whose ``impressions`` is required, so
+    a row omitting it makes production refuse the breakdown and answer with an empty
+    delivery list. Measured — that is what the first version of this step did.
 
-    If responses already exist, mutate them. Otherwise, register a default
-    response for each media buy known in ctx. This must be called from Given
-    steps that declare placement support, before the When step dispatches.
+    This replaces ``_inject_placement_data``, which was dead code (zero callers)
+    and passed a ``by_placement`` keyword ``set_adapter_response`` did not accept.
     """
-    env = ctx["env"]
-    if env._adapter_responses:
-        for resp in env._adapter_responses.values():
-            for pkg in resp.by_package:
-                if pkg.by_placement is None:
-                    pkg.by_placement = _DEFAULT_PLACEMENT_DATA
-    else:
-        media_buys = ctx.get("media_buys", {})
-        for label in media_buys:
-            real_id = _resolve_media_buy_id(ctx, label)
-            env.set_adapter_response(
-                media_buy_id=real_id,
-                by_placement=_DEFAULT_PLACEMENT_DATA,
-            )
+    placements: list[dict[str, Any]] = ctx.setdefault("placement_metrics", [])
+    placements.append({"placement_id": placement_id, "impressions": impressions, "spend": spend, "clicks": clicks})
+    label = next(iter(ctx.get("media_buys", {})), None)
+    assert label, "placement metrics need a media buy — the scenario must seed one first"
+    ctx["env"].set_adapter_response(media_buy_id=_resolve_media_buy_id(ctx, label), by_placement=placements)
 
 
 @when(parsers.parse('the Buyer Agent requests delivery metrics at status_filter boundary "{boundary_value}"'))
@@ -4694,3 +4778,81 @@ def _dispatch_resolution(ctx: dict, partition: str) -> None:
     else:
         # Fallback: pass through to generic dispatch
         _dispatch_partition(ctx, "resolution", partition)
+
+
+@when(parsers.parse('the buyer creates a media buy registering a reporting_webhook at "{cadence}"'))
+def when_create_media_buy_registering_reporting_cadence(ctx: dict, cadence: str) -> None:
+    """Dispatch create_media_buy whose reporting_webhook asks for *cadence*.
+
+    Everything except the cadence comes from the harness's minimal valid create
+    (``harness_create_request_kwargs``) and from
+    ``ReportingWebhookRequestFactory``, so a package, pricing or
+    schema rejection can never stand in for the cadence refusal under test. The
+    factory supplies the ``authentication`` block that
+    ``core/reporting-webhook.json`` REQUIRES, and the ``operation_id`` that the
+    AdCP 3.2 interim reporting-correlation agreement (``webhooks.mdx``
+    :656-673) asks for -- a field that schema does NOT declare, carried under
+    its ``additionalProperties: true``. Together they leave the cadence as the
+    only thing a scenario varies.
+
+    THE TWO AUTHORITIES ARE NAMED SEPARATELY ON PURPOSE. Folding them into one
+    citation is how a reader comes to grep ``core/reporting-webhook.json`` for
+    ``operation_id``, find nothing, and conclude the fixture is wrong or the
+    suppression gate is invented -- which is the investigation
+    salesagent-8qela.178 actually ran before the agreement's text was found on
+    main. Measured on the pinned wheel at
+    ``adcp/_schemas/3.2/core/reporting-webhook.json``: ``required`` is
+    ``[url, authentication, reporting_frequency]`` and ``properties`` carries no
+    ``operation_id``. ``ReportingWebhookRequestFactory``'s own docstring states
+    the same split, which is the attribution this sentence should have followed
+    in the first place.
+
+    PARAMETERISED rather than three near-identical steps: the only difference
+    between the accepted and refused legs is this one enum member, and three
+    copies of one dispatch is the shape the DRY invariant forbids and the way
+    they would drift into dispatching different creates.
+    """
+    from tests.bdd.steps.generic.given_media_buy import harness_create_request_kwargs
+
+    kwargs = harness_create_request_kwargs(ctx)
+    kwargs["reporting_webhook"] = ReportingWebhookRequestFactory.payload(reporting_frequency=cadence)
+    dispatch_request(ctx, **kwargs)
+
+
+@then(parsers.parse('the refusal names "{cadence}" as an available reporting cadence'))
+def then_refusal_names_available_cadence(ctx: dict, cadence: str) -> None:
+    """The refusal's details carry *cadence* in ``accepted_values``.
+
+    THE REFUSAL'S OWN MARKER, and the reason this step exists rather than the
+    scenario stopping at the code. ``UNSUPPORTED_FEATURE`` is classified
+    ``correctable`` precisely because the buyer holds a lever, and the lever is
+    only real if the response says WHICH cadence to resubmit with -- a refusal
+    naming nothing leaves the buyer to guess, and the pinned recovery text
+    ("check get_adcp_capabilities and remove unsupported fields") would be the
+    only hint.
+
+    Read off the WIRE envelope through the single guarded accessor
+    (``wire_error_dict``) and the one locator, not off a reconstructed exception
+    and not off ``result.wire_error_envelope`` by hand: the reconstruction is
+    lossy, so a detail asserted against it can pass while the buyer receives
+    nothing (tests/CLAUDE.md § Error Verification Policy), and
+    ``test_architecture_bdd_wire_discipline`` refuses the hand-rolled read —
+    which is how this step's first draft was caught.
+    """
+    from tests.bdd.steps._outcome_helpers import wire_error_dict
+    from tests.helpers.envelope_assertions import locate_envelope_error
+
+    envelope = wire_error_dict(ctx)
+    error = locate_envelope_error(envelope)
+    assert error is not None, f"response carries no payload-layer error object: {envelope!r}"
+    details = error.get("details") or {}
+    accepted = details.get("accepted_values")
+    assert accepted, (
+        f"the refusal names no accepted_values, so the buyer cannot tell which cadence to "
+        f"resubmit with. details={details!r}"
+    )
+    assert cadence in accepted, (
+        f"the refusal offers {accepted!r}, which does not include {cadence!r} -- the cadence this "
+        f"buy's products advertise. A refusal that names the wrong set is worse than one that "
+        f"names none, because the buyer acts on it."
+    )

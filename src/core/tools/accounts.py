@@ -22,8 +22,11 @@ from typing import TYPE_CHECKING, Literal, NamedTuple, TypedDict, cast
 
 from adcp.types import BrandReference as LibraryBrandReference
 from adcp.types import PaginationRequest, PaginationResponse
-from adcp.types.generated_poc.core.account_ref import AccountReference1, AccountReference2
-from adcp.types.generated_poc.core.business_entity import BusinessEntity
+from adcp.types.domains.core.account_ref import AccountReference1, AccountReference2
+from adcp.types.domains.core.business_entity import BusinessEntity
+from adcp.types.domains.core.notification_config import EventType as LibraryAccountEventType
+from adcp.types.domains.enums.account_currency_mode import AccountCurrencyMode
+from adcp.types.domains.enums.notification_type import NotificationType as LibraryNotificationType
 from pydantic import BaseModel
 
 from src.core.audit_logger import get_audit_logger
@@ -36,11 +39,18 @@ from src.core.database.repositories.account_serialization import (
 )
 from src.core.database.repositories.uow import AccountUoW
 from src.core.errors.codes import ErrorCode, ErrorCodeT
-from src.core.errors.details import BillingNotSupportedDetails, ConfigurationDetails, ErrorDetails, ValidationDetails
+from src.core.errors.details import (
+    BillingNotPermittedForAgentDetails,
+    BillingNotSupportedDetails,
+    ConfigurationDetails,
+    ErrorDetails,
+    ValidationDetails,
+)
 from src.core.exceptions import AdCPConfigurationError, AdCPValidationError
 from src.core.helpers import enum_value
 from src.core.helpers.brand_key import brand_key_parts
 from src.core.resolved_identity import ResolvedIdentity, TransportProtocol
+from src.core.schemas._base import canonical_agent_url
 from src.core.schemas.account import (
     Account,
     ListAccountsRequest,
@@ -154,8 +164,9 @@ def _apply_list_account_filters(db_accounts: list[DBAccount], req: ListAccountsR
 
     account_filter = req.account
     if account_filter is not None:
-        # account_filter is always AccountReference (a RootModel) when present.
-        db_accounts = [a for a in db_accounts if _matches_account_ref(a, account_filter.root)]
+        # account_filter IS the variant when present -- the pinned SDK's AccountReference is the
+        # two-arm union itself, so there is no ``.root`` to unwrap.
+        db_accounts = [a for a in db_accounts if _matches_account_ref(a, account_filter)]
 
     return db_accounts
 
@@ -308,7 +319,7 @@ def _resolve_billing_entity(entry: SyncEntry, existing: DBAccount | None) -> tup
     #/properties/accounts/items/properties/billing_entity/description), and the
     response item echoes it back with bank details stripped (write-only).
     """
-    from adcp.types.generated_poc.core.business_entity import BusinessEntity
+    from adcp.types.domains.core.business_entity import BusinessEntity
 
     submitted = getattr(entry, "billing_entity", None)
     if submitted is None:
@@ -397,6 +408,7 @@ class _FieldPolicy:
 FailureClass = Literal[
     "unsupported_field",
     "billing_not_supported",
+    "billing_not_permitted_for_agent",
     "sandbox_not_supported",
     "notification_config_invalid",
 ]
@@ -409,6 +421,7 @@ FailureClass = Literal[
 _FAILURE_CLASS_TO_CODE: dict[FailureClass, ErrorCodeT] = {
     "unsupported_field": ErrorCode.UNSUPPORTED_FEATURE,
     "billing_not_supported": ErrorCode.BILLING_NOT_SUPPORTED,
+    "billing_not_permitted_for_agent": ErrorCode.BILLING_NOT_PERMITTED_FOR_AGENT,
     "sandbox_not_supported": ErrorCode.UNSUPPORTED_FEATURE,
     "notification_config_invalid": ErrorCode.VALIDATION_ERROR,
 }
@@ -469,6 +482,20 @@ _APPLIED = _Disposition("applied")
 
 #: Why ``preferred_reporting_protocol`` is a DECLARED no-op rather than a
 #: rejection. Named because both modes cite it identically.
+_ADCP_32_UNIMPLEMENTED_CITATION = (
+    "sync-accounts-request.json#/properties/accounts/items — seven settable fields "
+    "arrived with the 3.2.1 pin (currency, timezone, operator_unit, operator_identity, "
+    "destination_billing_entity, reporting_delivery_configs, revision) and this seller "
+    "implements NONE of them: measured, the Account table carries no column for any of the "
+    "seven and accounts.py reads none of them. Ignored rather than rejected, for the reason "
+    "preferred_reporting_protocol gives: refusing a spec-legal field would fail a conformant "
+    "request over a setting this seller simply does not keep, and non-support stays "
+    "discoverable through get_adcp_capabilities. FIXME(#1729): triage each field as the "
+    "columns land — `revision` in particular is an optimistic-concurrency token, so ignoring "
+    "it means a buyer's conflict guard does not apply and that is a semantic gap, not just an "
+    "unstored setting."
+)
+
 _PREFERRED_PROTOCOL_CITATION = (
     "v3.1.1 sync-accounts-request.json"
     "#/properties/accounts/items/properties/preferred_reporting_protocol/description — hint language "
@@ -566,7 +593,7 @@ _FIELD_POLICY: dict[str, _FieldPolicy] = {
             "local_extension",
             "v3.1.1 sync-accounts-request.json#/properties/accounts/items/additionalProperties — "
             "not a sync_accounts property at all; the spec's governance surface is sync_governance "
-            "(dist/compliance/3.1.1/domains/governance/index.yaml). Accepted on the provisioning branch "
+            "(dist/compliance/<pin>/domains/governance/index.yaml). Accepted on the provisioning branch "
             "only because that is how governed accounts are seeded today; retire with sync_governance.",
         ),
         resolve=_resolve_governance_agents,
@@ -575,12 +602,82 @@ _FIELD_POLICY: dict[str, _FieldPolicy] = {
         provisioning=_Disposition("ignored_by_design", _PREFERRED_PROTOCOL_CITATION),
         settings_update=_Disposition("ignored_by_design", _PREFERRED_PROTOCOL_CITATION),
     ),
+    # The seven additions, each a declared no-op. See the citation.
+    "currency": _FieldPolicy(
+        provisioning=_Disposition("ignored_by_design", _ADCP_32_UNIMPLEMENTED_CITATION),
+        settings_update=_Disposition("ignored_by_design", _ADCP_32_UNIMPLEMENTED_CITATION),
+    ),
+    "timezone": _FieldPolicy(
+        provisioning=_Disposition("ignored_by_design", _ADCP_32_UNIMPLEMENTED_CITATION),
+        settings_update=_Disposition("ignored_by_design", _ADCP_32_UNIMPLEMENTED_CITATION),
+    ),
+    "operator_unit": _FieldPolicy(
+        provisioning=_Disposition("ignored_by_design", _ADCP_32_UNIMPLEMENTED_CITATION),
+        settings_update=_Disposition("ignored_by_design", _ADCP_32_UNIMPLEMENTED_CITATION),
+    ),
+    "operator_identity": _FieldPolicy(
+        provisioning=_Disposition("ignored_by_design", _ADCP_32_UNIMPLEMENTED_CITATION),
+        settings_update=_Disposition("ignored_by_design", _ADCP_32_UNIMPLEMENTED_CITATION),
+    ),
+    "destination_billing_entity": _FieldPolicy(
+        provisioning=_Disposition("ignored_by_design", _ADCP_32_UNIMPLEMENTED_CITATION),
+        settings_update=_Disposition("ignored_by_design", _ADCP_32_UNIMPLEMENTED_CITATION),
+    ),
+    "reporting_delivery_configs": _FieldPolicy(
+        provisioning=_Disposition("ignored_by_design", _ADCP_32_UNIMPLEMENTED_CITATION),
+        settings_update=_Disposition("ignored_by_design", _ADCP_32_UNIMPLEMENTED_CITATION),
+    ),
+    "revision": _FieldPolicy(
+        provisioning=_Disposition("ignored_by_design", _ADCP_32_UNIMPLEMENTED_CITATION),
+        settings_update=_Disposition("ignored_by_design", _ADCP_32_UNIMPLEMENTED_CITATION),
+    ),
 }
 
 
 def _disposition(field: str, mode: EntryMode) -> _Disposition:
     """The disposition ``field`` carries in ``mode`` (``provisioning``/``settings_update``)."""
     return _FIELD_POLICY[field].for_mode(mode)
+
+
+def resolve_account_currency_modes() -> list[AccountCurrencyMode]:
+    """Which account currency modes this seller supports — read off the entry policy.
+
+    3.2.1 ``get-adcp-capabilities-response.json``
+    #/properties/account/properties/supported_account_currency_modes is "required for
+    sellers implementing advertiser-account provisioning", and tells buyers to
+    "treat absence as an older seller whose currency mode is not discoverable, not as
+    support for either mode". This seller DOES provision advertiser accounts, so silence
+    makes it read as pre-3.2 — which is why :data:`_ADCP_32_UNIMPLEMENTED_CITATION` can
+    promise that non-support "stays discoverable through get_adcp_capabilities". This
+    function is that promise kept.
+
+    DERIVED, never declared, and derived from the one row that decides the behaviour the
+    capability describes. The enum's own definitions are the two predicates:
+
+    * ``fixed`` — "bound to one immutable ISO 4217 currency supplied during provisioning".
+      Supplied during provisioning means the provisioning disposition is ``applied``;
+      immutable means the settings-update disposition is not.
+    * ``per_media_buy`` — "the advertiser account is not currency-bound; omit account
+      currency". Not currency-bound means the provisioning disposition is not ``applied``.
+
+    So a seller that starts honouring ``currency`` re-declares itself by flipping that
+    row, and cannot keep advertising ``per_media_buy`` while storing a bound currency.
+    ``minItems: 1`` holds by construction rather than by hope: the two predicates split on
+    ``provisioning.kind == "applied"``, so exactly one of them is always true.
+
+    Today the row is ``ignored_by_design`` in both modes — the ``accounts`` table has no
+    currency column and ``NaturalKey`` is ``(brand_domain, brand_id, operator, sandbox)``,
+    with no currency component for a ``fixed`` account to key on — so this returns
+    ``[per_media_buy]``.
+    """
+    currency = _FIELD_POLICY["currency"]
+    bound = currency.provisioning.kind == "applied"
+    modes: list[AccountCurrencyMode] = []
+    if bound and currency.settings_update.kind != "applied":
+        modes.append(AccountCurrencyMode.fixed)
+    if not bound:
+        modes.append(AccountCurrencyMode.per_media_buy)
+    return modes
 
 
 def _resolve_entry_changes(entry: SyncEntry, existing: DBAccount | None, *, mode: EntryMode) -> ResolvedFields:
@@ -757,8 +854,10 @@ def _provisioning_gates(
     proof_failures: dict[int, list[GateFailure]],
 ) -> list[Callable[[], list[GateFailure] | None]]:
     """The provisioning branch's gate list, in order: billing policy (BR-RULE-059) ->
-    sandbox capability (BR-RULE-209 INV-6) -> notification_configs. The first failure
-    short-circuits the rest.
+    the calling agent's billing permission -> sandbox capability (BR-RULE-209 INV-6) ->
+    notification_configs. The first failure short-circuits the rest, so the per-agent
+    gate only ever sees a value the seller's capability accepts, which is the one case
+    its code exists for (enums/error-code.json BILLING_NOT_PERMITTED_FOR_AGENT).
 
     ``brand.domain`` is NOT gated here. It is an identifier -- a lookup key for the
     account relationship, never dereferenced -- so ``core/brand-ref.json``'s hostname
@@ -772,6 +871,7 @@ def _provisioning_gates(
     """
     return [
         lambda: _check_billing_policy(billing_val, identity),
+        lambda: _check_agent_billing_permission(billing_val, identity),
         lambda: _check_sandbox_capability(sandbox, tenant),
         lambda: _notification_configs_gate(entry, proof_failures.get(index)),
     ]
@@ -835,6 +935,42 @@ def _check_billing_policy(
     return None
 
 
+def _check_agent_billing_permission(
+    billing_val: str | None,
+    identity: ResolvedIdentity,
+) -> list[GateFailure] | None:
+    """Refuse a billing value the calling buyer agent's commercial relationship does not allow.
+
+    The per-buyer-agent gate, distinct from the seller-wide capability gate before it
+    (enums/error-code.json BILLING_NOT_PERMITTED_FOR_AGENT; error-handling.mdx "Billing
+    and account setup"). A passthrough-only agent has no payments relationship, so only
+    ``operator`` can be invoiced and ``agent``/``advertiser`` are refused.
+
+    The identity is established by construction: a ``ResolvedIdentity`` principal IS the
+    seller's onboarding record for the credential, which is the "credential-to-agent
+    mapping" the code requires before it may be emitted. An unmapped caller never
+    reaches a protected tool.
+
+    ``details`` carries the pin's clamped shape and nothing else
+    (error-details/billing-not-permitted-for-agent.json, additionalProperties false):
+    the rejected value and ONE retry value. ``operator`` is suggested only when the
+    seller's capability accepts it; otherwise there is no value this agent can retry
+    with, and the absence tells the buyer to complete onboarding offline.
+    """
+    from src.core.billing_policy import resolve_supported_billing
+
+    if billing_val is None or billing_val == "operator" or not identity.principal.billing_passthrough_only:
+        return None
+    suggested = "operator" if "operator" in resolve_supported_billing(identity.tenant) else None
+    return [
+        GateFailure(
+            failure_class="billing_not_permitted_for_agent",
+            field="billing",
+            details=BillingNotPermittedForAgentDetails(rejected_billing=billing_val, suggested_billing=suggested),
+        )
+    ]
+
+
 def _extract_natural_key(entry: SyncEntry) -> NaturalKey:
     """Extract natural key components from a PROVISIONING-mode sync request entry.
 
@@ -890,11 +1026,24 @@ def _check_sandbox_capability(entry_sandbox: bool | None, tenant: TenantContext 
     ]
 
 
-# Media-buy-anchored notification event types. These describe the lifecycle of a
-# media buy's delivery reporting, not an account, so they do not belong on the
-# account surface. There is deliberately no account-lifecycle event type either
-# (no account.status_changed) -- poll list_accounts or use push_notification_config.
-_MEDIA_BUY_ANCHORED_EVENT_TYPES = frozenset({"scheduled", "final", "delayed", "adjusted", "impairment"})
+# The event types that do not belong on the account surface: every member of the
+# notification-type vocabulary that the account surface's own enum does not declare.
+#
+# DERIVED from the two pinned enums rather than listed, because the list was wrong. It
+# read ``{scheduled, final, delayed, adjusted, impairment}`` -- five members, where the
+# pin's own migration text names six media-buy-anchored types, "(`scheduled`, `final`,
+# `delayed`, `adjusted`, `window_update`, `impairment`)". ``window_update`` was missing,
+# and nothing caught it because the request DTO types this field with the account-surface
+# enum and refuses the value before this check runs.
+#
+# The difference is the honest set for the question this gate asks. It is wider than
+# "media-buy-anchored": it also carries ``capabilities.changed`` and ``principal.changed``,
+# which are no more account-anchored than ``scheduled`` is, so refusing them here is the
+# same rule rather than an extension of it. Both enums spell their values dotted
+# (``creative.status_changed``), so the difference compares like with like.
+_EVENT_TYPES_OFF_THE_ACCOUNT_SURFACE = frozenset(
+    {member.value for member in LibraryNotificationType} - {member.value for member in LibraryAccountEventType}
+)
 
 
 def _check_notification_configs(configs: Iterable[NotificationConfig] | None) -> list[GateFailure] | None:
@@ -929,7 +1078,7 @@ def _check_notification_configs(configs: Iterable[NotificationConfig] | None) ->
             seen_subscribers.add(subscriber_id)
 
         for event_index, event_type in enumerate(getattr(config, "event_types", None) or []):
-            if enum_value(event_type) in _MEDIA_BUY_ANCHORED_EVENT_TYPES:
+            if enum_value(event_type) in _EVENT_TYPES_OFF_THE_ACCOUNT_SURFACE:
                 return [
                     GateFailure(
                         failure_class="notification_config_invalid",
@@ -963,12 +1112,23 @@ def _check_notification_configs(configs: Iterable[NotificationConfig] | None) ->
         # delegates its URL half to reject_unsafe_webhook_registration_url, which
         # runs over the same shared address predicate.
         #
-        # The refusal CAUSE is deliberately dropped rather than reported: AdCP 3.1.1 L1
+        # The refusal CAUSE is deliberately dropped rather than reported: L1
         # Security Considerations forbid echoing internal hostnames or addresses back to
         # the party that supplied the URL, and the buyer already gets the field pointer.
         # `exc.field` is the gate's own pointer -- it is built from this prefix, so
         # it names the refused half (`.url` or `.authentication.credentials`)
         # without carrying any refused host or credential into buyer-facing text.
+        #
+        # ``declared_by`` names the pinned schema this document actually came from,
+        # and it is load-bearing rather than documentation. The gate's
+        # correlation-id refusal (L3/webhooks.mdx :141) derives its own
+        # applicability from ``declared_by.model_fields``, and
+        # ``core/notification-config.json`` declares NO ``operation_id`` -- an
+        # account-level subscription has no such field, so there is nothing for its
+        # buyer to supply. Passing the push type here would refuse every conformant
+        # subscription at ``notification_configs[j].operation_id``, a pointer naming
+        # a field this schema does not have. Measured: that is exactly what happened
+        # when the rule was written unconditionally in the shared gate body.
         try:
             accept_push_notification_config(
                 {
@@ -976,6 +1136,7 @@ def _check_notification_configs(configs: Iterable[NotificationConfig] | None) ->
                     "authentication": getattr(config, "authentication", None),
                 },
                 field_prefix=f"notification_configs[{index}]",
+                declared_by=NotificationConfig,
             )
         except AdCPValidationError as exc:
             return [
@@ -1062,7 +1223,7 @@ def _process_settings_update_entry(
     """
     if entry.account is None:
         raise AdCPConfigurationError()
-    ref = entry.account.root
+    ref = entry.account  # the pinned SDK: the union itself, no RootModel wrapper to unwrap
     existing = _resolve_settings_update_target(ref, repo)
 
     if existing is None:
@@ -1147,14 +1308,22 @@ _PROOF_BUDGET_SECONDS = 6.0
 def _proof_tuple(config: NotificationConfig) -> tuple[str, str, str | None, tuple[str, ...]]:
     """The identity of a proof, per the spec's proof-reuse allowance.
 
-    A re-sent config whose (subscriber_id, normalized url, auth binding, normalized
+    A re-sent config whose (subscriber_id, canonical url, auth binding, normalized
     event_types) matches an already-proven persisted entry MAY skip re-proof.
+
+    The url is canonicalized by ``canonical_agent_url`` and by nothing else. A bare
+    ``rstrip("/")`` stood here and was a leniency on a security decision: it made
+    ``https://h/hook/`` reuse the proof taken for ``https://h/hook``, so an endpoint
+    whose control was never proven inherited the proof of a DIFFERENT endpoint. The
+    canonical form keeps those two apart (the spec keeps ``/a`` and ``/a/`` distinct)
+    while correctly equating the spellings the algorithm does define as the same
+    endpoint -- a dropped default port, a differently-cased host.
     """
     auth = config.authentication
     auth_scheme = getattr(auth, "scheme", None) if auth is not None else None
     return (
         config.subscriber_id,
-        str(config.url or "").rstrip("/"),
+        canonical_agent_url(config.url),
         enum_value(auth_scheme) if auth_scheme is not None else None,
         tuple(sorted(enum_value(e) for e in (config.event_types or []))),
     )
@@ -1235,7 +1404,7 @@ def _challenge_signing(tenant_id: str) -> ChallengeSigning | None:
 
     ``seller_agent_url`` is a PUBLISHED ``agents[]`` entry of ours, taken from
     :func:`agent_endpoint_urls` and never composed here: a receiver matches it
-    byte-for-byte against our brand.json (security.mdx @ v3.1.1 :1104 step 5) and then
+    byte-for-byte against our brand.json (security.mdx :1104 step 5) and then
     resolves that entry's ``jwks_uri``.
 
     It does NOT vary by the transport the registration arrived on, and deliberately so.
@@ -1429,7 +1598,7 @@ def _lookup_existing_for_entry(entry: SyncEntry, repo: AccountRepository) -> DBA
     """
     ref = getattr(entry, "account", None)
     if ref is not None:
-        return _resolve_settings_update_target(ref.root, repo)
+        return _resolve_settings_update_target(ref, repo)
     brand = getattr(entry, "brand", None)
     operator = getattr(entry, "operator", None)
     if brand is None or operator is None:
@@ -1524,7 +1693,7 @@ async def _sync_accounts_impl(
     # the identical resolve/validate/write code, and each entry's reads see the
     # earlier entries' writes as flushed rows -- the in-request memory a preview
     # previously had to fake with a parallel state machine
-    # (sync-accounts-request.json#/properties/dry_run @ v3.1.1).
+    # (sync-accounts-request.json#/properties/dry_run).
     with AccountUoW(tenant_id, dry_run=dry_run) as uow:
         assert uow.accounts is not None
         repo = uow.accounts

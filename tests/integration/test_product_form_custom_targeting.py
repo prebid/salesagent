@@ -6,8 +6,7 @@ A GAM product's ``targeting_template.key_value_pairs`` is stored as
 on save, so a seller fixes a malformed config on the product instead of a buyer's media
 buy failing later.
 
-Real PostgreSQL, real Flask app, real form POST. No format is submitted, so the creative
-agent registry is never consulted, and nothing on these paths calls GAM.
+Real PostgreSQL, real Flask app, real form POST. Nothing on these paths calls GAM.
 """
 
 import json
@@ -45,7 +44,7 @@ def _form(name: str, key_value_pairs: dict) -> dict[str, str]:
     """The product form fields both routes need before they reach custom targeting."""
     return {
         "name": name,
-        "formats": "[]",
+        "format_options": json.dumps([{"format_kind": "image", "params": {"width": 300, "height": 250}}]),
         "pricing_model_0": "cpm_fixed",
         "currency_0": "USD",
         "rate_0": "10.00",

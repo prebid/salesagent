@@ -10,7 +10,7 @@ import logging
 import os
 from typing import Any
 
-from adcp.types.generated_poc.enums.metro_system import MetroAreaSystem
+from adcp.types.domains.enums.metro_system import MetroAreaSystem
 from pydantic import ValidationError
 
 from src.adapters.gam_implementation_config_schema import CustomTargeting

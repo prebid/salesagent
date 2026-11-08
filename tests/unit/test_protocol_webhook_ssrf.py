@@ -67,6 +67,13 @@ _PAYLOAD = create_mcp_webhook_payload(
     status=GeneratedTaskStatus.completed,
     task_type="update_media_buy",
     result={},
+    # REQUIRED from adcp 9 on: ``operation_id`` was ``str | None = None`` at 6.6.0 and is
+    # now a required keyword, because core/push-notification-config.json makes it a
+    # required envelope property the seller MUST echo verbatim. The production builder
+    # (src/core/webhooks/delivery.py) already threaded it off the registration, so this is
+    # the only site the tightening reaches. The value is arbitrary here: none of the cases
+    # below is about the payload.
+    operation_id="op-ssrf-fixture",
 )
 # The delivery's task identity, typed. `send_notification` used to take a loose
 # four-key dict and rebuild a context from it downstream; the rebuild reset

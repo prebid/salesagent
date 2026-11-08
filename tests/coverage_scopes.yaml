@@ -66,7 +66,6 @@ scopes:
       - tests/integration/test_creative_agent_live.py
       - tests/integration/test_creative_assignment_principal_id.py
       - tests/integration/test_creative_review_model.py
-      - tests/integration/test_creative_sync_data_preservation.py
       - tests/integration/test_creative_formats_behavioral.py
       - tests/integration/test_creative_list_behavioral.py
       - tests/integration/test_creative_repository.py

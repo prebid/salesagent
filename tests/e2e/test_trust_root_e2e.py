@@ -8,19 +8,23 @@ the documents as a real counterparty consumes them rather than as we build them.
 
 Two deliberate seams, each with its reason:
 
-1. **Hop 1 is seeded** (``_capabilities_client_factory``). Two independent reasons,
-   and either alone would be sufficient:
+1. **Hop 1 is seeded** (``_capabilities_client_factory``), because this module
+   grades A3, whose scope stops at the published documents. Seeding hop 1 from A3's
+   own helpers is what keeps a failure here attributable to brand.json or the JWKS
+   rather than to the capabilities builder.
 
-   * *SDK divergence #4.* ``_fetch_capabilities`` does a raw ``GET <agent_url>``
-     and requires a JSON object body, while security.mdx:1142 says the opposite
-     verbatim — "invoke ``get_adcp_capabilities`` via the agent's declared
-     transport (MCP ``tools/call`` or A2A skill invocation), **not** a raw HTTP
-     ``GET``". Our ``/mcp`` answers GET with a redirect to an SSE stream and
-     ``/a2a`` is JSON-RPC POST, so an unseeded hop 1 fails no matter what A3
-     publishes.
-   * *This module grades A3, whose scope stops at the published documents.* Seeding
-     hop 1 from A3's own helpers is what keeps a failure here attributable to
-     brand.json or the JWKS rather than to the capabilities builder.
+   What is NO LONGER a reason: SDK divergence #4. ``_fetch_capabilities`` used to
+   do a raw ``GET <agent_url>`` and require a JSON object body, while
+   security.mdx:1142 said the opposite verbatim — "invoke
+   ``get_adcp_capabilities`` via the agent's declared transport (MCP
+   ``tools/call`` or A2A skill invocation), **not** a raw HTTP ``GET``". The SDK
+   now does what the spec says, so the seed is a SCOPE decision alone and the
+   transport under it speaks MCP (``json_seeded_client_factory``). Un-seeding hop 1
+   here would still need a second decision this module has no business making: the
+   url walked is the card's A2A interface url (``/a2a``) while the resolver's
+   default protocol is MCP. ``AGENT_ENDPOINT_PATHS`` publishes a ``/mcp`` entry
+   too, so what a buyer resolves against is reachable; which of our two published
+   entries a walk should pick is a question for whoever un-seeds this.
 
    ``identity`` is no longer gated: publishing the trust root is what took it out
    of ``_UNBACKED_BLOCKS`` (``src/core/schemas/capability_declarations.py``), and
@@ -33,33 +37,71 @@ Two deliberate seams, each with its reason:
    test asserts the values the resolver ends up using are those helpers' output.
 
 2. **Hops 2 and 3 are live.** No ``_brand_jwks_client_factory`` is passed —
-   brand.json and the JWKS are fetched from the running stack over real HTTP,
+   brand.json and the JWKS are fetched from the running stack over real TLS,
    because those two hops are the ones A3 owns.
 
-``allow_private_destinations=True`` is a TEST argument only: it relaxes the SDK's
-SSRF pin so an ``http://localhost:<port>`` stack is reachable. No production path
-reads it: the inbound verifier (``src/core/signing/verifier.py``) pins it ``False``
-on every resolution walk, and ``src/core/config.py`` deliberately exposes no knob
-for it. This module can pass ``True`` precisely because it calls
-``async_resolve_agent`` itself rather than going through that verifier.
+The walk runs against ``seller.adcp-e2e.dev`` on the stack's one TLS front, and two
+independent rules put it there. Neither is a stack limitation; both are the pin.
+
+* **https.** ``identity.brand_json_url`` is pinned ``pattern: "^https://"``, so
+  production refuses to publish one for a host that cannot serve https:
+  ``origin_is_publishable`` (``src/core/signing/posture.py``) gates the emission and
+  ``emitted_identity`` returns ``None``. A plaintext ``localhost:<port>`` tenant
+  therefore publishes NO trust root, and a walk seeded with an ``http://`` pointer
+  was grading a document this agent never serves — which is what this module did
+  until ``adcp`` 9's ``_extract_brand_json_url`` refused the scheme and said so.
+* **A registrable domain.** security.mdx step 3 (Origin binding) requires the agent
+  url's host eTLD+1 to equal the ``brand_json_url``'s, computed from a pinned Public
+  Suffix List snapshot. ``.test`` and ``localhost`` are in no PSL, so both sides
+  compute ``None``, equality never holds, and the documented fallback wants an
+  ``authorized_operators[]`` entry only a House Portfolio document carries. A
+  conformant verifier MUST answer ``request_signature_brand_origin_mismatch`` there,
+  and the SDK does, with no development-domain opt-in to pass. So the name a buyer
+  resolves us by is ``*.adcp-e2e.dev`` — the same conclusion, in the same stack, that
+  the counterparty origin reached for the inbound direction. See
+  :data:`~tests.e2e._signing_e2e.SELLER_ETLD1_HOST`.
+
+That second rule is also why this test is in-network only: the name is a compose
+alias, and the host path has no PSL-resolvable name for a loopback listener.
+
+Two test arguments make a private TLS front walkable, and neither relaxes a check:
+
+* ``allow_private_destinations=True`` opens the SDK's SSRF pin so a loopback or
+  compose-internal address is reachable. No production path reads it: the inbound
+  verifier (``src/core/signing/verifier.py``) pins it ``False`` on every resolution
+  walk, and ``src/core/config.py`` deliberately exposes no knob for it. This module
+  can pass ``True`` precisely because it calls ``async_resolve_agent`` itself rather
+  than going through that verifier.
+* ``SSL_CERT_FILE`` points at ``.test-tls/combined-ca.pem`` — the public roots PLUS
+  this stack's private CA — so full certificate validation stays on and simply
+  trusts our leaf as well. The SDK's hops 2 and 3 build their own
+  ``ssl.create_default_context()`` (``adcp.signing.ip_pinned_transport.
+  _build_ssl_context``), which takes no cafile and honours that variable at the
+  OpenSSL level; hop 3 (``async_default_jwks_fetcher``) has no client-factory seam
+  at all, so this is the only way to hand it a trust anchor. The in-network runner
+  already sets it (``docker-compose.e2e.yml``); ``tests/e2e/conftest.py`` sets the
+  same default on the host path. ``verify=False`` is what this avoids, and it would
+  have destroyed the handshake these two hops exist to perform.
 """
 
 from __future__ import annotations
 
 import contextlib
-import ssl
 
 import httpx
 import pytest
 
 from tests.e2e._signing_e2e import (
-    ca_bundle,
+    SELLER_ETLD1_HOST,
+    ca_verified_ssl_context,
     netloc,
     origin,
     provisioned_trust_root_tenant,
     seeded_capabilities_factory,
+    seller_etld1_base_url,
     tls_base_url,
 )
+from tests.e2e.conftest import e2e_in_network
 from tests.helpers.signing import published_kids
 
 _SLUG = "trustroot_e2e"
@@ -72,15 +114,38 @@ _TENANT_ID = "tr_e2e"
 _TLS_SLUG = "trustroot_e2e_tls"
 _TLS_TENANT_ID = "tr_e2e_tls"
 
+#: The walk below needs a seller name with an eTLD+1 in the Public Suffix List
+#: (see :data:`SELLER_ETLD1_HOST`), and that name is a compose network alias. It
+#: resolves inside the stack's network and nowhere else, so on the host path there
+#: is no address for this test to dial — not a weaker assertion, an absent origin.
+#: ``./run_all_tests.sh`` runs every suite in-network, which is where this is
+#: graded. Same device, same wording as
+#: ``tests/e2e/test_webhook_capture_egress_gate_e2e.py``.
+requires_in_network = pytest.mark.skipif(
+    not e2e_in_network(),
+    reason=f"in-network only: {SELLER_ETLD1_HOST} is a compose alias, not resolvable from the host path "
+    "(set ADCP_TEST_HOST)",
+)
+
 
 @pytest.fixture
 def trust_root_tenant(live_server):
-    """A tenant whose canonical agent URL IS the live PLAINTEXT stack, plus one key."""
+    """A tenant answering at the walkable seller origin, plus one key.
+
+    Two independent reasons it is not the plaintext stack, and either one alone
+    would be enough:
+
+    * a plaintext host publishes no trust root at all — ``origin_is_publishable``
+      refuses an ``http://`` origin, so ``emitted_identity`` emits no
+      ``identity.brand_json_url`` for it and there is nothing to walk;
+    * the walk binds the agent url to that pointer by eTLD+1, which rules out
+      ``.test`` and ``localhost`` alike (:data:`SELLER_ETLD1_HOST`).
+    """
     with provisioned_trust_root_tenant(
         live_server,
         tenant_id=_TENANT_ID,
         slug=_SLUG,
-        host=netloc(live_server["mcp"]),
+        host=netloc(seller_etld1_base_url(live_server)),
     ) as provisioned:
         yield provisioned
 
@@ -110,6 +175,7 @@ def tls_trust_root_tenant(live_server):
         yield provision
 
 
+@requires_in_network
 @pytest.mark.asyncio
 async def test_counterparty_resolves_our_jwks_through_our_published_brand_json(
     docker_services_e2e, live_server, trust_root_tenant
@@ -144,7 +210,7 @@ async def test_counterparty_resolves_our_jwks_through_our_published_brand_json(
     from src.core.schemas._base import canonical_agent_url as canonical_identity_url
 
     tenant, key = trust_root_tenant
-    base_url = live_server["mcp"]
+    base_url = seller_etld1_base_url(live_server)
 
     # 1. The URL we publish must be the URL we are reachable at. If this fails, the
     #    scheme derivation in domain_config does not handle the host the stack is
@@ -155,7 +221,18 @@ async def test_counterparty_resolves_our_jwks_through_our_published_brand_json(
         f"{canonical_agent_url(tenant)!r}, reachable at {base_url!r}"
     )
 
-    async with httpx.AsyncClient(base_url=base_url, timeout=15.0) as client:
+    # The pointer the walk below starts from is the one the pin obliges, and on this
+    # origin production really does emit it. Asserted here rather than left implicit
+    # because the seed two blocks down is only faithful while this holds — a seed
+    # carrying a scheme production suppresses is a document no counterparty can ever
+    # receive, and that is the state this test was in before.
+    assert brand_json_url(tenant).startswith("https://"), (
+        f"identity.brand_json_url is pinned ^https:// and origin_is_publishable gates the "
+        f"emission on it, so a walk can only start from an https pointer; derived "
+        f"{brand_json_url(tenant)!r} for a tenant at {netloc(base_url)!r}"
+    )
+
+    async with httpx.AsyncClient(base_url=base_url, verify=ca_verified_ssl_context(), timeout=15.0) as client:
         card = (await client.get("/.well-known/agent-card.json")).json()
         brand = (await client.get("/.well-known/brand.json")).json()
         adagents = (await client.get("/.well-known/adagents.json")).json()
@@ -282,7 +359,7 @@ async def test_hop_one_of_discovery_resolves_over_real_tls(docker_services_e2e, 
     jwks_path = "/.well-known/jwks.json"
 
     published_tls_base_url = tls_base_url(live_server)
-    verify = ssl.create_default_context(cafile=ca_bundle())
+    verify = ca_verified_ssl_context()
 
     # The netloc INCLUDES the port: get_tenant_by_virtual_host (config_loader.py:252)
     # matches the Host header as an exact string, and httpx only omits the port

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 from adcp.types import ImageFormatAsset, VideoFormatAsset
-from adcp.types.generated_poc.core.format import Dimensions, Renders  # TODO: no stable alias in adcp.types
+from adcp.types.domains.core.format import Dimensions, Renders  # TODO: no stable alias in adcp.types
 
 from src.core.schemas import Format, FormatId, ListCreativeFormatsResponse
 from tests.factories import TenantFactory
@@ -25,7 +25,6 @@ ALL_TRANSPORTS = [Transport.A2A, Transport.MCP, Transport.REST]
 def _make_format(
     format_id: str,
     name: str,
-    type: str | None = "display",
     renders: list | None = None,
     assets: list | None = None,
 ) -> Format:
@@ -33,7 +32,6 @@ def _make_format(
     return Format(
         format_id=FormatId(agent_url=AGENT_URL, id=format_id),
         name=name,
-        type=type,
         is_standard=True,
         renders=renders,
         assets=assets,
@@ -58,21 +56,18 @@ class TestFullCatalogNoFilters:
             _make_format(
                 "display_300x250",
                 "Medium Rectangle",
-                type="display",
                 renders=[Renders(role="primary", dimensions=Dimensions(width=300, height=250))],
                 assets=[ImageFormatAsset(item_type="individual", asset_id="hero_image", required=True)],
             ),
             _make_format(
                 "video_preroll_15s",
                 "Pre-roll 15s",
-                type="video",
                 renders=[Renders(role="primary", dimensions=Dimensions(width=640, height=360))],
                 assets=[VideoFormatAsset(item_type="individual", asset_id="video_file", required=True)],
             ),
             _make_format(
                 "audio_companion",
                 "Audio Companion Banner",
-                type="audio",
             ),
         ]
 
@@ -99,7 +94,6 @@ class TestFullCatalogNoFilters:
             _make_format(
                 "display_banner",
                 "Standard Display Banner",
-                type="display",
                 renders=[Renders(role="primary", dimensions=Dimensions(width=728, height=90))],
                 assets=[
                     ImageFormatAsset(
@@ -112,7 +106,6 @@ class TestFullCatalogNoFilters:
             _make_format(
                 "video_midroll",
                 "Mid-roll Video",
-                type="video",
                 assets=[
                     VideoFormatAsset(
                         item_type="individual",
@@ -168,7 +161,6 @@ class TestFullCatalogNoFilters:
             _make_format(
                 "sole_format",
                 "The Only Format",
-                type="display",
                 renders=[Renders(role="primary", dimensions=Dimensions(width=320, height=50))],
             ),
         ]
@@ -191,11 +183,11 @@ class TestFullCatalogNoFilters:
         included when no filters are applied.
         """
         formats = [
-            _make_format("display_leaderboard", "Leaderboard 728x90", type="display"),
-            _make_format("display_mrec", "Medium Rectangle", type="display"),
-            _make_format("video_preroll", "Pre-roll 30s", type="video"),
-            _make_format("video_outstream", "Outstream Video", type="video"),
-            _make_format("audio_spot", "Audio Spot 15s", type="audio"),
+            _make_format("display_leaderboard", "Leaderboard 728x90"),
+            _make_format("display_mrec", "Medium Rectangle"),
+            _make_format("video_preroll", "Pre-roll 30s"),
+            _make_format("video_outstream", "Outstream Video"),
+            _make_format("audio_spot", "Audio Spot 15s"),
         ]
 
         with CreativeFormatsEnv() as env:

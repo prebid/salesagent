@@ -11,8 +11,9 @@ import asyncio
 from unittest.mock import MagicMock, patch
 
 import pytest
-from adcp.types import FormatId
+from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as FormatId
 
+from src.core.creative_agent_registry import FormatFetchResult
 from src.core.tools.creatives._sync import _sync_creatives_impl
 from src.core.validation_helpers import run_async_in_sync_context
 from tests.factories.creative_asset import build_assets, image_spec, text_spec
@@ -172,9 +173,9 @@ class TestSyncCreativesErrorHandling:
                     mock_format.format_id = _fmt_id
                     mock_format.agent_url = "https://example.com"
                     mock_format.output_format_ids = None  # Not generative
-                    return [mock_format]
+                    return FormatFetchResult(formats=[mock_format], errors=[])
 
-                mock_reg_instance.list_all_formats = mock_list_formats
+                mock_reg_instance.list_all_formats_with_errors = mock_list_formats
 
                 # Mock preview_creative to return empty previews (failure case)
                 async def mock_preview(*args, **kwargs):
@@ -246,7 +247,7 @@ class TestSyncCreativesAsyncScenario:
                     mock_format.format_id = _fmt_id2
                     mock_format.agent_url = "https://example.com"
                     mock_format.output_format_ids = None
-                    return [mock_format]
+                    return FormatFetchResult(formats=[mock_format], errors=[])
 
                 async def mock_preview(*args, **kwargs):
                     await asyncio.sleep(0.001)
@@ -264,7 +265,7 @@ class TestSyncCreativesAsyncScenario:
                     }
 
                 mock_reg_instance.get_format = mock_get_format
-                mock_reg_instance.list_all_formats = mock_list_formats
+                mock_reg_instance.list_all_formats_with_errors = mock_list_formats
                 mock_reg_instance.preview_creative = mock_preview
 
                 # This is the critical test: calling from async context should work

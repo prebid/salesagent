@@ -11,7 +11,7 @@ Part of #1391 SDK 5.7 creative-asset-shape migration.
 """
 
 import pytest
-from adcp.types import CreativeAsset
+from adcp.types import LegacyCreativeAsset as CreativeAsset
 from pydantic import ValidationError
 
 from src.core.schemas.creative import CreativeAssetRequest
@@ -86,12 +86,19 @@ def test_none_keeps_the_key_carrying_null():
     assert "format_id" not in CreativeAssetRequestFactory.payload(format_id=OMIT)
 
 
-def test_overrides_reach_the_dict_verbatim_where_build_would_normalise():
-    """An override lands AFTER model_dump, so a negative path can carry un-normalised bytes.
+def test_overrides_reach_the_dict_verbatim():
+    """An override lands AFTER model_dump, so a negative path can carry arbitrary bytes.
 
-    ``build()`` routes the same value through the model and gets pydantic's trailing
-    slash. That asymmetry is why a malformation is always a payload() override and never
-    a build() kwarg — through build() it would raise in the test's own setup.
+    That is why a malformation is always a payload() override and never a build() kwarg:
+    through build() a refused value raises in the test's own setup.
+
+    IT NO LONGER DEMONSTRATES A NORMALISATION ASYMMETRY on ``agent_url``, and the rename
+    says so. The asymmetry it was named for was pydantic's ``AnyUrl`` appending a trailing
+    slash to a bare origin inside build(); adcp 9 (upstream #1396, "keep the
+    format-reference agent_url as the wire string") types the field ``str``, so BOTH paths
+    now carry the bytes verbatim. Asserting that equality is the honest remaining content —
+    the override still reaches the dict untouched — and the sibling assertion is kept so a
+    future re-introduction of model-side rewriting on this field turns this red.
     """
     raw = "https://creative.test.example.com"
     format_id = {"id": "display_300x250", "agent_url": raw}
@@ -99,4 +106,4 @@ def test_overrides_reach_the_dict_verbatim_where_build_would_normalise():
     assert CreativeAssetRequestFactory.payload(format_id=format_id)["format_id"]["agent_url"] == raw
 
     through_model = CreativeAssetRequestFactory.build(format_id=format_id).model_dump(mode="json")
-    assert through_model["format_id"]["agent_url"] == f"{raw}/"
+    assert through_model["format_id"]["agent_url"] == raw
