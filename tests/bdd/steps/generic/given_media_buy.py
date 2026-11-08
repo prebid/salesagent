@@ -779,6 +779,35 @@ def given_nonexistent_product(ctx: dict, product_id: str) -> None:
     kwargs["packages"][0]["product_id"] = product_id
 
 
+@given(
+    parsers.parse(
+        'a package references product "{product_id}" selecting format option "{option_id}" of the seller\'s own host'
+    )
+)
+def given_package_selects_agent_host_option(ctx: dict, product_id: str, option_id: str) -> None:
+    """Point the first package at *product_id*, priced by its own option, naming the agent host as publisher.
+
+    ``core/format-option-ref.json`` publisher branch: ``{scope, publisher_domain,
+    format_option_id}``. The pricing option is the product's stored one, so the package is
+    valid in every other respect.
+    """
+    kwargs = _ensure_request_defaults(ctx)
+    assert kwargs.get("packages"), "No packages in request to point at the product"
+    pricing = ctx["env"].get_one(PricingOption, tenant_id=ctx["tenant"].tenant_id, product_id=product_id)
+    assert pricing is not None, f"product {product_id!r} has no pricing option to buy it with"
+    kwargs["packages"][0].update(
+        product_id=product_id,
+        pricing_option_id=pricing_option_id(pricing),
+        format_option_refs=[
+            {
+                "scope": "publisher",
+                "publisher_domain": ctx["tenant"].virtual_host_name,
+                "format_option_id": option_id,
+            }
+        ],
+    )
+
+
 @given("end_time is before start_time")
 def given_end_before_start(ctx: dict) -> None:
     """Set end_time before start_time."""

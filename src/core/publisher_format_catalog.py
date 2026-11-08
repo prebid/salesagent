@@ -16,7 +16,9 @@ gives it authority "Publisher"; and ``core/placement.json`` says a seller's attr
 not grant the seller authority to mint IDs in that publisher's catalog namespace". So this
 seller publishes no ``formats[]`` (``src/core/signing/trust_root.py``), and a declaration
 naming the host this agent serves its own adagents.json at names a catalog that does not
-exist: no buyer can resolve it. The product and inventory-profile forms refuse one.
+exist: no buyer can resolve it. The product and inventory-profile forms refuse one, and
+:func:`src.core.database.repositories.product.offered_products` does not offer a product
+whose contract carries one.
 """
 
 from __future__ import annotations

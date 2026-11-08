@@ -39,6 +39,25 @@ Feature: BR-UC-002 A catalog holding a product buyers are not offered
     And the wire error details should include missing_product_ids "unoffered"
     And no media buy record should be persisted
 
+  # A format option naming the seller's own host as its publisher resolves in no catalog:
+  # publisher_domain names the publisher whose adagents.json formats[] declares the option
+  # (core/format-option-ref.json), and this agent publishes none. core/product.json
+  # format_options: an unresolved format-option reference "MUST fail closed". So the product
+  # is not offered, and a buy selecting that option is refused as for any unoffered product.
+  @T-UC-002-ext-agent-host-format-option @extension @error @requires_db
+  Scenario: a buy selecting a format option under the seller's own host is refused
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And the tenant also holds product "host_option" declaring format option "homepage_mrec" under the seller's own host
+    But a package references product "host_option" selecting format option "homepage_mrec" of the seller's own host
+    When the Buyer Agent sends the create_media_buy request
+    Then the response is compliant with the create_media_buy error spec
+    And the operation should fail
+    And the error code should be "PRODUCT_NOT_FOUND"
+    And the error recovery should be "correctable"
+    And the wire error details should include missing_product_ids "host_option"
+    And no media buy record should be persisted
+
   @T-UC-002-ext-unoffered-product-manual-approval @extension @error @requires_db
   Scenario: the unoffered product is not found when the tenant requires manual approval
     Given a valid create_media_buy request

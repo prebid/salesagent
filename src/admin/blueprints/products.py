@@ -25,6 +25,7 @@ from src.core.database.product_pricing import get_product_pricing_options
 from src.core.database.repositories.authorized_property import AuthorizedPropertyRepository
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.principal import PrincipalRepository
+from src.core.database.repositories.product import offer_refusal
 from src.core.format_resolver import linked_format_contract
 from src.core.format_satisfaction import refuse_outside_common_intersection
 from src.core.helpers.publisher_property_helpers import (
@@ -700,7 +701,9 @@ def list_products(tenant_id):
                         },
                     ),
                     "inventory_profile": inventory_profile_dict,
-                    "offered": bool(product.resolve_publisher_properties(verified_properties)),
+                    "not_offered_reason": offer_refusal(
+                        product, product.resolve_publisher_properties(verified_properties)
+                    ),
                     # Dynamic product fields
                     "is_dynamic": getattr(product, "is_dynamic", False),
                     "is_dynamic_variant": getattr(product, "is_dynamic_variant", False),

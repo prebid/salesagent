@@ -71,6 +71,28 @@ def given_unoffered_product(ctx: dict, product_id: str) -> None:
     _offer(ctx, product_id, [{"publisher_domain": "unbacked-publisher.example", "selection_type": "all"}])
 
 
+@given(
+    parsers.parse(
+        'the tenant also holds product "{product_id}" declaring format option "{option_id}" under the seller\'s own host'
+    )
+)
+def given_product_with_agent_host_option(ctx: dict, product_id: str, option_id: str) -> None:
+    """A product selling a verified publisher whose one format option names the agent host as its publisher.
+
+    The row the removed tenant catalog let a seller author: ``publisher_domain`` set to the
+    host this agent serves its adagents.json at (``Tenant.virtual_host_name``).
+    """
+    tenant = ctx["tenant"]
+    declaration = {
+        "format_kind": "image",
+        "format_option_id": option_id,
+        "publisher_domain": tenant.virtual_host_name,
+        "params": {"width": 300, "height": 250},
+    }
+    product = ProductFactory(tenant=tenant, product_id=product_id, format_ids=None, format_options=[declaration])
+    PricingOptionFactory(product=product)
+
+
 @given(parsers.parse('the seller offers product "{product_id}" naming publisher_properties {selectors}'))
 def given_product_naming_selectors(ctx: dict, product_id: str, selectors: str) -> None:
     """A product storing explicit selectors, the shape the admin product form writes."""
@@ -113,6 +135,20 @@ def given_operator_saved_profile(ctx: dict, profile_id: str, property_ids: str) 
 def then_product_announces(ctx: dict, product_id: str, expected: str) -> None:
     announced = wire_entry(ctx, "products", product_id=product_id)["publisher_properties"]
     assert announced == json.loads(expected), f"product {product_id!r} announced {announced!r}"
+
+
+@then("no product announces the seller's own host as a format option's publisher_domain")
+def then_no_agent_host_format_namespace(ctx: dict) -> None:
+    host = ctx["tenant"].virtual_host_name
+    products = wire_field(ctx, "products")
+    assert products, "the buyer received no products, so no format option was announced at all"
+    named = [
+        (product["product_id"], option.get("format_option_id"))
+        for product in products
+        for option in product.get("format_options") or []
+        if option.get("publisher_domain") == host
+    ]
+    assert named == [], f"format options announced under the seller's own host {host!r}: {named}"
 
 
 @then(parsers.parse('the buyer receives exactly the products "{product_ids}"'))

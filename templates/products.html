@@ -4,9 +4,9 @@
 
 {% block content %}
 {% macro not_offered_badge(product) %}
-{% if not product.offered %}
+{% if product.not_offered_reason %}
 <span class="badge" style="background: #dc3545; color: white;" data-not-offered="{{ product.product_id }}"
-      title="Buyers are not offered this product: it names no publisher with a verified authorized property. Add or verify its publisher under Authorized Properties.">Not offered to buyers</span>
+      title="Buyers are not offered this product: {{ product.not_offered_reason }}">Not offered to buyers</span>
 {% endif %}
 {% endmacro %}
 

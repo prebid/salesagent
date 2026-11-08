@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 
 from src.core.database.models import PricingOption, Product
 from src.core.format_satisfaction import refuse_outside_common_intersection
+from src.core.publisher_format_catalog import agent_host_refusal
 
 if TYPE_CHECKING:
     from src.core.helpers.publisher_property_helpers import SelectableProperty
@@ -50,16 +51,34 @@ def offered_products(
     offered = []
     for product in products:
         publisher_properties = product.resolve_publisher_properties(authorized_properties)
-        if publisher_properties:
+        refusal = offer_refusal(product, publisher_properties)
+        if refusal is None:
             offered.append(OfferedProduct(product, publisher_properties))
         else:
-            logger.warning(
-                "Product %s is not offered: its property selection names no publisher this seller holds a "
-                "verified authorized property of. Add and verify the publisher's properties under Authorized "
-                "Properties.",
-                product.product_id,
-            )
+            logger.warning("Product %s is not offered: %s", product.product_id, refusal)
     return offered
+
+
+def offer_refusal(product: Product, publisher_properties: list[dict]) -> str | None:
+    """Why buyers are not offered *product*, or ``None`` when they are.
+
+    *publisher_properties* is what :meth:`Product.resolve_publisher_properties` resolved for it.
+    A product is also withheld when a format option names the agent host as its publisher:
+    that option names a catalog no file publishes, so no buyer can resolve it, and
+    ``core/product.json`` ``format_options`` makes an unresolved reference "fail closed"
+    (``src/core/publisher_format_catalog.py``).
+    """
+    if not publisher_properties:
+        return (
+            "its property selection names no publisher this seller holds a verified authorized property of. "
+            "Add and verify the publisher's properties under Authorized Properties."
+        )
+    declarations = product.format_contract.format_options or ()
+    # The tenant is read only for a contract with a publisher-scoped option: a dynamic variant
+    # reaches here detached (#2291), and product-local declarations name no host to compare.
+    if not any(declaration.get("publisher_domain") for declaration in declarations):
+        return None
+    return agent_host_refusal(declarations, product.tenant.virtual_host_name)
 
 
 class ProductRepository:

@@ -172,3 +172,19 @@ Feature: A product names the publishers whose inventory it sells
     When the buyer requests products
     Then the buyer receives exactly the products "premium"
     And product "premium" announces publisher_properties [{"publisher_domain": "news.example", "property_tags": ["premium"], "selection_type": "by_tag"}, {"publisher_domain": "sports.example", "property_tags": ["premium"], "selection_type": "by_tag"}]
+
+  # A format option's publisher_domain names the publisher whose adagents.json formats[]
+  # declares it (AdCP 3.2.7 core/product-format-declaration.json publisher_domain;
+  # core/format-option-ref.json: the reference "resolves against the named publisher's
+  # adagents.json top-level formats[] catalog"). This agent publishes no formats[], so an
+  # option under its own host resolves nowhere, and core/product.json format_options says an
+  # unresolved format-option reference "MUST fail closed": the product is not offered.
+  # Alembic revision f9c29da38437 made every stored option under the agent host product-local;
+  # this grades a row that names it anyway.
+  @T-UC-GET-PRODUCTS-format-option-agent-host @publisher_domain_resolution @requires_db
+  Scenario: a product whose format option names the seller's own host as publisher is not offered
+    Given the seller offers product "news" naming publisher_properties [{"publisher_domain": "news.example", "selection_type": "all"}]
+    And the tenant also holds product "host_option" declaring format option "homepage_mrec" under the seller's own host
+    When the buyer requests products
+    Then no product announces the seller's own host as a format option's publisher_domain
+    And the buyer receives exactly the products "news"
