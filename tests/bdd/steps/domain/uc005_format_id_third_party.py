@@ -1,25 +1,23 @@
-"""UC-005 storyboard: third-party format_id (foreign agent_url) is an observation, not a failure.
+"""UC-005: a format_id filter naming a third-party agent's format is not answered with a local one.
 
 Scenario ``T-UC-005-storyboard-format-id-third-party-agent-out-of-scope``
 (@third-party-agent): when a product advertises a ``format_id`` whose ``agent_url``
-points at a creative agent OTHER than this seller, the seller cannot verify it
-locally. Per the ``list_formats`` storyboard step such a reference is OUT OF
-SCOPE — ``scope.equals=$agent_url`` with ``on_out_of_scope: warn`` — so the seller
-MUST NOT fabricate a local format entry to cover it, and an empty result is an
-observation, never a graded failure.
+points at a creative agent OTHER than this seller, the seller does not hold that format,
+and ``core/format-id.json`` names a format by both halves -- "Callers comparing two
+format-id values MUST canonicalize agent_url ... before treating two formats as the
+same". So a list_creative_formats filter naming it must not be answered with the seller's
+own same-id format.
 
 Wired to real production across a2a/mcp/rest (auto-parametrized; UC-005 →
 CreativeFormatsEnv). Falsifiability comes from the COLLISION setup: the seller's own
 catalog holds a format whose ``id`` matches the third-party reference but under the
 SELLER's ``agent_url``. A filter comparing ``id`` alone would return that local
-format as if it satisfied the third-party reference; the v3.1 ``(agent_url, id)``
-federation filter (``format_id_identity``) returns nothing, which is the correct
-observation. Both the production filter fix and the REST harness fix
-(``build_rest_body`` now transmits ``format_ids``) are required for this to hold on
-all three transports.
+format as if it satisfied the third-party reference; the ``(agent_url, id)``
+filter (``format_id_identity``) returns nothing. Both the production filter fix and the
+REST harness fix (``build_rest_body`` now transmits ``format_ids``) are required for
+this to hold on all three transports.
 
-@source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/compliance/source/protocols/media-buy/index.yaml step=list_formats
-(refs_resolve: match_keys [agent_url, id], scope.equals $agent_url, on_out_of_scope: warn)
+@source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format-id.json pointer=/properties/agent_url
 """
 
 from __future__ import annotations
@@ -95,17 +93,3 @@ def then_no_fabricated_local_entry(ctx: dict) -> None:
         f"seller substituted its own format {seller_local} for the third-party reference "
         f"{third_party}; the federation filter must match on (agent_url, id), not id alone"
     )
-
-
-@then("the verification result should be reported as an observation rather than a graded failure")
-def then_reported_as_observation(ctx: dict) -> None:
-    """An unresolvable foreign reference is a successful (empty) result, not an error envelope."""
-    assert ctx.get("error") is None, (
-        f"out-of-scope third-party reference raised an error instead of an observation: {ctx.get('error')!r}"
-    )
-    response = require_payload(ctx)
-    # The foreign reference resolves to nothing locally — that empty match is the
-    # observation (on_out_of_scope: warn), distinct from a graded failure/error.
-    third_party = format_id_identity(ctx["third_party_format_id"])
-    returned = {format_id_identity(f.format_id) for f in response.formats}
-    assert third_party not in returned

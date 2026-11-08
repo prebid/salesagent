@@ -1,0 +1,450 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>adcp-client-python open issues: what each one means for this seller</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #15181d; --muted: #5b6471; --rule: #dfe3e8;
+    --card: #f7f8fa; --code-bg: #f1f3f5;
+    --hit: #b3261e; --willhit: #a35200; --latent: #1f5f8b; --irrel: #5b6471;
+    --hit-bg: #fdecea; --willhit-bg: #fdf3e3; --latent-bg: #e8f1f8; --irrel-bg: #f1f3f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14171b; --fg: #e6e9ed; --muted: #9aa4b1; --rule: #2a2f36;
+      --card: #1b1f24; --code-bg: #22272e;
+      --hit: #ff8a80; --willhit: #ffbe6f; --latent: #7fc4ef; --irrel: #9aa4b1;
+      --hit-bg: #3a1d1b; --willhit-bg: #3a2c15; --latent-bg: #17313f; --irrel-bg: #22272e;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14171b; --fg: #e6e9ed; --muted: #9aa4b1; --rule: #2a2f36;
+    --card: #1b1f24; --code-bg: #22272e;
+    --hit: #ff8a80; --willhit: #ffbe6f; --latent: #7fc4ef; --irrel: #9aa4b1;
+    --hit-bg: #3a1d1b; --willhit-bg: #3a2c15; --latent-bg: #17313f; --irrel-bg: #22272e;
+  }
+  body {
+    background: var(--bg); color: var(--fg); margin: 0;
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 32px 20px 80px; }
+  h1 { font-size: 26px; line-height: 1.25; margin: 0 0 6px; letter-spacing: -0.01em; }
+  h2 { font-size: 19px; margin: 40px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--rule); }
+  h3 { font-size: 15px; margin: 24px 0 6px; }
+  p { margin: 0 0 12px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  code, kbd { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.88em;
+              background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+  pre { background: var(--code-bg); padding: 12px 14px; border-radius: 6px; overflow-x: auto; margin: 0 0 14px; }
+  pre code { background: none; padding: 0; }
+  .meta { background: var(--card); border: 1px solid var(--rule); border-radius: 8px; padding: 14px 16px; margin: 0 0 24px; }
+  .meta dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 0; }
+  .meta dt { color: var(--muted); }
+  .meta dd { margin: 0; }
+  .counts { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 22px; }
+  .count { flex: 1 1 180px; border: 1px solid var(--rule); border-radius: 8px; padding: 12px 14px; }
+  .count .n { font-size: 28px; font-weight: 600; line-height: 1; }
+  .count .l { font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); margin-top: 4px; }
+  .count.hit { background: var(--hit-bg); } .count.hit .n { color: var(--hit); }
+  .count.willhit { background: var(--willhit-bg); } .count.willhit .n { color: var(--willhit); }
+  .count.latent { background: var(--latent-bg); } .count.latent .n { color: var(--latent); }
+  .count.irrel { background: var(--irrel-bg); } .count.irrel .n { color: var(--irrel); }
+  .scroll { overflow-x: auto; margin: 0 0 20px; }
+  table { border-collapse: collapse; width: 100%; min-width: 900px; font-size: 13.5px; }
+  th, td { text-align: left; vertical-align: top; padding: 9px 10px; border-bottom: 1px solid var(--rule); }
+  th { font-size: 11.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  tbody tr:hover { background: var(--card); }
+  .b { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: 0.05em;
+       padding: 2px 7px; border-radius: 10px; white-space: nowrap; }
+  .b.hit { background: var(--hit-bg); color: var(--hit); }
+  .b.willhit { background: var(--willhit-bg); color: var(--willhit); }
+  .b.latent { background: var(--latent-bg); color: var(--latent); }
+  .b.irrel { background: var(--irrel-bg); color: var(--irrel); }
+  .ev { font-size: 11px; font-weight: 700; letter-spacing: 0.05em; color: var(--muted); white-space: nowrap; }
+  td.loc { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; }
+  .num { font-weight: 600; white-space: nowrap; }
+  a { color: inherit; }
+  .callout { border-left: 3px solid var(--hit); background: var(--hit-bg); padding: 12px 14px; border-radius: 0 6px 6px 0; margin: 0 0 18px; }
+  .callout.q { border-left-color: var(--latent); background: var(--latent-bg); }
+  ul, ol { margin: 0 0 12px; padding-left: 22px; }
+  li { margin-bottom: 5px; }
+  .small { font-size: 13px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>adcp-client-python open issues: what each one means for this seller</h1>
+<p class="sub">Forward-looking triage of all 24 open issues against the in-flight SDK&nbsp;9 integration. Written so a defect is read before it is rediscovered from a symptom.</p>
+
+<div class="meta">
+  <dl>
+    <dt>Pin measured</dt><dd><code>adcp==9.0.0b2+prs1435.1415.1447.1456</code> (AdCP spec 3.2.1, bundle key <code>3.2</code>), resolved from <code>pyproject.toml:10</code> and confirmed by <code>importlib.metadata.version("adcp")</code></dd>
+    <dt>Tree measured</dt><dd>worktree at <code>4eedcb1de</code>, branch <code>docs/sdk-issue-triage</code></dd>
+    <dt>Issue set</dt><dd>all 24 open issues on <code>adcontextprotocol/adcp-client-python</code>, full bodies read; closed issues read where an open one references them</dd>
+    <dt>Evidence rule</dt><dd>every HIT and WILL&nbsp;HIT carries an <span class="ev">EXECUTION</span> or <span class="ev">READING</span> marker. EXECUTION means a resolved annotation, a <code>model_validate</code> verdict or an imported value, not a top-level name or an issue quotation.</dd>
+    <dt>Scope</dt><dd>Read-and-report. No production or test code was changed.</dd>
+  </dl>
+</div>
+
+<div class="counts">
+  <div class="count hit"><div class="n">6</div><div class="l">Hit</div></div>
+  <div class="count willhit"><div class="n">3</div><div class="l">Will hit</div></div>
+  <div class="count latent"><div class="n">5</div><div class="l">Latent</div></div>
+  <div class="count irrel"><div class="n">10</div><div class="l">Irrelevant</div></div>
+</div>
+
+<div class="callout">
+  <strong>Finding 1 — our #1414 workaround has a hole, and #1359 is the hole.</strong> It closes the absent-key case and not the explicit-null case, because #1359's largest remaining cause puts an explicit <code>null</code> into <code>model_fields_set</code>. A <code>create_media_buy</code> whose single package carries <code>"budget": null</code> is <em>accepted</em> by our DTO, <code>get_total_budget()</code> returns <code>0</code>, and the pinned bundled schema calls the same document invalid in two places. That is the exact symptom #1414 was filed about, still reachable through a different spelling. <span class="ev">EXECUTION</span>
+</div>
+
+<div class="callout">
+  <strong>Finding 2 — the empty derivation is not dormant; it silently drops valid-looking formats and blames the wrong thing.</strong> <code>_KNOWN_ASSET_TYPES</code> is empty, so <em>every</em> asset type reads as unknown. A format whose only real defect is <code>requirements.codecs</code> being a string instead of a list is therefore dropped by <code>_validate_formats_tolerant</code> with the warning <em>"unsupported additive asset_type(s) ['video']"</em> — naming a first-class, fully modelled asset type. Separately, the SDK union grew an <code>_unknown</code> catch-all arm, so an unmodelled asset type no longer fails validation at all: the module's stated promise to <em>drop</em> such a format is inverted and it is now kept. Both measured end to end; see cross-cutting question&nbsp;2. <span class="ev">EXECUTION</span>
+</div>
+
+<h2>One row per issue</h2>
+<div class="scroll">
+<table>
+<thead><tr>
+  <th>#</th><th>Title</th><th>Bucket</th><th>Our file:line</th><th>Evidence</th><th>Action</th>
+</tr></thead>
+<tbody>
+
+<tr>
+  <td class="num">1414</td>
+  <td><code>anyOf</code> branch conditions discarded — only top-level <code>required</code> survives</td>
+  <td><span class="b hit">HIT</span></td>
+  <td class="loc">src/core/schemas/_base.py:2818–2898</td>
+  <td class="ev">EXECUTION</td>
+  <td>Extend <code>_check_anyof_branch_conditions</code> so an explicitly-null field does not count as sent for a branch test. Keep the issue open — the restated 80 lines are ours until the generator emits branch subschemas.</td>
+</tr>
+<tr>
+  <td class="num">1359</td>
+  <td>Bundled JSON Schema and generated model disagree about the same payload, both directions</td>
+  <td><span class="b hit">HIT</span></td>
+  <td class="loc">src/core/schemas/capability_declarations.py:795–808<br>src/core/creative_agent_registry.py:29<br>src/core/schemas/creative.py:15</td>
+  <td class="ev">EXECUTION</td>
+  <td>Three sub-causes reach us, two do not — see the detail below. Treat the explicit-null cause as a live request-path divergence, not a tolerance nicety.</td>
+</tr>
+<tr>
+  <td class="num">1448</td>
+  <td>Export the webhook key-purpose accept-set as a named constant</td>
+  <td><span class="b hit">HIT</span></td>
+  <td class="loc">tests/helpers/signing.py:1660<br>tests/integration/test_notification_proof_challenge.py:242</td>
+  <td class="ev">EXECUTION</td>
+  <td>Nothing to do locally until the constant exists; the restated literal is the known hole and the issue already carries our widening demonstration. Switch the two sites the day <code>WEBHOOK_ACCEPTED_ADCP_USES</code> lands.</td>
+</tr>
+<tr>
+  <td class="num">1214</td>
+  <td>Inbound verification accepts one expected <code>agent_url</code>, brand.json declares <code>agents[]</code></td>
+  <td><span class="b hit">HIT</span></td>
+  <td class="loc">src/core/signing/verifier.py:210<br>src/core/signing/verifier.py:718</td>
+  <td class="ev">EXECUTION</td>
+  <td>Live gap in the active signing lane; already tracked at prebid/salesagent#2276. Do not work around it per-URL — N verifications consume the nonce on the first attempt. Hold the 1:1 principal↔agent model until <code>VerifyOptions</code> takes a collection.</td>
+</tr>
+<tr>
+  <td class="num">1397</td>
+  <td>A tolerant canonical model subtypes a strict wire model while lacking one of its fields</td>
+  <td><span class="b hit">HIT</span></td>
+  <td class="loc">src/core/schemas/_base.py (GetProductsRequest DTO)</td>
+  <td class="ev">EXECUTION</td>
+  <td><strong>Our posted comment no longer reproduces on this pin.</strong> See the detail below, and relay it to the lane preparing the PR before it argues axis 1.</td>
+</tr>
+<tr>
+  <td class="num">1092</td>
+  <td><code>ReportingWebhook</code> cannot supply required <code>McpWebhookPayload.operation_id</code></td>
+  <td><span class="b hit">HIT</span></td>
+  <td class="loc">src/core/webhooks/delivery.py:180<br>src/core/tools/media_buy_create.py:2106<br>tests/bdd/steps/domain/uc004_delivery.py:805,840</td>
+  <td class="ev">EXECUTION</td>
+  <td>Resolved in our pin: <code>ReportingWebhook.model_fields</code> is <code>['url','token','authentication','reporting_frequency','requested_metrics','operation_id']</code>. We already thread it and grade the omitted case. Ask upstream to close.</td>
+</tr>
+
+<tr>
+  <td class="num">1404</td>
+  <td>Three hand-rolled copies of the bundled-schema resolution walk</td>
+  <td><span class="b willhit">WILL HIT</span></td>
+  <td class="loc">src/core/errors/codes.py:249–251<br>src/core/schemas/_pinned_fields.py:29–34</td>
+  <td class="ev">EXECUTION</td>
+  <td>We hold two more copies of the same walk, both packaged-layout-only and both running at import. Swap both to <code>get_named_schema_document</code>, which is importable on this pin and serves both documents we read.</td>
+</tr>
+<tr>
+  <td class="num">1362</td>
+  <td><code>$ref</code> into another file's <code>properties</code> generates a <code>RootModel</code> wrapper</td>
+  <td><span class="b willhit">WILL HIT</span></td>
+  <td class="loc">src/adapters/gam/managers/targeting.py:699,708,745,752<br>src/adapters/kevel.py:123,125<br>src/adapters/triton_digital.py:107,109<br>src/adapters/xandr.py:625,627</td>
+  <td class="ev">EXECUTION</td>
+  <td>The wrapper defect is <em>closed</em> on our pin — no RootModel is forced on us. What remains is 12 production <code>.root</code> reads now answering through a deprecation shim. Delete them before the shim goes.</td>
+</tr>
+<tr>
+  <td class="num">1409</td>
+  <td>Name union arms from their schema node instead of their position</td>
+  <td><span class="b willhit">WILL HIT</span></td>
+  <td class="loc">tests/factories/format.py:120 (docstring)<br>tests/bdd/steps/generic/given_config.py:110 (docstring)</td>
+  <td class="ev">EXECUTION</td>
+  <td>No code is keyed on a positional name — every derivation resolves the arms dynamically. Two docstrings name positions and one is <em>already wrong</em>. Delete the numbers; the rename itself needs no code change.</td>
+</tr>
+
+<tr>
+  <td class="num">1450</td>
+  <td><code>TargetingOverlaySupport</code> cannot hold <code>geo_places</code></td>
+  <td><span class="b latent">LATENT</span></td>
+  <td class="loc">src/core/tools/media_buy_update.py:238–241</td>
+  <td class="ev">EXECUTION</td>
+  <td>Two independent reasons it cannot bite: the declaration validates on our pin, and this seller advertises no <code>overlay_support</code> at all. Reachable the day we publish <code>Product.overlay_support</code>.</td>
+</tr>
+<tr>
+  <td class="num">1352</td>
+  <td><code>PgTaskRegistry.list</code> should paginate and filter in SQL</td>
+  <td><span class="b latent">LATENT</span></td>
+  <td class="loc">—</td>
+  <td class="ev">EXECUTION</td>
+  <td>We import no <code>adcp.decisioning</code>; our task listing is our own repositories. Reachable only if we adopt <code>PgTaskRegistry</code>.</td>
+</tr>
+<tr>
+  <td class="num">1267</td>
+  <td>Explain a failing signed request (signature-base reconstruction + per-check diagnostics)</td>
+  <td><span class="b latent">LATENT</span></td>
+  <td class="loc">src/core/signing/capture.py<br>tests/helpers/signing.py</td>
+  <td class="ev">READING</td>
+  <td>Nothing is broken; this would replace hand-rolled base reconstruction when a vector fails. Worth a +1 upstream, not work here.</td>
+</tr>
+<tr>
+  <td class="num">1418</td>
+  <td>Explain SDK&nbsp;9 beta installation and cold-start deadlines</td>
+  <td><span class="b latent">LATENT</span></td>
+  <td class="loc">pyproject.toml:191</td>
+  <td class="ev">READING</td>
+  <td>The install half is moot — we pin a wheel URL, not a PyPI prerelease. The cold-start half is buyer-side dispatch; reachable if a conformance client ever sets a sub-200&nbsp;ms first-call deadline.</td>
+</tr>
+<tr>
+  <td class="num">1383</td>
+  <td>A corrected PR body cannot clear <em>Validate conventional commit format</em></td>
+  <td><span class="b latent">LATENT</span></td>
+  <td class="loc">—</td>
+  <td class="ev">READING</td>
+  <td>Process cost, not code risk: several lanes file PRs on this SDK, and a body fix needs a push to retrigger. Push an empty commit rather than re-running jobs.</td>
+</tr>
+
+<tr><td class="num">1147</td><td>Reverse legacy facade for compact media-buy handlers</td><td><span class="b irrel">IRRELEVANT</span></td><td class="loc">—</td><td class="ev">EXECUTION</td><td>We implement the compact lifecycle only — 14 registry rows, no <code>list_products</code>/<code>buy_products</code> tool. (The <code>list_products</code> grep hits are Flask admin routes.)</td></tr>
+<tr><td class="num">1154</td><td>Complete negotiated buyer lifecycle parity</td><td><span class="b irrel">IRRELEVANT</span></td><td class="loc">—</td><td class="ev">READING</td><td>Buyer-side coordinator. We are the seller.</td></tr>
+<tr><td class="num">1258</td><td>Notify the adopter when a reporting issue opens, escalates or resolves</td><td><span class="b irrel">IRRELEVANT</span></td><td class="loc">—</td><td class="ev">EXECUTION</td><td>No <code>ReliableReportingService</code> anywhere in <code>src/</code>, <code>tests/</code> or <code>scripts/</code>.</td></tr>
+<tr><td class="num">1343</td><td>Durable seller-triggered repair for buyer-reported snapshot mismatches</td><td><span class="b irrel">IRRELEVANT</span></td><td class="loc">—</td><td class="ev">EXECUTION</td><td>Same: the SDK reporting service is not a surface we use.</td></tr>
+<tr><td class="num">1449</td><td>9.0 adoption follow-ups: ledger replacement, rollback, declaration-to-Format publishing</td><td><span class="b irrel">IRRELEVANT</span></td><td class="loc">—</td><td class="ev">EXECUTION</td><td>No <code>replace_empty_legacy_reporting</code> call and no owned ledger. Filed by a different adopter against its own migration.</td></tr>
+<tr><td class="num">1457</td><td>Reporting row storage: adopt the shared chunked layout</td><td><span class="b irrel">IRRELEVANT</span></td><td class="loc">—</td><td class="ev">EXECUTION</td><td>SDK-internal persistence stage for a subsystem we do not use.</td></tr>
+<tr><td class="num">1268</td><td>Local mock AdCP seller for buyer-side tests</td><td><span class="b irrel">IRRELEVANT</span></td><td class="loc">—</td><td class="ev">READING</td><td>Serves buyer-side implementers. We are the thing it mocks.</td></tr>
+<tr><td class="num">1381</td><td>Python 3.12 coverage step times out about a third of the time</td><td><span class="b irrel">IRRELEVANT</span></td><td class="loc">—</td><td class="ev">READING</td><td>The SDK's own CI budget.</td></tr>
+<tr><td class="num">1422</td><td>Preserve exact release-commit validation across subsequent main merges</td><td><span class="b irrel">IRRELEVANT</span></td><td class="loc">—</td><td class="ev">READING</td><td>The SDK's own release concurrency.</td></tr>
+<tr><td class="num">1441</td><td>Embedded Sales Agent asks for 9.0 GA</td><td><span class="b irrel">IRRELEVANT</span></td><td class="loc">—</td><td class="ev">READING</td><td>A different adopter's GA checklist; its four correctness items are all marked landed. Useful as a read, nothing to act on.</td></tr>
+
+</tbody>
+</table>
+</div>
+
+<h2>The six that matter, in full</h2>
+
+<h3>#1414 — our workaround has a hole, and #1359 is the hole</h3>
+<p>We restate the three <code>create-media-buy-request.json</code> <code>anyOf</code> branches by hand in <code>_check_anyof_branch_conditions</code> (<code>src/core/schemas/_base.py:2818–2898</code>), because the generated <code>_require_schema_required_group</code> tests only top-level field presence. The restatement uses <code>model_fields_set</code> as its requiredness test, and its docstring states the convention plainly: a supplied field counts even when explicitly null.</p>
+<p>That convention is what reopens the defect. Measured on the pin:</p>
+<pre><code>packages[0] = {"product_id": "prod_1", "pricing_option_id": "cpm_usd_fixed", "budget": null}
+
+our CreateMediaBuyRequest     -> ACCEPTED
+get_total_budget()            -> 0
+jsonschema Draft7 over
+  _schemas/3.2/media-buy/create-media-buy-request.json
+                              -> 2 errors ("None is not of type 'number'", plus the anyOf)
+
+same document with the "budget" key removed entirely
+our CreateMediaBuyRequest     -> refused: "matches no accepted shape"   (workaround live)</code></pre>
+<p>So the absent-key case is closed and the explicit-null case is open, on the same branch, through the same validator. Downstream the behaviour is exactly what #1414 describes: the budget floor receives <code>0</code> and answers <code>BUDGET_TOO_LOW</code> for a request that supplied no budget. The fix is one predicate — treat a field whose value is <code>None</code> as not-sent for a branch test wherever the schema's declared type excludes <code>null</code>.</p>
+
+<h3>#1359 — three sub-causes reach us, two do not</h3>
+<p>This is the general form of the recent surprises, so the useful answer is a per-cause split rather than a verdict on the issue.</p>
+<p><strong>Reaching us:</strong></p>
+<ul>
+  <li><strong>A <code>format: uri</code> field drops its sibling <code>pattern</code>.</strong> <code>get_adcp_capabilities_response.Identity.brand_json_url</code> resolves to <code>pydantic.networks.AnyUrl | None</code> with <code>metadata == []</code> — the schema's <code>pattern: "^https://"</code> is gone. We already re-enforce it by hand at <code>src/core/schemas/capability_declarations.py:795–808</code>, and the comment there records why. <span class="ev">EXECUTION</span></li>
+  <li><strong>Two tools expose only a <code>Legacy*</code> request model.</strong> <code>hasattr(adcp.types, "ListCreativeFormatsRequest")</code> and <code>hasattr(adcp.types, "BuildCreativeRequest")</code> are both <code>False</code>; the <code>Legacy*</code> spellings exist. We absorb this with an import alias in two places — <code>src/core/creative_agent_registry.py:29</code> and <code>src/core/schemas/creative.py:15</code>. Harmless today, misleading to read. <span class="ev">EXECUTION</span></li>
+  <li><strong>An optional field accepts explicit <code>null</code>.</strong> <code>GetProductsRequest.model_validate({"brief": None})</code> is accepted and <code>"brief" in model_fields_set</code> is <code>True</code>, though <code>brief</code> is a non-required <code>type: string</code> that the schema does not let be null. This is the largest remaining cause upstream (948 fields, 68 tools) and the one with a concrete local consequence — see #1414 above. <span class="ev">EXECUTION</span></li>
+</ul>
+<p><strong>Not reaching us:</strong></p>
+<ul>
+  <li><strong>Cause&nbsp;1, the bundled validator skipping <code>format: uri</code>.</strong> Our accepted-shape path never consults the bundled validator: <code>_announced_schema</code> (<code>src/core/schemas/_base.py:978–984</code>) is <code>dto.model_json_schema()</code>, so <code>deep_strip_to_schema</code> grades against the <em>model</em>. The only bundled-document reads under <code>src/</code> are two enum reads (see #1404). The two artifacts disagreeing therefore cannot split our request path. <span class="ev">READING of the call site, EXECUTION of the import graph</span></li>
+  <li><strong>Cause&nbsp;2, pydantic's lax coercion.</strong> Fixed in our pin. <code>ListAccountsRequest.model_validate({"sandbox": "yes"})</code> raises <code>bool_type</code> on both the SDK's model and ours. The issue's headline reproduction no longer reproduces at <code>9.0.0b2+prs1435.1415.1447.1456</code>. <span class="ev">EXECUTION</span></li>
+</ul>
+<p>Where we depend on the two artifacts agreeing: two enum reads (<code>enums/error-code.json</code> in <code>src/core/errors/codes.py</code>, <code>media-buy/get-media-buys-response.json</code> in <code>src/core/schemas/_pinned_fields.py</code>) and the BDD/storyboard conformance lane, which grades our model's verdict against the schema's. Nothing in the request path.</p>
+
+<h3>#1397 — our own posted measurement no longer holds on this pin</h3>
+<p>Our comment on the issue reports a second instance: <code>adcp.types.ProductFilters</code> resolving to the 34-field canonical class while <code>GetProductsRequest.model_fields["filters"].annotation</code> named the 35-field wire class, differing by <code>format_ids</code> — an audit hazard that already cost us one wrong conclusion. On the pin we actually hold:</p>
+<pre><code>adcp.types.ProductFilters                              canonical_creative       34 fields
+GetProductsRequest.model_fields["filters"].annotation   canonical_creative       34 fields
+same class?                                             True
+format_ids present in either?                           False
+
+src.core.schemas.GetProductsRequest filters annotation  domains.core.product_filters  35 fields
+format_ids present?                                     True</code></pre>
+<p>Axis&nbsp;1 of our comment — <em>the top-level export is not the class request models annotate</em> — does not reproduce here: one of the four PRs in our local segment narrowed the SDK's own request model to the canonical class. The asymmetry has moved: <strong>our DTO is now the wire-faithful one and the SDK's request model is not.</strong> That matters for the direction of the PR in flight, because the honest-lattice argument and the export-identity argument now have different standing. The subtyping question the issue actually asks is untouched by this.</p>
+<p>Also unverified and worth stating: <code>_DeliveryCreativeManifest</code>, the concrete case in the issue body, does not appear anywhere in our tree, so we have no second observation of the manifest instance.</p>
+
+<h3>#1404 — we are copies four and five</h3>
+<p>The issue counts three hand-rolled bundled-schema resolution walks inside the SDK. We hold two more:</p>
+<pre><code>src/core/errors/codes.py:249    bundle_key = resolve_bundle_key(get_adcp_spec_version())
+                        :250    schema = files("adcp") / "_schemas" / bundle_key / "enums" / "error-code.json"
+                        :251    document = json.loads(schema.read_text(encoding="utf-8"))
+
+src/core/schemas/_pinned_fields.py:29  @cache
+                                  :32  major_minor = ".".join(adcp.get_adcp_spec_version().split(".")[:2])
+                                  :34  return Path(adcp.__file__).parent / "_schemas" / major_minor</code></pre>
+<p>Both try the packaged layout and only the packaged layout, and both run at application import — <code>_load_published_codes</code> builds <code>CODE_TABLE</code>. The named trigger is in our own <code>pyproject.toml:181</code>: upstream gitignores <code>src/adcp/_schemas/</code>, so an SDK installed from a checkout rather than a wheel has no packaged bundle, and our import raises <code>FileNotFoundError</code> while the SDK's own public reader walks ancestors and succeeds.</p>
+<p><code>get_named_schema_document</code> is importable on this pin and serves both documents we need — <code>enums/error-code.json</code> (120 codes) and <code>enums/request-signing-error-code.json</code>. <span class="ev">EXECUTION</span> The stated reason for the copy in <code>codes.py</code>'s docstring is "public API only, not the SDK's private schema-root resolver"; that reason is satisfied by the public reader, so the copy has no remaining justification.</p>
+<p>One claim we could <em>not</em> confirm: <code>_pinned_fields.py</code>'s major-minor string slice agrees with <code>resolve_bundle_key</code> on every version in the bundle (<code>3.2.1</code>, <code>3.1.15</code>, <code>3.1.3</code>, <code>3.0.0</code> all map identically), so the two spellings are not diverging today. The risk is that the SDK's collapse rule stops being major-minor, which nothing in our tree would notice.</p>
+
+<h3>#1362 — the wrapper is gone; the unwrap is what remains</h3>
+<p>The issue's adopter-impact section names <code>src/adapters/gam/managers/targeting.py:698</code> reading <code>country.root</code>, and records a 27-field normalization step as our outstanding work. On this pin that work is unnecessary:</p>
+<pre><code>TargetingInput.geo_countries        list[targeting_input.GeoCountry] | None
+TargetingOverlay.geo_countries      list[targeting.GeoCountry] | None
+TargetingInput(geo_countries=["US","GB"]).geo_countries[0]   -> "US"      (indexable)
+list(...geo_countries)                                        -> [GeoCountry('US')]  (iterates elements)
+collection-wrapping RootModels reachable from TargetingInput  -> []
+GeoCountry is a RootModel?                                    -> False</code></pre>
+<p>10 of 37 shared fields still disagree with <code>TargetingOverlay</code>, and all ten disagree for reasons #1362 explicitly puts outside its acceptance criteria — element classes minted per module (<code>targeting_input.GeoCountry</code> vs <code>targeting.GeoCountry</code>) and <code>Sequence</code> vs <code>list</code> on the <code>*_exclude</code> fields. No RootModel is forced on us, so our standing rule against <code>.root</code> access is not under pressure from this issue.</p>
+<p>What <em>is</em> under pressure: 12 production <code>.root</code> reads across four adapters now resolve through a compatibility shim that warns <code>GeoCountry.root is deprecated; the value IS a str</code>. They work today and break when the shim goes. The sites are listed in the table row.</p>
+
+<h3>#1409 — nothing in code, two stale docstrings</h3>
+<p>Searching <code>src/</code>, <code>tests/</code> and <code>scripts/</code> for a numbered SDK class reference outside comments returns nothing: every site that needs a union arm resolves it from the annotation. <code>tests/factories/format.py:_find_inner_asset_class</code> correctly returns <code>Assets31</code>/<code>Assets32</code>/<code>Assets34</code> for image/video/text, and <code>make_asset_group("image","video")</code> builds a two-asset group. <span class="ev">EXECUTION</span></p>
+<p>Two docstrings name positions, and the drift has already started. <code>tests/bdd/steps/generic/given_config.py:110</code> says "Uses the AdCP <code>Assets18</code> repeatable_group structure"; on this pin <code>Assets18</code> is the <code>daast</code> arm of <code>Format.assets</code> and the repeatable-group arms are <code>Assets31</code> and up. <code>tests/factories/format.py:120</code> says "numbered class names (Assets18→Assets94, etc.) shift", which is true and already differently numbered. Both should name the arm by its <code>asset_type</code>, which is what the code keys on anyway.</p>
+
+<h2>Cross-cutting question 1 — is the codegen cluster one defect?</h2>
+<div class="callout q">
+<p><strong>Four of the five are one defect. #1397 is not.</strong></p>
+<p>The shared root cause: <strong>generation is lossy at the schema node, and the loss is silent.</strong> The generator renders each node into what pydantic can carry on a <em>field declaration</em> and discards every keyword that does not fit, leaving no record that anything was dropped. Each of the four is one class of discarded keyword:</p>
+<ul>
+  <li><strong>#1409</strong> drops the node's <em>identity</em> — <code>title</code>, the discriminator <code>const</code>, the <code>required</code> set — and substitutes its ordinal.</li>
+  <li><strong>#1362</strong> drops the node's <em>origin</em> — a pointer selects a type, and the generator treats it as a position needing a name, minting a wrapper per referencing site.</li>
+  <li><strong>#1414</strong> drops the node's <em>sibling conditions</em> — nested <code>required</code>, <code>allOf</code>, <code>not</code>, <code>const</code> inside an <code>anyOf</code> branch — keeping only the branch's top-level <code>required</code>.</li>
+  <li><strong>#1359</strong>'s codegen half drops <em>adjacent constraints</em>: a <code>pattern</code> beside a <code>format: uri</code>, and the absent/null distinction that <code>required</code> plus the declared type together express.</li>
+</ul>
+<p>The fix shape is also single, and #1409 is already written in it: <strong>express the keyword or refuse</strong>. <code>union_arm_names.py</code> raises <code>UnnameableArmError</code> rather than falling back to a number, which is exactly what #1414 asks for in its own words — "raise at import time or emit a documented gap, rather than silently narrow the contract". Asking upstream for one generator invariant ("no schema keyword is discarded without a recorded gap") reframes four issues as one, and gives a test that cannot go stale: enumerate the keywords in the bundle, subtract the keywords the generator can express, and require the remainder to be a declared, shrinking list.</p>
+<p><strong>#1397 is a different thing.</strong> It is about <code>canonical_creative.py</code>, which is hand-written, not generated: a deliberate API-design choice to make a tolerant boundary model subtype a strict wire model. No keyword is lost. Its second axis — the top-level export not being the annotated class — is a naming question that rhymes with #1409 without sharing its mechanism, and on our pin (above) it has already moved. Grouping it with the four would hand upstream a bundle it cannot act on as one.</p>
+<p><strong>The shape of dependence we should not be taking.</strong> All five issues are the generator losing structure; our exposure to them is a function of how <em>deep into a generated annotation</em> we read. That gradient is measurable, and it is sharper than "values are safe, annotations are exposed":</p>
+<pre><code>across the 1316 models reachable from src.core.schemas
+
+field.annotation retaining a TOP-LEVEL Annotated        2      pydantic strips it into .metadata
+field annotations carrying a NESTED Annotated        2867      pydantic does NOT strip these</code></pre>
+<p>So the top of <code>field.annotation</code> sits in a zone pydantic normalizes for us, and anything read <em>inside</em> it does not. That is the actual dividing line, and it explains both outcomes exactly: <code>_known_asset_types()</code> reads inside the annotation and was silently killed by a <code>Discriminator</code> the SDK added; the required-nullable rule at <code>_base.py:878</code> reads only the top level and is correct. <strong>Reading a generated annotation is not the error — reading through it is.</strong> Stated as "walk no annotations", the rule would condemn a correct site and still permit a <code>__pydantic_core_schema__</code> walk that is strictly more fragile.</p>
+</div>
+
+<h2>Cross-cutting question 2 — what makes the empty-derivation failure mode unconstructible?</h2>
+
+<p>Not a check. A guard over <code>_known_asset_types()</code> would catch this instance of an empty derivation and nothing adjacent to it, because the set of ways to write a traversal wrong is not finite. The question is what authority already knows each answer, and whether asking it removes the derivation or only shrinks it.</p>
+
+<h3>First: the proposed answer does not work, and measuring why is what finds the real bug</h3>
+<p>The suggested fix is a <code>TypeAdapter</code> over the discriminated union, on the ground that <em>"is this <code>asset_type</code> one the pin models?"</em> is a validation question the model answers by accepting or raising. The union has a catch-all arm, so it never raises:</p>
+<pre><code>Format.model_validate({... "assets": [{"asset_type": "hologram", ...}]})   -> SUCCEEDS
+  arm class: adcp.types.aliases.UnknownFormatAsset
+  asset_type value: "hologram"</code></pre>
+<p><span class="ev">EXECUTION</span> Accept-or-raise answers "accept" for every unmodelled asset type, so it cannot answer the question that was asked. The premise that pydantic already holds the mapping is nonetheless correct — it is reachable, and it is a trap:</p>
+<pre><code>Format.__pydantic_core_schema__ -> tagged-union, choices.keys() =
+  ['_unknown','audio','brief','catalog','css','daast','html','image','javascript',
+   'markdown','repeatable_group','text','url','vast','video','webhook']</code></pre>
+<p><span class="ev">EXECUTION</span> That is the vocabulary the hand-walk is trying to rediscover, and reading it would be a <em>deeper</em> structure read — into a private dunder, still needing <code>_unknown</code> subtracted by hand. It is the route that looks like the fix and is the same class of dependence.</p>
+<p>The form that works is narrower than either: ask the <strong>validated instance</strong> which arm it landed in.</p>
+<pre><code>isinstance(asset, UnknownFormatAsset)      asset_type=image  -> False
+                                           asset_type=video  -> False
+                                           asset_type=hologram -> True</code></pre>
+<p><span class="ev">EXECUTION</span> <code>UnknownFormatAsset</code> is importable by name from <code>adcp.types.aliases</code>, so a rename is an <code>ImportError</code> at import, not a set that quietly empties. There is no derived vocabulary, nothing to traverse, and no <code>Discriminator</code> the SDK can add next release that changes the answer.</p>
+
+<div class="callout">
+<p><strong>And the deletion is larger than the derived set, because the branch it feeds is already dead.</strong> <code>_validate_formats_tolerant</code> (<code>src/core/creative_agent_registry.py:114–146</code>) only consults the asset-type machinery inside <code>except ValidationError</code>. An unknown <code>asset_type</code> no longer raises, so that branch is unreachable for the thing it was written for. What it <em>is</em> still reachable by is any other validation failure — and there the empty set is actively harmful. Measured end to end:</p>
+<pre><code>format with ONE real defect: assets[0].requirements.codecs is a str, must be a list
+
+Format.model_validate(doc)                    -> refused at assets.0.video.requirements.codecs
+_KNOWN_ASSET_TYPES                            -> set()
+_unknown_asset_types(doc)                     -> {'video'}          &lt;- because the set is empty
+_is_purely_additive_asset_type(doc, {'video'}) -> True              &lt;- substituting "image" hides it
+_validate_formats_tolerant([doc], log)        -> 0 formats returned
+
+WARNING  Skipped 1 creative format(s) using unsupported additive asset_type(s) ['video']
+         (not modeled by the pinned adcp schema); returning the 0 compatible format(s).</code></pre>
+<p><span class="ev">EXECUTION</span> A format whose only defect is a mistyped video field is <strong>silently dropped</strong>, and the warning blames <code>video</code> — a first-class, fully modelled asset type. The function exists so that <em>"any other ValidationError still fails LOUD so real contract breakage is not masked"</em>; the empty set inverts it into a universal masker. The mechanism is that both asset arms carry <code>extra="allow"</code> and differ only in their <code>requirements</code> sub-model, so substituting <code>"image"</code> turns the 12 video-only fields into permitted extras and the defect disappears.</p>
+<p>In the other direction the module's stated promise is inverted too. Its docstring says an unrecognized additive <code>asset_type</code> is <em>"DROPPED (never mis-represented — we never model a creative we cannot fully understand)"</em>. Today it is <strong>kept</strong>, carrying an <code>UnknownFormatAsset</code> arm. Nothing of ours decided that; the SDK's union grew a catch-all arm and our drop path went dark.</p>
+</div>
+
+<h3>The four sites, and what already knows the answer</h3>
+<div class="scroll">
+<table>
+<thead><tr><th>Site</th><th>What it derives</th><th>Authority that already knows</th><th>Removes or shrinks</th></tr></thead>
+<tbody>
+<tr>
+  <td class="loc">src/core/creative_agent_registry.py:62–77</td>
+  <td>the <code>asset_type</code> vocabulary the pin models</td>
+  <td>the validated instance's arm class — <code>isinstance(asset, UnknownFormatAsset)</code></td>
+  <td><strong>Removes entirely</strong>, and takes <code>_unknown_asset_types</code>, <code>_is_purely_additive_asset_type</code> and the <code>except</code> branch with it</td>
+</tr>
+<tr>
+  <td class="loc">src/core/tools/creatives/listing.py:290</td>
+  <td>the wire fields a buyer's <code>fields</code> list can name</td>
+  <td>the generated enum itself — 20 members, importable by name; or <code>model_json_schema()</code>, which returns the same 20 values without naming the class</td>
+  <td><strong>Shrinks.</strong> The set is the answer, so it stays; the traversal goes</td>
+</tr>
+<tr>
+  <td class="loc">src/core/schemas/__init__.py:49–56</td>
+  <td>the models still needing <code>model_rebuild()</code></td>
+  <td><code>__pydantic_complete__</code></td>
+  <td><strong>Different failure mode.</strong> Not in scope — see below</td>
+</tr>
+<tr>
+  <td class="loc">src/core/schemas/_base.py:878</td>
+  <td>required fields whose value may be <code>null</code></td>
+  <td><code>model_json_schema()</code> — reproduces the identical 6 fields</td>
+  <td><strong>Replaceable, and should not be replaced</strong> — see below</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+<h3>Site 2 — a real tension worth naming</h3>
+<p>The enum is reachable two ways, and the obvious one is compromised by #1409. Its class name is <code>Field1</code> — a positional codegen name, exactly the kind #1409 proposes to rename. Importing it by name trades a silent traversal for a loud <code>ImportError</code>, which is an improvement, but it couples us to a name upstream has already said will change. The announced-schema route takes neither dependence:</p>
+<pre><code>ListCreativesRequest.model_json_schema()  -> fields enum: 20 values
+                                             ['creative_id','name','format_id','format_kind', ...]</code></pre>
+<p><span class="ev">EXECUTION</span> That reads the model's own published contract rather than its Python type graph, so it is immune to arm naming, to pointer wrappers, and to <code>Discriminator</code> insertion — the #1409 / #1362 / #1414 family in one step. It costs a small <code>$ref</code> resolution. For this site that is the right trade, because the answer genuinely is a set and the set has to come from somewhere.</p>
+
+<h3>Site 4 — the honest case where asking the authority is worse</h3>
+<p>This is the site the question is most interesting about, and the answer is not the tidy one. The structural read is <em>correct here</em>, and both alternative authorities are worse.</p>
+<p><strong>Validation cannot answer it.</strong> <code>TypeAdapter(ann).validate_python(None)</code> over the same 1316 models produces 47 false positives, every one a bare <code>typing.Any</code>:</p>
+<pre><code>required + nullable, found by the current structural rule       6
+the rule's apparent "misses" under validation                  48
+  ... of which bare typing.Any                                 47
+  ... of which a RootModel TypeVar                              1
+  ... genuine misses                                            0</code></pre>
+<p><span class="ev">EXECUTION</span> <strong>What the authority does not expose:</strong> pydantic's validator conflates <em>"the schema declares this nullable"</em> with <em>"the type is unconstrained"</em>. <code>TypeAdapter(Any).validate_python(None)</code> succeeds, and no runtime API distinguishes the two, because at validation time there is nothing to distinguish — both accept <code>None</code>. The JSON Schema fact the wire serializer needs is a <em>declaration</em>, and a declaration is only legible in the declaration.</p>
+<p><strong>The announced schema can answer it, and gains nothing.</strong> It does draw the distinction (<code>{"anyOf":[{"type":"string"},{"type":"null"}]}</code> versus <code>{}</code>), and over the 1316 models it returns exactly the same six fields — <code>CreateMediaBuyResponse1.confirmed_at</code>, <code>CreateMediaBuySuccess.confirmed_at</code>, <code>DiscriminatorItem.value</code>, <code>GetMediaBuysMediaBuy.confirmed_at</code>, <code>MediaBuy.confirmed_at</code>, <code>ReportingRevision.data_through</code> — with no asymmetry in either direction. <span class="ev">EXECUTION</span> But reaching them needs a <code>$ref</code>/<code>anyOf</code> resolver, which is the "150 lines of <code>$ref</code> / <code>allOf</code> / JSON-pointer walking" the comment at <code>_base.py:862–874</code> records as having been deleted in favour of this rule. Reintroducing it would restore a pointer walk to return an identical answer.</p>
+<p>So the site stays as it is, for a reason that is now measured rather than asserted: it reads the <em>top</em> of <code>field.annotation</code>, which is the zone pydantic normalizes (2 of 1316 retain an <code>Annotated</code> there), so it is structurally outside the failure mode this question is about. The empty-derivation mode needs a traversal, and a single <code>get_args</code> at a normalized top level is not one.</p>
+
+<h3>Site 3 — out of scope, and why that is the right answer rather than a dodge</h3>
+<p>The model-rebuild closure walks annotations, so it looks like a fourth instance. Its failure mode is not silent: a model the closure misses raises <code>'MockValSer' object cannot be converted to 'SchemaSerializer'</code> on its first dump. An empty worklist does not produce a wrong answer quietly — it produces a loud one at the first serialization. The authority that would replace the walk is <code>__pydantic_complete__</code>, and after import exactly one model in our namespace reports incomplete (<code>BaseModel</code> itself, re-exported and abstract). <span class="ev">EXECUTION</span></p>
+<p>Not measured, and stated rather than smoothed: whether iterating <code>__pydantic_complete__</code> over our 257 declared models would reach everything the annotation walk reaches. The walk touches 1316 models, so the large majority are library leaves, and the comment's account of the bug is that those leaves are the ones needing the explicit rebuild. Isolating that would mean unwinding an import that has already run.</p>
+
+<h3>So: is anything only observable rather than structurally enforceable?</h3>
+<p>Yes, one thing, and it is not any of the four sites.</p>
+<p>Site 1's architecture makes the empty-derivation mode unconstructible — there is no derived set, and <code>isinstance</code> against an imported arm class either resolves or fails at import. What it does <em>not</em> make unconstructible is the SDK silently changing what validation means. The <code>_unknown</code> arm turned a raising path into an accepting one, and no shape of ours could have refused that: our code was correct before and after, and the behaviour inverted underneath it. That is a property of the dependency, not of our code, and the only thing that surfaces it is reading the diff of what the union admits.</p>
+<p>We are not reaching for a check there. The honest conclusion is that the tolerant-ingestion <em>policy</em> — "drop a format we cannot fully model" — cannot be implemented against a union that models everything. Either the policy changes to "keep it, and mark the unmodelled arms", which the SDK now implements for us and which the <code>isinstance</code> read expresses directly, or the policy is wrong and should be deleted along with the code. Both are design decisions, not detections, and that is the deliverable here: <strong>stop deriving the vocabulary, ask the arm, and decide which policy we actually want.</strong></p>
+
+
+<h2>What could not be verified</h2>
+<ul>
+  <li><strong>#1397's concrete case.</strong> <code>_DeliveryCreativeManifest</code> and <code>revalidate_instances</code> appear nowhere in our tree, so we have no local observation of the manifest instance the issue is actually about — only of the <code>ProductFilters</code> instance we reported ourselves.</li>
+  <li><strong>#1404's bundle-key risk.</strong> The <code>_pinned_fields.py</code> string slice and <code>resolve_bundle_key</code> agree on all four versions present in the bundle, so the divergence is possible and not current. Stated as latent rather than measured.</li>
+  <li><strong>#1418's cold-start numbers.</strong> The 127–204&nbsp;ms cold versus 0.001&nbsp;ms warm figures are the reporter's; not reproduced here, and not reproducible from the seller side.</li>
+  <li><strong>#1414's 42/14/12 blast radius.</strong> Taken from the issue. We verified only that our one exposed model is <code>CreateMediaBuyRequest</code> and that the workaround is live for the absent-key case; the other 11 models were not re-counted on our local-segment pin.</li>
+  <li><strong>The <code>.root</code> deprecation horizon.</strong> The shim warns today. Whether it is removed in 9.0 GA or later is not stated in any open issue we read, so the 12 call sites have no dated deadline.</li>
+  <li><strong>Whether <code>__pydantic_complete__</code> alone would replace the rebuild closure.</strong> The walk touches 1316 models against our 257 declared ones, so most are library leaves, and the comment's account of the bug says those leaves are what need the explicit rebuild. Confirming it would mean unwinding an import that has already run. Stated as unmeasured rather than assumed either way.</li>
+  <li><strong>When the <code>_unknown</code> arm was added.</strong> We measured that it absorbs unmodelled asset types on this pin, not which SDK release introduced it, so we cannot say how long our drop path has been dark. A delta needs two measurements and we took one.</li>
+  <li><strong>Whether the false-drop has occurred in production.</strong> The path is reachable and reproduced locally. We did not search logs for the warning, so its real-world frequency is unknown.</li>
+</ul>
+
+<p class="small">Every measurement above was taken in a dedicated worktree against the pin named at the top. Numbers are evidence for that pin and that tree only; a different local segment of the SDK can move several of them, as #1397 and #1359 both demonstrate.</p>
+
+</div>
+</body>
+</html>

@@ -6,7 +6,7 @@ the body once, optionally signs those exact bytes, and transmits those exact
 bytes via ``content=`` through :mod:`src.core.security.outbound_http`. No
 webhook sender may reach ``json=`` on the egress seam.
 
-Spec grounding: pinned AdCP 3.1.1,
+Spec grounding: pinned AdCP,
 ``docs/building/by-layer/L3/webhooks.mdx:404-418`` — the legacy
 HMAC-SHA256 fallback signs ``{unix_timestamp}.{raw_body_bytes}`` and requires
 ``X-ADCP-Signature: sha256=<hex digest>`` / ``X-ADCP-Timestamp: <unix
@@ -16,7 +16,7 @@ confirming the spec reading, not the authority.
 
 Three authentication arms, one match (:func:`_headers_for`): legacy HMAC-SHA256,
 Bearer, and — selected by the ABSENCE of an ``authentication`` block, which is the
-pinned schema's own selector (``docs/building/by-layer/L1/security.mdx`` @ v3.1.1
+pinned schema's own selector (``docs/building/by-layer/L1/security.mdx``
 :1424) — the RFC 9421 webhook-signing profile. The 9421 arm does NOT get its own
 HTTP client: it is applied as ``send``/``asend``'s ``sign=`` callback, invoked once
 per attempt over ``request.content``. That is what keeps a signed delivery inside
@@ -31,7 +31,7 @@ Placed beside :mod:`outbound_http` rather than in ``src/services/``: this is
 egress policy (what bytes represent a payload, and how those bytes are
 authenticated), not business logic.
 
-Signer-side duplicate-object-key MUST (salesagent-47n9.19; pinned AdCP 3.1.1,
+Signer-side duplicate-object-key MUST (salesagent-47n9.19; pinned AdCP,
 ``docs/building/by-layer/L1/security.mdx`` §Duplicate object keys):
 signers MUST reject duplicate-key input before signing. ``prepare_signed_request``
 takes ``payload: dict[str, Any]`` — a Python ``dict`` cannot represent a
@@ -249,7 +249,7 @@ def prepare_signed_request(
 #: preference: :func:`prepare_signed_request` ``setdefault``\\ s exactly this value,
 #: and a caller that supplied any other spelling would ship a signature covering a
 #: header that never left, which a conformant verifier rejects with
-#: ``webhook_signature_components_incomplete`` (security.mdx @ v3.1.1 :1476).
+#: ``webhook_signature_components_incomplete`` (security.mdx :1476).
 _SIGNABLE_CONTENT_TYPE = "application/json"
 
 
@@ -288,7 +288,7 @@ def _headers_for(
     """Turn a validated block into (headers, HMAC secret, per-attempt signer). Matched ONCE.
 
     Three arms, one match, and exactly one of the three outputs is ever non-empty —
-    a delivery is authenticated ONE way (security.mdx @ v3.1.1 :1425 forbids
+    a delivery is authenticated ONE way (security.mdx :1425 forbids
     "signed both ways"), and spelling all three as one return is what makes a
     two-armed delivery unconstructible rather than merely discouraged.
 
@@ -298,7 +298,7 @@ def _headers_for(
       nothing and cost a second serialization.
     * ``Bearer`` -> an ``Authorization`` header, no body signature at all.
     * **No ``authentication`` block at all** -> the RFC 9421 arm. Absence is the
-      pinned schema's own selector for the 9421 profile (security.mdx @ v3.1.1 :1424),
+      pinned schema's own selector for the 9421 profile (security.mdx :1424),
       which is why this arm is keyed on ``auth is None`` and not on an enum member:
       ``AuthenticationScheme`` has exactly two members, ``Bearer`` and ``HMAC-SHA256``,
       and neither of them is 9421. The seam returns ``signer.build_auth_headers``
@@ -352,7 +352,7 @@ _HMAC_PROBE_CREDENTIAL = "x" * 32
 def legacy_hmac_fallback_supported() -> bool:
     """Whether this agent falls back to HMAC-SHA256 — ``webhook_signing.legacy_hmac_fallback``.
 
-    Pinned AdCP 3.1.1 defines the field as whether this agent falls back to HMAC-SHA256
+    Pinned defines the field as whether this agent falls back to HMAC-SHA256
     on the legacy ``push_notification_config.authentication`` path. The SDK model
     DEFAULTS it to false, which for this deployment would be a FALSE declaration:
     :func:`_headers_for` answers an ``HMAC-SHA256`` registration by handing the stored

@@ -46,7 +46,7 @@ import logging
 from typing import Any
 
 import pytest
-from adcp.types import AccountReference
+from adcp.types import AccountReferenceById
 
 from tests.helpers.log_capture import capture_logs
 from tests.integration.test_creative_v3 import (
@@ -131,7 +131,7 @@ def _dispatched_error_code(headers: dict[str, str], *, key: str) -> str | None:
         _sync_creatives(
             creatives=[_make_creative_dict(creative_id="c_cred_log")],
             idempotency_key=key,
-            account=AccountReference(root={"account_id": ACCOUNT_ID}),
+            account=AccountReferenceById(account_id=ACCOUNT_ID),
             push_notification_config=_push_config_with_authentication(),
             headers=headers,
         )

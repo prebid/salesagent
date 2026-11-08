@@ -18,14 +18,14 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
-from adcp.types.generated_poc.creative.sync_creatives_async_response_input_required import (  # TODO: no stable alias in adcp.types
+from adcp.types.domains.creative.sync_creatives_async_response_input_required import (  # TODO: no stable alias in adcp.types
     Reason,
     SyncCreativesInputRequired,
 )
-from adcp.types.generated_poc.creative.sync_creatives_async_response_submitted import (  # TODO: no stable alias in adcp.types
+from adcp.types.domains.creative.sync_creatives_async_response_submitted import (  # TODO: no stable alias in adcp.types
     SyncCreativesSubmitted,
 )
-from adcp.types.generated_poc.creative.sync_creatives_async_response_working import (  # TODO: no stable alias in adcp.types
+from adcp.types.domains.creative.sync_creatives_async_response_working import (  # TODO: no stable alias in adcp.types
     SyncCreativesWorking,
 )
 from sqlalchemy import select
@@ -33,9 +33,15 @@ from sqlalchemy import select
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
 from tests.harness import CreativeSyncEnv
-from tests.helpers.creative_test_helpers import creative_payload
+from tests.helpers.creative_test_helpers import DEFAULT_FORMAT_REFERENCE, creative_payload
 
-DEFAULT_AGENT_URL = "https://creative.test.example.com"
+#: The committed capture's own reference -- the only ``(agent_url, id)`` pair that
+#: resolves through production's two routes (``find_format``'s pair match and
+#: ``is_operator_agent``'s no-dial branch). It replaces a local
+#: ``"https://creative.test.example.com"`` / ``"display_300x250"`` pair, which named a
+#: format no agent serves at an agent no capture carries and only ever worked because
+#: the registry was a stand-in (salesagent-6xtxb).
+DEFAULT_AGENT_URL = DEFAULT_FORMAT_REFERENCE["agent_url"]
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -46,7 +52,7 @@ def _creative(**overrides) -> dict:
         **{
             "creative_id": "c_async_1",
             "name": "Async Lifecycle Test",
-            "format_id": {"id": "display_300x250", "agent_url": DEFAULT_AGENT_URL},
+            "format_id": dict(DEFAULT_FORMAT_REFERENCE),
             **overrides,
         }
     )

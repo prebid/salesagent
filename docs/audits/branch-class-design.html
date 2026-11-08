@@ -1,0 +1,695 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Branch-Class Design</title>
+<style>
+:root {
+  --bg: #ffffff; --fg: #1a1d21; --muted: #5a6472; --accent: #0b5fa5;
+  --card: #f5f7fa; --border: #d8dee6; --code-bg: #eef1f5; --code-fg: #24313f;
+  --red: #a4262c; --green: #0f6b3a; --th: #e8edf3;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #15181c; --fg: #d8dde3; --muted: #8b95a1; --accent: #5aa3dd;
+    --card: #1d2127; --border: #333a44; --code-bg: #20252c; --code-fg: #c9d4e0;
+    --red: #e07a80; --green: #5fc48a; --th: #242a32;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #15181c; --fg: #d8dde3; --muted: #8b95a1; --accent: #5aa3dd;
+  --card: #1d2127; --border: #333a44; --code-bg: #20252c; --code-fg: #c9d4e0;
+  --red: #e07a80; --green: #5fc48a; --th: #242a32;
+}
+body { background: var(--bg); color: var(--fg); font: 15px/1.55 -apple-system, "Segoe UI", Roboto, sans-serif;
+       max-width: 70rem; margin: 0 auto; padding: 2rem 1.5rem 5rem; }
+h1 { font-size: 1.7rem; line-height: 1.25; margin: 0 0 .4rem; }
+h2 { font-size: 1.25rem; margin: 2.6rem 0 .7rem; border-bottom: 1px solid var(--border); padding-bottom: .3rem; }
+h3 { font-size: 1.02rem; margin: 1.8rem 0 .5rem; }
+p, li { max-width: 62rem; }
+.meta { color: var(--muted); font-size: .88rem; margin-bottom: 1.6rem; }
+code { background: var(--code-bg); color: var(--code-fg); padding: .08rem .3rem; border-radius: 3px;
+       font: .86em/1.5 "SF Mono", ui-monospace, Menlo, Consolas, monospace; }
+pre { background: var(--code-bg); color: var(--code-fg); padding: .9rem 1rem; border-radius: 6px;
+      overflow-x: auto; font-size: .82rem; line-height: 1.5; }
+pre code { background: none; padding: 0; }
+table { border-collapse: collapse; margin: 1rem 0; font-size: .88rem; width: 100%; }
+.tablewrap { overflow-x: auto; }
+th, td { border: 1px solid var(--border); padding: .45rem .6rem; text-align: left; vertical-align: top; }
+th { background: var(--th); }
+.lead { background: var(--card); border: 1px solid var(--border); border-left: 4px solid var(--accent);
+        border-radius: 6px; padding: .9rem 1.1rem; margin: 1.2rem 0; }
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+.good { color: var(--green); font-weight: 600; }
+.bad { color: var(--red); font-weight: 600; }
+.note { color: var(--muted); font-size: .88rem; }
+caption { caption-side: top; text-align: left; color: var(--muted); font-size: .85rem; padding-bottom: .3rem; }
+</style>
+</head>
+<body>
+
+<h1>One class per schema branch: request generation in the adcp SDK</h1>
+<p class="meta">
+Solution design &middot; <code>adcp-client-python</code> at 9.0.0b2 &middot; bundle <code>schemas/cache/3.2</code>
+(1,509 non-bundled files) &middot; measured in a fresh clone at <code>00720022b</code>
+(branch <code>fix/anyof-branch-conditions</code>; upstream main <code>0c7e8b86d</code>) &middot;
+supersedes the constraint-compiler design (<code>codegen-solution-design.html</code>), whose census this reuses
+and re-derives. Terminology: a schema&rsquo;s <code>anyOf</code>/<code>oneOf</code> members are called
+<strong>branches</strong> throughout.
+</p>
+
+<div class="lead">
+The generator renders a response root&rsquo;s branches as one class each and a union
+(<code>CreateMediaBuyResponse = CreateMediaBuyResponse1 | 2 | 3</code>), but flattens a request root into
+one class &mdash; <code>CreateMediaBuyRequest</code>: 31 fields, every branch-discriminating field optional &mdash;
+and then bolts on a validator that reads only each branch&rsquo;s <code>required</code> key and discards the rest.
+The flattening is what creates the validator&rsquo;s job. This design deletes the job: every flat-root
+combinator schema is emitted as one class per branch plus a union alias, so the branch content stops
+being a rule and becomes a type. Measured over the whole affected population:
+<strong>all 247 branch-level keyword occurrences dissolve into types; zero survive as runtime checks.</strong>
+What survives as checks is the root conjuncts <em>beside</em> the combinator (41 occurrences), and those
+keep the constraint compiler &mdash; shrunk to that jurisdiction, with the closure rule unchanged:
+compiled, classified by a named rule, or <code>UnexpressibleKeywordError</code>. No skip lane, no ledger.
+The size of the change is not an input to any choice in this document: the shape that is correct against
+the schema wins, and consumer-facing consequences are documented (&sect;5) so adopters can migrate, never
+weighed as counter-arguments.
+</div>
+
+<h2>1&nbsp;&middot;&nbsp;The affected population, measured</h2>
+
+<p>250 non-bundled files carry a root <code>anyOf</code> (58) or <code>oneOf</code> (192). Of these, 55 roots
+have standalone-type branches (<code>$ref</code> / scalar) that the generator already renders as real unions;
+they are outside the defect. The defect population is the flat-root overlay schemas:
+<strong>42 generated modules carry the bolted validator today</strong>
+(<code>grep -rl _require_schema_required_group src/adcp/types/domains/</code>), plus
+<code>media-buy/buy-products-request.json</code>, which the validator pass skips because its second branch
+has no <code>required</code> key &mdash; its root combinator is enforced by <em>nothing</em>. 43 schemas:</p>
+
+<div class="tablewrap"><table>
+<tr><th>Kind</th><th class="num">Schemas</th><th>Members</th></tr>
+<tr><td>Request roots</td><td class="num">12</td><td><code>create-media-buy</code>, <code>control-media-buy</code>, <code>buy-products</code>, <code>request-proposals</code>, <code>sync-reporting-receipts</code>, <code>sync-creatives</code>, <code>get-creative-delivery</code>, <code>get-plan-audit-logs</code>, <code>get-geo-place-resolution</code>, <code>create-content-standards</code>, <code>verify-brand-claim</code>, <code>si-send-message</code></td></tr>
+<tr><td>Response roots that got the flat validator instead of branch classes</td><td class="num">4</td><td><code>list-account-changes-response</code>, <code>search-brands-response</code>, <code>get-reporting-status-response</code>, <code>webhook-challenge-response</code></td></tr>
+<tr><td>Shared objects nested inside requests (and responses)</td><td class="num">27</td><td><code>frequency-cap</code>, <code>package-control</code>, <code>creative-asset</code>, <code>creative-manifest</code>, <code>product</code>, <code>budget-range</code>, <code>outcome-target</code>, <code>placement</code>, <code>user-match</code>, &hellip;</td></tr>
+</table></div>
+
+<p>The shared objects are as much &ldquo;request shape&rdquo; as the request roots: a
+<code>PackageControl</code> arrives inside <code>control_media_buy</code>, a <code>FrequencyCap</code> inside
+<code>create_media_buy</code>. The lane therefore covers all 43, not the 12 &mdash; one emitter rule for every
+flat-root combinator schema, requests, stragglers and nested objects alike. The 22 response modules the
+existing per-branch emitter (<code>restore_response_variant_aliases</code>,
+<code>post_generate_fixes.py:4939</code>) already covers are re-emitted through the same unified code in the
+landing series (&sect;7), which is what deletes the second partial reader.</p>
+
+<h2>2&nbsp;&middot;&nbsp;The census: what dissolves, what survives</h2>
+
+<p>Every keyword occurrence inside every branch of the 43 schemas was walked and classified
+(census script run against the pinned bundle; totals re-derived, not copied from the superseded design).
+<strong>124 branches, 247 branch-level keyword occurrences</strong> (annotation keys &mdash;
+<code>title</code>, <code>description</code>, <code>$comment</code>, <code>x-*</code> &mdash; excluded):</p>
+
+<div class="tablewrap"><table>
+<caption>Branch-level keyword content, by what it becomes on a branch class</caption>
+<tr><th>Keyword shape in the branch</th><th class="num">Count</th><th>Becomes</th></tr>
+<tr><td><code>required: [f]</code> over a root-declared field</td><td class="num">127</td><td>a required field on the branch class</td></tr>
+<tr><td><code>required</code> over a field the branch itself declares</td><td class="num">15</td><td>same &mdash; the branch class declares and requires it</td></tr>
+<tr><td>a property the root does not declare (<code>type</code>/<code>$ref</code> under branch <code>properties</code>)</td><td class="num">40</td><td>a field (only the branch class carries it)</td></tr>
+<tr><td>property <code>const</code> / <code>enum</code> overlay (incl. nested, e.g. <code>budget_allocation.mode</code>)</td><td class="num">11</td><td>a <code>Literal</code> &mdash; nested ones on a branch-specific variant of the nested model</td></tr>
+<tr><td>nested <code>required</code> overlay on an object property (e.g. <code>account.required=[brand,operator]</code>)</td><td class="num">9</td><td>a branch-specific nested variant model with those fields required</td></tr>
+<tr><td><code>items</code> overlay (e.g. <code>packages.items.allOf: [$ref, required:[budget], not:{required:[min_spend_target]}]</code>)</td><td class="num">4</td><td>a separate per-branch item model</td></tr>
+<tr><td>value bounds on a property (<code>minItems</code>, <code>minLength</code>, <code>maxLength</code>, &hellip;)</td><td class="num">9</td><td>an <code>Annotated</code> field constraint</td></tr>
+<tr><td><code>not:{required:[&hellip;]}</code> / <code>not:{anyOf:[{required},&hellip;]}</code></td><td class="num">19</td><td>absence: the field is not on the branch class (see the <code>extra</code> caveat below)</td></tr>
+<tr><td>nested titled <code>oneOf</code> inside a branch (<code>get-reporting-status-response</code> only)</td><td class="num">2</td><td>sub-branch classes; identity = outer title &times; inner title, both from the node</td></tr>
+<tr><td><code>additionalProperties: true</code> restatements</td><td class="num">11</td><td>nothing (no-op &mdash; the config already allows extras)</td></tr>
+<tr><td><strong>Survives as a runtime check</strong></td><td class="num"><strong>0</strong></td><td>&mdash;</td></tr>
+</table></div>
+
+<p>The candidates expected to survive &mdash; <code>contains</code>, <code>if</code>/<code>then</code> nested
+inside a branch, value bounds across fields &mdash; appear <strong>zero times inside the branches of this
+population</strong>. They are real, but they live in the <em>root conjuncts beside the combinator</em>
+(<code>allOf</code> constraint members, root <code>if</code>/<code>then</code>/<code>else</code>, root
+<code>not</code>, <code>dependencies</code>), which apply to every branch and do not follow the branch
+partition. Measured over the same 43 schemas:</p>
+
+<div class="tablewrap"><table>
+<caption>Root conjuncts beside the combinator (15 of 43 schemas have none)</caption>
+<tr><th>Conjunct shape</th><th class="num">Count</th><th>Fate</th></tr>
+<tr><td>envelope <code>$ref</code> (<code>version-envelope</code>, <code>protocol-envelope</code>)</td><td class="num">14</td><td class="good">dissolves &mdash; inheritance, already rendered</td></tr>
+<tr><td><code>not:{required:[a,b]}</code> both-present bans (<code>q</code>+<code>value</code>, <code>challenge</code>+<code>token</code>, <code>assignments</code>+<code>assignment_operations</code>)</td><td class="num">3</td><td class="good">dissolves &mdash; the two fields are exactly the branch-required fields, so each branch class omits the other; the branches become disjoint</td></tr>
+<tr><td><code>not:{anyOf:[{required},&hellip;]}</code> fields banned outright (<code>buy-products</code>: <code>packages</code>, <code>proposal_id</code>, &hellip;; <code>placement</code>: <code>visibility</code>, <code>source</code>, &hellip;)</td><td class="num">7</td><td class="good">dissolves &mdash; joins every branch class&rsquo;s absence set</td></tr>
+<tr><td><code>if</code>/<code>then</code>(/<code>else</code>) conjuncts &mdash; of which 9 carry <code>contains</code> (<code>product</code>, <code>signal-listing</code>, <code>get-reporting-status</code>, <code>create-media-buy</code>&rsquo;s bidding rule)</td><td class="num">37</td><td class="bad">survives &mdash; compiled check on the branch classes whose fields it names</td></tr>
+<tr><td><code>dependencies</code> maps (<code>frequency-cap</code>: <code>max_impressions</code>&harr;<code>per</code>,<code>window</code>; <code>create-media-buy</code>: <code>proposal_id</code>&rarr;<code>total_budget</code>)</td><td class="num">2</td><td class="bad">survives &mdash; compiled implication over presence</td></tr>
+<tr><td>negated nested shape (<code>buy-products</code>/<code>request-proposals</code>: not (top-level <code>brand</code> and an <code>account</code> carrying both <code>brand</code> and <code>operator</code>))</td><td class="num">2</td><td class="bad">survives on the branch where it cannot distribute (it distributes into an absence on the account-shaped branch; the brand branch keeps a compiled check over the nested shape)</td></tr>
+</table></div>
+
+<p><strong>The honest totals: 247 of 247 branch-level occurrences become types; 41 root-conjunct
+occurrences survive as compiled checks across 17 schemas; 24 root-conjunct occurrences dissolve
+(14 inheritance, 10 distributed presence logic).</strong> The branch-class design therefore does not
+delete the constraint compiler of the superseded design &mdash; it shrinks its jurisdiction from
+&ldquo;everything, including the combinator&rdquo; to &ldquo;root conjuncts only,&rdquo; and relocates its
+output onto the branch classes. The combinator content &mdash; where the chased defect lived, and where
+all five red parity cases sit &mdash; is types.</p>
+
+<h3>2.1&nbsp;&middot;&nbsp;The worked example: <code>create-media-buy-request.json</code></h3>
+
+<pre><code># anyOf/0  "Explicit packages with fixed allocation"
+class CreateMediaBuyRequestExplicitPackagesWithFixedAllocation(AdcpRequest, AdcpVersionEnvelope):
+    packages: list[_PackageRequestFixedAllocation]      # required; item model requires budget,
+                                                        # omits min_spend_target
+    budget_allocation: _BudgetAllocationFixed | None = None   # mode: Literal['fixed'], required
+    total_budget: TotalBudget | None = None
+    # proposal_id: NOT A FIELD.  _absent = frozenset({'proposal_id'})
+
+# anyOf/1  "Explicit packages with seller-optimized allocation"
+class CreateMediaBuyRequestExplicitPackagesWithSellerOptimizedAllocation(...):
+    packages: list[package_request.PackageRequest]      # required, plain item type
+    total_budget: TotalBudget                           # required
+    budget_allocation: _BudgetAllocationSellerOptimized # required; mode: Literal['seller_optimized']
+    # proposal_id: NOT A FIELD.
+
+# anyOf/2  "Committed proposal execution"
+class CreateMediaBuyRequestCommittedProposalExecution(...):
+    proposal_id: str                                    # required
+    total_budget: TotalBudget                           # required
+    # packages, budget_allocation, frequency_cap: NOT FIELDS.
+    # _absent = frozenset({'packages', 'budget_allocation', 'frequency_cap'})
+
+CreateMediaBuyRequest: TypeAlias = (
+    CreateMediaBuyRequestExplicitPackagesWithFixedAllocation
+    | CreateMediaBuyRequestExplicitPackagesWithSellerOptimizedAllocation
+    | CreateMediaBuyRequestCommittedProposalExecution
+)</code></pre>
+
+<p>Every one of the five red parity cases from <code>tests/fixtures/validation-parity-cases.json</code>
+(commit <code>4ad62cdaf</code>) is now a document no branch accepts, and &mdash; at construction &mdash; a
+program that does not typecheck:</p>
+
+<div class="tablewrap"><table>
+<tr><th>Red case</th><th>Why it has no spelling</th></tr>
+<tr><td><code>packages_without_package_budget</code></td><td>the fixed-allocation branch&rsquo;s item model requires <code>budget</code>; the other two branches refuse the document for their own reasons</td></tr>
+<tr><td><code>packages_with_min_spend_target</code></td><td>the item model does not carry <code>min_spend_target</code> (absence set)</td></tr>
+<tr><td><code>packages_with_proposal_id</code></td><td>no class carries both names: branches 0&ndash;1 omit <code>proposal_id</code>, branch 2 omits <code>packages</code></td></tr>
+<tr><td><code>proposal_with_budget_allocation</code></td><td>branch 2 omits <code>budget_allocation</code>; branches 0&ndash;1 omit <code>proposal_id</code></td></tr>
+<tr><td><code>seller_optimized_without_total_budget</code></td><td>branch 1 requires <code>total_budget</code>; branch 0&rsquo;s nested <code>mode</code> is <code>Literal['fixed']</code> and the document says <code>seller_optimized</code></td></tr>
+</table></div>
+
+<h3>2.2&nbsp;&middot;&nbsp;The <code>extra='allow'</code> caveat, stated plainly</h3>
+
+<p>The generated models are <code>extra='allow'</code> (the schemas say
+<code>additionalProperties: true</code>; forward compatibility is the SDK&rsquo;s deliberate choice, and this
+design does not change it). Under <code>extra='allow'</code>, merely <em>omitting</em> a field from a branch
+class does not refuse a wire document that carries it &mdash; pydantic would file
+<code>proposal_id</code> under extras and accept. So the 19 absence occurrences (plus the 7 distributed
+outright bans) are enforced in two layers, and the claim for each layer is different:</p>
+
+<ul>
+<li><strong>At construction, absence is a type.</strong> The branch class does not declare the field; the
+pydantic mypy plugin and every IDE refuse the keyword argument. There is no spelling of
+<code>CommittedProposalExecution(packages=&hellip;)</code> that typechecks.</li>
+<li><strong>At wire validation, absence is one shared check.</strong> Each branch class carries a
+node-derived frozen set (<code>_absent</code>) and the base class carries one
+<code>mode='before'</code> hook, written once in <code>src/adcp/types/base.py</code>, that refuses a listed
+key present in the raw document &mdash; present with <em>any</em> value, explicit <code>null</code> included,
+which is exactly JSON Schema&rsquo;s <code>not:{required}</code> semantics. This is a check wearing the
+census&rsquo;s &ldquo;absence&rdquo; label, and the count above says so rather than hiding it: it is the one
+place the type system alone cannot carry the branch content, because the type system does not see raw
+documents. It is one primitive, not per-site logic, and the alternative &mdash;
+<code>extra='forbid'</code> on branch classes &mdash; would refuse spec-permitted unknown fields, a
+different behavior change this design does not smuggle in.</li>
+</ul>
+
+<h2>3&nbsp;&middot;&nbsp;Names: every branch, from its node &mdash; a folded-in prerequisite</h2>
+
+<p>The naming rule exists, designed and measured under
+<a href="https://github.com/adcontextprotocol/adcp-client-python/issues/1409">#1409</a>
+(<code>scripts/union_arm_names.py</code>, branch <code>claude/issue-1409-union-arm-naming</code>; measured 557
+root-level branches bundle-wide: 169 by title, 82 by discriminator const, 27 by required set, 278 creating
+no class, 1 refused). Two amendments, both forced by this design and both mechanical:</p>
+
+<ol>
+<li><strong>Step zero inverts for flat-root combinator schemas.</strong> The rule&rsquo;s step zero says a
+branch introducing no new property is a validation branch and must mint no class &mdash; correct when a flat
+root class exists for it to refine. Under this design the flat root class no longer exists: the branch
+<em>is</em> the request shape (the merged root properties plus the branch&rsquo;s modifications), and the
+class names exactly what a buyer sends. On a flat-root combinator schema, every branch mints a class.</li>
+<li><strong>One new rung, still node-derived.</strong> Naming rungs stay title &rarr; discriminator const
+&rarr; full sorted required set, each prefixed with the parent model name (the title rung too:
+response-branch titles already carry their stem &mdash; <code>CreateMediaBuySuccess</code> &mdash; but
+request-branch titles are prose, and a bare <code>CommittedProposalExecution</code> on the flat surface
+does not say what it is; parent + PascalCase(title) is as mechanical as parent + const). Rung&nbsp;3b:
+a branch whose only content is a nested <code>required</code> overlay is named parent + property +
+its sorted nested required set. One branch in the population needs it.</li>
+</ol>
+
+<div class="tablewrap"><table>
+<caption>Naming census over the 124 branches of the 43-schema population</caption>
+<tr><th>Source</th><th class="num">Branches</th><th>Examples</th></tr>
+<tr><td>title</td><td class="num">17</td><td><code>create-media-buy</code> (3), <code>verify-brand-claim</code> (4), <code>creative-asset</code>/<code>creative-manifest</code>/<code>product</code>/<code>transformer</code> (2 each), <code>get-reporting-status-response</code> (2)</td></tr>
+<tr><td>discriminator const (untitled)</td><td class="num">2</td><td><code>list-account-changes-response</code>: <code>status</code> = <code>completed</code>/<code>failed</code></td></tr>
+<tr><td>required set</td><td class="num">104</td><td><code>ControlMediaBuyRequestPaused</code>, <code>PackageControlCanceled</code>, <code>FrequencyCapSuppress</code>, <code>UserMatchClientIpClientUserAgent</code>, <code>SyncCreativesRequestAssignmentOperations</code>, &hellip;</td></tr>
+<tr><td>rung 3b: nested required</td><td class="num">1</td><td><code>buy-products-request</code> anyOf/1 &rarr; <code>BuyProductsRequestAccountBrandOperator</code> (branch content: <code>account.required=[brand,operator]</code>, nothing else)</td></tr>
+<tr><td class="bad">refused</td><td class="num">0</td><td>&mdash;</td></tr>
+</table></div>
+
+<p>No branch in the population is unnameable under the amended rule, so nothing is emitted
+module-internal here; the rule&rsquo;s fail-closed rung stays as specified for a future bundle (an
+upstream <code>title</code> for <code>buy-products-request</code> anyOf/1 should still be filed, as was done
+for <code>get-content-standards-response</code> oneOf/0 in adcontextprotocol/adcp#7913 &mdash; rung&nbsp;3b
+then stops being load-bearing for it). The same series wires the rule into the existing response emitter,
+deleting the ordinal comprehension (<code>post_generate_fixes.py:5483</code>) and the hand permutation
+(<code>:5478</code>): <code>CreateMediaBuyResponse1/2/3</code> become their titled names. Where a mechanical
+emitter would otherwise have to invent an identifier &mdash; the nested variant models of &sect;2
+(<code>_BudgetAllocationFixed</code>, the per-branch item models) &mdash; it does not mint a public name at
+all: they are module-internal helpers reached only through the branch class&rsquo;s field annotation, under
+the refusal list&rsquo;s existing line that a name reached only through an annotation is cosmetic while a
+public binding is the contract. Their cosmetic spelling is branch-class name + field name, both from
+nodes.</p>
+
+<h2>4&nbsp;&middot;&nbsp;Discriminated union or plain union, per schema</h2>
+
+<p>Measured: a pydantic discriminated union needs one field required in every branch with a distinct
+<code>const</code> per branch. <strong>Three schemas of 43 have one:</strong></p>
+
+<div class="tablewrap"><table>
+<tr><th>Schema</th><th>Tag</th><th>Values</th></tr>
+<tr><td><code>brand/verify-brand-claim-request.json</code></td><td><code>claim_type</code></td><td><code>subsidiary</code> / <code>parent</code> / <code>property</code> / <code>trademark</code></td></tr>
+<tr><td><code>account/list-account-changes-response.json</code></td><td><code>status</code></td><td><code>completed</code> / <code>failed</code></td></tr>
+<tr><td><code>media-buy/get-reporting-status-response.json</code></td><td><code>status</code></td><td><code>completed</code> / <code>failed</code></td></tr>
+</table></div>
+
+<p>Those three get <code>Annotated[Union[&hellip;], Field(discriminator='&hellip;')]</code>: single-pass
+dispatch and a one-line no-match error naming the tag. <code>create-media-buy</code> is <em>not</em> one of
+them &mdash; branches 0 and 1 differ by a <code>const</code> nested inside an optional object
+(<code>budget_allocation.mode</code>), branch 2 by the presence of <code>proposal_id</code>; there is no
+shared top-level tag, and inventing one would invent a spec field. (A pydantic
+<code>Discriminator</code> with a callable could synthesize dispatch, but the callable&rsquo;s logic is
+hand-authored semantics per schema &mdash; the thing this design exists to stop. Refused.)</p>
+
+<p><strong>Everything else is a plain union in left-to-right mode</strong>
+(<code>union_mode='left_to_right'</code>), not smart mode, for one reason: determinism of the <em>returned
+class</em>. The <code>anyOf</code> schemas of the at-least-one-of idiom (&sect;9) have overlapping branches
+&mdash; a <code>control_media_buy</code> document carrying both <code>paused</code> and
+<code>total_budget</code> satisfies two branches &mdash; and smart mode&rsquo;s match choice is a scoring
+heuristic. Left-to-right is the schema&rsquo;s own order, stable under regeneration of the same bundle, and
+JSON Schema <code>anyOf</code> semantics exactly: accepted iff at least one branch accepts. Disjointness
+was measured, not assumed: a first-order prover over the census (shared required <code>const</code>s with
+distinct values, or one branch requiring a field another bans) proves 12 of the 43 schemas (27 branches)
+pairwise disjoint; three more &mdash; <code>create-media-buy</code> (the two <code>mode</code> consts clash
+once branch 1&rsquo;s required <code>budget_allocation</code> is present), <code>buy-products</code> and
+<code>request-proposals</code> (the negated-nested-shape conjunct separates the brand and account branches)
+&mdash; are disjoint by reasoning the emitter can also perform from the Arm records. For
+<code>oneOf</code> roots, exactly-one must also hold: <strong>every <code>oneOf</code> in the population
+is in the first-order-provable set</strong>, so at-least-one equals exactly-one and the union is the full
+semantics. The emitter <em>proves</em> that disjointness from the Arm records when it renders a
+<code>oneOf</code> as a union; a <code>oneOf</code> it cannot prove disjoint refuses generation
+(<code>UndisjointOneOfError(file, pointer)</code> in the same family as
+<code>UnexpressibleKeywordError</code>) rather than shipping anyOf-weaker semantics. Zero refusals fire at
+the pin for this population. The 22 existing response-union modules keep their current contract
+(cross-branch exclusivity carried by wire validation) until they pass through the same emitter in the
+landing series.</p>
+
+<h3>4.1&nbsp;&middot;&nbsp;The no-match error: the consumer&rsquo;s whole diagnostic</h3>
+
+<p>When no branch matches, pydantic raises one <code>ValidationError</code> with a sub-error group per
+branch, keyed by the branch class name. For the document that supplies no required group at all (the ninth
+parity case), the three groups read, in schema order:</p>
+
+<pre><code>3 validation errors for CreateMediaBuyRequest
+CreateMediaBuyRequestExplicitPackagesWithFixedAllocation.packages
+  Field required [type=missing, ...]
+CreateMediaBuyRequestExplicitPackagesWithSellerOptimizedAllocation.packages
+  Field required [type=missing, ...]      (and .total_budget, .budget_allocation)
+CreateMediaBuyRequestCommittedProposalExecution.proposal_id
+  Field required [type=missing, ...]      (and .total_budget)</code></pre>
+
+<p>Schema-derived text &mdash; the class names are the branch titles &mdash; and strictly more informative
+than the flat validator&rsquo;s one sentence (&ldquo;requires at least one of these field groups:
+&hellip;&rdquo;), which named the groups but not what was wrong inside the nearest one. The two tests that
+match the old wording (<code>tests/test_codegen_contract_compatibility.py:297</code> and <code>:322</code>,
+both <code>match="at least one of these field groups"</code>) are asserting the message of a validator this
+design deletes; they are rewritten against the union error in the commit that deletes it (&sect;7, commit
+4), inside the 9.0 breaking window. A cross-branch mixture (e.g. <code>packages</code> +
+<code>proposal_id</code>) reports, per branch, the field that branch refuses &mdash; the absence hook names
+the offending key: <code>proposal_id is not accepted by this request shape</code> with the pointer, under
+the branch&rsquo;s group.</p>
+
+<h2>5&nbsp;&middot;&nbsp;Consumer-facing consequences, documented for migration</h2>
+
+<p>Nothing in this section is a counterweight. These are the consequences an adopter migrating to 9.0
+needs written down &mdash; what breaks, what the migration looks like, what the error reads like &mdash;
+and the governing distinction is: <strong>parsing accepts what the wire may carry; construction must only
+permit what the schema permits.</strong> A <code>TypeAdapter</code> over the union is parsing &mdash;
+reading a document the schema already governs. Any mechanism that keeps the flat shape constructible is
+construction of the illegal &mdash; so there is <em>no</em> permissive constructor accepting arbitrary
+kwargs, no <code>__new__</code> that inspects arguments and routes to a branch, and no alias keeping
+<code>CreateMediaBuyRequest(&hellip;)</code> callable. Each of those is a place where the wrong
+combination can be spelled again, which is precisely what is being removed; if the common path becomes
+less convenient, that is the correct outcome, because the convenience <em>was</em> the defect.</p>
+
+<p><strong>What breaks.</strong> <code>adcp.types.CreateMediaBuyRequest</code> (and 42 peers) stops being a
+class and becomes a <code>TypeAlias</code> union &mdash; the exact shape responses already have.
+Consequences, each loud, none silent:</p>
+
+<ul>
+<li><code>CreateMediaBuyRequest(&hellip;)</code> raises <code>TypeError</code> (a union is not callable).
+The migration table maps each flat name to its branch classes; the fix at a construction site is to name
+the branch being constructed &mdash; which is information the caller already had, since the flat
+constructor&rsquo;s argument combination <em>was</em> the branch choice, implicitly and uncheckably.</li>
+<li><code>CreateMediaBuyRequest.model_validate(raw)</code> becomes
+<code>TypeAdapter(CreateMediaBuyRequest).validate_python(raw)</code>. The SDK exports one cached adapter
+per union alias next to the alias (node-derived name: <code>CreateMediaBuyRequestAdapter</code>), so
+dict-shaped callers change one spelling. No factory function with 31 optional keywords is provided:
+that is the flat class again, reintroduced at runtime, and it makes nothing impossible.</li>
+<li><code>isinstance(x, CreateMediaBuyRequest)</code> keeps working (a union is a valid second argument),
+and <code>issubclass</code>-style registry checks need the member tuple.</li>
+<li>Surface count: 43 flat names become 43 aliases + 124 branch classes (+&nbsp;~15 module-internal
+variant models with no public binding). The flat surface grows by the branch classes; every new name is
+schema-derived; the rename table for the response ordinals rides the same
+<code>MIGRATION_v8_to_v9.md</code> table, and <code>aliases.py</code> re-points as it did under
+PR&nbsp;#1374&rsquo;s renumbering. 9.0.0 is in beta; this is the window.</li>
+</ul>
+
+<p><strong>What it does to our seller.</strong> Measured against
+<code>prebid-salesagent</code> at <code>4eedcb1de</code> (pins <code>adcp==6.6.0</code>, so this arrives
+with the 9.x bump, not as a hotfix):</p>
+
+<ul>
+<li><code>src/core/schemas/_base.py:2209</code> &mdash; <code>class CreateMediaBuyRequest(BuyerRequest,
+LibraryCreateMediaBuyRequest)</code> subclasses the flat class and narrows fields
+(<code>packages</code> &rarr; local <code>PackageRequest</code>, <code>push_notification_config</code>,
+<code>brand</code>). A union cannot be subclassed; the seller subclasses each branch class and declares a
+local union &mdash; <em>the shape it already uses for responses</em>
+(<code>CreateMediaBuySuccess</code>/<code>CreateMediaBuyError</code> extending the library branch classes,
+<code>CreateMediaBuyResponse = CreateMediaBuySuccess | CreateMediaBuyError</code>, same file). The
+narrowings land only on the branches that carry the field, which is itself a correction: today the
+proposal branch carries a dead <code>packages</code> narrowing.</li>
+<li><code>src/core/tools/registry.py:129</code> &mdash; <code>ToolSpec.dto: type[Req]</code> and its
+<code>issubclass(self.dto, BaseModel)</code> check assume a class. The row type widens to accept a union
+alias; the registry builds one cached <code>TypeAdapter</code> per row at import; the
+<code>AccountIdentity</code> derivation (&ldquo;the DTO requires <code>account</code>&rdquo;) quantifies
+over the union&rsquo;s members (all-of for required-ness, since every branch of these tools requires
+<code>account</code> at the root).</li>
+<li><code>src/core/tools/_boundary.py:228</code> &mdash; <code>TOOLS[tool_name].dto.model_validate(raw)</code>
+becomes the row&rsquo;s adapter: one line. <code>serve()</code>-style dispatch is otherwise untouched: the
+<code>_impl</code> annotation <code>req: CreateMediaBuyRequest</code> is still one name, and the body
+replaces optional-field sniffing (<code>if req.proposal_id:&hellip;</code>) with
+<code>isinstance</code>/<code>match</code> over branch classes &mdash; which mypy can check for
+exhaustiveness, a dispatch the flat class could not offer.</li>
+<li>Inherited blast radius, measured previously and inherited unchanged: 31 SDK-side test failures, 28 of
+them fixtures encoding requests the bundled schema also refuses, concentrated in two shared factories
+(&asymp;5 edits); and <code>tests/test_decisioning_webhook_emit.py:497</code> carries a comment stating
+the incomplete validator&rsquo;s contract as fact &mdash; those edits are corrections of fixtures that the
+defect itself taught, not accommodation of the new design.</li>
+</ul>
+
+<h2>6&nbsp;&middot;&nbsp;What becomes unconstructible, what remains detected</h2>
+
+<div class="tablewrap"><table>
+<tr><th>Defect</th><th>After this design</th><th>Mechanism</th></tr>
+<tr><td>A request combining fields from two branches (<code>proposal_id</code>+<code>packages</code>; <code>proposal_id</code>+<code>budget_allocation</code>/<code>frequency_cap</code>; <code>assignments</code>+<code>assignment_operations</code>; &hellip;)</td><td class="good">Unconstructible</td><td>no class carries both names; at the wire, every branch refuses one of them (required-miss or absence hook)</td></tr>
+<tr><td>A branch&rsquo;s required field missing (<code>budget</code> on a fixed-allocation package; <code>total_budget</code> under <code>seller_optimized</code>)</td><td class="good">Unconstructible</td><td>required field / <code>Literal</code> on the branch class and its item/variant models</td></tr>
+<tr><td>A satisfying combination absent entirely (no required group at all)</td><td class="good">Unconstructible</td><td>every branch class requires its group; the union has no member to construct</td></tr>
+<tr><td>A branch-discriminating <code>const</code> violated (<code>mode</code> not matching the branch)</td><td class="good">Unconstructible</td><td><code>Literal</code> on the branch-specific nested variant</td></tr>
+<tr><td>A constraint keyword inside a <em>branch</em> dropped silently</td><td class="good">Impossible</td><td>the one reader is key-consuming; a branch keyword is a type, a named-rule classification, or <code>UnexpressibleKeywordError</code> before install &mdash; there is no emit path that skips a key</td></tr>
+<tr><td>A positional public name; a name moving when upstream reorders branches</td><td class="good">Impossible</td><td>names derive from node identity (title/const/required set/nested-required); the ordinal comprehension and the hand permutation are deleted</td></tr>
+<tr><td>A <code>oneOf</code> rendered as a union that silently admits two-branch documents</td><td class="good">Impossible (this population)</td><td>disjointness proven from the Arm records or generation refuses; measured zero refusals at the pin</td></tr>
+<tr><td>A field the schema says must be absent, arriving on the wire</td><td>Detected (one shared check)</td><td>the <code>_absent</code> frozen set + one base-class hook (&sect;2.2); at construction it is unconstructible (the field does not exist on the class), but a raw document needs the hook because <code>extra='allow'</code> files unknown keys as extras</td></tr>
+<tr><td>Root conjuncts: <code>if</code>/<code>then</code> (37, 9 with <code>contains</code>), <code>dependencies</code> (2), negated nested shapes (2)</td><td>Detected (compiled checks)</td><td>the reduced constraint compiler: the same <code>Cond</code> grammar and vocabulary primitives as the superseded design, compiled onto the branch classes whose fields they name, under the same closure rule &mdash; a conjunct keyword outside the grammar refuses generation</td></tr>
+<tr><td><code>x-adcp-validation</code> behavioral rules</td><td>Detected</td><td>declared outside the structural models&rsquo; promise by <code>docs/validation-contract.md</code>; carried by canonical wire validation &mdash; a scope contract the reader cites, not a tolerance list</td></tr>
+<tr><td>Cross-branch exclusivity on the 22 already-union response modules</td><td>Detected (unchanged)</td><td>existing wire-validation contract, until those modules pass through the same emitter with the same disjointness proof</td></tr>
+<tr><td>Field-level format semantics pydantic lacks (<code>uri-template</code> &rarr; <code>str</code>)</td><td>Detected</td><td>pre-existing type-level looseness outside this defect class; named so the coverage claim is not read as total</td></tr>
+</table></div>
+
+<p>No skip lane, no residue set, no ledger, no ratchet, no allowlist exists anywhere in the design. A
+keyword is a type, a named-rule classification (annotation set, declared-behavioral,
+proven restatement), a compiled check from the closed grammar, or
+<code>UnexpressibleKeywordError(file, pointer, keyword)</code> aborting before install. One
+specification gap found during this work and reported rather than papered over:
+<code>buy-products-request</code> anyOf/1 carries no <code>title</code> (rung&nbsp;3b covers it mechanically;
+an upstream title should exist regardless).</p>
+
+<h2>7&nbsp;&middot;&nbsp;How it lands: five commits, each leaving the SDK coherent</h2>
+
+<div class="tablewrap"><table>
+<tr><th>#</th><th>Commit</th><th>Contents</th><th>What proves it</th></tr>
+<tr><td>1</td><td><code>feat(codegen): one reader for a schema root&rsquo;s constraint content</code></td>
+<td><code>scripts/schema_constraints.py</code>: <code>Arm</code> records (pointer, title, discriminator,
+required, declared fields, absence set, nested overlays, item overlays, condition residue) +
+the <code>Cond</code> grammar for conjuncts, the closure rule, <code>UnexpressibleKeywordError</code>,
+<code>UndisjointOneOfError</code>. Nothing wired; generated tree untouched.</td>
+<td>Constructed-node unit tests per production; the <strong>bundle parse-closure test</strong>: every root
+constraint node in the pinned bundle parses with zero unaccounted keys &mdash; &sect;2&rsquo;s census turned
+into a guard that re-derives the accounting on every run.</td></tr>
+<tr><td>2</td><td><code>feat(codegen): name union branches from their node</code></td>
+<td>Land <code>scripts/union_arm_names.py</code> (#1409) with the two amendments (&sect;3); the existing
+response emitter consumes it: ordinals and the <code>BuildCreativeResponse</code> permutation deleted,
+22 response modules renamed, <code>MIGRATION_v8_to_v9.md</code> rename table,
+<code>aliases.py</code> re-pointed. Regenerate.</td>
+<td><code>test_no_derived_name_is_positional</code> reads the generated classes; public-surface snapshot
+diff equals the migration table; adopter-path tests green; the 124-branch classification of &sect;3 as a
+fixture the rule must reproduce.</td></tr>
+<tr><td>3</td><td><code>feat(types): the condition vocabulary</code></td>
+<td><code>src/adcp/types/_conditions.py</code>: the absence hook and the conjunct primitives
+(<code>supplied</code>, <code>const_is</code>, <code>every_item</code>, <code>some_item</code>,
+<code>dependent_required</code>, &hellip;) &mdash; hand-written once, a few lines each.</td>
+<td>One unit test per primitive, including the suppliedness convention (explicit null is supplied; a
+default never sent is not) and vacuous descent through absent parents.</td></tr>
+<tr><td>4</td><td><code>feat(codegen)!: one class per branch for flat-root combinator schemas</code></td>
+<td>The branch-class emitter consumes <code>Arm</code> records for the 43-schema population: branch
+classes, nested variant and item models (module-internal), absence sets, <code>Literal</code>s,
+discriminated unions for the three tagged schemas, left-to-right unions elsewhere, union aliases +
+exported adapters &mdash; <em>and the root-conjunct validators compiled onto the branch classes in the
+same commit</em>, so no commit ships a parsed-but-unenforced conjunct.
+<code>_root_required_groups</code> and <code>enforce_root_required_groups</code> are deleted with their
+skip lane. Regenerate; rewrite the two message-matching tests; fix the &asymp;5 fixture/factory sites and
+the <code>test_decisioning_webhook_emit.py:497</code> comment.</td>
+<td>The nine <code>create_media_buy</code> parity cases pass un-silenced (the five red go green as
+union refusals, the three valid stay green, the ninth refuses with the &sect;4.1 error); one
+break-it-on-purpose run per mechanism (drop a branch&rsquo;s absence set &rarr; parity red; reorder two
+branches upstream in a scratch bundle &rarr; names stable, classes re-derived).</td></tr>
+<tr><td>5</td><td><code>feat(codegen): compile root constraints on combinator-less roots; the ledger is empty</code></td>
+<td>The same conjunct compiler attaches to flat roots with no combinator (root
+<code>if</code>/<code>then</code>/<code>else</code> and <code>dependencies</code>: <code>get-signals</code>
+and its 26 peers); delete <code>tests/fixtures/validation-model-divergences.json</code>; arm
+<strong>emit-closure</strong>: every parsed constraint is a type, a classification, or a compiled check,
+else refusal &mdash; the parse-closure test of commit 1 upgraded to grade emission.</td>
+<td>The three <code>get-signals</code> divergences flip to <code>pydantic_valid: false</code> and the
+ledger file is deleted; the parity suite asserts the divergence set equals the empty set with no
+allowlist parameter left to grow; emit-closure break-probe (comment out one compiler case &rarr;
+regeneration red, naming file, pointer, keyword).</td></tr>
+</table></div>
+
+<p>Every commit&rsquo;s gate: <code>pytest tests/</code> and
+<code>python scripts/generate_types.py --check</code>; commits 2, 4 and 5 regenerate the tree in the same
+commit per the pipeline&rsquo;s idempotence contract. Commit 4 is deliberately the largest: splitting it
+leaves either two readers alive or a window where the old validator is deleted before the branch classes
+exist, and both halves of that split are states this document exists to end.</p>
+
+<h2>8&nbsp;&middot;&nbsp;Verifying the flaw class is eliminated, not just these instances</h2>
+
+<p>This class of defect has twice been believed fixed and then found again in the same kind. So the
+design states how the <em>class</em> is confirmed gone, and the statement rests on a distinction: a
+validation defect is tested by sending a bad document and checking the refusal; <strong>an impossibility
+is tested by trying to spell the bad thing and failing before anything runs.</strong> Verification has
+four layers, from instance to class.</p>
+
+<h3>8.1&nbsp;&middot;&nbsp;Spelling failures: negative type-check fixtures</h3>
+
+<p>The SDK already grades adopter-visible typing with fixture files under two checkers:
+<code>make test-type-checks</code> (mypy <code>--strict</code>, zero <code>type: ignore</code> allowed)
+and <code>scripts/run_pyright_type_checks.py</code> over <code>tests/type_checks/</code> (72 fixtures
+today, all positive &mdash; code that must check clean). This design adds the inverted lane the
+impossibility claims need: <code>tests/type_checks_negative/</code>, graded by the same runner with the
+expectation reversed &mdash; each fixture spells exactly one forbidden construction and carries a marker
+comment naming the expected diagnostic code and line; the runner asserts the checker reports
+<em>that</em> diagnostic <em>there</em>, and <strong>a negative fixture that type-checks clean fails the
+suite</strong> (the impossibility has regressed to a possibility). The zero-ignore contract on the
+positive lane is untouched. The concrete fixtures, one per defect of &sect;2.1:</p>
+
+<ul>
+<li><code>CreateMediaBuyRequestCommittedProposalExecution(packages=&hellip;, proposal_id=&hellip;,
+&hellip;)</code> &mdash; expected: unknown keyword argument (<code>call-arg</code> /
+<code>reportCallIssue</code>). Both names together are a <em>type error</em>, not a validation error, on
+every branch class.</li>
+<li>a fixed-allocation branch package without <code>budget</code> &mdash; expected: missing required
+argument on the branch&rsquo;s own item model, at construction, with no validator involved.</li>
+<li><code>mode="seller_optimized"</code> on the fixed-allocation branch&rsquo;s
+<code>budget_allocation</code> &mdash; expected: <code>Literal</code> incompatibility naming the field
+<code>mode</code>, not a composition keyword.</li>
+</ul>
+
+<h3>8.2&nbsp;&middot;&nbsp;Construction failures: the error comes from the branch class itself</h3>
+
+<p>The same three spellings exercised at runtime assert the <em>provenance</em> of the refusal, not just
+its existence: a pydantic <code>ValidationError</code> whose <code>loc</code> names the field
+(<code>packages.0.budget</code>, <code>type=missing</code>; <code>budget_allocation.mode</code>,
+<code>type=literal_error</code>) raised by the branch class&rsquo;s own constructor &mdash; asserted by
+error type and location, never by message text. A refusal that instead arrives from a root-level
+model validator would mean the shape regressed to flat-plus-check, so the assertions pin where the
+refusal originates.</p>
+
+<h3>8.3&nbsp;&middot;&nbsp;The differential witness: the parity corpus, population derived</h3>
+
+<p>The parity suite (<code>4ad62cdaf</code>/<code>00720022b</code>) remains the independent witness that
+model verdicts equal bundled-schema verdicts on real documents, with both of that work&rsquo;s rules kept:
+population membership is <em>derived</em> (every generated union alias and every flat-root module &mdash;
+read off the generated tree, not an id list kept in the test), the suite asserts the population is
+non-empty, and it reads no ledger &mdash; there is no file to append a divergence to, because
+<code>validation-model-divergences.json</code> is deleted in commit&nbsp;5 and the divergence set is
+asserted equal to the empty set with no allowlist parameter left to grow.</p>
+
+<h3>8.4&nbsp;&middot;&nbsp;The class-level guarantee: what a future schema would have to contain</h3>
+
+<p>The actual test of the class is the generalisation: <strong>what would a future schema branch have to
+contain for the generator to produce a model that permits something the schema forbids?</strong> After
+this design there are exactly two channels, and they are different in kind:</p>
+
+<ul>
+<li><strong>A keyword kind the grammar does not know.</strong> This cannot produce a weaker model, because
+it cannot produce a model: the reader is key-consuming, and an unaccounted key raises
+<code>UnexpressibleKeywordError(file, pointer, keyword)</code>, aborting generation before install
+(<code>generate_types.py</code>&rsquo;s staging-and-rollback keeps the checkout clean). The
+refusal-at-generation step <em>is</em> the class-level guarantee, and it is exercised, not assumed:
+a fixture schema carrying a deliberately unknown constraint keyword runs through the generator in a test
+that asserts the abort and its named file/pointer/keyword (the build fails; no test has to catch a shipped
+model, because no model ships); and the break-it-on-purpose probe &mdash; comment out one compiler case,
+regeneration goes red at the closure test &mdash; is run once per landing commit, red only counting at
+this design&rsquo;s own assertion. The bundle-wide emit-closure test (commit&nbsp;5) re-derives the full
+accounting &mdash; every parsed constraint is a type, a named-rule classification, or a compiled check
+&mdash; on every run, so the census of &sect;2 is a guard, not a snapshot.</li>
+<li><strong>A semantic slip inside a kind the grammar does know</strong> &mdash; suppliedness of an
+explicit null, vacuous descent through an absent parent, the <code>extra='allow'</code> interplay of
+&sect;2.2. This is the honest residual channel, and it is detection, not impossibility: it is bounded to
+the ~10 hand-written vocabulary primitives (each pinned by its own convention test) plus the emitter&rsquo;s
+composition of them, and the differential corpus of &sect;8.3 is the instrument that catches a
+composition slip first, on real documents against the canonical validator. Claiming this channel closed
+by construction would be the overclaim this document refuses to make.</li>
+</ul>
+
+<p>&ldquo;We fixed the instances we found&rdquo; is what has happened twice. The statement this section
+makes instead: a model that under-enforces its schema&rsquo;s combinator content cannot be generated
+&mdash; the attempt fails at generation, and the run that proves the attempt fails is in the suite &mdash;
+and the one channel that remains (primitive semantics) is named, bounded, and witnessed differentially.</p>
+
+<h2>9&nbsp;&middot;&nbsp;The strongest argument against this design</h2>
+
+<div class="lead">
+<strong>It reifies a partition the schema does not define.</strong> <code>anyOf</code> is a satisfaction
+condition over documents, not a taxonomy; this design turns each branch into a nominal type, and a parsed
+document comes back as exactly one of them. Measured with the disjointness prover of &sect;4: only 15 of
+the 43 schemas (34 branches) have a partition the schema itself defines; the other
+<strong>28 schemas &mdash; 90 of the 124 branches &mdash; are the overlapping at-least-one-of idiom</strong>
+(<code>package-control</code> 15, <code>control-media-buy-request</code> 12,
+<code>frequency-cap-constraints</code> 6, <code>user-match</code> 5, and 24 more), where a document
+carrying both <code>paused</code> and <code>total_budget</code> satisfies two branches. The SDK must still
+return one class, and left-to-right makes the pick deterministic but <em>schema-arbitrary</em>: two bundles
+identical in meaning that differ only in branch order (a null edit under <code>anyOf</code> semantics)
+generate SDKs that hand the same document different class identities. A consumer&rsquo;s
+<code>isinstance</code> dispatch on that identity looks type-safe and is actually coupled to branch
+order &mdash; the type system presenting noise as signal. The flat class, whatever else was wrong with
+it, had no such channel.
+</div>
+
+<p>The answer, in three parts, all about what is and is not schema information. First, for the 15
+schema-defined partitions &mdash; titles, discriminator consts, provable mutual absence &mdash; the class
+identity of a parsed document <em>is</em> schema information the flat shape destroyed; recovering it is
+the point, and that set contains every schema whose branches carry distinct shapes (every
+<code>oneOf</code>, every const-discriminated schema, <code>create-media-buy</code> itself). Second, for
+the overlapping 28 the design does not pretend otherwise &mdash; and the census closes the exposure: in
+every one of those 28 schemas the branch content is <em>requiredness only</em>, so the branch classes are
+generated with identical field sets and an order-coupled <code>isinstance</code> can read nothing that
+differs between the candidates. The channel exists and carries zero bits. What cannot be removed is a
+consumer <em>writing</em> code that branches on it; what the design guarantees is that such code cannot
+observe different data by doing so, and the union alias &mdash; not the member &mdash; is the documented
+contract for parsed documents. Third, the residual correctness exposure that actually matters is not this
+one but &sect;8.4&rsquo;s second channel &mdash; a primitive whose semantics slip from JSON
+Schema&rsquo;s on nulls or absent parents &mdash; and that is where the verification instruments point. If
+a stronger argument against the design exists, it is there, not in the number of classes or the size of
+the migration: those are consequences, documented in &sect;5, and they were given no weight in any choice
+this document makes.</p>
+
+<p class="note">Sources measured for this design: the pinned bundle <code>schemas/cache/3.2</code> (census
+scripts run per-branch over the 43-schema population; totals in &sect;2&ndash;&sect;4 are from those runs);
+<code>scripts/post_generate_fixes.py</code> (<code>_root_required_groups:7029</code>,
+<code>enforce_root_required_groups:7217</code>, <code>restore_response_variant_aliases:4939</code>,
+ordinal naming <code>:5483</code>, permutation <code>:5478</code>);
+generated <code>create_media_buy_request.py</code> / <code>create_media_buy_response.py</code>;
+<code>tests/fixtures/validation-parity-cases.json</code> and commits <code>4ad62cdaf</code> /
+<code>00720022b</code> (the nine parity cases) and <code>0537063a2</code> (the hand-patch that proved
+expressibility); <code>scripts/union_arm_names.py</code> at
+<code>upstream/claude/issue-1409-union-arm-naming</code>;
+<code>docs/audits/codegen-solution-design.html</code> (superseded; census reused and re-derived) and the
+integration branch&rsquo;s <code>sdk-codegen-design-review.html</code>; seller-side consumption measured at
+<code>prebid-salesagent</code> <code>4eedcb1de</code>
+(<code>src/core/schemas/_base.py:2209</code>, <code>src/core/tools/registry.py:129</code>,
+<code>src/core/tools/_boundary.py:228</code>).</p>
+
+<hr style="margin:44px 0 28px;border:0;border-top:2px solid currentColor;opacity:.35">
+
+<h2>Amendment: the emit rule is a partition test, not a branch count</h2>
+
+<p><strong>This supersedes the design&rsquo;s uniform &ldquo;emit branch classes for all 43 schemas&rdquo;.</strong> The design&rsquo;s own
+objection against itself was correct &mdash; for 90 of the 124 branches it reifies a partition the schema does
+not define &mdash; and the answer is not to argue the channel carries no information. It is to stop minting
+classes where there is no partition.</p>
+
+<p>What forced the change: asking what happens to branches that overlap and carry <em>no</em>
+<code>required</code> at all. Measured over the bundle, 798 root-combinator branches across 250 schemas,
+134 carry no <code>required</code>. Most are value unions rather than object shapes &mdash;
+<code>core/start-timing.json</code> is <code>{const}</code> vs <code>{format}</code> (that is
+<code>Literal["asap"] | datetime</code>), <code>core/geo-place-type.json</code> is enum-vs-pattern, and 108
+branches are a bare <code>{$ref}</code>. Those already map to <code>A | B</code> at the field level and need
+nothing. Filtering to genuinely object-shaped branches with no <code>required</code> leaves <strong>15, in
+five schemas</strong>:</p>
+
+<pre><code>media-buy/buy-products-request.json          2 branches
+  0: {required: ["brand"]}
+  1: {properties: {account: {required: ["brand","operator"]}}}
+
+core/postal-country-system.json             10 branches
+  0: {properties: {country: {const:"US"}, system: {enum:["zip","zip_plus_four"]}}}
+  1: {properties: {country: {const:"GB"}, system: {enum:["outward","full"]}}}
+  2: {properties: {country: {const:"CA"}, system: {enum:["fsa","full"]}}}</code></pre>
+
+<p><strong>Without <code>required</code>, a branch is vacuously satisfiable</strong>, because
+<code>properties</code> grades only members that are present. A document carrying no <code>country</code>
+satisfies all ten postal branches, so left-to-right returns the US class for a document that never mentioned
+a country. And neither case is a shape: the postal schema is a lookup table (an <code>if/then</code> written
+as an <code>anyOf</code>), and <code>buy-products-request</code> is one requirement with two locations
+&mdash; brand at the top level or reachable through <code>account</code>.</p>
+
+<p><strong>The rule, replacing the two-way split:</strong> emit branch classes only where the branches
+partition by requiredness into distinct, mutually exclusive field sets. Everywhere else the
+<code>anyOf</code> is a constraint, not a type &mdash; compile it.</p>
+
+<table>
+  <thead><tr><th>Group</th><th>Count</th><th>Model</th></tr></thead>
+  <tbody>
+    <tr><td>Distinct required sets, provably disjoint</td><td>34 branches / 15 schemas</td><td>branch classes</td></tr>
+    <tr><td>Requiredness-only, overlapping</td><td>90 branches / 28 schemas</td><td>one class + compiled check</td></tr>
+    <tr><td>No <code>required</code>, vacuously overlapping</td><td>15 branches / 5 schemas</td><td>one class + compiled check</td></tr>
+  </tbody>
+</table>
+
+<p>This subsumes the awkward case rather than special-casing it: &ldquo;no <code>required</code>&rdquo; fails
+the partition test for the same reason &ldquo;overlapping <code>required</code>&rdquo; does. There is no
+partition to model.</p>
+
+<p><strong>Consequences for the commit series.</strong> Commit 4 narrows from 43 schemas to the 15 that pass
+the partition test; the other 28 keep one class and gain a compiled check, so the condition compiler&rsquo;s
+jurisdiction grows from 41 root conjuncts to 41 plus those 105 branch sets &mdash; still bounded, still the
+same vocabulary, and no new machinery. The partition test itself is the first-order disjointness prover the
+design already built, so it is a reuse rather than an addition. The order-coupled dispatch channel the design
+conceded is <strong>removed</strong> rather than argued down: where no partition exists there is no class
+identity to dispatch on, which is the property the flat class had and the uniform version gave up.</p>
+
+<p><strong>Also unenforced today, and worth stating.</strong> Because the current extractor reads only
+<code>required</code>, it finds none on those 15 branches and skips the schema outright &mdash; measured for
+<code>buy-products-request</code>, whose root <code>anyOf</code> no generated model enforces at all. The
+country&rarr;system rule and the brand-location rule are enforced by nothing in the Python SDK today.</p>
+
+<p>Whether the postal lookup table should exist in a protocol schema at all is a separate question, under
+survey; it does not change this rule, which handles the shape whatever the spec decides about the subject.</p>
+
+</body>
+</html>

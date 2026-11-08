@@ -14,7 +14,7 @@ whose whole job was to detect and ignore it. Deleting the field deleted the pred
 Membership is decided by walking the live MRO and unioning ``model_fields`` from every
 ancestor defined under ``adcp`` -- so it consults no import spelling and needs no table of
 which library type each DTO extends. REDECLARING an inherited field is not adding one and is
-governed separately by ``test_architecture_schema_inheritance.py``; this guard sees only
+not governed here at all since that guard was deleted 2026-10-17; this guard sees only
 names no SDK ancestor declares.
 """
 

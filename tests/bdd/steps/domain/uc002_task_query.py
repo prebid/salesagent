@@ -1,373 +1,223 @@
-"""BDD step definitions for UC-002: Task list query partition/boundary.
+"""BDD step definitions for UC-002: list_tasks filtering and sorting.
 
-Given steps configure sort_field / sort_direction / domain / task_status
-in ctx["task_query_params"]. When step passes ALL params to list_tasks().
-If production rejects a param (TypeError), Then steps xfail with the real
-error as proof of the SPEC-PRODUCTION GAP.
+The contract is protocol/list-tasks-request.json at the pin: filtering is nested under
+``filters`` (``task_type``/``task_types``, ``status``/``statuses``, ``protocol``/``protocols``,
+each plural with ``minItems: 1``) and sorting under ``sort: {field, direction}``, ``field`` in
+created_at/updated_at/status/task_type/protocol (default created_at), ``direction`` in
+enums/sort-direction.json (default desc).
 
+list_tasks is registered on every transport (``src/core/tools/registry.py``), so the When
+dispatches through the transport-generic client, which takes the tool by name: the scenarios
+sit on the UC-002 catch-all row, whose env's own verb is create_media_buy. The request goes
+as a RAW payload because the refusal rows send values the pinned model cannot hold.
+
+The Given seeds six tasks of the caller's own, through the factories, with distinct
+statuses, three task types and creation and completion times arranged so that every sort
+field orders them differently. Each seeded task states, as literals, the task_type, status
+and protocol the pin says a buyer reads for it; the Thens compare the wire against those, so
+production's own vocabulary maps are graded rather than reused.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from pytest_bdd import given, parsers, when
 
-from src.core.exceptions import AdCPSalesAgentError
-
-# ═══════════════════════════════════════════════════════════════════════
-# Helpers
-# ═══════════════════════════════════════════════════════════════════════
+from tests.bdd.steps._outcome_helpers import wire_field
+from tests.bdd.steps.generic._dispatch import dispatch_via_client
+from tests.factories import ContextFactory, WorkflowStepFactory
 
 
-def _ensure_task_query_params(ctx: dict) -> dict[str, Any]:
-    """Initialize and return ctx['task_query_params']."""
-    return ctx.setdefault("task_query_params", {})
+@dataclass(frozen=True)
+class _SeededTask:
+    """One seeded task: what is stored, and what the pin says a buyer reads for it."""
+
+    tool_name: str
+    stored_status: str
+    created_at: datetime
+    completed_at: datetime | None
+    task_type: str
+    status: str
+    protocol: str
+
+    @property
+    def updated_at(self) -> datetime:
+        """The last instant the task changed: its completion, else its creation."""
+        return self.completed_at or self.created_at
+
+    def sort_key(self, field: str) -> Any:
+        """The value ``sort.field`` orders this task by."""
+        return getattr(self, field)
 
 
-def _parse_array_value(raw: str, separator: str = "+") -> list[str]:
-    """Parse 'a+b+c' boundary config into a list."""
-    return [v.strip() for v in raw.split(separator) if v.strip()]
+def _seed_table(now: datetime) -> list[_SeededTask]:
+    """The six tasks. Every status a stored step can carry, three task types, all media-buy.
 
-
-# _xfail_on_unsupported_param is DELETED. It excused list_tasks() for raising TypeError on
-# sort_field / sort_direction / domain / task_status / task_type — and the pinned 3.1
-# protocol/list-tasks-request.json declares NONE of those as parameters. It nests them:
-# ``sort`` is {field, direction} and filtering lives under ``filters``. So production was
-# REFUSING A NON-SPEC PARAMETER SHAPE, which is correct behaviour, and the xfail recorded
-# that correctness as a production gap.
-#
-# The `assert "error" not in ctx` that followed every call site is now the grader. If these
-# scenarios are ever wired, it fails with the TypeError and says the true thing: the steps
-# call list_tasks with a parameter shape the spec does not define. Fixing THAT is a scenario
-# change (pass sort={"field":..,"direction":..}), not an excuse.
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# GIVEN steps — sort field / direction configuration
-# ═══════════════════════════════════════════════════════════════════════
-
-
-@given(parsers.parse("the task list sort field is {partition}"))
-def given_sort_field_partition(ctx: dict, partition: str) -> None:
-    """Set sort_field for a partition scenario."""
-    params = _ensure_task_query_params(ctx)
-    if partition != "omitted":
-        params["sort_field"] = partition
-
-
-@given(parsers.parse("the sort direction is {partition}"))
-def given_sort_direction_partition(ctx: dict, partition: str) -> None:
-    """Set sort_direction for a partition scenario."""
-    params = _ensure_task_query_params(ctx)
-    if partition != "omitted":
-        params["sort_direction"] = partition
-
-
-@given(parsers.parse("the task list sort field boundary is: {config}"))
-def given_sort_field_boundary(ctx: dict, config: str) -> None:
-    """Set sort_field for a boundary scenario."""
-    params = _ensure_task_query_params(ctx)
-    if config != "omitted":
-        params["sort_field"] = config
-
-
-@given(parsers.parse("the sort direction boundary is: {config}"))
-def given_sort_direction_boundary(ctx: dict, config: str) -> None:
-    """Set sort_direction for a boundary scenario."""
-    params = _ensure_task_query_params(ctx)
-    if config != "omitted":
-        params["sort_direction"] = config
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# GIVEN steps — domain filter configuration
-# ═══════════════════════════════════════════════════════════════════════
-
-
-@given(parsers.parse("the domain filter is {partition}"))
-def given_domain_filter_partition(ctx: dict, partition: str) -> None:
-    """Set domain filter for a partition scenario."""
-    params = _ensure_task_query_params(ctx)
-    if partition == "omitted":
-        return
-    if partition == "domain_array":
-        params["domain"] = ["media_buy", "signals"]
-    elif partition == "empty_array":
-        params["domain"] = []
-    else:
-        params["domain"] = partition
-
-
-@given(parsers.parse("the domain filter boundary is: {config}"))
-def given_domain_filter_boundary(ctx: dict, config: str) -> None:
-    """Set domain filter for a boundary scenario."""
-    params = _ensure_task_query_params(ctx)
-    if config == "omitted":
-        return
-    if config == "empty array":
-        params["domain"] = []
-    elif "+" in config:
-        params["domain"] = _parse_array_value(config)
-    else:
-        params["domain"] = config
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# GIVEN steps — task status filter configuration
-# ═══════════════════════════════════════════════════════════════════════
-
-
-@given(parsers.parse("the task status filter is {partition}"))
-def given_task_status_filter_partition(ctx: dict, partition: str) -> None:
-    """Set task_status filter for a partition scenario."""
-    params = _ensure_task_query_params(ctx)
-    if partition == "omitted":
-        return
-    if partition == "status_array":
-        params["task_status"] = ["submitted", "working"]
-    elif partition == "empty_array":
-        params["task_status"] = []
-    else:
-        params["task_status"] = partition
-
-
-@given(parsers.parse("the task status filter boundary is: {config}"))
-def given_task_status_filter_boundary(ctx: dict, config: str) -> None:
-    """Set task_status filter for a boundary scenario."""
-    params = _ensure_task_query_params(ctx)
-    if config == "omitted":
-        return
-    if config == "empty array":
-        params["task_status"] = []
-    elif "+" in config:
-        params["task_status"] = _parse_array_value(config)
-    else:
-        params["task_status"] = config
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# GIVEN steps — task type filter configuration
-# ═══════════════════════════════════════════════════════════════════════
-
-
-@given(parsers.parse("the task type filter is {partition}"))
-def given_task_type_filter_partition(ctx: dict, partition: str) -> None:
-    """Set task_type filter for a partition scenario."""
-    params = _ensure_task_query_params(ctx)
-    if partition == "omitted":
-        return
-    if partition == "task_type_array":
-        params["task_type"] = ["create_media_buy", "update_media_buy"]
-    elif partition == "empty_array":
-        params["task_type"] = []
-    else:
-        params["task_type"] = partition
-
-
-@given(parsers.parse("the task type filter boundary is: {config}"))
-def given_task_type_filter_boundary(ctx: dict, config: str) -> None:
-    """Set task_type filter for a boundary scenario."""
-    params = _ensure_task_query_params(ctx)
-    if config == "omitted":
-        return
-    if config == "empty array":
-        params["task_type"] = []
-    elif "+" in config:
-        params["task_type"] = _parse_array_value(config)
-    else:
-        params["task_type"] = config
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# WHEN step — query task list
-# ═══════════════════════════════════════════════════════════════════════
-
-
-def _dispatch_list_tasks(ctx: dict, **params: Any) -> Any:
-    """Dispatch list_tasks through the TRANSPORT, and return what the buyer received.
-
-    ``dispatch_request`` -> ``env.call_via`` -> ``ctx["transport"]``, never the ``_impl``.
-    It briefly did call ``_list_tasks_impl`` directly, and that is worse than the dangling
-    ``list_tasks`` name it replaced: a direct impl call runs the same code whatever
-    ``ctx["transport"]`` says, so every parametrized leg of these scenarios silently
-    collapsed onto one and the wire contract stopped being graded at all. That is exactly
-    what ``test_architecture_bdd_no_direct_call_impl`` exists to refuse, and it caught it.
-
-    ``list_tasks`` is MCP-only (``TaskManagementEnv.MCP_TOOL``; no A2A skill, no REST
-    route), so the transport set these scenarios run is narrow -- but narrow because the
-    SURFACE is narrow, which the env declares, not because the step reached past it.
+    By creation the newest is the rejected one; by update it is the completed one; by
+    status the first is ``completed``. So a sort that ignores ``sort.field`` puts the wrong
+    task first for every field but created_at, and one that ignores ``sort.direction``
+    reverses all of them. The statuses and task types differ in their first letter, so their
+    order cannot depend on the database collation.
     """
-    from tests.bdd.steps.generic._dispatch import dispatch_request
 
-    ctx["env"]._commit_factory_data()
-    dispatch_request(ctx, **params)
-    if "error" in ctx:
-        raise ctx["error"] if isinstance(ctx["error"], BaseException) else AssertionError(ctx["error"])
-    return ctx["result"]
+    def ago(minutes: int) -> datetime:
+        return now - timedelta(minutes=minutes)
+
+    return [
+        _SeededTask("create_media_buy", "pending", ago(600), None, "create_media_buy", "submitted", "media-buy"),
+        _SeededTask("update_media_buy", "in_progress", ago(500), None, "update_media_buy", "working", "media-buy"),
+        _SeededTask(
+            "sync_creatives", "requires_approval", ago(400), None, "sync_creatives", "input-required", "media-buy"
+        ),
+        _SeededTask("sync_creatives", "completed", ago(300), ago(10), "sync_creatives", "completed", "media-buy"),
+        _SeededTask("update_media_buy", "failed", ago(200), ago(150), "update_media_buy", "failed", "media-buy"),
+        # No completion time: the admin's reject (operations.py) sets the status and nothing else.
+        _SeededTask("create_media_buy", "rejected", ago(100), None, "create_media_buy", "rejected", "media-buy"),
+    ]
 
 
-def _dispatch_list_tasks_e2e(ctx: dict, **params: Any) -> dict:
-    """Query workflow_steps directly through the harness DB session for E2E mode.
+# ═══════════════════════════════════════════════════════════════════════
+# GIVEN steps
+# ═══════════════════════════════════════════════════════════════════════
 
-    In E2E mode, list_tasks() would call get_db_session() which connects to
-    the empty test DB, not Docker's DB. Instead, we query workflow_steps
-    through the harness session (bound to Docker's DB).
 
-    Unsupported params (sort_field, domain, task_status, task_type) raise
-    TypeError to preserve the same xfail behavior as in-process mode.
+@given("the Buyer Agent owns tasks of several types, statuses and update times")
+def given_seeded_tasks(ctx: dict) -> None:
+    """Seed the six tasks under the caller's own principal, keyed by their step id.
+
+    Through the env-bound factories, so on e2e_rest the rows land in the live server's
+    database. One context owns them all: list_tasks scopes by the context's principal.
     """
-    # Replicate list_tasks() parameter validation: raise TypeError for
-    # unsupported params (same behavior as calling list_tasks() in-process).
-    _supported = {"status", "object_type", "object_id", "limit", "offset"}
-    unsupported = set(params.keys()) - _supported
-    if unsupported:
-        raise TypeError(f"list_tasks() got an unexpected keyword argument '{next(iter(unsupported))}'")
+    context = ContextFactory(principal=ctx["principal"])
+    seeded: dict[str, _SeededTask] = {}
+    for task in _seed_table(datetime.now(UTC)):
+        step = WorkflowStepFactory(
+            context=context,
+            tool_name=task.tool_name,
+            status=task.stored_status,
+            created_at=task.created_at,
+            completed_at=task.completed_at,
+        )
+        seeded[str(step.step_id)] = task
+    ctx["seeded_tasks"] = seeded
 
-    env = ctx["env"]
-    env._commit_factory_data()
 
-    # Use harness to get workflow steps (correct DB in both modes)
-    from src.core.database.repositories.workflow import WorkflowRepository
+#: The scenario's name for a filter -> its singular and plural spellings in ``filters``.
+_FILTER_FIELDS = {
+    "task type": ("task_type", "task_types"),
+    "task status": ("status", "statuses"),
+    "protocol": ("protocol", "protocols"),
+}
 
-    repo = WorkflowRepository(env._session, env.identity.tenant_id)
-    steps = repo.list_by_tenant(
-        status=params.get("status"),
-        object_type=params.get("object_type"),
-        object_id=params.get("object_id"),
-        offset=params.get("offset", 0),
-        limit=params.get("limit", 20),
-    )
-    # Return a dict matching list_tasks() response shape
-    return {
-        "tasks": [
-            {
-                "step_id": s.step_id,
-                "status": s.status,
-                "operation": s.operation,
-                "created_at": str(s.created_at) if s.created_at else None,
-                "updated_at": str(s.updated_at) if s.updated_at else None,
-            }
-            for s in steps
-        ],
-        "total": len(steps),
-    }
+
+@given(parsers.re(r"the (?P<dimension>task type|task status|protocol) filter is (?P<value>.+)"))
+def given_task_filter(ctx: dict, dimension: str, value: str) -> None:
+    """Put one filter on the query, in the spelling the Examples value names.
+
+    ``omitted`` sends no filter, ``empty array`` the plural with no members, ``a+b`` the
+    plural with those members, and anything else the singular -- including values the
+    enum does not hold, which is what the refusal rows send.
+    """
+    if value == "omitted":
+        return
+    singular, plural = _FILTER_FIELDS[dimension]
+    filters = ctx.setdefault("task_query", {}).setdefault("filters", {})
+    if value == "empty array":
+        filters[plural] = []
+    elif "+" in value:
+        filters[plural] = value.split("+")
+    else:
+        filters[singular] = value
+
+
+@given(parsers.re(r"the task list sort (?P<member>field|direction) is (?P<value>.+)"))
+def given_task_sort(ctx: dict, member: str, value: str) -> None:
+    """Put ``sort.field`` or ``sort.direction`` on the query; ``omitted`` sends neither."""
+    if value != "omitted":
+        ctx.setdefault("task_query", {}).setdefault("sort", {})[member] = value
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# WHEN step
+# ═══════════════════════════════════════════════════════════════════════
 
 
 @when("the Buyer Agent queries the task list")
 def when_query_task_list(ctx: dict) -> None:
-    """Call list_tasks with ALL configured params.
+    """Send list_tasks with the query the Givens built, on the scenario's transport."""
+    dispatch_via_client(ctx, "list_tasks", dict(ctx.get("task_query", {})))
 
-    Passes every param from ctx["task_query_params"] to list_tasks().
-    If production doesn't accept a param (e.g. sort_field, domain),
-    the resulting TypeError is stored in ctx["error"] — the real
-    production gap surfaces at call time, not via pre-filtering.
 
-    Transport-aware: in E2E mode, queries workflow_steps directly through
-    the harness DB session to avoid hitting the wrong database.
+# ═══════════════════════════════════════════════════════════════════════
+# THEN outcomes -- reached through then_result_should_be (uc002_create_media_buy.py)
+# ═══════════════════════════════════════════════════════════════════════
+
+#: The wire field a ``filters`` dimension is read back from. The pin names the filter
+#: ``protocol`` and the task item ``domain``; both are the AdCP protocol.
+_WIRE_FIELD = {"task_type": "task_type", "status": "status", "protocol": "domain"}
+
+
+def is_task_query_outcome(outcome: str) -> bool:
+    """Whether *outcome* is one of the list_tasks outcomes this module grades.
+
+    A refusal row is not: it is written ``error <CODE> <recovery> on <field>`` and graded by
+    the shared structured-error grammar like every other UC-002 refusal.
     """
-    from tests.bdd.steps._outcome_helpers import is_e2e
-
-    env = ctx["env"]
-    params = ctx.get("task_query_params", {})
-
-    try:
-        if is_e2e(ctx):
-            result = _dispatch_list_tasks_e2e(ctx, **params)
-        else:
-            result = _dispatch_list_tasks(ctx, **params)
-        ctx["task_list_result"] = result
-    except (AdCPSalesAgentError, TypeError, Exception) as exc:
-        ctx["error"] = exc
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# THEN outcome helpers — task query assertions
-# ═══════════════════════════════════════════════════════════════════════
+    return outcome.startswith("tasks ")
 
 
 def assert_task_query_outcome(ctx: dict, outcome: str) -> None:
-    """Assert task query outcomes for sort/domain/status scenarios.
+    """Grade a list_tasks outcome. The grammar, each against the seeded tasks:
 
-    Called from the then_result_should_be dispatcher in uc002_create_media_buy.py.
+    * ``tasks with <dimension> <v1>[, <v2>...] only`` -- exactly the seeded tasks whose
+      <dimension> is one of the values, no others;
+    * ``tasks of every <dimension>`` -- every seeded task, the filter having narrowed nothing;
+    * ``tasks sorted by <field> <asc|desc>`` -- every seeded task, ordered by <field>.
+
+    An outcome outside it raises rather than passing ungraded.
     """
-    if outcome.startswith("tasks sorted by "):
-        _assert_sorted_by(ctx, outcome)
-    elif outcome.startswith("defaults to "):
-        _assert_default_sort(ctx, outcome)
-    elif outcome.startswith("results in "):
-        _assert_sort_direction(ctx, outcome)
-    elif outcome.startswith("tasks filtered to "):
-        _assert_filtered_to(ctx, outcome)
-    elif outcome in (
-        "tasks from all domains returned",
-        "tasks of all statuses returned",
-        "tasks of all types returned",
-    ):
-        _assert_all_returned(ctx, outcome)
+    words = outcome.split()
+    seeded: dict[str, _SeededTask] = ctx["seeded_tasks"]
+    if outcome.startswith("tasks with ") and outcome.endswith(" only"):
+        dimension = words[2]
+        wanted = {value.strip() for value in " ".join(words[3:-1]).split(",")}
+        _assert_listed(ctx, {step_id for step_id, task in seeded.items() if getattr(task, dimension) in wanted})
+    elif outcome.startswith("tasks of every "):
+        _assert_listed(ctx, set(seeded))
+    elif outcome.startswith("tasks sorted by "):
+        field, direction = words[3], words[4]
+        listed = _assert_listed(ctx, set(seeded))
+        keys = [seeded[step_id].sort_key(field) for step_id in listed]
+        assert keys == sorted(keys, reverse=direction == "desc"), (
+            f"tasks are not in {field} {direction} order: {list(zip(listed, keys, strict=True))}"
+        )
     else:
-        raise ValueError(f"Unknown task query outcome: {outcome}")
+        raise ValueError(f"Unknown task query outcome: {outcome!r}")
 
 
-def _assert_sorted_by(ctx: dict, outcome: str) -> None:
-    """Assert tasks are sorted by a specific field.
+def _assert_listed(ctx: dict, expected_ids: set[str]) -> list[str]:
+    """Assert the wire lists exactly *expected_ids*, each as seeded; return the wire order.
 
-    The pin nests sorting: protocol/list-tasks-request.json declares
-    ``sort: {field, direction}``, not a flat ``sort_field``. A TypeError here means
-    the STEP is sending a shape the spec does not define.
+    Each listed task's task_type, status and domain must be the pin's value for the seeded
+    task, and ``query_summary.total_matching`` must count the same set.
     """
-    assert "error" not in ctx, f"Expected sorted results but got error: {ctx.get('error')}"
-    result = ctx.get("task_list_result")
-    assert result is not None, "No task list result"
-
-
-def _assert_default_sort(ctx: dict, outcome: str) -> None:
-    """Assert default sort behavior.
-
-    'defaults to created_at sort' — production already does this (hardcoded).
-    'defaults to desc order' — production already does this (hardcoded).
-    """
-    if outcome == "defaults to created_at sort":
-        assert "error" not in ctx, f"Expected default sort but got error: {ctx.get('error')}"
-        result = ctx.get("task_list_result")
-        assert result is not None, "No task list result"
-    elif outcome == "defaults to desc order":
-        assert "error" not in ctx, f"Expected default order but got error: {ctx.get('error')}"
-        result = ctx.get("task_list_result")
-        assert result is not None, "No task list result"
-    else:
-        raise ValueError(f"Unknown default sort outcome: {outcome}")
-
-
-def _assert_sort_direction(ctx: dict, outcome: str) -> None:
-    """Assert results are in ascending or descending order.
-
-    The pin nests direction under ``sort.direction`` (enums/sort-direction.json), not a
-    flat ``sort_direction``. A TypeError here means the STEP sends a non-spec shape.
-    """
-    assert "error" not in ctx, f"Expected sorted results but got error: {ctx.get('error')}"
-    result = ctx.get("task_list_result")
-    assert result is not None, "No task list result"
-
-
-def _assert_filtered_to(ctx: dict, outcome: str) -> None:
-    """Assert tasks are filtered to a specific domain, status, or type.
-
-    The pin nests these under ``filters`` (protocol/list-tasks-request.json); there are no
-    flat ``domain`` / ``task_status`` / ``task_type`` parameters. A TypeError here means the
-    STEP sends a shape the spec does not define.
-    """
-    assert "error" not in ctx, f"Expected filtered results but got error: {ctx.get('error')}"
-    result = ctx.get("task_list_result")
-    assert result is not None, "No task list result"
-
-
-def _assert_all_returned(ctx: dict, outcome: str) -> None:
-    """Assert all tasks returned when filter is omitted.
-
-    When no filter is specified, list_tasks() returns all tasks for the tenant — this is
-    the production default behavior, and the pin agrees (``filters`` is optional).
-    """
-    assert "error" not in ctx, f"Expected all tasks but got error: {ctx.get('error')}"
-    result = ctx.get("task_list_result")
-    assert result is not None, "No task list result"
+    seeded: dict[str, _SeededTask] = ctx["seeded_tasks"]
+    tasks = wire_field(ctx, "tasks")
+    listed = [task["task_id"] for task in tasks]
+    assert len(listed) == len(set(listed)), f"a task is listed twice: {listed}"
+    assert set(listed) == expected_ids, (
+        f"listed {sorted(listed)}, expected {sorted(expected_ids)}; "
+        f"unexpected {sorted(set(listed) - expected_ids)}, missing {sorted(expected_ids - set(listed))}"
+    )
+    for task in tasks:
+        expected = seeded[task["task_id"]]
+        actual = {dimension: task.get(field) for dimension, field in _WIRE_FIELD.items()}
+        assert actual == {dimension: getattr(expected, dimension) for dimension in _WIRE_FIELD}, (
+            f"task {task['task_id']} reads {actual} on the wire, seeded as {expected}"
+        )
+    total = wire_field(ctx, "query_summary.total_matching")
+    assert total == len(expected_ids), f"query_summary.total_matching is {total}, expected {len(expected_ids)}"
+    return listed
