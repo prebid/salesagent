@@ -21,6 +21,7 @@ from src.adapters.gam_inventory_discovery import (
 from src.core.database.db_config import DatabaseConfig
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import GAMInventory, Product, ProductInventoryMapping
+from src.services.gam_product_config_service import product_gam_slots
 
 # Create database session factory
 engine = create_engine(DatabaseConfig.get_connection_string())
@@ -748,7 +749,7 @@ class GAMInventoryService:
             logger.error(f"   Insert count: {len(to_insert)}, Update count: {len(to_update)}")
             logger.error("   This usually indicates: lost connection, lock contention, or large transaction")
             self.db.rollback()
-            # A DB commit timeout is SERVICE_UNAVAILABLE, per AdCP 3.1.1
+            # A DB commit timeout is SERVICE_UNAVAILABLE, per AdCP.1
             # transport-errors.mdx Rule 1, which names this exact translation.
             raise AdCPServiceUnavailableError(internal_detail=e) from e
         except (OperationalError, DBAPIError) as e:
@@ -1241,17 +1242,28 @@ class GAMInventoryService:
         if not product:
             return []
 
-        # Extract product characteristics
-        creative_sizes: list[dict[str, int]] = []
-        if product.format_ids:
-            # Parse formats to get sizes
-            for format_id in product.format_ids:
-                if isinstance(format_id, str) and "display" in format_id:
-                    # Extract size from format like "display_300x250"
-                    parts = format_id.split("_")
-                    if len(parts) > 1 and "x" in parts[1]:
-                        width, height = parts[1].split("x")
-                        creative_sizes.append({"width": int(width), "height": int(height)})
+        # The slots this product's format declarations state, asked of the ONE reader that
+        # answers that question for GAM -- the same one that seeds a product's
+        # implementation_config and that the order manager reads a package's snapshot with.
+        # The size match below scores an ad unit against them.
+        #
+        # Read off ``Product.format_contract``, not the product's own columns: a product
+        # linked to an inventory profile is served and graded against the PROFILE's
+        # declarations, so sizing it from its own arms scored ad units against a contract no
+        # buyer was ever offered.
+        #
+        # THE LOOP THIS REPLACES WAS DEAD, not merely legacy-only. It tested
+        # ``isinstance(format_id, str)`` while ``models.py:402`` types the column
+        # ``Mapped[list[dict[str, str]] | None]`` and every writer stores FormatId DOCUMENTS,
+        # so the body never ran and ``creative_sizes`` was ALWAYS empty -- every ad unit was
+        # scored with no size signal at all. That is the same defect shape as the GAM seeder's
+        # deleted dimension map, which read a ``format_id`` key the stored entries do not
+        # carry (salesagent-ne2t3, salesagent-ki6a4).
+        contract = product.format_contract
+        creative_sizes: list[dict[str, int]] = [
+            {"width": slot["width"], "height": slot["height"]}
+            for slot in product_gam_slots(contract.format_ids, contract.format_options)
+        ]
 
         # Get keywords from product name and description
         keywords: list[str] = []

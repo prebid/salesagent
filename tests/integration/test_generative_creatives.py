@@ -16,11 +16,16 @@ from sqlalchemy import select
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
 from src.core.schemas import SyncCreativesResponse
-from tests.factories.creative_asset import build_assets, image_spec, text_spec
+from tests.factories.creative_asset import named_format_assets, prompt_assets, text_spec
 from tests.harness import CreativeSyncEnv
 from tests.helpers.creative_test_helpers import creative_payload
 
-DEFAULT_AGENT_URL = "https://creative.test.example.com"
+#: The agent the committed capture was taken FROM, which is the only agent_url whose
+#: ``(agent_url, id)`` pair ``find_format`` matches against the capture and the only one
+#: ``is_operator_agent`` admits -- so the one that resolves without dialling. The
+#: previous value ``https://creative.test.example.com`` did neither; it worked only while
+#: the registry was a stand-in (salesagent-6xtxb).
+DEFAULT_AGENT_URL = CreativeSyncEnv.DEFAULT_AGENT_URL
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -32,7 +37,10 @@ def _creative(**overrides) -> dict:
             "creative_id": "gen-creative-001",
             "name": "Test Generative Creative",
             "format_id": {"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250_generative"},
-            "assets": build_assets(text_spec("message", content="Create a banner ad for eco-friendly products")),
+            "assets": prompt_assets(
+                "Create a banner ad for eco-friendly products",
+                text_spec("message", content="Create a banner ad for eco-friendly products"),
+            ),
             **overrides,
         }
     )
@@ -85,20 +93,23 @@ class TestGenerativeCreatives:
             assert db_creative.data.get("url") == "https://example.com/generated.html"
 
     def test_static_format_calls_preview_creative(self, integration_db):
-        """Test that static formats (without output_format_ids) call preview_creative."""
-        from unittest.mock import MagicMock
+        """Test that static formats (without output_format_ids) call preview_creative.
 
-        from adcp.types import FormatId as LibraryFormatId
-
+        The served format is the CAPTURE's own, read through the env: the sync path hands
+        the resolved spec to ``canonical_kind_for``, whose first step reads
+        ``spec.canonical.kind``, and a hand-rolled ``MagicMock`` answered a child mock
+        there -- which ``CreativeFormatIdentity`` refuses as an out-of-vocabulary kind, so
+        the creative came back ``action='failed'``. ``CreativeSyncEnv.served_format`` now
+        FILTERS the committed capture, so the kind is the reference agent's own and no
+        test states it.
+        """
         with CreativeSyncEnv() as env:
             env.setup_default_data()
 
-            # Set up static format (no output_format_ids)
-            mock_format = MagicMock()
-            mock_format.format_id = LibraryFormatId(agent_url=DEFAULT_AGENT_URL, id="display_300x250")
-            mock_format.agent_url = DEFAULT_AGENT_URL
-            mock_format.output_format_ids = None
-            env.set_run_async_result([mock_format])
+            # A static format -- no output_format_ids in the capture, so production takes
+            # the preview_creative branch rather than the generative build. Asserted
+            # through ``generative=False`` rather than assumed.
+            served = env.served_format("display_300x250_image", generative=False)
 
             registry = env.mock["registry"].return_value
             registry.preview_creative = AsyncMock(
@@ -115,15 +126,13 @@ class TestGenerativeCreatives:
                     ]
                 }
             )
-            registry.get_format = AsyncMock(return_value=mock_format)
-
             result = env.call_impl(
                 creatives=[
                     _creative(
                         creative_id="static-creative-001",
                         name="Test Static Creative",
-                        format_id={"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250"},
-                        assets=build_assets(image_spec("image", url="https://example.com/banner.png")),
+                        format_id={"agent_url": env.DEFAULT_AGENT_URL, "id": served.format_id.id},
+                        assets=named_format_assets(served.format_id.id, media_url="https://example.com/banner.png"),
                     )
                 ]
             )
@@ -148,7 +157,7 @@ class TestGenerativeCreatives:
                     _creative(
                         creative_id="gen-creative-002",
                         format_id=fmt,
-                        assets=build_assets(text_spec("message", content="Test message")),
+                        assets=prompt_assets("Test message", text_spec("message", content="Test message")),
                     )
                 ]
             )
@@ -170,7 +179,7 @@ class TestGenerativeCreatives:
                     _creative(
                         creative_id="gen-creative-003",
                         format_id=fmt,
-                        assets=build_assets(text_spec("brief", content="Message from brief")),
+                        assets=prompt_assets("Message from brief", text_spec("brief", content="Message from brief")),
                     )
                 ]
             )
@@ -179,13 +188,17 @@ class TestGenerativeCreatives:
             call_args = registry.build_creative.call_args
             assert call_args[1]["message"] == "Message from brief"
 
-    def test_message_fallback_to_creative_name(self, integration_db):
-        """Test that creative name is used as fallback when no message provided."""
+    def test_creative_without_prompt_asset_is_refused(self, integration_db):
+        """A generative creative with no prompt asset is refused, not built from its name.
+
+        The captured generative format REQUIRES ``generation_prompt``, and the seller holds a
+        creative to its named format's required assets.
+        """
         with CreativeSyncEnv() as env:
             env.setup_default_data()
             fmt = env.setup_generative_build(format_id="display_300x250_generative")
 
-            env.call_impl(
+            result = env.call_impl(
                 creatives=[
                     _creative(
                         creative_id="gen-creative-004",
@@ -196,9 +209,9 @@ class TestGenerativeCreatives:
                 ]
             )
 
-            registry = env.mock["registry"].return_value
-            call_args = registry.build_creative.call_args
-            assert call_args[1]["message"] == "Create a creative for: Eco-Friendly Products Banner"
+            assert result.creatives[0].action == "failed"
+            assert [error.code for error in result.creatives[0].errors] == ["CREATIVE_VALIDATION_FAILED_GENERIC"]
+            assert not env.mock["registry"].return_value.build_creative.called
 
     def test_context_id_reuse_for_refinement(self, integration_db):
         """Test that context_id is reused for iterative refinement."""
@@ -221,7 +234,7 @@ class TestGenerativeCreatives:
                     _creative(
                         creative_id="gen-creative-005",
                         format_id=fmt,
-                        assets=build_assets(text_spec("message", content="Initial message")),
+                        assets=prompt_assets("Initial message", text_spec("message", content="Initial message")),
                     )
                 ]
             )
@@ -243,7 +256,7 @@ class TestGenerativeCreatives:
                     _creative(
                         creative_id="gen-creative-005",
                         format_id=fmt,
-                        assets=build_assets(text_spec("message", content="Refined message")),
+                        assets=prompt_assets("Refined message", text_spec("message", content="Refined message")),
                     )
                 ]
             )
@@ -268,7 +281,7 @@ class TestGenerativeCreatives:
                     _creative(
                         creative_id="gen-creative-006",
                         format_id=fmt,
-                        assets=build_assets(text_spec("message", content="Test message")),
+                        assets=prompt_assets("Test message", text_spec("message", content="Test message")),
                     )
                 ]
             )

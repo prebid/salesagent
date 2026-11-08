@@ -119,7 +119,7 @@ def require_vendor(client: VendorHttpClient | None, *, vendor: str) -> VendorHtt
     The vendor name is the structured fact and goes in
     ``ConfigurationDetails.provider``, the same slot every other named-provider
     misconfiguration uses. Naming a third-party vendor in buyer-facing text is
-    exactly what AdCP 3.1.1 ``transport-errors.mdx`` § Security Considerations
+    exactly what ``transport-errors.mdx`` § Security Considerations
     forbids, and buyer-facing text is a function of the code anyway (ADR-010),
     so there is nothing to author.
     """

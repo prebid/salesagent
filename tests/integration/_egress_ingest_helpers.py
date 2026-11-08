@@ -78,8 +78,18 @@ def _registered_format() -> object:
     class-insensitive by construction (#2093). Do not read this fixture as
     proof that the class-sensitive compare is still guarded; the guard is
     ``find_format`` being the one definition of the match.
+
+    ``canonical`` is the operator agent's own v1 -> v2 annotation, and without it a creative
+    in this format is refused before any dial. The harness re-homes the format at a peer
+    URL, and the SDK maps the v1 name ``display_300x250_image`` to a canonical kind only
+    for a reference at the reference agent's origin. At any other agent the id resolves
+    only through the declaration's own ``canonical`` (step 2 of the resolution order in
+    ``registries/v1-canonical-mapping.json``; ``core/format.json`` ``canonical``: "When set,
+    SDKs use this annotation as the authoritative v1 → v2 mapping for this format").
+    Without it the sync answered UNSUPPORTED_FEATURE at projection
+    (``format_resolver.creative_identity_of``), and the dial this module grades never ran.
     """
-    return FormatFactory(format_id={"id": _FORMAT_ID, "agent_url": AGENT_URL})
+    return FormatFactory(format_id={"id": _FORMAT_ID, "agent_url": AGENT_URL}, canonical={"kind": "image"})
 
 
 def _assert_no_push_config_persisted(tenant_id: str, principal_id: str) -> None:

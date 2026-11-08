@@ -110,6 +110,7 @@ onto the other source.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from functools import cache
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -121,7 +122,7 @@ from jsonschema.validators import Draft7Validator
 from referencing.jsonschema import DRAFT7
 
 from tests.helpers.adcp_pinned_schema import (
-    _EXCLUDED_TOP_LEVEL_DIR,
+    _EXCLUDED_TOP_LEVEL_DIRS,
     PinnedSchemaError,
     normalize_ref,
     schema_root,
@@ -136,6 +137,9 @@ from tests.helpers.adcp_pinned_schema import (
 from tests.helpers.adcp_pinned_schema import (
     _resolve_filename as _resolve_in_sdk_tree,
 )
+from tests.helpers.adcp_pinned_schema import (
+    installed_spec_version as _installed_spec_version,
+)
 
 __all__ = [
     "PinnedSchemaError",
@@ -145,6 +149,7 @@ __all__ = [
     "normalize_ref",
     "recovery_by_code",
     "schema_root",
+    "tree_ref_for_index_ref",
     "validate_against_pinned_schema",
     "validator_for",
 ]
@@ -160,6 +165,109 @@ _VERSION_PREFIX = re.compile(r"^(\d+\.\d+\.\d+)/(.+)$")
 # The namespace the vendored documents' own ``$id``/``$ref`` values live in
 # (``/schemas/3.1.1/core/agent-signing-key.json``).
 _SITE_ROOT_PREFIX = "/schemas/"
+
+#: The origin upstream stamps into ``$id`` and ``$ref`` from AdCP 3.2 on. Before 3.2 it
+#: wrote the bare site-rooted path; from 3.2 it writes the same path behind this origin,
+#: which is why both spellings have to resolve to the same vendored file.
+_SITE_ORIGIN = "https://adcontextprotocol.org"
+
+
+def _site_rooted_path(uri: str) -> str | None:
+    """*uri*'s site-rooted ``/schemas/…`` path, or ``None`` if it has none.
+
+    THE ROUTING DECISION, in one place, made on the PARSED PATH rather than on the raw
+    string. AdCP 3.2 writes ``$id`` and ``$ref`` as absolute URLs where 3.1.1 wrote the
+    bare path, so ``uri.startswith("/schemas/")`` -- what both call sites used to ask --
+    is False for every 3.2 ref. Those refs then fell through to the SDK branch, where
+    ``Path(url2pathname(urlparse(uri).path))`` is the ABSOLUTE ``/schemas/3.2.1/...`` and
+    :meth:`_PinnedSource.contained` correctly refused it as outside the SDK tree. The
+    guard was right; the routing that reached it was not.
+
+    THE ORIGIN IS CHECKED, not ignored. Routing on the path alone would make
+    ``https://evil.example/schemas/3.2.1/core/error.json`` resolve into the vendored tree
+    -- a foreign document naming our pinned namespace and being served our bytes. Only
+    upstream's own origin, or no origin at all, is site-rooted here; anything else keeps
+    falling through to the SDK branch and is refused there as it always was.
+
+    Not fixed by normalizing at vendor time instead: that would edit upstream's own bytes,
+    which is exactly what the SHA-256 pin guard on ``enums/error-code.json`` exists to
+    detect, and the vendoring is deliberately byte-faithful.
+    """
+    if uri.startswith(_SITE_ROOT_PREFIX):
+        return uri
+    parsed = urlparse(uri)
+    if not parsed.scheme and not parsed.netloc:
+        return None
+    if f"{parsed.scheme}://{parsed.netloc}" != _SITE_ORIGIN:
+        return None
+    return parsed.path if parsed.path.startswith(_SITE_ROOT_PREFIX) else None
+
+
+def tree_ref_for_index_ref(ref: str) -> str:
+    """Upstream's ``index.json`` ``$ref``, as a ref this module's resolvers accept.
+
+    The index changed spelling at the pin boundary, and nothing was taught to read
+    it. Measured on the installed trees:
+
+    ====  ============  ==========  ===============================================
+    pin   ``$ref``s     absolute    the ``sync-creatives`` response entry
+    ====  ============  ==========  ===============================================
+    3.1   437           0  (0%)     ``creative/sync-creatives-response.json``
+    3.2   633           633 (100%)  ``https://adcontextprotocol.org/schemas/3.2.1/creative/sync-creatives-response.json``
+    ====  ============  ==========  ===============================================
+
+    This is the same move :func:`_resolve_site_rooted` already records for the
+    generated tree's own 1314 internal ``$ref``s — 3.2 put them behind upstream's
+    origin, naming the spec version. It happened to the index too.
+
+    A tree-relative ref (the 3.1 form, and the app tree's) is returned unchanged, so
+    this is identity for every ref that already resolved.
+
+    THE VERSION IS VERIFIED, NOT STRIPPED, and that is the whole point of doing this
+    here rather than relaxing :func:`normalize_ref`. That function refuses a ref
+    carrying a version precisely because "quietly redirecting it hides that the
+    version it named was ignored"; keeping the refusal and narrowing it to a
+    MISMATCH preserves the guarantee while accepting upstream's new spelling. The
+    comparison is against the installed SDK's spec version (``3.2.1``), NOT the
+    schema directory it lives in (``3.2``) — a check against the directory would
+    pass today and go quiet at the next patch release, which is the failure this
+    docstring exists to prevent.
+
+    The origin is not re-checked here: :func:`_site_rooted_path` owns that rule, so
+    ``https://evil.example/schemas/3.2.1/core/error.json`` returns ``None`` there and
+    falls through unchanged, to be refused downstream. One origin rule, one place.
+
+    Measured, because "falls through" is only safe if something catches it — and WHICH
+    thing catches it depends on the caller, so both were checked:
+
+    - through :class:`~tests.helpers.adcp_schema_validator.AdCPSchemaValidator`, which
+      runs this and then :func:`normalize_ref`, the ``"://"`` refusal fires:
+      ``Cannot resolve schema reference 'https://evil.example/…'``;
+    - through :func:`load` directly, which skips ``normalize_ref``, it reaches
+      :func:`_resolve_filename` and dies as ``not found under any of: …``.
+
+    Refused on both paths. The second message names containment rather than origin,
+    which is worth knowing before debugging one.
+    """
+    path = _site_rooted_path(ref)
+    if path is None:
+        return ref
+
+    match = _VERSION_PREFIX.match(path[len(_SITE_ROOT_PREFIX) :])
+    if not match:
+        raise PinnedSchemaError(
+            f"Index ref {ref!r} is site-rooted but names no spec version "
+            f"({_SITE_ROOT_PREFIX}<major>.<minor>.<patch>/...), so it selects no pinned tree"
+        )
+
+    named, remainder = match.group(1), match.group(2)
+    pinned = _installed_spec_version()
+    if named != pinned:
+        raise PinnedSchemaError(
+            f"Index ref {ref!r} names spec version {named!r} but the installed pin is "
+            f"{pinned!r}. Resolving it would grade against a version the ref did not name."
+        )
+    return remainder
 
 
 class _PinnedSource(NamedTuple):
@@ -193,20 +301,37 @@ class _PinnedSource(NamedTuple):
             return path.as_uri()
         return self.uri_prefix + path.resolve().relative_to(self.ref_base.resolve()).as_posix()
 
-    def contained(self, candidate: Path, *, what: str) -> Path:
-        """Resolve *candidate* and assert it stays inside this source's tree.
+    def resolved_file(self, candidate: Path, *, what: str) -> Path:
+        """Resolve *candidate*, assert it stays inside this source's tree, and
+        assert the file is THERE.
 
-        The single containment check for this module, always against whichever
+        The single resolution check for this module, always against whichever
         tree the ref itself selected. A ref can embed traversal
         (``"media-buy/../../../../etc/hosts"``), and probing an UNRESOLVED path
         lets the OS follow the ``..`` segments — so resolution and the check
         have to happen together, here, once, rather than at each of the call
         sites that used to spell it out in three different shapes with three
         different messages.
+
+        EXISTENCE IS THE SECOND HALF, and leaving it out made a whole class of
+        defect silent. This was ``contained()``, which checked containment
+        alone; two of its four callers then checked ``exists()`` by hand and two
+        did not. The two that did not are the pair ``load_canonicalized`` walks,
+        so a ref that resolved INSIDE the tree to a file that was not there came
+        back as a successful resolution, and
+        ``load_canonicalized("media-buy/get-products-response.json")`` returned
+        a document whose ``$ref``s named files that do not exist. Nothing failed
+        until some later reader followed one, at which point the error named the
+        reader rather than the ref. A resolution that cannot be loaded is not a
+        resolution, so it fails here — and the name says both rules, because a
+        method called ``contained`` that also asserts existence is two rules
+        wearing one name.
         """
         resolved = candidate.resolve()
         if not resolved.is_relative_to(self.root.resolve()):
             raise PinnedSchemaError(f"{what} escapes the pinned {self.label} schema tree: {resolved}")
+        if not resolved.is_file():
+            raise PinnedSchemaError(f"{what}: pinned schema not found in the {self.label} tree -> {resolved}")
         return resolved
 
 
@@ -248,12 +373,9 @@ def _resolve_in_tree(source: _PinnedSource, rel: str, ref: str) -> Path:
     """
     root = source.root
     if "/" in rel:
-        path = source.contained(root / rel, what=f"Schema ref {ref!r}")
-        if not path.exists():
-            raise PinnedSchemaError(f"Pinned schema not found: {ref} -> {path}")
-        return path
+        return source.resolved_file(root / rel, what=f"Schema ref {ref!r}")
 
-    matches = sorted(p for p in root.rglob(rel) if _EXCLUDED_TOP_LEVEL_DIR not in p.relative_to(root).parts)
+    matches = sorted(p for p in root.rglob(rel) if not (_EXCLUDED_TOP_LEVEL_DIRS & set(p.relative_to(root).parts)))
     if not matches:
         raise PinnedSchemaError(f"Pinned schema {ref!r} not found under {root}.")
     if len(matches) > 1:
@@ -367,19 +489,45 @@ def auth_scheme_values() -> frozenset[str]:
 def _ref_target(target_part: str, *, file_dir: Path, source: _PinnedSource, what: str) -> tuple[_PinnedSource, Path]:
     """The pinned source and file a non-fragment ``$ref`` points at, under either convention.
 
-    Site-rooted (``/schemas/<version>/…``, the vendored tag tree's own form)
-    resolves against that version's vendored tree — the same explicit-version
-    selection ``_resolve_ref`` makes, never a fallback. Anything else is a
-    path relative to the referring file's own directory (the SDK plain tree's
-    form) and stays inside *source*.
+    Site-rooted (``/schemas/<version>/…``) resolves in the tree that holds the
+    REFERRING document — see :func:`_site_rooted_target`. Anything else is a
+    path relative to the referring file's own directory (the form the SDK plain
+    tree used before 3.2) and stays inside *source*.
     """
-    if target_part.startswith(_SITE_ROOT_PREFIX):
-        return _site_rooted_target(target_part, what=what)
-    return source, source.contained(file_dir / target_part, what=what)
+    site_rooted = _site_rooted_path(target_part)
+    if site_rooted is not None:
+        return _site_rooted_target(site_rooted, source=source, what=what)
+    return source, source.resolved_file(file_dir / target_part, what=what)
 
 
-def _site_rooted_target(uri_path: str, *, what: str) -> tuple[_PinnedSource, Path]:
-    """Map a site-rooted ``/schemas/…`` ref onto a vendored tree.
+def _site_rooted_target(uri_path: str, *, source: _PinnedSource, what: str) -> tuple[_PinnedSource, Path]:
+    """Map a site-rooted ``/schemas/<version>/…`` ref onto a tree, choosing the
+    tree by the REFERRING document's *source*.
+
+    THE REFERRER DECIDES, because from AdCP 3.2 the URI cannot. Until 3.2 the
+    two pinned trees spelled their refs differently — the vendored tag tree
+    site-rooted, the SDK plain tree relative to the referring file — so the ref
+    alone said which tree it meant. 3.2 moved the SDK's generated tree onto the
+    SAME absolute site-rooted form, in upstream's own origin, naming the spec
+    version: all 1314 of its internal ``$ref``s, with no ``$id`` of its own. The
+    two namespaces collapsed into one, and a rule that reads only the URI then
+    sends every SDK-internal ref to the vendored tree — a deliberately partial
+    closure of upstream's documents — where all but 112 of them are not present.
+
+    Resolving in the referrer's own tree is not a guess. Measured at this pin,
+    BOTH trees are CLOSED under self-reference and NEITHER has a single ref the
+    other would have to satisfy: the SDK tree's 1314 absolute targets all exist
+    inside it, the vendored tree's 110 all exist inside it, cross-tree refs are
+    zero in both directions. So this costs no reachable document, and it leaves
+    ``_vendored_source``'s rule — never serve the SDK's structurally different
+    copy for a ref that named a version — enforced BY CONSTRUCTION rather than by
+    a check a later reader can relax.
+
+    Not fixed by rewriting the refs at load time instead: that falsifies
+    :func:`load`'s own contract that ``$ref``s come back as upstream wrote them,
+    and it is a softer form of the vendor-time normalization this module already
+    refuses, the SHA-256 pin on ``enums/error-code.json`` existing precisely to
+    detect edits to upstream's bytes.
 
     Only the version-namespaced form is resolvable: the version segment is what
     names a pinned tree. A version-free ``/schemas/core/x.json`` is upstream's
@@ -392,8 +540,22 @@ def _site_rooted_target(uri_path: str, *, what: str) -> tuple[_PinnedSource, Pat
             f"{what}: a site-rooted ref is resolvable only when it names a vendored spec version "
             f"({_SITE_ROOT_PREFIX}<major>.<minor>.<patch>/...); got {uri_path!r}"
         )
-    source = _vendored_source(match.group(1))
-    return source, source.contained(source.root / match.group(2), what=what)
+    version, rest = match.group(1), match.group(2)
+    if source.uri_prefix is None:
+        # The SDK tree: its site-rooted refs are SELF-references, so the version
+        # they name must be the version THIS tree is. The tree is installed as
+        # <major>.<minor> and its refs carry the full <major>.<minor>.<patch>, so
+        # the comparison is on the maintenance line. A 3.1.1 ref found inside a
+        # 3.2 tree is a real anomaly and is refused rather than silently served.
+        if version.rsplit(".", 1)[0] != source.root.name:
+            raise PinnedSchemaError(
+                f"{what}: the {source.label} tree is pinned at {source.root.name} but this ref names "
+                f"spec version {version}. A tree's own refs are self-references; a ref naming another "
+                "version is not resolvable here."
+            )
+        return source, source.resolved_file(source.root / rest, what=what)
+    target = _vendored_source(version)
+    return target, target.resolved_file(target.root / rest, what=what)
 
 
 def _canonicalize_refs(node: Any, *, file_dir: Path, source: _PinnedSource) -> Any:
@@ -438,24 +600,41 @@ def load_canonicalized(ref: str) -> dict[str, Any]:
     return _canonicalize_refs(schema, file_dir=path.parent, source=source)
 
 
-def _retrieve(uri: str) -> referencing.Resource:
-    """``referencing``'s retrieve callback — one URI convention per pinned source.
+def _retrieve_in(source: _PinnedSource) -> Callable[[str], referencing.Resource]:
+    """``referencing``'s retrieve callback, BOUND to the tree that is asking.
 
-    SDK tree: file-relative ``$ref``s, resolved by urljoin against the
-    ``file://`` URI ``_load_with_id`` stamps, so the URI names a real
-    filesystem path. Vendored tree: upstream's own site-rooted
-    ``/schemas/<version>/…`` refs, which ARE the registry keys verbatim (that
-    is why the vendored documents keep their own ``$id`` — see
-    ``_PinnedSource.uri_prefix``).
+    ``referencing``'s callback signature is fixed at ``(uri) -> Resource``, so
+    the referring document's source cannot be threaded through the call — and
+    from AdCP 3.2 the URI alone no longer says which tree a site-rooted ref
+    means (see :func:`_site_rooted_target`). A single registry over both trees
+    therefore has one key namespace that both write into and no way to tell them
+    apart. So each source gets its OWN registry, built here: the source is
+    captured at :func:`validator_for` time, where it is already resolved, and
+    every ref inside that document resolves in that document's tree.
+
+    This is why the two trees cannot bleed into one another at all, rather than
+    being kept apart by a test somewhere. A vendored document physically cannot
+    reach the SDK's structurally different copy of the same filename, which is
+    the failure ``_vendored_source``'s docstring is written against.
+
+    Within a tree there are two spellings and both arrive here. A site-rooted
+    URI — upstream's own ``/schemas/<version>/…``, in either the bare-path form
+    3.1.1 wrote or the absolute form 3.2 adopted — routes through
+    :func:`_site_rooted_path`. Anything else is a ``file://`` URI, urljoined
+    against the one ``_load_with_id`` stamps, naming a real filesystem path.
     """
-    if uri.startswith(_SITE_ROOT_PREFIX):
-        source, path = _site_rooted_target(uri, what=f"Schema URI {uri!r}")
-    else:
-        source = _sdk_source()
-        path = source.contained(Path(url2pathname(urlparse(uri).path)), what=f"Schema URI {uri!r}")
-    if not path.exists():
-        raise PinnedSchemaError(f"Pinned schema not found: {uri} -> {path}")
-    return DRAFT7.create_resource(_load_with_id(path, source))
+
+    def retrieve(uri: str) -> referencing.Resource:
+        what = f"Schema URI {uri!r}"
+        site_rooted = _site_rooted_path(uri)
+        if site_rooted is not None:
+            target, path = _site_rooted_target(site_rooted, source=source, what=what)
+        else:
+            target = source
+            path = source.resolved_file(Path(url2pathname(urlparse(uri).path)), what=what)
+        return DRAFT7.create_resource(_load_with_id(path, target))
+
+    return retrieve
 
 
 def validator_for(ref: str) -> Draft7Validator:
@@ -472,8 +651,12 @@ def validator_for(ref: str) -> Draft7Validator:
     document is validated.
     """
     file_ref, _, pointer = ref.partition("#")
-    _, _, schema = _resolve_and_load(file_ref)
-    registry: referencing.Registry = referencing.Registry(retrieve=_retrieve)
+    source, _, schema = _resolve_and_load(file_ref)
+    # The registry is per-SOURCE, not shared: `_resolve_and_load` has already
+    # decided which tree this document came from, and binding it here is what
+    # lets `_retrieve_in` resolve the document's refs in that same tree. The
+    # source used to be discarded on this line.
+    registry: referencing.Registry = referencing.Registry(retrieve=_retrieve_in(source))
     registry = registry.with_resource(schema["$id"], DRAFT7.create_resource(schema))
 
     target = schema

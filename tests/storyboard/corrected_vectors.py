@@ -58,7 +58,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from tests.helpers.signing_vectors import create_media_buy_body
+from tests.helpers.signing_vectors import create_media_buy_body, profile_document_vector_ids
 
 #: Vendored-corpus ids keyed the way ``load_signing_vectors`` keys them
 #: (``"negative/001-no-signature-header"``), derived from a vector file's own path so the
@@ -288,10 +288,20 @@ def corrected_compliance_tree(source: Path, dest: Path) -> Path:
     vectors = dest / "test-vectors" / "request-signing"
     if not vectors.is_dir():
         raise FileNotFoundError(f"no request-signing vectors under {vectors}")
-    for bucket in _BUCKETS:
-        for path in sorted((vectors / bucket).glob("*.json")):
-            source_text = path.read_text()
-            corrected = correct_vector_text(f"{bucket}/{path.stem}", source_text)
-            if corrected != source_text:
-                path.write_text(corrected)
+    targets = [
+        (path, f"{bucket}/{path.stem}") for bucket in _BUCKETS for path in sorted((vectors / bucket).glob("*.json"))
+    ]
+    # The 3.2 profile documents carry the same stub bodies (adcontextprotocol/adcp#8571,
+    # fixed upstream by #8572 after the 3.2.7 pin), and they are what a 3.2 seller is driven
+    # with. Each is corrected under the id the profile selection drives it as; the one
+    # ungradeable orphan has no id and keeps its bytes. Drop this pass once the pin is a
+    # release that carries #8572.
+    targets += [
+        (vectors / f"{document}.json", vector_id) for document, vector_id in profile_document_vector_ids().items()
+    ]
+    for path, vector_id in targets:
+        source_text = path.read_text()
+        corrected = correct_vector_text(vector_id, source_text)
+        if corrected != source_text:
+            path.write_text(corrected)
     return dest

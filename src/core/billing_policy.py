@@ -1,6 +1,6 @@
 """Billing-party policy: the single source of truth for the billing value-set.
 
-The SDK ``BillingParty`` enum (pinned to AdCP spec v3.1.1 by
+The SDK ``BillingParty`` enum (pinned to by
 ``tests/unit/test_billing_party_parity.py``) is the only place the
 billing-party value-set is defined. The ``accounts`` DB CHECK constraint,
 the ``sync_accounts`` billing gate, and the capabilities
@@ -10,7 +10,7 @@ copy of the value-set may appear anywhere else (#1521, #1592).
 
 from typing import TYPE_CHECKING
 
-from adcp.types.generated_poc.enums.billing_party import (
+from adcp.types.domains.enums.billing_party import (
     BillingParty,
 )  # TODO: no stable alias in adcp.types
 
