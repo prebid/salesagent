@@ -71,6 +71,7 @@ import hashlib
 import json
 import os
 from collections.abc import Mapping
+from functools import cache
 from pathlib import Path
 from typing import Any
 
@@ -299,4 +300,37 @@ def load(
     rows = list(merged.values())
     if selected_only:
         rows = [row for row in rows if row["selected"]]
+    return rows
+
+
+#: The full BDD tree collects ~7.2k in-process items today. A floor well under that still
+#: catches a truncated record, which would make every verdict read from it vacuous.
+_MINIMUM_IN_PROCESS_BDD_ITEMS = 6000
+
+
+@cache
+def in_process_bdd_rows() -> tuple[dict[str, Any], ...]:
+    """Every in-process ``tests/bdd`` item the real run collected, with its marker sets.
+
+    The one reader for the graders that reason about the in-process routing population
+    (``tests/collection/test_architecture_env_route_agreement.py`` and
+    ``test_architecture_route_xfail_census.py``). Two readers would drift on the e2e
+    filter below, which decides whether a count is quoted over three in-process
+    transports or four.
+
+    The marker sets are the ones ``iter_markers()`` reports after every
+    ``pytest_collection_modifyitems`` hook, because the record is serialized at
+    ``pytest_collection_finish`` (see the module docstring). That is the superset the
+    routing contract is pinned on.
+
+    The in-network rows are dropped because the record may come from a session that had
+    ``BDD_E2E_ENABLED`` on (docker-compose sets it in-network). ``target`` scopes the read
+    to the ``tests/bdd`` tree, so rows from other suites cannot pad the floor.
+    """
+    rows = tuple(row for row in load(manifest_dir(), target=BDD_TREE) if "[e2e_" not in row["nodeid"])
+    assert len(rows) > _MINIMUM_IN_PROCESS_BDD_ITEMS, (
+        f"the collection record holds only {len(rows)} in-process tests/bdd items "
+        f"(expected > {_MINIMUM_IN_PROCESS_BDD_ITEMS}); a grader would be reasoning about a "
+        "truncated suite."
+    )
     return rows

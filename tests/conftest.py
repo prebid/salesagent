@@ -932,23 +932,18 @@ def _resolve_dotted(dotted: str) -> Any:
 # ---------------------------------------------------------------------------
 # Nested-pytest modules — one at a time under xdist
 # ---------------------------------------------------------------------------
-# MEMBERSHIP RULE: a module belongs here if and only if it runs a NESTED PYTEST
-# COLLECTION of a whole suite -- as a subprocess, through a helper that spawns
-# one, or in-process via `pytest.main`. Nothing pins that, so check before
-# adding — an earlier revision of this set carried four modules that collect
-# nothing (0.47s + 0.73s + 0.19s + 0.13s of work pinned to one worker for no
-# reason), and one of them stopped collecting in the same change that listed it.
-# Direct spawners are found with
-#
-#     grep -cE 'subprocess\.(run|Popen|check_output|check_call)' <module>
-#
-# but that grep finds only one of the three spellings, and reading it as the
-# whole rule is how this set went stale. The other two: a module can spawn
-# through a helper in `tests/unit/_architecture_helpers.py`
-# (`collect_bdd_node_ids_with_e2e_enabled`, `collect_bdd_items_with_markers`),
-# which the grep cannot see from the calling module (grep the helpers' callers
-# too); and a module can collect IN-PROCESS via `pytest.main` with no subprocess
-# at all (a `pytest.main` under `if __name__ == "__main__":` does not count).
+# MEMBERSHIP RULE: a module belongs here if and only if it starts a NESTED PYTEST
+# SESSION -- as a subprocess, through a helper that spawns one, or in-process via
+# `pytest.main`. Even one module's session imports the whole bdd conftest and the
+# app behind it. tests/unit/test_architecture_nested_pytest_membership.py derives
+# the set from the unit env's modules and fails on a spawner left out or a member
+# that stopped spawning. Both happened while the set was hand-kept: an earlier
+# revision carried four modules that collect nothing (0.47s + 0.73s + 0.19s +
+# 0.13s of work pinned to one worker for no reason), and spawners were missed.
+# The three spellings it recognizes: a `subprocess` call with a "pytest"
+# argument; a helper imported from another tests module that makes one
+# (`collect_bdd_node_ids_with_e2e_enabled`); and `pytest.main` in-process (one
+# under `if __name__ == "__main__":` does not count).
 # The in-process spelling is the most expensive, not an exception to be tidied
 # out: `test_architecture_ci_bdd_shard_manifest`, deleted since, measured its
 # nested import at ~2500 modules and ~490 MB which, unlike a subprocess's copy,
@@ -995,32 +990,28 @@ def _resolve_dotted(dotted: str) -> Any:
 # that way, which is worse than a failing test: a crash in this set does not
 # just lose its own module, it loses the whole leg.
 #
-# The multiplier is what makes it fatal rather than slow. That module's
-# `collect_bdd_items_with_markers` is `lru_cache(maxsize=1)`, i.e. per PROCESS, and its items
-# spread across every worker -- so 16 workers paid 16 separate
-# `pytest tests/bdd --collect-only` runs of ~7.2k items, each loading the whole
-# app, concurrently, alongside the 16 workers that spawned them. Measured in
-# that run: 1041.8s of CPU across 28 reported items. Grouping collapses that to
-# ONE collection for all 28 items, so the group is cheaper here, not just safer.
-# That module has since moved to tests/collection/, which runs in tox's
-# `collection` env without xdist, so this marker is inert for it there and it
-# is not listed. The helper it used still spawns for
-# `test_architecture_route_xfail_census` in tests/unit, which is why that one is.
+# The multiplier is what makes it fatal rather than slow. That module's nested
+# collection was cached per PROCESS, and its items spread across every worker --
+# so 16 workers paid 16 separate `pytest tests/bdd --collect-only` runs of ~7.2k
+# items, each loading the whole app, concurrently, alongside the 16 workers that
+# spawned them. Measured in that run: 1041.8s of CPU across 28 reported items.
+# Grouping collapses that to ONE collection for all 28 items, so the group is
+# cheaper here, not just safer. That module, and `test_architecture_route_xfail_census`
+# which shared its collector, now read the real run's record from tests/collection/
+# and start no nested session, so neither is listed.
 #
 # Requires `--dist loadgroup` (tox.ini's unit env, and .github/workflows/ci.yml's
 # unit job); under any other dist mode the marker is inert and these simply
 # spread out again. The match below is on the module's basename, wherever it lives.
 _NESTED_PYTEST_MODULES: frozenset[str] = frozenset(
     {
-        # `pytest tests/bdd --collect-only` (~7.2k items) via
-        # `collect_bdd_items_with_markers`; its `lru_cache` is per PROCESS, not
-        # shared across xdist workers. Invisible to the grep above.
-        "test_architecture_route_xfail_census",
-        # Two seeded collections of one bdd module via
-        # `collect_bdd_node_ids_with_e2e_enabled` -- invisible to the grep above.
+        # Two seeded collections of one bdd module via the imported helper
+        # `collect_bdd_node_ids_with_e2e_enabled`.
         "test_bdd_transport_collection_is_seed_independent",
         # `pytest tests/integration --collect-only` as a subprocess.
         "test_collection_is_side_effect_free",
+        # Two seeded `pytest <one bdd module> --collect-only` subprocesses.
+        "test_guards_bdd_strict_xfail_representative",
         # A nested `pytest -n 2` run of a generated suite, as a subprocess.
         "test_xdist_report_serialization",
     }

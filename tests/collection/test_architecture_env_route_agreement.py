@@ -13,9 +13,8 @@ the disagreement. The disagreement lives entirely in what is NOT a row: six
 marker-set-keyed prose branches in ``_harness_env``, invisible to
 ``scenario_liveness_join.registry_wired`` — and a marker SET is not expressible
 as a "tag combination in the table" at all. So the input is the real collected
-``tests/bdd`` suite: every scenario's tag + MARKER set, taken from a real
-``pytest --collect-only`` run (the same shape as
-``tests/collection/test_bdd_scenario_liveness_real_run.py``'s narrow slices),
+``tests/bdd`` suite: every scenario's tag + MARKER set, read from the collection
+record the real run published (``tests._collection_manifest.in_process_bdd_rows``),
 grouped per feature module so a failure names the module it is in.
 
 ## The negative obligation (F1c.1)
@@ -51,7 +50,7 @@ from typing import Any
 
 import pytest
 
-from tests._collection_manifest import BDD_TREE, load, manifest_dir
+from tests._collection_manifest import in_process_bdd_rows
 from tests.unit._architecture_helpers import assert_violations_match_allowlist, repo_root
 from tests.unit._liveness_contract_pins import (
     DERIVATION_ACCESSOR,
@@ -104,42 +103,6 @@ _CATCH_ALL_SCENARIOS = (
 
 _UC004_TAG_PREFIX = "T-UC-004-"
 
-# The real BDD collection yields ~7.2k in-process items today (9945 rows
-# collected with e2e_rest on, 7223 in-process at authoring time).
-_MINIMUM_COLLECTED_ITEMS = 6000
-
-
-@lru_cache(maxsize=1)
-def _collected_items() -> tuple[dict[str, Any], ...]:
-    """Every collected ``tests/bdd`` item with its marker set, from a real run.
-
-    Reads the full-tree record the real BDD session published rather than
-    spawning a nested ``pytest --collect-only``. The marker sets are the ones
-    ``iter_markers()`` reports AFTER every ``pytest_collection_modifyitems``
-    hook — the auto-applied entity markers from tests/conftest.py and the
-    transport xfail markers from tests/bdd/conftest.py included — because the
-    record is serialized at ``pytest_collection_finish``. That is the superset
-    ``DERIVATION_ACCESSOR`` is pinned on, and grading against anything narrower
-    would compare two equally-truncated sets and pass while proving nothing.
-
-    The in-network rows are dropped: this grader reasons about the in-process marker
-    sets, and the record may come from a session that had BDD_E2E_ENABLED on
-    (docker-compose sets it in-network). Dropping them here is what the old
-    nested collection achieved by popping the variable from its subprocess env.
-    """
-    rows = [row for row in load(manifest_dir(), target=BDD_TREE) if "[e2e_" not in row["nodeid"]]
-
-    # The suite collects ~7.2k items today. A floor well under that still catches
-    # a truncated collection, which would make every verdict below vacuous. It
-    # binds because `target` scoped the read to the tests/bdd tree — rows from
-    # tests/unit cannot pad it.
-    assert len(rows) > _MINIMUM_COLLECTED_ITEMS, (
-        f"the collection record produced only {len(rows)} in-process items "
-        f"(expected > {_MINIMUM_COLLECTED_ITEMS}) — the grader would be reasoning "
-        "about a truncated suite."
-    )
-    return tuple(rows)
-
 
 def _scenario_id(markers: list[str]) -> str | None:
     """The scenario's ``T-*`` identity tag — the key both sides join on.
@@ -158,7 +121,7 @@ def _scenario_id(markers: list[str]) -> str | None:
 def _scenarios_by_module() -> dict[str, dict[str, frozenset[frozenset[str]]]]:
     """``module -> scenario id -> the distinct marker sets its items carry``."""
     grouped: dict[str, dict[str, set[frozenset[str]]]] = defaultdict(lambda: defaultdict(set))
-    for row in _collected_items():
+    for row in in_process_bdd_rows():
         scenario_id = _scenario_id(row["markers"])
         if scenario_id is None:
             continue
@@ -345,7 +308,7 @@ def test_pinned_derivation_accessor_reproduces_iter_markers_for_every_collected_
     reproduces this lane's disease one layer out, where the agreement test above
     cannot see it — same function, same argument supplied by the test.
     """
-    rows = _collected_items()
+    rows = in_process_bdd_rows()
     assert accessor_dotted_module() is not None, (
         f"{DERIVATION_ACCESSOR}()'s home is not pinned yet (binding input G2: the implement atom records the "
         f"chosen module in the task and pins it in tests/unit/_liveness_contract_pins.py).\n{FIX_HINT}"

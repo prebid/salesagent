@@ -1853,7 +1853,7 @@ def parse_xfail_reason(reason: str) -> XfailReason | None:
 # Both lists may only SHRINK. A scenario that newly fails is not added here; it is fixed, or
 # its cause is measured and given its own entry with that cause. The entry counts, the
 # nodeids each list matches, the no-overlap rule and the outline-rows rule are pinned by
-# tests/unit/test_architecture_route_xfail_census.py.
+# tests/collection/test_architecture_route_xfail_census.py.
 #
 # Reasons avoid the words the dormancy tripwire (_classify_strict_xfail_dormancy) reads as a
 # claim about production, because several entries ARE test-wiring and say so.
@@ -2175,7 +2175,7 @@ _NO_UPDATE_WITHOUT_ID_ON_REST = (
 #: failure (the ledger) nor a pass that grades nothing (the parks); nothing is wrong on either
 #: side. Each entry names its rows and its transports, the row is xfail(run=False) on exactly
 #: those transports with the reason below, and it runs and grades on every other transport.
-#: Pinned by tests/unit/test_architecture_route_xfail_census.py with the two lists above.
+#: Pinned by tests/collection/test_architecture_route_xfail_census.py with the two lists above.
 _TRANSPORT_INEXPRESSIBLE_ROWS: tuple[_CatchallXfail, ...] = (
     _X(
         "T-UC-003-partition-media-buy-identification",

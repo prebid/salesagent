@@ -8,6 +8,7 @@ pass/fail results and per-suite reports whether sequential or parallel.
 """
 
 import configparser
+import re
 from pathlib import Path
 
 import pytest
@@ -60,6 +61,41 @@ class TestToxEnvironments:
         deps_str = tox_config.get(section, "depends", fallback="")
         for suite in ["unit", "integration", "e2e", "admin"]:
             assert suite in deps_str, f"coverage env missing depends on '{suite}'"
+
+
+def _expand_env_names(spec: str) -> set[str]:
+    """tox env names from a section suffix or a ``depends`` value, with ``{a,b}`` expanded."""
+    names: set[str] = set()
+    # Split on the commas OUTSIDE braces: `bdd-inprocess-s{1,2}` is one entry.
+    for token in re.findall(r"(?:[^,\s{}]|\{[^{}]*\})+", spec):
+        match = re.search(r"\{([^{}]*)\}", token)
+        if match is None:
+            names.add(token)
+            continue
+        for factor in match.group(1).split(","):
+            names |= _expand_env_names(token[: match.start()] + factor.strip() + token[match.end() :])
+    return names
+
+
+def test_quality_depends_on_every_bdd_env():
+    """``quality`` runs after every BDD env, so its single-threaded checkers are not starved.
+
+    tox ignores a ``depends`` entry for an env the invocation does not run, so listing both
+    the plain ``bdd`` env and the shard envs costs nothing on either run path. An env missing
+    from the list runs beside ``quality`` under ``tox -p`` (see the rationale above
+    ``[testenv:quality]``).
+    """
+    parser = configparser.ConfigParser(interpolation=None)
+    parser.read(str(TOX_INI))
+    bdd_envs = {
+        name
+        for section in parser.sections()
+        if section.startswith("testenv:bdd")
+        for name in _expand_env_names(section.removeprefix("testenv:"))
+    }
+    assert {"bdd", "bdd_e2e"} <= bdd_envs and any(n.startswith("bdd-inprocess-s") for n in bdd_envs), bdd_envs
+    depends = _expand_env_names(parser.get("testenv:quality", "depends", fallback=""))
+    assert not bdd_envs - depends, f"[testenv:quality] depends is missing {sorted(bdd_envs - depends)}"
 
 
 class TestCoverageConfig:
