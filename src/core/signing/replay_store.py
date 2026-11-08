@@ -24,6 +24,11 @@ writing). ``tests/integration/test_replay_store.py::TestClaimHappensAfterCryptoV
 is the tripwire that makes an SDK bump moving ``seen()`` earlier fail loudly instead
 of silently turning this store into a DoS amplifier.
 
+The pinned adcp 9.x verifier reserves the nonce with one ``claim()`` call after the
+crypto and digest checks, and calls ``seen()`` / ``remember()`` only for a store that
+has no ``claim()``. This store has one, because that legacy sequence asks
+``at_capacity`` after ``seen()`` has written the row (see :meth:`PostgresReplayStore.claim`).
+
 **Row lifetime belongs to ``remember()``, not to the claim.** The verifier hands
 ``remember`` a TTL computed from the SIGNATURE (``ttl = expires - now + max_skew``,
 ``verifier.py:354``) and the only-extend predicate raises any shorter claim to it. The
@@ -56,6 +61,8 @@ from __future__ import annotations
 
 import logging
 import random
+
+from adcp.signing.replay import ReplayClaimResult
 
 from src.core.config import SigningSettings
 from src.core.database.repositories.replay_nonce import ReplayNonceRepository
@@ -115,10 +122,33 @@ class PostgresReplayStore:
 
     def at_capacity(self, keyid: str) -> bool:
         """True iff ``keyid`` holds at least its cap in live entries (verifier step 9a)."""
-        cap = self._config.per_keyid_cap
+        return self._repository.at_or_above_cap(keyid, self._cap())
+
+    def claim(self, keyid: str, nonce: str, ttl_seconds: float) -> ReplayClaimResult:
+        """The SDK's step-13 reservation (``AtomicReplayStore``): replayed, capacity or claimed.
+
+        Without this method the pinned SDK falls back to ``seen()`` then ``at_capacity()``.
+        ``seen()`` here WRITES the claim, so that order counts the request's own row against
+        the cap and a cap of N admits N-1. Here the cap is judged against the rows that were
+        live before this one: the claim is written at the signature's (clamped) TTL, and it is
+        refused, and its row deleted, when the keyid now holds more than its cap.
+
+        Two claims racing for a keyid's last slot can each count the other's row, and then
+        both are refused. The cap fails closed under that race rather than admitting past it.
+        """
+        if self._repository.claim(keyid, nonce, self._clamped_ttl(ttl_seconds)):
+            return "replayed"
+        self._maybe_reap_expired()
+        if self._repository.at_or_above_cap(keyid, self._cap() + 1):
+            self._repository.forget(keyid, nonce)
+            return "capacity"
+        return "claimed"
+
+    def _cap(self) -> int:
+        """The per-keyid cap: the test counterparty's record's, else the deployment's."""
         if self._tuning is not None and self._tuning.replay_cap is not None:
-            cap = self._tuning.replay_cap
-        return self._repository.at_or_above_cap(keyid, cap)
+            return self._tuning.replay_cap
+        return self._config.per_keyid_cap
 
     def _claim_ttl(self) -> float:
         """Lifetime the claim writes, before ``remember()`` raises it to the signature's.

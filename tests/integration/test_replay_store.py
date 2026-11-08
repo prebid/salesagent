@@ -342,6 +342,30 @@ class TestPerKeyidCap:
         assert exc_info.value.code == "request_signature_rate_abuse"
         assert exc_info.value.step == "9a"
 
+    def test_the_verifier_admits_exactly_cap_requests(self, replay_session, keyid):
+        """Through the real verifier, a cap of 1 accepts the first request and refuses the second.
+
+        The off-by-one this pins lives in the SDK's call order, not in ``at_capacity``.
+        A store without an atomic ``claim()`` is driven through the SDK's legacy step-13
+        sequence, ``seen()`` then ``at_capacity()``, and ``seen()`` here is a WRITING
+        claim, so the request's own row is counted against the cap and the first request
+        under a cap of 1 is refused. Above, ``at_capacity`` is asked directly and cannot
+        see that.
+        """
+        store = _build_store(replay_session, _signing_config(), _tuning(replay_cap=1))
+        pair = generate_ed25519(keyid)
+
+        first, jwk = _sign(keyid, nonce="first", signing_jwk_pair=pair)
+        _verify(first, jwk, store)
+        assert _live_row_count(replay_session, keyid) == 1, "the accepted request must occupy the cap"
+
+        second, _ = _sign(keyid, nonce="second", signing_jwk_pair=pair)
+        with pytest.raises(SignatureVerificationError) as exc_info:
+            _verify(second, jwk, store)
+        assert exc_info.value.code == "request_signature_rate_abuse"
+        assert exc_info.value.step == "9a"
+        assert _live_row_count(replay_session, keyid, "second") == 0, "a refused request must not claim its nonce"
+
     def test_uncapped_keyid_is_unaffected_by_another_keyids_cap(self, replay_session, keyid):
         """The cap is per keyid: one signer at its cap must not reject another.
 
