@@ -38,7 +38,7 @@ from src.core.helpers.publisher_property_helpers import (
     publisher_tag_selection,
     selection_digest,
 )
-from src.core.publisher_format_catalog import PublisherCatalog, format_declarations_type
+from src.core.publisher_format_catalog import format_declarations_type, refuse_options_under_agent_host
 from src.core.schemas import Format
 from src.services.gam_product_config_service import GAMProductConfigService
 
@@ -115,7 +115,7 @@ def _parse_format_entries(formats_parsed: list[dict]) -> list[dict]:
     return entries
 
 
-def _parse_authored_format_options(raw: str | None, catalog: PublisherCatalog) -> list[dict] | None:
+def _parse_authored_format_options(raw: str | None, agent_host: str) -> list[dict] | None:
     """The canonical arm of core/product.json's root anyOf, as the operator authored it.
 
     Validated at AUTHOR time against the pinned discriminated union
@@ -133,9 +133,9 @@ def _parse_authored_format_options(raw: str | None, catalog: PublisherCatalog) -
     deprecated arm is satisfied by its KEY alone -- an empty array asserts a declaration
     that is not there.
 
-    A declaration naming a publisher option in this seller's OWN namespace must name one its
-    publisher format catalog declares (*catalog*, read off the tenant by the caller): RFC S3,
-    see ``src/core/publisher_format_catalog.py``.
+    A declaration naming *agent_host* (``Tenant.virtual_host_name``) as its publisher is
+    refused: this agent publishes no format options, so no buyer could resolve it (see
+    ``src/core/publisher_format_catalog.py``).
     """
     if not raw or not raw.strip():
         return None
@@ -153,7 +153,7 @@ def _parse_authored_format_options(raw: str | None, catalog: PublisherCatalog) -
         raise ValueError(
             f"format_options is not a valid canonical format declaration ({location}: {first['msg']})"
         ) from e
-    catalog.refuse_unresolved(document)
+    refuse_options_under_agent_host(document, agent_host)
     return document
 
 
@@ -909,7 +909,7 @@ def add_product(tenant_id):
                 # then overrides.
                 try:
                     format_options = _parse_authored_format_options(
-                        form_data.get("format_options"), PublisherCatalog.of(tenant)
+                        form_data.get("format_options"), tenant.virtual_host_name
                     )
                     # ``None`` for the legacy arm, literally: a product created here HAS no
                     # legacy arm, and its canonical declarations come from the product or
@@ -1224,10 +1224,9 @@ def add_product(tenant_id):
                 product = Product(**product_kwargs)
                 db_session.add(product)
                 # The contract the product is SERVED, whichever arm supplies it: a linked
-                # profile announces its declarations on the product's behalf, and those were
-                # checked against the catalog when the profile was authored, not since.
+                # profile announces its declarations on the product's behalf.
                 try:
-                    PublisherCatalog.of(tenant).refuse_unresolved(product.format_contract.format_options)
+                    refuse_options_under_agent_host(product.format_contract.format_options, tenant.virtual_host_name)
                     refuse_outside_common_intersection(product)
                 except ValueError as e:
                     db_session.rollback()
@@ -1345,7 +1344,7 @@ def edit_product(tenant_id, product_id):
         if format_options_submitted:
             try:
                 authored_format_options = _parse_authored_format_options(
-                    request.form.get("format_options"), PublisherCatalog.of(tenant)
+                    request.form.get("format_options"), tenant.virtual_host_name
                 )
             except ValueError as e:
                 flash(str(e), "error")
@@ -1428,13 +1427,13 @@ def edit_product(tenant_id, product_id):
 
                     attributes.flag_modified(product, "format_options")
 
-                # The anyOf, and the served contract's own-namespace options, now that both arms
+                # The anyOf, and the served contract's options under the agent host, now that both arms
                 # and the profile link carry their post-edit values: the contract the product
                 # will be served, so a linked profile's declarations count.
                 try:
                     contract = product.format_contract
                     _refuse_a_product_with_no_format_arm(list(contract.format_ids), contract.format_options)
-                    PublisherCatalog.of(tenant).refuse_unresolved(contract.format_options)
+                    refuse_options_under_agent_host(contract.format_options, tenant.virtual_host_name)
                 except ValueError as e:
                     flash(str(e), "error")
                     return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))

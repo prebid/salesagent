@@ -43,7 +43,6 @@ from src.core.helpers.publisher_property_helpers import (
     selector_selection,
     tag_selection,
 )
-from src.core.publisher_format_catalog import PublisherCatalog
 
 logger = logging.getLogger(__name__)
 
@@ -281,7 +280,7 @@ def add_inventory_profile(tenant_id: str):
                 # the declarations' v1_format_ref.
                 try:
                     format_options = _parse_authored_format_options(
-                        form_data.get("format_options"), PublisherCatalog.of(tenant)
+                        form_data.get("format_options"), tenant.virtual_host_name
                     )
                 except ValueError as e:
                     flash(str(e), "error")
@@ -429,9 +428,17 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
                 # legacy-only profile stays editable; authoring declarations retires its
                 # stored format_ids, which its linked products no longer read once the
                 # profile carries a canonical arm (``Product.format_contract``).
-                authored_format_options = _parse_authored_format_options(
-                    form_data.get("format_options"), PublisherCatalog.of(tenant_obj)
-                )
+                # Refused like the add form refuses it: flash and return to the form. Left to the
+                # handler's catch-all, the rolled-back profile rendered detached and answered 500.
+                try:
+                    authored_format_options = _parse_authored_format_options(
+                        form_data.get("format_options"), tenant_obj.virtual_host_name
+                    )
+                except ValueError as e:
+                    flash(str(e), "error")
+                    return redirect(
+                        url_for("inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id)
+                    )
                 if authored_format_options:
                     profile.format_options = authored_format_options
                     profile.format_ids = None

@@ -41,6 +41,7 @@ from tests.bdd.steps._outcome_helpers import (
 )
 from tests.factories import PricingOptionFactory, ProductFactory, StoredPlacementFactory
 from tests.factories.creative import DEFAULT_CREATIVE_AGENT_URL
+from tests.factories.product import authorize_publishers, default_publisher_properties
 
 #: The legacy arm every product here also carries, matching ``MediaBuyCreateEnv``'s own
 #: seeded default so the deprecated selector route and the rest of the create flow behave
@@ -1443,6 +1444,10 @@ def _store_product(
     """
     from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
 
+    if properties:
+        # A product is offered only for a publisher the seller holds a verified property of
+        # (#1845); the default publisher's comes with ProductFactory, a named one's here.
+        authorize_publishers(ctx["tenant"], *dict.fromkeys(s["publisher_domain"] for s in properties))
     product = ProductFactory(
         tenant=ctx["tenant"],
         product_id=product_id,
@@ -1629,8 +1634,13 @@ def given_profile_linked_declaration(ctx: dict, declaration: str, profile_declar
     """
     from tests.factories.inventory_profile import InventoryProfileFactory
 
+    # The profile supplies the product's publishers, so it names the default one the linked
+    # ProductFactory row seeds a verified property for (#1845).
     profile = InventoryProfileFactory(
-        tenant=ctx["tenant"], format_ids=None, format_options=_DECLARATIONS[profile_declaration]
+        tenant=ctx["tenant"],
+        format_ids=None,
+        format_options=_DECLARATIONS[profile_declaration],
+        publisher_properties=default_publisher_properties(),
     )
     _store_product(
         ctx,

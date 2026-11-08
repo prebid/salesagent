@@ -261,13 +261,11 @@ def build_adagents_json(
         entry["signing_keys"] = [_published_jwk(key) for key in keys]
     document: dict[str, Any] = {"$schema": f"{_SCHEMA_BASE}/adagents.json", "authorized_agents": [entry]}
 
-    # The publisher format catalog (RFC S3): canonical-formats-migration.mdx § Seller
-    # migration step 3, "Publish reusable publisher options in /.well-known/adagents.json".
-    # Authored on the tenant and published as stored -- adagents.json#/properties/formats is
-    # "Publisher-authoritative", so it is never synthesized from product declarations.
-    if tenant.publisher_format_options:
-        document["formats"] = list(tenant.publisher_format_options)
-
+    # No ``formats[]``. adagents.json#/properties/formats is the "Publisher-authoritative
+    # format catalog", and a publisher declares it in its own file (canonical-formats.mdx
+    # § Where to declare a format: authority "Publisher"). A seller authors no publisher's
+    # options (core/placement.json ``publisher_domain``: it "does not grant the seller
+    # authority to mint IDs in that publisher's catalog namespace").
     if last_updated := _last_updated(keys):
         document["last_updated"] = last_updated
     # A dict, not ``AdcpAgentsAuthorization`` (#1757). This builder once emitted an empty

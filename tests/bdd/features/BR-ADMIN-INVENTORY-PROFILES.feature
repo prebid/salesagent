@@ -42,3 +42,30 @@ Feature: The inventory page's profile modal authors canonical format declaration
   Scenario: The rendered modal carries the canonical editor
     When the inventory page is opened
     Then the page's modal has a format_options field and no formats field
+
+  # A format option's publisher_domain names the publisher whose adagents.json formats[]
+  # declares it (AdCP 3.2.7 core/product-format-declaration.json publisher_domain), and this
+  # agent publishes no formats[]: a seller authors no publisher's options (core/placement.json
+  # publisher_domain: no "authority to mint IDs in that publisher's catalog namespace"). So the
+  # profile modal and the product form refuse a declaration naming the seller's own host as
+  # its publisher, and store nothing under it.
+
+  @T-ADMIN-INVPROF-006 @error-path
+  Scenario: The modal refuses a format option naming the seller's own host as publisher
+    When the modal submits a new profile "host_option" declaring format option "homepage_mrec" under the seller's own host
+    Then the modal is answered 400 with the reason as JSON
+    And the refusal names the seller's own host as the format option's publisher
+    And no profile "host_option" is stored
+
+  @T-ADMIN-INVPROF-007 @error-path
+  Scenario: The modal's edit refuses a format option naming the seller's own host as publisher
+    Given a stored profile "host_edit" declaring an image of 300x250
+    When the modal edits the profile "host_edit" to declare format option "homepage_mrec" under the seller's own host
+    Then the refusal names the seller's own host as the format option's publisher
+    And the profile "host_edit" stores an image of 300x250
+
+  @T-ADMIN-INVPROF-008 @error-path
+  Scenario: The product form refuses a format option naming the seller's own host as publisher
+    When the operator submits the product form for "host_option" declaring format option "homepage_mrec" under the seller's own host
+    Then the refusal names the seller's own host as the format option's publisher
+    And no product "host_option" is stored

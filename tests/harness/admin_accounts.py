@@ -269,6 +269,29 @@ class AdminAccountEnv:
                 )
                 session.commit()
 
+    def products_path(self, path: str = "") -> str:
+        """The product routes of this tenant, which the product forms post to."""
+        return f"/tenant/{self._tenant_id}/products/{path}"
+
+    def agent_host(self) -> str:
+        """The hostname this tenant's agent answers at (``Tenant.virtual_host_name``)."""
+        from src.core.database.models import Tenant
+
+        with get_db_session() as session:
+            tenant = session.get(Tenant, self._tenant_id)
+            assert tenant is not None, f"no tenant {self._tenant_id!r}"
+            return tenant.virtual_host_name
+
+    def product_is_stored(self, product_id: str) -> bool:
+        """Whether this tenant holds a product *product_id*."""
+        from sqlalchemy import select
+
+        from src.core.database.models import Product
+
+        with get_db_session() as session:
+            stmt = select(Product.product_id).filter_by(tenant_id=self._tenant_id, product_id=product_id)
+            return session.scalars(stmt).first() is not None
+
     def get_account_from_db(self, *, name: str | None = None, account_id: str | None = None) -> Account | None:
         """Look up an account in the database."""
         from sqlalchemy import select

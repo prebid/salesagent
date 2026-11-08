@@ -27,12 +27,13 @@ from typing import Any
 
 from bs4 import BeautifulSoup
 
-from src.core.database.models import AuthorizedProperty, InventoryProfile, Product
+from src.core.database.models import AuthorizedProperty, InventoryProfile, Product, Tenant
 from tests.harness.admin_client import AdminResponse
 from tests.harness.product import ProductEnv
 
-#: A format the profile form requires. Any id serves: the form stores it verbatim.
-_PROFILE_FORMATS = json.dumps([{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"}])
+#: The canonical declaration both create forms require (core/product.json: "New 3.2 products
+#: MUST carry format_options"); the legacy ``formats`` field is no longer authored.
+_FORMAT_OPTIONS = json.dumps([{"format_kind": "image", "params": {"width": 300, "height": 250}}])
 
 
 #: Input types a form submits only as its submitter, or not as text at all.
@@ -177,9 +178,16 @@ class AdminInventoryProfileEnv(ProductEnv):
 
         *checked* adds boxes the operator checks before saving, by field name.
         """
+        return self._save_open_form({"name": [name]}, checked)
+
+    def save_open_form_with(self, **fields: str) -> AdminResponse:
+        """POST the page last opened as it rendered, with each of *fields* set to its value."""
+        return self._save_open_form({field: [value] for field, value in fields.items()}, {})
+
+    def _save_open_form(self, replaced: dict[str, list[str]], checked: dict[str, list[str]]) -> AdminResponse:
         assert self._open_form is not None, "no edit page is open"
         path, page = self._open_form
-        form = {**rendered_form(page), "name": [name]}
+        form = {**rendered_form(page), **replaced}
         for field_name, values in checked.items():
             form[field_name] = [*form.get(field_name, []), *values]
         return self._admin_request(path, form)
@@ -237,6 +245,21 @@ class AdminInventoryProfileEnv(ProductEnv):
         """The product row as the form left it, read fresh from the env's database."""
         return self._stored(Product, product_id=product_id)
 
+    def product_is_stored(self, product_id: str) -> bool:
+        """Whether this tenant holds a product *product_id* (the step AdminAccountEnv also answers)."""
+        return self.stored_product(product_id) is not None
+
+    def agent_host(self) -> str:
+        """The hostname this tenant's agent answers at (``Tenant.virtual_host_name``)."""
+        tenant = self._stored_tenant()
+        return tenant.virtual_host_name
+
+    def _stored_tenant(self) -> Tenant:
+        self.get_session().expire_all()
+        tenant = self.get_one(Tenant, tenant_id=self.tenant_id)
+        assert tenant is not None, f"no tenant {self.tenant_id!r}"
+        return tenant
+
     def _stored(self, model: type[Any], **key: str) -> Any:
         self.get_session().expire_all()
         return self.get_one(model, tenant_id=self.tenant_id, **key)
@@ -250,7 +273,7 @@ class AdminInventoryProfileEnv(ProductEnv):
             "profile_id": profile_id,
             "targeted_ad_unit_ids": "[]",
             "targeted_placement_ids": "[]",
-            "formats": _PROFILE_FORMATS,
+            "format_options": _FORMAT_OPTIONS,
             **selection,
         }
 
@@ -261,7 +284,7 @@ class AdminInventoryProfileEnv(ProductEnv):
         return {
             "name": f"Product {product_id}",
             "product_id": product_id,
-            "formats": "[]",
+            "format_options": _FORMAT_OPTIONS,
             "delivery_measurement_provider": "publisher",
             "pricing_model_0": "cpm_fixed",
             "currency_0": "USD",

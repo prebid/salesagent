@@ -32,7 +32,7 @@ from tests.utils.database_helpers import vhost_for
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 _REVISION = "3c38b1ee241f"
-_PREVIOUS = "f7c2e8a13d64"
+_PREVIOUS = "f9c29da38437"
 _TENANT = "mig_legacy_sel"
 
 

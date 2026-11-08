@@ -273,3 +273,15 @@ Feature: BR-ADMIN-INVENTORY-PROFILE-publishers Which publishers the operator's s
     Then the form offers exactly the properties "news_home, sports_home, weather_home"
     When the operator opens the edit form of inventory profile "existing"
     Then the form offers exactly the properties "news_home, sports_home, weather_home"
+
+  # A format option's publisher_domain names the publisher whose adagents.json formats[]
+  # declares it (AdCP 3.2.7 core/product-format-declaration.json publisher_domain), and this
+  # agent publishes none, so the product edit form refuses a declaration naming the seller's
+  # own host. BR-ADMIN-INVENTORY-PROFILES grades the add form and the profile modal.
+  @T-ADMIN-INVPROFILE-033 @admin_inventory_profile @requires_db
+  Scenario: the product edit form refuses a format option naming the seller's own host as publisher
+    Given the seller offers product "news" naming publisher_properties [{"publisher_domain": "news.example", "property_ids": ["news_home"], "selection_type": "by_id"}]
+    When the operator opens the edit form of product "news"
+    And the operator saves the open edit form of product "news", declaring format option "homepage_mrec" under the seller's own host
+    Then the page contains "the host this sales agent answers at"
+    And product "news" stores no format option under the seller's own host

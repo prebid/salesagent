@@ -170,13 +170,6 @@ class Tenant(Base, JSONValidatorMixin):
         comment="Implementation-backed AdCP capability declaration blocks (#1592); NULL = nothing declared",
     )
 
-    # The reusable publisher format options this tenant publishes as the ``formats[]`` of the
-    # adagents.json served at its own host (RFC S3; see src/core/publisher_format_catalog.py).
-    # Each entry is a core/product-format-declaration.json document carrying a unique
-    # format_option_id; a product names one as {publisher_domain: primary_domain,
-    # format_option_id}. NULL means no catalog, and the served file then carries no formats[].
-    publisher_format_options: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONType, nullable=True)
-
     # Pydantic AI configuration for multi-model support
     # Structure: {"provider": "anthropic", "model": "claude-sonnet-4-20250514", "api_key": "encrypted:...", ...}
     ai_config: Mapped[dict | None] = mapped_column(
@@ -315,18 +308,6 @@ class Tenant(Base, JSONValidatorMixin):
         self.virtual_host_name = hostname_of(host)
         return host
 
-    @validates("publisher_format_options")
-    def _validate_publisher_format_options(self, _key: str, value: list[dict[str, Any]] | None) -> list | None:
-        """Every write path stores a catalog of referenceable options, or nothing.
-
-        Refused on assignment, so the admin form, the management API and a seed script cannot
-        store an entry the served adagents.json would publish as an unreferenceable or
-        ambiguous option. An empty catalog is stored as NULL (``formats[]`` has minItems 1).
-        """
-        from src.core.publisher_format_catalog import validated_catalog
-
-        return validated_catalog(value)
-
     @property
     def gemini_api_key(self) -> str | None:
         """Get decrypted Gemini API key."""
@@ -367,33 +348,6 @@ class Tenant(Base, JSONValidatorMixin):
         from src.core.agent_identity import canonical_agent_url
 
         return canonical_agent_url(self)
-
-    @property
-    def primary_domain(self) -> str:
-        """The seller's own publisher-format namespace — a HOSTNAME, never an origin.
-
-        This is the domain the tenant's own adagents.json is served at, and so the
-        ``publisher_domain`` its reusable format declarations (``publisher_format_options``)
-        are scoped under: :meth:`PublisherCatalog.of
-        <src.core.publisher_format_catalog.PublisherCatalog.of>` reads it to name that
-        namespace. It is NEVER a product's publisher. A tenant is a seller, and a product
-        names its publishers from verified authorized properties
-        (:meth:`Product.resolve_publisher_properties`), never from the agent host (#1845).
-
-        ``virtual_host`` stores the origin the tenant is served at, port included, because
-        the agent card publishes that string and a card naming the wrong port sends every
-        client to a closed one. A publisher domain is a different part of the same fact:
-        AdCP constrains ``publisher_domain`` to a pattern admitting no colon, so the port
-        comes off here. It is the ONE derivation of this value, so no caller can feed the
-        colon through.
-
-        Always a string, because ``virtual_host`` is mandatory. Neither a fabricated domain
-        nor a ``None`` belongs here: a made-up host reaches buyers as a publisher's own, and
-        a ``None`` only moves the invention into every caller.
-        """
-        from src.core.http_utils import hostname_of
-
-        return hostname_of(self.virtual_host)
 
     @property
     def is_gam_tenant(self) -> bool:
