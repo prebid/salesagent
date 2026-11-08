@@ -20,7 +20,7 @@ from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler
 
 from tests.helpers.local_http_origin import serve_in_thread
-from tests.helpers.test_tls_material import load_gen_test_tls, server_ssl_context
+from tests.helpers.tls_material import load_gen_test_tls, server_ssl_context
 
 
 class WebhookCaptureHandler(BaseHTTPRequestHandler):

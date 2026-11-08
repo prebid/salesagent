@@ -1,6 +1,6 @@
 """Helpers for normalizing publisher_properties to AdCP discriminated union format.
 
-AdCP 2.13.0+ requires PublisherPropertySelector dicts to have a selection_type
+The spec requires PublisherPropertySelector dicts to have a selection_type
 discriminator ("all", "by_id", or "by_tag"). Legacy data and inventory profiles
 created via the admin UI "full JSON" mode may lack this field.
 
@@ -16,7 +16,7 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import PublisherDomain
+from adcp.types.domains.protocol.get_adcp_capabilities_response import PublisherDomain
 from pydantic import ValidationError
 
 from src.core.http_utils import canonical_publisher_domain
@@ -79,7 +79,7 @@ def ensure_selection_type(properties: list[dict]) -> list[dict] | None:
 #: The seller's default property tag. Its stored description is "Default tag that applies to
 #: all properties", and the admin forms put it on every property row, so a row carrying it
 #: says nothing about the publisher's own adagents.json: a publisher following
-#: ``docs/deployment/vm.md`` declares it there, and another need not. AdCP 3.1.1
+#: ``docs/deployment/vm.md`` declares it there, and another need not. AdCP 3.2.7
 #: ``core/publisher-property-selector.json`` "Selects properties from a publisher's
 #: adagents.json", so ``by_tag`` would name nothing at a publisher that does not declare it.
 #: A tag selection holding it therefore selects each publisher whole, a form's choice and a
@@ -122,7 +122,7 @@ class AuthorizedPropertyRef:
 def publisher_domain_on_wire(stored: str) -> str | None:
     """The host *stored* names, or ``None`` when AdCP's ``publisher_domain`` pattern refuses it.
 
-    An admin path stores a domain as typed. AdCP 3.1.1 ``core/product.json`` admits only the
+    An admin path stores a domain as typed. AdCP 3.2.7 ``core/product.json`` admits only the
     pattern, which a port, an empty domain or an underscore cannot meet.
     """
     domain = canonical_publisher_domain(stored)
@@ -144,7 +144,7 @@ def _by_publisher(properties: Iterable[SelectableProperty]) -> dict[str, list[Se
 def by_id_selectors(properties: Iterable[SelectableProperty]) -> list[dict]:
     """One ``by_id`` selector per publisher, holding the IDs of that publisher's properties.
 
-    AdCP 3.1.1 ``core/publisher-property-selector.json``: by_id is "Single-publisher only —
+    AdCP 3.2.7 ``core/publisher-property-selector.json``: by_id is "Single-publisher only —
     property IDs are publisher-scoped".
     """
     return [
@@ -190,7 +190,7 @@ def authorized_selectors(selectors: list[dict] | None, properties: Iterable[Sele
 
     An inventory profile or a product's own ``properties`` already name their publishers,
     and a buyer verifies each one at ``https://<publisher_domain>/.well-known/adagents.json``
-    (AdCP 3.1.1 ``governance/property/authorized-properties.mdx``). The seller's verified
+    (AdCP 3.2.7 ``governance/property/authorized-properties.mdx``). The seller's verified
     row is its proof of authorization for that one property, so the check is per property,
     as :func:`id_selection` and :func:`tag_selection` check a form's choice: a ``by_id``
     selector keeps the ids of its publisher's verified properties, a ``by_tag`` selector

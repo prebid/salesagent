@@ -54,7 +54,7 @@ services:
       TLS_ASK_ENABLED: "true"
 
   # ---- Optional: the pinned AdCP reference creative agent (docker compose --profile creative-agent) ----
-  # The app reaches it at https://<SALES_AGENT_DOMAIN>/api/creative-agent through Caddy, because
+  # The app reaches it at https://<SALES_AGENT_DOMAIN>/api/creative-agent/mcp through Caddy, because
   # the app's outbound HTTP is https-only. Image built by src/scripts/creative-agent-stack.sh build.
   creative-pg:
     profiles: ["creative-agent"]

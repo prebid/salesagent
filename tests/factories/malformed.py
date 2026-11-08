@@ -117,12 +117,12 @@ from __future__ import annotations
 from collections.abc import Iterator
 from typing import Any
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from scripts.audit.creative_literal_sites import EXTRA_FORBIDDEN
 from src.core.errors.codes import AppErrorCode, ErrorCode, ErrorCodeT
-from src.core.schemas.creative import CreativeAssetRequest
-from src.core.schemas.pricing import PricingOption
+from src.core.schemas.creative import SyncCreativeAsset
+from src.core.schemas.pricing import PricingOptionAdapter
 
 #: The vocabulary an obligation may name: THIS REPO'S OWN, both arms of ``ErrorCodeT``
 #: — the 92 codes AdCP publishes plus the 8 this seller emits — DERIVED from the enums
@@ -245,7 +245,7 @@ def malformed(kind: str, why: str, payload: dict[str, Any], *, obligation: Error
         raise ValueError(
             f"malformed() requires obligation=<an ErrorCodeT member>, got {obligation!r}. Import it from "
             "src.core.errors.codes — this repo's own table, whose ErrorCodeT is the 92 spec codes PLUS this "
-            "seller's 8 (AGENT_UNREACHABLE and friends); the SDK enum alone silently drops the second arm. "
+            "seller's 9 (AGENT_UNREACHABLE and friends); the SDK enum alone silently drops the second arm. "
             "The obligation states WHICH CODE the buyer must receive for these bytes, and the gate grades "
             "the part of that claim the pin can see. An undeclared key is not a malformation and has no "
             "member in either arm — see this module's docstring."
@@ -287,14 +287,33 @@ def malformed(kind: str, why: str, payload: dict[str, Any], *, obligation: Error
 #: docstring records) and NOT ``adcp.types.PricingOption`` (a bare ``UnionType`` alias
 #: with no ``model_validate``). ``test_gated_creative_model_is_the_pinned_request_item``
 #: derives the creative entry from the registry DTO so a re-point fails loudly.
-GATED_ITEMS: dict[str, tuple[type[BaseModel], str]] = {
-    "creatives": (CreativeAssetRequest, "creative_id"),
+#:
+#: EVERY ENTRY IS A ``TypeAdapter``, uniformly, so the gate's one operation
+#: (``validate_python``) is spelled once. Pricing's pinned item is a nine-arm
+#: discriminated union rather than a single class, which no ``type[BaseModel]`` can
+#: express; it was previously expressed by a local ``RootModel`` wrapper in
+#: ``src.core.schemas.pricing``, and that wrapper is deleted because every other thing it
+#: was claimed to do was false (``Product.pricing_options`` holds the arms, so nothing
+#: ever read ``.root`` off one). Wrapping the creative entry too costs nothing and keeps
+#: the two halves from diverging.
+#:
+#: Each entry carries the pin's NAME alongside it, because a ``TypeAdapter`` has no
+#: ``__name__`` and the four problem messages below name the pin that rejected the item.
+#: For pricing the name is the union's, which is already the honest answer: WHICH arm
+#: refuses a given item is decided per item by its discriminator.
+#:
+#: The creative item model is also named on its own below, because a ``TypeAdapter`` does
+#: not expose the type it wraps and the derivation guard asserts identity against it.
+GATED_CREATIVE_ITEM: type[BaseModel] = SyncCreativeAsset
+
+GATED_ITEMS: dict[str, tuple[TypeAdapter[Any], str, str]] = {
+    "creatives": (TypeAdapter(GATED_CREATIVE_ITEM), "creative_id", GATED_CREATIVE_ITEM.__name__),
     # No request DTO carries a top-level ``pricing_options`` today (it is a Product
     # RESPONSE field), so this entry grades nothing yet. It is declared anyway because
     # the gate's subject is "inline literals of a pinned item model" and pricing is the
     # second such literal the audit counts; the day a request grows the field, it is
     # graded rather than discovered.
-    "pricing_options": (PricingOption, "pricing_option_id"),
+    "pricing_options": (PricingOptionAdapter, "pricing_option_id", "AdCPPricingOption"),
 }
 
 #: THE GATE CARRIES NO TOLERANCE LIST, and that is a measured decision rather than an
@@ -310,10 +329,10 @@ GATED_ITEMS: dict[str, tuple[type[BaseModel], str]] = {
 #: where the staleness test grades the handoff without granting a runtime pass.
 
 
-def _pin_rejection(model: type[BaseModel], item: dict[str, Any]) -> ValidationError | None:
+def _pin_rejection(model: TypeAdapter[Any], item: dict[str, Any]) -> ValidationError | None:
     """The pinned model's verdict on *item*: the error it raised, or ``None`` if accepted."""
     try:
-        model.model_validate(item)
+        model.validate_python(item)
     except ValidationError as exc:
         return exc
     return None
@@ -359,7 +378,7 @@ def _pin_refuses_the_bytes(rejection: ValidationError | None) -> bool | None:
     return True
 
 
-def _gated_items(node: Any, path: str = "") -> Iterator[tuple[str, type[BaseModel], dict[str, Any]]]:
+def _gated_items(node: Any, path: str = "") -> Iterator[tuple[str, TypeAdapter[Any], str, dict[str, Any]]]:
     """Every gated item in *node*, as ``(site, model, item)``, at whatever depth it sits.
 
     DICTS AND LISTS ONLY. A ``dispatch_request`` bag routinely carries ``req=<a typed
@@ -377,10 +396,10 @@ def _gated_items(node: Any, path: str = "") -> Iterator[tuple[str, type[BaseMode
             child = f"{path}.{key}" if path else key
             entry = GATED_ITEMS.get(key)
             if entry is not None and isinstance(value, list):
-                model, id_key = entry
+                model, id_key, model_name = entry
                 for index, item in enumerate(value):
                     if isinstance(item, dict):
-                        yield f"{child}[{index}] ({id_key}={item.get(id_key)!r})", model, item
+                        yield f"{child}[{index}] ({id_key}={item.get(id_key)!r})", model, model_name, item
             else:
                 yield from _gated_items(value, child)
     elif isinstance(node, list):
@@ -426,18 +445,18 @@ def malformation_problems(kwargs: dict[str, Any]) -> list[str]:
     and feeding one here would grade the builder rather than the literal.
     """
     problems: list[str] = []
-    for site, model, item in _gated_items(kwargs):
+    for site, model, model_name, item in _gated_items(kwargs):
         rejection = _pin_rejection(model, item)
         refuses = _pin_refuses_the_bytes(rejection)
         if not isinstance(item, _Malformed):
             if refuses:
-                problems.append(f"{site} is rejected by {model.__name__} but is not declared malformed:\n{rejection}")
+                problems.append(f"{site} is rejected by {model_name} but is not declared malformed:\n{rejection}")
             continue
         declares_pin_refusal = item.obligation is PIN_DERIVABLE_OBLIGATION
         if refuses is None:
             problems.append(
                 f"{site} is declared malformed({item.kind!r}, obligation={item.obligation.name}) but the only "
-                f"thing {model.__name__} objects to is an UNDECLARED KEY, which is not a malformation. A "
+                f"thing {model_name} objects to is an UNDECLARED KEY, which is not a malformation. A "
                 "malformation is bytes the model refuses on their merits; an undeclared key is bytes the "
                 "boundary STRIPS. That surface is environment-SPECIFIC — ENVIRONMENT=production sets "
                 "extra='ignore' (get_pydantic_extra_mode, src/core/config.py) and these same bytes are "
@@ -451,7 +470,7 @@ def malformation_problems(kwargs: dict[str, Any]) -> list[str]:
         elif declares_pin_refusal and not refuses:
             problems.append(
                 f"{site} is declared malformed({item.kind!r}, obligation={item.obligation.name}) but "
-                f"{model.__name__} ACCEPTS it — the malformation was REPAIRED and the scenario now grades a "
+                f"{model_name} ACCEPTS it — the malformation was REPAIRED and the scenario now grades a "
                 "conformant payload. Something supplied what the declaration says is wrong: a factory default "
                 "is the usual culprit, so express the malformation as a payload() OVERRIDE (assets=OMIT, "
                 "format_id=None, ...) rather than relying on the baseline to leave it out.\n"
@@ -460,7 +479,7 @@ def malformation_problems(kwargs: dict[str, Any]) -> list[str]:
         elif refuses and not declares_pin_refusal:
             problems.append(
                 f"{site} is declared malformed({item.kind!r}, obligation={item.obligation.name}) but "
-                f"{model.__name__} REJECTS it — the declaration is MIS-DECLARED. These bytes never reach the "
+                f"{model_name} REJECTS it — the declaration is MIS-DECLARED. These bytes never reach the "
                 f"seller's rules, so the buyer receives {PIN_DERIVABLE_OBLIGATION.name} and a Then asserting "
                 f"{item.obligation.name} cannot pass. Either the bytes changed, or the obligation was guessed "
                 f"rather than measured; the pin's own reason follows.\n{rejection}"

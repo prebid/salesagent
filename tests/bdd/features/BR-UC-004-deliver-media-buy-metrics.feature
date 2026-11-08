@@ -600,7 +600,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     # taxonomy leaking into a scenario as if it were a wire code. The
     # message-contains assertion is gone: the sentence is a function of the code.
     And the error should include "suggestion" field
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/media-buy/get-media-buy-delivery-response.json pointer=/properties/errors
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-response.json pointer=/properties/errors
     # POST-F1: System state unchanged
     # POST-F2: Error explains adapter failure
     # POST-F3: Suggestion to retry
@@ -720,21 +720,48 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario: sort_by metric not available - seller falls back to spend
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the seller supports reporting dimension "placement"
+    And the seller reports placement "pl-A" with 3000 impressions, 150 spend and 30 clicks
+    And the seller reports placement "pl-B" with 1500 impressions, 200 spend and 10 clicks
+    And the seller reports placement "pl-C" with 500 impressions, 50 spend and 50 clicks
     And the seller does NOT report metric "conversions"
     When the Buyer Agent requests delivery metrics for "mb-001" with reporting_dimensions {"placement": {"sort_by": "conversions"}}
     Then the response is compliant with the get_media_buy_delivery spec
     And the response placement breakdown should be sorted by "spend" (fallback)
+    And the response placement breakdown should be ordered "pl-B", "pl-A", "pl-C"
     # BR-RULE-091 INV-6: sort_by metric not reported -> falls back to 'spend'
+    # The three placement rows are the whole point of the scenario and not scenery.
+    # Each sortable metric ranks them differently — spend B > A > C, impressions
+    # A > B > C, clicks C > A > B — so the named ORDER separates a spend fallback from
+    # a fallback to anything else. Without them the seller synthesizes a split from one
+    # weight vector that is rank-identical across every metric, and "sorted descending"
+    # then holds whatever the seller sorted by — measured: deleting the fallback branch,
+    # and falling back to clicks instead of spend, both left this scenario green on all
+    # transports (GH #2059).
 
   @T-UC-004-dim-sortby-valid @invariant @BR-RULE-091 @reporting-dimensions
   Scenario: sort_by metric available - seller uses requested metric
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the seller supports reporting dimension "placement"
+    And the seller reports placement "pl-A" with 3000 impressions, 150 spend and 30 clicks
+    And the seller reports placement "pl-B" with 1500 impressions, 200 spend and 10 clicks
+    And the seller reports placement "pl-C" with 500 impressions, 50 spend and 50 clicks
     And the seller reports metric "clicks"
     When the Buyer Agent requests delivery metrics for "mb-001" with reporting_dimensions {"placement": {"sort_by": "clicks"}}
     Then the response is compliant with the get_media_buy_delivery spec
     And the response placement breakdown should be sorted by "clicks"
+    And the response placement breakdown should be ordered "pl-C", "pl-A", "pl-B"
     # BR-RULE-091 INV-6 counter-example: sort_by metric reported -> uses requested metric
+    # The three placement rows are the same ones the fallback sibling above names, and
+    # they are here for the same reason: each sortable metric ranks them differently
+    # (spend B > A > C, impressions A > B > C, clicks C > A > B), so the named ORDER is
+    # the only form that separates "sorted by the REQUESTED metric" from "sorted by
+    # something". The seller used to synthesize a split from one weight vector when the
+    # adapter reported none, which is rank-identical across every metric; that branch was
+    # deleted because it returned invented placement ids to every real tenant, and the
+    # rows now come from the mock adapter's simulate_breakdowns. This scenario was left
+    # relying on the deleted synthesis and went red on all four transports
+    # (salesagent-1c6sr).
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json pointer=/properties/reporting_dimensions/properties/placement/properties/sort_by property=by_placement
 
   @T-UC-004-dim-multi @invariant @BR-RULE-091 @reporting-dimensions
   Scenario: Multiple dimensions requested simultaneously
@@ -944,7 +971,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | omitted (absent from request) | (field absent) | valid |
       | false (explicit) | false | valid |
       | true (explicit) | true | valid |
-      | string 'true' (non-boolean type) | "true" | invalid |
+      | string 'true' (non-boolean type) | "true" | error "INVALID_REQUEST" with suggestion |
 
   @T-UC-004-partition-account @partition @delivery_account
   Scenario Outline: Delivery account partition - <partition>
@@ -1221,7 +1248,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     # v3.1: supersedes_window enables broadcast c3/c7 progression
     # BR-RULE-221 INV-6: window_update + supersedes_window -> buyer REPLACES superseded window's data
     # BR-RULE-221 INV-4: measurement_window references a declared window_id
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
   @T-UC-004-webhook-partial-data @alternative @webhook @v3-1 @invariant @BR-RULE-222 @partial-data
   Scenario: Webhook payload signals partial_data with unavailable_count when adapter data is delayed
@@ -1239,7 +1266,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     # BR-RULE-222 INV-2/INV-3: partial_data true -> unavailable_count present and equal to delayed/failed count
     # BR-RULE-222 INV-5: temporarily unavailable data -> status reporting_delayed
     # BR-RULE-222 INV-6: reporting_delayed + known availability -> expected_availability present
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
   @T-UC-004-webhook-adjusted-resend @alternative @webhook @v3-1 @invariant @BR-RULE-221 @measurement-window
   Scenario: Webhook notification_type adjusted resends a prior period with is_adjusted true
@@ -1265,7 +1292,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the response packages should include measurement_window "c7" for "pkg-1"
     # v3.1: is_final + measurement_window declare provisional vs closed data
     # BR-RULE-221 INV-2: is_final true -> seller considers data closed, no further updates expected
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
   @T-UC-004-package-is-final-false @main-flow @polling @v3-1 @invariant @BR-RULE-221 @measurement-window
   Scenario: Polling response marks a live broadcast package is_final false with measurement_window live
@@ -1295,7 +1322,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     # BR-RULE-220 INV-1: qualified metric in metric_aggregates -> top-level scalar omitted
     # BR-RULE-220 INV-5: viewable_rate row carries measurable_impressions + viewable_impressions
     # BR-RULE-220 INV-11: same metric_id, different qualifier -> separate rows, never summed
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
   @T-UC-004-metric-aggregates-vendor-scope @main-flow @polling @v3-1 @invariant @BR-RULE-220 @metric-aggregates
   Scenario: aggregated_totals.metric_aggregates supports vendor scope anchored on BrandRef
@@ -1309,7 +1336,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the vendor row should include measurable_impressions as coverage denominator
     # v3.1: vendor scope uses (vendor BrandRef, metric_id) tuple
     # BR-RULE-220 INV-4: scope=vendor -> requires [scope, vendor, metric_id, value], keyed by (vendor, metric_id)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
   @T-UC-004-metric-aggregates-completion-source @main-flow @polling @v3-1 @invariant @BR-RULE-220 @metric-aggregates
   Scenario: aggregated_totals.metric_aggregates partitions completion_rate by completion_source qualifier
@@ -1337,7 +1364,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     # v3.1: missing_metrics surfaces accountability breaches symmetric with committed_metrics
     # BR-RULE-223 INV-1: contract metric not populated (and measurable) -> appears in missing_metrics
     # BR-RULE-223 INV-5: standard scope entry carries scope + metric_id (from available-metric enum)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
   @T-UC-004-missing-metrics-clean @main-flow @polling @v3-1 @invariant @BR-RULE-223 @missing-metrics @accountability
   Scenario: by_package.missing_metrics is empty or absent when all committed metrics were delivered
@@ -1395,7 +1422,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the response is compliant with the get_media_buy_delivery spec
     And the response packages should include pacing_index <pacing_index> for "pkg-1"
     # v3.1: pacing_index 1.0 = on-track, <1 behind, >1 ahead
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
     Examples: pacing_index states
       | pace_state | pacing_index |
@@ -1433,7 +1460,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the aggregated_totals should include "media_buy_count" equal to 2
     # v3.1: aggregated_totals scalars expanded beyond impressions/spend/clicks
     # BR-RULE-220 INV-2: unqualified metrics (roas, cost_per_acquisition, media_buy_count) -> top-level scalars, not metric_aggregates rows
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
   @T-UC-004-aggregated-reach-homogeneous @main-flow @polling @v3-1 @invariant @BR-RULE-224 @reach
   Scenario: aggregated_totals.reach is present when all buys share the same reach_unit
@@ -1448,7 +1475,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     # BR-RULE-224 INV-1/INV-3: reach present -> homogeneous reach_unit; reach_unit names the single shared unit
     # BR-RULE-224 INV-4: seller can dedup -> reach is deduplicated across buys
     # BR-RULE-224 INV-6: frequency present -> reach present
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
   @T-UC-004-aggregated-reach-heterogeneous-omitted @main-flow @polling @v3-1 @invariant @BR-RULE-224 @reach
   Scenario: aggregated_totals.reach is omitted when reach_unit is heterogeneous across buys
@@ -1472,7 +1499,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     # v3.1: reporting_delayed is webhook-context status for missing/delayed data
     # BR-RULE-222 INV-5: temporarily unavailable data -> status reporting_delayed
     # BR-RULE-222 INV-6: reporting_delayed + known availability -> expected_availability present
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
   @T-UC-004-status-pending-legacy-alias @main-flow @polling @v3-1
   Scenario: Polling response accepts legacy status "pending" as alias for "pending_start"
@@ -1492,7 +1519,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the response packages should include "daily_breakdown" arrays for each package
     And each daily_breakdown entry should include date, impressions, and spend
     # v3.1: include_package_daily_breakdown=true gates per-package daily arrays
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
   @T-UC-004-package-daily-breakdown-off @main-flow @polling @v3-1
   Scenario: include_package_daily_breakdown omitted defaults to false and packages have no daily arrays
@@ -1513,7 +1540,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And that entry should include "metric_id" with value "impressions"
     And that entry should NOT include "vendor"
     # v3.1: standard scope -> metric_id alone, MUST resolve in available-metric.json
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
   @T-UC-004-v31-metric-scope-vendor @main-flow @v3-1 @metric-scope
   Scenario: committed_metrics entry with scope vendor keys by (vendor, metric_id) tuple
@@ -1525,7 +1552,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And that entry should include "metric_id" with value "viewable_impressions"
     And that entry should include "vendor" referencing brand "moat"
     # v3.1: vendor scope -> (vendor, metric_id) tuple; vendor anchored on brand.json
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
   @T-UC-004-v31-forecastable-metric-vocab @main-flow @v3-1 @forecastable-metric
   Scenario Outline: Forecast metrics map accepts forecastable-metric vocabulary
@@ -1562,7 +1589,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     # sellers can return arbitrary formats and still pass smoke tests; the
     # schema check is the protocol-level contract.
     # delivery_reporting: schema compliance after controller-driven delivery
-    # @source repo=adcp ref=v3.1.1 path=static/compliance/source/protocols/media-buy/scenarios/delivery_reporting.yaml phase=simulate_and_verify step=get_delivery
+    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/delivery_reporting.yaml phase=simulate_and_verify step=get_delivery
 
   @T-UC-004-storyboard-required-metrics-end-to-end-accountability @storyboard-v3.1 @v3-1 @missing-metrics @accountability
   Scenario: Measurement accountability -- required_metrics declared at discovery surfaces missing_metrics in delivery
@@ -1585,9 +1612,17 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     # scenarios target single missing entries; this storyboard anchor asserts
     # the full lifecycle (discovery -> reporting contract -> emission).
     # measurement_accountability: required_metrics at discovery -> missing_metrics in delivery
-    # @source repo=adcp ref=v3.1.1 path=static/compliance/source/protocols/media-buy/scenarios/measurement_accountability.yaml phase=simulate_and_validate_accountability step=get_delivery_clean
+    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/measurement_accountability.yaml phase=simulate_and_validate_accountability step=get_delivery_clean
 
-  @T-UC-004-storyboard-vendor-metric-end-to-end @storyboard-v3.1 @v3-1 @vendor-metric @accountability
+  # STORYBOARD CLAIM WITHDRAWN at the AdCP 3.2.1 pin — RESTORABLE BY DECLARING.
+    # Gated upstream by `requires_capability media_buy.features.committed_metrics_supported`, which this seller does not declare, so the claim that an AdCP storyboard grades this scenario is FALSE at 3.2.1
+    # and feeding a guard a false claim is the guard grading a fiction. Declaring it
+    # restores the claim and the coverage with it; that decision is salesagent-o1wxm,
+    # because declaring a capability is a get_adcp_capabilities behaviour change and this
+    # repo declares a posture only where the implementation backs it.
+    # The `@storyboard-v3.1` TAG is gone and nothing else is: every Given, When and Then
+    # below still runs on every transport.
+  @T-UC-004-storyboard-vendor-metric-end-to-end @v3-1 @vendor-metric @accountability
   Scenario: Vendor metric accountability -- declaration on product, filter at discovery, emission in delivery
     Given the seller's product declared reporting_capabilities.vendor_metrics for vendor "attentionvendor.example" and metric_id "attention_units"
     And the buyer declared filters.required_vendor_metrics matching that pointer at get_products time
@@ -1595,9 +1630,9 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And controller-driven simulated delivery emitted vendor_metric_values for that vendor metric
     When the Buyer Agent calls get_media_buy_delivery for the media buy
     Then the response is compliant with the get_media_buy_delivery spec
-    And the per-package vendor_metric_values should carry one row per (vendor.domain, vendor.brand_id, metric_id)
+    And the per-package vendor_metric_values should carry one row per (vendor.domain, vendor.brand_id, metric_id, qualifier)
     And the row for vendor "attentionvendor.example" should include metric_id "attention_units"
-    And the seller should NOT emit duplicate rows for the same (vendor.domain, vendor.brand_id, metric_id) within a single reporting period
+    And the seller should NOT emit duplicate rows for the same (vendor.domain, vendor.brand_id, metric_id, qualifier) within a single reporting period
     # vendor_metric_accountability storyboard: vendor-defined metrics (attention
     # scores, emissions, panel demographics) flow through the lifecycle:
     #   1. reporting_capabilities.vendor_metrics on the product -- pointer
@@ -1607,10 +1642,12 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     #      seller silently excludes products that don't match (filter-not-fail).
     #      At least one of vendor or metric_id must be pinned per entry.
     #   3. by_package[].vendor_metric_values on get_media_buy_delivery -- one row
-    #      per (vendor.domain, vendor.brand_id, metric_id) per reporting period;
-    #      seller MUST de-duplicate before emission.
+    #      per (vendor.domain, vendor.brand_id, metric_id, qualifier) per reporting
+    #      period; the same vendor metric MAY appear in several rows only when each
+    #      carries a distinct qualifier; seller MUST de-duplicate before emission.
     # vendor_metric_accountability: declaration -> filter -> emission contract
-    # @source repo=adcp ref=v3.1.1 path=static/compliance/source/protocols/media-buy/scenarios/vendor_metric_accountability.yaml phase=simulate_and_validate_vendor_metrics step=get_delivery_with_vendor_metrics
+    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/vendor_metric_accountability.yaml phase=simulate_and_validate_vendor_metrics step=get_delivery_with_vendor_metrics
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/delivery-metrics.json pointer=/properties/vendor_metric_values
 
   @T-UC-004-aggr-scope-standard @invariant @BR-RULE-220 @metric-aggregates
   Scenario: Standard-scope aggregate row draws metric_id from the closed enum
@@ -1621,7 +1658,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the row's metric_id should be a member of the available-metric enum
     And the row should carry "scope", "metric_id", and "value"
     # BR-RULE-220 INV-3: scope=standard -> metric_id from available-metric.json enum, requires [scope, metric_id, value]
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
   @T-UC-004-aggr-components @invariant @BR-RULE-220 @metric-aggregates
   Scenario Outline: Standard rate or cost metric carries its required component fields
@@ -1631,7 +1668,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the response is compliant with the get_media_buy_delivery spec
     And the row MUST carry component fields "<component_a>" and "<component_b>"
     # BR-RULE-220 INV-5/INV-6/INV-7/INV-8: rate/cost metric rows require their component fields
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
     Examples:
       | metric_id            | component_a            | component_b          |
@@ -1648,7 +1685,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the response is compliant with the get_media_buy_delivery spec
     And the row's qualifier MUST include "lift_dimension"
     # BR-RULE-220 INV-9: brand_lift -> qualifier must include lift_dimension
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
   @T-UC-004-aggr-qualifier-closed @invariant @BR-RULE-220 @metric-aggregates
   Scenario: Qualifier keys are confined to the closed vocabulary
@@ -1659,7 +1696,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And each qualifier key MUST be one of "viewability_standard", "completion_source", "attribution_methodology", "attribution_window", or "lift_dimension"
     And no other qualifier key should be present
     # BR-RULE-220 INV-10: qualifier keys confined to closed vocab (additionalProperties: false)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
   @T-UC-004-aggr-finest-granularity @invariant @BR-RULE-220 @metric-aggregates
   Scenario: Qualified metric is emitted at the finest available granularity
@@ -1670,7 +1707,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the response should emit one row per (metric_id, full qualifier set)
     # BR-RULE-220 INV-12: one row per (metric_id, full qualifier set) at finest granularity; buyer re-aggregates up
     # --- Measurement Window Supersession (BR-RULE-221) ---
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
   @T-UC-004-window-isfinal-absent @invariant @BR-RULE-221 @measurement-window
   Scenario: Absent is_final means the seller draws no provisional/final distinction
@@ -1680,7 +1717,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the response is compliant with the get_media_buy_delivery spec
     And the buyer should treat the data as not distinguished provisional from final
     # BR-RULE-221 INV-3: is_final absent -> seller does not distinguish provisional from final
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
   @T-UC-004-window-absent @invariant @BR-RULE-221 @measurement-window
   Scenario: Absent measurement_window means data is not windowed
@@ -1690,7 +1727,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the response is compliant with the get_media_buy_delivery spec
     And the data should be treated as not windowed (final on first delivery)
     # BR-RULE-221 INV-5: measurement_window absent -> not windowed (standard digital, final on first delivery)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
   @T-UC-004-window-first-report @alternative @webhook @invariant @BR-RULE-221 @measurement-window
   Scenario: First report for a period carries no supersedes_window
@@ -1700,7 +1737,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And "supersedes_window" should be absent
     # BR-RULE-221 INV-7: first report for a period -> supersedes_window absent (no prior window to replace)
     # --- Delayed Data Signaling (BR-RULE-222) ---
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
   @T-UC-004-delayed-count-nonnegative @boundary @BR-RULE-222 @partial-data @webhook
   Scenario: unavailable_count is a non-negative integer
@@ -1710,7 +1747,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the webhook payload is compliant with the AdCP delivery webhook spec
     And "unavailable_count" MUST be an integer greater than or equal to 0
     # BR-RULE-222 INV-4: unavailable_count >= 0 (integer)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
   @T-UC-004-delayed-no-false-complete @invariant @BR-RULE-222 @partial-data @truthfulness
   Scenario: Delayed data is flagged, never presented as complete
@@ -1721,7 +1758,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the seller MUST NOT present that data as complete (zeroed or final)
     And the buy MUST be flagged via "reporting_delayed" / "partial_data"
     # BR-RULE-222 INV-7: missing/delayed data must be flagged, never reported as complete
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
   @T-UC-004-delayed-sync-absent @invariant @BR-RULE-222 @partial-data
   Scenario: Synchronous API response omits webhook-only partial-data signals
@@ -1731,7 +1768,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And "partial_data" should be absent
     And "unavailable_count" should be absent
     # BR-RULE-222 INV-8: synchronous response -> partial_data and unavailable_count absent (webhook-context fields)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
   @T-UC-004-delayed-all-available @invariant @BR-RULE-222 @partial-data @webhook
   Scenario: Webhook with all media buys available does not flag partial_data
@@ -1743,7 +1780,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And "unavailable_count" should be 0 or absent
     # BR-RULE-222 INV-1 (counter): no delayed/failed buy -> partial_data not forced true
     # --- Missing Metrics Contract Accountability (BR-RULE-223) ---
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
   @T-UC-004-missing-committed-source @invariant @BR-RULE-223 @missing-metrics @accountability
   Scenario: Missing set is computed against committed_metrics committed before period end
@@ -1753,7 +1790,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the response is compliant with the get_media_buy_delivery spec
     And the missing set MUST be computed against committed_metrics entries with committed_at before reporting_period.end
     # BR-RULE-223 INV-2: committed_metrics present -> missing set computed against entries committed_at < reporting_period.end
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
   @T-UC-004-missing-late-commit @invariant @BR-RULE-223 @missing-metrics @accountability
   Scenario: A metric committed at or after period end is not flagged for the earlier period
@@ -1763,7 +1800,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the response is compliant with the get_media_buy_delivery spec
     And that metric MUST NOT be flagged missing for the earlier period
     # BR-RULE-223 INV-3: committed_at >= reporting_period.end -> not flagged missing for that period
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
   @T-UC-004-missing-fallback @invariant @BR-RULE-223 @missing-metrics @accountability
   Scenario: Without committed_metrics the missing set falls back to current available_metrics
@@ -1772,7 +1809,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the response is compliant with the get_media_buy_delivery spec
     And the missing set MUST fall back to the product's current reporting_capabilities.available_metrics with no timestamp filter
     # BR-RULE-223 INV-4: committed_metrics absent -> fall back to current available_metrics, no timestamp filter
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
   @T-UC-004-missing-scope @invariant @BR-RULE-223 @missing-metrics
   Scenario Outline: Missing entry carries the required fields for its scope
@@ -1781,7 +1818,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the response is compliant with the get_media_buy_delivery spec
     And the missing entry MUST carry "<required_fields>"
     # BR-RULE-223 INV-5/INV-6: standard requires scope+metric_id (from enum); vendor requires scope+vendor+metric_id
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
     Examples:
       | scope    | required_fields          |
@@ -1795,7 +1832,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the response is compliant with the get_media_buy_delivery spec
     And the missing_metrics entry's qualifier MUST equal the qualifier on that committed_metrics entry
     # BR-RULE-223 INV-7: standard missing entry for a qualified committed metric -> qualifier deep-equals committed qualifier
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
   @T-UC-004-missing-window-exclusion @invariant @BR-RULE-223 @missing-metrics @measurement-window
   Scenario: A metric not yet measurable for the current window is excluded from missing_metrics
@@ -1805,7 +1842,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And that metric MUST be excluded from "missing_metrics"
     And it MAY surface when a wider window supersedes via supersedes_window
     # BR-RULE-223 INV-8: not measurable for current window -> excluded from missing_metrics (surfaces on wider window)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
   @T-UC-004-missing-dropped-metric @invariant @BR-RULE-223 @missing-metrics @accountability
   Scenario: A metric the product later dropped is still flagged if it was committed before period end
@@ -1817,7 +1854,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And that metric MUST still be flagged in "missing_metrics"
     # BR-RULE-223 INV-10: reconciliation independent of subsequent product mutations
     # --- Aggregated Reach Deduplication (BR-RULE-224) ---
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
   @T-UC-004-reach-dedup @invariant @BR-RULE-224 @reach
   Scenario Outline: Reach value is deduplicated or summed per seller capability
@@ -1827,7 +1864,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the response is compliant with the get_media_buy_delivery spec
     And "aggregated_totals.reach" should be the "<reach_value>"
     # BR-RULE-224 INV-4/INV-5: can dedup -> deduplicated; cannot -> sum of per-buy reach
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
     Examples:
       | dedup_capability | reach_value                    |
@@ -1841,7 +1878,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the response is compliant with the get_media_buy_delivery spec
     And "aggregated_totals.frequency" should be "<frequency_state>"
     # BR-RULE-224 INV-6/INV-7: frequency present -> reach present; reach omitted -> frequency omitted
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
     Examples:
       | reach_state | frequency_state |
@@ -1857,7 +1894,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And "aggregated_totals.frequency" should be greater than or equal to 0
     # BR-RULE-224 INV-8: reach/frequency value >= 0
     # --- New / changed individual invariants (BR-RULE-030, 209, 018) ---
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
   @T-UC-004-identify-account-scope @invariant @BR-RULE-030 @identification
   Scenario: Account filter scopes resolution to the referenced account
@@ -1866,7 +1903,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the response is compliant with the get_media_buy_delivery spec
     And the response should include only media buys belonging to account "acct-A"
     # BR-RULE-030 INV-7: account filter provided -> resolution scoped to that account (omitted -> all accessible accounts)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
   @T-UC-004-sandbox-natural-key @invariant @BR-RULE-209 @sandbox
   Scenario: Natural-key sandbox reference resolves without prior provisioning
@@ -1876,7 +1913,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the seller MUST resolve the reference to the sandbox account for that brand/operator pair
     And no prior provisioning should be required
     # BR-RULE-209 INV-8: natural-key (brand+operator) + sandbox:true -> resolves to sandbox account without prior provisioning
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
   @T-UC-004-envelope-two-layer @invariant @BR-RULE-018 @response @error @webhook
   Scenario Outline: Two-layer error envelope distinguishes fatal failures from warnings
@@ -1901,7 +1938,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the response is compliant with the get_media_buy_delivery spec
     And the metric_aggregates handling should be <expected>
     # BR-RULE-220 INV-1..INV-12: metric_aggregates mutual-exclusion, scope row-shape, component fields, qualifier vocab
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
     Examples: Mutual exclusion with top-level scalars
       | boundary_point                                                       | expected |
@@ -1947,7 +1984,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the response is compliant with the get_media_buy_delivery spec
     And the missing_metrics handling should be <expected>
     # BR-RULE-223 INV-1..INV-10: missing-set computed against committed_metrics; scope/qualifier discipline; window and temporal exclusion
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
     Examples: Clean delivery and flagging
       | boundary_point                                                  | expected |
@@ -1978,7 +2015,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the response is compliant with the get_media_buy_delivery spec
     And the status handling should be <expected>
     # uc004_media_buy_status: base lifecycle enum + legacy pending alias + webhook-context reporting_delayed/failed; unknown values rejected
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
     Examples: Base lifecycle enum
       | boundary_point                          | expected |
@@ -2004,7 +2041,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the response is compliant with the get_media_buy_delivery spec
     And the window handling should be <expected>
     # BR-RULE-221 INV-1..INV-8: measurement_window references a declared window_id (1..50 chars); supersedes_window pairs with window_update; is_adjusted distinct from supersession
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
     Examples: Provisional vs windowed
       | boundary_point                                            | expected |
@@ -2027,7 +2064,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the response is compliant with the get_media_buy_delivery spec
     And the reach handling should be <expected>
     # BR-RULE-224 INV-1..INV-8: reach present only when reach_unit homogeneous; reach_unit names the shared unit; frequency requires reach
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
     Examples: Homogeneity and field presence
       | boundary_point                                        | expected |
@@ -2049,7 +2086,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     When the seller assembles partial-data signals at boundary "<boundary_point>"
     Then the delayed-data handling should be <expected>
     # BR-RULE-222 INV-1..INV-8: delayed/failed buy -> partial_data true + unavailable_count = count; reporting_delayed carries expected_availability; never report delayed data as complete
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
     Examples: Correct signaling
       | boundary_point                                                   | expected |
@@ -2072,7 +2109,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the response is compliant with the get_media_buy_delivery spec
     And the sandbox flag handling should be <expected>
     # BR-RULE-209 INV-4/INV-5: sandbox account -> sandbox:true echoed; production account -> sandbox absent (or explicit false)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
 
     Examples: Response flag semantics
       | boundary_point                                  | expected |

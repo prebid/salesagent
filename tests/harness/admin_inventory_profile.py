@@ -28,7 +28,7 @@ from typing import Any
 from bs4 import BeautifulSoup
 
 from src.core.database.models import AuthorizedProperty, InventoryProfile, Product
-from tests.harness.admin_client import AdminClient, AdminResponse, guarded_admin_client
+from tests.harness.admin_client import AdminResponse
 from tests.harness.product import ProductEnv
 
 #: A format the profile form requires. Any id serves: the form stores it verbatim.
@@ -140,7 +140,6 @@ _LEGACY_SELECTION_REVISION = "3c38b1ee241f_legacy_publisher_selections_to_select
 class AdminInventoryProfileEnv(ProductEnv):
     """``ProductEnv`` plus the operator's inventory-profile form and products page."""
 
-    _admin: AdminClient | None = None
     _open_form: tuple[str, AdminResponse] | None = None
 
     # ── requests ───────────────────────────────────────────────────────────
@@ -273,9 +272,5 @@ class AdminInventoryProfileEnv(ProductEnv):
     def _admin_request(self, path: str, form: dict[str, Any] | None = None) -> AdminResponse:
         """GET *path*, or POST *form* to it and follow the redirect to the page showing its flash."""
         url = f"/tenant/{self.tenant_id}/{path}"
-        if form is not None:
-            self._commit_factory_data()
-        if self._admin is None:
-            base_url = self.e2e_config.base_url if self.e2e_config is not None else None
-            self._admin = guarded_admin_client(self._guard, base_url, self.tenant_id)
-        return self._admin.request("get", url) if form is None else self._admin.submit(url, form)
+        client = self.admin_client(self.tenant_id)
+        return client.request("get", url) if form is None else client.submit(url, form)

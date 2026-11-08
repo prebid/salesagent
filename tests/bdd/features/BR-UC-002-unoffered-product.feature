@@ -9,7 +9,8 @@
 # read, so an unoffered product is refused before anything is stored.
 #
 # @T-UC-002-ext- routes through the wired UC-002 create dispatch on every transport.
-# Ungraded by the 3.1.1 storyboards.
+# Ungraded by the 3.2.7 storyboards: universal/error-compliance.yaml grades a nonexistent
+# product id, not one the catalog holds and does not offer.
 
 @analysis-2026-11-03 @schema-v3.1
 Feature: BR-UC-002 A catalog holding a product buyers are not offered

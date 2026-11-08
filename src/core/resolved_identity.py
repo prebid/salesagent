@@ -101,6 +101,29 @@ class PublicIdentity(BaseModel):
     def tenant_id(self) -> str:
         return self.tenant.tenant_id
 
+    @property
+    def in_sandbox(self) -> bool:
+        """Whether the account the request named is a sandbox account. THE one sandbox predicate.
+
+        media-buy/advanced-topics/sandbox.mdx: "Sandbox is account-level, not per-request.
+        Once a request references a sandbox account, the entire request is treated as
+        sandbox", and "Sandbox mode is determined solely by the account reference". So the
+        adapter selection (``get_adapter``) and every response's ``sandbox`` flag read this
+        one answer, and cannot disagree. This type carries no account, so it is False here;
+        :class:`ResolvedIdentity` answers from the account it carries.
+        """
+        return False
+
+    @property
+    def sandbox_echo(self) -> Literal[True] | None:
+        """The ``sandbox`` value a success response carries: True for a sandbox account, else omitted.
+
+        sandbox.mdx: sellers "SHOULD include `sandbox: true` in success responses when
+        processing a sandbox account request". Never False: the field only ever confirms
+        sandbox mode, so a production account's response simply has none.
+        """
+        return True if self.in_sandbox else None
+
     def replay_scope(self) -> tuple[str, str, str | None] | None:
         """``(tenant_id, principal_id, account_id)`` the idempotency cache keys on, or None.
 
@@ -141,6 +164,12 @@ class ResolvedIdentity(PublicIdentity):
     @property
     def principal_id(self) -> str:
         return self.principal.principal_id
+
+    @property
+    def in_sandbox(self) -> bool:
+        # The column is nullable with a FALSE default, and ``COALESCE(sandbox, false)`` is its
+        # natural-key spelling (models.py), so NULL and False are one answer.
+        return self.account is not None and bool(self.account.sandbox)
 
     def replay_scope(self) -> tuple[str, str, str | None]:
         return self.tenant_id, self.principal_id, self.account.account_id if self.account is not None else None
@@ -204,7 +233,7 @@ def _signature_credential(
     Raises ``AdCPRequestSignatureError`` when the verifier refuses.
 
     A verified signature establishes exactly one fact — "the request was issued by the agent
-    whose ``jwks_uri`` contains the ``keyid``" (security.mdx @ v3.1.1 § Agent identity) — and
+    whose ``jwks_uri`` contains the ``keyid``" (security.mdx § Agent identity) — and
     names that agent by the ``agents[]`` entry the verifier already used to fetch the JWKS. It
     is a publication coordinate the verifier controlled end to end, never a buyer-asserted
     field, so looking a principal up by it is exactly as sound as looking one up by a token
@@ -435,7 +464,7 @@ def _resolve_identity(
     # verified inside the tenant the request reached, never looked up across tenants.
     #
     # IT ALSO COMES BEFORE EVERY REFUSAL, which is the ordering the composition rule forces.
-    # security.mdx @ v3.1.1 :1268 makes ``request_signature_required`` the answer an
+    # security.mdx :1268 makes ``request_signature_required`` the answer an
     # UNAUTHENTICATED caller earns on a ``required_for`` operation, and "unauthenticated" is
     # defined at :1224 to include a caller presenting a bearer this seller does not accept.
     # Whether the operation is in that bucket is SELLER data, so it cannot be known before the
@@ -592,7 +621,8 @@ def identity_of(tenant_id: str, principal_id: str, account_id: str | None = None
         raise AdCPConfigurationError()
     if account_id is None:
         return ResolvedIdentity(principal=principal, tenant=tenant)
-    account_ref = AccountReference(root=AccountReferenceById(account_id=account_id))
+    # The ARM, not a wrapper: the pinned SDK's AccountReference IS the two-arm union.
+    account_ref = AccountReferenceById(account_id=account_id)
     return AccountIdentity(principal=principal, tenant=tenant, account=_load_account(account_ref, tenant_id, principal))
 
 

@@ -8,7 +8,7 @@ Feature: BR-ADMIN-INVENTORY-PROFILE-publishers Which publishers the operator's s
 
   # A seller represents many publishers, each authorizing the agent in its own
   # adagents.json, and a buyer verifies a product at every
-  # publisher_properties[].publisher_domain (AdCP 3.1.1
+  # publisher_properties[].publisher_domain (AdCP 3.2.7
   # governance/property/authorized-properties.mdx). So the profile form stores one
   # selector per publisher of the VERIFIED authorized properties the selection matches:
   # core/product.json admits only the singular publisher_domain form on a product, and

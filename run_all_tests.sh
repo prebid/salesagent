@@ -80,6 +80,27 @@ export DELIVERY_WEBHOOK_INTERVAL="${DELIVERY_WEBHOOK_INTERVAL:-5}"
 # workers plus the per-worker server stacks -- which is why each knob cannot be
 # chosen in isolation. Tiers are keyed on the Docker VM's MemTotal, with the
 # CI-box tier matching what is measured green in-network (16/16/8 at 86-196GB).
+#
+# THE CI-BOX FLOOR IS THE BOTTOM OF THAT MEASURED RANGE, and it is a literal
+# below, not a round number: _CI_BOX_FLOOR_GB. It read 64 for a long time, 22 GB
+# under the range this comment declares, so a box between 64 and 85 GB silently
+# received the parallelism measured green at 86-196 GB. hetzner2-vm sat in that
+# gap when its Docker MemTotal fell from 86 GB to 74 GB, and its unit leg
+# truncated 20 of 30 retained in-network runs (exitcode 3, a dead master) while
+# the SAME box at 86 GB truncated 0 of 45 and a 196 GB box 0 of 92 -- with the
+# worker allocation byte-identical across all three, so the worker counts were
+# never the variable. salesagent-8qela.157 carries the measurement and
+# salesagent-8qela.158 the ruling.
+#
+# A box in the gap now drops to the tier below rather than running a
+# configuration nobody measured. That is slower on such a box and deliberately
+# so: a slow leg has a verdict and a truncated one does not.
+#
+# tests/unit/test_run_all_tests_memory_tiers.py reads both numbers out of this
+# file and fails if the floor stops matching the range the comment states, so
+# the comment is a check rather than a claim. Moving the floor means moving the
+# declared range in the same edit, which is the review this gap needed.
+_CI_BOX_FLOOR_GB=86
 _docker_mem_gb="$(docker info --format '{{.MemTotal}}' 2>/dev/null || echo 0)"
 # `{{.MemTotal}}` renders the literal string `<no value>` when the daemon does
 # not report it. Under `set -euo pipefail` the arithmetic below then aborts the
@@ -91,7 +112,7 @@ _docker_mem_gb="$(docker info --format '{{.MemTotal}}' 2>/dev/null || echo 0)"
 _docker_mem_gb=$(( _docker_mem_gb / 1073741824 ))
 _cores="$( (nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4) )"
 
-if [ "$_docker_mem_gb" -ge 64 ]; then
+if [ "$_docker_mem_gb" -ge "$_CI_BOX_FLOOR_GB" ]; then
     # CI box. Per-worker e2e stacks are affordable; cores are the ceiling again.
     _unit=$(( _cores > 16 ? 16 : _cores )); _integration=8; _e2e_workers=8
 elif [ "$_docker_mem_gb" -ge 32 ]; then
@@ -199,6 +220,17 @@ rm -f test-results/storyboard_summary_*.json
 dc() { docker compose -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" --profile runner "$@"; }
 
 cleanup() {
+    local rc=$?
+    # A failed run keeps every container's log beside its reports. The stack is removed
+    # below, and with it the only record of why the live server answered as it did: a
+    # report shows the wire answer (e.g. a per-creative SERVICE_UNAVAILABLE) but not the
+    # exception the server logged when it chose that answer.
+    if [ "$rc" -ne 0 ]; then
+        mkdir -p "$RESULTS_DIR/containers"
+        docker ps -a --filter "name=${COMPOSE_PROJECT_NAME}-" --format '{{.Names}}' | while read -r _name; do
+            docker logs "$_name" >"$RESULTS_DIR/containers/${_name}.log" 2>&1 || true
+        done
+    fi
     # Per-worker e2e servers AND their TLS sidecars are `docker compose run`
     # containers (not `up`), so `dc down` won't remove them — do it explicitly.
     # The sidecars MUST be matched too: a leaked `-tls-gwN.adcp.test` container
@@ -221,6 +253,30 @@ scripts/creative-agent-stack.sh build
 # build done. Same Dockerfile, so it is a layer-cache hit, not a second real build.
 echo "Building image + bringing up the app stack in-network (project: $COMPOSE_PROJECT_NAME)..."
 dc build postgres adcp-server adcp-server-storyboard proxy tests
+
+# WHICH TREE THIS RUN GRADED, recorded beside its reports before a single suite
+# runs. A run directory used to carry no commit, no branch and no installed pin,
+# so a per-nodeid comparison could be made against a baseline that graded neither
+# tree in the claim -- and was: 36 regressions and 15 fixes reported, all of which
+# dissolved against a real base (salesagent-dxb3j). The reports cannot carry this
+# and nothing can reconstruct it afterwards, because the working tree moves.
+#
+# HERE and not later for that reason. The one fact that cannot come from the host
+# is the adcp pin AS INSTALLED -- `pyproject.toml` declares the release, while a
+# locally built SDK wheel carries a `+<local>` segment, and only that segment
+# separates two builds of the same release. So it is read from the
+# interpreter that runs the suites, which is why this sits immediately after the
+# `tests` image is built and before anything uses it. A failure to read it records
+# null rather than aborting the run: an unknown pin is worth less than no run.
+_adcp_pin="$(dc run --rm --no-deps -T tests python -m scripts.audit.run_identity --adcp 2>/dev/null | tail -1)" || _adcp_pin=""
+# The asserted identity is read HERE, in shell, and passed as arguments. run_identity.py is
+# pure stdlib and cannot import the settings loader (it runs where src/ may not exist), and a
+# raw environment read inside it is banned by ruff-environment.toml. Reading the three
+# variables in the shell satisfies both: SA_RUN_* are set by whoever launched the run --
+# cassini forwards them from the client, where .git exists -- and are empty otherwise, which
+# run_identity records as an absent identity rather than guessing one.
+python3 -m scripts.audit.run_identity --write "$RESULTS_DIR" --adcp-json "$_adcp_pin" \
+    --commit "${SA_RUN_COMMIT:-}" --branch "${SA_RUN_BRANCH:-}" --tree "${SA_RUN_TREE:-}"
 
 # Pre-create logs/ group-writable + setgid BEFORE anything else touches the
 # bind mount: adcp-server bind-mounts .:/app and creates logs/audit.log at

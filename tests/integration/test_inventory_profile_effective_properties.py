@@ -153,7 +153,7 @@ def test_product_with_profile(integration_db, test_tenant, test_profile):
 
 
 class TestEffectiveFormats:
-    """Tests for Product.effective_format_ids property."""
+    """Tests for the legacy arm of Product.format_contract, for legacy-only products and profiles."""
 
     @pytest.mark.requires_db
     def test_effective_formats_returns_profile_formats_when_profile_set(
@@ -177,7 +177,7 @@ class TestEffectiveFormats:
             assert product.inventory_profile is not None
 
             # effective_formats should return profile's formats
-            effective = product.effective_format_ids
+            effective = list(product.format_contract.format_ids)
             assert effective == test_profile.format_ids
             assert len(effective) == 2
             assert effective[0]["id"] == "display_300x250_image"
@@ -205,7 +205,7 @@ class TestEffectiveFormats:
             assert product.inventory_profile_id is None
 
             # effective_formats should return product's custom formats
-            effective = product.effective_format_ids
+            effective = list(product.format_contract.format_ids)
             assert effective == product.format_ids
             assert len(effective) == 2
             assert effective[0]["id"] == "video_15s"
@@ -342,7 +342,7 @@ class TestEffectiveImplementationConfig:
             assert product.inventory_profile is not None
 
             # Effective properties should use profile config
-            effective_formats = product.effective_format_ids
+            effective_formats = list(product.format_contract.format_ids)
             assert effective_formats == test_profile.format_ids
             assert len(effective_formats) == 2
 

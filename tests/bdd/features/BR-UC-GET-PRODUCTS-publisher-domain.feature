@@ -8,7 +8,7 @@ Feature: A product names the publishers whose inventory it sells
   # A seller (one sales agent, one host) represents many publishers. Each publisher
   # authorizes the agent in its OWN /.well-known/adagents.json, and a buyer verifies a
   # product by fetching that file at every publisher_properties[].publisher_domain and
-  # failing closed when it finds no authorization (AdCP 3.1.1
+  # failing closed when it finds no authorization (AdCP 3.2.7
   # governance/property/authorized-properties.mdx, "Authorization Validation Workflow"
   # and "Missing adagents.json: Treat as unauthorized").
   #
@@ -42,7 +42,7 @@ Feature: A product names the publishers whose inventory it sells
   # announced as selection_type "all" on every path, stored selectors included. "all" claims
   # "all properties from each addressed publisher" (core/publisher-property-selector.json),
   # which under property_tags or property_ids authorization includes properties outside the
-  # authorized scope; AdCP 3.1.1 does not say how a buyer treats that.
+  # authorized scope; AdCP 3.2.7 does not say how a buyer treats that.
   #
   # A verified publisher is named by the host its row names (lower-case, no scheme, path or
   # trailing dot), as the capabilities portfolio names it, because core/product.json's
@@ -53,7 +53,7 @@ Feature: A product names the publishers whose inventory it sells
   # The by-id grouping of a form's choice is graded through an inventory profile the
   # operator saves with the admin form (AdminInventoryProfileEnv).
   #
-  # Ungraded by the 3.1.1 storyboards: no compliance step compares publisher_domain
+  # Ungraded by the 3.2.7 storyboards: no compliance step compares publisher_domain
   # against the seller's authorized properties.
 
   Background:

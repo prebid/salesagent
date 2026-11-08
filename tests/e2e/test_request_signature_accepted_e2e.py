@@ -83,9 +83,10 @@ graded by a POSITIVE observable rather than by the absence of a rejection.
         brand.json hop RAN. Traced, not assumed: ``resolve_agent`` hop 2
         (``adcp/signing/agent_resolver.py``) reads the agent's ``jwks_uri`` out of
         the brand.json ``agents[]`` entry, so an unlisted agent fails there with
-        ``BrandJsonResolverError("agent_not_found")``, which
-        ``_map_brand_json_resolver_error`` (``verifier.py`` :601) maps to exactly this
-        code and ``_FailedDiscoveryJwksResolver`` (:174) raises at checklist step 7.
+        ``BrandJsonResolverError("agent_not_found")``, which the SDK's
+        ``_BRAND_JSON_SPEC_CODES`` carries onto the exception as its ``signature_code``
+        and ``_map_agent_resolver_error`` reads back out — exactly this code — after
+        which ``_FailedDiscoveryJwksResolver`` (:174) raises at checklist step 7.
         Tier 3 is the SECOND consumer of the same document and is simply not reached
         on this input — the walk fails first. The registry branch cannot produce this
         code at all: with no ``agent_url`` there is no walk, and an unmatched keyid
@@ -420,8 +421,9 @@ async def test_a_signed_request_from_a_walked_counterparty_is_accepted_and_count
                 brand = await _counterparty_get(counterparty, "GET", _BRAND_JSON_PATH)
                 assert brand.status_code == 200, (
                     f"the counterparty must publish {_BRAND_JSON_PATH!r} as a plain 200 with a JSON "
-                    f"object — agent_resolver._fetch_capabilities demands exactly that and follows no "
-                    f"redirects; got HTTP {brand.status_code}. Body: {brand.text[:300]!r}"
+                    f"object — hop 2 of the walk is BrandJsonJwksResolver, which demands exactly "
+                    f"that and follows no redirects; got HTTP {brand.status_code}. Body: "
+                    f"{brand.text[:300]!r}"
                 )
                 listed_urls = [agent.get("url") for agent in brand.json().get("agents", [])]
                 assert listed_urls == [_LISTED_AGENT_URL], (
@@ -492,8 +494,10 @@ async def test_a_signed_request_from_a_walked_counterparty_is_accepted_and_count
             # ── Leg (iv): same key material, a counterparty its brand does not list. ──
             # The ONLY control that proves the brand.json hop RAN. resolve_agent's hop 2
             # reads jwks_uri out of the agents[] entry, so an unlisted agent dies there as
-            # BrandJsonResolverError("agent_not_found"), which _map_brand_json_resolver_error
-            # maps to the code below and _FailedDiscoveryJwksResolver raises at checklist
+            # BrandJsonResolverError("agent_not_found"), which the SDK's
+            # _BRAND_JSON_SPEC_CODES carries onto the exception's signature_code and
+            # _map_agent_resolver_error reads back out as the code below, after which
+            # _FailedDiscoveryJwksResolver raises at checklist
             # step 7. Every other assertion in this module stays green if the key were
             # resolved from the registry instead — including the metric delta, which would
             # be byte-identical.

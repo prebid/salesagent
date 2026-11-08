@@ -27,6 +27,7 @@ from src.core.database.models import (
 )
 from src.core.database.repositories import MediaBuyRepository
 from src.services.media_buy_status_scheduler import MediaBuyStatusScheduler
+from tests.factories import stamp_format_identity
 from tests.factories.principal import plaintext_token_for
 from tests.helpers.media_buy_write_seam import (
     assert_status_move_carried_bookkeeping,
@@ -133,11 +134,10 @@ def _create_creative(
             principal_id=principal_id,
             creative_id=creative_id,
             name="Test Creative",
-            agent_url="https://creative.adcontextprotocol.org",
-            format="display_300x250",
             status=status,
             data={"type": "display", "width": 300, "height": 250},
         )
+        stamp_format_identity(creative, format_id="display_300x250")
         session.add(creative)
         session.commit()
 

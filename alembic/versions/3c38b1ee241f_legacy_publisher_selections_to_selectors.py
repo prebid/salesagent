@@ -1,7 +1,7 @@
 """legacy publisher selections to explicit selectors
 
 Revision ID: 3c38b1ee241f
-Revises: 7f31c0ab94d2
+Revises: f7c2e8a13d64
 Create Date: 2026-11-07 21:00:00.000000
 
 A product selected its publishers one of three ways: explicit ``properties`` selectors,
@@ -41,7 +41,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "3c38b1ee241f"
-down_revision: str | Sequence[str] | None = "7f31c0ab94d2"
+down_revision: str | Sequence[str] | None = "f7c2e8a13d64"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

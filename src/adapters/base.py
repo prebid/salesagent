@@ -11,7 +11,13 @@ if TYPE_CHECKING:
     from src.core.schemas import Snapshot, Targeting
 
 from adcp.types import BrandReference
-from adcp.types.aliases import Package as ResponsePackage
+
+# ``LegacyPackage`` from the module that contains only the legacy arm, not the unprefixed
+# ``adcp.types.aliases.Package`` this used to read. The two names differ by the word
+# ``aliases``: ``adcp.types.aliases.Package`` is the generated package (format_ids,
+# format_ids_pending, format_ids_to_provide) while ``adcp.types.Package`` is the canonical one
+# without them. See the note in ``src/core/schemas/_base.py``.
+from adcp.types.legacy import LegacyPackage as ResponsePackage
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 from rich.console import Console
 
@@ -26,6 +32,7 @@ from src.core.schemas import (
     AssetStatus,
     CheckMediaBuyStatusResponse,
     CreateMediaBuyRequest,
+    Format,
     MediaPackage,
     Principal,
     PushNotificationConfig,
@@ -400,9 +407,22 @@ class AdServerAdapter(ABC):
         Per AdCP spec, CreateMediaBuyResponse.Package requires package_id.
         This builds the list consistently across adapters.
 
+        A package is reported paused when the SELLER holds it or when the BUYER asked
+        for it to be created that way. Both are real and neither overrides the other:
+        media-buy/package-request.json (AdCP) says ``paused`` asks for a package
+        "created in a paused state", and core/package.json says the response reports
+        whether the package "is paused by the buyer" — so an adapter that holds every
+        package pending approval cannot answer "active" to a buyer who asked for paused,
+        and a seller hold is not cancelled by a buyer who did not ask for one.
+
+        This is the one place either answer is formed: every adapter's create path
+        returns through here, so threading ``MediaPackage.paused`` to the ad server is
+        all that is left per adapter.
+
         Args:
             packages: List of MediaPackage objects from the request.
-            paused: Whether packages should be marked as paused (e.g. for HITL).
+            paused: Whether the SELLER holds these packages (e.g. for HITL), regardless
+                of what the buyer asked for.
             include_product_id: Whether to include product_id in the response
                 (useful for adapters that need product tracking, e.g. Mock).
 
@@ -413,7 +433,7 @@ class AdServerAdapter(ABC):
         for package in packages:
             kwargs: dict[str, Any] = {
                 "package_id": package.package_id,
-                "paused": paused,
+                "paused": paused or package.paused,
             }
             if include_product_id:
                 kwargs["product_id"] = package.product_id
@@ -443,7 +463,9 @@ class AdServerAdapter(ABC):
         Args:
             media_buy_id: The generated media buy ID.
             packages: List of MediaPackage objects from the request.
-            paused: Whether packages should be marked as paused.
+            paused: Whether the SELLER holds these packages; the buyer's own
+                ``MediaPackage.paused`` ask is honoured either way (see
+                :meth:`_build_package_responses`).
             creative_deadline_days: Days from now for creative deadline.
                 None means no creative deadline (e.g. GAM sets this explicitly).
             package_responses: Pre-built package responses (overrides packages).
@@ -697,25 +719,41 @@ class AdServerAdapter(ABC):
         # Default implementation returns empty inventory
         return {"placements": [], "ad_units": [], "targeting_options": {}, "creative_specs": [], "properties": {}}
 
-    def get_creative_formats(self) -> list[dict[str, Any]]:
-        """Return creative formats provided by this adapter.
+    @classmethod
+    def creative_formats(cls, tenant_id: str) -> list[Format]:
+        """The creative formats this adapter serves itself, as a creative agent.
 
-        Override in adapters that act as both sales and creative agents.
-        Returns format definitions that will be included in list_creative_formats.
+        Override in adapters that act as both sales and creative agents. Whatever this
+        answers is the tenant's catalogue for those formats on EVERY path --
+        ``list_creative_formats`` lists it when a product declares it and ``sync_creatives``
+        resolves against it, both reading it through ``adapter_served_creative_formats``, so the two cannot
+        disagree about a format one of them serves. These formats are NOT in
+        ``CreativeAgentRegistry``: that answers for the agents it DIALS, and the point of
+        an adapter-served format is that there is nothing to dial.
 
-        Each format dict should match AdCP Format schema:
-        {
-            "format_id": {"id": "cube_3d", "agent_url": "..."},
-            "name": "3D Cube Gallery",
-            "type": "display",
-            "assets": [
-                {"item_type": "individual", "asset_id": "front_image", "asset_type": "image", "required": True},
-                ...
-            ],
-            "description": "6-sided rotating cube with images",
-        }
+        EVERY FORMAT MUST CARRY ``canonical``, and that is the whole reason this returns
+        models rather than the dicts it used to. An adapter-served format's ``agent_url``
+        is a pseudo-URL (``broadstreet://<tenant_id>``) with no host to dial, and its id
+        is outside ``registries/v1-canonical-mapping.json``, so step 1 of the projection
+        order in ``core/format-id.json`` -- the format's own
+        ``CanonicalProjectionReference``, whose ``kind`` is required once declared -- is
+        the ONLY route by which a creative naming it can be given a ``format_kind``. A
+        format served without one cannot be synced at all: ``creative_identity_of``
+        refuses the reference and the creative comes back ``failed``. The declaring party
+        for a format nothing can fetch is the adapter, locally, with no network call.
+
+        A format whose canonical kind the adapter cannot name must not be served. Guessing
+        one fabricates the identity every comparison downstream keys on.
+
+        A CLASSMETHOD because the catalogue is a property of the adapter and the tenant,
+        not of a configured connection: the discovery paths resolve the adapter CLASS for
+        a tenant (``get_adapter_class_for_tenant``) and have no Principal to construct one
+        with.
+
+        Args:
+            tenant_id: the seller whose catalogue this is; it names the ``agent_url``.
 
         Returns:
-            List of format dictionaries (empty by default)
+            The adapter's formats, each with ``canonical.kind`` set (empty by default).
         """
         return []

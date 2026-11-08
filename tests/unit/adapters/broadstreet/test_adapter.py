@@ -6,9 +6,12 @@ from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pytest
+from adcp.types.canonical_creative import CanonicalFormatKind
 
 from src.adapters.base import AdapterCreateRequest, AdapterUpdateResult
 from src.adapters.broadstreet import BroadstreetAdapter
+from src.adapters.broadstreet.config_schema import BROADSTREET_TEMPLATES
+from src.core.exceptions import AdCPConfigurationError
 from src.core.schemas import FormatId, MediaPackage
 from tests.helpers.broadstreet_client import stub_broadstreet_client, zone_payload
 
@@ -559,69 +562,84 @@ class TestBroadstreetAdapterInventory:
 
 
 class TestBroadstreetAdapterCreativeFormats:
-    """Tests for creative format discovery (Broadstreet as creative agent)."""
+    """The catalogue Broadstreet serves as its own creative agent.
 
-    def test_get_creative_formats_returns_templates(self, mock_principal, mock_config):
-        """Test that get_creative_formats returns Broadstreet templates as AdCP formats."""
-        adapter = BroadstreetAdapter(
-            config=mock_config,
-            principal=mock_principal,
-            tenant_id="test_tenant",
-        )
+    ``creative_formats`` is a CLASSMETHOD and these call it as one: the catalogue is a
+    property of the adapter and the tenant, and the discovery paths that read it hold no
+    Principal to build an instance with.
+    """
 
-        formats = adapter.get_creative_formats()
+    def test_creative_formats_returns_templates(self):
+        """Every template comes back, with the tenant in its pseudo-``agent_url``."""
+        formats = BroadstreetAdapter.creative_formats("test_tenant")
 
-        # Should return all template types
-        assert len(formats) > 0
+        assert {f.format_id.id for f in formats} == {f"broadstreet_{t}" for t in BROADSTREET_TEMPLATES}
+        assert {f.format_id.agent_url for f in formats} == {"broadstreet://test_tenant"}
 
-        # Check for cube_3d template
-        cube_format = next((f for f in formats if "cube_3d" in f["format_id"]["id"]), None)
-        assert cube_format is not None
-        assert cube_format["name"] == "Amazing 3D Cube Gallery"
-        assert cube_format["type"] == "display"
+        cube_format = next(f for f in formats if f.format_id.id == "broadstreet_cube_3d")
+        assert cube_format.name == "Amazing 3D Cube Gallery"
 
         # Cube should have 6 required face images
-        required_assets = [a for a in cube_format["assets"] if a["required"]]
+        required_assets = [a for a in cube_format.assets if a.required]
         assert len(required_assets) == 6
-        assert all("image" in a["asset_id"] for a in required_assets)
+        assert all("image" in a.asset_id for a in required_assets)
 
-    def test_get_creative_formats_includes_youtube(self, mock_principal, mock_config):
-        """Test YouTube video format is included."""
-        adapter = BroadstreetAdapter(
-            config=mock_config,
-            principal=mock_principal,
-            tenant_id="test_tenant",
-        )
+    def test_every_format_declares_its_canonical_kind(self):
+        """The property the write gate depends on, for the WHOLE catalogue.
 
-        formats = adapter.get_creative_formats()
+        ``core/canonical-projection-ref.json`` requires ``kind`` once a format declares a
+        projection, and for a ``broadstreet://`` pseudo-URL that declaration is the only
+        route to a ``format_kind`` -- the id matches no glob in
+        ``registries/v1-canonical-mapping.json`` and there is no host to fetch from. A
+        format served without one is refused at sync (``creative_identity_of`` raises
+        UNSUPPORTED_FEATURE), so this is asserted over every template rather than one.
+        """
+        formats = BroadstreetAdapter.creative_formats("test_tenant")
 
-        youtube_format = next((f for f in formats if "youtube" in f["format_id"]["id"]), None)
-        assert youtube_format is not None
-        assert youtube_format["name"] == "YouTube Video with Text"
+        kinds = {f.format_id.id: f.canonical.kind for f in formats if f.canonical is not None}
+        assert kinds == {
+            "broadstreet_static": "image",
+            "broadstreet_html": "html5",
+            "broadstreet_text": "native_in_feed",
+            "broadstreet_cube_3d": "image_carousel",
+            "broadstreet_youtube_video": "video_hosted",
+            "broadstreet_push_pin": "image",
+            "broadstreet_gallery": "image_carousel",
+            "broadstreet_native": "native_in_feed",
+        }
+        # Every kind is a member of the pinned closed vocabulary, read from the SDK rather
+        # than transcribed: an unknown value would project an identity nothing can key on.
+        assert set(kinds.values()) <= {k.value for k in CanonicalFormatKind}
 
-        # YouTube requires youtube_url asset
-        required = [a for a in youtube_format["assets"] if a["required"]]
-        assert any(a["asset_id"] == "youtube_url" for a in required)
+    def test_a_template_without_a_canonical_kind_is_refused(self):
+        """The adapter will not serve a format whose canonical kind it cannot name.
 
-    def test_get_creative_formats_asset_types(self, mock_principal, mock_config):
-        """Test that asset types are correctly inferred."""
-        adapter = BroadstreetAdapter(
-            config=mock_config,
-            principal=mock_principal,
-            tenant_id="test_tenant",
-        )
+        Fire-probing the refusal: the only way to reach it is to remove the declaration,
+        because every committed template carries one.
+        """
+        patched = {**BROADSTREET_TEMPLATES, "static": {**BROADSTREET_TEMPLATES["static"], "canonical_kind": None}}
+        with (
+            patch.dict(BROADSTREET_TEMPLATES, patched, clear=True),
+            pytest.raises(AdCPConfigurationError),
+        ):
+            BroadstreetAdapter.creative_formats("test_tenant")
 
-        formats = adapter.get_creative_formats()
-        cube_format = next((f for f in formats if "cube_3d" in f["format_id"]["id"]), None)
+    def test_creative_formats_includes_youtube(self):
+        """YouTube video format is included and requires its url asset."""
+        formats = BroadstreetAdapter.creative_formats("test_tenant")
 
-        # Image assets should have type "image"
-        front_image = next((a for a in cube_format["assets"] if a["asset_id"] == "front_image"), None)
-        assert front_image["asset_type"] == "image"
+        youtube_format = next(f for f in formats if f.format_id.id == "broadstreet_youtube_video")
+        assert youtube_format.name == "YouTube Video with Text"
 
-        # Caption assets should have type "text"
-        front_caption = next((a for a in cube_format["assets"] if a["asset_id"] == "front_caption"), None)
-        assert front_caption["asset_type"] == "text"
+        required = [a for a in youtube_format.assets if a.required]
+        assert any(a.asset_id == "youtube_url" for a in required)
 
-        # Click URL should have type "url"
-        click_url = next((a for a in cube_format["assets"] if a["asset_id"] == "click_url"), None)
-        assert click_url["asset_type"] == "url"
+    def test_creative_formats_asset_types(self):
+        """Asset types are inferred from the template's asset ids."""
+        formats = BroadstreetAdapter.creative_formats("test_tenant")
+        cube_format = next(f for f in formats if f.format_id.id == "broadstreet_cube_3d")
+        by_id = {a.asset_id: a.asset_type for a in cube_format.assets}
+
+        assert by_id["front_image"] == "image"
+        assert by_id["front_caption"] == "text"
+        assert by_id["click_url"] == "url"

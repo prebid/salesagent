@@ -152,7 +152,7 @@ class GAMCreativesManager:
         logger.info(f"[DEBUG] line_item_map keys: {list(line_item_map.keys())}")
         logger.info(f"[DEBUG] creative_placeholders keys: {list(creative_placeholders.keys())}")
 
-        # AdCP 2.5: Check if any creatives have non-default weights
+        # Check if any creatives have non-default weights
         # If so, update affected line items to use MANUAL rotation
         self._update_line_items_for_weighted_creatives(assets, line_item_map, line_item_service)
 
@@ -357,7 +357,7 @@ class GAMCreativesManager:
     ) -> None:
         """Update line items to use MANUAL rotation if creatives have non-default weights.
 
-        AdCP 2.5 supports creative rotation weights. When weights differ from the default (100),
+        The spec supports creative rotation weights. When weights differ from the default (100),
         GAM requires MANUAL rotation type on the line item to respect the weights.
 
         Args:
@@ -996,7 +996,7 @@ class GAMCreativesManager:
     ) -> None:
         """Associate creative with its assigned line items.
 
-        Supports creative rotation weights (AdCP 2.5). When weights differ from the default (100),
+        Supports creative rotation weights. When weights differ from the default (100),
         the weight is passed to GAM's manualCreativeRotationWeight field for MANUAL rotation.
 
         Supports creative-level placement targeting (adcp#208). When placement_ids are specified
@@ -1073,7 +1073,7 @@ class GAMCreativesManager:
                             f"only supports one targetingName. Using first: {first_placement_id}"
                         )
 
-            # Create Line Item Creative Association (AdCP 2.5 weight support + adcp#208 placement targeting)
+            # Create Line Item Creative Association (weight support + adcp#208 placement targeting)
             association: dict[str, str | int] = {
                 "creativeId": gam_creative_id,
                 "lineItemId": line_item_id,

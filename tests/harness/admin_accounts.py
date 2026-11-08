@@ -14,6 +14,7 @@ fixture supplies the address; both arrive as arguments.
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Any
 
 from sqlalchemy import delete
 
@@ -224,6 +225,49 @@ class AdminAccountEnv:
 
         self._created_account_ids.append(account_id)
         return account_id
+
+    def inventory_profiles_path(self, path: str = "") -> str:
+        """The inventory-profile routes of this tenant, which the page's modal posts to."""
+        return f"/tenant/{self._tenant_id}/inventory-profiles/{path}"
+
+    def _inventory_profile(self, profile_id: str) -> Any:
+        from sqlalchemy import select
+
+        from src.core.database.models import InventoryProfile
+
+        with get_db_session() as session:
+            stmt = select(InventoryProfile).filter_by(tenant_id=self._tenant_id, profile_id=profile_id)
+            return session.scalars(stmt).first()
+
+    def inventory_profile_format_options(self, profile_id: str) -> Any:
+        """The stored declarations of *profile_id*, or None when there is no such profile."""
+        profile = self._inventory_profile(profile_id)
+        return None if profile is None else profile.format_options
+
+    def inventory_profile_row_id(self, profile_id: str) -> int:
+        """The integer id the edit route takes."""
+        return self._inventory_profile(profile_id).id
+
+    def authorize_publisher(self, domain: str) -> None:
+        """Store this tenant's verified website property on *domain*, unless it has it.
+
+        The profile forms accept a publisher selector only for a publisher the seller holds a
+        verified property of (``selector_selection``), as ``get_products`` sells it.
+        """
+        from sqlalchemy import select
+
+        from src.core.database.models import AuthorizedProperty
+
+        property_id = domain.replace(".", "_")
+        with get_db_session() as session:
+            stmt = select(AuthorizedProperty).filter_by(tenant_id=self._tenant_id, property_id=property_id)
+            if session.scalars(stmt).first() is None:
+                session.add(
+                    AuthorizedProperty.verified_website(
+                        tenant_id=self._tenant_id, property_id=property_id, domain=domain, name=domain
+                    )
+                )
+                session.commit()
 
     def get_account_from_db(self, *, name: str | None = None, account_id: str | None = None) -> Account | None:
         """Look up an account in the database."""
