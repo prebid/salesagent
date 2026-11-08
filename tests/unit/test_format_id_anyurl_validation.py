@@ -30,7 +30,7 @@ AGENT = "https://creative.adcontextprotocol.org/"
 #
 # Duplicating those rules here re-asserted them through one extra caller, in a form that
 # names an implementation value rather than a spec rule, and the two cases went red on a
-# type change (FormatIdentity is a distinct type, not a tuple[str, str]) while the
+# type change (the identity is a derived key, not a tuple[str, str]) while the
 # behavior they described was never wrong. The cases below are what this module still
 # grades that the vector test cannot: that ``format_identity_or_none`` accepts a FormatId
 # whose ``agent_url`` is an AnyUrl and a raw dict off the wire alike (the original

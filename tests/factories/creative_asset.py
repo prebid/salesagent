@@ -6,11 +6,13 @@ Used by creative sync tests instead of hand-crafted dicts.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from typing import Any
 
 import factory
-from adcp.types import CreativeAsset, FormatId
+from adcp.types import LegacyCreativeAsset as CreativeAsset
+from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as FormatId
 
 from tests.factories.format import AGENT_URL
 
@@ -94,7 +96,7 @@ class CreativeAssetFactory(factory.Factory):
     creative_id = factory.Sequence(lambda n: f"c_{n:04d}")
     name = factory.Sequence(lambda n: f"Test Creative {n}")
     format_id = factory.LazyFunction(lambda: FormatId(id="display_300x250_image", agent_url=AGENT_URL))
-    assets = factory.LazyFunction(lambda: build_assets(image_spec("banner")))
+    assets = factory.LazyFunction(lambda: named_format_assets("display_300x250_image"))
 
 
 # ---------------------------------------------------------------------------
@@ -159,6 +161,26 @@ def image_spec(
     return AssetSpec(role, "image", {"url": url, "width": width, "height": height}, multiple)
 
 
+#: The file size a canonical manifest's image states: under the smallest cap any scenario
+#: declares (200 KB). ``core/assets/image-asset.json``: ``file_size_bytes`` is "Required by
+#: agents that advertise a max_file_size_kb constraint", and the seller refuses a manifest
+#: silent about a cap the selected declaration states.
+MANIFEST_IMAGE_BYTES = 50 * 1024
+
+
+def manifest_image_spec(
+    role: str = "image_main", *, width: int = 300, height: int = 250, multiple: bool = False
+) -> AssetSpec:
+    """An image as a canonical manifest carries it: its dimensions and its file size.
+
+    ``multiple=True`` makes it one rendition of an array-valued slot; several such specs for
+    one role build the array (:func:`build_assets`).
+    """
+    return image_spec(role, width=width, height=height, multiple=multiple).with_fields(
+        file_size_bytes=MANIFEST_IMAGE_BYTES
+    )
+
+
 def text_spec(role: str, *, content: str, multiple: bool = False) -> AssetSpec:
     """AssetSpec for a text asset."""
     return AssetSpec(role, "text", {"content": content}, multiple)
@@ -193,11 +215,110 @@ def asset_spec(role: str, asset_type: str, *, multiple: bool = False, **fields: 
 
 
 def build_assets(*specs: AssetSpec) -> dict:
-    """Merge specs into one ``assets`` slot map for a creative payload."""
+    """Merge specs into one ``assets`` slot map for a creative payload.
+
+    Specs sharing a role with ``multiple=True`` each append one item to that slot's array, in
+    order -- the shape of a slot holding several assets, such as an image rendition set
+    (creative-manifest.json: "an array of asset objects (slots with ``min``/``max`` counts")).
+    Any other repeated role is replaced by the later spec.
+    """
     out: dict = {}
     for spec in specs:
-        out.update(spec.payload())
+        for role, value in spec.payload().items():
+            held = out.get(role)
+            out[role] = [*held, *value] if spec.multiple and isinstance(held, list) else value
     return out
+
+
+def canonical_assets(kind: str) -> dict:
+    """The ``assets`` a manifest of canonical *kind* must carry: one asset per REQUIRED slot.
+
+    Read off the pin, not listed here: ``declared_slots_by_kind`` is the seller's own reader
+    of each canonical schema's ``slots`` default, so the slot ids and asset types are the
+    ones the seller grades against (``image`` -> ``image_main``, ``video_hosted`` ->
+    ``video_main``). creative-manifests.mdx § Basic structure: "``assets`` is keyed by
+    ``asset_group_id`` from the matched declaration's ``params.slots[]``".
+
+    Only the media types have a builder; a kind requiring anything else raises ``KeyError``
+    naming the type, so a scenario cannot silently send an incomplete manifest.
+    """
+    from src.core.format_satisfaction import declared_slots_by_kind
+
+    builders = {
+        "image": manifest_image_spec,
+        "video": video_spec,
+        "audio": lambda group: asset_spec(group, "audio", url="https://example.com/spot.mp3"),
+    }
+    return build_assets(
+        *(
+            builders[str(slot["asset_type"])](str(slot["asset_group_id"]))
+            for slot in declared_slots_by_kind()[kind]
+            if slot.get("required")
+        )
+    )
+
+
+def named_format_assets(
+    format_id: str = "display_300x250_image", *, media_url: str | None = None, prompt: str | None = None
+) -> dict:
+    """The ``assets`` a manifest naming legacy *format_id* must carry: one per REQUIRED asset.
+
+    The deprecated branch's sibling of :func:`canonical_assets`, for a format the committed
+    capture carries (``load_reference_formats``) -- the one the harness serves -- so the asset
+    ids and types are the ones the seller grades against (``display_300x250_image`` ->
+    ``banner_image`` image plus ``click_url`` url). :func:`format_manifest` builds it.
+    """
+    from src.core.format_cache import load_reference_formats
+
+    (fmt,) = (fmt for fmt in load_reference_formats() if fmt.format_id.id == format_id)
+    return format_manifest(fmt, media_url=media_url, prompt=prompt)
+
+
+def prompt_assets(content: str, *also: AssetSpec, format_id: str = "display_300x250_generative") -> dict:
+    """A generative creative's assets: what its named format requires, the prompt carrying *content*.
+
+    The captured generative formats require a ``generation_prompt`` text asset, so a creative
+    in one carries it whatever other prompt role (``message``, ``brief``) a test also sends.
+    *also* are those further assets; give a prompt role the same *content* and the build's
+    prompt is *content* whichever asset production reads it from.
+    """
+    return {**named_format_assets(format_id, prompt=content), **build_assets(*also)}
+
+
+def format_manifest(fmt: Any, *, media_url: str | None = None, prompt: str | None = None) -> dict:
+    """The ``assets`` that fill *fmt*'s required assets, each keyed by its ``asset_id``.
+
+    core/format.json: each asset's ``asset_id`` "must be used as the key in creative
+    manifests", and "Required assets must be provided for a valid creative". Read off the
+    format, not listed by the caller, so a manifest cannot drift from the format it names.
+
+    *media_url* replaces the default URL of the image, video or audio asset, for a caller
+    whose creatives must differ in what they serve; *prompt* is the content of the text
+    asset, for a generative format whose required text asset is the build's prompt.
+
+    A required type with no builder raises ``KeyError`` naming it, so a scenario cannot
+    silently send an incomplete manifest.
+    """
+    media = {} if media_url is None else {"url": media_url}
+    builders: dict[str, Callable[[str], AssetSpec]] = {
+        "image": lambda asset_id: image_spec(asset_id, **media),
+        "url": lambda asset_id: url_spec(asset_id, url="https://example.com/landing"),
+        "text": lambda asset_id: text_spec(asset_id, content=prompt or "Test copy"),
+        "video": lambda asset_id: video_spec(asset_id, **media),
+        "audio": lambda asset_id: asset_spec(asset_id, "audio", url=media_url or "https://example.com/spot.mp3"),
+        "html": lambda asset_id: asset_spec(asset_id, "html", content="<div>ad</div>"),
+        "vast": lambda asset_id: asset_spec(asset_id, "vast", delivery_type="url", url="https://example.com/vast.xml"),
+        "daast": lambda asset_id: asset_spec(
+            asset_id, "daast", delivery_type="url", url="https://example.com/daast.xml"
+        ),
+    }
+    return build_assets(
+        *(
+            builders[str(asset.asset_type)](asset.asset_id)
+            for asset in fmt.assets or ()
+            if getattr(asset, "item_type", None) == "individual" and asset.required
+        )
+    )
 
 
 def assert_assets(stored_assets: Mapping, *specs: AssetSpec) -> None:
@@ -207,16 +328,24 @@ def assert_assets(stored_assets: Mapping, *specs: AssetSpec) -> None:
 
 
 def make_test_banner_creative(**overrides: object) -> CreativeAsset:
-    """Minimal valid banner CreativeAsset (``c_test_1`` / ``display_300x250``) for sync tests.
+    """Minimal valid banner CreativeAsset (``c_test_1`` / ``display_300x250_image``).
 
     Canonical replacement for per-module ``_make_creative_asset`` helpers —
     see #1430 DRY extraction.
+
+    FOR SYNC TESTS, which is why the format must be one the reference agent actually
+    serves. This defaulted to ``display_300x250`` — a format that is NOT among those in
+    ``tests/fixtures/creative_formats/reference_formats.json``, so every creative built
+    here is refused by ``_validation.py`` with ``AdCPFormatNotFoundError`` and comes back
+    ``action='failed'``. That was invisible while the harness served a stand-in
+    catalogue; it is the real catalogue now, in process and on the wire alike.
+    ``CreativeAssetFactory`` above, in this same file, already named the served id.
     """
     defaults: dict = {
         "creative_id": "c_test_1",
         "name": "Test Banner",
-        "format_id": FormatId(agent_url=AGENT_URL, id="display_300x250"),
-        "assets": build_assets(image_spec("banner")),
+        "format_id": FormatId(agent_url=AGENT_URL, id="display_300x250_image"),
+        "assets": named_format_assets("display_300x250_image"),
     }
     defaults.update(overrides)
     return make_creative_asset_minimal(**defaults)

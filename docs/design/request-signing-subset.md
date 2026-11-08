@@ -1,9 +1,10 @@
 # The RFC 9421 subset this seller implements
 
-AdCP 3.1.1's `request_signing` surface is over-specified for one deployment. This seller is
-COMPATIBLE with it and is not an exhaustive implementation of it. Three narrowings were
-decided; this document states what each one means in code, what it deletes, and — for the one
-the pinned corpus refuses — the two storyboard cards that refuse it.
+AdCP's `request_signing` surface is over-specified for one deployment. This seller is
+COMPATIBLE with it and is not an exhaustive implementation of it. TWO narrowings were decided;
+this document states what each one means in code and what it deletes. A third was decided
+under the 3.1.1 pin and is void under 3.2 — §3 keeps it, because the coverage it was protecting
+is still being paid for while the storyboard runner is 3.1-only.
 
 Spec grounding throughout: AdCP 3.1.1 via `adcp==6.6.0`,
 `v3.1.1:docs/building/by-layer/L1/security.mdx` (there is no `dist/docs/3.1.1/`), the pinned
@@ -153,20 +154,54 @@ store one: `_reject_undeclarable_posture_fields` refuses a declaration naming an
 before pydantic types anything, with the reason LOGGED and the envelope carrying the field
 names alone. A value that cannot be stored is a value no response can echo.
 
-## 3. `covers_content_digest` — MEASURED twice, and NOT taken
+## 3. `covers_content_digest` — not a narrowing at the 3.2 pin
 
-The posture stays `either`. Requiring coverage is right on the security argument — every
-request here is a POST to one path, so `@method`, `@target-uri` and `@authority` are constant
-across all of them, and a signature that does not cover `content-digest` binds nothing that
-varies (security.mdx :1057 spells out the body-swap consequence). The pinned corpus refuses it
-anyway, and the refusal was measured on the wire rather than argued.
+**The posture is `required`, and it is not a decision.** The 3.2 response schema requires the
+field with a `const` wherever `request_signing.supported` is true and the document speaks 3.2
+or later (the `allOf` if/then on `request_signing.supported`), security.mdx :1541 says it in
+words — "AdCP 3.2 verifiers that advertise request-signing support MUST advertise
+`covers_content_digest: \"required\"`" — and the field's own description makes `either` and
+`forbidden` 3.0/3.1 compatibility values that "MUST NOT be advertised as a 3.2 signing
+posture". So `RequestSigningPosture` derives it from `supported` and
+`CapabilityDeclarations._validate_digest_coverage` refuses the other two by name. A deployment
+that genuinely cannot bind bodies has the spec's own remedy and not a legacy policy:
+`supported: false`, or a separately configured 3.0/3.1 endpoint.
 
-### What the runner's gate does with each digest vector
+The security argument always pointed the same way — every request here is a POST to one path,
+so `@method`, `@target-uri` and `@authority` are constant across all of them, and a signature
+that does not cover `content-digest` binds nothing that varies (security.mdx :1057 spells out
+the body-swap consequence).
+
+### What changed, and what did not: the measurement below is still true of the 3.1.1 corpus
+
+The rest of this section is the measurement that kept the posture at `either` under the 3.1.1
+pin, and it is kept because the loss it records is real and still being paid. Its PREMISE is
+what 3.2 removed. The root corpus signs 36 of its 40 vectors without `content-digest`, so a
+`required` verifier cannot grade them; `profile-3.2/` was added to restore exactly that
+coverage, and **all 11 of its positive vectors cover `content-digest`** while
+`profile-3.2/negative/007-missing-content-digest` carries
+`verifier_capability.covers_content_digest: "required"` and expects
+`request_signature_components_incomplete` — the vector `required` exists for, now gradable.
+The corpus README is explicit: root `negative/018` has no 3.2 counterpart "because `forbidden`
+is a legacy-only posture a 3.2 verifier cannot advertise".
+
+The runner-side half has landed. `compliance/universal/signed-requests.yaml` said of itself
+that "the repository CI reference evaluator covers the 3.2 body-integrity policy while
+runner-side profile selection is added"; `@adcp/sdk@14.4.0` adds that selection
+(`signingProfileForAdcpVersion` / `selectRequestSigningVectors`), so a run at a 3.2 pin now
+synthesizes its steps from `profile-3.2/` — 11 positives and 19 negatives — and the root
+corpus is not graded at all. That is why the structural gate no longer fires for us: every
+`profile-3.2` negative but `007` covers `content-digest`, and `007` is the vector the gate
+exempts.
+
+### What the runner's gate did with each digest vector, on the root corpus
 
 The runner gates each vector against the agent's DECLARED policy, in two halves —
 `contentDigestDeclarationMismatch` and `contentDigestStructuralMismatch`
-(`@adcp/sdk@14.0.0-rc.42`, `lib/testing/storyboard/request-signing/grader.mjs`), reached
-through the `agentContentDigestPolicy` this repo's own bridge patch forwards:
+(`lib/testing/storyboard/request-signing/grader.mjs`). On the 14.4.0 storyboard path the
+policy reaches them from the agent's own capability block (`declaredContentDigestPolicy`,
+adcp-client#2993); on the rc.42 path it reached them from a bridge patch this repo carried,
+now deleted:
 
 | vector | declares | signs content-digest | under `either` | under `required` |
 |---|---|---|---|---|
@@ -201,25 +236,27 @@ purpose, missing params, crypto-invalid, replay, revocation and rate-abuse. Step
 would no longer be graded against the corpus at all, because every vector that reaches them
 omits `content-digest` and would be refused at step 6 first.
 
-The in-process suite says the same thing on the real wire: declaring `required` turned 16
-`test_signing_conformance_vectors.py` rows red, 7 of them positive vectors this seller now
-REFUSES with `request_signature_components_incomplete`, and 8 negatives whose own graded code
-is pre-empted at step 6.
+The in-process suite said the same thing on the real wire at the time: declaring `required`
+turned 16 `test_signing_conformance_vectors.py` rows red, 7 of them positive vectors this
+seller then REFUSED with `request_signature_components_incomplete`, and 8 negatives whose own
+graded code was pre-empted at step 6. That module is LIVE, at
+`tests/integration/test_signing_conformance_vectors.py` — so the in-process half of this
+measurement is a statement about today, not history, and it grades the root corpus in-process
+while the storyboard runner grades it out-of-process.
 
-### Why that settles it
+### Why the 3.1.1 reading does not carry forward
 
-A verifier declaring `required` is spec-legal, and upstream's gate politely excludes the
-vectors it would break rather than failing them. Underneath that politeness is the fact:
-**this seller would refuse 11 of the 12 requests the pinned corpus says a conformant verifier
-must ACCEPT.** `either` is not a compromise between the four digest vectors; it is the only
-value under which the happy path is graded at all.
+What settled it then was that **this seller would have refused 11 of the 12 requests the
+3.1.1 corpus says a conformant verifier must ACCEPT** — `either` was not a compromise between
+the four digest vectors, it was the only value under which the happy path was graded at all.
+That is a property of a corpus where 36 of 40 vectors sign without a digest, and 3.2 replaced
+it: in `profile-3.2/` all 11 positives cover `content-digest`, so the happy path is graded
+under `required` and under nothing else. The sentence to keep from the old reasoning is its
+last clause, inverted — a measurement must never be used to re-write conformance expectations
+so new refusals read as correct, and it is not being used that way here: the expectations came
+from the pin first, and the vectors already agree with them.
 
-Landing it would additionally mean re-writing those 16 conformance expectations so the new
-refusals read as correct, which is the one thing a measurement like this must not be used for.
-Recorded here and beside the declaration (`scripts/setup/storyboard_signing.py`), and reported
-upstream with the fixture PR.
-
-The half that did land: nothing now accepts a posture we do not enforce, so
+The half that landed with the narrowings: nothing now accepts a posture we do not enforce, so
 `to_verifier_capability` is no longer a lossy projection — every bucket a tenant can declare
 is a field `VerifierCapability` carries, and `bucket_for` compensates for nothing.
 

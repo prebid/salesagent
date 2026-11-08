@@ -96,7 +96,7 @@ verbatim is still right — it is what lets ``sign=strategy.build_auth_headers``
 work with no adapter — but the trade is real, and widening the callback later
 means diverging from the SDK.
 
-Spec grounding: AdCP 3.1.1, ``building/by-layer/L1/security.mdx``, "Webhook URL
+Spec grounding: ``building/by-layer/L1/security.mdx``, "Webhook URL
 validation (SSRF)". Before any outbound fetch to a counterparty-controlled URL a
 fetcher MUST (1) reject non-HTTPS in production, (2) reject reserved ranges,
 (3) pin the connection to the validated IP, (4) refuse to follow redirects,
@@ -148,6 +148,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -160,7 +161,20 @@ from typing import Any, Protocol
 # underscore makes that re-export an ImportError instead of something a ban
 # list has to keep enumerating.
 import httpx as _httpx
-from adcp.signing import AsyncIpPinnedTransport, IpPinnedTransport
+
+# The SECOND httpx generation, bound privately for the identical reason. ``httpx2`` is a
+# separate distribution, not a version of ``httpx``: mcp 2.x's streamable-HTTP client is
+# written entirely against it (``httpx2.AsyncClient``, ``httpx2.SSEError``,
+# ``httpx2.StreamError``, ``EventSource``), so the ONE seam that hands a long-lived client
+# to that transport has to build an httpx2 client. Every install already carries both,
+# because ``adcp`` depends on both (its pyproject says so) and ships IP-pinned transports
+# for each.
+import httpx2 as _httpx2
+from adcp.signing import (
+    AsyncIpPinnedTransport,
+    AsyncIpPinnedTransport2,
+    IpPinnedTransport,
+)
 from pydantic import JsonValue
 from typing_extensions import TypeIs
 
@@ -223,15 +237,25 @@ class McpClientFactory(Protocol):
     Protocol and the annotation on :func:`guarded_client_factory` would not
     check. ``follow_redirects`` is the fourth because fastmcp passes it
     unconditionally; it is accepted and discarded, never honoured.
+
+    **It is the httpx2 generation from mcp 2.x on.** The restatement used to name
+    ``httpx`` types, and mcp 2.x moved its whole streamable-HTTP client to ``httpx2`` --
+    a different distribution with different classes, down to the exceptions its retry
+    paths catch (``httpx2.SSEError``, ``httpx2.StreamError``). Handing that transport an
+    ``httpx.AsyncClient`` is not a typing mismatch to suppress: its error handling would
+    never match, and ``EventSource`` would be given a foreign response. mcp 2.x also
+    narrowed ``headers`` to ``dict`` and dropped ``follow_redirects`` from its own
+    Protocol, though fastmcp 4 still passes it (with a ``type: ignore[call-arg]`` of its
+    own, fastmcp/client/transports/http.py), which is why it stays declared here.
     """
 
     def __call__(
         self,
-        headers: Mapping[str, str] | None = None,
-        timeout: _httpx.Timeout | float | None = None,
-        auth: _httpx.Auth | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: _httpx2.Timeout | None = None,
+        auth: _httpx2.Auth | None = None,
         follow_redirects: bool | None = None,
-    ) -> _httpx.AsyncClient: ...
+    ) -> _httpx2.AsyncClient: ...
 
 
 #: Headers a signer may not set, because they describe the FRAMING of the body
@@ -296,7 +320,7 @@ class OperatorEndpoint:
 
     ``name`` identifies the ROLE this deployment stands behind (e.g. "the
     creative agent", "Kevel"), never an address: a refusal naming an endpoint
-    the buyer did not choose would disclose network topology (AdCP 3.1.1,
+    the buyer did not choose would disclose network topology (AdCP,
     security.mdx point 6), so the constructor refuses anything that looks like
     one rather than relying on every call site to remember not to pass one.
     """
@@ -376,7 +400,8 @@ def wrapped_failure(exc: BaseException) -> WrappedFailure | None:
     found = find_wrapped(exc, _httpx.HTTPStatusError)
     if found is None:
         return None
-    return WrappedFailure(status=found.response.status_code, retry_after=_retry_after_seconds(found.response))
+    status = found.response.status_code
+    return WrappedFailure(status=status, retry_after=retry_after_seconds(status, found.response.headers))
 
 
 def find_wrapped[Wrapped: BaseException](exc: BaseException, exc_type: type[Wrapped]) -> Wrapped | None:
@@ -505,6 +530,18 @@ def _async_transport(url: str, *, field: str | None, allow_private: bool) -> Asy
     return AsyncIpPinnedTransport(hostname=pinned.hostname, resolved_ip=pinned.resolved_ip, verify=True)
 
 
+def _async_transport2(url: str, *, field: str | None, allow_private: bool) -> AsyncIpPinnedTransport2:
+    """The httpx2 twin of :func:`_async_transport` — same decision, other generation.
+
+    One extra function rather than one parameterised one: the only thing that differs is
+    the transport CLASS, and both resolve through the same
+    :meth:`EgressPolicy.resolve_for_dial`, so there is still exactly one place the
+    pre-connection verdict is reached.
+    """
+    pinned = EgressPolicy.resolve_for_dial(url, field=field, allow_private=allow_private)
+    return AsyncIpPinnedTransport2(hostname=pinned.hostname, resolved_ip=pinned.resolved_ip, verify=True)
+
+
 async def sleep_backoff(attempts: Attempts) -> None:
     """Await the wait BR-RULE-029 owes before *attempts*' next attempt.
 
@@ -529,12 +566,24 @@ async def sleep_backoff(attempts: Attempts) -> None:
     await asyncio.sleep(attempts.wait_seconds())
 
 
-def _retry_after_seconds(response: _httpx.Response) -> float | None:
-    """The origin's Retry-After in seconds, or ``None`` if it did not usably say.
+def retry_after_seconds(status: int, headers: Mapping[str, str]) -> float | None:
+    """How long a response with *status* and *headers* asked us to wait, or ``None``.
+
+    ``Retry-After`` on any status. On a 429 only, ``RateLimit-Reset`` when there is no
+    ``Retry-After``: the RateLimit header fields (draft-ietf-httpapi-ratelimit-headers,
+    the shape express-rate-limit's ``standardHeaders`` emits, which the reference agent's
+    MCP limiter turns on) put the window's remaining seconds there. On any other status it is
+    NOT a request to wait — a limiter stamps it on every response, a 200 or a 503
+    included — so honouring it there would lengthen a 5xx backoff to the end of a rate
+    window nobody exhausted.
 
     Delta-seconds only. RFC 9110 also permits an HTTP-date, but honouring one
     means trusting a counterparty's clock against ours; it is logged and treated
     as absent, which costs only the BR-RULE-029 wait we would have taken anyway.
+    A non-finite number is absent too (``core/error.json`` ``retry_after``:
+    "Non-finite values are treated as absent"), and it has to be, because
+    ``float("inf")`` parses and :func:`~src.core.exceptions.clamp_retry_after`
+    cannot round it.
 
     Deliberately UNCLAMPED. The raw value decides the WAIT (bounded separately by
     :data:`_MAX_HONOURED_RETRY_AFTER_SECONDS`); the value that rides out to the
@@ -542,20 +591,24 @@ def _retry_after_seconds(response: _httpx.Response) -> float | None:
     two would floor every wait at one second, so an origin could not answer
     ``Retry-After: 0`` — and a test suite could not avoid sleeping for real.
 
-    Module-private, and reached from outside only through
-    :func:`wrapped_failure`, which projects the parsed value onto
-    :class:`WrappedFailure`. That is what keeps the 429/Retry-After parsing rule
-    in one home regardless of which transport the seam used underneath WITHOUT
-    handing an ``_httpx.Response`` to a module that is forbidden to import _httpx.
+    Takes the headers as a plain mapping, not a response: the MCP seam reads an
+    ``httpx2`` response and this module's own loop an ``httpx`` one, and the rule
+    has one home either way without a response object of either generation
+    crossing the seam.
     """
-    raw = response.headers.get("Retry-After")
-    if raw is None:
-        return None
-    try:
-        return float(raw.strip())
-    except ValueError:
-        logger.debug("Ignoring non-delta-seconds Retry-After: %r", raw)
-        return None
+    names = ("Retry-After", "RateLimit-Reset") if status == 429 else ("Retry-After",)
+    for name in names:
+        raw = headers.get(name)
+        if raw is None:
+            continue
+        try:
+            seconds = float(raw.strip())
+        except ValueError:
+            seconds = math.nan
+        if math.isfinite(seconds):
+            return seconds
+        logger.debug("Ignoring non-delta-seconds %s: %r", name, raw)
+    return None
 
 
 def _build_request(
@@ -659,7 +712,9 @@ def _conclude_attempt(
     step. Pure sync, so both the sync and async drivers call it unchanged; the
     async/sync difference lives entirely in the I/O verbs around it.
     """
-    outcome = attempts.record_response(response.status_code, _retry_after_seconds(response))
+    outcome = attempts.record_response(
+        response.status_code, retry_after_seconds(response.status_code, response.headers)
+    )
     if outcome is Attempts.Outcome.SUCCESS:
         return _result(response, body, attempt, started)
     if outcome is Attempts.Outcome.TERMINAL:
@@ -729,12 +784,19 @@ def validate_url(url: str, *, provenance: UrlProvenance | None = None) -> None:
 def guarded_async_client(
     url: str,
     *,
-    headers: Mapping[str, str] | None = None,
-    timeout: _httpx.Timeout | float | None = None,
-    auth: _httpx.Auth | None = None,
+    headers: dict[str, str] | None = None,
+    timeout: _httpx2.Timeout | None = None,
+    auth: _httpx2.Auth | None = None,
     follow_redirects: bool | None = None,
-) -> _httpx.AsyncClient:
-    """An ``_httpx.AsyncClient`` pinned to ``url``'s validated IP, redirects refused.
+) -> _httpx2.AsyncClient:
+    """An ``_httpx2.AsyncClient`` pinned to ``url``'s validated IP, redirects refused.
+
+    **httpx2, not httpx**, and it is the only builder in this module that is: this client
+    exists for mcp 2.x's streamable-HTTP transport, which is written against httpx2 end to
+    end. :func:`asend` and :func:`send` keep the httpx generation, because they own their
+    own request/response lifecycle and nothing hands their client to another library. See
+    :class:`McpClientFactory` for why handing the wrong generation across is a behaviour
+    bug rather than a typing one.
 
     For the one library seam whose stateful client this module's one-shot
     :func:`asend` cannot carry — fastmcp's ``StreamableHttpTransport``, which
@@ -753,7 +815,7 @@ def guarded_async_client(
     verdict :func:`validate_url` and :func:`asend` reach, because all three go
     through the same policy method.
     """
-    transport = _async_transport(url, field=None, allow_private=_allow_private())
+    transport = _async_transport2(url, field=None, allow_private=_allow_private())
     kwargs: dict[str, Any] = {}
     if headers is not None:
         kwargs["headers"] = headers
@@ -771,7 +833,7 @@ def guarded_async_client(
     # not passable at all.
     del follow_redirects
     kwargs.update(transport=transport, follow_redirects=False, trust_env=False)
-    return _httpx.AsyncClient(**kwargs)
+    return _httpx2.AsyncClient(**kwargs)
 
 
 def guarded_client_factory(url: str) -> McpClientFactory:
@@ -786,11 +848,11 @@ def guarded_client_factory(url: str) -> McpClientFactory:
     """
 
     def factory(
-        headers: Mapping[str, str] | None = None,
-        timeout: _httpx.Timeout | float | None = None,
-        auth: _httpx.Auth | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: _httpx2.Timeout | None = None,
+        auth: _httpx2.Auth | None = None,
         follow_redirects: bool | None = None,
-    ) -> _httpx.AsyncClient:
+    ) -> _httpx2.AsyncClient:
         return guarded_async_client(url, headers=headers, timeout=timeout, auth=auth, follow_redirects=follow_redirects)
 
     return factory

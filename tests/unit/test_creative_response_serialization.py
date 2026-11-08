@@ -15,6 +15,7 @@ This test suite covers:
 
 import pytest
 from adcp.types import CreativeAction
+from pydantic import ValidationError
 
 from src.core.schemas import (
     CreateCreativeResponse,
@@ -126,23 +127,37 @@ def test_creative_model_dump_omits_null_fields_inside_assets(null_field):
 
 
 def test_sync_creative_result_excludes_internal_fields():
-    """model_dump() excludes internal_status and review_feedback; the spec status is derived."""
+    """model_dump() excludes internal_status; the spec status is derived from it."""
     result = SyncCreativeResult(
         creative_id="c_1",
         action=CreativeAction.created,
         internal_status="pending_review",
-        review_feedback="Looks good",
     )
     dumped = result.model_dump(mode="json")
     assert dumped["creative_id"] == "c_1"
     # The pinned per-creative ``status`` is the row's review state (creative-status enum).
     assert dumped["status"] == "pending_review"
     assert "internal_status" not in dumped
-    assert "review_feedback" not in dumped
-    # The other half of the split: both fields EXIST on the model. The attribute is what
+    # The other half of the split: the field EXISTS on the model. The attribute is what
     # existing means — there is no second dump shape (CLAUDE.md pattern 4).
     assert result.internal_status == "pending_review"
-    assert result.review_feedback == "Looks good"
+
+
+def test_sync_creative_result_refuses_the_deleted_review_feedback():
+    """``review_feedback`` is gone, and the model refuses it rather than storing an extra.
+
+    The positive control for the deletion: the class carries the environment-based extra
+    mode, which is ``forbid`` outside production, so a construction site still passing the
+    name fails loudly instead of the value becoming an extra on an ``extra="allow"``
+    parent and reaching the buyer.
+    """
+    assert "review_feedback" not in SyncCreativeResult.model_fields
+    with pytest.raises(ValidationError):
+        SyncCreativeResult(
+            creative_id="c_1",
+            action=CreativeAction.created,
+            review_feedback="Looks good",  # type: ignore[call-arg]
+        )
 
 
 def test_sync_creative_result_omits_unset_optional_arrays():

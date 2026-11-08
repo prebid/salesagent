@@ -35,6 +35,55 @@ FEATURES_DIR = BDD_DIR / "features"
 # FIXME(#1947): unbound feature files ("census unbound BDD feature files -- scenarios()
 # binding gap"), also tracked as salesagent-yz8mo. Each entry is
 # scenarios that never execute. This set may only shrink.
+#
+# READ THIS BEFORE REMOVING AN ENTRY: a ``scenarios()`` call ALONE buys nothing here,
+# and leaves this guard green while the scenarios still grade nothing.
+#
+# Binding has a SECOND precondition this guard cannot see: an ``ENV_ROUTES`` row.
+# ``tests/bdd/conftest.py``'s ``_harness_env`` resolves one per scenario and, when
+# there is none, calls ``pytest.xfail(f"No harness wired for {uc} ...")`` at FIXTURE
+# SETUP -- before a single step runs. That xfail has no baseline and no ledger: unlike
+# the missing-step dormancy converter in the same file, which refuses a scenario absent
+# from ``tests/bdd/dormant_scenarios.txt``, nothing caps or records it. So removing an
+# entry below without adding the route converts "unbound, and counted HERE" into
+# "bound, xfailed at setup, counted NOWHERE" -- the same invisibility with this guard
+# satisfied, which is strictly worse than the entry.
+#
+# MEASURED (``storyboard_spec.resolve_env_route`` against the live ``ENV_ROUTES``):
+# all 18 features below resolve to NO route, covering 1473 scenarios. The module
+# docstring's "20 of 38 ... hiding 1604 scenarios" is this population before two of
+# the twenty were bound; the file count is still 38.
+# ``registry_wired`` in ``scripts/audit``'s liveness join reports this, and
+# ``test_architecture_storyboard_measured_status.py`` explains why that False is a
+# measurement rather than an absence -- but it is a REPORT, not a gate.
+#
+# The entries are also not one population. Graded against the pinned spec's
+# ``docs/protocol/required-tasks.mdx``, which fixes each task to an agent ROLE,
+# and against the 14 names in ``src.core.tools.registry.TOOLS``:
+#
+#   This seller's own served surface -- the only bind-worthy entries:
+#     BR-UC-001  get_products (Required for a sales agent)          121 scenarios
+#     BR-UC-027  list_tasks, complete_task, get_task_status          93
+#
+#   Tasks this seller does not serve (no row in ``TOOLS``), Optional or Conditional
+#   for a sales agent where the spec names them at all:
+#     BR-UC-015 sync_event_sources, log_event · BR-UC-016 sync_audiences
+#     BR-UC-023 sync_catalogs · BR-UC-017 report_usage, get_account_financials
+#     BR-UC-032 comply_test_controller -- named in no role table, and its pinned
+#       request schema reads "Sandbox only -- sellers MUST NOT expose this tool in
+#       production", so anything bound here must be a sandbox-only surface
+#
+#   ANOTHER AGENT ROLE'S contract. Not a sales-agent obligation in any edition of
+#   the spec, so no binding of these can grade this seller:
+#     BR-UC-020 build_creative, BR-UC-021 preview_creative, BR-UC-022
+#       get_creative_delivery/get_creative_features -- Creative Protocol, and
+#       OPTIONAL even for a creative agent. This seller is the CLIENT of a creative
+#       agent (``src/core/creative_agent_registry.py``) and declares only
+#       ``media_buy`` in ``DEFAULT_SUPPORTED_PROTOCOLS``, so it does not claim the
+#       role either.
+#     BR-UC-008 signal agent · BR-UC-012, BR-UC-024 content-standards agent
+#     BR-UC-013, BR-UC-025 property-governance agent · BR-UC-028 collection
+#     governance · BR-UC-030 campaign governance · BR-UC-014 brand agent (SI)
 UNBOUND_ALLOWLIST: set[str] = {
     "BR-UC-001-discover-available-inventory.feature",
     "BR-UC-008-manage-audience-signals.feature",
