@@ -40,6 +40,7 @@ Feature: UC-010 get_adcp_capabilities — the seller publishes its advertising p
     And the tenant declares no advertising policy
     When the Buyer Agent calls get_adcp_capabilities
     Then the response is compliant with the get_adcp_capabilities spec
+    And the response should include media_buy.portfolio with publisher_domains "news.example"
     And media_buy.portfolio.advertising_policies should be omitted
 
   @T-UC-010-local-advertising-policy-empty-description @main-flow @partition @boundary
@@ -49,6 +50,7 @@ Feature: UC-010 get_adcp_capabilities — the seller publishes its advertising p
     And the tenant declares an advertising policy with no description
     When the Buyer Agent calls get_adcp_capabilities
     Then the response is compliant with the get_adcp_capabilities spec
+    And the response should include media_buy.portfolio with publisher_domains "news.example"
     And media_buy.portfolio.advertising_policies should be omitted
     # The column holds a document, and only its "description" member is publishable. A
     # policy row that carries other keys but no description has nothing to say on the

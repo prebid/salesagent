@@ -107,7 +107,6 @@ pytest_plugins = [
     "tests.bdd.steps.domain.tenant_identification",
     "tests.bdd.steps.domain.agent_card_discovery",
     "tests.bdd.steps.domain.mcp_endpoint_paths",
-    "tests.bdd.steps.domain.publisher_format_catalog",
     "tests.bdd.steps.domain.publisher_authorization",
     "tests.bdd.steps.domain.pre_dispatch_refusals",
     "tests.bdd.steps.domain.codes_open_vocabulary",
@@ -6812,19 +6811,6 @@ ENV_ROUTES: list[EnvRoute] = [
         when=lambda m: "mcppath" in m,
         env_builder=_build_capabilities_env,
         seed=_seed_tenant_and_principal,
-    ),
-    # ── @pubformats (local publisher-format-catalog feature, RFC S3) ────────
-    # An UNSCOPED `when` row for the same reason as the rows around it: T-PUBFORMATS-* tags
-    # carry no T-UC-<n>, so detect_uc returns None and no coarse bucket claims them.
-    #
-    # The product env, because one scenario dispatches get_products and reads the product
-    # off the wire; the adagents.json fetches use `fetch_agent_card`, which every env has.
-    # No seed: the Background's "a tenant is configured for product discovery" seeds the
-    # tenant and principal, as for the canonical-format-filter rows.
-    EnvRoute(
-        tag="pubformats",
-        when=lambda m: "pubformats" in m,
-        env_builder=_build_product_env,
     ),
     # ── @pubauth (local publisher-authorization feature) ────────────────────
     # A `when` row because its scenarios carry T-ADMIN-PUBAUTH-* tags, which detect_uc

@@ -168,13 +168,6 @@ class Tenant(Base, JSONValidatorMixin):
         comment="Implementation-backed AdCP capability declaration blocks (#1592); NULL = nothing declared",
     )
 
-    # The reusable publisher format options this tenant publishes as the ``formats[]`` of the
-    # adagents.json served at its own host (RFC S3; see src/core/publisher_format_catalog.py).
-    # Each entry is a core/product-format-declaration.json document carrying a unique
-    # format_option_id; a product names one as {publisher_domain: primary_domain,
-    # format_option_id}. NULL means no catalog, and the served file then carries no formats[].
-    publisher_format_options: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONType, nullable=True)
-
     # Pydantic AI configuration for multi-model support
     # Structure: {"provider": "anthropic", "model": "claude-sonnet-4-20250514", "api_key": "encrypted:...", ...}
     ai_config: Mapped[dict | None] = mapped_column(
@@ -312,18 +305,6 @@ class Tenant(Base, JSONValidatorMixin):
         # plain column and nothing takes a URL apart in SQL.
         self.virtual_host_name = hostname_of(host)
         return host
-
-    @validates("publisher_format_options")
-    def _validate_publisher_format_options(self, _key: str, value: list[dict[str, Any]] | None) -> list | None:
-        """Every write path stores a catalog of referenceable options, or nothing.
-
-        Refused on assignment, so the admin form, the management API and a seed script cannot
-        store an entry the served adagents.json would publish as an unreferenceable or
-        ambiguous option. An empty catalog is stored as NULL (``formats[]`` has minItems 1).
-        """
-        from src.core.publisher_format_catalog import validated_catalog
-
-        return validated_catalog(value)
 
     @property
     def gemini_api_key(self) -> str | None:

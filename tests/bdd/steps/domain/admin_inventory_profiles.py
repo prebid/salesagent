@@ -7,6 +7,8 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
+from tests.helpers.admin_product_form import minimal_product_create_form
+
 IMAGE_300X250 = [{"format_kind": "image", "params": {"width": 300, "height": 250}}]
 FETCH_HEADERS = {"Accept": "application/json"}
 
@@ -71,6 +73,72 @@ def when_modal_edits(ctx: dict, profile_id: str, width: int, height: int) -> Non
     env = ctx["env"]
     path = env.inventory_profiles_path(f"{env.inventory_profile_row_id(profile_id)}/edit")
     _post(ctx, path, _modal_form(env, profile_id, _image(width, height)), FETCH_HEADERS)
+
+
+def _agent_host_option(env: Any, option_id: str) -> list[dict[str, Any]]:
+    """One image declaration naming the seller's own host as the publisher of *option_id*."""
+    return [
+        {
+            "format_kind": "image",
+            "format_option_id": option_id,
+            "publisher_domain": env.agent_host(),
+            "params": {"width": 300, "height": 250},
+        }
+    ]
+
+
+@when(
+    parsers.parse(
+        'the modal submits a new profile "{profile_id}" declaring format option "{option_id}" under the seller\'s own host'
+    )
+)
+def when_modal_creates_agent_host_option(ctx: dict, profile_id: str, option_id: str) -> None:
+    env = ctx["env"]
+    form = _modal_form(env, profile_id, _agent_host_option(env, option_id))
+    _post(ctx, env.inventory_profiles_path("add"), form, FETCH_HEADERS)
+
+
+@when(
+    parsers.parse(
+        'the modal edits the profile "{profile_id}" to declare format option "{option_id}" under the seller\'s own host'
+    )
+)
+def when_modal_edits_agent_host_option(ctx: dict, profile_id: str, option_id: str) -> None:
+    env = ctx["env"]
+    path = env.inventory_profiles_path(f"{env.inventory_profile_row_id(profile_id)}/edit")
+    _post(ctx, path, _modal_form(env, profile_id, _agent_host_option(env, option_id)), FETCH_HEADERS)
+
+
+@when(
+    parsers.parse(
+        'the operator submits the product form for "{product_id}" declaring format option "{option_id}" '
+        "under the seller's own host"
+    )
+)
+def when_product_form_declares_agent_host_option(ctx: dict, product_id: str, option_id: str) -> None:
+    env = ctx["env"]
+    form = minimal_product_create_form(
+        "pub.example:all_inventory",
+        product_id=product_id,
+        format_options=json.dumps(_agent_host_option(env, option_id)),
+    )
+    ctx["admin_response"] = env.client.request("post", env.products_path("add"), data=form)
+
+
+@then("the refusal names the seller's own host as the format option's publisher")
+def then_refusal_names_agent_host(ctx: dict) -> None:
+    response = ctx["admin_response"]
+    body = response.data.decode()
+    assert response.status_code in (200, 400), f"{response.status_code}: {body[:200]!r}"
+    host = ctx["env"].agent_host()
+    assert f"name {host}, the host this sales agent answers at" in body, (
+        f"the refusal does not name {host}: {body[:2000]}"
+    )
+
+
+@then(parsers.parse('no product "{product_id}" is stored'))
+def then_no_product(ctx: dict, product_id: str) -> None:
+    assert not ctx["env"].product_is_stored(product_id), f"product {product_id!r} was stored"
 
 
 @when("the inventory page is opened")
