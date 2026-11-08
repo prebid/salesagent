@@ -52,7 +52,6 @@ WEAK_ASSERTION_ALLOWLIST: set[tuple[str, str]] = {
     # FIXME(#1370): pre-existing split assertions outside tests/unit/ (surfaced by SCAN_DIRS widen)
     ("tests/integration/test_creative_async_lifecycle_obligations.py", "test_async_input_required_response"),
     ("tests/integration/test_delivery_webhooks_force.py", "test_trigger_report_for_media_buy_public_method"),
-    ("tests/integration/test_targeting_values_endpoint.py", "test_get_targeting_values_endpoint"),
 }
 
 
