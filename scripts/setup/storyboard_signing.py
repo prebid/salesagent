@@ -289,7 +289,22 @@ def seed() -> None:
     answered (``request_signature_required`` rather than ``AUTH_MISSING``), and
     ``virtual_host`` changes the origin this tenant publishes its trust root at. Neither
     should reach a suite that did not ask for it.
+
+    REFUSES under ``RuntimeSettings.is_production``, before it opens a session. What it
+    writes is the test kit's trust material: the kit's keyids onboarded for a principal, and
+    a grading record whose accepted JWKS holds the kit's PUBLIC keys, so anyone holding the
+    kit's published private keys could sign as that principal. That is the conformance
+    contract on a grading target and a key-trust bypass on a deployment.
     """
+    from src.core.config import get_settings
+
+    if get_settings().runtime.is_production:
+        raise SystemExit(
+            "Refusing to seed the signed-requests test kit on a production deployment "
+            "(PRODUCTION, ENVIRONMENT=production or FLY_APP_NAME is set): it would make a "
+            "principal trust the kit's published keys."
+        )
+
     from sqlalchemy import select
 
     from src.core.agent_identity import brand_json_url
@@ -606,6 +621,9 @@ def main() -> None:
         for name, value in signing_env().items():
             print(f"{name}={value}")
         return
+    from src.core.config import load_settings
+
+    load_settings()
     seed()
 
 
