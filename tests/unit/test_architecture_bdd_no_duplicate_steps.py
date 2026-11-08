@@ -90,10 +90,28 @@ _DUPLICATE_THRESHOLD = 2
 # above as claims a shared body failed to distinguish -- the bodies now distinguish them, so
 # the groups are gone rather than merged.
 #
-# 21 -> 20: the two "errors" absence Thens ('NOT contain an "errors" field', 'NOT have an
-# "errors" field') were one body, ``wire_absent(ctx, "errors")``; both are deleted and their
-# feature lines bind to the one absence step, ``the response should NOT contain "errors" field``.
-_DUPLICATE_GROUP_BASELINE = 20
+# 22 -> 21 -> 20: two independent drops, and the ratchet's equality arm caught each one
+# ("Only N duplicate group(s) remain but the baseline still says N+1") -- which is this
+# counter working in the shrink direction rather than failing.
+#
+# The identified one: ``the tenant runs the "<adapter_type>" ad server`` moved out of
+# steps/domain/publisher_authorization.py into steps/generic/given_config.py when
+# BR-UC-002's sandbox-isolation pair started using it (salesagent-kf5mn). Its body was a
+# bare delegation to ``env.run_ad_server``, byte-identical to its neighbours' bodies in
+# that module, which is what put it in a group; the group is GONE rather than merged,
+# because there is now one binding for the sentence and two envs realizing it.
+#
+# The other drop came with the four-lane SDK-9 integration and is NOT attributed: the guard
+# reports counts, and the AST fragment it prints does not identify one step pair
+# unambiguously. The plausible source is the deletion of four dead `type`-filter When steps
+# and the two Givens that seeded only the deleted outlines, but that was not measured, so it
+# is recorded as a guess and not as a fact.
+#
+# 20 -> 19: the two "errors" absence Thens ('NOT contain an "errors" field' in uc003, 'NOT have
+# an "errors" field' in then_media_buy.py) were one body, ``wire_absent(ctx, "errors")``. Both
+# are deleted and their feature lines bind to the one absence step, ``the response should NOT
+# contain "errors" field``, so the group is gone rather than merged.
+_DUPLICATE_GROUP_BASELINE = 19
 
 # Steps exempt from the 3+ identical-body scan (load-bearing: each suppresses a
 # cluster that would otherwise fail test_no_excessive_duplicate_step_bodies).
@@ -119,8 +137,14 @@ _ALLOWED_DUPLICATES: set[str] = set()
 # So the MEMBER count is ratcheted too, two-sided, in the same shape. Together the two numbers
 # carry both sides' obligation: no new group, and no group growing.
 #
-# 43 -> 41: the two members of the "errors" absence group are deleted (see 21 -> 20 above).
-_DUPLICATE_MEMBER_BASELINE = 41
+# 43 -> 41: two members left alongside the group drops recorded above -- the ad-server Given's
+# group being the identified one. Both numbers moving together is the ordinary case; the member
+# arm exists for the case where they do NOT, because a group that loses members without
+# disappearing is invisible to the group count. Neither number is hand-reasoned: both are what
+# the scan reports on this tree, and the guard's equality arm fails if either drifts.
+#
+# 41 -> 39: the two members of the "errors" absence group are deleted (see 20 -> 19 above).
+_DUPLICATE_MEMBER_BASELINE = 39
 
 
 def _is_step_decorated(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:

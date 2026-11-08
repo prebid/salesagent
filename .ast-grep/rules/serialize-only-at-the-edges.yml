@@ -55,6 +55,14 @@ ignores:
   - "src/core/errors/issues.py"
   - "src/core/errors/details.py"
   - "src/core/database/repositories/**"
+  # THE EDGE MOVED, it did not appear. The one dump in this file is the format identity's
+  # verbatim assertion becoming the ``legacy_format_id`` document, and it is the SAME call
+  # that lived in ``repositories/creative.py`` -- permitted there by the line above -- until
+  # the mapping layer took ownership of the translation between a creative asset and its row
+  # (docs/design/persistence-mapping-layer.md). Named file by file rather than as
+  # ``mapping/**``, so the next mapper that needs to compose a document says so deliberately
+  # instead of inheriting the permission.
+  - "src/core/database/mapping/creative.py"
   - "src/core/database/database_session.py"
   - "src/core/context_manager.py"
   - "src/core/json_validators.py"

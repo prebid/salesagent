@@ -24,6 +24,8 @@ from src.core.exceptions import (
     AdCPValidationError,
 )
 from src.core.helpers import enum_value
+from src.core.validation_helpers import campaign_interval_violated
+from src.core.webhooks.registration import REPORTING_STREAM_ID_FIELD, suppressed_reporting_stream
 
 
 def _validate_attribution_window(attribution_window: "AttributionWindow | None") -> None:
@@ -42,28 +44,24 @@ def _validate_attribution_window(attribution_window: "AttributionWindow | None")
     """
     if attribution_window is None:
         return
-    for window in (attribution_window.post_click, attribution_window.post_view):
-        if window is None:
-            continue
-        unit = enum_value(window.unit)
-        if unit == "campaign" and window.interval != 1:
-            raise AdCPValidationError(
-                field="attribution_window",
-            )
+    if any(campaign_interval_violated(w) for w in (attribution_window.post_click, attribution_window.post_view)):
+        raise AdCPValidationError(
+            field="attribution_window",
+        )
 
 
 logger = logging.getLogger(__name__)
 console = Console()
 
 from adcp.types import Duration, MediaBuyStatus
-from adcp.types.generated_poc.core.attribution_window import (
+from adcp.types.domains.core.attribution_window import (
     AttributionWindow as ResponseAttributionWindow,  # TODO: no stable alias in adcp.types
 )
-from adcp.types.generated_poc.core.duration import (
+from adcp.types.domains.core.duration import (
     Unit as DurationUnit,  # TODO: no stable alias in adcp.types — Unit from adcp.types is DimensionUnit
 )
-from adcp.types.generated_poc.enums.attribution_model import AttributionModel  # TODO: no stable alias in adcp.types
-from adcp.types.generated_poc.media_buy.get_media_buy_delivery_request import (
+from adcp.types.domains.enums.attribution_model import AttributionModel  # TODO: no stable alias in adcp.types
+from adcp.types.domains.media_buy.get_media_buy_delivery_request import (
     AttributionWindow,
 )
 
@@ -76,7 +74,7 @@ from src.core.schemas import Error
 # platform default (industry-standard single-touch attribution).
 PLATFORM_DEFAULT_ATTRIBUTION_MODEL = AttributionModel.last_touch
 
-# adcp 3.6.0: Use schemas.ReportingPeriod (extends creative ReportingPeriod) for adapter compat.
+# the pinned SDK: Use schemas.ReportingPeriod (extends creative ReportingPeriod) for adapter compat.
 # The media-buy-specific ReportingPeriod has identical fields (start, end) but different identity.
 # Adapters are typed to accept schemas.ReportingPeriod, so we use that here.
 
@@ -210,6 +208,27 @@ def get_media_buy_delivery(
         # Per-buy adapter failures degrade (UC-004): record an advisory error and continue
         # with the other buys instead of aborting the whole multi-buy request.
         adapter_errors: list[Error] = []
+        # THE BUYER'S HALF OF THE SUPPRESSED REPORTING STREAM. AdCP.1
+        # ``L3/webhooks.mdx`` :666 asks for two things of a ``reporting_webhook``
+        # registered without a correlation id — "Flag the missing value for the buyer
+        # and suppress scheduled sends" — and :667 names THIS read as where the buyer
+        # goes meanwhile: "Existing buyers need to update their registration with an ID
+        # before reports resume. They can use get_media_buy_delivery while arranging
+        # support."
+        #
+        # The suppression is the scheduler's (``delivery_webhook_scheduler``), which
+        # runs in a background batch with no request to answer; the flag has to ride a
+        # response, and this is the response the spec sends the buyer to. An advisory,
+        # not a raised failure: the delivery data IS the answer the buyer asked for, so
+        # by the advisory rule (error-architecture.md § Which lane a failure takes) the
+        # response stays a success and ``errors[]`` reports what is degraded.
+        #
+        # It is NOT flagged at ``create_media_buy`` instead, and the reason is the
+        # route's own shape: ``core/reporting-webhook.json`` does not define
+        # ``operation_id`` at the 3.2 pin, so a registration omitting it is a document
+        # the published schema accepts, and :666 governs buyers who ALREADY registered
+        # one — for whom no create-time response exists any more.
+        suppressed_stream_errors: list[Error] = []
         found_ids = {buy_id for buy_id, _ in target_media_buys}
         if req.media_buy_ids:
             for requested_id in req.media_buy_ids:
@@ -253,6 +272,18 @@ def get_media_buy_delivery(
         total_conversion_value: float | None = None
 
         for media_buy_id, buy in target_media_buys:
+            # Flagged BEFORE the try, so a buy whose adapter read also fails still
+            # reports its suppressed stream: the two advisories are independent facts
+            # and the adapter branch below ``continue``s.
+            if suppressed_reporting_stream(buy.raw_request):
+                suppressed_stream_errors.append(
+                    Error.of(  # structural-guard: advisory per-buy result in GetMediaBuyDeliveryResponse.errors[]
+                        ErrorCode.INVALID_REQUEST,
+                        field=REPORTING_STREAM_ID_FIELD,
+                        details=EntityRefDetails(media_buy_id=media_buy_id),
+                    )
+                )
+
             try:
                 # Determine status from the persisted lifecycle column,
                 # date-refined only for serving states — the same single
@@ -516,7 +547,7 @@ def get_media_buy_delivery(
         # rejected/canceled/failed buy from being promised a next report that
         # will never come (next_expected_at is "only present ... when
         # notification_type is not 'final'" per
-        # get-media-buy-delivery-response.json @ v3.1-04f59d2d5).
+        # get-media-buy-delivery-response.json-04f59d2d5).
         #
         # UNGRADED: the schema/storyboard describe "final" narrowly as "the
         # campaign completes" (optimization-reporting.mdx §Publisher Commitment).
@@ -571,7 +602,7 @@ def get_media_buy_delivery(
 
         attribution_window = _resolve_attribution_window(req, campaign_length_days)
 
-        # Derived quotients — top-level aggregated_totals scalars per the AdCP 3.1
+        # Derived quotients — top-level aggregated_totals scalars per the
         # response schema (media-buy/get-media-buy-delivery-response.json defines
         # roas as "total conversion_value / total spend" and cost_per_acquisition
         # as "total spend / total conversions"). Conformance-ungraded on this
@@ -587,7 +618,7 @@ def get_media_buy_delivery(
         )
 
         # Normalize advisory error codes to guaranteed-standard wire codes.
-        advisory_errors = not_found_errors + adapter_errors
+        advisory_errors = not_found_errors + adapter_errors + suppressed_stream_errors
 
         # Create AdCP-compliant response
         response = GetMediaBuyDeliveryResponse(
@@ -793,9 +824,22 @@ def _build_placement_breakdown(
     (``get-media-buy-delivery-response.json`` §by_placement_truncated;
     ``get_media_buy_delivery.mdx`` §Truncation.)
 
-    - Uses the adapter's per-placement metrics when present, else synthesizes
-      a representative multi-placement split of the package totals so the
-      requested sort ordering is observable.
+    - Uses the adapter's per-placement metrics, and INVENTS NOTHING when the adapter
+      reports none. Three placements with the ids ``plc_a``/``plc_b``/``plc_c`` and a
+      ``clicks`` value from a hardcoded 1% CTR used to be synthesized here, so that a
+      ``sort_by=clicks`` request had a substantive ordering to grade. That ran in
+      production: a buyer asking a GAM tenant for a placement breakdown received three
+      placement identifiers that exist in no ad server and a click count nothing had
+      measured. The rows the sort tests need now come from the mock adapter, which
+      supplies them through ``simulate_breakdowns`` the way it already supplies
+      ``by_geo`` and ``by_device_type`` -- test input belongs in a fixture, not in a
+      production branch every tenant shares.
+    - Omits rather than returning an empty array, matching
+      ``_build_device_type_breakdown``: ``([], False)`` asserts a complete zero-row
+      breakdown for a package that delivered impressions. The pin permits the omission --
+      "unsupported dimensions are silently omitted from the response" -- and will stop
+      permitting it only if ``supports_placement_breakdown`` is ever declared true, which
+      no adapter can honour today.
     - Delegates sort + limit to ``_apply_breakdown_limit`` (spec §Truncation:
       rows sorted by ``sort_by`` descending, then truncated by ``limit``).
       When the seller does not report the requested metric on the breakdown
@@ -805,28 +849,10 @@ def _build_placement_breakdown(
     if placement_dim is None:
         return None, None
 
-    if raw_placements:
-        placements: list[PlacementBreakdown] = [PlacementBreakdown(**p) for p in raw_placements]
-    else:
-        # No per-placement data from the adapter — synthesize a deterministic
-        # representative split so the breakdown (and its ordering) is
-        # meaningful. Weights are distinct so descending sorts are verifiable.
-        # ``clicks`` is always populated (a representative 1% CTR of the
-        # placement's impression share) so a ``sort_by=clicks`` request is a
-        # substantive ordering, not a vacuous all-null sort.
-        imp = float(package_impressions or 0.0)
-        spd = float(package_spend or 0.0)
-        weights = ((0.5, "plc_a"), (0.3, "plc_b"), (0.2, "plc_c"))
-        placements = [
-            PlacementBreakdown(
-                placement_id=pid,
-                impressions=imp * w,
-                spend=spd * w,
-                clicks=round(imp * w * 0.01, 4),
-            )
-            for w, pid in weights
-        ]
+    if not raw_placements:
+        return None, None
 
+    placements: list[PlacementBreakdown] = [PlacementBreakdown(**p) for p in raw_placements]
     return _apply_breakdown_limit(placements, placement_dim)
 
 

@@ -123,7 +123,7 @@ class OutboundDeliveryFailed(OutboundError, AdCPServiceUnavailableError):
     # These two spellings survived the merge onto the typed-details
     # architecture, rather than being folded into ``UpstreamCallDetails``'s
     # ``status_code``/``max_retries``, because the pin does not decide the
-    # question and the graded acceptance criterion does: AdCP 3.1.1
+    # question and the graded acceptance criterion does: AdCP.1
     # ``core/error.json`` types ``details`` as ``additionalProperties: true``
     # ("Additional task-specific error details") and mandates no key set, while
     # AC6 of this seam requires ``attempts``/``last_status`` unchanged across a
@@ -137,7 +137,7 @@ class OutboundDeliveryFailed(OutboundError, AdCPServiceUnavailableError):
         # ``internal_detail`` rather than being dropped — it is logged
         # server-side by ``adcp_error_for()`` and never serialized.
         #
-        # ``retry_after`` stays the base's own top-level slot: AdCP 3.1.1
+        # ``retry_after`` stays the base's own top-level slot: AdCP.1
         # ``core/error.json`` puts ``retry_after`` at the TOP LEVEL of the error
         # object and models no such member inside ``details``, so moving it into
         # the details block would both invent a key and change the backoff the
@@ -161,7 +161,7 @@ def _fail(attempts: int, http_status: int | None, retry_after: float | None = No
     return OutboundDeliveryFailed(
         attempts=attempts,
         http_status=http_status,
-        retry_after=clamp_retry_after(retry_after) if retry_after is not None else None,
+        retry_after=clamp_retry_after(retry_after),
     )
 
 

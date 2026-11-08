@@ -116,10 +116,12 @@ elif [ "$MODE" = "ci" ]; then
     # single-sourced in scripts/creative-agent-stack.sh. Idempotent (reuses a
     # healthy stack across runs); torn down with the Docker stack on EXIT.
     ./scripts/creative-agent-stack.sh up
-    export CREATIVE_AGENT_URL="$(./scripts/creative-agent-stack.sh url)"
+    # CREATIVE_AGENT_URL, CREATIVE_AGENT_ORIGIN and SSL_CERT_FILE, from the one
+    # recipe the stack prints.
+    eval "$(./scripts/creative-agent-stack.sh env)"
 
     # ─── Outbound egress escape hatch — TEST PATH ONLY (#1589, salesagent-e6h0) ──
-    # The line above exports an https://agent.localhost:<port>/... URL
+    # The env above exports an https://agent.localhost:<port>/... URL
     # (scripts/creative-agent-stack.sh's own TLS front, salesagent-40qh) at a
     # reserved loopback address, which src/core/security/outbound_http.py
     # refuses for the ADDRESS reason. docker-compose.e2e.yml opens the same
@@ -147,9 +149,9 @@ elif [ "$MODE" = "ci" ]; then
     # BDD refusal scenarios). An ambient private-range hatch there would make
     # the seam accept exactly the addresses it exists to reject.
     #
-    # Literal "true" — the seam compares the lowercased string.
+    # Literal "true" — the seam compares the lowercased string. This setting is
+    # being deleted (salesagent-0o5xs): the origins get resolvable hosts instead.
     export ADCP_OUTBOUND_ALLOW_PRIVATE="true"
-    export SSL_CERT_FILE="$(pwd)/.test-tls/combined-ca.pem"
 
     trap './scripts/creative-agent-stack.sh down 2>/dev/null || true; ./scripts/test-stack.sh down 2>/dev/null || true' EXIT
 

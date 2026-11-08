@@ -13,6 +13,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 from src.adapters.constants import _OLD_FIELD_MAP, ADAPTER_PLATFORM_MAP, resolve_adapter_id
+from src.core.schemas import MediaPackage
 
 # ---------------------------------------------------------------------------
 # resolve_adapter_id
@@ -149,11 +150,29 @@ class TestResolveAdapterId:
 
 def _make_media_package(
     package_id: str = "pkg-1",
-) -> MagicMock:
-    """Create a minimal MediaPackage-like object for testing response builders."""
-    pkg = MagicMock()
-    pkg.package_id = package_id
-    return pkg
+) -> MediaPackage:
+    """A real ``MediaPackage`` carrier, not a mock, for the response builders.
+
+    This was a bare ``MagicMock`` with only ``package_id`` set, so every other
+    attribute answered with a ``Mock``. That held only while the builders read
+    nothing else: when ``_build_package_responses`` began reading
+    ``package.paused`` to carry the buyer's create-time pause to the ad server,
+    the mock handed pydantic a ``Mock`` where ``Package.paused`` declares a
+    ``bool`` and seven tests failed on a shape production never produces.
+
+    A mock that answers every attribute cannot fail that way loudly -- it fails
+    at whichever consumer first depends on a real value, far from the fixture.
+    Building the declared carrier means the next field the builders read is
+    either supplied here or rejected by the model at construction.
+    """
+    return MediaPackage(
+        package_id=package_id,
+        name=f"Package {package_id}",
+        delivery_type="guaranteed",
+        cpm=10.0,
+        impressions=1000,
+        format_ids=[],
+    )
 
 
 def _make_adapter_instance() -> Any:

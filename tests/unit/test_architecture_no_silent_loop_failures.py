@@ -100,8 +100,6 @@ def _ordinal_keys(found: list[tuple[str, str, int]]) -> list[tuple[str, str, int
 # of the silent handler within that function). Each has a FIXME(#gh-issue) comment
 # at the source. Shrink-only.
 SILENT_LOOP_HANDLER_ALLOWLIST: set[tuple[str, str, int]] = {
-    # FIXME(#1566): unparseable Broadstreet template dropped from formats silently
-    ("src/core/tools/creative_formats.py", "_list_creative_formats_impl", 0),
     # FIXME(#1566): creative-association failure logged only, absent from response
     ("src/core/tools/media_buy_create.py", "_create_media_buy_impl", 0),
 }
@@ -436,21 +434,22 @@ def _advisory_fix_hint(violations: list[tuple[str, str, int]]) -> str:
 # all five of its sites, and that absence is what makes this guard a pin on the
 # fix rather than a description of it.
 SILENT_ADVISORY_HANDLER_ALLOWLIST: set[tuple[str, str, int]] = {
-    # FIXME(#1566): exactly TWO handlers, both response-degrading and both with a
-    # FIXME at the source: creative_formats.py:297 drops the adapter's formats and
-    # :487 drops the creative-agent referrals, each with nothing but a log line, so
-    # the buyer reads "this seller has none" off a failed lookup. Same disease as
-    # the loop-shaped row already allowlisted for this function above.
-    # They are now TWO entries (ordinals 0 and 1) rather than one (file, function)
-    # key covering both: a single key made a third violation in this function
-    # invisible — see `_ordinal_keys`.
+    # FIXME(#1566): ONE handler left, response-degrading, with a FIXME at the source:
+    # it drops the creative-agent referrals with nothing but a log line, so the buyer
+    # reads "this seller federates to no creative agents" off a failed lookup.
     #
-    # (The other two handlers in this function — the :225 event-loop retry and the
-    # :447 cursor reset — are silent fallbacks the detector now exempts, and
-    # `_create_media_buy_impl` is gone from this list entirely: it has no advisory
-    # container at all, so it was never in scope. See the two notes below.)
+    # It used to be TWO. The sibling at ordinal 0 wrapped the inline Broadstreet
+    # format-building block, which is GONE: the adapter declares its own catalogue and
+    # the registry serves it to discovery and to sync alike (salesagent-zthsk), so the
+    # lookup that could silently degrade no longer happens in this function. The
+    # referral handler moves down to ordinal 0 -- ordinals are positional within the
+    # function, which is the property that makes a NEW third violation visible here.
+    #
+    # (The other two handlers in this function -- the event-loop retry and the cursor
+    # reset -- are silent fallbacks the detector exempts, and `_create_media_buy_impl`
+    # is absent entirely: it has no advisory container at all, so it was never in
+    # scope. See the two notes below.)
     ("src/core/tools/creative_formats.py", "_list_creative_formats_impl", 0),
-    ("src/core/tools/creative_formats.py", "_list_creative_formats_impl", 1),
 }
 
 

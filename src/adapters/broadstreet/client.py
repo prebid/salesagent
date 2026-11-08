@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 def _raise_broadstreet_error(exc: OutboundError) -> NoReturn:
     """Re-raise an egress-seam failure as the AdCP error the upstream status warrants.
 
-    AdCP 3.1.1 ``transport-errors.mdx`` Rule 1 mandates translating a vendor's
+    ``transport-errors.mdx`` Rule 1 mandates translating a vendor's
     HTTP status into an AdCP code. Three rows are Broadstreet's own, because a
     vendor ad server's 4xx carries RESOURCE semantics the shared
     operator-endpoint table cannot express -- it reads every non-429 4xx as
@@ -57,7 +57,7 @@ def _raise_broadstreet_error(exc: OutboundError) -> NoReturn:
 
     The vendor's response BODY appears in none of these errors. It used to ride
     in ``internal_detail`` (non-wire by construction, because a third party's
-    body has no provenance guarantee -- AdCP 3.1.1 Security Considerations
+    body has no provenance guarantee -- Security Considerations
     MUST-NOT list); the egress seam now declines to carry a counterparty's error
     body back at all, so operators keep the status and lose the vendor's message
     text.

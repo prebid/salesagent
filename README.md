@@ -4,8 +4,8 @@ An open-source implementation of the [Ad Context Protocol (AdCP)](https://adcont
 sales-agent role, maintained under Prebid.org. It lets AI agents discover and buy advertising
 inventory through standardized MCP and A2A interfaces.
 
-> **Status: alpha.** A pre-1.0 implementation of a pre-release protocol
-> (AdCP 3.1.1), under active development. APIs still change between
+> **Status: alpha.** A pre-1.0 implementation of a pre-release protocol,
+> under active development. APIs still change between
 > releases — `v2.0.0` introduced breaking changes — so pin a version and expect
 > to adapt on upgrade. It is one of several AdCP sales-agent implementations,
 > not a sole or canonical reference. The codebase is substantial and functional
@@ -22,11 +22,11 @@ The Prebid Sales Agent is a server that:
 
 ## AdCP Compatibility
 
-This implementation targets **AdCP spec version 3.1.1** via the `adcp==6.6.0`
-Python SDK. The protocol is pre-1.0 — request/response shapes still move between
-spec releases, and SDK bumps can change them. See
-[docs/adcp-spec-version.md](docs/adcp-spec-version.md) for the SDK-to-spec mapping
-and bump procedure. The pin is enforced by a CI guard
+This implementation targets AdCP through the `adcp` Python SDK, pinned exactly in
+`pyproject.toml`. The protocol is pre-1.0 — request/response shapes still move
+between spec releases, and SDK bumps can change them. See
+[docs/adcp-spec-version.md](docs/adcp-spec-version.md) for how to resolve the pin
+and for the bump procedure. The pin is enforced by a CI guard
 (`tests/unit/test_adcp_spec_version.py`), which fails on drift.
 
 ## Choose Your Path

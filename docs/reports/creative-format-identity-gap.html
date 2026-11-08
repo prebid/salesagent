@@ -1,0 +1,212 @@
+<title>Creative Format Identity Gap</title>
+<style>
+  :root {
+    --bg: #fbfaf8; --fg: #1a1a18; --muted: #5f5c55; --rule: #e0ddd6;
+    --code-bg: #f3f1ec; --accent: #7a3e12; --bad: #8a2b20; --good: #2d5e3a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #17171a; --fg: #e8e6e1; --muted: #a09c93; --rule: #33333a;
+      --code-bg: #1f1f24; --accent: #d79a62; --bad: #e08b7e; --good: #8fc79f;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #17171a; --fg: #e8e6e1; --muted: #a09c93; --rule: #33333a;
+    --code-bg: #1f1f24; --accent: #d79a62; --bad: #e08b7e; --good: #8fc79f;
+  }
+  body { background: var(--bg); color: var(--fg); margin: 0;
+         font: 16px/1.65 ui-serif, Georgia, "Times New Roman", serif; }
+  main { max-width: 46rem; margin: 0 auto; padding: 3rem 1.25rem 6rem; }
+  h1 { font-size: 1.9rem; line-height: 1.2; margin: 0 0 .3rem; letter-spacing: -.01em; }
+  .sub { color: var(--muted); font-size: .95rem; margin: 0 0 2.5rem; }
+  h2 { font-size: 1.25rem; margin: 2.8rem 0 .8rem; padding-top: 1.2rem;
+       border-top: 1px solid var(--rule); }
+  h3 { font-size: 1.02rem; margin: 1.8rem 0 .5rem; color: var(--accent); }
+  p { margin: 0 0 1rem; }
+  pre { background: var(--code-bg); border-radius: 4px; padding: .9rem 1rem; overflow-x: auto;
+        font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 0 0 1.2rem; }
+  code { background: var(--code-bg); padding: .1em .35em; border-radius: 3px;
+         font: .88em ui-monospace, SFMono-Regular, Menlo, monospace; }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  table { border-collapse: collapse; width: 100%; margin: 0 0 1.3rem; font-size: .92rem; }
+  th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid var(--rule);
+           vertical-align: top; }
+  th { font-weight: 600; font-size: .82rem; text-transform: uppercase;
+       letter-spacing: .04em; color: var(--muted); }
+  blockquote { margin: 0 0 1.2rem; padding: .2rem 0 .2rem 1rem;
+               border-left: 3px solid var(--rule); color: var(--muted); font-style: italic; }
+  .bad { color: var(--bad); font-weight: 600; }
+  .good { color: var(--good); font-weight: 600; }
+  ol, ul { margin: 0 0 1.2rem; padding-left: 1.4rem; }
+  li { margin-bottom: .5rem; }
+  .note { font-size: .9rem; color: var(--muted); }
+</style>
+
+<main>
+<h1>Creative format identity: both arms, canonical preferred</h1>
+<p class="sub">What the spec says, what the SDK gives, what the app is missing. Companion to
+<em>Targeting: input versus state</em> &mdash; and a different answer.
+Branch <code>adopt/sdk-9.0.0</code>, <code>adcp==9.0.0b1</code>, spec 3.2.1.</p>
+
+<p>The targeting gap turned out to be a missing conversion, because the request and state
+schemas there have opposite null semantics. The creative identity looks like the same
+problem and is not: here the spec puts the <em>same</em> duality on both sides, so nothing
+needs converting. What is missing is simpler and more embarrassing &mdash; the app only
+accepts the deprecated arm.</p>
+
+<h2>1. What the spec says</h2>
+<p>Both the request shape and the state shape carry both arms, mutually exclusive, with the
+legacy one deprecated:</p>
+<table>
+  <thead><tr><th>Schema</th><th>Member</th><th>Spec text</th></tr></thead>
+  <tbody>
+    <tr><td rowspan="3"><code>core/creative-asset.json</code><br><span class="note">the input</span></td>
+        <td><code>format_id</code></td>
+        <td>&ldquo;<strong>DEPRECATED in 3.2.</strong> Legacy named-format path retained for older
+            3.x peers. New creative assets use <code>format_kind</code> and optional
+            <code>format_option_ref</code>.&rdquo;</td></tr>
+    <tr><td><code>format_kind</code></td>
+        <td>&ldquo;Canonical format name this creative targets (e.g. <code>image</code>,
+            <code>video_hosted</code>). Mutually exclusive with deprecated
+            <code>format_id</code>.&rdquo;</td></tr>
+    <tr><td><code>format_option_ref</code></td>
+        <td>&ldquo;3.1+ format-option path, optional. Structured format option reference matching
+            one of the target product&rsquo;s <code>format_options[]</code> declarations.&rdquo;</td></tr>
+    <tr><td rowspan="3"><code>creative/list-creatives-response.json</code><br><span class="note">the state</span></td>
+        <td><code>format_id</code></td>
+        <td>&ldquo;<strong>DEPRECATED in 3.2.</strong> Legacy named-format path. New listed
+            creatives use <code>format_kind</code> and optional
+            <code>format_option_ref</code>.&rdquo;</td></tr>
+    <tr><td><code>format_kind</code></td>
+        <td>&ldquo;<strong>Canonical 3.2 path.</strong> The canonical format kind this creative
+            targets. Mutually exclusive with deprecated <code>format_id</code>.&rdquo;</td></tr>
+    <tr><td><code>format_option_ref</code></td>
+        <td>&ldquo;Optional reference to the concrete canonical format option this creative
+            targets. <strong>Required when <code>format_kind</code> alone is ambiguous in the
+            enclosing product context.</strong>&rdquo;</td></tr>
+  </tbody>
+</table>
+<p>And the item schema enforces the exclusivity structurally, with named arms:</p>
+<pre><code>"oneOf": [
+  {"title": "Listed creative (named-format reference)",
+   "required": ["format_id"],   "not": {"required": ["format_kind"]}},
+  {"title": "Listed creative (canonical format kind)",
+   "required": ["format_kind"], "not": {"required": ["format_id"]}}
+]</code></pre>
+<p>Two consequences follow, and both matter:</p>
+<ul>
+  <li><strong>The state mirrors the input.</strong> A creative created with <code>format_id</code>
+      is listed with <code>format_id</code>; one created with <code>format_kind</code> is listed
+      with <code>format_kind</code>. <span class="good">No resolver is required.</span></li>
+  <li><strong>Exactly one is always present.</strong> The identity can never be projected away
+      &mdash; which is why a <code>fields</code> selection that omits it still gets it.</li>
+</ul>
+
+<h2>2. What the SDK gives</h2>
+<p>Three surfaces, and the two compatibility ones are identical on these members:</p>
+<table>
+  <thead><tr><th>Surface</th><th><code>format_id</code></th><th><code>format_kind</code></th>
+             <th><code>format_option_ref</code></th></tr></thead>
+  <tbody>
+    <tr><td><code>core.creative_asset.CreativeAsset</code> (generated)</td>
+        <td>optional</td><td>optional</td><td>optional</td></tr>
+    <tr><td><code>LegacyCreativeAsset</code></td>
+        <td>optional</td><td>optional</td><td>optional</td></tr>
+    <tr><td><code>canonical_creative.CreativeAsset</code></td>
+        <td class="bad">ABSENT</td><td class="good">required</td><td>optional</td></tr>
+  </tbody>
+</table>
+<p><code>Legacy*</code> is <strong>not</strong> a format_id-only surface &mdash; it is the same
+both-arms shape as the generated class. The canonical layer is the 4.0-ready one: it deletes
+legacy identity from <code>model_fields</code> and binds the name to <code>None</code>, so the
+generated XOR validator reduces to &ldquo;<code>format_kind</code> must be set&rdquo;.</p>
+<p>So for a seller that must accept both arms during the 3.x window, the correct surface is the
+generated/Legacy one. <strong>That is where the app already sits.</strong> Repointing to
+<code>canonical_creative</code> would remove the legacy arm the spec says to retain &mdash; an
+earlier attempt here did exactly that and was reverted.</p>
+
+<h2>3. What the app has</h2>
+<p>It is on the right surface and uses one arm of it. Measured:</p>
+<pre><code>format_id          296 refs / 31 files
+format_kind         15 refs /  4 files
+format_option_ref    2 refs /  2 files
+
+format_kind in src/core/tools/creatives/   0
+format_kind in src/core/database/          0
+creatives table identity columns:          agent_url, format     (no format_kind)</code></pre>
+<p>And the business logic refuses the canonical arm outright:</p>
+<pre><code>// src/core/tools/creatives/_validation.py:104
+if not creative.format_id:
+    raise AdCPValidationError(field="format_id")</code></pre>
+<p>The DTO accepts a canonical-only creative &mdash; measured: <code>format_kind</code> alone
+constructs fine, and both-or-neither is refused as <code>oneOf</code>. So a spec-conformant
+canonical creative <span class="bad">clears the boundary and is then rejected by business
+logic</span>, with <code>VALIDATION_ERROR</code> naming <code>format_id</code>: a field the
+spec tells new creatives not to send.</p>
+<p>That is the worst available failure mode. Refusing at the boundary would at least be
+honest; refusing afterwards, by name, tells a correct buyer to add a deprecated field.</p>
+
+<h2>4. The gap</h2>
+<p>No conversion, no resolver, no new model. Four things, in order of how much they hurt:</p>
+<table>
+  <thead><tr><th></th><th>Gap</th><th>Today</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td><strong>Accept the canonical arm on input</strong></td>
+        <td>refused at <code>_validation.py:104</code>, naming the deprecated field</td></tr>
+    <tr><td>2</td><td><strong>Persist which arm and its value</strong></td>
+        <td>columns exist for the legacy pair only (<code>agent_url</code>, <code>format</code>)</td></tr>
+    <tr><td>3</td><td><strong>Read back the arm the creative was created with</strong></td>
+        <td>always emits <code>format_id</code>; a canonical creative could not round-trip</td></tr>
+    <tr><td>4</td><td><code>format_option_ref</code> <strong>when <code>format_kind</code> is
+            ambiguous</strong></td>
+        <td>2 references in <code>src/</code>; the conditional obligation is unimplemented</td></tr>
+  </tbody>
+</table>
+<p>Items 1&ndash;3 are one feature: carry the identity the buyer gave, and give it back. Item 4
+is a separate conditional rule and needs the product&rsquo;s
+<code>format_options[]</code> to exist first &mdash; which is the canonical-products work
+(<code>format_options</code>: 0 references in <code>src/</code>).</p>
+
+<h3>What validation must keep doing</h3>
+<p>The legacy arm&rsquo;s value is checked against the creative-agent registry today
+(<code>fetch_format_spec(agent_url, format_id)</code>, which refuses a format no agent serves
+with <code>REFERENCE_NOT_FOUND</code>). The canonical arm needs the equivalent: a
+<code>format_kind</code> outside the pinned 16-member vocabulary is not a reference lookup, it is
+an enum violation, and the two should not be collapsed into one code.</p>
+
+<h2>5. Plan</h2>
+<ol>
+  <li><strong>Stop requiring the deprecated arm.</strong> Replace the <code>format_id</code>
+      presence check with an identity check that accepts either, and let the model&rsquo;s own
+      XOR be the authority on exclusivity &mdash; it already refuses both-or-neither.</li>
+  <li><strong>Give storage a canonical column</strong> and record which arm the creative carries.
+      A migration adds structure only; a backfill of existing rows is separate work and may be
+      impossible for creatives whose agent publishes no canonical declaration.</li>
+  <li><strong>Echo the stored arm on readback</strong>, so the state mirrors the input as the spec
+      describes, and exactly one identity is always on the wire.</li>
+  <li><strong>Grade all of it in BDD</strong>: a creative synced by <code>format_id</code> lists by
+      <code>format_id</code>; one synced by <code>format_kind</code> lists by
+      <code>format_kind</code>; both-or-neither is refused <code>oneOf</code>; an unknown
+      <code>format_kind</code> is refused as an enum violation, not a missing reference.</li>
+  <li><strong>Defer</strong> <code>format_option_ref</code> ambiguity until products carry
+      <code>format_options[]</code>.</li>
+</ol>
+
+<h2>6. Why this is not the targeting gap</h2>
+<table>
+  <thead><tr><th></th><th>Targeting</th><th>Creative identity</th></tr></thead>
+  <tbody>
+    <tr><td>Input vs state</td>
+        <td>different semantics &mdash; tri-state mutation vs strict non-null state</td>
+        <td>same duality on both sides</td></tr>
+    <tr><td>Needs a resolver?</td><td class="bad">yes</td><td class="good">no</td></tr>
+    <tr><td>App&rsquo;s declarations</td><td>already correct at every layer</td>
+        <td>already on the correct surface</td></tr>
+    <tr><td>What is missing</td><td>the conversion between them</td>
+        <td>acceptance, storage and readback of one arm</td></tr>
+  </tbody>
+</table>
+<p>The lesson they share is the one that cost three reverted patches: an error about a type
+mismatch is not evidence that a type annotation is wrong. Both cases needed the spec read
+first, and in both cases the app&rsquo;s type declarations turned out to be <em>right</em>.</p>
+</main>

@@ -195,7 +195,7 @@ def given_tenant_served_on_port(ctx: dict, port: int) -> None:
 
 @then("the adagents.json validates against the pinned schema")
 def then_adagents_schema_valid(ctx: dict) -> None:
-    """Graded twice on purpose: jsonschema against the pinned 3.1.1 file, and
+    """Graded twice on purpose: jsonschema against the pinned file, and
     ``validate_adagents_structure``, the function this seller's own admin code runs when it
     consumes a PUBLISHER's adagents.json."""
     from adcp.adagents import validate_adagents_structure
@@ -222,3 +222,36 @@ def then_adagents_claims_own_host_only(ctx: dict) -> None:
         f"host and no other: a property on another publisher's domain is authorized by that "
         f"publisher's own adagents.json"
     )
+
+
+#: The SDK's sentence for list_creative_formats that presents the deprecated task as a
+#: prerequisite for syncing creatives.
+_SDK_PREREQUISITE_SENTENCE = "format_ids needed for sync_creatives"
+
+
+@then("the seller advertises list_creative_formats with the pinned request schema's description")
+def then_list_creative_formats_advertised_as_deprecated(ctx: dict) -> None:
+    """The card's skill on every transport, and MCP's tools/list entry on MCP, carry the pin's text.
+
+    The expected description is read from the pinned schema file the SDK ships, not from
+    the code under test, and the pin must still mark the task deprecated for the
+    obligation to hold.
+    """
+    from tests.bdd.steps.generic._dispatch import _as_transport
+    from tests.harness.transport import Transport
+    from tests.helpers.adcp_pinned_schema import load
+
+    schema = load("media-buy/list-creative-formats-request.json")
+    assert schema.get("deprecated") is True, "the pin no longer marks the sales-agent list_creative_formats deprecated"
+    expected = schema["description"]
+
+    skills = {skill["id"]: skill.get("description") for skill in _fetched_document(ctx).get("skills") or []}
+    advertised = {"the agent card's skill": skills.get("list_creative_formats")}
+    if _as_transport(ctx, "then_list_creative_formats_advertised_as_deprecated") is Transport.MCP:
+        advertised["MCP tools/list"] = ctx["env"].list_mcp_tools().get("list_creative_formats")
+
+    for surface, description in advertised.items():
+        assert description == expected, f"{surface} advertises {description!r}, not the pinned description {expected!r}"
+        assert _SDK_PREREQUISITE_SENTENCE not in (description or ""), (
+            f"{surface} presents list_creative_formats as a prerequisite for sync_creatives"
+        )

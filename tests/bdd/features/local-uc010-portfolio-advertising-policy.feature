@@ -2,7 +2,7 @@
 #
 # LOCALLY-ADDED (survives BR-*.feature regeneration).
 #
-# Upstream gap: v3.1.1 defines media_buy.portfolio.advertising_policies, and this seller
+# Upstream gap: v3.2.7 defines media_buy.portfolio.advertising_policies, and this seller
 # emits it from the tenant's advertising_policy column, but no BR-UC-010 storyboard step
 # grades it. The obligation was graded only by mocked unit tests that patched the unit of
 # work and asserted against a response they had half-built, so it did not reach the wire on
@@ -20,8 +20,8 @@
 # "advertising_policies is omitted" assertion would pass because its parent is missing
 # rather than because the policy is absent. The last scenario grades that case directly.
 #
-# @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/portfolio/properties/advertising_policies
-# @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/portfolio/required
+# @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/portfolio/properties/advertising_policies
+# @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/portfolio/required
 Feature: UC-010 get_adcp_capabilities — the seller publishes its advertising policy (local)
 
   @T-UC-010-local-advertising-policy-declared @main-flow @partition @boundary

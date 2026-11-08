@@ -255,10 +255,16 @@ def init_db(exit_on_error=False):
                         "product_id": "prod_1",
                         "name": "Premium Display - News",
                         "description": "Premium news site display inventory",
-                        "formats": [
+                        "format_options": [
                             {
-                                "agent_url": "https://creative.adcontextprotocol.org",
-                                "id": "display_300x250_image",
+                                "format_kind": "image",
+                                "params": {"width": 300, "height": 250},
+                                "v1_format_ref": [
+                                    {
+                                        "agent_url": "https://creative.adcontextprotocol.org",
+                                        "id": "display_300x250_image",
+                                    }
+                                ],
                             }
                         ],
                         "targeting_template": {
@@ -279,10 +285,16 @@ def init_db(exit_on_error=False):
                         "product_id": "prod_2",
                         "name": "Run of Site Display",
                         "description": "General display inventory across all properties",
-                        "formats": [
+                        "format_options": [
                             {
-                                "agent_url": "https://creative.adcontextprotocol.org",
-                                "id": "display_728x90_image",
+                                "format_kind": "image",
+                                "params": {"width": 728, "height": 90},
+                                "v1_format_ref": [
+                                    {
+                                        "agent_url": "https://creative.adcontextprotocol.org",
+                                        "id": "display_728x90_image",
+                                    }
+                                ],
                             }
                         ],
                         "targeting_template": {
@@ -308,7 +320,7 @@ def init_db(exit_on_error=False):
                         product_id=p["product_id"],
                         name=p["name"],
                         description=p["description"],
-                        format_ids=p["formats"],
+                        format_options=p["format_options"],
                         targeting_template=p["targeting_template"],
                         implementation_config=p.get("implementation_config"),
                         property_tags=p.get("property_tags"),
