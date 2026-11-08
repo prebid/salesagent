@@ -135,8 +135,8 @@ mcp = FastMCP(
     name="AdCPSalesAgent",
     lifespan=lifespan_context,
     # tools/list publishes each tool's `parameters` (the DTO's model_json_schema(), JSON Schema
-    # 2020-12 per MCP 2025-11-25) as-is, $defs and $ref intact. FastMCP's default inlines every
-    # $ref on every listing.
+    # 2020-12 per MCP 2025-11-25) as-is, $defs and $ref intact. FastMCP's default re-inlines the
+    # $refs on every listing.
     dereference_schemas=False,
 )
 
