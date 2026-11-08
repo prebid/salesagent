@@ -1385,6 +1385,12 @@ class BaseTestEnv:
 
         declare_signed_requests_grading(self, replay_cap=replay_cap)
 
+    def declare_another_signed_requests_test_counterparty(self, *, replay_cap: int) -> None:
+        """Make a different principal of this env's tenant the test counterparty, with its own key."""
+        from tests.harness.signing_capability import declare_another_signed_requests_test_counterparty
+
+        declare_another_signed_requests_test_counterparty(self, replay_cap=replay_cap)
+
     def repoint_signing_agent_url(self, agent_url: str) -> Any:
         """Move this buyer's PUBLISHED ``agent_url`` to *agent_url*, keeping its key.
 

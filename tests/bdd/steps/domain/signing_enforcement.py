@@ -208,6 +208,23 @@ def given_buyer_is_test_counterparty(ctx: dict, cap: str | None) -> None:
     ctx["env"].declare_signed_requests_grading(replay_cap=int(cap) if cap is not None else None)
 
 
+@given(
+    parsers.parse(
+        "another counterparty of this seller is the signed-requests test counterparty, "
+        "accepting only its own keys, with a replay cap of {cap:d}"
+    )
+)
+def given_another_counterparty_is_test_counterparty(ctx: dict, cap: int) -> None:
+    """Make a different principal of THIS seller the ``signed_requests`` test counterparty.
+
+    signed-requests-runner.yaml L41-43, L64-69 and L146-164: the accepted JWKS and the lower
+    per-keyid cap are for the test-kit counterparty only. That counterparty is another
+    principal of the Buyer's own tenant, with a key of its own onboarded for it, so the Buyer
+    stays an ordinary counterparty on a tenant that carries a grading record.
+    """
+    ctx["env"].declare_another_signed_requests_test_counterparty(replay_cap=cap)
+
+
 @given("the Buyer Agent signs the request with an additional signature label ahead of it naming a key nobody onboarded")
 def given_buyer_signs_with_extra_label(ctx: dict) -> None:
     """Ask for the ``"extra_label"`` realization: a real ``sig1`` signature, one unverified label first.
@@ -467,6 +484,7 @@ def then_seller_recorded_failure(ctx: dict, count: int, code: str) -> None:
 
 
 @then(parsers.parse("the seller verified exactly {count:d} request under the Buyer Agent's published key"))
+@then(parsers.parse("the seller verified exactly {count:d} requests under the Buyer Agent's published key"))
 def then_seller_verified_requests(ctx: dict, count: int) -> None:
     """Pin how many requests the seller's verifier ACCEPTED under THIS buyer's key.
 

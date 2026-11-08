@@ -397,6 +397,31 @@ def declare_signed_requests_grading(env: Any, *, replay_cap: int | None = None) 
     env._session.commit()
 
 
+def declare_another_signed_requests_test_counterparty(env: Any, *, replay_cap: int) -> None:
+    """Make a different principal of the env's tenant the signed-requests test counterparty.
+
+    The env's own principal stays an ordinary counterparty. The other principal sits at
+    :data:`~tests.helpers.signing.UNRESOLVABLE_AGENT_URL`, a key of its own (``<env
+    key_id>-kit``, never the env's) is onboarded for it, and its ``signed_requests_grading``
+    record accepts only that key's JWKS and carries *replay_cap*. A verifier that let the
+    record reach any other principal of the tenant would verify the env's signature against
+    a JWKS without its key, or apply the record's cap to it.
+    """
+    from src.core.signing.grading import SignedRequestsGrading
+    from tests.factories import PrincipalFactory, PrincipalSigningKeyidFactory
+    from tests.helpers.signing import UNRESOLVABLE_AGENT_URL, keypair_for
+
+    tenant, _principal = env.setup_default_data()
+    kit_kid = f"{env.signing.key_id}-kit"
+    _private_key, kit_jwks = keypair_for(kit_kid)
+    kit = PrincipalFactory(
+        tenant=tenant,
+        agent_url=UNRESOLVABLE_AGENT_URL,
+        signed_requests_grading=SignedRequestsGrading(jwks=kit_jwks, replay_cap=replay_cap),
+    )
+    PrincipalSigningKeyidFactory(principal=kit, keyid=kit_kid)
+
+
 def ensure_declarable_identity_host(env: Any) -> None:
     """Give the env's tenant a DOTTED ``virtual_host`` if it has not got one.
 
