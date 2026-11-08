@@ -10,6 +10,7 @@ Write methods add objects to the session but never commit — the Unit of Work
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
@@ -36,6 +37,20 @@ from src.core.webhooks.registration import ValidatedWebhookRegistration
 # deliberately NOT sentinel-defaulted: they are required, and the receipt always
 # has them.
 _UNSET: Any = object()
+
+
+@dataclass(frozen=True)
+class StoredWebhookTarget:
+    """Registration values safe to carry beyond the repository session.
+
+    Authentication validation remains the outbound sender's responsibility.
+    """
+
+    url: str = field(repr=False)
+    authentication_type: str | None
+    authentication_token: str | None = field(repr=False)
+    operation_id: str | None
+    token: str | None = field(repr=False)
 
 
 class PushNotificationConfigRepository:
@@ -104,7 +119,7 @@ class PushNotificationConfigRepository:
         *,
         active_only: bool = True,
     ) -> PushNotificationConfig | None:
-        """Find a config by its URL within the (tenant, principal) scope.
+        """Find the newest config for a URL within the (tenant, principal) scope.
 
         The duplicate check at registration used to hand-write this query in the
         admin route and omit ``is_active``, so a URL that had been deactivated
@@ -116,8 +131,21 @@ class PushNotificationConfigRepository:
         :meth:`upsert` reactivate it, rather than inserting a second row for the
         same (principal, url) and leaving the first as debris.
         """
-        stmt = self._scoped(principal_id, active_only=active_only).where(PushNotificationConfig.url == url)
+        stmt = (
+            self._scoped(principal_id, active_only=active_only)
+            .where(PushNotificationConfig.url == url)
+            .order_by(PushNotificationConfig.created_at.desc(), PushNotificationConfig.id.desc())
+        )
         return self._session.scalars(stmt).first()
+
+    def find_target_by_url(self, principal_id: str, url: str) -> StoredWebhookTarget | None:
+        """Copy the selected active registration before callers release their session."""
+        row = self.find_by_url(principal_id, url)
+        return (
+            StoredWebhookTarget(row.url, row.authentication_type, row.authentication_token, row.operation_id, row.token)
+            if row is not None
+            else None
+        )
 
     def list_active_by_principal(self, principal_id: str) -> list[PushNotificationConfig]:
         """Return all active configs for a principal within this tenant."""

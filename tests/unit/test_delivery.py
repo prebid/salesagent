@@ -52,9 +52,9 @@ from tests.factories.media_buy import (
     pricing_options_named,
     request_package,
 )
-from tests.factories.principal import PrincipalFactory
 from tests.factories.product import PricingOptionFactory
 from tests.harness.delivery_poll_unit import DeliveryPollEnv
+from tests.helpers.unit_identity import UNIT_ACCOUNT_ID, fabricated_account_identity
 
 # ---------------------------------------------------------------------------
 # Fixtures (shared across all test classes)
@@ -79,7 +79,7 @@ def _make_identity(
     the one thing ``.ast-grep/rules/resolved-identity-constructed-only-by-its-owners.yml``
     forbids of an identity.
     """
-    return PrincipalFactory.make_identity(principal_id=principal_id, tenant_id=tenant_id)
+    return fabricated_account_identity(principal_id=principal_id, tenant_id=tenant_id)
 
 
 def _make_mock_media_buy(
@@ -97,6 +97,7 @@ def _make_mock_media_buy(
 ) -> MagicMock:
     buy = MagicMock()
     buy.media_buy_id = media_buy_id
+    buy.account_id = UNIT_ACCOUNT_ID
     buy.budget = Decimal(str(budget))
     buy.currency = currency
     buy.start_date = start_date or date(2025, 1, 1)

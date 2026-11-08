@@ -35,8 +35,9 @@ takes two questions, in this order.
   missing cannot be reconciled against. Graded by
   ``@T-UC-019-listing-omits-unrenderable-row``.
 
-So: never fabricate a required field; never fail a whole listing over one row;
-never answer "not found" when the buyer named the row that broke.
+These rules govern stored-row projection. Optional snapshot execution also resolves
+the stored account; an unresolved account raises ``CONFIGURATION_ERROR`` through
+the shared boundary, with the transport failure markers required by AdCP 3.1.1.
 """
 
 from __future__ import annotations
@@ -56,6 +57,7 @@ from src.core.errors.codes import ErrorCode
 from src.core.errors.details import ConfigurationDetails, ValidationDetails
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tools._media_buy_status import resolve_canonical_status
+from src.core.tools.media_buy_create import identity_for_stored_buy
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +85,7 @@ class _MediaBuyData:
     """Plain data extracted from a MediaBuy ORM row."""
 
     media_buy_id: str
+    account_id: str | None
     currency: str | None
     budget: Decimal | None
     raw_request: dict | None
@@ -123,7 +126,9 @@ from src.core.database.models import CreativeAssignment, MediaBuy
 from src.core.database.repositories import MediaBuyUoW
 from src.core.database.repositories.creative import CreativeRepository
 from src.core.exceptions import (
+    AdCPConfigurationError,
     AdCPPersistedStateError,
+    AdCPSalesAgentError,
     AdCPValidationError,
 )
 from src.core.helpers.adapter_helpers import get_adapter
@@ -211,23 +216,13 @@ def _get_media_buys_impl(
         # Resolve package configs for all media buys in one batch query
         packages_by_media_buy = _fetch_packages(all_media_buy_ids, uow)
 
-    # Get snapshots from adapter if requested
-    snapshot_data: dict[str, dict[str, Snapshot | None]] = {}  # media_buy_id -> package_id -> Snapshot
-    unavailable_reason: SnapshotUnavailableReason | None = None
-
-    if req.include_snapshot:
-        adapter = get_adapter(identity)
-        if adapter.capabilities.supports_realtime_reporting:
-            # Build list of (media_buy_id, package_id, platform_line_item_id) for the adapter
-            package_refs = []
-            for buy in target_media_buys:
-                for pkg in packages_by_media_buy.get(buy.media_buy_id, []):
-                    line_item_id = (pkg.package_config or {}).get("platform_line_item_id")
-                    package_refs.append((buy.media_buy_id, pkg.package_id, line_item_id))
-
-            snapshot_data = adapter.get_packages_snapshot(package_refs)
-        else:
-            unavailable_reason = SnapshotUnavailableReason.SNAPSHOT_UNSUPPORTED
+    snapshot_data, unavailable_reasons = _account_snapshots(
+        identity,
+        target_media_buys,
+        packages_by_media_buy,
+        row_advisories,
+        include_snapshot=bool(req.include_snapshot),
+    )
 
     # Build response
     response_media_buys = []
@@ -253,7 +248,9 @@ def _get_media_buys_impl(
             snapshot = buy_snapshots.get(pkg_id)
             snapshot_unavailable = None
             if req.include_snapshot and snapshot is None:
-                snapshot_unavailable = unavailable_reason or SnapshotUnavailableReason.SNAPSHOT_TEMPORARILY_UNAVAILABLE
+                snapshot_unavailable = unavailable_reasons.get(
+                    buy.media_buy_id, SnapshotUnavailableReason.SNAPSHOT_TEMPORARILY_UNAVAILABLE
+                )
 
             # Materialize targeting_overlay from package_config so callers can verify
             # what was persisted. Tolerates the legacy "targeting" key for data written
@@ -396,6 +393,60 @@ def _get_media_buys_impl(
 
 
 # --- Helper functions ---
+
+
+def _account_snapshots(
+    identity: ResolvedIdentity,
+    target_media_buys: list[_MediaBuyData],
+    packages_by_media_buy: dict[str, list[_PackageData]],
+    row_advisories: list[Error],
+    *,
+    include_snapshot: bool,
+) -> tuple[dict[str, dict[str, Snapshot | None]], dict[str, SnapshotUnavailableReason]]:
+    """Optional snapshots resolve and execute once per stored account, after reads close."""
+    snapshot_data: dict[str, dict[str, Snapshot | None]] = {}  # media_buy_id -> package_id -> Snapshot
+    unavailable_reasons: dict[str, SnapshotUnavailableReason] = {}
+
+    if include_snapshot:
+        buys_by_account: dict[str | None, list[_MediaBuyData]] = {}
+        for buy in target_media_buys:
+            buys_by_account.setdefault(buy.account_id, []).append(buy)
+        for account_id, account_buys in buys_by_account.items():
+            try:
+                account_identity = identity_for_stored_buy(
+                    identity.tenant_id,
+                    identity.principal.principal_id,
+                    account_id,
+                    account_buys[0].media_buy_id,
+                    resolved_identity=identity,
+                )
+                adapter = get_adapter(account_identity)
+                if not adapter.capabilities.supports_realtime_reporting:
+                    for buy in account_buys:
+                        unavailable_reasons[buy.media_buy_id] = SnapshotUnavailableReason.SNAPSHOT_UNSUPPORTED
+                    continue
+                package_refs = [
+                    (buy.media_buy_id, pkg.package_id, (pkg.package_config or {}).get("platform_line_item_id"))
+                    for buy in account_buys
+                    for pkg in packages_by_media_buy.get(buy.media_buy_id, [])
+                ]
+                snapshot_data.update(adapter.get_packages_snapshot(package_refs))
+            except AdCPConfigurationError:
+                # CONFIGURATION_ERROR requires transport failure markers in AdCP 3.1.1.
+                raise
+            except Exception as exc:
+                logger.warning("Snapshot unavailable for account %s: %s", account_id, exc)
+                for buy in account_buys:
+                    unavailable_reasons[buy.media_buy_id] = SnapshotUnavailableReason.SNAPSHOT_TEMPORARILY_UNAVAILABLE
+                    row_advisories.append(
+                        Error.from_exception(exc)
+                        if isinstance(exc, AdCPSalesAgentError)
+                        else Error.of(  # structural-guard: optional snapshot advisory in GetMediaBuysResponse.errors[]
+                            ErrorCode.SERVICE_UNAVAILABLE, details=ConfigurationDetails(media_buy_id=buy.media_buy_id)
+                        )
+                    )
+
+    return snapshot_data, unavailable_reasons
 
 
 def _buyer_named_rows(req: GetMediaBuysRequest) -> bool:
@@ -566,6 +617,7 @@ def _fetch_target_media_buys(
         renderable.append(
             _MediaBuyData(
                 media_buy_id=buy.media_buy_id,
+                account_id=buy.account_id,
                 currency=buy.currency,
                 budget=buy.budget,
                 raw_request=buy.raw_request,

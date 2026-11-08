@@ -95,6 +95,7 @@ EXPECTED_WIRED_ROUTES: frozenset[str] = frozenset(
         "security-wire-error-safety",
         "security-tenant-isolation",
         "database-fail-fast",
+        "sandbox-lifecycle",
         "uc002-account",
         "uc002-ext",
         "uc002-idempotency",

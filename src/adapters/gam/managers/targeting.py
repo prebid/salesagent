@@ -8,6 +8,7 @@ and geo mapping operations for Google Ad Manager campaigns.
 import json
 import logging
 import os
+from itertools import chain
 from typing import Any
 
 from adcp.types.generated_poc.enums.metro_system import MetroAreaSystem
@@ -19,6 +20,7 @@ from src.core.exceptions import (
     AdCPConfigurationError,
     AdCPSalesAgentError,
 )
+from src.core.schemas import Targeting
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +38,9 @@ class GAMTargetingManager:
         "dooh": 30004,  # Digital out-of-home / Set-top box
     }
 
-    # Supported media types
-    SUPPORTED_MEDIA_TYPES = {"video", "display", "native"}
+    # GAM line items have a single environment type.
+    MEDIA_TYPE_ENVIRONMENTS = {"video": "VIDEO_PLAYER", "display": "BROWSER", "native": "BROWSER"}
+    SUPPORTED_MEDIA_TYPES = set(MEDIA_TYPE_ENVIRONMENTS)
 
     def __init__(
         self,
@@ -615,8 +618,9 @@ class GAMTargetingManager:
                 return regions[region_code]
         return None
 
-    def validate_targeting(self, targeting_overlay) -> list[str]:
-        """Validate targeting and return unsupported features.
+    @classmethod
+    def validate_targeting(cls, targeting_overlay: Targeting | None) -> list[str]:
+        """Validate targeting without constructing a manager or vendor client.
 
         Args:
             targeting_overlay: AdCP targeting overlay object
@@ -632,13 +636,13 @@ class GAMTargetingManager:
         # Check device types
         if targeting_overlay.device_form_factors:
             for device in targeting_overlay.device_form_factors:
-                if device not in self.DEVICE_TYPE_MAP:
+                if device not in cls.DEVICE_TYPE_MAP:
                     unsupported.append(f"Device type '{device}' not supported")
 
         # Check media types
         if targeting_overlay.media_type_any_of:
             for media in targeting_overlay.media_type_any_of:
-                if media not in self.SUPPORTED_MEDIA_TYPES:
+                if media not in cls.SUPPORTED_MEDIA_TYPES:
                     unsupported.append(f"Media type '{media}' not supported")
 
         # Audio-specific targeting not supported
@@ -649,9 +653,89 @@ class GAMTargetingManager:
         if targeting_overlay.geo_postal_areas or targeting_overlay.geo_postal_areas_exclude:
             unsupported.append("Postal code targeting requires GAM geo service integration (not implemented)")
 
-        # GAM supports all other standard targeting dimensions
+        # Additional builder refusals are shared through validate_local_targeting.
 
         return unsupported
+
+    @classmethod
+    def validate_local_targeting(cls, targeting_overlay: Targeting | None) -> None:
+        """Apply the builder's local refusals without config reads or vendor calls.
+
+        Tenant-specific AXE/custom-key resolution remains in the live builder.
+        """
+        if not targeting_overlay:
+            return
+
+        cls._validate_geo_targeting(targeting_overlay)
+
+        # Technology/Device targeting - NOT SUPPORTED, MUST FAIL LOUDLY. Named by the
+        # field the buyer actually sent: the seller extension, or the spec's device_platform.
+        if targeting_overlay.device_form_factors:
+            raise AdCPCapabilityNotSupportedError(
+                details=CapabilityRefusalDetails(
+                    capability="device_type_any_of" if targeting_overlay.device_type_any_of else "device_platform",
+                    rejected_value=targeting_overlay.device_form_factors,
+                )
+            )
+
+        for capability, values in (
+            ("os_any_of", targeting_overlay.os_any_of),
+            ("browser_any_of", targeting_overlay.browser_any_of),
+            ("content_cat_any_of", targeting_overlay.content_cat_any_of),
+            ("keywords_any_of", targeting_overlay.keywords_any_of),
+        ):
+            if values:
+                raise AdCPCapabilityNotSupportedError(
+                    details=CapabilityRefusalDetails(capability=capability, rejected_value=values)
+                )
+
+        audience_list = [*(targeting_overlay.audiences_any_of or []), *(targeting_overlay.signals or [])]
+        if audience_list:
+            raise AdCPCapabilityNotSupportedError(
+                details=CapabilityRefusalDetails(capability="audiences", rejected_value=audience_list)
+            )
+
+        if targeting_overlay.media_type_any_of:
+            if len(targeting_overlay.media_type_any_of) > 1:
+                raise AdCPCapabilityNotSupportedError(
+                    details=CapabilityRefusalDetails(
+                        capability="media_type_any_of", rejected_value=targeting_overlay.media_type_any_of
+                    )
+                )
+            media_type = targeting_overlay.media_type_any_of[0]
+            if media_type not in cls.MEDIA_TYPE_ENVIRONMENTS:
+                raise AdCPCapabilityNotSupportedError(
+                    details=CapabilityRefusalDetails(
+                        capability="media_type",
+                        rejected_value=media_type,
+                        accepted_values=sorted(cls.MEDIA_TYPE_ENVIRONMENTS),
+                    )
+                )
+
+    @staticmethod
+    def _validate_geo_targeting(targeting_overlay: Targeting) -> None:
+        """Refuse only geo dimensions unsupported by the local mapping implementation."""
+        # Postal code targeting not implemented in static mapping - fail loudly.
+        # The capability NAME travels as structured detail; the buyer-facing sentence is
+        # the code's own.
+        if targeting_overlay.geo_postal_areas:
+            raise AdCPCapabilityNotSupportedError(details=CapabilityRefusalDetails(capability="geo_postal_areas"))
+        if targeting_overlay.geo_postal_areas_exclude:
+            raise AdCPCapabilityNotSupportedError(
+                details=CapabilityRefusalDetails(capability="geo_postal_areas_exclude")
+            )
+
+        metro_systems = (metro.system for metro in targeting_overlay.geo_metros or ())
+        excluded_metro_systems = (metro.system for metro in targeting_overlay.geo_metros_exclude or ())
+        for system in chain(metro_systems, excluded_metro_systems):
+            if system != MetroAreaSystem.nielsen_dma:
+                raise AdCPCapabilityNotSupportedError(
+                    details=CapabilityRefusalDetails(
+                        capability="geo_system",
+                        rejected_value=system.value,
+                        accepted_values=["nielsen_dma"],
+                    )
+                )
 
     def build_targeting(self, targeting_overlay) -> dict[str, Any]:
         """Build GAM targeting criteria from AdCP targeting.
@@ -668,20 +752,11 @@ class GAMTargetingManager:
         if not targeting_overlay:
             return {}
 
+        self.validate_local_targeting(targeting_overlay)
         gam_targeting: dict[str, Any] = {}
 
         # Geographic targeting
         geo_targeting: dict[str, Any] = {}
-
-        # Postal code targeting not implemented in static mapping - fail loudly.
-        # The capability NAME travels as structured detail; the buyer-facing sentence is
-        # the code's own.
-        if targeting_overlay.geo_postal_areas:
-            raise AdCPCapabilityNotSupportedError(details=CapabilityRefusalDetails(capability="geo_postal_areas"))
-        if targeting_overlay.geo_postal_areas_exclude:
-            raise AdCPCapabilityNotSupportedError(
-                details=CapabilityRefusalDetails(capability="geo_postal_areas_exclude")
-            )
 
         # Build targeted locations
         if any(
@@ -715,14 +790,6 @@ class GAMTargetingManager:
             # Map metros (GeoMetro: validate system, extract values)
             if targeting_overlay.geo_metros:
                 for metro in targeting_overlay.geo_metros:
-                    if metro.system != MetroAreaSystem.nielsen_dma:
-                        raise AdCPCapabilityNotSupportedError(
-                            details=CapabilityRefusalDetails(
-                                capability="geo_system",
-                                rejected_value=metro.system.value,
-                                accepted_values=["nielsen_dma"],
-                            )
-                        )
                     for dma_code in metro.values:
                         if dma_code in self.geo_metro_map:
                             geo_targeting["targetedLocations"].append({"id": self.geo_metro_map[dma_code]})
@@ -757,57 +824,12 @@ class GAMTargetingManager:
             # Map excluded metros
             if targeting_overlay.geo_metros_exclude:
                 for metro in targeting_overlay.geo_metros_exclude:
-                    if metro.system != MetroAreaSystem.nielsen_dma:
-                        raise AdCPCapabilityNotSupportedError(
-                            details=CapabilityRefusalDetails(
-                                capability="geo_system",
-                                rejected_value=metro.system.value,
-                                accepted_values=["nielsen_dma"],
-                            )
-                        )
                     for dma_code in metro.values:
                         if dma_code in self.geo_metro_map:
                             geo_targeting["excludedLocations"].append({"id": self.geo_metro_map[dma_code]})
 
         if geo_targeting:
             gam_targeting["geoTargeting"] = geo_targeting
-
-        # Technology/Device targeting - NOT SUPPORTED, MUST FAIL LOUDLY. Named by the
-        # field the buyer actually sent: the seller extension, or the spec's device_platform.
-        if targeting_overlay.device_form_factors:
-            raise AdCPCapabilityNotSupportedError(
-                details=CapabilityRefusalDetails(
-                    capability="device_type_any_of" if targeting_overlay.device_type_any_of else "device_platform",
-                    rejected_value=targeting_overlay.device_form_factors,
-                )
-            )
-
-        if targeting_overlay.os_any_of:
-            raise AdCPCapabilityNotSupportedError(
-                details=CapabilityRefusalDetails(capability="os_any_of", rejected_value=targeting_overlay.os_any_of)
-            )
-
-        if targeting_overlay.browser_any_of:
-            raise AdCPCapabilityNotSupportedError(
-                details=CapabilityRefusalDetails(
-                    capability="browser_any_of", rejected_value=targeting_overlay.browser_any_of
-                )
-            )
-
-        # Content targeting - NOT SUPPORTED, MUST FAIL LOUDLY
-        if targeting_overlay.content_cat_any_of:
-            raise AdCPCapabilityNotSupportedError(
-                details=CapabilityRefusalDetails(
-                    capability="content_cat_any_of", rejected_value=targeting_overlay.content_cat_any_of
-                )
-            )
-
-        if targeting_overlay.keywords_any_of:
-            raise AdCPCapabilityNotSupportedError(
-                details=CapabilityRefusalDetails(
-                    capability="keywords_any_of", rejected_value=targeting_overlay.keywords_any_of
-                )
-            )
 
         # Custom key-value targeting
         custom_targeting = {}
@@ -859,55 +881,14 @@ class GAMTargetingManager:
             # Our dict: {'key_id': 'value_name', 'NOT_key_id': 'value_name'}
             gam_targeting["customTargeting"] = self._build_custom_targeting_structure(custom_targeting)
 
-        # Audience segment targeting
-        # Map AdCP audiences_any_of and signals to GAM audience segment IDs
-        if targeting_overlay.audiences_any_of or targeting_overlay.signals:
-            # Note: This requires GAM audience segment ID mapping configured per tenant
-            # For now, we fail loudly to indicate it's not fully implemented
-            audience_list = []
-            if targeting_overlay.audiences_any_of:
-                audience_list.extend(targeting_overlay.audiences_any_of)
-            if targeting_overlay.signals:
-                audience_list.extend(targeting_overlay.signals)
-
-            raise AdCPCapabilityNotSupportedError(
-                details=CapabilityRefusalDetails(capability="audiences", rejected_value=audience_list)
-            )
-
         # Media type targeting - map to GAM environmentType
         # This should be set on line items, not in targeting dict
         # We'll store it for the line item creation logic to use
         if targeting_overlay.media_type_any_of:
-            # Validate only one media type (GAM line items have single environmentType)
-            if len(targeting_overlay.media_type_any_of) > 1:
-                raise AdCPCapabilityNotSupportedError(
-                    details=CapabilityRefusalDetails(
-                        capability="media_type_any_of", rejected_value=targeting_overlay.media_type_any_of
-                    )
-                )
-
             media_type = targeting_overlay.media_type_any_of[0]
-            # Map AdCP media types to GAM environmentType
-            media_type_map = {
-                "video": "VIDEO_PLAYER",
-                "display": "BROWSER",
-                "native": "BROWSER",
-                # audio and dooh not directly supported by GAM
-            }
-
-            if media_type in media_type_map:
-                # Store for line item creation - will be picked up by orders manager
-                environment_type = media_type_map[media_type]
-                gam_targeting["_media_type_environment"] = environment_type
-                logger.info(f"Media type '{media_type}' mapped to GAM environmentType: {environment_type}")
-            else:
-                raise AdCPCapabilityNotSupportedError(
-                    details=CapabilityRefusalDetails(
-                        capability="media_type",
-                        rejected_value=media_type,
-                        accepted_values=sorted(media_type_map),
-                    )
-                )
+            environment_type = self.MEDIA_TYPE_ENVIRONMENTS[media_type]
+            gam_targeting["_media_type_environment"] = environment_type
+            logger.info(f"Media type '{media_type}' mapped to GAM environmentType: {environment_type}")
 
         logger.info(f"Applying GAM targeting: {list(gam_targeting.keys())}")
         return gam_targeting

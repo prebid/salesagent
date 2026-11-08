@@ -107,16 +107,6 @@ ALLOWLIST: frozenset[tuple[str, str, str]] = frozenset(
         # update's in-flight writes and then closes the shared scoped session.
         # Fix = the optional-uow shape from _assignments.py:88-91.
         ("src/core/tools/media_buy_update.py", "_update_media_buy_impl", "sync_creatives"),
-        # FIXME(#1644): the delivery webhook scheduler holds a
-        # get_db_session() session open, hands it to _send_report_for_media_buy,
-        # and that helper calls delivery_for_media_buy, which opens its own
-        # MediaBuyUoW on the same scoped session — and the caller keeps using the
-        # session afterwards (session.scalar/scalars/expunge).
-        (
-            "src/services/delivery_webhook_scheduler.py",
-            "_send_report_for_media_buy",
-            "delivery_for_media_buy",
-        ),
     }
 )
 
