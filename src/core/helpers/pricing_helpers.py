@@ -1,7 +1,18 @@
 """Pricing option helper utilities.
 
-Handles the RootModel wrapper pattern used by adcp 2.14.0+ for discriminated unions,
-and owns the ``pricing_info`` projection a package row stores.
+Owns the ``pricing_info`` projection a package row stores.
+
+NO ROOTMODEL UNWRAP. Both functions below opened with
+``getattr(pricing_option, "root", pricing_option)`` for the wrapper the pinned SDK shipped,
+and neither kind of argument they receive has a ``root`` attribute, so both hops returned
+their own argument.
+
+``pricing_info_for`` TAKES THE ORM ROW, not a schema pricing option, and that is not
+interchangeable: ``rate`` and ``is_fixed`` are COLUMNS on ``PricingOption``
+(``src/core/database/models.py``) and are fields of no member of the V3 discriminated
+union, so handing it a schema member raises ``AttributeError`` on ``rate``. Every caller
+passes a row: the three in ``media_buy_create`` read ``product.pricing_options`` off a
+``ProductModel``, and the test callers build through ``PricingOptionFactory``.
 """
 
 from typing import Any
@@ -18,14 +29,13 @@ def pricing_info_for(pricing_option: Any, *, bid_price: float | None = None) -> 
 
     ``bid_price`` is not a property of the option — it is what THIS package bid — so it is
     supplied by the caller rather than projected. Everything else is the option's own
-    terms, unwrapped for the RootModel members adcp 2.14.0+ uses.
+    terms, read off it directly (see the module docstring on the unwrap that was removed).
     """
-    option = getattr(pricing_option, "root", pricing_option)
     return {
-        "pricing_model": option.pricing_model,
-        "rate": float(option.rate) if option.rate else None,
-        "currency": option.currency,
-        "is_fixed": option.is_fixed,
+        "pricing_model": pricing_option.pricing_model,
+        "rate": float(pricing_option.rate) if pricing_option.rate else None,
+        "currency": pricing_option.currency,
+        "is_fixed": pricing_option.is_fixed,
         "bid_price": bid_price,
     }
 
@@ -44,8 +54,7 @@ def pricing_option_has_rate(pricing_option: Any) -> bool:
 
     Handles multiple formats:
     - Dict format (from JSON/serialization): checks fixed_price, then rate
-    - Pydantic RootModel wrapper: checks the wrapped member's fixed_price
-    - Direct attribute access (SQLAlchemy models): checks fixed_price, then rate
+    - Direct attribute access (schema union member or SQLAlchemy row): fixed_price, then rate
 
     Args:
         pricing_option: A pricing option in any supported format
@@ -57,8 +66,10 @@ def pricing_option_has_rate(pricing_option: Any) -> bool:
     if isinstance(pricing_option, dict):
         return pricing_option.get("fixed_price", pricing_option.get("rate")) is not None
 
-    # Unwrap RootModel wrapper if present, then check the model/row attributes
-    target = getattr(pricing_option, "root", pricing_option)
-    if getattr(target, "fixed_price", None) is not None:
+    # Model or row attributes, and BOTH getattrs are load-carrying because the two shapes
+    # spell the fixed rate disjointly: ``fixed_price`` is declared by all nine union members
+    # and is NOT a column, while ``rate`` is a column and is a field of no member. So each
+    # read misses on exactly one of the two kinds this function accepts.
+    if getattr(pricing_option, "fixed_price", None) is not None:
         return True
-    return getattr(target, "rate", None) is not None
+    return getattr(pricing_option, "rate", None) is not None

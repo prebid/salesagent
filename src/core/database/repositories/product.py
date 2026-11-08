@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from src.core.database.models import PricingOption, Product
+from src.core.format_satisfaction import refuse_outside_common_intersection
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +84,25 @@ class ProductRepository:
         )
         return list(self._session.execute(stmt).unique().scalars().all())
 
+    def list_dynamic_templates(self) -> list[Product]:
+        """Live dynamic product templates for the tenant.
+
+        A TEMPLATE, not a variant: ``is_dynamic`` marks the row the signals-driven
+        variants are generated FROM, and the generated variants carry
+        ``is_dynamic_variant`` instead. ``archived_at IS NULL`` keeps retired
+        templates from producing new variants.
+
+        Deliberately not ``list_all()`` filtered in Python: that query fetches every
+        product for the tenant with two eager loads, so filtering afterwards would
+        load the whole catalogue to find a handful of templates.
+        """
+        stmt = select(Product).where(
+            Product.tenant_id == self._tenant_id,
+            Product.is_dynamic.is_(True),
+            Product.archived_at.is_(None),
+        )
+        return list(self._session.scalars(stmt).all())
+
     def list_all_with_inventory(self) -> list[Product]:
         """Get all products with pricing, inventory profile, and tenant loaded.
 
@@ -124,7 +144,9 @@ class ProductRepository:
         """Persist a new product within this tenant.
 
         The product.tenant_id must match the repository's tenant_id.
-        Raises ValueError if there is a tenant mismatch.
+        Raises ValueError if there is a tenant mismatch, or if the product sells several
+        publishers without placements and declares an option not all of them accept
+        (:func:`~src.core.format_satisfaction.refuse_outside_common_intersection`).
 
         Does NOT commit — the UoW handles that.
         """
@@ -132,6 +154,7 @@ class ProductRepository:
             raise ValueError(
                 f"Tenant mismatch: product.tenant_id={product.tenant_id!r} != repository tenant_id={self._tenant_id!r}"
             )
+        refuse_outside_common_intersection(product)
         self._session.add(product)
         self._session.flush()
         return product
@@ -143,7 +166,7 @@ class ProductRepository:
         Returns the updated Product, or None if not found in this tenant.
         Raises ValueError if any kwarg is not a valid Product attribute or
         if the caller attempts to update an immutable field (tenant_id,
-        product_id).
+        product_id), and for the updated product :meth:`create` refuses.
         """
         blocked = self._IMMUTABLE_FIELDS & kwargs.keys()
         if blocked:
@@ -155,6 +178,7 @@ class ProductRepository:
             if not hasattr(product, key):
                 raise ValueError(f"Product has no attribute {key!r}")
             setattr(product, key, value)
+        refuse_outside_common_intersection(product)
         self._session.flush()
         return product
 

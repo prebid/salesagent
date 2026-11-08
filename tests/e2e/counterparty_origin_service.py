@@ -3,19 +3,30 @@
 The live server's INBOUND verifier resolves an unknown counterparty by WALKING
 its published trust root — ``adcp.signing.agent_resolver.async_resolve_agent``:
 
-    GET <agent_url>                     -> capabilities, whose
+    MCP get_adcp_capabilities at <agent_url>
+                                        -> capabilities, whose
                                            ``identity.brand_json_url`` names ...
     GET <brand_json_url>                -> brand.json, whose ``agents[]`` entry
                                            for that url carries ``jwks_uri`` ...
     GET <jwks_uri>                      -> the JWKS the signature is verified against
 
-This service is the other end of that walk. It exists because the SELLER'S OWN
-published trust root cannot be reused as the counterparty: ``_fetch_capabilities``
-does a raw ``GET`` with ``follow_redirects=False`` and demands a 200 carrying a
-JSON object, while our ``/mcp`` answers ``GET`` with an SSE redirect (an SDK
-divergence from ``security.mdx``:1142, which says to invoke
-``get_adcp_capabilities`` over the declared transport). Hop 1 would die on our
-own route.
+This service is the other end of that walk.
+
+HOP 1 IS A TOOL CALL, NOT A FETCH, AND THAT CHANGED UNDER THIS FIXTURE. Up to adcp
+6.6.0 the SDK's ``_fetch_capabilities`` was a raw ``GET <agent_url>`` — its own
+docstring said "SSRF-pinned ``GET``" — and this origin was built to answer exactly
+that. The version of this docstring written then recorded that the raw GET was "an
+SDK divergence from ``security.mdx``:1142, which says to invoke
+``get_adcp_capabilities`` over the declared transport". adcp 9 CLOSED that
+divergence: ``adcp/signing/_resolver_protocol.py`` opens an MCP session and calls the
+tool. So the fixture outlived the behaviour it was shaped around, hop 1 began failing,
+and every signing scenario reported ``request_signature_capabilities_unreachable`` —
+which is the code AdCP 3.2.1 assigns to a failed hop 1, correctly emitted against an
+origin that could not complete one (``salesagent-8qela.167``).
+
+It still exists for the reason it always did, which the above does not retire: the
+SELLER'S OWN published trust root cannot be reused as the counterparty, because the
+pair below must differ in exactly one bit and the seller publishes only itself.
 
 It is a SIBLING of ``tests/e2e/webhook_capture_service.py``, not a mode inside it.
 What would be shared is ~30 lines of ``BaseHTTPRequestHandler`` — not the
@@ -68,6 +79,16 @@ BRAND_UNLISTED_PATH = "/.well-known/brand-unlisted.json"
 JWKS_PATH = "/.well-known/jwks.json"
 JWKS_CONTROL_PATH = "/_control/jwks"
 HEALTH_PATH = "/health"
+
+#: The one tool this origin implements, and the one AdCP 3.2.1 hop 1 names.
+CAPABILITIES_TOOL = "get_adcp_capabilities"
+
+#: MCP assigns a session through a RESPONSE header on ``initialize``; the client reads
+#: it back and uses it to address the best-effort ``DELETE`` that ends discovery. A
+#: constant rather than a generated id: this origin holds no per-session state, so a
+#: unique value would only be something to look up and find nothing behind.
+MCP_SESSION_HEADER = "Mcp-Session-Id"
+MCP_SESSION_ID = "counterparty-origin"
 
 #: SLOTS — the same listed-agent shape, once per caller instead of once per origin.
 #:
@@ -179,27 +200,193 @@ def _brand_json(listed_agent_url: str | None) -> dict:
 
 
 class _CounterpartyHandler(JsonRequestHandler):
-    """Answer the three walk hops as plain GETs, plus the JWKS control plane."""
+    """Answer hop 1 over MCP and hops 2-3 as plain GETs, plus the JWKS control plane."""
+
+    def _wants_event_stream(self) -> bool:
+        """Whether the request is asking for an SSE stream rather than a document."""
+        return "text/event-stream" in (self.headers.get("Accept") or "")
+
+    def _agent_capabilities(self, store: _JwksStore, path: str) -> tuple[dict | None, dict | None]:
+        """``(document, refusal)`` for an agent path, ``(None, None)`` when *path* is not one.
+
+        ONE mapping from agent path to capabilities document, because hop 1 is now
+        answered on two methods — ``POST`` for the MCP tool call the SDK makes, and
+        ``GET`` for the raw fetch kept beside it — and a second copy of
+        "which brand.json does this agent point at" is the drift this repo treats as a
+        defect.
+
+        The slot refusal travels with it for the same reason ``_slot_document`` gives:
+        an uninstalled slot answering a well-formed document lets the walk SUCCEED and
+        fail later as an unresolvable keyid, blaming the verifier for a caller that
+        installed nothing. Refusing at hop 1 names the slot, on either method.
+        """
+        if path == LISTED_AGENT_PATH:
+            return _capabilities(f"{PUBLIC_ORIGIN}{BRAND_JSON_PATH}"), None
+        if path == UNLISTED_AGENT_PATH:
+            return _capabilities(f"{PUBLIC_ORIGIN}{BRAND_UNLISTED_PATH}"), None
+        if path.startswith(SLOT_AGENT_PREFIX):
+            slot = path[len(SLOT_AGENT_PREFIX) :]
+            if not store.has(slot):
+                return None, {"error": f"no keyset installed for slot {slot!r}"}
+            return _capabilities(f"{PUBLIC_ORIGIN}{SLOT_BRAND_PREFIX}{slot}.json"), None
+        return None, None
+
+    def do_POST(self) -> None:  # noqa: N802 - stdlib handler name
+        """Answer hop 1 as the MCP tool call AdCP 3.2.1 specifies.
+
+        ``L1/security.mdx`` § "Discovering an agent's signing keys via
+        ``brand_json_url``" step 1 is a ``get_adcp_capabilities`` fetch, and adcp 9
+        makes it over the agent's declared transport
+        (``adcp/signing/_resolver_protocol.py``) rather than the raw ``GET`` adcp 6.6.0
+        used. This origin answered only the raw GET, so hop 1 died and every signing
+        scenario reported ``request_signature_capabilities_unreachable`` — the pin's
+        correct code for a failed hop 1, against a fixture that could not complete it
+        (``salesagent-8qela.167``).
+
+        MCP over plain ``application/json``, not SSE: the client accepts either for a
+        POST reply (``mcp/client/streamable_http.py`` branches on the response
+        content-type) and JSON is what this stdlib origin can frame with the
+        ``Content-Length`` the rest of the module already relies on.
+        """
+        store: _JwksStore = self.server.jwks_store  # type: ignore[attr-defined]
+        path = self.path.split("?", 1)[0].rstrip("/") or "/"
+        document, refusal = self._agent_capabilities(store, path)
+        if document is None:
+            self._write_json(404, refusal or {"error": f"no MCP endpoint at {self.path!r}"})
+            return
+
+        raw = self._read_raw_body()
+        try:
+            message = json.loads(raw) if raw else {}
+        except json.JSONDecodeError as exc:
+            self._write_json(400, {"error": f"MCP body is not valid JSON: {exc}"})
+            return
+        self._answer_mcp(message, document)
+
+    def _answer_mcp(self, message: dict, document: dict) -> None:
+        """The three JSON-RPC exchanges the SDK's discovery client makes, and nothing else.
+
+        Deliberately not a general MCP server: ``initialize``, the
+        ``notifications/initialized`` that follows it, and one ``tools/call``. Anything
+        else answers METHOD_NOT_FOUND, which is the honest reply from an origin that
+        publishes identity documents and implements no other tool.
+        """
+        request_id = message.get("id")
+        method = message.get("method")
+        params = message.get("params") or {}
+
+        if request_id is None:
+            # A notification. The client sends `notifications/initialized` and, per the
+            # MCP spec, MUST NOT be answered with a response — it does not even read
+            # this body (streamable_http.py gates the read on JSONRPCRequest).
+            self._write_json(202, {})
+            return
+
+        if method == "initialize":
+            # ECHO the client's requested version rather than naming one. The client
+            # asks with a value from its own accepted handshake list and then validates
+            # the reply against that same list, so echoing cannot disagree with it —
+            # whereas a literal here would be a second copy of `mcp`'s version tuple,
+            # in a module that cannot import `mcp` to check it.
+            self._write_json(
+                200,
+                {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": {
+                        "protocolVersion": params.get("protocolVersion"),
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {"name": "counterparty-origin", "version": "1"},
+                    },
+                },
+                extra_headers={MCP_SESSION_HEADER: MCP_SESSION_ID},
+            )
+            return
+
+        if method == "tools/call" and params.get("name") == CAPABILITIES_TOOL:
+            self._write_json(
+                200,
+                {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": {
+                        "content": [{"type": "text", "text": json.dumps(document)}],
+                        "isError": False,
+                        "resultType": "complete",
+                    },
+                },
+            )
+            return
+
+        self._write_json(
+            200,
+            {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {"code": -32601, "message": f"method not found: {method!r}"},
+            },
+        )
+
+    def do_DELETE(self) -> None:  # noqa: N802 - stdlib handler name
+        """Terminate a discovery session.
+
+        The SDK sends this best-effort after a SUCCESSFUL capabilities call
+        (``_resolver_protocol.py``) and ignores any HTTP error, so this exists to keep
+        the exchange the real client makes from ending on a 501 — the session is a
+        single constant here and there is nothing to release.
+        """
+        self._write_json(200, {"terminated": True})
 
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler name
         store: _JwksStore = self.server.jwks_store  # type: ignore[attr-defined]
         path = self.path.split("?", 1)[0].rstrip("/") or "/"
 
+        agent_document, agent_refusal = self._agent_capabilities(store, path)
+        if (agent_document is not None or agent_refusal is not None) and self._wants_event_stream():
+            # The streamable-HTTP client opens a SECOND, server->client SSE stream
+            # with a GET at this same url (``mcp/client/streamable_http.py``:639
+            # ``start_get_stream`` -> :224 ``handle_get_stream``). Nothing here
+            # pushes server-initiated messages, so that stream is declined — and 405
+            # is the one status ``DiscoveryTransport`` passes through on a GET
+            # instead of turning into ``capabilities_unreachable``
+            # (``_resolver_protocol.py``:120), which is the SDK saying this is the
+            # expected answer from a server without one.
+            #
+            # Keyed on ``Accept`` and NOT on the method, because the same GET at the
+            # same url is how ``tests/harness/signing_capability.py`` reads this
+            # document back, and that read must keep getting its 200. TODAY'S WALK
+            # DOES NOT REACH THIS ARM -- ``mcp_capabilities_post`` issues no
+            # ``Mcp-Session-Id`` and ``handle_get_stream`` returns at :232 without
+            # one -- but a request that asked only for an event stream must not be
+            # answered with a JSON document, and this is the answer that stays
+            # correct if a session id is ever issued.
+            #
+            # PRESERVED ACROSS THE ASSEMBLY MERGE (salesagent-8qela.173). Both
+            # integration lines built an MCP face for this origin independently;
+            # this branch existed only on the sdk9 line and the incoming version
+            # has no Accept-keyed arm and no 405 anywhere, so its agent-path GET
+            # would answer an SSE request with a JSON document. Ordered BEFORE the
+            # agent-document branch below, which is what keeps every non-SSE GET
+            # answering exactly as the incoming version does.
+            self.send_response(405)
+            self.end_headers()
+            return
+        if agent_document is not None or agent_refusal is not None:
+            # Hop 1 as a raw GET, kept beside the MCP face. adcp 9 no longer fetches it
+            # this way, but a capabilities document is a legitimate thing for this origin
+            # to publish, the slot refusal is identical on both methods, and keeping it
+            # costs one branch. Nothing in the suite reads it today.
+            self._write_json(200 if agent_document is not None else 404, agent_document or agent_refusal or {})
+            return
+
         if path == HEALTH_PATH:
             self._write_json(200, {"compose_project_name": self.server.compose_project_name})  # type: ignore[attr-defined]
-        elif path == LISTED_AGENT_PATH:
-            self._write_json(200, _capabilities(f"{PUBLIC_ORIGIN}{BRAND_JSON_PATH}"))
-        elif path == UNLISTED_AGENT_PATH:
-            self._write_json(200, _capabilities(f"{PUBLIC_ORIGIN}{BRAND_UNLISTED_PATH}"))
         elif path == BRAND_JSON_PATH:
             self._write_json(200, _brand_json(f"{PUBLIC_ORIGIN}{LISTED_AGENT_PATH}"))
         elif path == BRAND_UNLISTED_PATH:
             self._write_json(200, _brand_json(None))
         elif path == JWKS_PATH:
             self._write_json(200, store.published())
-        elif path.startswith(SLOT_AGENT_PREFIX):
-            slot = path[len(SLOT_AGENT_PREFIX) :]
-            self._slot_document(store, slot, _capabilities(f"{PUBLIC_ORIGIN}{SLOT_BRAND_PREFIX}{slot}.json"))
         elif path.startswith(SLOT_BRAND_PREFIX) and path.endswith(".json"):
             slot = path[len(SLOT_BRAND_PREFIX) : -len(".json")]
             self._slot_document(store, slot, _brand_json(slot_agent_url(slot)))

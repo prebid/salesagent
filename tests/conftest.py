@@ -932,37 +932,99 @@ def _resolve_dotted(dotted: str) -> Any:
 # ---------------------------------------------------------------------------
 # Nested-pytest modules — one at a time under xdist
 # ---------------------------------------------------------------------------
-# MEMBERSHIP RULE: a module belongs here if and only if it spawns a `pytest`
-# SUBPROCESS. Nothing pins that, so check before adding — an earlier revision of
-# this set carried four modules that spawn nothing (0.47s + 0.73s + 0.19s +
-# 0.13s of work pinned to one worker for no reason), and one of them stopped
-# spawning in the same change that listed it. Verify with:
+# MEMBERSHIP RULE: a module belongs here if and only if it runs a NESTED PYTEST
+# COLLECTION of a whole suite -- as a subprocess, through a helper that spawns
+# one, or in-process via `pytest.main`. Nothing pins that, so check before
+# adding — an earlier revision of this set carried four modules that collect
+# nothing (0.47s + 0.73s + 0.19s + 0.13s of work pinned to one worker for no
+# reason), and one of them stopped collecting in the same change that listed it.
+# Direct spawners are found with
 #
 #     grep -cE 'subprocess\.(run|Popen|check_output|check_call)' <module>
 #
-# Why the group: a nested subprocess re-collects the whole unit suite, and its
-# timeout was calibrated against a SERIAL run. With N xdist workers you get up
-# to N concurrent full-suite collections competing with the N workers that
-# spawned them. Measured on a 14-core Mac at -n 12 and -n 14, the nested
-# collection dies with
+# but that grep finds only one of the three spellings, and reading it as the
+# whole rule is how this set went stale. The other two: a module can spawn
+# through a helper in `tests/unit/_architecture_helpers.py`
+# (`collect_bdd_node_ids_with_e2e_enabled`, `collect_bdd_items_with_markers`),
+# which the grep cannot see from the calling module (grep the helpers' callers
+# too); and a module can collect IN-PROCESS via `pytest.main` with no subprocess
+# at all (a `pytest.main` under `if __name__ == "__main__":` does not count).
+# The in-process spelling is the most expensive, not an exception to be tidied
+# out: `test_architecture_ci_bdd_shard_manifest`, deleted since, measured its
+# nested import at ~2500 modules and ~490 MB which, unlike a subprocess's copy,
+# is NOT freed when the collection ends -- it is retained for the rest of that
+# worker's session.
+#
+# Why the group: a nested subprocess re-collects a whole suite, and its timeout
+# was calibrated against a SERIAL run. With N xdist workers you get up to N
+# concurrent full-suite collections competing with the N workers that spawned
+# them. Measured on a 14-core Mac at -n 12 and -n 14, the nested collection dies
+# with
 #
 #     subprocess.TimeoutExpired: [... 'pytest','tests/unit/','--collect-only' ...]
 #     timed out after 60 seconds
 #
 # while passing at -n 8 and serially. Raising the timeout would hide the
-# contention rather than remove it.
+# contention rather than remove it. One xdist_group means at most ONE nested
+# collection runs at a time, whatever the worker count -- which is the property
+# that was actually missing.
 #
 # The "shared cached collection" this comment used to name as the right
 # follow-up now exists: tests/_collection_manifest.py publishes what the real
-# run collected, and the two modules that used to sit here beside
-# test_xdist_report_serialization -- test_architecture_ci_bdd_shard_manifest and
-# test_e2e_rest_ledger_fitness -- read it instead of spawning, so they no longer
-# belong to this set by the membership rule above. One module is left, and the
-# group still means at most ONE nested collection runs at a time.
+# run collected, and the observers in tests/collection/ read it instead of
+# spawning. `test_e2e_rest_ledger_fitness` and
+# `test_e2e_rest_ssrf_blocked_scenario_collected` left this set that way, and
+# `test_architecture_bdd_xfail_reason_tokens` left it when its per-item
+# `--collect-only` subprocess was removed. The members below still collect for
+# themselves.
 #
-# Requires `--dist loadgroup` (tox.ini's unit env); under any other dist mode
-# the marker is inert and these simply spread out again.
-_NESTED_PYTEST_MODULES: frozenset[str] = frozenset({"test_xdist_report_serialization"})
+# AND AT -n 16 THE FAILURE IS NO LONGER A TIMEOUT, IT IS THE WORKER DYING.
+# `test_architecture_env_route_agreement` satisfied the rule above and was not
+# listed here, and in the in-network run of 2026-10-09 it killed the unit leg:
+#
+#     worker 'gw0' crashed while running
+#     'tests/unit/test_architecture_env_route_agreement.py::
+#      test_catch_all_scenario_resolves_not_wired[UC-002-conftest.py:3475]'
+#
+# xdist replaces a crashed worker with a clone (dsession.py:266), and
+# loadscope's `_assign_work_unit` reads `registered_collections[node]`
+# (scheduler/loadscope.py:275) -- which a clone has no entry in until it
+# finishes collecting. A second crash inside that window reschedules onto the
+# clone and the master dies with `KeyError: <WorkerController gw17>`, ending the
+# session at 2584 of 6704 collected. Three consecutive runs got no unit verdict
+# that way, which is worse than a failing test: a crash in this set does not
+# just lose its own module, it loses the whole leg.
+#
+# The multiplier is what makes it fatal rather than slow. That module's
+# `collect_bdd_items_with_markers` is `lru_cache(maxsize=1)`, i.e. per PROCESS, and its items
+# spread across every worker -- so 16 workers paid 16 separate
+# `pytest tests/bdd --collect-only` runs of ~7.2k items, each loading the whole
+# app, concurrently, alongside the 16 workers that spawned them. Measured in
+# that run: 1041.8s of CPU across 28 reported items. Grouping collapses that to
+# ONE collection for all 28 items, so the group is cheaper here, not just safer.
+# That module has since moved to tests/collection/, which runs in tox's
+# `collection` env without xdist, so this marker is inert for it there and it
+# is not listed. The helper it used still spawns for
+# `test_architecture_route_xfail_census` in tests/unit, which is why that one is.
+#
+# Requires `--dist loadgroup` (tox.ini's unit env, and .github/workflows/ci.yml's
+# unit job); under any other dist mode the marker is inert and these simply
+# spread out again. The match below is on the module's basename, wherever it lives.
+_NESTED_PYTEST_MODULES: frozenset[str] = frozenset(
+    {
+        # `pytest tests/bdd --collect-only` (~7.2k items) via
+        # `collect_bdd_items_with_markers`; its `lru_cache` is per PROCESS, not
+        # shared across xdist workers. Invisible to the grep above.
+        "test_architecture_route_xfail_census",
+        # Two seeded collections of one bdd module via
+        # `collect_bdd_node_ids_with_e2e_enabled` -- invisible to the grep above.
+        "test_bdd_transport_collection_is_seed_independent",
+        # `pytest tests/integration --collect-only` as a subprocess.
+        "test_collection_is_side_effect_free",
+        # A nested `pytest -n 2` run of a generated suite, as a subprocess.
+        "test_xdist_report_serialization",
+    }
+)
 
 
 @functools.lru_cache(maxsize=4096)
@@ -997,6 +1059,20 @@ def entity_markers_for_path(fspath: str) -> frozenset[str]:
     return frozenset(markers)
 
 
+# `tryfirst`, and the xdist_group marker below is why. xdist appends the group
+# name to the nodeid from its OWN `pytest_collection_modifyitems`
+# (xdist/remote.py:244), and the scheduler groups by splitting that suffix back
+# off (scheduler/loadgroup.py::_split_scope) -- the MARKER is never consulted by
+# the scheduler, only the suffix it produced. Both impls are plain, xdist's ran
+# first, so every marker added here arrived after the only read of it.
+#
+# Measured on this branch, `-n 4 --dist loadgroup` over
+# test_architecture_env_route_agreement.py (all 47 items marked): 0 nodeids
+# carried `@nested_pytest` and the items spread 10/15/11/11 across gw0-gw3. The
+# grouping had never taken effect, so the property the comment above claims --
+# at most one nested collection at a time -- was not held for the three modules
+# listed there either.
+@pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(config, items):
     """Auto-apply entity markers from filename/path patterns."""
     for item in items:

@@ -14,7 +14,7 @@ Usage:
         # auto-commits when exiting the `with` block
 
     with WorkflowUoW(tenant_id) as uow:
-        steps = uow.workflows.list_by_tenant(status="pending")
+        steps = uow.workflows.list_by_tenant(statuses=["pending"])
         # auto-commits when exiting the `with` block
 
     with TenantConfigUoW(tenant_id) as uow:
@@ -155,6 +155,23 @@ class BaseUoW:
                 drain_after_commit(session)
         finally:
             end_effects(session)
+
+    def join[U: BaseUoW](self, unit: type[U]) -> U:
+        """*unit*'s repositories on THIS unit's open transaction, for a service run inside it.
+
+        The joined unit is never entered, so it neither commits nor closes: its writes are
+        this unit's writes and commit or roll back with them, and an effect queued through
+        one of its repositories is released by this unit's commit. Opening *unit* instead
+        commits on its own exit, so its writes outlive a rollback of this unit; and
+        ``get_db_session`` hands out the thread's scoped session, so when that is this
+        unit's session the inner commit releases what this unit had flushed as well.
+        Valid only while this unit is open.
+        """
+        assert self._session is not None, f"{type(self).__name__} is not open; there is no transaction to join"
+        joined = unit(self._tenant_id)
+        joined._session = self._session
+        joined._init_repos()
+        return joined
 
     #: ``attribute name -> repository class`` for subclasses that declare their
     #: repositories instead of hand-writing the two hooks below. Every repository in this

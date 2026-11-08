@@ -11,7 +11,9 @@ the tool once, for every transport. A response becomes a body in one function. A
 code and supplies facts. Because there is one of each, a rule holds everywhere by
 construction, and needs no check policing agreement between copies.
 
-The codebase targets AdCP 3.1.1 through the `adcp` SDK. The companion pages are
+The codebase targets a pinned AdCP spec version through the `adcp` SDK; the pin
+lives in `pyproject.toml` and [docs/adcp-spec-version.md](../adcp-spec-version.md)
+names the spec version it targets. The companion pages are
 [Architecture guide](architecture.md), [Request lifecycle](request-lifecycle.md),
 [Patterns reference](patterns-reference.md), [Structural guards](structural-guards.md), and
 [Error architecture](../design/error-architecture.md).
@@ -129,12 +131,40 @@ excluded field no transport could set and no caller read. `Field(exclude=True)` 
 domain or response model such as `Product`, where a field must exist on the model and not on
 the wire.
 
-**There is deliberately no test comparing a DTO's field set to the pinned schema.** Such a
-suite exists when the model and the schema are two artifacts that can disagree. Here the DTO
-*is* the pinned model plus the mixin, so what it declares is inherited, and the comparison
-asserts only that Python inheritance works. `tests/unit/test_architecture_schema_inheritance.py` grades
-REDECLARATIONS against the library parent instead, which is the only place a local class can
-weaken a pinned type.
+**A FIELD YOU ADD MUST HAVE A DECLARED SURFACE.** Extending a pinned model by inheritance is
+the point of adopting it, and nothing here forbids it. What is forbidden is adding a field
+without deciding which surface it lives on, because the three surfaces behave differently and
+two of them are buyer-visible:
+
+- **A field on a request DTO is ADVERTISED.** `_register_tool` derives the announced parameter
+  shape from the DTO, so the field becomes a parameter buyers may send and other sellers do
+  not implement. `ListAccountsRequest.idempotency_key` was added so one BDD step could
+  construct the model; it reached the advertised contract and then grew a predicate in the
+  transport boundary whose only job was to detect and ignore it. Deleting the field deleted
+  the predicate.
+- **A field on a response model is ON THE WIRE** unless declared `Field(exclude=True)`. Nine
+  such fields were emitted to buyers under pinned-looking names until `9094a72d2`.
+- **`Field(exclude=True)` does not mean "internal", it means gone.** It strips the field from
+  the wire, from persistence AND from the idempotency hash alike. So a field marked that way
+  to keep it off the wire cannot persist either — measured 2026-10-17, 16 fields are in that
+  state, among them `Product.implementation_config` and `Format.platform_config`.
+
+A seller-owned field with a persistence surface therefore has no spelling on a wire model
+today, which is what salesagent-3zmsd exists to give it: an ORM model built by
+`from_domain`/`to_domain` mappers, so the domain model is not coupled to the data model.
+
+This paragraph previously said the opposite — that no comparison of a DTO's fields against the
+pin was needed, because the DTO "*is* the pinned model plus the mixin, so what it declares is
+inherited". That reasoning is what let additions accumulate unexamined: measured 2026-10-17,
+51 added-field declaration sites across 99 adoption sites. Most had no live reason — three
+justifications the regenerated SDK has since absorbed, and `TaskSummary`'s six are a field set
+`GetTaskStatusResponse` lost a release earlier. The capability is fine; those 51 were not
+using it deliberately.
+
+`tests/unit/test_architecture_dto_adds_no_field.py` grades registry request DTOs — surface (1)
+above — by unioning `model_fields` across every `adcp`-defined ancestor, with a shrink-only
+allowlist. Its population is the registry, so it never saw a model that is not a tool's
+request type.
 
 Divergence from the spec has two directions, and Python can state only one of them. You
 declare an added field on the subclass, typed and greppable in the file you are already
@@ -650,8 +680,8 @@ The constructor has no `message` parameter. A raise site supplies facts through 
 owns the four things a buyer needs with a code — the message, the recovery, the suggestion, and
 the HTTP status — and `message`, `recovery`, `suggestion`, and `status_code` are read-only
 properties resolving from it at every read, so no instance can carry a value that disagrees
-with the table by any route. The table holds 100 entries: the 92 published codes loaded from
-the pinned bundle's `enums/error-code.json` through `importlib.resources`, plus the 8 platform
+with the table by any route. The table holds 101 entries: the 92 published codes loaded from
+the pinned bundle's `enums/error-code.json` through `importlib.resources`, plus the 9 platform
 codes `AppErrorCode` declares. An error names its code by its class or explicitly, never both
 and never neither: `__init_subclass__` refuses a subclass whose code the table does not
 classify, and `__new__` refuses both a bare base construction and an `error_code` passed to a

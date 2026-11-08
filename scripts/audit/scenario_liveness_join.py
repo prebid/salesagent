@@ -153,17 +153,45 @@ def _reject_narrowed_run(path: Path, run: dict[str, Any] | None) -> None:
     records its own scope, so the distinction is in the file rather than
     inferred from it.
 
-    ``run`` is absent in an artifact written before that landed. Treated as
-    legacy and allowed through: it is a gitignored, regenerated file, and
-    refusing it would fail the first run after an upgrade rather than the
-    condition worth catching.
+    TWO narrowings, because pytest records them in two places. ``-k``/``-m`` land on
+    ``selection``/``markers``. A run narrowed BY PATH leaves both EMPTY and is visible
+    only in ``target``, the invocation paths the writer records. That form is the one
+    in use: ``pytest tests/bdd/test_uc010_...py`` sets neither expression, and neither
+    does a CI shard, which is handed its file list. Without ``target`` a 24-record
+    artifact over a suite of some eight thousand parametrized scenarios reads as a
+    full measurement and every scenario it did not name reads as dormant
+    (salesagent-peq79). ``shard_split.targets_cover_suite`` judges ``target`` against
+    the BDD modules on disk: a directory that is a prefix of every module (``tests/bdd``,
+    ``tests``) covers the suite, and a file list covers it only when it names every
+    module. One shard's file list does not, so its artifact is refused here; the
+    shards are folded into one measurement by ``tests.bdd.scenario_liveness.load_run``.
+
+    There is deliberately NO floor on ``collected``. A floor needs a number, and the
+    only honest source for it is one full run's count -- which goes stale the day a
+    scenario is added or removed, failing the build for a non-reason, or needs ratchet
+    machinery to maintain it. It is also unsound in both directions: near the true
+    count, suite shrinkage breaks it; low enough to survive shrinkage, and the largest
+    single module -- over a thousand items on its own -- passes. ``target`` needs no
+    number: the paths either account for every module or they do not.
+
+    ``run`` is absent in an artifact written before the writer recorded its scope, and
+    ``target`` is absent in one written before it recorded its paths. Both are treated
+    as legacy and allowed through: it is a gitignored, regenerated file, and refusing
+    it would fail the first run after an upgrade rather than the condition worth
+    catching.
     """
     if not run:
         return
     selection = run.get("selection") or ""
     markers = run.get("markers") or ""
-    # A shard narrows by neither: it is handed a file list. ``target`` is absent in an
-    # artifact written before the writer recorded it, which the legacy rule above covers.
+    if selection or markers:
+        raise storyboard_spec.StoryboardAuditError(
+            f"{path} was written by a NARROWED bdd run "
+            f"(-k {selection!r}, -m {markers!r}; {run.get('collected')} collected). "
+            "Every scenario it does not name would report dormant, which is a claim about "
+            "production rather than about the question that was asked. Re-run the full suite "
+            "(`pytest tests/bdd`) before regenerating anything that quotes liveness."
+        )
     target = run.get("target")
     if target is not None and not shard_split.targets_cover_suite("bdd", target):
         raise storyboard_spec.StoryboardAuditError(
@@ -172,15 +200,6 @@ def _reject_narrowed_run(path: Path, run: dict[str, Any] | None) -> None:
             "not a measurement of the suite. Re-run the full suite (`pytest tests/bdd`) before "
             "regenerating anything that quotes liveness."
         )
-    if not selection and not markers:
-        return
-    raise storyboard_spec.StoryboardAuditError(
-        f"{path} was written by a NARROWED bdd run "
-        f"(-k {selection!r}, -m {markers!r}; {run.get('collected')} collected). "
-        "Every scenario it does not name would report dormant, which is a claim about "
-        "production rather than about the question that was asked. Re-run the full suite "
-        "(`pytest tests/bdd`) before regenerating anything that quotes liveness."
-    )
 
 
 def build_index(

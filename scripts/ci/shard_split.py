@@ -70,15 +70,15 @@ def list_suite_files(suite: str, repo_root: Path | None = None) -> list[str]:
 def targets_cover_suite(suite: str, targets: Iterable[str], repo_root: Path | None = None) -> bool:
     """True when these pytest invocation paths account for every file of the suite.
 
-    Two shapes reach here. A session invoked on the DIRECTORY (`pytest tests/bdd`) names one
-    target that is a prefix of every module. Sharded sessions each name their own files, and
-    must union to the whole set.
+    Two shapes reach here. A session invoked on the DIRECTORY (`pytest tests/bdd`, or an
+    ancestor: `tests`, or `.` for the repo root) names one target that is a prefix of every
+    module. Sharded sessions each name their own files, and must union to the whole set.
     """
     named = set(targets)
     if not named:
         return False
     return all(
-        any(module == t or module.startswith(f"{t}/") for t in named)
+        any(t in {".", module} or module.startswith(f"{t}/") for t in named)
         for module in (Path(f).as_posix() for f in list_suite_files(suite, repo_root=repo_root))
     )
 

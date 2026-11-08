@@ -24,8 +24,7 @@ class TestAIReviewCreative:
         """Create a mock tenant with AI review configuration."""
         tenant = Mock(spec=Tenant)
         tenant.tenant_id = "test_tenant"
-        tenant.gemini_api_key = "test-api-key"
-        tenant.ai_config = None  # Explicitly set to None to use gemini_api_key fallback
+        tenant.ai_config = {"provider": "gemini", "api_key": "test-api-key"}
         tenant.creative_review_criteria = "Approve if creative is brand-safe and follows guidelines."
         tenant.ai_policy = {
             "auto_approve_threshold": 0.90,
@@ -41,7 +40,16 @@ class TestAIReviewCreative:
         creative.creative_id = "test_creative_123"
         creative.tenant_id = "test_tenant"
         creative.name = "Test Banner Ad"
-        creative.format = "display_300x250"
+        # The four identity columns as the ORM hands them back: a stored assertion is a JSON
+        # document, the kind is a string, and both may be NULL. A Mock attribute left
+        # unstubbed answers a Mock, which is not a state any of these columns can hold.
+        creative.format_kind = "image"
+        creative.format_option_ref = None
+        creative.legacy_format_id = {
+            "agent_url": "https://creative.adcontextprotocol.org",
+            "id": "display_300x250",
+        }
+        creative.legacy_format_key = "https://creative.adcontextprotocol.org/\x1fdisplay_300x250"
         creative.data = {"url": "https://example.com/banner.jpg", "tags": ["retail", "fashion"]}
         creative.status = "pending"
         return creative
@@ -254,13 +262,12 @@ class TestAIReviewCreative:
         assert result["policy_triggered"] == "uncertain"
         assert "could not make confident decision" in result["reason"].lower()
 
-    # Edge Case: Missing Gemini API key (and no ai_config)
+    # Edge Case: no AI configuration on the tenant
     @patch("src.services.ai.AIServiceFactory")
     def test_missing_gemini_api_key(self, mock_factory_class, mock_db_session, mock_tenant):
         """Test behavior when AI is not configured."""
         from src.admin.blueprints.creatives import _ai_review_creative_impl
 
-        mock_tenant.gemini_api_key = None
         mock_tenant.ai_config = None
 
         mock_factory = MagicMock()

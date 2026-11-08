@@ -73,7 +73,7 @@ uv run pytest $(uv run python scripts/ci/shard_paths.py bdd 1)
 
 **Load metric note:** greedy assignment balances Gherkin `Scenario` line counts (~920 total). Collected pytest items are much higher (~9×) because each scenario expands by `Examples:` rows and transport parametrization. Wall-clock is dominated by slow DB-heavy scenarios, not test volume — the reason 2 shards was chosen over 3–4.
 
-Structural guard: `tests/unit/test_architecture_ci_bdd_shard_manifest.py`, with the partition itself in `tests/collection/test_architecture_ci_bdd_shard_partition.py`.
+The partition is graded against the real run's collection in `tests/collection/test_architecture_ci_bdd_shard_partition.py`.
 
 ## Integration Test Shards
 
@@ -141,7 +141,10 @@ full monolith compile on warm CI runs.
 [`publish-creative-agent.yml`](../../.github/workflows/publish-creative-agent.yml)
 workflow runs on `push` to `main` and `workflow_dispatch`. It logs in to
 `ghcr.io` and calls `creative-agent-stack.sh publish`, which builds from the
-pinned tarball and pushes `ghcr.io/<repo>/adcp-creative-agent:${ADCP_PIN}`.
+pinned tarball and pushes `ghcr.io/<repo>/adcp-creative-agent:${IMAGE_TAG}`.
+`IMAGE_TAG` is `${ADCP_PIN}-p<checksum>`, where the checksum covers the script's two
+patches to the agent source (the Fly size check and the MCP rate limit), so changing
+a patch publishes a new tag instead of reusing an image built without it.
 If the tag already exists, publish is a no-op. Publish failures fail the
 workflow loudly (unlike the test shard, which degrades gracefully).
 
@@ -150,7 +153,7 @@ workflow loudly (unlike the test shard, which degrades gracefully).
 from fork PRs), sets `CREATIVE_AGENT_GHCR_IMAGE`, and calls
 `creative-agent-stack.sh up`:
 
-- **Warm run** (public image tag `${ADCP_PIN}` in ghcr.io): `docker pull` +
+- **Warm run** (public image tag `${IMAGE_TAG}` in ghcr.io): `docker pull` +
   retag to local `adcp-creative-agent` — no compile.
 - **Cold / degraded** (package absent, private, or pull blip): fetch tarball and
   `docker build` locally. The shard never pushes.

@@ -1,9 +1,7 @@
 """Guard: the BDD shards partition what pytest really collected.
 
-The rest of the shard configuration is graded in
-``tests/unit/test_architecture_ci_bdd_shard_manifest.py``. This one needs the record a real
-session published, because pytest's own collection is the second opinion against
-``shard_split``'s glob.
+It needs the record a real session published, because pytest's own collection is the
+second opinion against ``shard_split``'s glob.
 """
 
 from __future__ import annotations

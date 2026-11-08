@@ -1,7 +1,5 @@
 """Grader: the two env-route resolvers must agree, per COLLECTED scenario.
 
-The structural half of this lane — one owner, one routing call, the four routing
-helpers absorbed — lives in ``test_architecture_liveness_contract_owner.py``.
 This module grades the BEHAVIOR the lane exists to fix: the verdict
 ``tests/bdd/conftest.py::_harness_env`` dispatches on and the verdict
 ``scripts/audit/scenario_liveness_join`` publishes must be the SAME verdict for
@@ -67,33 +65,6 @@ from tests.unit._liveness_contract_pins import (
 pytestmark = pytest.mark.arch_guard
 
 _BDD_DIR = Path("tests/bdd")
-_OWNER_MODULE = ".".join(OWNER.with_suffix("").parts)
-
-# One catch-all scenario per branch UC, by EXACT tag, each verified in-tree to
-# fall through to its branch's `else: pytest.xfail(...)` today. UC-004 is
-# handled separately — see the module docstring.
-_CATCH_ALL_SCENARIOS = (
-    ("UC-002", "T-UC-002-alt-asap", "conftest.py:3475"),
-    ("UC-003", "T-UC-003-alt-budget", "conftest.py:3586"),
-    # UC-006 has no specimen: its catch-all was replaced by rows that each named a
-    # measured blocker, and every one of those rows is empty now -- each scenario they
-    # parked was corrected to the pin and wired, or deleted as ungrounded in the sync
-    # request's schema. The row family still exists in tests/bdd/conftest.py and would
-    # pin a specimen again the day a UC-006 scenario is parked on one of them.
-    # UC-011 and UC-018 have no specimen either, for the same reason UC-006 has none: the
-    # catch-all rows they fell through to no longer park anything. Both rows survive and
-    # build the real env (they are pinned in test_architecture_measurement_floors.py's
-    # EXPECTED_WIRED_ROUTES), so a scenario of those UCs is WIRED by construction and
-    # cannot be a specimen of "falls through to an xfail". What catches an unbound step in
-    # them now is the dormancy tripwire, which fails the scenario and names the step
-    # instead of xfailing it out of sight.
-)
-
-_UC004_TAG_PREFIX = "T-UC-004-"
-
-# The real BDD collection yields ~7.2k in-process items today (9945 rows
-# collected with e2e_rest on, 7223 in-process at authoring time).
-_MINIMUM_COLLECTED_ITEMS = 6000
 
 # BDD modules whose scenarios carry NO ``T-`` identity tag. They are outside the
 # join by construction — ``scenario_liveness._scenario_identifier`` returns None,
@@ -106,6 +77,36 @@ _MODULES_WITHOUT_SCENARIO_IDENTITY = frozenset(
         "tests/bdd/test_get_products_inventory_profile.py",
     }
 )
+_OWNER_MODULE = ".".join(OWNER.with_suffix("").parts)
+
+# One catch-all scenario per branch UC, by EXACT tag, each verified in-tree to
+# fall through to its branch's `else: pytest.xfail(...)` today. UC-004 is
+# handled separately — see the module docstring.
+_CATCH_ALL_SCENARIOS = (
+    # UC-002 and UC-003 have no specimen any more: their catch-alls (uc002-not-wired,
+    # uc003-not-wired) lost their xfail_reason and build the real env, so a scenario that
+    # falls through to them is WIRED; what fails there is named in the BDD conftest's
+    # _UC002_UC003_LEDGER. The specimens they carried (T-UC-002-alt-asap,
+    # T-UC-003-alt-budget) are replaced by one from the catch-all that still parks.
+    ("UC-010", "T-UC-010-v31-build-version", "uc010-not-wired"),
+    # UC-006 has no specimen: its catch-all was replaced by rows that each named a
+    # measured blocker, and every one of those rows is empty now -- each scenario they
+    # parked was corrected to the pin and wired, or deleted as ungrounded in the sync
+    # request's schema. The row family still exists in tests/bdd/conftest.py and would
+    # pin a specimen again the day a UC-006 scenario is parked on one of them.
+    # UC-011 and UC-018 have no specimen either, for the same reason UC-006 has none: the
+    # catch-all rows they fell through to no longer park anything. Both rows survive and
+    # build the real env, so a scenario of those UCs is WIRED by construction and
+    # cannot be a specimen of "falls through to an xfail". What catches an unbound step in
+    # them now is the dormancy tripwire, which fails the scenario and names the step
+    # instead of xfailing it out of sight.
+)
+
+_UC004_TAG_PREFIX = "T-UC-004-"
+
+# The real BDD collection yields ~7.2k in-process items today (9945 rows
+# collected with e2e_rest on, 7223 in-process at authoring time).
+_MINIMUM_COLLECTED_ITEMS = 6000
 
 
 @lru_cache(maxsize=1)
