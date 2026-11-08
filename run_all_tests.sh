@@ -464,7 +464,7 @@ done
 [ "$sbs" = true ] || {
     echo "ERROR: adcp-server-storyboard never became healthy within the 360s deadline — aborting" >&2
     echo "       (the storyboard suite grades this agent, not the one behind proxy:8000;" >&2
-    echo "        it runs the same image with ENVIRONMENT=production)" >&2
+    echo "        it runs the same image with ENVIRONMENT=conformance and extra=\"ignore\")" >&2
     dc logs --tail=120 adcp-server-storyboard >&2
     exit 1
 }
