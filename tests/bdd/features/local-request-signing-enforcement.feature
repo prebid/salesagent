@@ -24,19 +24,19 @@
 # Reconcile upstream in adcp-req (a "seller enforces inbound request signatures"
 # storyboard), then retire this file in favor of the regenerated one.
 #
-# @source repo=adcp ref=v3.1.1 path=docs/building/by-layer/L1/security.mdx pointer=L1268-L1269
-# @source repo=adcp ref=v3.1.1 path=docs/building/by-layer/L1/security.mdx pointer=L1375
-# @source repo=adcp ref=v3.1.1 path=docs/building/by-layer/L1/security.mdx pointer=L1462-L1465
-# @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/test-vectors/request-signing/negative/027-webhook-registration-authentication-unsigned.json pointer=/expected_outcome
-# @source repo=adcp ref=v3.1.1 path=docs/building/by-layer/L1/security.mdx pointer=L1028
-# @source repo=adcp ref=v3.1.1 path=docs/building/by-layer/L1/security.mdx pointer=L1088-L1094
-# @source repo=adcp ref=v3.1.1 path=docs/building/by-layer/L1/security.mdx pointer=L1100
-# @source repo=adcp ref=v3.1.1 path=docs/building/by-layer/L1/security.mdx pointer=L1120
-# @source repo=adcp ref=v3.1.1 path=docs/building/by-layer/L1/security.mdx pointer=L1212
-# @source repo=adcp ref=v3.1.1 path=docs/building/by-layer/L1/security.mdx pointer=L1216
-# @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/test-kits/signed-requests-runner.yaml pointer=L39-L60
-# @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/test-kits/signed-requests-runner.yaml pointer=L108-L126
-# @source repo=adcp ref=v3.1.1 path=docs/building/by-layer/L1/security.mdx pointer=L1240
+# @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx pointer=L1509-L1510
+# @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx pointer=L1620
+# @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx pointer=L1709-L1712
+# @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/test-vectors/request-signing/negative/027-webhook-registration-authentication-unsigned.json pointer=/expected_outcome
+# @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx pointer=L1209
+# @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx pointer=L1323-L1329
+# @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx pointer=L1337
+# @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx pointer=L1357
+# @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx pointer=L1452
+# @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx pointer=L1456
+# @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/test-kits/signed-requests-runner.yaml pointer=L48-L69
+# @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/test-kits/signed-requests-runner.yaml pointer=L146-L164
+# @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx pointer=L1481
 Feature: Inbound request-signature enforcement on an AdCP operation (local)
 
   @T-UC-006-local-signing-required-unsigned @request-signing @error-path @invariant
@@ -72,6 +72,39 @@ Feature: Inbound request-signature enforcement on an AdCP operation (local)
     # matching the key this buyer published, under a kid unique to this run — is what
     # separates "verified" from "waved through".
 
+  @T-UC-006-local-signing-untrusted-destination @request-signing @error-path @invariant @boundary
+  Scenario: a signed request from a counterparty whose trust root is an unreachable destination is refused as untrusted
+    Given a creative with a known format_id
+    And the Buyer Agent has published a signing key the seller can resolve
+    And the Buyer Agent's published agent_url points at a cloud-metadata address
+    And the seller requires a request signature for "sync_creatives"
+    And the Buyer Agent signs the request
+    When the Buyer Agent syncs the creative
+    Then the seller answers with the request-signature challenge "request_signature_jwks_untrusted" and recovery "terminal"
+    # ONE variable from the verified scenario above: the same counterparty, the same
+    # keypair, the same real signature, the same posture. Only the agent_url on its
+    # Principal row moves — and that row is the ONLY legitimate source of a
+    # counterparty's identity (security.mdx forbids a header or a body field), so the
+    # seller must walk to a destination its own SSRF gate refuses.
+    #
+    # WHY THIS CODE, where the discovery-chain table offers no row. The table names
+    # `request_signature_capabilities_unreachable` for a capabilities fetch that
+    # "failed (DNS, TCP, TLS, timeout, non-2xx)" and classes it TRANSIENT. Nothing is
+    # fetched here: the destination is refused before a socket opens, and no retry can
+    # change that. The pinned enum scopes `request_signature_jwks_untrusted` to "the
+    # JWKS URL or resolved network destination failed SSRF and trust-boundary
+    # validation" with recovery `terminal`, and a capabilities destination IS such a
+    # destination. RECOVERY IS THE SUBSTANCE, not the spelling: answering the transient
+    # code here tells a buyer to retry a probe of the metadata service on a jittered
+    # backoff, which is what this seller did until the verifier read the
+    # `signature_code` the resolver attaches to the refusal.
+    #
+    # Graded on all four transports BECAUSE the metadata range is refused ahead of the
+    # `allow_private` hatch the e2e stack holds open — a private-range address would
+    # grade the opposite behavior there. See the Given's docstring.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/request-signing-error-code.json pointer=/enumMetadata/request_signature_jwks_untrusted
+    # @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx pointer=L1357
+
   @T-UC-006-local-signing-webhook-credentials @request-signing @error-path @invariant @boundary
   Scenario: a registration carrying webhook authentication is refused unless signed
     Given a creative with a known format_id
@@ -94,6 +127,49 @@ Feature: Inbound request-signature enforcement on an AdCP operation (local)
     # WHERE the credential travels is the TRANSPORT's business, not this scenario's, and it
     # is not the same place on every transport: the env puts it where each transport's
     # production code READS it. That difference is the point — see the a2a result.
+
+  @T-UC-006-local-signing-upgraded-legacy-digest @request-signing @error-path @invariant @boundary
+  Scenario Outline: a seller upgraded from a legacy digest posture still refuses what a required posture refuses
+    Given a creative with a known format_id
+    And the Buyer Agent has published a signing key the seller can resolve
+    And the seller stored the legacy digest posture "<digest>" before this upgrade
+    And the upgrade has rewritten stored digest postures
+    And <request>
+    When the Buyer Agent syncs the creative
+    Then the seller answers with the request-signature challenge "<code>" and recovery "<recovery>"
+    # A posture this pin refuses to read fell back to the unsupported posture, so the same
+    # requests were accepted with nothing enforced. get-adcp-capabilities-response.json
+    # (v3.2.7) pins covers_content_digest to "required" when supported is true; the revision
+    # rewrites the stored value to that, and verification then runs as for any such tenant.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/request_signing/properties/covers_content_digest
+    # @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx pointer=L1709-L1712
+
+    Examples:
+      | digest    | request                                                         | code                          | recovery    |
+      | either    | the request registers a webhook whose authentication carries credentials | request_signature_required    | correctable |
+      | forbidden | the request registers a webhook whose authentication carries credentials | request_signature_required    | correctable |
+      | either    | the Buyer Agent signs under a key its trust root does not publish | request_signature_key_unknown | correctable |
+      | forbidden | the Buyer Agent signs under a key its trust root does not publish | request_signature_key_unknown | correctable |
+
+  # enums/request-signing-error-code.json (v3.2.7) publishes each code's recovery, and "SDKs MUST
+  # consume enumMetadata for recovery classification". The transcription this seller carried
+  # said terminal for these, against the pin's correctable: the buyer can re-sign, or publish
+  # the key, and send it again. The challenge is graded with the recovery, byte for byte.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/request-signing-error-code.json pointer=/enumMetadata
+  @T-UC-006-local-signing-pinned-recovery @request-signing @error-path @invariant
+  Scenario Outline: A refused signature carries the recovery the pin publishes - <code>
+    Given a creative with a known format_id
+    And the Buyer Agent has published a signing key the seller can resolve
+    And the seller places "sync_creatives" in the "supported" request-signature bucket
+    And <request>
+    When the Buyer Agent syncs the creative
+    Then the seller answers with the request-signature challenge "<code>" and recovery "correctable"
+
+    Examples:
+      | code                              | request                                                           |
+      | request_signature_invalid         | the Buyer Agent signs with a key other than the one it published  |
+      | request_signature_digest_mismatch | the Buyer Agent signs a different rendering of the request        |
+      | request_signature_key_unknown     | the Buyer Agent signs under a key its trust root does not publish |
 
   @T-UC-006-local-signing-malformed-every-bucket @request-signing @error-path @invariant @boundary
   Scenario Outline: a present-but-malformed signature is refused in every bucket the seller declares
@@ -145,7 +221,7 @@ Feature: Inbound request-signature enforcement on an AdCP operation (local)
     And the seller places "sync_creatives" in the "supported" request-signature bucket
     And the Buyer Agent signs a different rendering of the request
     When the Buyer Agent syncs the creative
-    Then the seller answers with the request-signature challenge "request_signature_digest_mismatch" and recovery "terminal"
+    Then the seller answers with the request-signature challenge "request_signature_digest_mismatch" and recovery "correctable"
     # ONE variable apart from the scenario above: the same operation, the same key, the same
     # tampered bytes — the bucket. This is the control that makes that completion mean
     # something: without it, "the request completed" is equally explained by a verifier that
@@ -159,7 +235,7 @@ Feature: Inbound request-signature enforcement on an AdCP operation (local)
     And the Buyer Agent signs a different rendering of the request
     And the request registers a webhook whose authentication carries credentials
     When the Buyer Agent syncs the creative
-    Then the seller answers with the request-signature challenge "request_signature_digest_mismatch" and recovery "terminal"
+    Then the seller answers with the request-signature challenge "request_signature_digest_mismatch" and recovery "correctable"
     # ONE variable apart from "a signed-but-invalid request completes when the seller grades
     # no operation" above: the same operation, the same key, the same tampered bytes, the same
     # posture — the request now hands over webhook CREDENTIALS. That scenario COMPLETES and
@@ -189,10 +265,10 @@ Feature: Inbound request-signature enforcement on an AdCP operation (local)
     When the Buyer Agent syncs the creative
     Then the creative should be processed successfully
     And the seller verified exactly 1 request under the Buyer Agent's published key
-    # security.mdx @ v3.1.1 L1088-1090: given a keyid, the verifier resolves the signing
+    # security.mdx @ v3.2.7 L1323-1325: given a keyid, the verifier resolves the signing
     # agent's agents[] entry, and "Discovery MAY come from prior onboarding". The seller
     # recorded the keyid against the Buyer's agent URL; the keys come from the agent's own
-    # origin. The signature is the only credential (L1216, L631-632).
+    # origin. The signature is the only credential (L1456, L746-747).
 
   @T-UC-006-local-signing-onboarded-other-tenant @request-signing @error-path @invariant
   Scenario: a keyid onboarded only by another seller is not resolved
@@ -203,9 +279,9 @@ Feature: Inbound request-signature enforcement on an AdCP operation (local)
     And the Buyer has no authentication credentials
     And the Buyer Agent signs the request
     When the Buyer Agent syncs the creative
-    Then the seller answers with the request-signature challenge "request_signature_key_unknown" and recovery "terminal"
+    Then the seller answers with the request-signature challenge "request_signature_key_unknown" and recovery "correctable"
     # ONE variable apart from the scenario above: the onboarding record belongs to another
-    # tenant. A seller resolves a keyid against its own onboarding records; L1094 forbids
+    # tenant. A seller resolves a keyid against its own onboarding records; L1329 forbids
     # accepting a keyid it cannot resolve to a specific agents[] entry.
 
   @T-UC-006-local-signing-bearer-never-borrows-a-key @request-signing @error-path @invariant
@@ -217,9 +293,9 @@ Feature: Inbound request-signature enforcement on an AdCP operation (local)
     And the seller requires a request signature for "sync_creatives"
     And the Buyer Agent signs the request
     When the Buyer Agent syncs the creative
-    Then the seller answers with the request-signature challenge "request_signature_key_unknown" and recovery "terminal"
+    Then the seller answers with the request-signature challenge "request_signature_key_unknown" and recovery "correctable"
     # The Buyer keeps its bearer. On the bearer transport identity comes from the
-    # credential-to-agent mapping in the onboarding record (L1216), and the Buyer's names no
+    # credential-to-agent mapping in the onboarding record (L1456), and the Buyer's names no
     # agent URL, so no key resolves for it. The other counterparty sits at the Buyer
     # Agent's published origin: a verifier that looked the keyid up for a bearer caller
     # would verify and serve this request.
@@ -235,7 +311,7 @@ Feature: Inbound request-signature enforcement on an AdCP operation (local)
     When the Buyer Agent syncs the creative
     Then the creative should be processed successfully
     And the seller verified exactly 1 request under the Buyer Agent's published key
-    # signed-requests-runner.yaml @ v3.1.1 L55-60: the agent "MUST treat these keyids as a
+    # signed-requests-runner.yaml @ v3.2.7 L64-69: the agent "MUST treat these keyids as a
     # registered test counterparty whose JWKS contains the corresponding public keys".
     # The Buyer is that counterparty: its keyid is onboarded for it, its agent URL publishes
     # nothing, so only the accepted JWKS on its own record can verify the signature.
@@ -252,12 +328,12 @@ Feature: Inbound request-signature enforcement on an AdCP operation (local)
     When the Buyer Agent syncs the creative
     Then the seller answers with the request-signature challenge "request_signature_rate_abuse" and recovery "terminal"
     And the seller verified exactly 1 request under the Buyer Agent's published key
-    # runner.yaml @ v3.1.1 L108-126: the agent MUST reject the (N+1)th distinct-nonce request
+    # runner.yaml @ v3.2.7 L146-164: the agent MUST reject the (N+1)th distinct-nonce request
     # with request_signature_rate_abuse once the per-keyid cap is hit, and MAY lower the cap
     # for the test-kit counterparty only. Each signature carries a fresh nonce, and the shared
     # idempotency_key only makes the second sync a retry that the verifier runs ahead of. The
     # first sync leaves one live replay entry, so the second meets the record's cap of 1 at
-    # checklist step 9a (security.mdx L1240; "No (block new)" at L1392). A verifier that kept
+    # checklist step 9a (security.mdx L1481; "No (block new)" at L1637). A verifier that kept
     # the deployment's cap for the test counterparty would serve it.
 
   @T-UC-006-local-signing-verified-label-identifies @request-signing @invariant
@@ -272,6 +348,6 @@ Feature: Inbound request-signature enforcement on an AdCP operation (local)
     Then the creative should be processed successfully
     And the seller verified exactly 1 request under the Buyer Agent's published key
     # ONE variable apart from "a request signed by an onboarded counterparty is served
-    # without a bearer": an unverified label placed first. L1028: verifiers MUST process
+    # without a bearer": an unverified label placed first. L1209: verifiers MUST process
     # exactly one label (conventionally sig1) and MUST ignore any additional labels, so the
-    # keyid that selects the counterparty is the verified label's (L1212).
+    # keyid that selects the counterparty is the verified label's (L1452).

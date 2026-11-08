@@ -46,8 +46,8 @@ window — which is why it exists only on that counterparty's record and
 verifier hands the store the record of the counterparty it resolved as its ``tuning``;
 the store applies it as given.
 
-Spec grounding: AdCP 3.1.1 via ``adcp==6.6.0``;
-``dist/compliance/3.1.1/test-kits/signed-requests-runner.yaml``; graded at the wire by
+Spec grounding: via ``adcp==6.6.0``;
+``dist/compliance/<pin>/test-kits/signed-requests-runner.yaml``; graded at the wire by
 vectors ``016-replayed-nonce`` (``request_signature_replayed``) and ``020-rate-abuse``
 (``request_signature_rate_abuse``).
 """

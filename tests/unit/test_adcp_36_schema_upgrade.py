@@ -21,12 +21,21 @@ class TestCreativeListingBoundary:
     The delivery-only field 'variants' does not exist on the listing Creative.
     """
 
-    def test_creative_without_format_id_is_rejected(self):
-        """Creative missing format_id field must raise ValidationError."""
+    def test_creative_without_a_format_identifier_is_rejected(self):
+        """A Creative naming NEITHER format identifier must raise ValidationError.
+
+        ``name`` is supplied so the refusal under test is the format-identity one and not
+        a missing required field: AdCP 3.2 makes ``format_id`` OPTIONAL on
+        core/creative-asset.json (identity moved to ``format_kind`` /
+        ``format_option_ref``), so ``Creative(creative_id="c1")`` now fails on ``name``
+        first and a ``match="format_id"`` would be asserting the wrong refusal. The rule
+        this grades is the local XOR -- ``_exactly_one_format_identifier`` -- which is what
+        keeps a creative from arriving with no identity at all.
+        """
         from src.core.schemas import Creative
 
-        with pytest.raises(ValidationError, match="format_id"):
-            Creative(creative_id="c1")
+        with pytest.raises(ValidationError, match="exactly one of format_id and format_kind"):
+            Creative(creative_id="c1", name="Test Creative")
 
     def test_creative_with_minimal_fields_is_valid(self):
         """Creative with creative_id + format_id + name is valid (dates have default_factory)."""

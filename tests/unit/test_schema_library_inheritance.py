@@ -37,7 +37,7 @@ class TestSchemaLibraryInheritance:
 
     def test_get_products_response_extends_library(self):
         """GetProductsResponse must extend library type."""
-        from adcp.types import GetProductsResponse as LibraryResponse
+        from adcp.types import LegacyGetProductsResponse as LibraryResponse
 
         from src.core.schemas import GetProductsResponse
 
@@ -77,9 +77,9 @@ class TestSchemaLibraryInheritance:
         """PropertyIdentifier must be the library property-specific Identifier type.
 
         V3 Migration: Property class requires property-specific Identifier from
-        adcp.types.generated_poc.core.property.Identifier, not generic Identifier.
+        adcp.types.domains.core.property.Identifier, not generic Identifier.
         """
-        from adcp.types.generated_poc.core.property import (
+        from adcp.types.domains.core.property import (
             Identifier as PropertySpecificIdentifier,
         )  # TODO: no stable alias (property-specific, different from adcp.types.Identifier)
 

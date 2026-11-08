@@ -44,7 +44,7 @@ def get_principal_from_token(token: str, tenant_id: str) -> Principal | None:
 def get_principal_by_signing_keyid(keyid: str, tenant_id: str) -> Principal | None:
     """The counterparty *tenant_id* onboarded *keyid* for, or ``None``.
 
-    security.mdx @ v3.1.1 L1088-1090, checklist step 1: the verifier resolves a keyid to the
+    security.mdx L1323-1325, checklist step 1: the verifier resolves a keyid to the
     signing agent's brand.json ``agents[]`` entry, and "Discovery MAY come from prior
     onboarding". The answer is a CANDIDATE: only the verifier, by verifying the signature
     against this principal's keys, establishes it as the caller.

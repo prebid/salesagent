@@ -74,7 +74,7 @@ class TestDeliveryTypeEnum:
 # inheritance works."
 #
 # What those sets stood in for is graded where it can fail: the inheritance guard
-# (tests/unit/test_architecture_schema_inheritance.py) grades every REDECLARATION against
+# (critical pattern #1) governs every REDECLARATION against
 # its library parent, and the round-trip and construction cases below still exercise values.
 
 

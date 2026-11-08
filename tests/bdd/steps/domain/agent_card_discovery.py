@@ -139,3 +139,36 @@ def then_refusal_is_configuration_error(ctx: dict) -> None:
     assert ctx["requested_host"] not in response.text, (
         f"the refusal echoed the caller's own Host back to it: {response.text[:300]!r}"
     )
+
+
+#: The SDK's sentence for list_creative_formats that presents the deprecated task as a
+#: prerequisite for syncing creatives.
+_SDK_PREREQUISITE_SENTENCE = "format_ids needed for sync_creatives"
+
+
+@then("the seller advertises list_creative_formats with the pinned request schema's description")
+def then_list_creative_formats_advertised_as_deprecated(ctx: dict) -> None:
+    """The card's skill on every transport, and MCP's tools/list entry on MCP, carry the pin's text.
+
+    The expected description is read from the pinned schema file the SDK ships, not from
+    the code under test, and the pin must still mark the task deprecated for the
+    obligation to hold.
+    """
+    from tests.bdd.steps.generic._dispatch import _as_transport
+    from tests.harness.transport import Transport
+    from tests.helpers.adcp_pinned_schema import load
+
+    schema = load("media-buy/list-creative-formats-request.json")
+    assert schema.get("deprecated") is True, "the pin no longer marks the sales-agent list_creative_formats deprecated"
+    expected = schema["description"]
+
+    skills = {skill["id"]: skill.get("description") for skill in _fetched_card(ctx).get("skills") or []}
+    advertised = {"the agent card's skill": skills.get("list_creative_formats")}
+    if _as_transport(ctx, "then_list_creative_formats_advertised_as_deprecated") is Transport.MCP:
+        advertised["MCP tools/list"] = ctx["env"].list_mcp_tools().get("list_creative_formats")
+
+    for surface, description in advertised.items():
+        assert description == expected, f"{surface} advertises {description!r}, not the pinned description {expected!r}"
+        assert _SDK_PREREQUISITE_SENTENCE not in (description or ""), (
+            f"{surface} presents list_creative_formats as a prerequisite for sync_creatives"
+        )

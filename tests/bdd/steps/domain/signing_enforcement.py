@@ -52,6 +52,15 @@ _WEBHOOK_CREDENTIAL = "harness-webhook-shared-secret-0123456789"
 #: gets that far in these scenarios, and it must not be able to.
 _WEBHOOK_URL = "https://buyer.example/webhooks/adcp/creative"
 
+#: An ``agent_url`` whose destination the SSRF gate must refuse on every transport.
+#: 169.254.169.254 is the IMDS link-local address; ``adcp.signing`` checks its
+#: metadata blocklist BEFORE the ``allow_private`` gate is read, so unlike an RFC 1918
+#: or loopback address this one is refused even under the e2e stack's open
+#: ``ADCP_OUTBOUND_ALLOW_PRIVATE`` posture. HTTPS, so the refusal is the DESTINATION's
+#: and not step 1's scheme check — an ``http://`` url is rejected at canonicalization
+#: and never reaches the gate this scenario grades.
+_METADATA_AGENT_URL = "https://169.254.169.254/a2a"
+
 
 @given("the Buyer Agent has published a signing key the seller can resolve")
 def given_buyer_publishes_signing_key(ctx: dict) -> None:
@@ -68,6 +77,35 @@ def given_buyer_publishes_signing_key(ctx: dict) -> None:
     variable — the signature. Without it an unsigned dispatch is a different experiment.
     """
     ctx["env"].enable_request_signing()
+
+
+@given("the Buyer Agent's published agent_url points at a cloud-metadata address")
+def given_buyer_agent_url_is_a_banned_destination(ctx: dict) -> None:
+    """Re-point this buyer's trust root at a destination the SSRF gate must refuse.
+
+    ONE variable from the verified scenario: same counterparty, same keypair, same
+    real RFC 9421 signature. Only the ``agent_url`` on its Principal row moves, which
+    is the sole input to the seller's key resolution, so the outcome below is
+    attributable to the destination and to nothing else.
+
+    :data:`_METADATA_AGENT_URL` rather than a loopback or RFC 1918 address, and the
+    reason is transport uniformity rather than taste. ``docker-compose.e2e.yml`` sets
+    ``ADCP_OUTBOUND_ALLOW_PRIVATE=true`` for the server — it has to, because every
+    origin on a compose network resolves to a private bridge address — so a scenario
+    built on a private address would be refused in process and ACCEPTED over e2e,
+    and the one transport closest to production would grade the opposite behavior.
+    The cloud-metadata range is refused UNCONDITIONALLY, ahead of and outside that
+    hatch, so this scenario means the same thing on all four transports. The sibling
+    reasoning, and the same immunity, is recorded in
+    ``local-egress-ssrf-refusal.feature``'s header.
+
+    It is also the address whose mishandling is worth a scenario of its own: before
+    the verifier read the ``signature_code`` the resolver attaches, this exact input
+    was answered ``request_signature_capabilities_unreachable``, which the pinned enum
+    classes ``transient`` with "retry once after a 1-5 s jittered backoff" — telling a
+    caller to retry a probe of the metadata service.
+    """
+    ctx["env"].repoint_signing_agent_url(_METADATA_AGENT_URL)
 
 
 @given(parsers.parse('the seller requires a request signature for "{operation}"'))
@@ -110,7 +148,7 @@ def given_buyer_signs_the_request(ctx: dict) -> None:
 def given_seller_onboarded_buyer_key(ctx: dict) -> None:
     """Record the Buyer Agent's keyid in the Buyer's onboarding record on this seller.
 
-    security.mdx @ v3.1.1 L1088-1090, checklist step 1: given a keyid, the verifier resolves
+    security.mdx L1323-1325, checklist step 1: given a keyid, the verifier resolves
     the signing agent's ``agents[]`` entry, and "Discovery MAY come from prior onboarding".
     The keys themselves still come from the agent's own origin.
     """
@@ -121,7 +159,7 @@ def given_seller_onboarded_buyer_key(ctx: dict) -> None:
 def given_buyer_key_onboarded_by_another_seller(ctx: dict) -> None:
     """Onboard the Buyer Agent's keyid in a DIFFERENT tenant, and nowhere on this seller.
 
-    A seller resolves a keyid against its own onboarding records (L1094: a keyid it cannot
+    A seller resolves a keyid against its own onboarding records (L1329: a keyid it cannot
     resolve to a specific ``agents[]`` entry is not accepted), so another tenant's mapping
     must not reach this one.
     """
@@ -146,7 +184,7 @@ def given_buyer_onboarded_without_agent_url(ctx: dict) -> None:
     """The Buyer authenticates by its bearer, and its onboarding names no agent URL.
 
     With no ``agents[]`` coordinate there is no origin to walk, so no key can be resolved
-    for the Buyer itself (security.mdx @ v3.1.1 L1216: on the bearer transport identity is
+    for the Buyer itself (security.mdx L1456: on the bearer transport identity is
     the credential-to-agent mapping in the onboarding record).
     """
     ctx["env"].attach_agent_url(None)
@@ -161,11 +199,11 @@ def given_buyer_onboarded_without_agent_url(ctx: dict) -> None:
 def given_buyer_is_test_counterparty(ctx: dict, cap: str | None) -> None:
     """Make the Buyer the ``signed_requests`` test counterparty, its accepted JWKS the Buyer Agent's.
 
-    runner.yaml @ v3.1.1 L32-34, L55-60: the agent under test pre-configures an accepted
+    signed-requests-runner.yaml L41-43, L64-69: the agent under test pre-configures an accepted
     JWKS for the test-kit counterparty only. The Buyer becomes that counterparty: its keyid
     is onboarded for it, its agent URL publishes no keys, so only the accepted JWKS on its
     record can verify its signature. With a replay cap named, the record carries it too:
-    L108-126 allow the lower per-keyid cap for the test-kit counterparty only.
+    L146-164 allow the lower per-keyid cap for the test-kit counterparty only.
     """
     ctx["env"].declare_signed_requests_grading(replay_cap=int(cap) if cap is not None else None)
 
@@ -174,7 +212,7 @@ def given_buyer_is_test_counterparty(ctx: dict, cap: str | None) -> None:
 def given_buyer_signs_with_extra_label(ctx: dict) -> None:
     """Ask for the ``"extra_label"`` realization: a real ``sig1`` signature, one unverified label first.
 
-    security.mdx @ v3.1.1 L1028: verifiers MUST process exactly one ``Signature-Input`` label
+    security.mdx L1209: verifiers MUST process exactly one ``Signature-Input`` label
     (conventionally ``sig1``) and MUST ignore any additional labels. The extra label names a
     keyid nobody onboarded, so a verifier that took the counterparty from it resolves no key.
     Verbatim, like the other named realizations
@@ -218,6 +256,35 @@ def given_seller_grades_nothing(ctx: dict) -> None:
     spellings so a scenario cannot silently grade the other arm.
     """
     ctx["env"].declare_request_signing(bucket="narrowed_none")
+
+
+@given(parsers.parse('the seller stored the legacy digest posture "{digest}" before this upgrade'))
+def given_seller_stored_legacy_digest_posture(ctx: dict, digest: str) -> None:
+    """Store ``{supported: true, required_for: [], covers_content_digest: <digest>}``.
+
+    A value the previous pin accepted and this one refuses to read, and the shape of the
+    pinned vector 027's ``verifier_capability`` otherwise, so the credential escalation is
+    the only thing that can refuse an unsigned registration.
+    """
+    ctx["env"].declare_request_signing(covers_content_digest=digest)
+
+
+@given("the upgrade has rewritten stored digest postures")
+def given_upgrade_rewrote_stored_digest_postures(ctx: dict) -> None:
+    """Run the real revision's rewrite against the seller's real database."""
+    ctx["env"].run_stored_digest_posture_upgrade()
+
+
+@given("the Buyer Agent signs under a key its trust root does not publish")
+def given_buyer_signs_under_unpublished_key(ctx: dict) -> None:
+    """Ask for a real signature whose ``keyid`` the seller cannot find (the env's realization)."""
+    ctx["signed"] = "unknown_key"
+
+
+@given("the Buyer Agent signs with a key other than the one it published")
+def given_buyer_signs_with_another_key(ctx: dict) -> None:
+    """Ask for a signature under the published ``keyid`` that its public key does not verify."""
+    ctx["signed"] = "wrong_key"
 
 
 @given("the Buyer Agent sends a signature the seller cannot parse")

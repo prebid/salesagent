@@ -1,4 +1,4 @@
-"""Guard: one name, one URL policy — no security-shaped name may bind to two answers.
+"""Guard: one name, one URL policy — for the TWO names in :data:`POLICY_NAMES`.
 
 ``validate_webhook_url`` named TWO functions with opposite security properties:
 ``WebhookURLValidator.validate_webhook_url`` performs the SSRF check, while
@@ -17,6 +17,33 @@ Scope note — why "name collision" and not "dead code": a second, unreferenced
 URL helper is untidy; a second *security-shaped* name that answers the opposite
 question is a trap. The rule below is deliberately about names that decide URL
 policy, not about dead code in general.
+
+SCOPE, NARROWED — the two exact names, not a class of names
+-----------------------------------------------------------
+This file's own first line used to read "no security-shaped name may bind to two
+answers", which claimed a CLASS while :data:`POLICY_NAMES` matches two exact
+strings against ``node.name``. The gap is reachable: ``WebhookURLValidator``
+``.validate_webhook_url_registration`` (src/core/webhook_validator.py) is
+security-shaped, decides URL policy, and is NOT graded here — a rename that adds
+a suffix leaves the new name outside the watchlist. No defect follows from it
+today, measured: that method delegates entirely to
+``EgressPolicy.check_registration``, so it gates.
+
+The docstring is narrowed rather than the watchlist widened, and that is a
+deliberate choice (salesagent-kdkbo):
+
+* a prefix rule over "security-shaped" names is a population that grows WITHOUT
+  REVIEW, which is how an allowlist becomes a liability. An exact list is
+  auditable and someone has to look at each addition.
+* the invariant that matters -- at most one definition per name -- is enforced by
+  :func:`test_url_policy_name_has_at_most_one_definition` over whatever is found,
+  so widening the match buys nothing the sibling does not already give.
+* a docstring claiming more than the code does is the staleness disease this
+  repo guards against elsewhere. Narrowing the sentence is the honest fix;
+  widening the code to make a sentence true is not.
+
+So: adding a name here is a review decision, taken per name, with the reason
+written down. It is not a pattern.
 
 RETARGETED (GH #1802), for the same reason and in the same direction as
 ``test_architecture_counterparty_egress_gated``. When this guard was written the

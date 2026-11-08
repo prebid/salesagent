@@ -11,15 +11,17 @@ errors to reach production.
 """
 
 import pytest
+from adcp.types import LegacyProduct as LibraryProduct
 from sqlalchemy import delete
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative, MediaBuy, Principal, Tenant
 from src.core.database.models import PricingOption as DBPricingOption
 from src.core.database.models import Product as ProductModel
-from src.core.product_conversion import default_reporting_capabilities
+from src.core.product_conversion import convert_product_model_to_schema, default_reporting_capabilities
 from src.core.schemas import Principal as PrincipalSchema
 from src.core.schemas import Product
+from tests.factories.product import PricingOptionFactory, ProductFactory
 from tests.helpers.adcp_factories import create_test_db_product
 from tests.utils.database_helpers import (
     create_tenant_with_timestamps,
@@ -30,93 +32,168 @@ from tests.utils.database_helpers import (
 class TestSchemaFieldMapping:
     """Test that schema fields map correctly to database fields."""
 
-    def test_product_schema_database_field_alignment(self):
-        """Validate that Product schema fields align with database model fields."""
-        # Get all fields from Product schema
-        schema_fields = set(Product.model_fields.keys())
+    def test_every_attribute_the_converter_reads_resolves_on_the_orm_model(self, factory_session):
+        """Converting a real product row exercises every ORM attribute the converter reads.
 
-        # Get all columns from ProductModel database table
-        db_columns = {column.name for column in ProductModel.__table__.columns}
+        RENAMED from ``test_product_schema_database_field_alignment``, which is what it
+        no longer does. It grades converter-to-ORM resolution, not schema-to-database
+        alignment, and nothing covers the latter — by design, see WHAT IT USED TO GRADE
+        below. A name promising the old coverage would leave the next reader believing
+        an obligation is enforced that is deliberately not.
 
-        # Fields that exist in schema but should NOT be in database (computed properties)
-        computed_fields = {
-            "brief_relevance",  # Populated dynamically when brief is provided
-            "expires_at",  # Optional field that may not be in all database versions
-            # PR#79 fields - calculated dynamically from product_performance_metrics table
-            "currency",  # ISO 4217 currency code, defaults to "USD"
-            "estimated_exposures",  # Calculated from historical performance data
-            "floor_cpm",  # Minimum CPM calculated from market data
-            "recommended_cpm",  # Suggested CPM based on goals and historical data
-            # PR#88 field - populated from database relationship, not a column
-            "pricing_options",  # List of PricingOption objects from pricing_options table
-            # AdCP library field - mapped from property_tags database column
-            "publisher_properties",  # Populated from property_tags database column
-            # AdCP 2.12.0+ protocol extension field - not stored in database
-            "ext",  # Protocol extension field for future protocol additions
-            # Device type targeting - populated from targeting_template.device_targets during conversion
-            "device_types",  # Internal field for device type filtering
-            # property_targeting_allowed: now persisted ( migration)
-            # AdCP 3.9+ fields - inherited from library Product, not yet stored in database
-            "max_optimization_goals",  # Max optimization goals from adcp 3.9 spec
-            "metric_optimization",  # Metric optimization config from adcp 3.9 spec
-            "outcome_measurement",  # Outcome measurement config from adcp 3.9 spec
-            # AdCP 3.10+ fields - inherited from library Product, not yet stored in database
-            "enforced_policies",  # Policy enforcement config from adcp 3.10 spec
-            "show_ids",  # Show/series identifiers from adcp 3.10 spec
-            "exclusivity",  # Exclusivity constraints from adcp 3.10 spec
-            "episodes",  # Episode-level targeting from adcp 3.10 spec
-            # AdCP 3.12+ fields - inherited from library Product, not yet stored in database
-            "collections",  # Collection grouping from adcp 3.12 spec
-            "collection_targeting_allowed",  # Collection targeting flag from adcp 3.12 spec
-            "installments",  # Installment payment config from adcp 3.12 spec
-            "material_submission",  # Material submission config from adcp 3.12 spec
-            "measurement_readiness",  # Measurement readiness from adcp 3.12 spec
-            "trusted_match",  # Trusted match config from adcp 3.12 spec
-            # AdCP 3.1.1 Product fields - inherited from library Product, not yet stored in database
-            "measurement_terms",  # product.json, optional in AdCP 3.1.1
-            "cancellation_policy",  # product.json, optional in AdCP 3.1.1
-            "performance_standards",  # product.json, optional in AdCP 3.1.1
-            # AdCP 5.7+ fields - inherited from library Product, not yet stored in database
-            "format_options",  # Format option config from adcp 5.7 spec
-            "vendor_metric_optimization",  # Vendor metric optimization from adcp 5.7 spec
-            "allowed_actions",  # Allowed buyer actions from adcp 5.7 spec
-            # AdCP 6.6+ (spec 3.1.1) fields - inherited from library Product, not yet stored
-            # in database. Pure forward-compat passthrough: nothing in src/ populates or reads
-            # them (defaulted None). Persist deliberately if/when a product-management feature
-            # configures placement-type/signal arrays (PR #1567).
-            "video_placement_types",  # Video placement types from adcp 3.1.1 spec
-            "social_placement_surfaces",  # Social placement surfaces from adcp 3.1.1 spec
-            "signal_targeting_options",  # Signal targeting options from adcp 3.1.1 spec
-            "sponsored_placement_types",  # Sponsored placement types from adcp 3.1.1 spec
-            "audio_distribution_types",  # Audio distribution types from adcp 3.1.1 spec
-            "signal_targeting_rules",  # Signal targeting rules from adcp 3.1.1 spec
-            "included_signals",  # Included signals from adcp 3.1.1 spec
-        }
+        WHAT THIS GRADES, and why it RUNS the converter instead of comparing name sets.
+        The fault this module exists for is named in its own header: ``'Product' object
+        has no attribute 'pricing'`` reaching production (#161). That fault needs a
+        READER — a line naming an attribute the ORM model does not declare. There is
+        exactly one such reader, :func:`~src.core.product_conversion.convert_product_model_to_schema`,
+        the single ORM-to-wire converter. So the obligation is graded by driving it over
+        a real row: an attribute it names and the model lacks raises ``AttributeError``
+        right here.
 
-        # Fields that exist in database but should NOT be in external schema (internal only)
-        internal_db_fields = {
-            "tenant_id",  # Internal field for multi-tenancy
-            "targeting_template",  # Internal targeting configuration
-            "price_guidance",  # Legacy field not in AdCP spec
-            "countries",  # Not part of AdCP Product schema
-            "implementation_config",  # Ad server-specific configuration
-        }
+        One conversion covers the WHOLE read set, not just the fields this fixture
+        populates, because every optional read in the converter is guarded by
+        ``if product_model.X:`` — and the guard itself performs the read. A falsy value
+        skips the assignment, never the attribute access. Measured with a recording proxy
+        over this fixture: 26 of the converter's 26 distinct ``product_model`` reads
+        execute. It was 26 of 27 until the dead ``elif hasattr(...)`` fallback at
+        ``product_conversion.py``:530-535 was deleted; that branch held the only read no
+        fixture could reach, so removing it closed the gap rather than hiding it.
 
-        # Check that required schema fields have database equivalents
-        required_schema_fields = schema_fields - computed_fields
-        missing_db_fields = required_schema_fields - db_columns - internal_db_fields
+        WHAT IT USED TO GRADE, and why that was wrong. The expected set was
+        ``Product.model_fields`` — the WHOLE pinned schema surface — minus a
+        hand-maintained 36-name exemption list, which asserted that this seller stores
+        every field in the pin. That is the inverse of critical pattern #7: the DTO is
+        the ACCEPTED shape, and ``Product`` inherits the library parent's fields by
+        construction (pattern #1), so ``model_fields`` is the pin's ceiling and never a
+        floor for the ``products`` table. ``_schemas/3.2/core/product.json`` requires
+        seven properties — ``product_id``, ``name``, ``description``, ``delivery_type``,
+        ``pricing_options``, ``publisher_properties``, ``reporting_capabilities`` — and
+        obliges a column for none of the rest.
 
-        assert not missing_db_fields, (
-            f"Schema fields missing from database: {missing_db_fields}. "
-            f"These fields are in the Product schema but have no corresponding database column. "
-            f"This could cause 'object has no attribute' errors when accessing them."
+        The exemption list was the evidence against the rule it served: 26 of its 36
+        entries were already annotated "inherited from library Product, not yet stored
+        in database", appended once per SDK bump (3.9, 3.10, 3.12, 3.1.1, 5.7, 6.6).
+        The adcp 9.0.0b1 bump (spec 3.2.1) added eleven more — ``identity``,
+        ``targeting_resolution``, ``overlay_support``, ``media_buy_support``,
+        ``demographic_targeting``, ``audience_activation``, ``audience_evidence``,
+        ``audience_evidence_selections``, ``execution_requirements``,
+        ``list_applications``, ``acceptance_policy_profile_ids`` — every one optional in
+        the pin, read or written NOWHERE under ``src/``, and graded by no storyboard in
+        ``_compliance/3.2.1/``. Four of them (``targeting_resolution``,
+        ``overlay_support``, ``list_applications``, ``audience_evidence_selections``) are
+        resolved per REQUEST by the pin's own wording, so a column would be a copy that
+        drifts; three are ``x-status: experimental`` and carry a MUST to declare a
+        matching ``experimental_features`` id this seller does not declare, so emitting
+        them would be the non-conformant move. A pinned field this seller has not
+        implemented is legitimately absent. A converter line with no backing attribute
+        never is.
+        """
+        product = ProductFactory()
+        PricingOptionFactory(product=product)
+        factory_session.commit()
+        factory_session.refresh(product)
+
+        # The primary assertion. An unbacked attribute read raises AttributeError out of
+        # this call; a read that resolves but carries the wrong shape fails Product's own
+        # validation. Both are the defect this module was opened for.
+        converted = convert_product_model_to_schema(product, adapter_type="mock")
+
+        # A guard that grades less and stays green is the failure mode to design against,
+        # and "it did not raise" is exactly that: a converter gutted to return only the
+        # pin's seven required fields reads almost nothing and still passes the call
+        # above. So assert the TRANSFER, not just the absence of an exception. Measured
+        # on this fixture, the converter supplies 14 fields; the floor sits just under
+        # that so a legitimately-absent optional does not trip it, while dropping to the
+        # required-only set does.
+        supplied = converted.model_fields_set
+        assert len(supplied) >= 12, (
+            f"the converter supplied only {len(supplied)} fields ({sorted(supplied)}); it supplies 14 "
+            f"on this fixture. A sharp drop means it stopped reading the row, which makes the "
+            f"AttributeError check above vacuous — it would pass on a converter that reads nothing."
         )
 
-        # Verify critical fields exist in both
+        # A count alone is satisfiable by garbage, so pin values that can only have come
+        # off this row. Compared by IDENTIFYING VALUE rather than by object: the row holds
+        # format_ids as raw dicts and Product coerces them to FormatReference models, so
+        # asserting the two containers equal would be grading pydantic's coercion rather
+        # than the converter's read.
+        assert converted.product_id == product.product_id, (
+            f"the converter returned product_id {converted.product_id!r} for the row "
+            f"{product.product_id!r}; it read the wrong attribute"
+        )
+        assert converted.delivery_type == product.delivery_type, (
+            f"delivery_type {converted.delivery_type!r} does not match the row's {product.delivery_type!r}"
+        )
+        assert [reference.id for reference in converted.format_ids] == [
+            entry["id"] for entry in list(product.format_contract.format_ids)
+        ], (
+            f"format_ids {converted.format_ids!r} does not carry the row's effective format ids "
+            f"{list(product.format_contract.format_ids)!r}"
+        )
+
+        db_columns = {column.name for column in ProductModel.__table__.columns}
+
+        # The floor, hand-named on purpose: no derivation from one side can assert that a
+        # field exists on BOTH. Four are required by _schemas/3.2/core/product.json;
+        # `format_ids` is this seller's own hard requirement — the converter raises
+        # ValueError on a product with no effective format (product_conversion.py:407).
+        schema_fields = set(Product.model_fields.keys())
         critical_fields = {"product_id", "name", "description", "format_ids", "delivery_type"}
         for field in critical_fields:
             assert field in schema_fields, f"Critical field '{field}' missing from Product schema"
             assert field in db_columns, f"Critical field '{field}' missing from ProductModel database"
+
+    def test_every_field_this_repo_adds_to_product_is_backed_by_storage(self):
+        """A field OUR subclass adds -- not inherited from the pin -- must be stored.
+
+        The companion to the converter test above, and the other direction. That one
+        grades the READER: an attribute the converter names and the ORM model lacks.
+        This grades the WRITER: a field this seller declares for itself and then has
+        nowhere to put. Nothing upstream will ever supply such a field, so a conversion
+        that reads one off a database row raises AttributeError -- the #161 fault
+        arriving from the opposite side.
+
+        Scoped to what this seller declares for ITSELF, which is the distinction
+        critical pattern #7 draws. ``Product`` inherits the pinned parent's fields by
+        construction (pattern #1), so ``model_fields`` is the pin's CEILING and never a
+        floor for the ``products`` table -- asserting a column for every pinned field is
+        the inverted obligation the 41-name allowlist used to encode. Subtracting the
+        parent's fields leaves only what we added, and that set we do owe storage for.
+
+        Derived from the models rather than listed, so an SDK bump that adds a spec field
+        changes nothing here. Measured at adcp 9.0.0b1: the set is ``allowed_principal_ids``,
+        ``countries``, ``implementation_config`` -- all columns -- and the 38 unmapped
+        inherited fields are correctly out of scope.
+        """
+        schema_fields = set(Product.model_fields.keys())
+        library_fields = set(LibraryProduct.model_fields.keys())
+
+        # Storage is columns UNION relationship-backed attributes. ``pricing_options``
+        # lives in its own table, so a columns-only check would call it missing.
+        storage = {column.name for column in ProductModel.__table__.columns} | set(
+            ProductModel.__mapper__.relationships.keys()
+        )
+
+        locally_added = schema_fields - library_fields
+
+        # A derivation that matches nothing is green, so prove the populations are real
+        # before trusting the subtraction below.
+        assert locally_added, (
+            "derivation is vacuous: Product declares no field the library parent lacks, "
+            "so this test would pass no matter what storage looked like. Either the "
+            "LibraryProduct import no longer names the pinned parent, or the local "
+            "subclass stopped adding fields -- fix the derivation, do not delete it."
+        )
+        assert storage, "derivation is vacuous: ProductModel exposes no columns or relationships"
+
+        unbacked = locally_added - storage
+
+        assert not unbacked, (
+            f"Fields added by this repo with no database column and no relationship: {unbacked}. "
+            f"These are not inherited from the pinned AdCP Product, so nothing upstream will "
+            f"ever supply them -- a conversion that reads one off a database row raises "
+            f"AttributeError. Add the column (with a migration) or drop the field."
+        )
 
     def test_database_field_access_validation(self, integration_db):
         """Test that all database fields can be accessed without AttributeError."""
@@ -438,11 +515,12 @@ class TestSchemaFieldMapping:
             try:
                 validated_product = Product(**conversion_data)
                 assert validated_product.product_id == "validation_test_001"
-                # adcp 2.14.0+ uses RootModel wrapper - access via .root
+                # The element IS the union member: Product.pricing_options is typed with
+                # the arms, so its fields are read directly. This went through ``.root``
+                # for a local RootModel wrapper that was never what this list held.
                 pricing = validated_product.pricing_options[0]
-                pricing_inner = pricing.root
-                assert pricing_inner.fixed_price == 7.25
-                assert pricing_inner.pricing_model == "cpm"
+                assert pricing.fixed_price == 7.25
+                assert pricing.pricing_model == "cpm"
             except Exception as e:
                 pytest.fail(f"Schema validation failed with database data: {e}")
 

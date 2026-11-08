@@ -60,7 +60,7 @@ class PrincipalRepository:
     def find_by_signing_keyid(self, keyid: str) -> Principal | None:
         """The principal of this tenant that ``keyid`` is onboarded for, or ``None``.
 
-        security.mdx @ v3.1.1 L1088-1094, checklist step 1: a keyid resolves to one
+        security.mdx L1323-1329, checklist step 1: a keyid resolves to one
         ``agents[]`` entry. ``principal_signing_keyids`` maps it to one principal, and its
         primary key ``(tenant_id, keyid)`` makes this one row. The keyid is unverified when
         this runs; the verifier establishes the principal.

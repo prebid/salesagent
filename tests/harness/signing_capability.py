@@ -354,8 +354,8 @@ def onboard_signing_keyid(env: Any) -> None:
     """Record the env key's ``key_id`` as onboarded for the env's own principal.
 
     The harness's ONE spelling of the keyid mapping for the acting principal: the
-    ``principal_signing_keyids`` row production's keyid lookup reads (security.mdx @ v3.1.1
-    L1090, "Discovery MAY come from prior onboarding").
+    ``principal_signing_keyids`` row production's keyid lookup reads (security.mdx
+    L1325, "Discovery MAY come from prior onboarding").
     """
     from tests.factories import PrincipalSigningKeyidFactory
 

@@ -49,7 +49,7 @@ Feature: BR-UC-011 Manage Accounts
     And accounts with other statuses are excluded
     # @bva status: active (first enum value), closed (last enum value)
     # @bva accounts (response): status filter = specific value with matches
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/account-status.json pointer=/enum
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/account-status.json pointer=/enum
     # rejected row: the Given seeds no rejected account, so this row grades enum
     # acceptance (no validation error) — the matching-data case is
     # @T-UC-011-list-status-rejected below.
@@ -72,7 +72,7 @@ Feature: BR-UC-011 Manage Accounts
     And the response contains an accounts array with 1 items
     And every returned account has status "rejected"
     # @bva status: rejected — the one account-status enum value the filter outline never seeded
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/list-accounts-request.json pointer=/properties/status/enum
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/list-accounts-request.json pointer=/properties/status/enum
 
   @T-UC-011-list-no-accounts @list @empty-result @partition @boundary
   Scenario: List accounts returns empty when authenticated agent has no accounts (0 accounts visible)
@@ -106,7 +106,7 @@ Feature: BR-UC-011 Manage Accounts
     # member (get_adcp_capabilities and list_accounts share the same boundary code path).
     # POST-F2: Buyer knows what failed and the error code
     # POST-F1: No state change (read-only)
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumDescriptions/AUTH_INVALID
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/AUTH_INVALID
 
   @T-UC-011-list-pagination @list @pagination @post-s4
   Scenario: List accounts with pagination
@@ -133,8 +133,8 @@ Feature: BR-UC-011 Manage Accounts
     # every transport pre-serializes via model_dump(mode="json") (exclude_none), so the cursor is
     # omitted (not null) on the wire — the invariant now holds on a2a/mcp/rest.
     # cursor is "Only present when has_more is true" — has_more=false MUST NOT carry a cursor
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/pagination-response.json pointer=/properties/cursor/description
-    # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/pagination-integrity-list-accounts.yaml pointer=phases/pagination_walk
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/pagination-response.json pointer=/properties/cursor/description
+    # @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/universal/pagination-integrity-list-accounts.yaml pointer=/narrative
 
   @T-UC-011-list-account-filter @list @account-filter @partition @boundary
   Scenario Outline: List accounts with exact account filter -- <key_shape>
@@ -147,8 +147,8 @@ Feature: BR-UC-011 Manage Accounts
     # Graduated: _apply_list_account_filters honors req.account (AccountReference oneOf, both
     # account_id and natural-key branches), forwarded by all 3 transports.
     # AccountRef oneOf: account_id XOR natural key (brand + operator, optionally sandbox)
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/list-accounts-request.json pointer=/properties/account
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/account-ref.json pointer=/oneOf
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/list-accounts-request.json pointer=/properties/account
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/account-ref.json pointer=/oneOf
 
     Examples:
       | key_shape             |
@@ -169,8 +169,8 @@ Feature: BR-UC-011 Manage Accounts
     # #1592 A3 core scope, tracked separately as #1615)
     # allowed_tasks is the only required field of account-authorization; absence of the whole
     # object means "no introspection", NOT denial — callers MUST NOT infer access from absence
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/list-accounts-response.json pointer=/properties/accounts/items
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/account-authorization.json pointer=/required
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/list-accounts-response.json pointer=/properties/accounts/items
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/account-authorization.json pointer=/required
 
   # DELETED: "list_accounts tolerates the 3.1 every-request envelope (idempotency_key + ext)".
   # READS TAKE NO IDEMPOTENCY KEY. A read is idempotent by construction, so there is no
@@ -203,7 +203,7 @@ Feature: BR-UC-011 Manage Accounts
     # VALIDATION_ERROR ("business rules BEYOND schema validation"). The step asserted
     # VALIDATION_ERROR while the request was built in the test process and never
     # dispatched, so the code was never checked against the seller (salesagent-prkv.65).
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/INVALID_REQUEST
     #   pointer=/INVALID_REQUEST
     Then the error is compliant with the AdCP error spec
     And the response contains a validation error
@@ -268,7 +268,7 @@ Feature: BR-UC-011 Manage Accounts
     # rather than by being spelled out on it. That is how it went missing in a
     # real implementation: the response type declared no status at all, and no
     # transport noticed, because nothing graded the composed branch.
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/account/list-accounts-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-response.json pointer=/allOf/1
 
   @T-UC-011-sync-multi-brand @sync @brand-identity @partition @boundary
   Scenario: Sync multi_brand_domain with brand_id and operator (brand with domain + brand_id)
@@ -332,8 +332,8 @@ Feature: BR-UC-011 Manage Accounts
     # it (A2A skill handler) is non-conformant on a field the spec makes mandatory.
     # Storyboard: dist/compliance/3.1.1 has no account domain — this obligation is UNGRADED
     # by the conformance storyboard; the schema is the sole authority.
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/required
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/idempotency_key
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-request.json pointer=/required
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-request.json pointer=/properties/idempotency_key
 
   @T-UC-011-sync-idempotency-malformed @sync @idempotency @validation @v3-1 @partition @boundary
   Scenario Outline: sync_accounts rejects a malformed idempotency_key -- <partition_name>
@@ -348,7 +348,7 @@ Feature: BR-UC-011 Manage Accounts
     # server-minted uuid4 (or drops the field) would let both rows below succeed, so this
     # outline is what distinguishes "threads the buyer's key" from "fabricates its own".
     # @bva idempotency_key: 15 chars (one below minLength 16); disallowed charset
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/idempotency_key
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-request.json pointer=/properties/idempotency_key
 
     Examples:
       | key                  | partition_name  | boundary_point                    |
@@ -376,7 +376,7 @@ Feature: BR-UC-011 Manage Accounts
     # key first), so this scenario names OMIT_IDEMPOTENCY_KEY to send none.
     # Storyboard: dist/compliance/3.1.1 has no account domain -- UNGRADED by the conformance
     # storyboard, so the schema is the sole authority, same as the accept scenario above.
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/required
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-request.json pointer=/required
 
   @T-UC-011-sync-billing-enum @sync @billing @post-s7 @partition @boundary
   Scenario Outline: Sync with billing model <billing> -- <partition_name>
@@ -388,7 +388,7 @@ Feature: BR-UC-011 Manage Accounts
     And the account billing is "<billing>"
     # @bva billing: operator (first enum value), advertiser (last enum value)
     # POST-S7: Buyer knows billing model for each account
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/billing-party.json pointer=/enum
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/billing-party.json pointer=/enum
 
     Examples:
       | billing    | partition_name     | boundary_point                |
@@ -411,10 +411,10 @@ Feature: BR-UC-011 Manage Accounts
     # advertiser directly even when a different operator places orders on their behalf.
     # status is in the per-item required set, and the spec example for an advertiser-billed
     # created account pins status "active" — an unpinned status let a rejected/pending result pass.
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/billing-party.json pointer=/enum
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/billing
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-response.json pointer=/oneOf/0/properties/accounts/items/required
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-response.json pointer=/examples/3
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/billing-party.json pointer=/enum
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/billing
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-response.json pointer=/oneOf/0/properties/accounts/items/allOf/1
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-response.json pointer=/examples/3
 
   @T-UC-011-sync-mixed @sync @upsert @partition
   Scenario: Sync mixed_results -- created and updated in same request (all different actions)
@@ -467,8 +467,8 @@ Feature: BR-UC-011 Manage Accounts
     # the second natural-key call must upsert to the SAME handle, never demand account_id
     # and never mint a different account_id (which would pass the bare-presence check while
     # breaking the stability invariant this scenario exists to grade).
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-response.json pointer=/oneOf/0/properties/accounts/items/properties/account_id/description
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/description
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-response.json pointer=/oneOf/0/properties/accounts/items/properties/account_id/description
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-request.json pointer=/description
 
   @T-UC-011-sync-settings-update @sync @settings-update @partition @boundary
   Scenario: Settings-update mode targets an existing account by account_id without provisioning
@@ -488,8 +488,8 @@ Feature: BR-UC-011 Manage Accounts
     # AccountReference2/natural-key branches), mode-exclusivity enforced in _impl before dispatch.
     # Settings-update entry carries `account` (AccountRef); trio fields MUST be absent;
     # the seller updates settable state with no provisioning side effects
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/account
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/oneOf/1
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/account
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-request.json pointer=/properties/accounts/items/oneOf/1
 
   @T-UC-011-sync-settings-update-no-provision @sync @settings-update @error @post-f1 @post-f2 @partition @boundary
   Scenario: Settings-update entry never provisions -- unknown account rejected with UNSUPPORTED_PROVISIONING
@@ -507,9 +507,9 @@ Feature: BR-UC-011 Manage Accounts
     # would otherwise trigger provisioning are rejected with UNSUPPORTED_PROVISIONING"
     # (recovery "correctable" per the enum metadata). "No accounts were modified" is graded on the
     # census: nothing was seeded, so the post-call list stays empty.
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/account/description
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumMetadata/UNSUPPORTED_PROVISIONING
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/error.json pointer=/properties/recovery/enum
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/account/description
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumMetadata/UNSUPPORTED_PROVISIONING
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/error.json pointer=/properties/recovery/enum
 
   @T-UC-011-delete-missing-brandless @sync @delete-missing @error @partition @boundary
   Scenario: delete_missing over a persisted brand-less account returns a typed error, never a crash
@@ -534,8 +534,8 @@ Feature: BR-UC-011 Manage Accounts
     # state is inconsistent" code; CONFIGURATION_ERROR's enumMetadata describes
     # exactly this posture (seller-side fault, buyer cannot resolve, MUST NOT
     # auto-retry), hence recovery "terminal".
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-response.json pointer=/oneOf/1
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumMetadata/CONFIGURATION_ERROR
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-response.json pointer=/oneOf/1
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumMetadata/CONFIGURATION_ERROR
 
   @T-UC-011-sync-settings-update-brandless @sync @settings-update @error @partition @boundary
   Scenario: Settings-update against a persisted brand-less account returns a typed error, never a crash
@@ -562,9 +562,9 @@ Feature: BR-UC-011 Manage Accounts
     # resolve and MUST NOT auto-retry ("surface to a human at the seller") — hence recovery
     # "terminal". A transient/correctable code would be a lie: retrying, or editing the
     # request, cannot make a brand appear on the stored row.
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-response.json pointer=/oneOf/1
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumMetadata/CONFIGURATION_ERROR
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/error.json pointer=/properties/recovery
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-response.json pointer=/oneOf/1
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumMetadata/CONFIGURATION_ERROR
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/error.json pointer=/properties/recovery
 
   @T-UC-011-sync-mode-exclusive @sync @settings-update @validation @partition @boundary
   Scenario: Entry carrying both an account reference and the provisioning trio is rejected
@@ -580,10 +580,10 @@ Feature: BR-UC-011 Manage Accounts
     # for semantically-valid entries that fail a business rule. Production currently validates the
     # both-shapes entry as the ProvisioningMode branch and silently ignores the extra `account`, so it
     # provisions instead of rejecting.
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/oneOf
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-response.json pointer=/oneOf/1
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumMetadata/VALIDATION_ERROR
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/error.json pointer=/properties/field
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-request.json pointer=/properties/accounts/items/oneOf
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-response.json pointer=/oneOf/1
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumMetadata/VALIDATION_ERROR
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/error.json pointer=/properties/field
 
   @T-UC-011-ext-a-no-token @sync @ext-a @auth @error @post-f1 @post-f2 @partition @boundary
   Scenario: Sync without authentication -- sync_no_token returns error_auth (no token on sync)
@@ -617,7 +617,7 @@ Feature: BR-UC-011 Manage Accounts
     And the response contains error code AUTH_INVALID
     And the error should include "suggestion" field with remediation guidance
     # @bva authentication (account operations): invalid token on sync
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumDescriptions/AUTH_INVALID
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/AUTH_INVALID
 
   @T-UC-011-ext-b-partial @sync @partial-failure @invariant @partition @boundary
   Scenario: Sync partial_failure -- success_partial_failure with action=failed (action=failed with errors)
@@ -648,12 +648,14 @@ Feature: BR-UC-011 Manage Accounts
     And the error should include "suggestion" field with remediation guidance
     And the per-account error recovery is "correctable"
     And the per-account error details scope is "capability"
-    And the per-account error details supported_billing echoes the seller's supported billing values
+    And the per-account error details supported_billing, if sent, echoes the seller's supported billing values
     # @bva billing: billing = unsupported value for seller
     # BR-RULE-059 INV-2: Request includes billing model the seller does not support -> action=failed, status=rejected, BILLING_NOT_SUPPORTED
     # POST-F2: Buyer knows what failed and the specific error code
-    # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/billing-gate-dispatch.yaml pointer=phases/capability_gate/steps/sync_accounts_unsupported_billing
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/error-details/billing-not-supported.json
+    # details.supported_billing is optional: "Sellers MAY omit this field"; the storyboard
+    # leaves it "intentionally not required". When sent it is an echoed copy of the capability.
+    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/universal/billing-gate-dispatch.yaml phase=capability_gate_operator step=sync_accounts_unsupported_operator_billing
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/error-details/billing-not-supported.json
 
   @T-UC-011-billing-gate-recover @sync @ext-c @billing @recovery @partition
   Scenario: Buyer recovers from BILLING_NOT_SUPPORTED by retrying with a supported value
@@ -677,7 +679,7 @@ Feature: BR-UC-011 Manage Accounts
     # keyless re-dispatch this note used to describe would be refused at the boundary before
     # reaching the recovery. (It also claimed REST rejects the field as extra; SyncAccountsBody
     # derives from the DTO and declares it, so that was never true.)
-    # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/billing-gate-dispatch.yaml pointer=phases/per_agent_gate_recover (recover-leg mechanics; capability-gate recovery narrative in the storyboard header)
+    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/universal/billing-gate-dispatch.yaml pointer=phases/per_agent_gate_recover (recover-leg mechanics; capability-gate recovery narrative in the storyboard header)
 
   @T-UC-011-billing-agent-gate-reject @sync @billing @per-agent-gate @error @partition
   Scenario: Passthrough-only buyer agent submitting billing "agent" is rejected with BILLING_NOT_PERMITTED_FOR_AGENT
@@ -694,12 +696,19 @@ Feature: BR-UC-011 Manage Accounts
     And the per-account error details rejected_billing is "agent"
     And the per-account error details suggested_billing is "operator"
     And the per-account error details do not include permitted_billing, rate_card, payment_terms, credit_limit, billing_entity, or account_id
-    # XFAIL-EXPECTED: production gap — GH #1772 (no per-buyer-agent commercial gate exists in production)
+    # Graduated (#1772): the per-buyer-agent gate reads the agent's onboarding record
+    # (principals.billing_passthrough_only) after the capability gate has accepted the value.
     # Clamped details shape (additionalProperties: false) — the per-agent code MUST NOT act as
     # a commercial-state oracle; only rejected_billing + optional suggested_billing may appear.
     # Only emitted under ESTABLISHED agent identity — unidentified callers get BILLING_NOT_SUPPORTED.
-    # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/billing-gate-dispatch.yaml pointer=phases/per_agent_gate_reject/steps/sync_accounts_passthrough_rejects_agent
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/error-details/billing-not-permitted-for-agent.json
+    # Here every caller of a protected tool is a principal row, which IS the "credential-to-agent
+    # mapping in the seller's onboarding record" the code requires (error-handling.mdx).
+    # SELLER CHOICE (the pin says only "typically operator"): a passthrough-only agent can be
+    # invoiced through the operator alone, so suggested_billing is "operator" when the seller's
+    # supported_billing includes it and is omitted otherwise (terminal-pending-onboarding).
+    # @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L3/error-handling.mdx (Billing and account setup)
+    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/universal/billing-gate-dispatch.yaml pointer=phases/per_agent_gate_reject/steps/sync_accounts_passthrough_rejects_agent
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/error-details/billing-not-permitted-for-agent.json
 
   @T-UC-011-billing-agent-gate-recover @sync @billing @per-agent-gate @recovery @partition
   Scenario: Passthrough-only buyer agent recovers autonomously via suggested_billing
@@ -713,9 +722,10 @@ Feature: BR-UC-011 Manage Accounts
     When the Buyer Agent retries the sync_accounts request with the seller's suggested_billing value and a fresh idempotency_key
     Then the account for brand domain "acme-corp.com" has action "created"
     And the account billing is "operator"
-    # XFAIL-EXPECTED: production gap — GH #1772 (per-agent gate + autonomous recovery unimplemented)
+    # Graduated (#1772): the retry carries the suggested_billing value read off the rejection,
+    # as the storyboard's context_outputs capture it, not a value typed into the step.
     # The recover phase is NOT a replay: different payload requires a fresh idempotency_key
-    # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/billing-gate-dispatch.yaml pointer=phases/per_agent_gate_recover/steps/sync_accounts_recover_with_suggested
+    # @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/universal/billing-gate-dispatch.yaml pointer=phases/per_agent_gate_recover/steps/sync_accounts_recover_with_suggested
 
   @T-UC-011-ext-c-mixed @sync @ext-c @billing @partial-failure @partition
   Scenario: Billing rejection is per-account -- other accounts still succeed
@@ -834,9 +844,28 @@ Feature: BR-UC-011 Manage Accounts
     # authentication.credentials scrubbed.
     # Paused entries (active: false) may skip only the outbound proof challenge; the seller MUST
     # persist and echo applied state on sync_accounts AND list_accounts, credentials write-only
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/notification_configs
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-response.json pointer=/oneOf/0/properties/accounts/items/properties/notification_configs
-    # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/notification-config-lifecycle.yaml pointer=phases/register_and_echo_paused_subscriber
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/notification_configs
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-response.json pointer=/oneOf/0/properties/accounts/items/properties/notification_configs
+    # @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/universal/notification-config-lifecycle.yaml pointer=phases/register_and_echo_paused_subscriber
+
+  @T-UC-011-notif-sandbox-register-paused @sync @notification-configs @sandbox @partition @boundary
+  Scenario: A sandbox account provisioned with a paused subscriber returns its account_id and echoes the subscriber
+    Given the Buyer is authenticated
+    And the seller declares account.sandbox equals true in capabilities
+    When the Buyer Agent sends a sync_accounts request provisioning a sandbox account for brand domain "acme-corp.com" with a paused notification config subscriber "buyer-primary" for url "https://buyer.example/webhooks/adcp/account-primary" and event_types "creative.status_changed, creative.purged"
+    Then the response is compliant with the sync_accounts success spec
+    And the provisioned account should have sandbox equals true
+    And the account should have a seller-assigned account_id
+    And the account notification_configs echo exactly 1 subscriber
+    And the echoed subscriber "buyer-primary" has url "https://buyer.example/webhooks/adcp/account-primary" and active false
+    And the echoed subscriber has event_types "creative.status_changed, creative.purged"
+    # The storyboard's own request shape: provisioning with sandbox true AND a paused
+    # subscriber in one entry. The account_id is what the storyboard's settings-update
+    # follow-up addresses the account by, so it is graded here, not assumed.
+    # A seller that declares account.sandbox accepts the entry; one that does not refuses it
+    # (T-UC-011-sandbox-capability-not-declared), which is a seller posture, not a defect.
+    # @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/universal/notification-config-lifecycle.yaml pointer=phases/register_and_echo_paused_subscriber/steps/sync_accounts_create_paused_notification_config
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/account/properties/sandbox
 
   @T-UC-011-notif-replace-clear @sync @notification-configs @partition @boundary
   Scenario: Re-sending a subscriber_id replaces in place; an empty array clears the set
@@ -853,8 +882,8 @@ Feature: BR-UC-011 Manage Accounts
     # preserves, [] clears, re-sent subscriber_id replaces in place).
     # Declarative replace: full desired array replaces the persisted set; re-sending an existing
     # subscriber_id replaces (never duplicates); [] removes all subscribers; seller MUST NOT merge
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/notification_configs/description
-    # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/notification-config-lifecycle.yaml pointer=phases/replace_pause_and_clear
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/notification_configs/description
+    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/universal/notification-config-lifecycle.yaml pointer=phases/replace_pause_and_clear
 
   @T-UC-011-notif-omit-preserves @sync @notification-configs @partition @boundary
   Scenario: Omitting notification_configs leaves persisted subscribers unchanged
@@ -871,8 +900,8 @@ Feature: BR-UC-011 Manage Accounts
     # "Omit this field to leave existing subscribers unchanged" — omission is not clearance
     # The seed declares a PAUSED subscriber (active false) so the echoed active flag is a
     # declared input, not an undeclared fixture default (F19)
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/notification_configs/description
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/notification-config.json pointer=/properties/active
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/notification_configs/description
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/notification-config.json pointer=/properties/active
 
   @T-UC-011-notif-event-scope-reject @sync @notification-configs @error @post-f1 @post-f2 @partition @boundary
   Scenario: Media-buy-anchored event type on the account surface is rejected per entry
@@ -883,13 +912,24 @@ Feature: BR-UC-011 Manage Accounts
     And the account has status "rejected"
     And the accounts entry carries error code "VALIDATION_ERROR"
     And the per-account error field points at "notification_configs[0].event_types[0]"
-    # Graduated (T2 increment F4b): _check_notification_configs rejects
-    # media-buy-anchored event types on the account surface pre-persist.
-    # Media-buy-anchored event types (scheduled, final, delayed, adjusted, impairment) do not
-    # belong on the account surface; also no account-lifecycle event types exist here (no
-    # account.status_changed — poll list_accounts or use push_notification_config instead)
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/notification_configs/description
-    # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/notification-config-event-scope.yaml pointer=steps/sync_accounts_rejects_scheduled_account_notification
+    # Graduated (#2353): the DTO used to type event_types with the account-surface enum, so
+    # the seller refused the whole request at the boundary and _check_notification_configs
+    # never ran. src/core/schemas/notification.py now declares the field over the wide
+    # enums/notification-type.json — the pinned field asks for exactly that in the sentence
+    # that states its enum ("rather than silently dropping them") — and the gate owns the
+    # refusal, naming notification_configs[i].event_types[j].
+    # Media-buy-anchored event types (scheduled, final, delayed, adjusted, window_update,
+    # impairment) and agent-anchored capabilities.changed do not belong on the account
+    # surface. Account-lifecycle types DO exist here — account.status_changed and
+    # account.change_recorded are both account-anchored members of the pinned enum, and the
+    # request schema states the use: "Durable account lifecycle transitions such as later
+    # payment_required, suspended, closed, or recovery to active use account.status_changed
+    # on this surface". (The note that previously stood here said no account-lifecycle type
+    # existed and named account.status_changed as the example; that was true of 3.1, whose
+    # event_types $ref'd the wide enums/notification-type.json, and false since 3.2 narrowed
+    # the field to an inline account-anchored enum that declares both.)
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/notification_configs/description
+    # @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/universal/notification-config-event-scope.yaml pointer=phases/reject_media_buy_anchored_event_type/steps/sync_accounts_rejects_scheduled_account_notification
 
   @T-UC-011-notif-duplicate-subscriber @sync @notification-configs @error @post-f2 @partition @boundary
   Scenario: Duplicate subscriber_id values within one submitted array are rejected
@@ -904,8 +944,8 @@ Feature: BR-UC-011 Manage Accounts
     # subscriber_id values within one submitted array pre-persist.
     # "Duplicate subscriber_id values within one submitted array are rejected" — no
     # last-write-wins merging, no duplicate subscriptions
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/notification_configs/description
-    # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/notification-config-rejections.yaml pointer=steps/sync_accounts_rejects_duplicate_subscriber_id
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/notification_configs/description
+    # @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/universal/notification-config-rejections.yaml pointer=steps/sync_accounts_rejects_duplicate_subscriber_id
 
   @T-UC-011-notif-activation-proof-fail @sync @notification-configs @error @post-f1 @post-f2 @partition @boundary
   Scenario: Active subscriber whose proof-of-control challenge fails is rejected and prior state kept
@@ -924,7 +964,7 @@ Feature: BR-UC-011 Manage Accounts
     # Before activating a new/changed active subscriber the seller MUST complete the
     # proof-of-control challenge; on failure it rejects the entry (action=failed), leaves the
     # prior notification_configs[] set unchanged, and reports VALIDATION_ERROR at the url field
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/notification_configs/description (Activation proof paragraph)
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/notification_configs/description (Activation proof paragraph)
 
   # ══════════════════════════════════════════════════════════════════════════
   # Entry-field disposition (salesagent-gcze step 12)
@@ -979,10 +1019,10 @@ Feature: BR-UC-011 Manage Accounts
     # Storyboard: UNGRADED (no 3.1.1 storyboard sends entry-root sandbox in settings-update).
     # POST-F1: the account's persisted sandbox flag is unchanged, so it is still findable
     # under its original natural key.
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/sandbox/description
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/oneOf/1
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/account.json pointer=/properties/sandbox
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumMetadata/UNSUPPORTED_FEATURE
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/sandbox/description
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-request.json pointer=/properties/accounts/items/oneOf/1
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/account.json pointer=/properties/sandbox
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumMetadata/UNSUPPORTED_FEATURE
 
   @T-UC-011-billing-entity-roundtrip @sync @list @settings-update @billing-entity @partition @boundary
   Scenario: billing_entity is applied in both modes and echoed with bank details stripped
@@ -1007,10 +1047,10 @@ Feature: BR-UC-011 Manage Accounts
     # DECLARES bank details, so an echo that returns them is a real write-only leak.
     # Storyboard: graded only NEGATIVELY (billing_entity MUST NOT leak through error.details,
     # billing-gate-dispatch.yaml:350); persistence + echo are UNGRADED.
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/billing_entity/description
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-response.json pointer=/oneOf/0/properties/accounts/items/properties/billing_entity
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/account.json pointer=/properties/billing_entity
-    # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/billing-gate-dispatch.yaml pointer=phases/capability_gate (non-leak leg only)
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/billing_entity/description
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-response.json pointer=/oneOf/0/properties/accounts/items/properties/billing_entity
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/account.json pointer=/properties/billing_entity
+    # @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/universal/billing-gate-dispatch.yaml pointer=phases/per_agent_gate_reject/steps/sync_accounts_passthrough_rejects_agent (non-leak leg only)
 
   @T-UC-011-preferred-reporting-protocol-noop @sync @partition @boundary
   Scenario: preferred_reporting_protocol is accepted as a declared no-op, never a rejection
@@ -1035,9 +1075,9 @@ Feature: BR-UC-011 Manage Accounts
     # reporting_delivery_methods are declared unbacked (#1291), which is what discharges the
     # no-quiet-failure rule here.
     # Storyboard: UNGRADED (zero occurrences of preferred_reporting_protocol in dist/compliance/3.1.1).
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/preferred_reporting_protocol/description
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/account.json pointer=/properties/reporting_bucket
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-response.json pointer=/oneOf/0/properties/accounts/items/properties/errors/description
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/preferred_reporting_protocol/description
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/account.json pointer=/properties/reporting_bucket
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-response.json pointer=/oneOf/0/properties/accounts/items/properties/errors/description
 
   @T-UC-011-settings-update-billing-forbidden @sync @list @settings-update @validation @error @post-f1 @post-f2 @partition @boundary
   Scenario: Settings-update entry carrying billing alone is rejected at the operation level
@@ -1058,9 +1098,9 @@ Feature: BR-UC-011 Manage Accounts
     # is silently dropped again. This scenario is what makes the row a behavioral claim.
     # POST-F1: the pre-existing account keeps billing "operator" — an operation-level
     # rejection writes nothing.
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/oneOf/1/allOf/2
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/billing/description
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumMetadata/VALIDATION_ERROR
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-request.json pointer=/properties/accounts/items/oneOf/1/allOf/5
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/billing/description
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumMetadata/VALIDATION_ERROR
 
   @T-UC-011-ext-e-preview @sync @dry-run @post-s10 @partition @boundary
   Scenario: dry_run_true returns preview -- success_dry_run (dry_run = true)
@@ -1087,7 +1127,7 @@ Feature: BR-UC-011 Manage Accounts
     # Locally added (GH: settings-update entries ignored dry_run and persisted the write).
     # The provisioning-trio preview scenario above never reaches the settings-update
     # dispatch, which routes BEFORE any dry_run branch — this grades that branch.
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/dry_run
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-request.json pointer=/properties/dry_run
     # ("When true, preview what would change without applying. Returns what would be
     # created/updated/deactivated.") Conformance storyboard: UNGRADED (dry_run absent
     # from dist/compliance/3.1.1 at v3.1.1).
@@ -1137,7 +1177,7 @@ Feature: BR-UC-011 Manage Accounts
     # so a settings-update entry's target counted as "missing" and was CLOSED by the
     # very request that successfully updated it — the response carried both the update
     # result and an action=updated/status=closed result for the same account).
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/delete_missing
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-request.json pointer=/properties/delete_missing
     # ("accounts previously synced by this agent but not included in this request will
     # be deactivated" — the settings-update target IS included in this request.)
     # Conformance storyboard: UNGRADED (delete_missing absent from dist/compliance/3.1.1 at v3.1.1).
@@ -1263,9 +1303,9 @@ Feature: BR-UC-011 Manage Accounts
   # nothing was dispatched: pydantic raised in the test process and the step graded
   # its own exception (salesagent-prkv.65). Corrected to the request-level rejection
   # production actually returns, and which the spec requires.
-  # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-request.json pointer=/properties/accounts/items/oneOf
   #   pointer=/properties/accounts/items/anyOf
-  # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/INVALID_REQUEST
   #   pointer=/INVALID_REQUEST
 
   @T-UC-011-sync-missing-brand @sync @validation @partition @boundary
@@ -1387,7 +1427,7 @@ Feature: BR-UC-011 Manage Accounts
     And no real ad platform account should have been created
     # BR-RULE-209 INV-6: seller with account.sandbox: true supports sandbox provisioning
     # 3.1.1: the sandbox capability lives at account.sandbox (media_buy.features has no sandbox flag)
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/account/properties/sandbox
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/account/properties/sandbox
     # BR-RULE-209 INV-2: real ad platform calls suppressed for sandbox account
 
   @T-UC-011-sandbox-list-filter @invariant @br-rule-209 @sandbox
@@ -1402,7 +1442,7 @@ Feature: BR-UC-011 Manage Accounts
     # BR-RULE-209 INV-4: sandbox accounts identifiable via sandbox: true
     # Given seeds exactly one sandbox + one production account; the sandbox=true
     # filter returns only the sandbox account (count 1, sandbox id present, prod id absent)
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/list-accounts-request.json pointer=/properties/sandbox
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/list-accounts-request.json pointer=/properties/sandbox
 
   @T-UC-011-sandbox-validation @invariant @br-rule-209 @sandbox
   Scenario: Sandbox account provisioning with invalid billing returns real validation error
@@ -1423,7 +1463,7 @@ Feature: BR-UC-011 Manage Accounts
     # An out-of-enum billing value is a schema violation, hence INVALID_REQUEST
     # ("violates schema constraints") rather than VALIDATION_ERROR ("business rules
     # BEYOND schema validation").
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/INVALID_REQUEST
     #   pointer=/INVALID_REQUEST
     # BR-RULE-209 INV-1: BR-UC-001-discover-available-inventory.feature:1420
     Then the response is compliant with the sync_accounts error spec
@@ -1447,8 +1487,8 @@ Feature: BR-UC-011 Manage Accounts
     # @bva sandbox: sandbox absent in response (production account)
     # @bva sandbox: sandbox omitted on sync_accounts request item
     # BR-RULE-209 INV-4: sandbox accounts identifiable via sandbox: true; production accounts via false or absence
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/sandbox
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-response.json pointer=/oneOf/0/properties/accounts/items/properties/sandbox
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/sandbox
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-response.json pointer=/oneOf/0/properties/accounts/items/properties/sandbox
 
     Examples:
       | request_item | response_field |
@@ -1473,8 +1513,8 @@ Feature: BR-UC-011 Manage Accounts
     # BR-RULE-209 INV-6: only a seller with account.sandbox: true supports sandbox provisioning
     # UNSUPPORTED_FEATURE is the canonical fit (a requested feature the seller does not
     # support); recovery correctable = "check get_adcp_capabilities and remove unsupported fields"
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/account/properties/sandbox
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumMetadata/UNSUPPORTED_FEATURE
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/account/properties/sandbox
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumMetadata/UNSUPPORTED_FEATURE
     # POST-F1: no real or sandbox account created on failure
 
   # DELETED: "ACCOUNT_SETUP_REQUIRED carries v3.1 details shape (setup_url + setup_steps)".
@@ -1571,7 +1611,7 @@ Feature: BR-UC-011 Manage Accounts
     # Given had never run.
     # POST-F3: recovery suggestion (use a fresh idempotency_key or re-read current state)
     # accompanies the conflict; recovery=correctable per enums/error-code.json enumMetadata.
-    # @source repo=adcp ref=v3.1.1 path=docs/building/by-layer/L1/security.mdx pointer=L428-L441
-    # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/idempotency.yaml pointer=/invariants
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/idempotency_key
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumMetadata/IDEMPOTENCY_CONFLICT
+    # @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx pointer=L535-L555
+    # @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/universal/idempotency.yaml pointer=/invariants
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-request.json pointer=/properties/idempotency_key
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumMetadata/IDEMPOTENCY_CONFLICT

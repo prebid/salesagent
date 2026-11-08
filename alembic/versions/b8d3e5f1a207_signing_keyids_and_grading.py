@@ -1,13 +1,13 @@
 """Onboarded request-signing keyids, and the signed-requests test counterparty's record
 
 1. ``principal_signing_keyids`` maps a keyid to the counterparty principal whose
-   ``agent_url`` is its brand.json ``agents[]`` entry (security.mdx @ v3.1.1 L1088-1094).
+   ``agent_url`` is its brand.json ``agents[]`` entry (security.mdx L1323-1329).
    ``keyid`` uses ``collation="C"`` as ``adcp_replay`` does.
 2. ``principals.signed_requests_grading`` holds the signed-requests test kit's relaxations
    on the kit's test counterparty.
 
 Revision ID: b8d3e5f1a207
-Revises: 7f31c0ab94d2
+Revises: f7c2e8a13d64
 Create Date: 2026-10-11 09:00:00.000000
 
 """
@@ -21,7 +21,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "b8d3e5f1a207"
-down_revision: str | Sequence[str] | None = "7f31c0ab94d2"
+down_revision: str | Sequence[str] | None = "f7c2e8a13d64"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
