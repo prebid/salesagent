@@ -164,14 +164,16 @@ class MockAdServer(AdServerAdapter):
         principal,
         creative_engine=None,
         tenant_id=None,
-        order_name_template: str | None = None,
-        tenant_ai_config: SellerAIConfig = None,
+        *,
+        order_name_template: str | None,
+        tenant_ai_config: SellerAIConfig,
     ):
         """Initialize mock adapter with GAM-like objects.
 
         ``order_name_template`` and ``tenant_ai_config`` come off the tenant
         (``TenantContext``) for the order name; ``None`` is the default template and
-        "configured nothing".
+        "configured nothing". Both are required, so a construction that leaves them out
+        is a type error rather than a seller whose template and AI are silently dropped.
         """
         super().__init__(config, principal, creative_engine, tenant_id)
         self._order_name_template = order_name_template

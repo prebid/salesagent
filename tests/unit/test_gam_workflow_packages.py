@@ -111,6 +111,7 @@ def _build_gam_adapter(mock_principal):
             advertiser_id="789",
             trafficker_id="456",
             tenant_id="tenant_123",
+            tenant_ai_config=None,
         )
 
 
@@ -168,6 +169,7 @@ class TestGAMManualApprovalPath:
                 advertiser_id="789",
                 trafficker_id="456",
                 tenant_id="tenant_123",
+                tenant_ai_config=None,
             )
 
             # Mock _requires_manual_approval to return True
@@ -224,6 +226,7 @@ class TestGAMManualApprovalPath:
                 advertiser_id="789",
                 trafficker_id="456",
                 tenant_id="tenant_123",
+                tenant_ai_config=None,
             )
 
             # Mock workflow manager to fail
@@ -277,6 +280,7 @@ class TestGAMActivationWorkflowPath:
                 advertiser_id="789",
                 trafficker_id="456",
                 tenant_id="tenant_123",
+                tenant_ai_config=None,
             )
 
             # Mock the order creation
@@ -355,6 +359,7 @@ class TestGAMSuccessPath:
                 advertiser_id="789",
                 trafficker_id="456",
                 tenant_id="tenant_123",
+                tenant_ai_config=None,
             )
 
             # Mock the order creation

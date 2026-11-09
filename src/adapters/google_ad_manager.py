@@ -121,7 +121,7 @@ class GoogleAdManager(AdServerAdapter):
         tenant_id: str | None = None,
         targeting_config: dict[str, Any] | None = None,
         naming_templates: tuple[str | None, str | None] | None = None,
-        tenant_ai_config: SellerAIConfig = None,
+        tenant_ai_config: SellerAIConfig,
     ):
         """Initialize Google Ad Manager adapter with modular managers.
 
@@ -138,7 +138,8 @@ class GoogleAdManager(AdServerAdapter):
             naming_templates: Pre-loaded (order_template, line_item_template) tuple.
                 If None, uses (None, None) defaults.
             tenant_ai_config: What AI the seller configured (``TenantContext.ai_config``),
-                for the order name's ``{auto_name}``.
+                for the order name's ``{auto_name}``. Required: ``None`` means the seller
+                configured nothing, so it is stated, never defaulted.
         """
         super().__init__(config, principal, None, tenant_id)
         assert self.tenant_id is not None  # Guaranteed by base class validation

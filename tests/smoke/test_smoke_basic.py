@@ -128,7 +128,9 @@ class TestCriticalPaths:
 
         # Should be able to create adapter
         config = {"enabled": True}
-        adapter = MockAdServer(config=config, principal=principal, tenant_id="test_tenant")
+        adapter = MockAdServer(
+            config=config, principal=principal, tenant_id="test_tenant", order_name_template=None, tenant_ai_config=None
+        )
         assert adapter is not None
 
     @pytest.mark.smoke

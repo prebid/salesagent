@@ -132,8 +132,9 @@ class GAMWorkflowManager(BaseWorkflowManager):
         start_time: datetime,
         end_time: datetime,
         media_buy_id: str,
-        order_name_template: str | None = None,
-        tenant_ai_config: SellerAIConfig = None,
+        *,
+        order_name_template: str | None,
+        tenant_ai_config: SellerAIConfig,
     ) -> str | None:
         """Creates a workflow step for manual creation of GAM order (manual mode).
 

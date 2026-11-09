@@ -409,7 +409,7 @@ def get_adapter(identity: ResolvedIdentity) -> MockAdServerAdapter | GoogleAdMan
         # the non-sandbox branch's answer for the same absent row (salesagent-6d07f).
         if config_row is None:
             raise AdCPConfigurationError(internal_detail=ValueError(f"tenant {tenant_id} has no adapter_config row"))
-        return MockAdServerAdapter(_simulating_adapter_config(config_row), principal, tenant_id=tenant_id)
+        return _mock_adapter(_simulating_adapter_config(config_row), principal, tenant)
 
     adapter_config: dict[str, object] = {"enabled": True}
     if config_row:

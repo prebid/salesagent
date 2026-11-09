@@ -10,7 +10,9 @@ name.
 Three sites build an order name, and each is graded here through its own code path, every
 one of them reached through ``get_adapter``: the mock adapter, the GAM adapter's automatic
 mode (the name sent to GAM's ``createOrders``), and the GAM adapter's manual-approval mode
-(the name written to the workflow step a human trafficker reads). The model is asked only
+(the name written to the workflow step a human trafficker reads). A request naming a
+SANDBOX account takes its own branch of ``get_adapter`` to the mock adapter, and is graded
+separately. The model is asked only
 when the template names ``{auto_name}``; the default template does not, and asks nothing.
 
 The platform AI credential is removed, so the seller's own configuration is the only one
@@ -31,6 +33,7 @@ import pytest
 from src.adapters.base import AdapterCreateRequest
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.schemas import FormatId, MediaPackage
+from src.core.schemas.account import Account
 from src.core.tenant_context import TenantContext
 from tests.factories import PrincipalFactory
 from tests.helpers.gam_client import stub_gam_client_manager
@@ -64,13 +67,23 @@ def _seller_tenant(session, ai_config, gemini_api_key, order_name_template="{aut
     return tenant
 
 
-def _adapter_for(tenant, principal):
-    """The adapter production builds for this caller: ``get_adapter`` on the loaded identity."""
+#: The account a sandbox request names; ``get_adapter`` answers it with the simulating adapter.
+_SANDBOX_ACCOUNT = Account(account_id="acc_sandbox_naming", name="Sandbox Account", status="active", sandbox=True)
+
+
+def _adapter_for(tenant, principal, account: Account | None = None):
+    """The adapter production builds for this caller: ``get_adapter`` on the loaded identity.
+
+    ``account`` is the account the request named, carried on the identity as the resolver
+    builds it.
+    """
     identity = PrincipalFactory.make_identity(
         tenant=TenantContext.from_orm_model(tenant),
         principal_id=principal.principal_id,
         platform_mappings=principal.platform_mappings,
     )
+    if account is not None:
+        identity = PrincipalFactory.make_account_identity(identity, account)
     return get_adapter(identity)
 
 
@@ -97,10 +110,11 @@ def _request() -> AdapterCreateRequest:
 
 
 @contextmanager
-def _sellers_ai_only(failure: BaseException | None = None) -> Iterator[AsyncMock]:
-    """No platform credential, and the vendor model call answering ``_AI_NAME`` (or raising ``failure``)."""
+def _model_call(failure: BaseException | None = None, *, platform_key: str | None = None) -> Iterator[AsyncMock]:
+    """The platform credential ``platform_key`` (none by default), and the vendor model call
+    answering ``_AI_NAME`` (or raising ``failure``)."""
     with (
-        PlatformAICredential(),
+        PlatformAICredential(platform_key),
         patch(
             "src.services.ai.agents.naming_agent.generate_name_async",
             new=AsyncMock(return_value=_AI_NAME, side_effect=failure),
@@ -109,10 +123,12 @@ def _sellers_ai_only(failure: BaseException | None = None) -> Iterator[AsyncMock
         yield model_call
 
 
-def _create_mock_buy(tenant, failure: BaseException | None = None):
+def _create_mock_buy(
+    tenant, failure: BaseException | None = None, *, account: Account | None = None, platform_key: str | None = None
+):
     principal = PrincipalFactory(tenant=tenant)
-    adapter = _adapter_for(tenant, principal)
-    with _sellers_ai_only(failure) as model_call:
+    adapter = _adapter_for(tenant, principal, account)
+    with _model_call(failure, platform_key=platform_key) as model_call:
         result = adapter._create_media_buy_immediate(_request(), [_package()], _START, _END)
     return adapter._media_buys[result.media_buy_id]["name"], model_call
 
@@ -165,6 +181,64 @@ def test_a_defect_in_the_naming_path_fails_the_buy(bound_factory_session):
         _create_mock_buy(tenant, ValueError("naming defect"))
 
 
+def _sandbox_seller(session, ai_config, gemini_api_key, order_name_template="{auto_name}", *, manual_approval=False):
+    """A seller tenant whose ``AdapterConfig`` row the sandbox branch reads, which refuses a tenant without one."""
+    from tests.factories import AdapterConfigFactory
+
+    tenant = _seller_tenant(session, ai_config, gemini_api_key, order_name_template)
+    AdapterConfigFactory(tenant=tenant, adapter_type="mock", mock_manual_approval_required=manual_approval)
+    session.commit()
+    return tenant
+
+
+@_SELLER_AI
+def test_a_sandbox_account_names_the_order_with_the_sellers_own_ai(bound_factory_session, ai_config, gemini_api_key):
+    """A request naming a sandbox account is answered by the mock adapter with the seller's AI."""
+    tenant = _sandbox_seller(bound_factory_session, ai_config, gemini_api_key)
+
+    name, model_call = _create_mock_buy(tenant, account=_SANDBOX_ACCOUNT)
+
+    assert model_call.await_count == 1, "order naming never asked the seller's AI"
+    assert name == _AI_NAME
+
+
+def test_a_sandbox_account_keeps_the_sellers_order_name_template(bound_factory_session):
+    """The seller's own ``order_name_template`` names a sandbox order, as it did on ``main``."""
+    tenant = _sandbox_seller(bound_factory_session, None, None, order_name_template="Sandbox {brand_name}")
+
+    name, _model = _create_mock_buy(tenant, account=_SANDBOX_ACCOUNT)
+
+    assert name == "Sandbox naming.example.com"
+
+
+def test_a_sandbox_account_never_takes_the_platform_key_for_unusable_seller_ai(bound_factory_session):
+    """A seller whose AI configuration cannot run has AI off, and the platform key does not stand in.
+
+    The row names a provider with no key, so ``TenantAIConfig.from_tenant`` answers
+    ``UNUSABLE_AI_CONFIG``. The platform credential is present, so an adapter built without
+    the seller's configuration would read "configured nothing" and ask the platform's model.
+    """
+    tenant = _sandbox_seller(bound_factory_session, {"provider": "anthropic", "model": "claude-x"}, None)
+
+    name, model_call = _create_mock_buy(tenant, account=_SANDBOX_ACCOUNT, platform_key="platform-gemini-key")
+
+    assert model_call.await_count == 0, "the platform's model was asked for a seller whose AI is off"
+    assert name == "naming.example.com"
+
+
+def test_a_sandbox_account_keeps_the_tenants_approval_posture(bound_factory_session):
+    """The sandbox adapter still takes its configuration from the tenant's ``AdapterConfig`` row.
+
+    Naming is not the only thing the sandbox branch hands the mock adapter: a seller that
+    requires manual approval keeps requiring it for a sandbox request.
+    """
+    tenant = _sandbox_seller(bound_factory_session, None, None, manual_approval=True)
+
+    adapter = _adapter_for(tenant, PrincipalFactory(tenant=tenant), _SANDBOX_ACCOUNT)
+
+    assert adapter.manual_approval_required is True
+
+
 def _create_gam_buy(session, ai_config, gemini_api_key, *, manual_approval: bool):
     """Drive ``GoogleAdManager.create_media_buy`` for a seller tenant, against a stub GAM client.
 
@@ -208,7 +282,7 @@ def _create_gam_buy(session, ai_config, gemini_api_key, *, manual_approval: bool
     with patch("src.adapters.google_ad_manager.GAMClientManager", return_value=gam_client):
         adapter = _adapter_for(tenant, principal)
 
-    with _sellers_ai_only() as model_call:
+    with _model_call() as model_call:
         result = adapter.create_media_buy(
             _request(),
             [package],
