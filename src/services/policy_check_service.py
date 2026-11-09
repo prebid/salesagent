@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
-from adcp.types.generated_poc.brand import Brand  # TODO: no stable alias in adcp.types
+from adcp.types.domains.brand_discovery import Brand  # TODO: no stable alias in adcp.types
 from pydantic import BaseModel, Field
 
 from src.core.schemas import Product
@@ -79,7 +79,7 @@ class PolicyCheckService:
         brand_info = None
         if brand_manifest:
             if isinstance(brand_manifest, Brand):
-                # Extract name and tagline from adcp 3.12 Brand model
+                # Extract name and tagline from the pinned SDK Brand model
                 # names is list[LocalizedName] where LocalizedName is RootModel[dict[str, str]]
                 brand_name = None
                 if brand_manifest.names:

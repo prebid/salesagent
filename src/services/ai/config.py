@@ -196,6 +196,26 @@ UNUSABLE_AI_CONFIG: Final = _UnusableAIConfig.UNUSABLE
 SellerAIConfig = TenantAIConfig | Literal[_UnusableAIConfig.UNUSABLE] | None
 
 
+def tenant_google_api_key(seller_ai: SellerAIConfig) -> str | None:
+    """The tenant's own Google (Gemini) API key, or ``None``.
+
+    *seller_ai* is what `TenantAIConfig.from_tenant` answered (``TenantContext.ai_config``),
+    so the generative creative build reads the seller's key through the same rule as every
+    other AI consumer. The key is a Google key only when the provider it is configured with
+    canonicalizes to Google; a configuration that names no provider runs on the platform
+    provider, as `AIServiceFactory.resolve` resolves it.
+
+    Only the tenant's own configuration is read. The platform default key
+    (``GEMINI_API_KEY``) is not consulted here.
+    """
+    if not isinstance(seller_ai, TenantAIConfig):
+        return None
+    provider = seller_ai.provider or get_settings().integrations.pydantic_ai_provider
+    if canonicalize_google_provider(provider) != CANONICAL_GOOGLE_PROVIDER:
+        return None
+    return seller_ai.api_key or None
+
+
 def get_platform_defaults() -> dict:
     """Get platform-level AI configuration from the startup settings.
 

@@ -536,7 +536,7 @@ def sample_products(integration_db, sample_tenant):
     """Create sample products that comply with AdCP protocol."""
     from src.core.database.database_session import get_db_session
     from src.core.database.models import Product
-    from tests.factories import PricingOptionFactory
+    from tests.factories import PricingOptionFactory, StoredPlacementFactory
 
     with get_db_session() as session:
         products = [
@@ -561,30 +561,30 @@ def sample_products(integration_db, sample_tenant):
                 properties=None,
                 # Placements for placement-targeting validation (adcp#208)
                 placements=[
-                    {
-                        "placement_id": "homepage_atf",
-                        "name": "Homepage Above the Fold",
-                        "description": "Premium above-the-fold placement on homepage",
-                        "format_ids": [
+                    StoredPlacementFactory(
+                        placement_id="homepage_atf",
+                        name="Homepage Above the Fold",
+                        description="Premium above-the-fold placement on homepage",
+                        format_ids=[
                             {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
                         ],
-                    },
-                    {
-                        "placement_id": "sidebar",
-                        "name": "Sidebar",
-                        "description": "Standard sidebar placement",
-                        "format_ids": [
+                    ),
+                    StoredPlacementFactory(
+                        placement_id="sidebar",
+                        name="Sidebar",
+                        description="Standard sidebar placement",
+                        format_ids=[
                             {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
                         ],
-                    },
-                    {
-                        "placement_id": "article_inline",
-                        "name": "Article Inline",
-                        "description": "Inline placement within article content",
-                        "format_ids": [
+                    ),
+                    StoredPlacementFactory(
+                        placement_id="article_inline",
+                        name="Article Inline",
+                        description="Inline placement within article content",
+                        format_ids=[
                             {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_728x90"},
                         ],
-                    },
+                    ),
                 ],
             ),
             Product(

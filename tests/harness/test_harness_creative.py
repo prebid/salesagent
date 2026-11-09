@@ -20,7 +20,7 @@ class TestCreativeSyncEnvContract:
         assert CreativeSyncEnv is not None
 
     def test_has_correct_external_patches(self):
-        """CreativeSyncEnv patches registry, run_async, notifications, audit."""
+        """CreativeSyncEnv patches the registry instance, notifications, audit."""
         from tests.harness.creative_sync import CreativeSyncEnv
 
         # ai_review_executor joined the set with #1721: the ai-powered branch hands a
@@ -31,9 +31,14 @@ class TestCreativeSyncEnvContract:
         # slack_notifier: the Slack sender the real _send_creative_notifications reaches.
         # Patching the sender (not the function) is what lets the function's own
         # "require-human only, webhook only" guard be graded.
+        #
+        # "run_async" LEFT the set with salesagent-6xtxb. It patched the sync bridge
+        # _sync.py calls the registry through, with ``side_effect = lambda coro: []``, so
+        # the in-process catalogue was EMPTY while the e2e server fetched 71 formats from
+        # the committed capture. Its only call site is the list_all_formats fetch, so
+        # dropping it restored exactly that fetch and nothing else.
         expected_keys = {
             "registry",
-            "run_async",
             "send_notifications",
             "slack_notifier",
             "audit_log",
@@ -57,17 +62,14 @@ class TestCreativeSyncEnvContract:
 
         with _UnitMode() as env:
             assert "registry" in env.mock
-            assert "run_async" in env.mock
             assert "ai_review_executor" in env.mock
             assert "send_notifications" in env.mock
             assert "slack_notifier" in env.mock
             assert "audit_log" in env.mock
-            assert len(env.mock) == 6
-            # The Gemini key is a settings field, pinned on the settings object for the
-            # env's lifetime rather than mocked through a config accessor.
-            from src.core.config import get_settings
-
-            assert get_settings().integrations.gemini_api_key is None
+            assert len(env.mock) == 5
+            # The generative build reads the TENANT's AI configuration, and the env's
+            # tenant carries none until a test sets one (set_gemini_api_key).
+            assert env.identity.tenant.ai_config is None
 
     def test_identity_defaults(self):
         """Identity has sane defaults."""
@@ -78,15 +80,21 @@ class TestCreativeSyncEnvContract:
         assert env.identity.tenant_id == "test_tenant"
 
     def test_configure_mocks_sets_registry_defaults(self):
-        """_configure_mocks sets up happy-path registry return values."""
+        """_configure_mocks installs production's testing-mode registry, not a stand-in."""
+        from src.core.creative_agent_registry import ReferenceFormatsRegistry
         from tests.harness.creative_sync import CreativeSyncEnv
 
         class _UnitMode(CreativeSyncEnv):
             use_real_db = False
 
         with _UnitMode() as env:
-            # Registry mock should have a return value configured
-            assert env.mock["registry"].return_value is not None
+            registry = env.mock["registry"].return_value
+            assert isinstance(registry, ReferenceFormatsRegistry), (
+                "the env must install production's own ReferenceFormatsRegistry: a stand-in "
+                "serves a catalogue the e2e server does not have, and answers any attribute "
+                "truthily (canonical_kind_for read 'spec.canonical.kind' off a MagicMock and "
+                "put the repr through production code)"
+            )
 
     def test_has_rest_endpoint(self):
         """CreativeSyncEnv defines REST_ENDPOINT for REST dispatch."""

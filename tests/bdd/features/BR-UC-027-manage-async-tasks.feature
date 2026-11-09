@@ -71,7 +71,7 @@ Feature: BR-UC-027 Manage Async Tasks
     Then the response contains only tasks with domain "media-buy" and status "submitted" or "working"
     And the query_summary shows filters_applied including "protocol" and "statuses"
     # POST-S1: Combined filter dimensions with AND, OR within
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/core/tasks-list-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/tasks-list-request.json
 
   @T-UC-027-main-date-range @main-flow @list-tasks @happy-path @post-s1
   Scenario: List tasks -- date range filter returns tasks within time window
@@ -129,7 +129,7 @@ Feature: BR-UC-027 Manage Async Tasks
     And the query_summary shows total_matching as 0 and returned as 0
     And the query_summary domain_breakdown and status_breakdown are empty
     # POST-S1: Empty result set handled gracefully
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/core/tasks-list-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/tasks-list-request.json
 
   @T-UC-027-main-include-history @main-flow @list-tasks @happy-path @post-s1
   Scenario: List tasks -- include_history flag includes conversation history
@@ -147,7 +147,7 @@ Feature: BR-UC-027 Manage Async Tasks
     And the request context is echoed in the response
     # POST-S2: Buyer knows status, type, AdCP protocol, timestamps
     # POST-S4: Context echoed
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/core/tasks-list-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/tasks-list-request.json
 
   @T-UC-027-ext-a-progress @extension @ext-a @get-task @happy-path @post-s2
   Scenario: Get task details -- in-progress task includes progress information
@@ -243,7 +243,7 @@ Feature: BR-UC-027 Manage Async Tasks
     # POST-F2: Buyer knows REFERENCE_NOT_FOUND
     # POST-F3: Context echoed
     # POST-F4: Error references provided task_id
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/core/tasks-list-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/tasks-list-request.json
 
   @T-UC-027-ext-c-complete @extension @ext-c @error @post-f1 @post-f2 @post-f4
   Scenario: REFERENCE_NOT_FOUND -- complete_task with nonexistent task_id
@@ -256,7 +256,7 @@ Feature: BR-UC-027 Manage Async Tasks
     # POST-F1: System state unchanged, no task modified
     # POST-F2: Buyer knows REFERENCE_NOT_FOUND
     # POST-F4: Error references task_id
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/core/tasks-list-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/tasks-list-request.json
 
   @T-UC-027-ext-c-other-tenant @extension @ext-c @error @post-f1 @post-f2 @post-f4
   Scenario: REFERENCE_NOT_FOUND -- task exists but belongs to different tenant
@@ -283,7 +283,7 @@ Feature: BR-UC-027 Manage Async Tasks
     # POST-F1: System state unchanged
     # POST-F2: Buyer knows task is already terminal
     # POST-F3: Context echoed
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/core/tasks-list-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/tasks-list-request.json
 
   @T-UC-027-ext-d-failed @extension @ext-d @error @post-f1 @post-f2
   Scenario: TASK_NOT_COMPLETABLE -- task already failed
@@ -308,7 +308,7 @@ Feature: BR-UC-027 Manage Async Tasks
     # POST-F1: System state unchanged (validation before task lookup)
     # POST-F2: Buyer knows the invalid status value
     # POST-F3: Context echoed
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/core/tasks-list-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/tasks-list-request.json
 
   @T-UC-027-ext-e-canceled @extension @ext-e @error @post-f1 @post-f2
   Scenario: COMPLETION_STATUS_INVALID -- terminal but disallowed status
@@ -320,7 +320,7 @@ Feature: BR-UC-027 Manage Async Tasks
     And the suggestion should contain "'completed' or 'failed'"
     # POST-F1: Canceled not allowed via complete_task
     # POST-F2: Buyer knows valid options
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/core/tasks-list-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/tasks-list-request.json
 
   @T-UC-027-ext-e-unknown @extension @ext-e @error @post-f1 @post-f2
   Scenario: COMPLETION_STATUS_INVALID -- arbitrary unrecognized status
@@ -344,7 +344,7 @@ Feature: BR-UC-027 Manage Async Tasks
     # POST-F1: System state unchanged
     # POST-F2: Buyer knows auth is required
     # POST-F3: Guidance on required headers
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/core/tasks-list-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/tasks-list-request.json
 
   @T-UC-027-ext-f-get @extension @ext-f @error @post-f1 @post-f2 @post-f3
   Scenario: AUTH_REQUIRED -- get_task without authentication
@@ -357,7 +357,7 @@ Feature: BR-UC-027 Manage Async Tasks
     # POST-F1: System state unchanged
     # POST-F2: Auth required for task queries
     # POST-F3: Recovery guidance
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/core/tasks-list-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/tasks-list-request.json
 
   @T-UC-027-ext-f-complete @extension @ext-f @error @post-f1 @post-f2 @post-f3
   Scenario: AUTH_REQUIRED -- complete_task without authentication
@@ -596,7 +596,7 @@ Feature: BR-UC-027 Manage Async Tasks
     And the error should include "suggestion" field
     And the suggestion should contain "pending, in_progress, or requires_approval"
     # INV-2: Terminal state rejects completion
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/core/tasks-list-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/tasks-list-request.json
 
   @T-UC-027-inv-203-3-violated @invariant @BR-RULE-203 @error
   Scenario: BR-RULE-203 INV-3 violated -- nonexistent task_id rejected
@@ -607,7 +607,7 @@ Feature: BR-UC-027 Manage Async Tasks
     And the error should include "suggestion" field
     And the suggestion should contain "Verify the task_id"
     # INV-3: Task not found within tenant scope
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/core/tasks-list-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/tasks-list-request.json
 
   @T-UC-027-inv-203-4-holds @invariant @BR-RULE-203
   Scenario: BR-RULE-203 INV-4 holds -- completed_at set on successful completion
@@ -656,7 +656,7 @@ Feature: BR-UC-027 Manage Async Tasks
     And the error should include "suggestion" field
     And the suggestion should contain "at least one value"
     # INV-2: minItems=1 enforced
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/core/tasks-list-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/tasks-list-request.json
 
   @T-UC-027-inv-205-3-violated @invariant @BR-RULE-205 @error
   Scenario: BR-RULE-205 INV-3 violated -- task_ids exceeds 100 items
@@ -667,7 +667,7 @@ Feature: BR-UC-027 Manage Async Tasks
     And the error should include "suggestion" field
     And the suggestion should contain "Reduce the number"
     # INV-3: maxItems=100 enforced
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/core/tasks-list-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/tasks-list-request.json
 
   @T-UC-027-inv-205-4-holds @invariant @BR-RULE-205
   Scenario: BR-RULE-205 INV-4 holds -- multiple filters combine with AND semantics
@@ -676,7 +676,7 @@ Feature: BR-UC-027 Manage Async Tasks
     Then the query_summary shows total_matching as 3
     And all returned tasks have domain "media-buy" and status "submitted"
     # INV-4: AND across dimensions, OR within multi-value
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/core/tasks-list-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/tasks-list-request.json
 
   @T-UC-027-inv-205-5-violated @invariant @BR-RULE-205 @error
   Scenario: BR-RULE-205 INV-5 violated -- invalid date format rejected
@@ -712,7 +712,7 @@ Feature: BR-UC-027 Manage Async Tasks
     And the error should include "suggestion" field
     And the suggestion should contain "supported sort fields"
     # INV-3: Invalid sort field
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/core/tasks-list-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/tasks-list-request.json
 
   @T-UC-027-inv-206-4-violated @invariant @BR-RULE-206 @error
   Scenario: BR-RULE-206 INV-4 violated -- invalid sort direction rejected
@@ -745,7 +745,7 @@ Feature: BR-UC-027 Manage Async Tasks
     And the error should include "suggestion" field
     And the suggestion should contain "Verify the task_id"
     # INV-2: Failed completion has no audit entry
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/core/tasks-list-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/tasks-list-request.json
 
   @T-UC-027-inv-207-3-holds @invariant @BR-RULE-207
   Scenario: BR-RULE-207 INV-3 holds -- known principal recorded in audit
@@ -769,7 +769,7 @@ Feature: BR-UC-027 Manage Async Tasks
     When the Buyer Agent invokes list_tasks with filter protocol "media-buy"
     Then the response includes query_summary with total_matching, returned, domain_breakdown, status_breakdown, filters_applied, and sort_applied
     # INV-1: All summary fields present
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/core/tasks-list-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/tasks-list-request.json
 
   @T-UC-027-inv-208-2-holds @invariant @BR-RULE-208
   Scenario: BR-RULE-208 INV-2 holds -- empty result set shows zero summary
@@ -778,7 +778,7 @@ Feature: BR-UC-027 Manage Async Tasks
     Then the query_summary shows total_matching as 0 and returned as 0
     And the domain_breakdown and status_breakdown are empty objects
     # INV-2: Zero counts with empty breakdowns
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/core/tasks-list-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/tasks-list-request.json
 
   @T-UC-027-inv-208-3-holds @invariant @BR-RULE-208
   Scenario: BR-RULE-208 INV-3 holds -- returned count matches tasks array length
@@ -802,7 +802,7 @@ Feature: BR-UC-027 Manage Async Tasks
     Then the response contains only tasks belonging to adcp-protocol "brand"
     And the query_summary filters_applied includes the protocol filter
     # v3.1: filters.protocol replaces legacy filters.domain at the top-level taxonomy
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/core/tasks-list-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/tasks-list-request.json
 
   @T-UC-027-v31-list-filter-protocols-multi @v3-1 @main-flow @list-tasks @happy-path @post-s1
   Scenario: List tasks -- v3.1 protocols multi-value filter accepts adcp-protocol array
@@ -811,7 +811,7 @@ Feature: BR-UC-027 Manage Async Tasks
     Then the response contains only tasks belonging to adcp-protocol values in the requested set
     And the query_summary filters_applied includes the protocols filter
     # v3.1: filters.protocols array (minItems 1) of adcp-protocol values
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/core/tasks-list-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/tasks-list-request.json
 
   @T-UC-027-v31-list-sort-protocol @v3-1 @main-flow @list-tasks @happy-path @post-s1
   Scenario: List tasks -- v3.1 sort.field protocol orders results by adcp-protocol
@@ -820,7 +820,7 @@ Feature: BR-UC-027 Manage Async Tasks
     Then the returned tasks are ordered by their adcp-protocol value ascending
     And the query_summary sort_applied reports field "protocol" and direction "asc"
     # v3.1: sort.field enum extended with protocol (replacing legacy domain)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/core/tasks-list-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/tasks-list-request.json
 
   @T-UC-027-v31-get-include-result-completed @v3-1 @extension-a @get-task @happy-path @post-s2
   Scenario: Get task -- v3.1 include_result true on completed task returns result payload
@@ -829,7 +829,7 @@ Feature: BR-UC-027 Manage Async Tasks
     Then the response status is "completed"
     And the response includes the result field with an async-response-data payload
     # v3.1: include_result=true + status=completed MUST surface result per tasks-get-request schema
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/core/tasks-list-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/tasks-list-request.json
 
   @T-UC-027-v31-get-include-result-default-omits @v3-1 @extension-a @get-task @happy-path @post-s2
   Scenario: Get task -- v3.1 default include_result false omits result on completed task
@@ -838,7 +838,7 @@ Feature: BR-UC-027 Manage Async Tasks
     Then the response status is "completed"
     And the response does not include the result field
     # v3.1: default include_result=false keeps polling lightweight
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/core/tasks-list-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/tasks-list-request.json
 
   @T-UC-027-v31-get-response-protocol-required @v3-1 @extension-a @get-task @happy-path @post-s2
   Scenario: Get task -- v3.1 response includes REQUIRED protocol field referencing adcp-protocol
@@ -847,7 +847,7 @@ Feature: BR-UC-027 Manage Async Tasks
     Then the response includes the protocol field with a value from the adcp-protocol enum
     And the protocol field is REQUIRED on the tasks-get-response
     # v3.1: tasks-get-response.protocol REQUIRED ($ref /schemas/enums/adcp-protocol.json)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/core/tasks-list-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/tasks-list-request.json
 
   @T-UC-027-v31-get-include-result-failed-omits @v3-1 @extension-a @get-task @happy-path @post-s2
   Scenario: Get task -- v3.1 failed status carries error and omits result regardless of include_result
@@ -857,7 +857,7 @@ Feature: BR-UC-027 Manage Async Tasks
     And the response includes error section with code, message, and details
     And the response does not include the result field
     # BR-RULE-297 INV-4: failed → error carried, result omitted (mutually exclusive output channels)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/core/tasks-list-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/tasks-list-request.json
 
   @T-UC-027-v31-get-include-result-non-terminal-omits @v3-1 @extension-a @get-task @happy-path @post-s2
   Scenario Outline: Get task -- v3.1 include_result true on non-terminal status omits result
@@ -866,7 +866,7 @@ Feature: BR-UC-027 Manage Async Tasks
     Then the response status is "<status>"
     And the response does not include the result field
     # BR-RULE-297 INV-5: non-terminal statuses have no completion payload yet (OQ-7)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/core/tasks-list-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/tasks-list-request.json
 
     Examples:
       | status         |
@@ -882,7 +882,7 @@ Feature: BR-UC-027 Manage Async Tasks
     Then schema validation rejects the response
     And the rejection identifies protocol as outside the adcp-protocol enum
     # BR-RULE-298 INV-2: PROTOCOL_VALUE_INVALID server invariant
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/core/tasks-list-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/tasks-list-request.json
 
   @T-UC-027-inv-298-3-violated @v3-1 @extension-a @get-task @sad-path
   Scenario: Get task -- v3.1 response missing required protocol field is rejected by schema validation
@@ -891,7 +891,7 @@ Feature: BR-UC-027 Manage Async Tasks
     Then schema validation rejects the response
     And the rejection identifies protocol as a required-field violation
     # BR-RULE-298 INV-3: PROTOCOL_FIELD_MISSING server invariant
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/core/tasks-list-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/tasks-list-request.json
 
   @T-UC-027-inv-298-4-violated @v3-1 @extension-a @get-task @sad-path
   Scenario: Get task -- v3.1 response with legacy domain field instead of protocol is treated as protocol absent
@@ -900,7 +900,7 @@ Feature: BR-UC-027 Manage Async Tasks
     Then schema validation rejects the response
     And the rejection identifies protocol as missing (legacy domain is not declared on v3.1 get-response)
     # BR-RULE-298 INV-4: legacy domain treated as protocol absent
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/core/tasks-list-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/tasks-list-request.json
 
   @T-UC-027-inv-298-5-holds @v3-1 @extension-a @get-task @list-tasks @happy-path
   Scenario: List vs Get -- v3.1 same task surfaces narrower list domain and broader get protocol per surface asymmetry
@@ -910,7 +910,7 @@ Feature: BR-UC-027 Manage Async Tasks
     Then the list response tasks[] entry domain is one of "media-buy" or "signals" or absent per the narrowed enum
     And the get response protocol is "governance" from the full adcp-protocol enum
     # BR-RULE-298 INV-5 / OQ-6: list-vs-get surface asymmetry
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/core/tasks-list-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/tasks-list-request.json
 
   @T-UC-027-inv-208-5-additional-protocols @v3-1 @main-flow @list-tasks @happy-path @post-s1
   Scenario: List tasks -- v3.1 domain_breakdown surfaces additional protocol counts via additionalProperties
@@ -919,7 +919,7 @@ Feature: BR-UC-027 Manage Async Tasks
     Then the query_summary domain_breakdown declares the narrow keys media-buy and signals
     And the query_summary domain_breakdown also includes count for protocol "creative" via additionalProperties
     # BR-RULE-208 INV-5: additionalProperties=true allows non-{media-buy,signals} counts (OQ-8)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/core/tasks-list-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/tasks-list-request.json
 
   @T-UC-027-inv-205-6-holds @v3-1 @main-flow @list-tasks @happy-path @post-s1
   Scenario: List tasks -- v3.1 protocol filter values must be members of the adcp-protocol enum
@@ -928,14 +928,14 @@ Feature: BR-UC-027 Manage Async Tasks
     Then the response contains only tasks belonging to adcp-protocol "signals"
     And the query_summary filters_applied includes the protocol filter
     # BR-RULE-205 INV-6: protocol/protocols filter members must be from adcp-protocol.json
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/core/tasks-list-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/tasks-list-request.json
 
   @T-UC-027-partition-get-response-protocol @v3-1 @partition @get_response_protocol
   Scenario Outline: tasks-get-response protocol identity -- <partition>
     Given a task with the configured protocol exists in the tenant
     When the Buyer Agent invokes get_task with task_id
     Then <outcome>
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/core/tasks-list-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/tasks-list-request.json
 
     Examples: Valid partitions
       | partition              | outcome                                                                                                |
@@ -981,7 +981,7 @@ Feature: BR-UC-027 Manage Async Tasks
     # POST-F1: no tenant query executed
     # POST-F2: canonical error code identifies offending filter field
     # POST-F3: application context echoed on validation failure
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/core/tasks-list-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/tasks-list-request.json
 
   @T-UC-027-ext-g-filter-array-empty @extension @ext-g @error @post-f1 @post-f2 @post-f3
   Scenario: Extension G EC-008 -- INVALID_REQUEST rejects multi-value array with zero items
@@ -996,7 +996,7 @@ Feature: BR-UC-027 Manage Async Tasks
     # POST-F1: no tenant query executed
     # POST-F2: canonical error code identifies offending filter array
     # POST-F3: application context echoed on validation failure
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/core/tasks-list-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/tasks-list-request.json
 
   @T-UC-027-ext-g-filter-date-invalid-format @extension @ext-g @error @post-f1 @post-f2 @post-f3
   Scenario: Extension G EC-009 -- FILTER_DATE_INVALID_FORMAT rejects non-ISO 8601 date filter
@@ -1011,7 +1011,7 @@ Feature: BR-UC-027 Manage Async Tasks
     # POST-F1: no tenant query executed
     # POST-F2: canonical error code identifies offending date filter
     # POST-F3: application context echoed on validation failure
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/core/tasks-list-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/tasks-list-request.json
 
   @T-UC-027-ext-g-filter-task-ids-too-many @extension @ext-g @error @post-f1 @post-f2 @post-f3
   Scenario: Extension G EC-010 -- FILTER_TASK_IDS_TOO_MANY rejects task_ids array exceeding 100
@@ -1026,7 +1026,7 @@ Feature: BR-UC-027 Manage Async Tasks
     # POST-F1: no tenant query executed
     # POST-F2: canonical error code identifies offending task_ids array
     # POST-F3: application context echoed on validation failure
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/core/tasks-list-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/tasks-list-request.json
 
   @T-UC-027-ext-g-sort-field-invalid @extension @ext-g @error @post-f1 @post-f2 @post-f3
   Scenario: Extension G EC-011 -- SORT_FIELD_INVALID rejects sort.field outside v3.1 enum
@@ -1041,7 +1041,7 @@ Feature: BR-UC-027 Manage Async Tasks
     # POST-F1: no tenant query executed
     # POST-F2: canonical error code identifies offending sort.field
     # POST-F3: application context echoed on validation failure
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/core/tasks-list-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/tasks-list-request.json
 
   @T-UC-027-ext-g-sort-direction-invalid @extension @ext-g @error @post-f1 @post-f2 @post-f3
   Scenario: Extension G EC-012 -- SORT_DIRECTION_INVALID rejects sort.direction outside {asc,desc}

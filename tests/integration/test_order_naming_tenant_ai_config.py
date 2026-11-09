@@ -27,11 +27,10 @@ from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from adcp.types import FormatId
 
 from src.adapters.base import AdapterCreateRequest
 from src.core.helpers.adapter_helpers import get_adapter
-from src.core.schemas import MediaPackage
+from src.core.schemas import FormatId, MediaPackage
 from src.core.tenant_context import TenantContext
 from tests.factories import PrincipalFactory
 from tests.helpers.gam_client import stub_gam_client_manager

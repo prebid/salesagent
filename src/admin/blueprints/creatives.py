@@ -16,10 +16,11 @@ from adcp.webhooks import GeneratedTaskStatus
 
 from src.core.database.repositories.creative import CreativeRepository
 from src.core.exceptions import AdCPValidationError
+from src.core.schemas import CreativeFormatIdentity
 from src.core.schemas.creative import SyncCreativeResult, SyncCreativesResponse
 from src.core.validation_helpers import run_async_in_sync_context
 from src.core.webhooks.delivery import WebhookTaskContext
-from src.core.webhooks.registration import accept_push_notification_config
+from src.core.webhooks.registration import accept_push_notification_config, stored_registration_fields
 from src.services.ai.factory import tenant_ai_enabled
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
@@ -227,20 +228,24 @@ async def _call_webhook_for_creative_status(
             # first silently delivered under a scheme the buyer did not solely request.
             # The gate owns that rule.
             #
-            # The authentication block is forwarded only when TRUTHY, matching the
-            # previous `or {}` behaviour: an empty block keeps meaning "no
-            # authentication" and keeps delivering unsigned, because turning today's
-            # unsigned delivery into a refusal is a delivered -> never-delivered change
-            # that needs an owner sign-off (#1802 made one for a legacy scheme).
+            # The field set is DERIVED from the pinned config by
+            # stored_registration_fields, which also owns the truthy-only rule this
+            # site used to spell inline (an empty authentication block keeps meaning
+            # "no authentication" and keeps delivering unsigned).
+            #
+            # It used to list `url` and `authentication` and nothing else -- the same
+            # two of the pinned schema's four fields the delivery-report scheduler
+            # listed -- so a stashed `operation_id` was dropped on every read and
+            # build_webhook_envelope then refused the delivery: the seller MUST echo
+            # it, it is REQUIRED on core/mcp-webhook-payload.json, and webhooks.mdx
+            # :143 forbids recovering it from the URL.
             cfg_dict = step.request_data.get("push_notification_config") or {}
             url = cfg_dict.get("url")
             if not url:
                 logger.error(f"No push notification URL present for creative {creative_id}")
                 return False
 
-            registration_config = {"url": url}
-            if cfg_dict.get("authentication"):
-                registration_config["authentication"] = cfg_dict["authentication"]
+            registration_config = stored_registration_fields(cfg_dict)
 
             try:
                 push_notification_config = accept_push_notification_config(
@@ -355,7 +360,11 @@ def review_creatives(tenant_id, **kwargs):
                 {
                     "creative_id": creative.creative_id,
                     "name": creative.name,
-                    "format": creative.format,
+                    # The identity as an operator reads it: the id the buyer asserted when
+                    # the row has one, else the canonical kind. Through the ONE row reader,
+                    # so this page cannot disagree with the buyer-facing one about what
+                    # format a creative is.
+                    "format": CreativeFormatIdentity.from_row(creative).label,
                     "status": creative.status,
                     "principal_name": principal_name,
                     "principal_id": creative.principal_id,
@@ -567,20 +576,21 @@ def approve_creative(tenant_id, creative_id, **kwargs):
             webhook_data = {"creative_id": creative_id, "tenant_id": tenant_id}
 
             # Collect Slack data for post-commit
+            format_label = CreativeFormatIdentity.from_row(creative).label
             tenant = uow.tenant_config.get_tenant()
             if tenant and tenant.slack_webhook_url:
                 principal_name = uow.creatives.get_principal_name(creative.principal_id)
 
                 slack_data = {
                     "slack_webhook_url": tenant.slack_webhook_url,
-                    "message": f"\u2705 Creative approved: {creative.name} ({creative.format}) from {principal_name}",
+                    "message": f"\u2705 Creative approved: {creative.name} ({format_label}) from {principal_name}",
                 }
 
             # Collect audit data for post-commit
             audit_data = {
                 "creative_id": creative_id,
                 "creative_name": creative.name,
-                "format": creative.format,
+                "format": format_label,
                 "principal_id": creative.principal_id,
                 "human_override": is_override,
             }
@@ -754,20 +764,21 @@ def reject_creative(tenant_id, creative_id, **kwargs):
             webhook_data = {"creative_id": creative_id, "tenant_id": tenant_id}
 
             # Collect Slack data for post-commit
+            format_label = CreativeFormatIdentity.from_row(creative).label
             tenant = uow.tenant_config.get_tenant()
             if tenant and tenant.slack_webhook_url:
                 principal_name = uow.creatives.get_principal_name(creative.principal_id)
 
                 slack_data = {
                     "slack_webhook_url": tenant.slack_webhook_url,
-                    "message": f"\u274c Creative rejected: {creative.name} ({creative.format}) from {principal_name}\nReason: {rejection_reason}",
+                    "message": f"\u274c Creative rejected: {creative.name} ({format_label}) from {principal_name}\nReason: {rejection_reason}",
                 }
 
             # Collect audit data for post-commit
             audit_data = {
                 "creative_id": creative_id,
                 "creative_name": creative.name,
-                "format": creative.format,
+                "format": format_label,
                 "principal_id": creative.principal_id,
                 "rejection_reason": rejection_reason,
                 "human_override": is_override,
@@ -852,7 +863,7 @@ def _ai_review_creative(
                 }
 
                 uow.creatives.update_data(creative, creative.data)
-                creative_format_str = str(creative.format)
+                creative_format_str = CreativeFormatIdentity.from_row(creative).label
 
                 # Collect Slack notification data for post-commit
                 if slack_webhook_url and principal_name:
@@ -1155,7 +1166,7 @@ def _ai_review_creative_impl_inner(
                         agent=agent,
                         review_criteria=tenant.creative_review_criteria,
                         creative_name=creative.name,
-                        creative_format=creative.format,
+                        creative_format=CreativeFormatIdentity.from_row(creative).label,
                         promoted_offering=promoted_offering,
                         creative_data=creative.data,
                     )

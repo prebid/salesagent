@@ -111,6 +111,24 @@ class TenantContext(BaseModel):
 
         return hostname_of(self.virtual_host)
 
+    @property
+    def auto_approves_creatives(self) -> bool:
+        """Whether a synced creative is approved at sync, with no review before it can serve.
+
+        The ONE predicate over ``approval_mode`` that both readers ask: sync_creatives'
+        routing (``_apply_approval_mode``) approves the row when it holds and leaves it
+        ``pending_review`` otherwise, and ``get_adcp_capabilities`` advertises
+        ``media_buy.creative_approval_mode`` from it. Two readers comparing the string
+        separately could advertise ``auto_approve`` for a mode that holds creatives for review.
+
+        Only ``auto-approve`` holds. ``ai-powered`` does not: the AI reviewer leaves a creative
+        ``pending_review`` for a human on low confidence, a sensitive category or a review
+        failure, which is ``require_human``'s "may require manual review" ceiling
+        (protocol/get-adcp-capabilities-response.json, v3.2.7,
+        ``media_buy.creative_approval_mode``).
+        """
+        return self.approval_mode == "auto-approve"
+
     # --- Construction helpers ---
 
     @classmethod

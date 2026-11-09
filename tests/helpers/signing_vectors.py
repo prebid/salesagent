@@ -3,7 +3,11 @@
 #1291 B3 (``salesagent-z6nr.14``). Two things live here, and nothing else:
 
 1. **The loader** — reads the vendored, sha256-pinned snapshot under
-   ``tests/fixtures/adcp_conformance_vectors/3.1.1/request-signing/`` offline.
+   ``tests/fixtures/adcp_conformance_vectors/<pin>/request-signing/`` offline. That
+   ``<pin>`` is DERIVED, never spelled: :data:`VECTORS_DIR` builds it from
+   ``EXPECTED_SPEC_VERSION``, so do not re-hardcode a version here — this line said
+   ``3.1.1`` for a while after the pin moved to 3.2.1, which is the stale-orienting-text
+   failure the surrounding effort kept paying for.
    Same shape as :mod:`tests.helpers.pinned_schema`: a missing file is a HARD
    ``AssertionError``, never a skip, so a re-vendor that drops a vector cannot
    quietly shrink the graded set.
@@ -17,7 +21,7 @@ Why a transplant is needed at all (decision D-B3-1, settled — do not relitigat
 ``src.core.signing.capture.ADCP_SURFACE_PREFIXES = ("/mcp", "/a2a", "/api/v1")`` gates
 the CAPTURE middleware, and the vectors address ``/adcp/<operation>``. Sent verbatim
 they carry no ``HttpExchange``, so ``SignatureSubject.exchange`` is ``None``, nothing is
-verifiable, and all 40 would "pass" having graded nothing. Serving ``/adcp/*`` is a
+verifiable, and every one would "pass" having graded nothing. Serving ``/adcp/*`` is a
 protocol-surface decision, not a test-harness one, so it belongs to B4
 (``salesagent-z6nr.15``), which grades the URL space black-box.
 
@@ -67,6 +71,8 @@ envelope is the thing that puts it in the protocol-method namespace.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 from dataclasses import dataclass
 from enum import Enum
@@ -111,9 +117,48 @@ def load_vector_manifest() -> dict[str, Any]:
     return json.loads(_read("MANIFEST.json"))
 
 
+#: The one root vector whose 3.2 counterpart cannot be found by slug.
+#:
+#: Matching is by SLUG, never by number: ``negative/001-no-signature-header`` and
+#: ``profile-3.2/negative/001-base64url-sf-binary`` share a number and are unrelated
+#: vectors, so a number fallback would silently grade the wrong document. Only this one
+#: pair needs naming, and the corpus README says why: "Root ``positive/001`` (basic POST)
+#: and ``positive/002`` (POST with content-digest) are the same request in 3.2, so both
+#: map to ``profile-3.2/positive/001-post-with-content-digest.json``."
+_PROFILE_SLUG_EXCEPTIONS: dict[str, str] = {"positive/basic-post": "001-post-with-content-digest"}
+
+#: Profile-3.2 vectors with no root counterpart, driven under their OWN ids. ENUMERATED, not
+#: globbed, because the two orphans are not equivalent and one of them must stay out.
+#:
+#: ``001-base64url-sf-binary`` is in: ``src/core/signing/algorithms.py`` names it as the thing
+#: that grades its MUST ("Base64URL characters are not valid inside 3.2 request ``sf-binary``
+#: and MUST be rejected as ``request_signature_header_malformed``", security.mdx
+#: §"Request-profile binary value encoding"), and nothing local ran it — so the rule whose
+#: absence WAS salesagent-8qela.1 had no detector outside a box run. It is gradeable because
+#: checklist step 1 is a PARSE: ``_rejects``'s default transplants the URL without re-signing,
+#: so the base64url token reaches the wire verbatim and is refused before the signature's
+#: validity against the transplanted URL is ever evaluated.
+#:
+#: ``002-multiple-trailing-dots`` is OUT, and the reason generalises: its mutation IS the URL
+#: authority, so transplanting it onto a real route replaces the authority and DELETES THE
+#: THING THE VECTOR GRADES, after which the stale signature fails as
+#: ``request_signature_invalid`` — a red that reads as a finding and is a fixture defect. That
+#: is the inverse of a vacuous pass: a fixture made gradeable by removing its subject.
+#: Measured, not assumed. The storyboard reaches the same conclusion by a shorter route and
+#: reports it ``not_selected``: "HTTP transport cannot route to an intentionally malformed DNS
+#: authority; verified at the library level."
+_PROFILE_ONLY_VECTORS: tuple[str, ...] = ("profile-3.2/negative/001-base64url-sf-binary",)
+
+
 @lru_cache(maxsize=1)
-def load_signing_vectors() -> dict[str, dict[str, Any]]:
-    """Every request vector, keyed by id (``"positive/001-basic-post"``)."""
+def load_root_signing_vectors() -> dict[str, dict[str, Any]]:
+    """The ROOT corpus verbatim, keyed by id — no profile selection.
+
+    For the graders that are defined over the vectors AS VENDORED rather than over the
+    documents a 3.2 seller is driven with: L1(a) signature-base conformance, whose whole
+    subject is canonicalization against spec-authored bytes and which declares no posture
+    at all. :func:`load_signing_vectors` is the profile-selected set and is what L2 drives.
+    """
     out: dict[str, dict[str, Any]] = {}
     for bucket in ("positive", "negative"):
         directory = VECTORS_DIR / bucket
@@ -122,6 +167,71 @@ def load_signing_vectors() -> dict[str, dict[str, Any]]:
         for path in sorted(directory.glob("*.json")):
             out[f"{bucket}/{path.stem}"] = json.loads(path.read_text())
     return out
+
+
+@lru_cache(maxsize=1)
+def load_signing_vectors() -> dict[str, dict[str, Any]]:
+    """Every request vector, keyed by its ROOT id (``"positive/001-basic-post"``).
+
+    PROFILE-SELECTED: where a ``profile-3.2/`` counterpart exists, its document is what
+    gets driven, under the root vector's id. The root corpus is a 3.1 corpus — most of its
+    vectors declare ``covers_content_digest: "either"`` and one declares
+    ``"forbidden"`` — and a 3.2 seller must refuse both, so driving the root document
+    configures a posture the seller rejects and the verifier never runs at all. The
+    counterparts exist for exactly this reason and were vendored alongside the root
+    corpus; this is the same profile selection the out-of-process storyboard runner
+    performs, which reports the root vectors it drops as ``profile_excluded``.
+
+    Keyed on the ROOT id on purpose, so the vector registries and
+    ``test_every_vector_is_accounted_for`` keep naming one stable set and the
+    graded count cannot quietly fall when a counterpart appears or disappears.
+
+    A profile-3.2 vector with NO root counterpart is the one case that keying by root id
+    cannot express, so those are added under their OWN ids by
+    :data:`_PROFILE_ONLY_VECTORS`. Both facts matter and only one of them is obvious: every
+    profile-3.2 document but two IS driven by the substitution above (their keys are
+    root-named, which is what makes the corpus look root-only), and the remaining two are
+    orphans. Only one of those is gradeable here — see the constant.
+    """
+    return {vector_id: json.loads(source.read_text()) for vector_id, source in _selected_vector_sources().items()}
+
+
+@lru_cache(maxsize=1)
+def _selected_vector_sources() -> dict[str, Path]:
+    """The document each vector id is driven with: the selection :func:`load_signing_vectors` describes."""
+    out: dict[str, Path] = {}
+    for bucket in ("positive", "negative"):
+        directory = VECTORS_DIR / bucket
+        if not directory.is_dir():
+            raise AssertionError(f"Conformance vector directory not vendored: {directory}")
+        counterparts: dict[str, Path] = {
+            path.stem.split("-", 1)[1]: path for path in sorted((VECTORS_DIR / "profile-3.2" / bucket).glob("*.json"))
+        }
+        for path in sorted(directory.glob("*.json")):
+            slug = path.stem.split("-", 1)[1]
+            named = _PROFILE_SLUG_EXCEPTIONS.get(f"{bucket}/{slug}")
+            out[f"{bucket}/{path.stem}"] = (
+                VECTORS_DIR / "profile-3.2" / bucket / f"{named}.json" if named else counterparts.get(slug, path)
+            )
+    for vector_id in _PROFILE_ONLY_VECTORS:
+        path = VECTORS_DIR / f"{vector_id}.json"
+        if not path.is_file():
+            raise AssertionError(f"Profile-only conformance vector not vendored: {path}")
+        out[vector_id] = path
+    return out
+
+
+def profile_document_vector_ids() -> dict[str, str]:
+    """``"profile-3.2/<bucket>/<stem>"`` -> the vector id that document is driven under.
+
+    The inverse of the profile selection, for the profile documents only. A profile
+    document the selection drives under no id (the ungradeable orphan) is absent.
+    """
+    return {
+        str(source.relative_to(VECTORS_DIR).with_suffix("")): vector_id
+        for vector_id, source in _selected_vector_sources().items()
+        if source.relative_to(VECTORS_DIR).parts[0] == "profile-3.2"
+    }
 
 
 @lru_cache(maxsize=1)
@@ -147,8 +257,23 @@ def load_signing_keys() -> dict[str, Any]:
 
 
 def vectors_with_expected_signature_base() -> dict[str, dict[str, Any]]:
-    """The L1(a) set: every vector file shipping ``expected_signature_base``."""
-    return {vid: v for vid, v in load_signing_vectors().items() if "expected_signature_base" in v}
+    """The L1(a) set: every ROOT vector file shipping ``expected_signature_base``.
+
+    Reads :func:`load_root_signing_vectors`, NOT the profile-selected set, because L1 is
+    defined over "the vectors' ORIGINAL untouched URLs" (see
+    ``tests/unit/test_signing_conformance_signature_base.py``) and canonicalization is
+    policy-independent: L1 declares no posture, it computes a base and compares it to
+    spec-authored bytes, so which digest policy a 3.2 seller may advertise does not bear
+    on it.
+
+    Routing L1 through the selected set was a real regression and
+    ``test_l1_signature_base_set_is_pinned_by_name`` caught it: the set grew 13 -> 15
+    because the counterparts for ``negative/016`` and ``positive/004`` ship the field
+    where their roots do not. The name count growing hid a content LOSS — under the
+    selection, ``positive/001``'s own no-digest base stopped being graded anywhere, and a
+    base without ``content-digest`` is a distinct canonicalization case from one with it.
+    """
+    return {vid: v for vid, v in load_root_signing_vectors().items() if "expected_signature_base" in v}
 
 
 # ---------------------------------------------------------------------------
@@ -157,9 +282,15 @@ def vectors_with_expected_signature_base() -> dict[str, dict[str, Any]]:
 
 #: The real surface the vectors are transplanted onto.
 #: ``TOOLS["create_media_buy"].rest == RestBinding("POST", "/media-buys")`` under the
-#: router's ``/api/v1`` prefix — the vectors' OWN operation — which is why every
-#: vector's ``verifier_capability`` is fed to the posture BYTE-IDENTICAL, with no
-#: ``required_for`` rewrite anywhere.
+#: router's ``/api/v1`` prefix — the vectors' OWN operation — which is why no
+#: ``required_for`` rewrite is needed anywhere: the buckets are fed to the posture
+#: verbatim.
+#:
+#: The capability is no longer fed BYTE-IDENTICAL, and this comment used to say it was.
+#: ``covers_content_digest`` is rewritten to the one value a 3.2 seller may advertise —
+#: see ``_advertisable`` in the L2 module for why that removes a constraint rather than
+#: relaxing an assertion. The buckets, which are what this paragraph is actually about,
+#: are still untouched.
 TRANSPLANT_PREFIX = "/api/v1"
 TRANSPLANT_OPERATION_SEGMENT = "media-buys"
 #: The registry key ``TRANSPLANT_OPERATION_SEGMENT`` dispatches, and therefore the DTO
@@ -287,18 +418,44 @@ def recomputes_digest(vector_id: str) -> bool:
     * not re-signed (``negative/018``) means the placeholder signature is the
       step-ordering canary, and every header byte stays as shipped.
 
-    On the vendored 3.1.1 corpus that is ``positive/002`` alone — the one row that must
-    PASS the step-11 digest check, and therefore the one row whose digest has to describe
-    the body actually sent.
-    """
-    from adcp.signing.digest import content_digest_matches
+    Under the profile selection that is every positive (the 3.2 counterparts all cover
+    ``content-digest``) plus the re-signed negatives whose fault is not the digest
+    (``016``, ``026``, ``031``) — the rows that must PASS the step-11 digest check, or reach
+    a later step, and so need a digest describing the body actually sent.
 
+    Every member is judged and recomputed, not just ``sha-256``: ``positive/014`` ships
+    ``sha-256`` and ``sha-512``, and a row is truthful only if each member describes its
+    body. :func:`recomputed_digest` rebuilds the header member by member.
+    """
     vector = load_signing_vectors()[vector_id]
     headers = {name.lower(): value for name, value in vector["request"]["headers"].items()}
     digest = headers.get("content-digest")
     if digest is None or TRANSPLANT[vector_id].resigned is None:
         return False
-    return content_digest_matches(digest, vector["request"].get("body", "").encode())
+    return recomputed_digest(digest, vector["request"].get("body", "").encode()) == digest
+
+
+#: RFC 9530 algorithm key -> hash, for the algorithms the corpus ships.
+_DIGEST_ALGORITHMS = {"sha-256": hashlib.sha256, "sha-512": hashlib.sha512}
+
+
+def recomputed_digest(header_value: str, body: bytes) -> str:
+    """*header_value* with every member's digest recomputed over *body*, keys and order kept.
+
+    The member set IS what ``positive/014`` grades (two distinct algorithm keys are legal),
+    so rebuilding only ``sha-256`` — the SDK's ``compute_content_digest_sha256`` — would
+    delete the vector's subject while leaving it green. Standard padded Base64, the 3.2
+    profile's ``sf-binary``. A key outside :data:`_DIGEST_ALGORITHMS` raises: a member this
+    cannot recompute would otherwise go on the wire describing a body that was not sent.
+    """
+    from adcp.signing.canonical import split_structured_field
+
+    members = []
+    for member in split_structured_field(header_value, ","):
+        key = member.split("=", 1)[0].strip()
+        digest = base64.b64encode(_DIGEST_ALGORITHMS[key](body).digest()).decode()
+        members.append(f"{key}=:{digest}:")
+    return ", ".join(members)
 
 
 # ---------------------------------------------------------------------------
@@ -315,7 +472,7 @@ class Credential(Enum):
     verifier reads ``principal.agent_url`` as the key-resolution INPUT (verifier.py:234).
     With no accepted credential ``agent_url`` is ``None``, no ``StaticJwksResolver`` can
     be built, and every signed vector short-circuits at step 7 with
-    ``request_signature_key_unknown`` — which would make all 12 positives fail and
+    ``request_signature_key_unknown`` — which would make every positive fail and
     ``negative/008`` pass for the wrong reason.
 
     ``Principal.agent_url`` being the ONLY legitimate source is a spec rule, not a
@@ -447,7 +604,7 @@ def _rejects(
 #: placeholder IS the step-ordering canary: a crypto-first verifier returns
 #: ``request_signature_invalid`` and that is a graded FAIL. Re-signing them destroys it.
 TRANSPLANT: dict[str, VectorPlan] = {
-    # -- positives: 12 of 12, all re-signed (URL changed, outcome is step 10+) ------
+    # -- positives: every one re-signed (URL changed, outcome is step 10+) ---------
     "positive/001-basic-post": _positive(
         "positive/001-basic-post", f"{_SELLER}/api/v1/media-buys", route_named=True, operation="create_media_buy"
     ),
@@ -535,7 +692,33 @@ TRANSPLANT: dict[str, VectorPlan] = {
         route_named=True,
         operation="create_media_buy",
     ),
-    # -- negatives: 28 of 28 -------------------------------------------------------
+    "positive/013-two-signature-labels-distinct": _positive(
+        "positive/013-two-signature-labels-distinct",
+        f"{_SELLER}/api/v1/media-buys",
+        route_named=True,
+        operation="create_media_buy",
+        notes="False-positive guard for negative/029: sig2 is a well-formed 64-byte value that does "
+        "not verify. Only the sig1 member is re-signed; sig2 goes on the wire as shipped, which is "
+        "what keeps a verifier that tries every label failing here.",
+    ),
+    "positive/014-content-digest-two-algorithms": _positive(
+        "positive/014-content-digest-two-algorithms",
+        f"{_SELLER}/api/v1/media-buys",
+        route_named=True,
+        operation="create_media_buy",
+        notes="False-positive guard for negative/030: Content-Digest carries sha-256 AND sha-512. "
+        "Every member is recomputed over the transplanted body under its own algorithm, so the "
+        "two-key dictionary the vector grades is what reaches the verifier.",
+    ),
+    "positive/015-bracketed-ipv6-host-with-port": _positive(
+        "positive/015-bracketed-ipv6-host-with-port",
+        "https://[2001:db8::1]:8443/api/v1/media-buys",
+        route_named=True,
+        operation="create_media_buy",
+        notes="False-positive guard for negative/031. Ships its OWN Host header, which goes on the "
+        "wire in place of the synthesised one; it byte-matches the URL authority.",
+    ),
+    # -- negatives: every root negative, plus the one profile-only orphan ------------
     "negative/001-no-signature-header": _rejects(
         "negative/001-no-signature-header",
         "request_signature_required",
@@ -573,6 +756,15 @@ TRANSPLANT: dict[str, VectorPlan] = {
         "request_signature_header_malformed",
         notes="Vector URL names sync_creatives; the transplant moves it into the required bucket. "
         "Outcome unchanged (rejects at step 1). verifier_capability NOT rewritten.",
+    ),
+    # The one profile-3.2 orphan driven under its own id; see _PROFILE_ONLY_VECTORS for why
+    # this one is gradeable and its sibling is not. Defaults are load-bearing: no re-sign, so
+    # the base64url token travels verbatim, and step 1 refuses it as a parse failure.
+    "profile-3.2/negative/001-base64url-sf-binary": _rejects(
+        "profile-3.2/negative/001-base64url-sf-binary",
+        "request_signature_header_malformed",
+        notes="Mutation is the Signature VALUE, so it must not be re-signed; the URL transplant "
+        "is harmless because step 1 parses before it verifies.",
     ),
     "negative/012-missing-expires-param": _rejects(
         "negative/012-missing-expires-param", "request_signature_params_incomplete"
@@ -643,11 +835,14 @@ TRANSPLANT: dict[str, VectorPlan] = {
     ),
     "negative/026-non-ascii-host": _rejects(
         "negative/026-non-ascii-host",
-        "request_signature_header_malformed",
+        "request_target_uri_malformed",
         wire_url="https://bücher.example.com/api/v1/media-buys",
-        notes="PRODUCTION GAP: adcp==6.6.0 returns request_signature_invalid — no A-label "
-        "enforcement anywhere on the authority path. httpx punycodes the host before send, so "
-        "this vector is only gradeable through the raw-ASGI driver.",
+        resigned=_ED,
+        notes="Step 10: a raw U-label host is a malformed @target-uri, not a malformed signature "
+        "header. Re-signed over the transplanted URL (the SDK's signer maps the U-label to its "
+        "A-label, as the vector's own base does) so the host stays the ONLY fault — a verifier "
+        "that silently applies ToASCII would accept. httpx punycodes the host before send, so this "
+        "vector is only gradeable through the raw-ASGI driver.",
     ),
     "negative/027-webhook-registration-authentication-unsigned": _rejects(
         "negative/027-webhook-registration-authentication-unsigned",
@@ -671,5 +866,26 @@ TRANSPLANT: dict[str, VectorPlan] = {
         "request could be graded, and the storyboard runner skips the vector for an agent that "
         "declares no protocol-method bucket. Also unroutable: JSON-RPC tasks/cancel is not a TOOLS "
         "key, so invoke_tool never dispatches it and operation is ''.",
+    ),
+    "negative/029-duplicate-signature-label": _rejects(
+        "negative/029-duplicate-signature-label",
+        "request_signature_header_malformed",
+        notes="Step 1: the Signature dictionary repeats sig1. NEVER re-signed — both members are "
+        "the shipped bytes, and re-signing would collapse the header to one label.",
+    ),
+    "negative/030-content-digest-key-case": _rejects(
+        "negative/030-content-digest-key-case",
+        "request_signature_header_malformed",
+        notes="Step 1: Content-Digest carries SHA-256 and sha-256. Not re-signed, so the digest "
+        "header goes on the wire byte-for-byte as shipped.",
+    ),
+    "negative/031-malformed-host-authority": _rejects(
+        "negative/031-malformed-host-authority",
+        "request_target_uri_malformed",
+        wire_url="https://[::1]/api/v1/media-buys",
+        resigned=_ED,
+        notes="Step 10: the vector's own Host header (::1, an unbracketed IPv6 literal) goes on the "
+        "wire while the URL stays bracketed. Re-signed over the URL authority so the Host header "
+        "is the ONLY fault — a verifier that derives @authority from the URL alone would accept.",
     ),
 }

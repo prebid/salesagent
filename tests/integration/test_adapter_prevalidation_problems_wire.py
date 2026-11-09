@@ -35,26 +35,30 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 _WIRE_TRANSPORTS = [Transport.MCP, Transport.A2A, Transport.REST]
 
 
-def _drive_real_prevalidation(env) -> None:
-    """Make the mocked adapter run the REAL pre-validation, refusing the seeded model.
+def _package_on_unsupported_pricing(env) -> dict:
+    """Seed a CPA option on the env's product and return a package that selects it.
 
-    ``env.mock["adapter"]`` is a MagicMock, so calling validate_media_buy_request on
-    it returns another MagicMock and the method under test never executes. Binding
-    the real ``AdServerAdapter.validate_media_buy_request`` with the mock standing in
-    for ``self`` runs the actual default implementation while
-    ``get_supported_pricing_models`` is controlled — which is the only thing the
-    method reads off self.
-
-    Supported is set to ``{"cpc"}`` so the seeded ``cpm`` package is refused. Without
-    that the request succeeds and there is nothing to grade.
+    ``MediaBuyCreateEnv`` runs the real ``MockAdServer`` pre-creation check, and the mock
+    ad server sells no CPA (``get_supported_pricing_models``), so a package on this option
+    is refused by the seller as it is deployed. This used to narrow a mocked adapter's
+    supported set to ``{"cpc"}`` instead, which graded an ad server that does not exist.
+    ``pricing-options/cpa-option.json`` requires ``event_type``, and the seller cannot
+    publish a CPA option without one.
     """
-    from src.adapters.base import AdServerAdapter
+    from tests.factories import PricingOptionFactory
+    from tests.harness.create_request import pricing_option_id
 
-    adapter = env.mock["adapter"].return_value
-    adapter.get_supported_pricing_models.return_value = {"cpc"}
-    adapter.validate_media_buy_request = lambda *args, **kwargs: AdServerAdapter.validate_media_buy_request(
-        adapter, *args, **kwargs
+    _tenant, _principal, product, _seeded = env.setup_media_buy_data()
+    option = PricingOptionFactory(
+        product=product,
+        pricing_model="cpa",
+        currency="USD",
+        is_fixed=True,
+        rate=10.00,
+        parameters={"event_type": "purchase"},
     )
+    env._commit_factory_data()
+    return {"product_id": product.product_id, "budget": 5000.0, "pricing_option_id": pricing_option_id(option)}
 
 
 @pytest.mark.parametrize("transport", _WIRE_TRANSPORTS, ids=lambda t: t.value)
@@ -64,15 +68,14 @@ def test_unsupported_pricing_reaches_the_buyer_as_structured_problems(integratio
 
     now = datetime.now(UTC)
     with MediaBuyCreateEnv() as env:
-        env.setup_media_buy_data()
-        _drive_real_prevalidation(env)
+        package = _package_on_unsupported_pricing(env)
 
         result = env.call_via(
             transport,
             brand={"domain": "prevalidation.example.com"},
             start_time=(now + timedelta(days=1)).isoformat(),
             end_time=(now + timedelta(days=8)).isoformat(),
-            packages=[{"product_id": "prod_1", "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"}],
+            packages=[package],
             idempotency_key=f"prevalidate-{uuid4().hex}",
         )
 
@@ -121,15 +124,14 @@ def test_no_authored_sentence_reaches_the_buyer_from_pre_validation(integration_
 
     now = datetime.now(UTC)
     with MediaBuyCreateEnv() as env:
-        env.setup_media_buy_data()
-        _drive_real_prevalidation(env)
+        package = _package_on_unsupported_pricing(env)
 
         result = env.call_via(
             transport,
             brand={"domain": "prevalidation-prose.example.com"},
             start_time=(now + timedelta(days=1)).isoformat(),
             end_time=(now + timedelta(days=8)).isoformat(),
-            packages=[{"product_id": "prod_1", "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"}],
+            packages=[package],
             idempotency_key=f"prevalidate-prose-{uuid4().hex}",
         )
 

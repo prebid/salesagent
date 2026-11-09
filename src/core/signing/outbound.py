@@ -10,7 +10,7 @@ webhook_egress._headers_for` is the ONE match that reads a validated
 ``PushAuthentication`` block and returns exactly one of (HMAC credential, Bearer header,
 per-attempt RFC 9421 signer), and its two twins ``deliver_webhook`` / ``adeliver_webhook``
 own the socket through :mod:`src.core.security.outbound_http`. "Signed both ways"
-(security.mdx @ v3.1.1 :1425) is therefore a shape that cannot be expressed rather than
+(security.mdx :1425) is therefore a shape that cannot be expressed rather than
 a rule three senders must remember.
 
 What this module decides, and nothing else:
@@ -193,7 +193,7 @@ def delivery_auth_mode(auth: DeclaredAuth) -> str:
     ``AuthenticationScheme`` both read.
 
     Absent ``authentication`` is :data:`DELIVERY_AUTH_RFC9421`, matching the seam's
-    ``auth is None`` arm (security.mdx @ v3.1.1 :1424 keys 9421 on ABSENCE). A scheme the
+    ``auth is None`` arm (security.mdx :1424 keys 9421 on ABSENCE). A scheme the
     pin knows reports its own wire spelling. An UNRECOGNIZED scheme reports ``Bearer``
     rather than being echoed verbatim, because the challenge enum is closed and a value
     outside it is a document the receiver must reject; ``Bearer`` is the answer that says
@@ -360,7 +360,7 @@ def webhook_delivery_signer(
     edit cannot hand a caller a Bearer or legacy-HMAC strategy and still satisfy the
     annotation. That matters most to the caller this function exists for —
     :func:`src.core.security.webhook_egress.deliver_webhook`, whose RFC 9421 arm is
-    selected by the ABSENCE of an ``authentication`` block (security.mdx @ v3.1.1 :1424)
+    selected by the ABSENCE of an ``authentication`` block (security.mdx :1424)
     and which must therefore never be handed a legacy strategy to apply there (:1425
     forbids answering a legacy registration with an RFC 9421 signature, and the converse
     shape — a legacy strategy on the 9421 arm — would be the same confusion mirrored).
@@ -488,7 +488,7 @@ def adcp_challenge_signer(*, tenant_id: str, repo: SigningKeyRepository, now: da
     other three, so the caller builds the payload from the SDK TYPE and posts it through
     :func:`send_signed_challenge`.
 
-    **There is deliberately NO ``config`` parameter.** ``sync_accounts.mdx`` @ v3.1.1 :207
+    **There is deliberately NO ``config`` parameter.** ``sync_accounts.mdx`` :207
     is explicit that the challenge "MUST be signed with the seller's RFC 9421 webhook
     profile key EVEN WHEN the candidate config selects legacy delivery auth". Threading the
     candidate registration in here — the shape a DELIVERY reads, where :1425 forbids the
@@ -569,7 +569,7 @@ async def send_signed_challenge(
     ``Content-Type`` is decisive rather than decoration: ``JwkSignerStrategy`` builds its
     signature base from ``headers={"Content-Type": "application/json"}`` and covers the
     ``content-type`` component whenever that header is present, while a webhook verifier
-    REJECTS a signature whose covered components omit it (``security.mdx`` @ v3.1.1 :1476,
+    REJECTS a signature whose covered components omit it (``security.mdx`` :1476,
     ``webhook_signature_components_incomplete``). The seam's ``content=`` path sets no
     Content-Type of its own, so it ships explicitly or the signature covers a header that
     never left.
@@ -613,7 +613,7 @@ async def send_signed_challenge(
     A non-2xx answer is projected back onto :class:`ChallengeAnswer` rather than allowed to
     escape as ``OutboundDeliveryFailed``, so the caller keeps grading the status itself and
     still logs *which* status the endpoint answered. Its ``content`` is empty on that path
-    and honestly so: the seam surfaces no body for an undelivered request (AdCP 3.1.1
+    and honestly so: the seam surfaces no body for an undelivered request (AdCP.1
     ``security.mdx`` point 6 — nothing derived from the origin's response rides out on a
     failure), and the echo check never reads it, because a non-2xx has already failed the
     2xx gate that precedes it. A transport failure has no status to project and is

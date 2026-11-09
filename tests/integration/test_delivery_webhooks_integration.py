@@ -24,6 +24,7 @@ from src.core.database.models import (
 from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
 from tests.factories import PricingOptionFactory
 from tests.factories.principal import plaintext_token_for
+from tests.factories.webhook import ReportingWebhookRequestFactory
 from tests.utils.database_helpers import vhost_for
 
 
@@ -130,10 +131,18 @@ def _create_basic_media_buy_with_webhook(
                         "pricing_option_id": pricing_option.pricing_option_id,
                     }
                 ],
-                "reporting_webhook": {
-                    "url": "https://example.com/webhook",  # outbound HTTP will be mocked
-                    "reporting_frequency": "daily",
-                },
+                # Through the factory, not a literal. The literal declared only
+                # ``url`` and ``reporting_frequency``, so it was missing
+                # ``authentication`` -- which ``core/reporting-webhook.json``
+                # /required lists -- and the ``operation_id`` the seller must echo
+                # into ``mcp-webhook-payload.operation_id`` on every
+                # ``media_buy_delivery`` notification. Without the latter the
+                # scheduler correctly refuses to build an envelope, so every
+                # assertion here about a send was being made against a stream that
+                # cannot be delivered on.
+                "reporting_webhook": ReportingWebhookRequestFactory.payload(
+                    url="https://example.com/webhook"  # outbound HTTP will be mocked
+                ),
             },
         )
 
