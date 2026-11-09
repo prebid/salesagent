@@ -64,6 +64,7 @@ from tests.bdd.steps._outcome_helpers import (
     wire_entry_errors,
 )
 from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.factories.request import OMIT
 from tests.factories.webhook import PushNotificationConfigRequestFactory
 from tests.helpers.webhook_credential_refusal import SHORT_CREDENTIAL
 
@@ -203,7 +204,7 @@ def when_sync_creative_with_agent_url(ctx: dict, agent_url: str) -> None:
     decision, and that VALIDATION_ERROR resembles a refusal closely enough to
     pass a careless assertion for entirely the wrong reason.
     """
-    from adcp.types import FormatId
+    from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as FormatId
 
     from tests.factories.creative_asset import CreativeAssetFactory
 
@@ -248,19 +249,26 @@ def when_create_media_buy_with_push_url(ctx: dict, webhook_url: str) -> None:
 # different requests.
 
 
-def _dispatch_create_registering(ctx: dict, authentication: dict) -> None:
-    """Dispatch create_media_buy registering *authentication* on a safe URL.
+def _dispatch_create_registering(ctx: dict, **registration: object) -> None:
+    """Dispatch create_media_buy with *registration* overrides on a safe URL.
 
-    Everything except the authentication block comes from the harness's minimal
+    Everything except the overridden field comes from the harness's minimal
     valid create, so a package/pricing rejection can never stand in for the
     refusal under test, and the URL is public so the SSRF gate that runs first
     cannot be the thing that refuses.
+
+    Keyword overrides rather than a positional ``authentication`` dict: a second
+    registration half is graded here now (an absent ``operation_id``), and the
+    only difference between the two dispatches is WHICH field of the same
+    document is wrong. A copy of this body differing in one keyword is the shape
+    the DRY invariant forbids, and is how the two would drift into being
+    dispatched against different creates.
     """
     from tests.bdd.steps.generic.given_media_buy import harness_create_request_kwargs
 
     kwargs = harness_create_request_kwargs(ctx)
     kwargs["push_notification_config"] = PushNotificationConfigRequestFactory.payload(
-        url=_SAFE_WEBHOOK_URL, authentication=authentication
+        url=_SAFE_WEBHOOK_URL, **registration
     )
     dispatch_request(ctx, **kwargs)
 
@@ -297,7 +305,7 @@ def when_create_media_buy_hmac_without_credentials(ctx: dict) -> None:
 
     The surface that runs BOTH registration halves today.
     """
-    _dispatch_create_registering(ctx, _HMAC_WITHOUT_CREDENTIALS)
+    _dispatch_create_registering(ctx, authentication=_HMAC_WITHOUT_CREDENTIALS)
 
 
 @when("the buyer creates a media buy registering two authentication schemes")
@@ -312,7 +320,33 @@ def when_create_media_buy_two_schemes(ctx: dict) -> None:
     same buyer error currently reaches ``error.field`` differently depending on
     which wire it arrived on.
     """
-    _dispatch_create_registering(ctx, _TWO_SCHEMES)
+    _dispatch_create_registering(ctx, authentication=_TWO_SCHEMES)
+
+
+@when("the buyer creates a media buy registering a webhook with no operation_id")
+def when_create_media_buy_without_operation_id(ctx: dict) -> None:
+    """Dispatch create_media_buy with a push_notification_config carrying no operation_id.
+
+    ``OMIT`` rather than ``operation_id=None``: the key must be ABSENT, which is
+    what a buyer who never supplied one sends, and is the only spelling the
+    pinned schema calls a registration without the field. ``None`` would be a
+    present-but-null property, a different document.
+
+    No ``authentication`` block, deliberately. The gate runs the URL half first
+    and the pinned model refuses a malformed credential half before the gate is
+    reached at all, so a registration carrying either could be refused for a
+    reason that is not the one under test. An unsigned public-URL registration
+    leaves exactly one thing wrong with it.
+
+    What this grades is the seller taking AdCP 3.2.1 ``L3/webhooks.mdx`` :141's
+    MAY — "Sellers MAY reject a webhook registration that omits ``operation_id``
+    with ``INVALID_REQUEST``" — instead of the alternative it had: accept, then
+    refuse every delivery at the envelope builder because
+    ``core/mcp-webhook-payload.json`` requires the field and :143 forbids
+    recovering it from the URL, and log that refusal where the buyer cannot see
+    it. Ungraded until now, which is how permanent silence stayed reachable.
+    """
+    _dispatch_create_registering(ctx, operation_id=OMIT)
 
 
 @when("the buyer updates the media buy registering HMAC-SHA256 with no credentials")

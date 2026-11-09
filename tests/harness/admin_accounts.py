@@ -14,6 +14,7 @@ fixture supplies the address; both arrive as arguments.
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Any
 
 from sqlalchemy import delete
 
@@ -224,6 +225,28 @@ class AdminAccountEnv:
 
         self._created_account_ids.append(account_id)
         return account_id
+
+    def inventory_profiles_path(self, path: str = "") -> str:
+        """The inventory-profile routes of this tenant, which the page's modal posts to."""
+        return f"/tenant/{self._tenant_id}/inventory-profiles/{path}"
+
+    def _inventory_profile(self, profile_id: str) -> Any:
+        from sqlalchemy import select
+
+        from src.core.database.models import InventoryProfile
+
+        with get_db_session() as session:
+            stmt = select(InventoryProfile).filter_by(tenant_id=self._tenant_id, profile_id=profile_id)
+            return session.scalars(stmt).first()
+
+    def inventory_profile_format_options(self, profile_id: str) -> Any:
+        """The stored declarations of *profile_id*, or None when there is no such profile."""
+        profile = self._inventory_profile(profile_id)
+        return None if profile is None else profile.format_options
+
+    def inventory_profile_row_id(self, profile_id: str) -> int:
+        """The integer id the edit route takes."""
+        return self._inventory_profile(profile_id).id
 
     def get_account_from_db(self, *, name: str | None = None, account_id: str | None = None) -> Account | None:
         """Look up an account in the database."""

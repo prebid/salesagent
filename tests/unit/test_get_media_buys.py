@@ -78,6 +78,7 @@ def make_media_buy(
     confirmed_at=datetime(2025, 1, 1, tzinfo=UTC),
 ):
     buy = MagicMock()
+    buy.name = None
     buy.media_buy_id = media_buy_id
     buy.principal_id = principal_id
     buy.tenant_id = tenant_id
@@ -293,7 +294,7 @@ class TestFetchTargetMediaBuys:
         assert [b.media_buy_id for b in result] == ["buy_good"]
         assert len(self.advisories) == 1
         advisory = self.advisories[0]
-        assert advisory.code == "CONFIGURATION_ERROR"
+        assert advisory.code == "PERSISTED_VALUE_UNRENDERABLE"
         assert advisory.recovery == "terminal", (
             "a persisted-state defect cannot be retried into success; the advisory must say so"
         )
@@ -307,7 +308,7 @@ class TestFetchTargetMediaBuys:
             "tell whether the buy they are looking for is missing or was never there"
         )
         assert advisory.details["reasons"] == ["MEDIA_BUY_UNRENDERABLE"]
-        assert advisory.field == "media_buys[]"
+        assert advisory.field == "media_buys"
 
     def test_a_null_revision_is_refused_like_a_below_minimum_one(self):
         """The ``revision is None`` operand has an oracle now.
@@ -687,7 +688,7 @@ class TestTargetingOverlayRoundTrip:
         assert response.errors is not None
         assert len(response.errors) == 1
         err = response.errors[0]
-        assert err.code == "TARGETING_REHYDRATION_FAILED"
+        assert err.code == "PERSISTED_VALUE_UNRENDERABLE"
         assert err.recovery == "terminal", "a row the buyer cannot repair must not invite a retry"
         # The discriminator is ``details.reasons``, not the message: ``message`` is
         # derived from CODE_TABLE, so no raise site can stamp a

@@ -55,15 +55,9 @@ from sqlalchemy.orm import Session
 from src.core.errors.codes import AppErrorCode
 from src.core.errors.details import ConfigurationDetails, ValidationDetails
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.tools._media_buy_status import resolve_canonical_status
+from src.core.tools._media_buy_status import resolve_canonical_status, seller_valid_actions
 
 logger = logging.getLogger(__name__)
-
-# Existing classification for generic unrenderable persisted fields. Targeting
-# rehydration has its own platform advisory below; the remaining blob paths keep
-# their current classification.
-_BLOB_DEFECT_CODE = "CONFIGURATION_ERROR"
-_BLOB_DEFECT_RECOVERY = "terminal"
 
 
 @dataclass
@@ -71,6 +65,7 @@ class _MediaBuyData:
     """Plain data extracted from a MediaBuy ORM row."""
 
     media_buy_id: str
+    name: str | None
     currency: str | None
     budget: Decimal | None
     raw_request: dict | None
@@ -87,10 +82,12 @@ class _MediaBuyData:
     # the build loop a projector: it cannot recompute what it was handed, because it no
     # longer holds anything to recompute it from.
     wire_status: MediaBuyStatus
-    # Spec-required on media_buys[] at AdCP 3.1.1; carried through this row object so
+    # Spec-required on media_buys[] at AdCP; carried through this row object so
     # the response is built from persisted values rather than defaults.
     confirmed_at: datetime | None
     revision: int
+    # Optional on media_buys[]; NULL when the adapter reported no deadline on create.
+    creative_deadline: datetime | None
 
 
 @dataclass
@@ -104,7 +101,6 @@ class _PackageData:
     bid_price: Decimal | None
 
 
-from adcp.server.helpers import valid_actions_for_status
 from adcp.types import MediaBuyStatus
 
 from src.core.database.models import CreativeAssignment, MediaBuy
@@ -219,18 +215,20 @@ def _get_media_buys_impl(
 
     # Build response
     response_media_buys: list[GetMediaBuysMediaBuy] = []
-    for buy in target_media_buys:
+    for buy_index, buy in enumerate(target_media_buys):
         # No policy here, and none is possible: the row's status was resolved at the
         # fetch seam and a row whose status could not be resolved never became a
         # _MediaBuyData. This loop projects; it does not decide.
         status = buy.wire_status
+        buy_path = f"media_buys[{buy_index}]"
 
         # Build packages
         packages = packages_by_media_buy.get(buy.media_buy_id, [])
         response_packages: list[GetMediaBuysPackage] = []
         buy_snapshots = snapshot_data.get(buy.media_buy_id, {})
 
-        for pkg in packages:
+        for package_index, pkg in enumerate(packages):
+            package_path = f"{buy_path}.packages[{package_index}]"
             pkg_config = pkg.package_config or {}
             pkg_id = pkg.package_id
 
@@ -249,7 +247,7 @@ def _get_media_buys_impl(
             # OPTIONAL-field branch of the module's per-row failure policy (see the
             # module docstring): targeting_overlay has a legal empty value, so a
             # single corrupted package_config row renders as None with a non-fatal
-            # TARGETING_REHYDRATION_FAILED advisory rather than crashing the whole
+            # PERSISTED_VALUE_UNRENDERABLE advisory rather than crashing the whole
             # tenant's get_media_buys response. The REQUIRED-field branch of the same
             # policy is _persisted_revision / _compute_status, which refuse.
             #
@@ -274,37 +272,27 @@ def _get_media_buys_impl(
                         pkg_id,
                         exc,
                     )
-                    # AdCP 3.2.7 L3/error-handling.mdx reserves CONFIGURATION_ERROR
-                    # for transport failures. This package degrades inside a usable
-                    # result, so use a terminal platform advisory (BR-RULE-294,
-                    # upstream-storyboard ungraded). The table owns its recovery and
-                    # seller guidance; details identify the persisted row.
                     row_advisories.append(
-                        Error.of(  # structural-guard: advisory per-package result in GetMediaBuysResponse.errors[]
-                            AppErrorCode.TARGETING_REHYDRATION_FAILED,
-                            field=(
-                                f"media_buys[{len(response_media_buys)}]."
-                                f"packages[{len(response_packages)}].targeting_overlay"
-                            ),
-                            details=ValidationDetails(
-                                reasons=["targeting_rehydration_failed"],
-                                package_id=pkg_id,
-                                media_buy_id=buy.media_buy_id,
-                            ),
+                        _persisted_value_advisory(
+                            field_path=f"{package_path}.targeting_overlay",
+                            media_buy_id=buy.media_buy_id,
+                            package_id=pkg_id,
+                            reason="targeting_rehydration_failed",
                         )
                     )
                     targeting_overlay = None
 
             # Every blob read below goes through the rule; nothing reaches the
             # constructor straight from package_config.
-            def _blob(key: str, *, _cfg=pkg_config, _pid=pkg_id, _mb=buy.media_buy_id) -> Any:
+            def _blob(key: str, *, _cfg=pkg_config, _pid=pkg_id, _mb=buy.media_buy_id, _path=package_path) -> Any:
                 return _resolve_blob_field(
                     _cfg,
                     key,
                     model=GetMediaBuysPackage,
                     model_field=key,
-                    subject=f"package '{_pid}' on media buy '{_mb}'",
-                    field_path=f"media_buys[].packages[{_pid}].{key}",
+                    media_buy_id=_mb,
+                    package_id=_pid,
+                    field_path=f"{_path}.{key}",
                     advisories=row_advisories,
                 )
 
@@ -317,6 +305,9 @@ def _get_media_buys_impl(
                     start_time=_blob("start_time"),
                     end_time=_blob("end_time"),
                     paused=_blob("paused"),
+                    # Absent means the buy-level creative_deadline applies
+                    # (get-media-buys-response.json, packages[].creative_deadline).
+                    creative_deadline=_blob("creative_deadline"),
                     targeting_overlay=targeting_overlay,
                     creative_approvals=approvals if approvals else None,
                     snapshot=snapshot,
@@ -333,23 +324,24 @@ def _get_media_buys_impl(
             "buyer_campaign_ref",
             model=GetMediaBuysMediaBuy,
             model_field="buyer_campaign_ref",
-            subject=f"media buy '{buy.media_buy_id}'",
-            field_path=f"media_buys[{buy.media_buy_id}].buyer_campaign_ref",
+            media_buy_id=buy.media_buy_id,
+            field_path=f"{buy_path}.buyer_campaign_ref",
             advisories=row_advisories,
         )
 
         response_media_buys.append(
             GetMediaBuysMediaBuy(
                 media_buy_id=buy.media_buy_id,
+                name=buy.name,
                 buyer_campaign_ref=buyer_campaign_ref,
                 status=status,
-                valid_actions=valid_actions_for_status(status.value),
+                valid_actions=seller_valid_actions(status.value),
                 currency=buy.currency or "USD",
                 total_budget=total_budget,
                 packages=response_packages,
                 created_at=buy.created_at,
                 updated_at=buy.updated_at,
-                # Both spec-required on media_buys[] at AdCP 3.1.1, and both read
+                # Both spec-required on media_buys[] at and both read
                 # straight off the persisted columns rather than defaulted here.
                 # Neither is produced at this site: MediaBuyRepository owns both
                 # writes — `_stamp_confirmation_if_needed` writes confirmed_at once,
@@ -359,6 +351,7 @@ def _get_media_buys_impl(
                 # decided.
                 confirmed_at=buy.confirmed_at,
                 revision=buy.revision,
+                creative_deadline=buy.creative_deadline,
             )
         )
 
@@ -391,9 +384,10 @@ def _resolve_blob_field(
     *,
     model: type[BaseModel],
     model_field: str,
-    subject: str,
+    media_buy_id: str,
     field_path: str,
     advisories: list[Error],
+    package_id: str | None = None,
 ) -> Any:
     """Return ``blob[key]`` if *model* will accept it for *model_field*, else None + an advisory.
 
@@ -433,51 +427,32 @@ def _resolve_blob_field(
         TypeAdapter(annotation).validate_python(value)
     except ValidationError:
         advisories.append(
-            Error(  # structural-guard: advisory per-row/per-package result in GetMediaBuysResponse.errors[]
-                code=_BLOB_DEFECT_CODE,
-                recovery=_BLOB_DEFECT_RECOVERY,
-                message=(
-                    f"PERSISTED_FIELD_UNRENDERABLE: stored {key!r} for {subject} is not a "
-                    f"value this field accepts; returning {model_field}=None."
-                ),
-                field=field_path,
+            _persisted_value_advisory(
+                field_path=field_path,
+                media_buy_id=media_buy_id,
+                package_id=package_id,
+                reason="persisted_field_unrenderable",
             )
         )
         return None
     return value
 
 
-def _omitted_row_advisory(media_buy_id: str, exc: AdCPPersistedStateError) -> Error:
-    """The advisory that stands in for a media buy too corrupt to render.
+def _persisted_value_advisory(
+    *, field_path: str, media_buy_id: str, reason: str, package_id: str | None = None
+) -> Error:
+    """Report a degraded value in a usable result, with stable identity in details.
 
-    Names the ``media_buy_id`` deliberately. An advisory that says a row was dropped
-    without saying which one cannot be reconciled against: the buyer has no way to
-    tell whether the buy they are looking for is missing or was never there.
-
-    It names it in ``details``, not in an authored sentence. ``Error`` DERIVES
-    ``message``/``suggestion``/``recovery`` from ``CODE_TABLE`` (ADR-010), discarding
-    anything a call site passes for them — so the f-string this replaces named the row
-    only in a string the model threw away, leaving the buyer an advisory that pointed
-    at no row at all. The marker and the id travel as data instead, which is also
-    where a client can read them without parsing prose.
+    AdCP 3.2.7 L3/error-handling.mdx requires failed transport for CONFIGURATION_ERROR.
+    Its open code vocabulary permits this terminal advisory for seller-owned data
+    that the buyer cannot repair (BR-RULE-294; upstream storyboard ungraded).
+    Returned values use positional JSONPath-lite fields; omitted rows name the
+    collection because they have no position in the response.
     """
-    # The code comes from the refusal itself rather than being transcribed here: one
-    # defect, one code, two mechanisms (ruling R-M1 chose CONFIGURATION_ERROR for the
-    # REFUSAL on this same fault). That also settles the code question the same way it
-    # was settled there — SERVICE_UNAVAILABLE carries "transient" / "retry with
-    # exponential backoff", advice that can never succeed, because no amount of backoff
-    # repairs a row whose persisted revision is 0; CONFIGURATION_ERROR carries
-    # "terminal" / "surface to a human at the seller ... MUST NOT auto-retry".
-    # ``field`` is the LISTING slot, not the refusal's own column: this advisory
-    # explains an absence from ``media_buys[]``, and the offending column travels
-    # with the cause in the server log.
-    return Error.of(  # structural-guard: advisory per-row omission in GetMediaBuysResponse.errors[]
-        exc.error_code,
-        field="media_buys[]",
-        details=ValidationDetails(
-            reasons=["MEDIA_BUY_UNRENDERABLE"],
-            media_buy_id=media_buy_id,
-        ),
+    return Error.of(  # structural-guard: advisory in GetMediaBuysResponse.errors[] for degraded/omitted data
+        AppErrorCode.PERSISTED_VALUE_UNRENDERABLE,
+        field=field_path,
+        details=ValidationDetails(reasons=[reason], media_buy_id=media_buy_id, package_id=package_id),
     )
 
 
@@ -531,17 +506,22 @@ def _fetch_target_media_buys(
             if filter_statuses is not None and wire_status not in filter_statuses:
                 continue
             revision = _persisted_revision(buy)
-        except AdCPPersistedStateError as exc:
+        except AdCPPersistedStateError:
             if buyer_named_rows:
                 # The buyer named this row, so a listing without it answers "no such
                 # media buy" — a worse answer than the terminal error naming the
                 # seller-side defect (ruling R-M1).
                 raise
-            row_advisories.append(_omitted_row_advisory(buy.media_buy_id, exc))
+            row_advisories.append(
+                _persisted_value_advisory(
+                    field_path="media_buys", media_buy_id=buy.media_buy_id, reason="MEDIA_BUY_UNRENDERABLE"
+                )
+            )
             continue
         renderable.append(
             _MediaBuyData(
                 media_buy_id=buy.media_buy_id,
+                name=buy.name,
                 currency=buy.currency,
                 budget=buy.budget,
                 raw_request=buy.raw_request,
@@ -550,6 +530,7 @@ def _fetch_target_media_buys(
                 wire_status=wire_status,
                 confirmed_at=buy.confirmed_at,
                 revision=revision,
+                creative_deadline=buy.creative_deadline,
             )
         )
     return renderable

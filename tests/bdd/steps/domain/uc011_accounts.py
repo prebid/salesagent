@@ -161,7 +161,7 @@ def _assert_wire_field_rejection(ctx: dict, field: str, code: str = "INVALID_REQ
     required fields, or violates schema constraints" -- rather than the ACCOUNT
     being unprovisionable, which is what a per-account ``action: "failed"`` result
     reports. VALIDATION_ERROR is for "business rules BEYOND schema validation".
-    @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json
+    @source repo=adcp ref=v3.2.1 path=dist/schemas/3.1.1/enums/error-code.json
       pointer=/INVALID_REQUEST  (pinned: tests/fixtures/adcp_schemas_pinned/enums/error-code.json:102)
     """
     result = ctx.get("result")
@@ -228,7 +228,13 @@ def _action_str(action: Any) -> str:
 
 
 def _brand_id_str(bid: Any) -> str | None:
-    """Extract string value from BrandId (RootModel[str]) or return as-is."""
+    """Extract the string value of a brand id, whatever shape it arrives in.
+
+    ``BrandId`` is a ``ScalarStr`` -- a plain ``str`` subclass -- from adcp 9 on,
+    so the ``isinstance(bid, str)`` branch is what answers today. It was a
+    ``RootModel[str]`` before; the ``.root`` read below stays only for a caller
+    still handing one over, and must not be copied into new code.
+    """
     if bid is None:
         return None
     if isinstance(bid, str):
@@ -266,7 +272,7 @@ def _make_governance_agent(url: str = "https://compliance.example.com/check") ->
     omission-preserves scenario (salesagent-gcze) is the first, and it must
     fail on the governance wipe, not on the fixture.
     """
-    from adcp.types.generated_poc.core.account import GovernanceAgent  # TODO: no stable alias in adcp.types
+    from adcp.types.domains.core.account import GovernanceAgent  # TODO: no stable alias in adcp.types
 
     return GovernanceAgent(url=url).model_dump(mode="json")
 
@@ -433,18 +439,19 @@ def given_agent_passthrough_only(ctx: dict) -> None:
     capability ACCEPTS the requested value but the calling buyer agent's
     commercial relationship with the seller does not (e.g., the agent is
     onboarded as passthrough-only — no payments relationship — so ``agent`` and
-    ``advertiser`` reject)." The correct fixture therefore declares agent (and
-    advertiser) as *capability-supported* — the value is enum-valid AND in the
-    seller's supported_billing — so the ONLY thing that could reject it is the
-    per-buyer-agent commercial gate. Production has no such gate (GH #1772), so it
-    accepts the capability-supported value and provisions the account; that is
-    the gap these scenarios grade (strict xfail in conftest _XFAIL_TAGS).
+    ``advertiser`` reject)." The fixture therefore declares agent (and advertiser)
+    as *capability-supported* — the value is enum-valid AND in the seller's
+    supported_billing — so the ONLY thing that can reject it is the per-buyer-agent
+    commercial gate, and then records the agent's relationship where the seller
+    keeps it: the principal's onboarding row (``billing_passthrough_only``).
 
-    Real DB seeding via ``set_billing_policy`` (writes the tenant
-    ``supported_billing`` column) — NOT mock injection — so the setup is
-    e2e_rest-compatible.
+    Both writes are real DB state — the tenant ``supported_billing`` column and the
+    principal row — NOT mock injection, so the setup is the same on every transport,
+    e2e_rest included.
     """
+    _setup_tenant_and_principal(ctx)
     _set_billing_policy(ctx, ["operator", "agent", "advertiser"])
+    ctx["env"].register_agent_as_passthrough_only()
 
 
 def _set_approval_mode(ctx: dict, mode: str) -> None:
@@ -907,7 +914,7 @@ def then_validation_error(ctx: dict) -> None:
     INVALID_REQUEST ("Request is malformed, missing required fields, or violates
     schema constraints"). VALIDATION_ERROR is reserved for "invalid field values
     or violates business rules BEYOND schema validation", which this is not.
-    @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json
+    @source repo=adcp ref=v3.2.1 path=dist/schemas/3.1.1/enums/error-code.json
       pointer=/INVALID_REQUEST  (pinned locally at
       tests/fixtures/adcp_schemas_pinned/enums/error-code.json:102 and :149)
 
@@ -1653,26 +1660,26 @@ def then_per_account_error_details_scope(ctx: dict, scope: str) -> None:
     assert actual == scope, f"Expected per-account error details.scope '{scope}', got {actual!r}"
 
 
-@then("the per-account error details supported_billing echoes the seller's supported billing values")
+@then("the per-account error details supported_billing, if sent, echoes the seller's supported billing values")
 def then_per_account_error_details_supported_billing(ctx: dict) -> None:
-    """Assert details.supported_billing echoes the seller's configured supported set.
+    """Assert a sent details.supported_billing is the seller's configured supported set.
 
-    Spec: error-details/billing-not-supported.json#/properties/supported_billing
-    (array, minItems: 1, "Sellers MAY omit this field" when the resolved supported
-    set is empty) -- compares order-insensitively against the policy the Given step
-    configured via ``_set_billing_policy``, stashed at ``ctx["configured_billing_policy"]``.
+    Spec: error-details/billing-not-supported.json#/properties/supported_billing is an
+    "Echoed copy of the seller's supported_billing capability" and "Sellers MAY omit this
+    field", and billing-gate-dispatch.yaml says it "is intentionally not required". So
+    absence is conformant; a sent value that differs from the capability is not. Compared
+    order-insensitively against the policy the Given configured via
+    ``_set_billing_policy``, stashed at ``ctx["configured_billing_policy"]``.
     """
     configured = ctx.get("configured_billing_policy")
     assert configured is not None, "No configured billing policy captured — a prior Given must set the seller's policy"
-    errors = _last_account_errors(ctx)
-    err = next((e for e in errors if e.code == "BILLING_NOT_SUPPORTED"), None)
-    assert err is not None, f"No BILLING_NOT_SUPPORTED error present, got codes {[e.code for e in errors]}"
-    details = getattr(err, "details", None) or {}
-    actual = details.get("supported_billing")
-    assert actual is not None, f"Expected details.supported_billing to be present, got details={details!r}"
-    assert set(actual) == set(configured), (
-        f"Expected details.supported_billing to echo the seller's supported billing values "
-        f"{configured!r} (order-insensitive), got {actual!r}"
+    errors = _sole_account_errors(ctx)
+    entry = next((e for e in errors if e.get("code") == "BILLING_NOT_SUPPORTED"), None)
+    assert entry is not None, f"No BILLING_NOT_SUPPORTED error on the wire, got codes {[e.get('code') for e in errors]}"
+    sent = entry.get("details", {}).get("supported_billing")
+    assert sent is None or sorted(sent) == sorted(configured), (
+        f"details.supported_billing, when sent, must echo the seller's supported billing values "
+        f"{configured!r} (order-insensitive), got {sent!r}"
     )
 
 
@@ -1727,11 +1734,11 @@ def then_operation_error_naming_field(ctx: dict, code: str, field: str) -> None:
 #     ``recovery`` and NO ``details`` (scope/supported_billing), and the rejected
 #     entry is NOT persisted (the loop ``continue``s), so a recovery retry with a
 #     supported value provisions a fresh account (action "created").
-#   - There is NO per-buyer-agent commercial gate anywhere in production: a
-#     capability-supported billing value ("agent" when the tenant declares it in
-#     supported_billing) is accepted and the account is provisioned. Production
-#     therefore never emits BILLING_NOT_PERMITTED_FOR_AGENT — the per-agent
-#     reject/recover scenarios stay strict tag-level xfails (conftest _XFAIL_TAGS).
+#   - The per-buyer-agent gate (_check_agent_billing_permission) runs after the
+#     capability gate: a capability-supported value the calling agent's onboarding
+#     record does not allow (passthrough-only: anything but "operator") is rejected
+#     with BILLING_NOT_PERMITTED_FOR_AGENT and the clamped details
+#     {rejected_billing, suggested_billing}, and the entry is not persisted.
 # ═══════════════════════════════════════════════════════════════════════
 
 
@@ -1784,18 +1791,19 @@ def when_retry_sync_with_billing(ctx: dict, billing: str) -> None:
     "the Buyer Agent retries the sync_accounts request with the seller's suggested_billing value and a fresh idempotency_key"
 )
 def when_retry_sync_with_suggested_billing(ctx: dict) -> None:
-    """Retry the prior request with the seller's suggested_billing value.
+    """Retry the prior request with the value the seller put in details.suggested_billing.
 
-    For a passthrough-only agent the single canonical retry value is
-    ``operator`` (error-details/billing-not-permitted-for-agent.json:
-    "Typically ``operator`` for passthrough-only agents"; examples[0] =
-    {"rejected_billing": "agent", "suggested_billing": "operator"}). Production
-    never emits ``suggested_billing`` (no per-agent gate, GH #1772), so this leg is
-    only reached after the scenario has already xfailed on the missing
-    BILLING_NOT_PERMITTED_FOR_AGENT error — the step exists so the scenario runs
-    non-dormant.
+    READ OFF THE PRIOR RESPONSE, the way the storyboard captures it
+    (billing-gate-dispatch.yaml per_agent_gate_reject ``context_outputs:
+    accounts[0].errors[0].details.suggested_billing``), never typed here: a retry that
+    hard-coded ``operator`` would pass the recover leg whatever the seller suggested,
+    or whether it suggested anything at all. An absent suggestion means
+    terminal-pending-onboarding (error-details/billing-not-permitted-for-agent.json),
+    so there is nothing to retry with and the step fails rather than inventing one.
     """
-    _retry_sync_with_billing(ctx, "operator")
+    suggested = _agent_gate_error_details(ctx).get("suggested_billing")
+    assert suggested, "the seller suggested no billing value to retry with (details.suggested_billing absent)"
+    _retry_sync_with_billing(ctx, suggested)
 
 
 def _last_account_errors(ctx: dict) -> list[Any]:
@@ -3624,8 +3632,39 @@ def _notif_config(
     return entry
 
 
-def _dispatch_sync_notification(ctx: dict, domain: str, notification_configs: list[dict[str, Any]]) -> None:
+def _notif_entry(domain: str, notification_configs: list[dict[str, Any]], *, sandbox: bool = False) -> dict[str, Any]:
+    """The one provisioning accounts[] entry every notification_configs scenario sends.
+
+    Shared by the typed dispatch below and by the event-scope When, which must send the
+    SAME entry as a literal payload because the value it carries is schema-invalid on
+    purpose and so cannot survive ``SyncAccountsRequest``. ``sandbox`` is sent only when
+    asked for: the key is part of the natural key, so an omitted flag and ``false`` are
+    the same production account and every pre-existing caller stays byte-identical.
+    """
+    entry: dict[str, Any] = {
+        "brand": {"domain": domain},
+        "operator": domain,
+        "billing": "operator",
+        "notification_configs": notification_configs,
+    }
+    if sandbox:
+        entry["sandbox"] = True
+    return entry
+
+
+def _dispatch_sync_notification(
+    ctx: dict, domain: str, notification_configs: list[dict[str, Any]], *, sandbox: bool = False
+) -> None:
     """Dispatch a sync_accounts request carrying a notification_configs array for one account.
+
+    THE POSITIVE-PATH DISPATCH for this surface: every caller sends a document the pinned
+    ``core/notification-config.json`` accepts, so building the request model here is
+    correct and a construction failure is an authoring bug. It is deliberately NOT wrapped
+    in ``except Exception: ctx["error"] = exc`` — that wrapper stashed a pydantic error
+    raised in the TEST process and dispatched nothing, so the scenario graded the model and
+    said nothing about the seller (the same defect :func:`_sync_raw` documents, and exactly
+    how T-UC-011-notif-event-scope-reject came to assert on an empty context). A scenario
+    whose document the model refuses belongs on :func:`_sync_raw`, not here.
 
     ``ctx["signed"]`` asks for a REAL RFC 9421 signature on this dispatch and is
     forwarded rather than branched on (salesagent-n78j0.1.3): a registration carrying
@@ -3635,17 +3674,11 @@ def _dispatch_sync_notification(ctx: dict, domain: str, notification_configs: li
     """
     from src.core.schemas.account import SyncAccountsRequest
 
-    entry = {
-        "brand": {"domain": domain},
-        "operator": domain,
-        "billing": "operator",
-        "notification_configs": notification_configs,
-    }
-    try:
-        req = SyncAccountsRequest(idempotency_key=fresh_idempotency_key(), accounts=[entry])
-        dispatch_request(ctx, req=req, signed=ctx.get("signed", False))
-    except Exception as exc:
-        ctx["error"] = exc
+    req = SyncAccountsRequest(
+        idempotency_key=fresh_idempotency_key(),
+        accounts=[_notif_entry(domain, notification_configs, sandbox=sandbox)],
+    )
+    dispatch_request(ctx, req=req, signed=ctx.get("signed", False))
 
 
 def _sub_attr(sub: Any, name: str) -> Any:
@@ -3911,14 +3944,23 @@ def when_sync_provision_paused_subscriber_event_types(ctx: dict, domain: str, su
     event-scope rejection rather than credential handling.
 
     Spec: core/notification-config.json#/properties/event_types — media-buy-anchored
-    types (scheduled, final, delayed, adjusted, impairment) "are invalid on this
-    surface; sellers MUST reject those entries as per-account validation failures with
-    INVALID_REQUEST or VALIDATION_ERROR and error.field pointing at the invalid
+    types (``scheduled``, ``final``, ``delayed``, ``adjusted``, ``window_update``,
+    ``impairment``) and agent-anchored ``capabilities.changed`` "are schema-invalid on
+    this surface and sellers MUST reject those entries as per-account validation failures
+    with INVALID_REQUEST or VALIDATION_ERROR and error.field pointing at the invalid
     event_types entry rather than silently dropping them".
+
+    SENDS A LITERAL PAYLOAD, through :func:`_sync_raw`, and that stays true now that the
+    DTO carries the value inward (#2353). The request is schema-invalid on purpose --
+    which is why the graded storyboard marks its vector ``sample_request_skip_schema:
+    true`` -- so building a ``SyncAccountsRequest`` here would assert something about the
+    TEST process rather than about the seller. The obligation is what
+    ``_check_notification_configs`` does with the document, so the document is what gets
+    sent.
     """
     ctx["notif_domain"] = domain
     cfg = _notif_config(sub, url, ets, active=False)
-    _dispatch_sync_notification(ctx, domain, [cfg])
+    _sync_raw(ctx, accounts=[_notif_entry(domain, [cfg])])
 
 
 @when(
@@ -3950,6 +3992,28 @@ def when_sync_provision_paused_subscriber(ctx: dict, domain: str, sub: str, url:
     auth = {"schemes": ["Bearer"], "credentials": credential}
     cfg = _notif_config(sub, url, ets, active=False, authentication=auth)
     _dispatch_sync_notification(ctx, domain, [cfg])
+
+
+@when(
+    parsers.re(
+        r"the Buyer Agent sends a sync_accounts request provisioning a sandbox account for brand domain "
+        r'"(?P<domain>[^"]+)" with a paused notification config subscriber "(?P<sub>[^"]+)" for url '
+        r'"(?P<url>[^"]+)" and event_types "(?P<ets>[^"]+)"'
+    )
+)
+def when_sync_provision_sandbox_paused_subscriber(ctx: dict, domain: str, sub: str, url: str, ets: str) -> None:
+    """Provision a SANDBOX account carrying one paused subscriber, as the storyboard sends it.
+
+    The shape of notification-config-lifecycle.yaml ``sync_accounts_create_paused_notification_config``:
+    a provisioning entry with ``sandbox: true`` and one ``active: false`` subscriber. Both
+    halves are graded apart elsewhere (sandbox provisioning, paused registration); this is
+    the combination the storyboard sends, where a seller whose sandbox posture refuses the
+    entry never reaches the subscriber at all. A conformant document, so it goes through
+    the typed positive-path dispatch.
+    """
+    ctx["notif_domain"] = domain
+    cfg = _notif_config(sub, url, ets, active=False)
+    _dispatch_sync_notification(ctx, domain, [cfg], sandbox=True)
 
 
 @when(

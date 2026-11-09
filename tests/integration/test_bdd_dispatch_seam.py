@@ -9,7 +9,7 @@ and merges ``req.model_dump(exclude_none=True)`` under the caller's explicit kwa
 That ground is an argument, and an argument is not a measurement. The measurement is
 here: send a ``format_ids`` FILTER through the seam on every transport and require the
 seller to honour it. If ``req`` stopped reaching the tool as arguments on MCP, the
-filter would be dropped and the full reference catalog would come back — so this fails
+filter would be dropped and every format the product declares would come back — so this fails
 on exactly the regression the deletion could have caused, rather than restating the
 implementation.
 
@@ -31,6 +31,8 @@ from tests.harness.creative_formats import CreativeFormatsEnv
 #: One of the twelve pin-expressible reference formats (the same id UC-005's
 #: roundtrip scenario seeds, for the reason its comment gives).
 FILTERED_FORMAT_ID = "video_vast"
+#: Another reference format, declared beside it so an unfiltered answer is not one entry.
+OTHER_FORMAT_ID = "display_300x250_image"
 
 
 @pytest.mark.requires_db
@@ -38,6 +40,9 @@ class TestCallViaForwardsReqWholeAndTheEnvUnpacksIt:
     @pytest.mark.parametrize("transport", ["rest", "a2a", "mcp"])
     def test_a_format_ids_filter_still_reaches_the_tool(self, transport: str, integration_db: object) -> None:
         with CreativeFormatsEnv() as env:
+            # The list projects the seller's product declarations, so the product declares
+            # the filtered format AND one more: a dropped filter then returns both.
+            env.declare_reference_formats(FILTERED_FORMAT_ID, OTHER_FORMAT_ID)
             ctx: dict = {"env": env}
             req = ListCreativeFormatsRequest(format_ids=[FormatId(agent_url=DEFAULT_AGENT_URL, id=FILTERED_FORMAT_ID)])
             _call_via(ctx, transport, req=req)
