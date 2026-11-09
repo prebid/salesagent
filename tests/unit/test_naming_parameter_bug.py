@@ -34,6 +34,14 @@ def _no_platform_ai_key():
         yield
 
 
+def _make_request(domain: str = "acme.com") -> MagicMock:
+    """The adapter's create request as the naming path reads it: a brand domain and no packages."""
+    request = MagicMock()
+    request.brand = MagicMock(domain=domain)
+    request.packages = []
+    return request
+
+
 class TestRenderOrderNameParameters:
     """Tests for render_order_name parameter handling."""
 
@@ -45,9 +53,7 @@ class TestRenderOrderNameParameters:
         string landing in the AI-configuration parameter. The signature refuses it before
         the call runs.
         """
-        request = MagicMock()
-        request.brand = MagicMock(domain="testbrand.com")
-        request.packages = []
+        request = _make_request(domain="testbrand.com")
         gemini_key = "AIzaSy..."  # A string API key
 
         with pytest.raises(TypeError, match="positional argument"):
@@ -55,10 +61,7 @@ class TestRenderOrderNameParameters:
 
     def test_keyword_arg_works_correctly(self):
         """The seller's AI configuration, passed by keyword, reaches generate_auto_name."""
-        request = MagicMock()
-        request.brand = MagicMock(domain="testbrand.com")
-        request.get_total_budget.return_value = 1000
-        request.packages = []
+        request = _make_request(domain="testbrand.com")
 
         packages = []
         start_time = datetime(2025, 1, 1)
@@ -105,9 +108,7 @@ class TestAutoNameIsAskedOnlyWhenTheTemplateNamesIt:
         ids=["default-template", "similar-name", "alone", "first-alternative", "later-alternative-spaced"],
     )
     def test_generate_auto_name_runs_exactly_when_referenced(self, template, asked, rendered):
-        request = MagicMock()
-        request.brand = MagicMock(domain="acme.com")
-        request.packages = []
+        request = _make_request()
         config = TenantAIConfig(provider="google", model=DEFAULT_GOOGLE_MODEL, api_key="seller-key")
 
         with patch("src.core.utils.naming.generate_auto_name", return_value="AI Name") as auto_name:
@@ -120,9 +121,7 @@ class TestAutoNameIsAskedOnlyWhenTheTemplateNamesIt:
 
     def test_no_template_renders_the_default_without_asking_the_model(self):
         """None is the seller who configured no template: the default, which names no auto_name."""
-        request = MagicMock()
-        request.brand = MagicMock(domain="acme.com")
-        request.packages = []
+        request = _make_request()
 
         with patch("src.core.utils.naming.generate_auto_name", return_value="AI Name") as auto_name:
             name = render_order_name(
@@ -137,19 +136,11 @@ class TestAutoNameIsAskedOnlyWhenTheTemplateNamesIt:
 class TestMediaBuyIdInOrderName:
     """Tests for media_buy_id in render_order_name."""
 
-    @staticmethod
-    def _make_request():
-        request = MagicMock()
-        request.brand = MagicMock(domain="acme.com")
-        request.get_total_budget.return_value = 1000
-        request.packages = []
-        return request
-
     def test_media_buy_id_is_rendered(self):
         """media_buy_id should be substituted when provided."""
         name = render_order_name(
             "{media_buy_id}",
-            self._make_request(),
+            _make_request(),
             [],
             datetime(2025, 1, 1),
             datetime(2025, 1, 31),
@@ -159,9 +150,7 @@ class TestMediaBuyIdInOrderName:
 
     def test_media_buy_id_empty_when_not_provided(self):
         """media_buy_id should default to empty string when not provided."""
-        name = render_order_name(
-            "{media_buy_id}", self._make_request(), [], datetime(2025, 1, 1), datetime(2025, 1, 31)
-        )
+        name = render_order_name("{media_buy_id}", _make_request(), [], datetime(2025, 1, 1), datetime(2025, 1, 31))
         assert name == ""
 
     @pytest.mark.parametrize(
@@ -171,7 +160,7 @@ class TestMediaBuyIdInOrderName:
     def test_no_empty_placeholders_with_media_buy_id(self, template):
         """Template should not produce double-space artifacts when media_buy_id is provided."""
         name = render_order_name(
-            template, self._make_request(), [], datetime(2025, 1, 1), datetime(2025, 1, 31), media_buy_id="buy_abc123"
+            template, _make_request(), [], datetime(2025, 1, 1), datetime(2025, 1, 31), media_buy_id="buy_abc123"
         )
         assert "  " not in name
         assert "buy_abc123" in name

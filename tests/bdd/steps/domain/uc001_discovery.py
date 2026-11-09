@@ -26,7 +26,7 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import wire_field
+from tests.bdd.steps._outcome_helpers import wire_product_ids
 from tests.bdd.steps.domain.uc_get_products_inventory import given_tenant
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories import PricingOptionFactory, ProductFactory
@@ -53,11 +53,6 @@ def _add_catalog_product(ctx: dict, product_id: str, name: str) -> None:
     product = ProductFactory(tenant=ctx["tenant"], product_id=product_id, name=name)
     PricingOptionFactory(product=product)
     catalog.append(product_id)
-
-
-def _wire_product_ids(ctx: dict) -> list[str]:
-    """The product_ids of ``products[]`` in the order the buyer receives them."""
-    return [product["product_id"] for product in wire_field(ctx, "products")]
 
 
 # ── The seller's own AI configuration ───────────────────────────────
@@ -237,7 +232,7 @@ def then_product_excluded(ctx: dict) -> None:
     """The scored product is dropped, and nothing else is: products[] is the catalog without it."""
     (excluded,) = ctx["relevance_scores"]
     expected = [product_id for product_id in ctx["catalog"] if product_id != excluded]
-    actual = _wire_product_ids(ctx)
+    actual = wire_product_ids(ctx)
     assert actual == expected, f"Expected products[] {expected} ({excluded!r} excluded), got {actual}"
 
 
@@ -252,7 +247,7 @@ def then_products_sorted_by_score(ctx: dict) -> None:
     scores: dict[str, float] = ctx["relevance_scores"]
     expected = sorted(scores, key=scores.__getitem__, reverse=True)
     assert expected != ctx["catalog"], f"score order {expected} equals catalog order, so ranking is not observable"
-    actual = _wire_product_ids(ctx)
+    actual = wire_product_ids(ctx)
     assert actual == expected, f"Expected products[] sorted by score {expected}, got {actual}"
 
 
@@ -263,5 +258,5 @@ def then_products_sorted_by_score(ctx: dict) -> None:
 def then_full_catalog_in_catalog_order(ctx: dict) -> None:
     """products[] is the whole catalog, in catalog order: nothing ranked, filtered or blocked."""
     expected = ctx["catalog"]
-    actual = _wire_product_ids(ctx)
+    actual = wire_product_ids(ctx)
     assert actual == expected, f"Expected the catalog {expected} in catalog order, got {actual}"
