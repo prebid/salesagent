@@ -26,23 +26,47 @@
 # entries now owned by the env E2EUnsupportedSetup declaration. 47 genuine-gap
 # entries remain, grouped by gap below.
 #
-# FINAL SET AFTER THE main MERGE: 14 entries =
+# SET AFTER THE main MERGE: 14 entries =
 #   5  uc004 invalid-input rows the live server still accepts (spec-production gap)
 #   2  explicit inline-xfail production gaps (attribution default, push-notification ack)
 #   7  parallel-e2e_rest mock-injection artifacts (E2E_PER_WORKER, owner-approved)
 # (was 10 — the 3 uc018 rows GRADUATED 2026-08-31 on main; see that block below.)
 # The 4 uc004 date-range rows and the 2 uc004 account valid rows GRADUATED at the
 # #1417 merge and must never be re-added.
+#
+# Do not read that breakdown as the current set — it is the composition at that merge,
+# and it has shrunk four times since. ``EXPECTED_LEDGER`` in
+# tests/unit/test_e2e_rest_ledger_state.py is the only count that cannot go stale,
+# because the lock test fails when it and this file disagree. A per-graduation note
+# lives at each block below; the number at the top does not get maintained.
 
 # --- uc004 invalid-input validation — wire shape — GRADUATED (#1430 jdy1-M1) ---
 # Fixed by mapping FastAPI 422 -> AdCPValidationError in parse_rest_error
 # (tests/harness/_base.py); the 6 entries now xpass in-network (innet_120626_1848).
 
-# --- uc004 invalid-input validation — accepted by live server (5) ---
+# --- uc004 invalid-input validation — accepted by live server (1) ---
 # GENUINE GAP: the live server accepts these inputs that the spec marks invalid
-# (owner-mismatch principal, out-of-enum sampling, string "true" daily-breakdown,
-# geo metro without system).
+# (owner-mismatch principal, out-of-enum sampling, geo metro without system).
 # Production does not validate them — a real spec-production gap, tracked for src/ fix.
+#
+# Graduated 2026-10-09 — the daily-breakdown row (string 'true' → INVALID_REQUEST),
+# inspected against .claude/rules/workflows/xpass-graduation.md. The STALE RISK note
+# that stood here predicted exactly this and named what it was waiting for ("no
+# in-network run was made to show it"); innet_091026_1343 (bdd_e2e.json) is that run,
+# and the row XPASSED in it over real HTTP — POST /api/v1/media-buys/delivery → 400.
+# Re-grounded at the 3.2.1 pin, not the 3.1.1 one the scenario was written against:
+# 3.2/bundled/media-buy/get-media-buy-delivery-request.json still types
+# include_package_daily_breakdown as `"type": "boolean"`, so "true" is invalid input,
+# and 3.2/enums/error-code.json still carries INVALID_REQUEST with a suggestion — the
+# scenario's expected cell is the pin's obligation verbatim, not an over-specification.
+# The row's Then is the strong one: the `error "<CODE>" with suggestion` cell routes
+# through _assert_error_outcome → TransportResult.assert_wire_error(code,
+# require_suggestion=True), which grades the captured wire envelope (recovery
+# pin-defaulted from the error-code enum), so a refusal carrying a different code or no
+# suggestion fails. Both Givens go through the shared env (_ensure_media_buy_in_db,
+# env.set_adapter_response with its @realize_e2e(_persist_simulation_config)), so every
+# transport runs the same setup. a2a, mcp and rest all pass PLAIN in-process in the same
+# run, so the ledger line was the only routing left holding it.
 # (campaign-unit interval!=1 GRADUATED at the main merge: upstream regenerated the
 # scenario's expected cell `invalid` -> `error "VALIDATION_ERROR" with suggestion`,
 # the old `-invalid]` nodeid no longer collects, and the renamed scenario passes
@@ -53,7 +77,6 @@
 # partition twins (start_after_end / start_equals_end) on origin/pr-1417 itself
 # (d4af23095, strict-xfail XPASS in-network) — that is the positive evidence the
 # twins were waiting for, so all four date-range rows are off the ledger.
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_include_package_daily_breakdown_boundary__boundary_point[e2e_rest-string 'true' (non-boolean type)-"true"-invalid]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-geo with geo_level=metro but no system (behavioral gap)-{"geo": {"geo_level": "metro"}}-invalid]
 
 # --- uc004 delivery account valid rows — GRADUATED (#1417 merge) ---
@@ -117,11 +140,14 @@ tests/bdd/test_uc011_manage_accounts.py::test_push_notification_for_async_status
 # failed with 'asyncio.run() cannot be called from a running event loop').
 # Verified in-network: all 4 transports pass incl. e2e_rest.
 
-# --- parallel e2e_rest mock-injection artifacts (2) ---
+# --- parallel e2e_rest mock-injection artifacts (0 — BLOCK FULLY GRADUATED) ---
 # Added 2026-07-09: surfaced when perf/parallelize-test-suite enabled parallel
 # e2e_rest (E2E_PER_WORKER). Mock-injection-incompatible artifacts, not regressions:
 # UC-005 set_registry_formats is not visible to the separate HTTP server.
 # Ledger: salesagent-5p68 / e2e_rest retirement issue #1418.
+# The clause above never described a single row that sat here. All of them are
+# graduated; the notes are kept because each records the mechanism the clause got
+# wrong, which is the part that generalizes. Do not re-add a row under this header.
 #
 # Graduated 2026-09-15 — the 4 UC-004 delivery rows, one at a time, each inspected
 # against .claude/rules/workflows/xpass-graduation.md and adversarially re-checked.
@@ -144,20 +170,51 @@ tests/bdd/test_uc011_manage_accounts.py::test_push_notification_for_async_status
 # values. XPASSED in-network in innet_150926_0531. The two rows that remain below are
 # NOT covered by this note.
 #
-# The baseline row still genuinely fails in-network.
+# Graduated 2026-10-09 — BOTH remaining rows, one at a time, each inspected against
+# .claude/rules/workflows/xpass-graduation.md. Their routing was the ledger line alone:
+# the e2e_rest marker collapse (conftest :4489) reports the ledger reason for both, so
+# no second strict route was hiding under them.
 #
-# The third-party-agent row was xpassing VACUOUSLY: its ONE discriminating assertion --
-# the seller must not substitute its own same-id format for a foreign reference, which
-# is what separates (agent_url, id) matching from id-only matching -- compared a
-# hand-built raw tuple against canonicalized identities. format_id_identity
-# canonicalizes the agent_url (core/format-id.json makes that a MUST for anyone
-# comparing two format-id values), turning ...adcontextprotocol.org into
-# ...adcontextprotocol.org/, so the two could never be equal and the assertion held
-# whatever the seller returned. Measured, not inferred. The comparison now runs both
-# sides through format_id_identity and fires on a substitution; the in-process
-# transports pass with it. The row stays here until an in-network run says what the
-# repaired assertion does over real HTTP -- graduating it on the strength of the run
-# that xpassed the BROKEN assertion would be citing the wrong measurement.
+# Re-grounded at the 3.2.1 pin first, since both scenarios were written against 3.1.1.
+# The storyboard half of each citation is GONE at the pin: v3.2.1 carries no
+# `creative_sync`/`list_formats` step in protocols/media-buy/index.yaml and no
+# `discover_formats` phase in protocols/creative/index.yaml, so neither obligation is
+# graded upstream any more (the third-party scenario's own text already says so). The
+# SCHEMA half of the baseline row survives intact and is what it grades:
+# 3.2/core/format-id.json still declares required [agent_url, id], and its agent_url
+# description still carries the canonicalization MUST the third-party row compares on.
+# Neither row is over-specified against 3.2.1.
+#
+# The baseline row's "still genuinely fails in-network" note above was TRUE when
+# written and names the wrong line now. Measured: in innet_061026_1351 this node FAILED
+# with `[XPASS(strict)] upstream adcp#7338: the response asset oneOf omits
+# pixel_tracker` — a SECOND, strict route from the #7338 _SELECTIVE_XFAIL block, not
+# this ledger entry. 53bb472a4 graduated those six #7338 entries, and the node has
+# XPASSED in both in-network runs since (innet_071026_0547, innet_091026_1343). Its
+# Thens read the real HTTP body through `wire_field(ctx, "formats")` and assert
+# per-entry that format_id is an object with both members, with the preceding When
+# refusing an empty array — so an empty catalog cannot satisfy it.
+#
+# The third-party row was xpassing VACUOUSLY: its ONE discriminating assertion -- the
+# seller must not substitute its own same-id format for a foreign reference, which is
+# what separates (agent_url, id) matching from id-only matching -- compared a
+# hand-built raw tuple against canonicalized identities, so the two could never be
+# equal and the assertion held whatever the seller returned. be2c9f501 repaired it to
+# run both sides through format_id_identity. That is what this note said the row was
+# waiting on: "the row stays here until an in-network run says what the REPAIRED
+# assertion does over real HTTP". Three consecutive in-network runs now say it XPASSES
+# (innet_061026_1351, innet_071026_0547, innet_091026_1343), and the falsifier survives
+# the transport: set_registry_formats does not inject over e2e (it validates
+# realizability against the live catalog), and the live reference catalog carries
+# display_300x250_image under the SELLER's agent_url — so an id-only filter regression
+# would surface that entry and fire the assertion there too.
+#
+# Production explains both. creative_formats.py:271 filters req.format_ids through
+# format_id_identity on both sides, and the REFERENCE_NOT_FOUND routing (:565) fires
+# only on a registry FETCH failure — a foreign agent the seller simply does not host
+# produces an empty match and no advisory, which is the "observation, not a graded
+# failure" the scenario demands. Both rows pass PLAIN on a2a, mcp and rest in-process
+# in innet_091026_1343.
 #
 # Graduated 2026-08-31 — the 3 UC-018 rows, one at a time, each inspected against
 # .claude/rules/workflows/xpass-graduation.md. The block's UC-018 clause ("injected
@@ -171,8 +228,6 @@ tests/bdd/test_uc011_manage_accounts.py::test_push_notification_for_async_status
 # counter steps refuse to pass on an empty array. All three pass on a2a, mcp and
 # rest in-process, and XPASSED in three consecutive in-network runs spanning two
 # merges from main: innet_270826_0338, innet_270826_1824, innet_310826_1248.
-tests/bdd/test_uc005_discover_creative_formats.py::test_baseline_list_creative_formats_response_carries_format_id_objects_with_agent_url_and_id[e2e_rest]
-tests/bdd/test_uc005_discover_creative_formats.py::test_format_id_with_agent_url_pointing_at_a_thirdparty_creative_agent_is_reported_as_observation_not_failure[e2e_rest]
 
 # UC-010 capability-degradation scenarios (eiww batches chbi/tmpd) — RESOLVED
 # 2026-07-24 (salesagent-689e). The 6 entries formerly here split per the
@@ -214,7 +269,7 @@ tests/bdd/test_uc005_discover_creative_formats.py::test_format_id_with_agent_url
 #   - targeting granularity: no per-tenant surface exists and none is being added.
 #     The three rows below record that.
 
-# --- upstream adcp#7338 on the live catalog (1) ---
+# --- upstream adcp#7338 on the live catalog (0 — BLOCK GRADUATED) ---
 # Added 2026-09-13 when @T-UC-005-main's Given moved from minted fmt_N ids to three
 # reference-catalog formats (the tag-level strict xfail that parked all four transports
 # is gone; in-process the scenario now grades POST-S1/S2 for real). Over e2e_rest the
@@ -229,7 +284,7 @@ tests/bdd/test_uc005_discover_creative_formats.py::test_format_id_with_agent_url
 # publishes pixel_tracker assets on 45 formats and its core/format.json admits none.
 # adcp#7338 fixed the schema in v3.1.22. tests/fixtures/creative_formats/reference_formats.json
 # is now captured at agent pin 76b031a85eb8 (v3.1.25), which carries the same 45, while the
-# feature files still cite the v3.1.1 schemas (@source ref=v3.1.1 commit=467fd93d7). So the
+# feature files still cite the v3.1.1 schemas (@source ref=v3.2.1 commit=467fd93d7). So the
 # row graduates when the SPEC pin moves to v3.1.22 or later, not when the agent pin moves.
 # The adcp SDK from that release ALREADY accommodates the mismatch on the read path:
 # adcp/types/aliases.py adds an UnknownFormatAsset arm to Format.assets because "AdCP
@@ -259,7 +314,50 @@ tests/bdd/test_uc005_discover_creative_formats.py::test_format_id_with_agent_url
 # never reaches the success schema. But any uc005 scenario that graduates onto a success path
 # over e2e_rest lands on this defect immediately. Expect that rather than reading it as a
 # regression.
-tests/bdd/test_uc005_discover_creative_formats.py::test_discover_full_format_catalog[e2e_rest]
+#
+# CONDITION NOW MET, ROW DELIBERATELY KEPT (2026-10-06, lane/bdd-category @ 549c3bc5d).
+# This block graduates "when the SPEC pin moves to v3.1.22 or later". It has: at the 3.2
+# pin core/format.json admits pixel_tracker, vast_tracker, daast_tracker, card and
+# published_post -- the five adcp#7421 added. The six in-process #7338 entries
+# (two tags in _XFAIL_TAGS, four row-level in _SELECTIVE_XFAIL, 69 nodes) were graduated
+# in that change on an in-process run.
+#
+# THIS ROW IS NOT GRADUATED, because nothing here measured e2e_rest. Only a bdd-in-network
+# run grades this ledger, and none was run. Graduating on the in-process result would be
+# citing the wrong measurement -- exactly what the UC-005 baseline-format-id row above
+# refuses for its own repaired assertion.
+#
+# THE REASON ABOVE IS NOW STALE, AND THE ROW STAYS ANYWAY (2026-10-07). The in-network run
+# innet_061026_1351 (bdd_e2e.json) settled both halves, and they disagree:
+#
+#   - #7338 IS satisfied over e2e_rest. The 23 other uc005 e2e_rest nodes are
+#     XPASS(strict) citing #7338 -- they pass over real HTTP against the live server
+#     (POST /api/v1/creative-formats -> 200 OK). No uc005 e2e_rest record shows a #7338
+#     FAILURE; the only pixel_tracker mentions left are those 23 XPASS reason strings.
+#     So the asset union no longer blocks this transport, and the "SCOPE OF THE GAP"
+#     paragraph above (every uc005 success path fails this check over e2e_rest) no longer
+#     holds.
+#   - but THIS node still fails, for an unrelated reason:
+#       AssertionError: E2E catalog needs at least display, video, audio categories,
+#       got: {'native', 'video', 'dooh', 'display'}   -- extra in the right set: 'audio'
+#     The live e2e catalog carries no `audio` category. That is catalog CONTENT, nothing
+#     to do with the pinned asset union.
+#
+# So this row is now an xfail whose recorded reason is not the defect it is absorbing --
+# the same shape as the six in-process #7338 entries, which were failing on an ambiguous
+# schema filename while ledgered for the asset union. Re-point it at the missing `audio`
+# category (or seed the category) rather than graduating it; #7338 is no longer what holds
+# it here.
+#
+# Graduated: the row above this note, test_discover_full_format_catalog[e2e_rest]. The
+# re-point this block asked for was right about the defect and wrong about where it lived:
+# innet_281026_1316 records the failure as AttributeError: 'Format' object has no attribute
+# 'type', raised by then_all_formats' e2e branch, which compared display/video/audio
+# categories read off a field core/format.json has not declared since the 3.0 major. No
+# category can be seeded for it. The Then now asks the env what its registry serves on
+# each transport (CreativeFormatsEnv.served_registry_formats -- the whole reference
+# catalog over e2e) and checks total_count, membership and, on a single page, identity.
+# Not yet measured in-network: the next bdd-in-network run grades it.
 
 # --- UC-010 targeting granularity has no per-tenant surface (3) ---
 # Added 2026-09-15. These three rows configure a targeting SHAPE per tenant --
@@ -301,12 +399,19 @@ tests/bdd/test_uc010_discover_seller_capabilities.py::test_targeting_capability_
 tests/bdd/test_uc010_discover_seller_capabilities.py::test_targeting_capability_configurations__partition[e2e_rest-nested_populated native postal map and metros-geo_metros.nielsen_dma=true, geo_postal_areas US=["zip"]-geo_metros equals {nielsen_dma: true} and geo_postal_areas has US containing "zip"]
 tests/bdd/test_uc010_discover_seller_capabilities.py::test_targeting_capability_configurations__partition[e2e_rest-postal_areas_native DE/CH/AT via native country-keyed map-geo_postal_areas DE=["plz"] CH=["plz"] AT=["plz"]-geo_postal_areas equals {DE: [plz], CH: [plz], AT: [plz]}]
 
-# salesagent-3cs7o.54 — asset-level provenance is absent from the stored creative over
-# e2e_rest only; the same scenario passes on a2a, mcp and rest. The pin mandates the
-# behaviour (core/creative-asset.json /properties/provenance: an asset with its own
-# provenance "replaces this object entirely (no field-level merging)"), and production
-# carries it on every hop readable from the source — the DTO, deep_strip_to_schema,
-# _build_creative_data, the JSONType serializer, the generative overwrite, the update
-# merge and _validation — each eliminated by direct measurement and listed on the ticket.
-# The remaining step is a live-stack probe, so this is ledgered rather than guessed at.
-tests/bdd/test_uc006_sync_creatives.py::test_inv5__assetlevel_provenance_replaces_creativelevel_entirely[e2e_rest]
+# Graduated: test_uc006_sync_creatives.py::test_inv5__assetlevel_provenance_replaces_
+# creativelevel_entirely[e2e_rest]. The entry read "asset-level provenance is absent from
+# the stored creative over e2e_rest only ... production carries it on every hop readable
+# from the source ... each eliminated by direct measurement ... the remaining step is a
+# live-stack probe". The probe has been taken and the answer was that nothing was absent:
+# the THEN read next(iter(stored_assets.values())) — whichever asset the stored document
+# lists first — and 1883dedc4 made the in-process payload two assets (banner_image +
+# click_url) where it had been one, so the assertion read the url asset and found no
+# provenance on it. Measured on noetis-b-vm, the read-back lists click_url first. The Given
+# now records the role it attached the declaration to and both THENs read that asset.
+# Evidence: in-process a2a/mcp/rest went 3 failed -> 3 passed on a narrowed box run with
+# nothing else changed, and the full in-network run innet_181026_0036 (host noetis-b-vm,
+# run 0c551f12a08c463daaf5cfe62758dfe3) reports this nodeid XPASSED, which is what un-routes
+# it here. Production stores asset-level provenance, as salesagent-gxudh already records
+# (provenance is one of the three pinned fields that DO reach the row).
+# salesagent-3cs7o.54

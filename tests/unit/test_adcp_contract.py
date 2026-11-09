@@ -72,27 +72,27 @@ class TestSchemaMatchesLibrary:
         Non-spec fields should be explicitly documented and eventually removed.
         """
         from adcp import (
-            CreateMediaBuyRequest as LibCreateMediaBuyRequest,
-        )
-        from adcp import (
             GetMediaBuyDeliveryRequest as LibGetMediaBuyDeliveryRequest,
         )
         from adcp import (
             GetSignalsRequest as LibGetSignalsRequest,
         )
+        from adcp import (
+            LegacyCreateMediaBuyRequest as LibCreateMediaBuyRequest,
+        )
 
         # We define it locally in src/core/schemas.py
         from adcp import (
-            ListCreativeFormatsRequest as LibListCreativeFormatsRequest,
+            LegacyListCreativeFormatsRequest as LibListCreativeFormatsRequest,
         )
         from adcp import (
-            ListCreativesRequest as LibListCreativesRequest,
+            LegacyListCreativesRequest as LibListCreativesRequest,
         )
         from adcp import (
-            SyncCreativesRequest as LibSyncCreativesRequest,
+            LegacySyncCreativesRequest as LibSyncCreativesRequest,
         )
         from adcp.types import (
-            GetProductsWholesaleRequest as LibGetProductsRequest,
+            LegacyGetProductsRequest as LibGetProductsRequest,
         )
 
         from src.core.schemas import (
@@ -170,7 +170,7 @@ class TestSchemaMatchesLibrary:
         This test catches accidental regressions where we make fields required.
         In adcp 3.6.0, brand_manifest is replaced by brand (BrandReference with domain).
         """
-        from adcp.types import GetProductsWholesaleRequest as LibraryGetProductsRequest
+        from adcp.types import LegacyGetProductsRequest as LibraryGetProductsRequest
 
         # Verify library allows empty request (buying_mode is required for wholesale variant)
         lib_req = LibraryGetProductsRequest(buying_mode="wholesale")
@@ -186,7 +186,7 @@ class TestSchemaMatchesLibrary:
 
     def test_get_products_request_brand_accepts_domain(self):
         """Verify brand (BrandReference) accepts domain field per adcp 3.6.0."""
-        from adcp.types import GetProductsWholesaleRequest as LibraryGetProductsRequest
+        from adcp.types import LegacyGetProductsRequest as LibraryGetProductsRequest
 
         # Library accepts brand with domain (buying_mode required for wholesale variant)
         lib_req = LibraryGetProductsRequest(brand={"domain": "acme.com"}, buying_mode="wholesale")
@@ -202,7 +202,7 @@ class TestSchemaMatchesLibrary:
 
         In adcp 3.6.0, brand (BrandReference) is required for CreateMediaBuyRequest.
         """
-        from adcp import CreateMediaBuyRequest as LibraryCreateMediaBuyRequest
+        from adcp.types import LegacyCreateMediaBuyRequest as LibraryCreateMediaBuyRequest
         from pydantic import ValidationError
 
         # Library should require brand for CreateMediaBuyRequest
@@ -211,7 +211,7 @@ class TestSchemaMatchesLibrary:
 
     def test_schema_validation_matches_library(self):
         """Compare our schema validation against library for common cases."""
-        from adcp.types import GetProductsWholesaleRequest as LibraryGetProductsRequest
+        from adcp.types import LegacyGetProductsRequest as LibraryGetProductsRequest
 
         # Test cases that should work in both (adcp 3.6.0: brand replaces brand_manifest)
         # buying_mode is required for the wholesale variant in adcp 3.9
@@ -248,8 +248,8 @@ class TestSchemaMatchesLibrary:
         the parent's annotation — the library parent is the source of truth,
         which also catches any future drift on an SDK bump.
         """
-        from adcp.types.aliases import (
-            CreateMediaBuySuccessResponse as LibraryCreateMediaBuySuccess,
+        from adcp.types.domains.media_buy.create_media_buy_response import (
+            CreateMediaBuyResponse1 as LibraryCreateMediaBuySuccess,
         )
 
         from src.core.schemas import CreateMediaBuySuccess as LocalCreateMediaBuySuccess
@@ -698,15 +698,26 @@ class TestAdCPContract:
                 # Missing publisher_properties
             )
 
-    def test_product_format_ids_required_in_conversion(self):
-        """Test that product conversion fails when format_ids is missing.
+    def test_product_declaring_neither_format_arm_is_refused_in_conversion(self):
+        """Conversion fails when a product declares NEITHER format arm.
 
-        Products without format_ids configured are invalid for media buys because
-        we cannot validate creative compatibility. Per AdCP spec, products must
-        specify supported formats to be available for purchase.
+        REGROUNDED against the pinned 3.2 schema. This test previously demanded that an
+        absent ``format_ids`` alone be refused, on the reasoning that "products must
+        specify supported formats to be available for purchase". That obligation is no
+        longer what the spec says: ``core/product.json`` makes the declaration a root
+        ``anyOf`` -- "Products MUST carry ``format_ids``, ``format_options``, or both
+        during the 3.x migration window" -- and ``format_ids`` is "Deprecated in AdCP 3.2;
+        removed in AdCP 4.0" and absent from the root ``required`` list. So the error case
+        is neither arm, and demanding the legacy arm specifically made the very shape 3.2
+        tells new products to author unservable.
+
+        Note the mock: ``format_contract`` must be set EXPLICITLY. A bare MagicMock returns a
+        truthy child for any attribute, so a fixture that omits it asserts arms that are
+        not there.
         """
         from unittest.mock import MagicMock
 
+        from src.core.format_resolver import NamedFormats
         from src.core.product_conversion import convert_product_model_to_schema
 
         # Create a mock product with no format_ids
@@ -715,7 +726,7 @@ class TestAdCPContract:
         product_model.name = "Product Without Formats"
         product_model.description = "This product has no format_ids configured"
         product_model.delivery_type = "guaranteed"
-        product_model.effective_format_ids = []  # Empty - no formats configured
+        product_model.format_contract = NamedFormats(format_ids=())  # neither arm: the anyOf is unsatisfied
         product_model.effective_properties = [{"publisher_domain": "example.com", "property_tags": ["test"]}]
         product_model.pricing_options = [
             MagicMock(
@@ -729,14 +740,20 @@ class TestAdCPContract:
             )
         ]
 
-        # Conversion should fail with a clear error message
-        with pytest.raises(ValueError, match="has no format_ids configured"):
+        # Conversion should fail naming the declaration, not one arm of it
+        with pytest.raises(ValueError, match="declares no creative format"):
             convert_product_model_to_schema(product_model)
 
-        # Also test with None (another way format_ids might be missing)
-        product_model.effective_format_ids = None
-        with pytest.raises(ValueError, match="has no format_ids configured"):
-            convert_product_model_to_schema(product_model)
+        # WHAT THIS TEST DELIBERATELY DOES NOT GRADE, so nobody mistakes it for sufficient:
+        # that the canonical arm ALONE is accepted. These two assertions pass equally under
+        # a conversion that still demands format_ids, because this product has neither arm.
+        # The discriminating case -- a canonically-authored product with no legacy arm,
+        # stored and served -- is
+        # BR-UC-GET-PRODUCTS-format-options.feature's @T-UC-GET-PRODUCTS-format-options-
+        # canonical-only scenario, which goes through real factories and reads the real
+        # wire. It is not reproduced here: a MagicMock complete enough to convert
+        # SUCCESSFULLY would be a hand-built fake of half the product model, and a fixture
+        # that elaborate grades itself rather than the seller.
 
     def test_adcp_create_media_buy_request(self):
         """Test AdCP create_media_buy request structure."""
@@ -785,9 +802,22 @@ class TestAdCPContract:
         assert format_obj.name == "Native Feed Ad"
 
     def test_format_canonical_parameters_round_trip(self):
-        """canonical_parameters keeps format_kind and params (3.1.1 product-format-declaration.json
-        requires both). The SDK's generated declaration has neither field and ignores extras, so a
-        creative agent's catalog came back as {"canonical_formats_only": false, "experimental": false}."""
+        """canonical_parameters keeps format_kind and the params the buyer sent.
+
+        product-format-declaration.json requires both. At adcp 6.6.0 the SDK's generated
+        declaration had NEITHER field and ignored extras, so a creative agent's catalog came
+        back as ``{"canonical_formats_only": false, "experimental": false}`` -- that is the
+        defect this test was filed for, and it is what the assertions below still grade.
+
+        NOT exact dict equality any more. adcp 9 generates the per-kind arms properly, and
+        an ``image`` arm carries its own schema defaults (``slots``, ``asset_source``,
+        ``buyer_asset_acceptance``, ...), so the round trip is now a SUPERSET of the input
+        rather than the input plus two keys. Pinning the whole dict would be pinning the
+        pinned schema's default set, which belongs to the pin and not to this seller;
+        asserting the two load-bearing facts keeps the test failing for the original reason
+        -- a dropped ``format_kind`` or dropped ``params`` -- and not for an upstream
+        default.
+        """
         from tests.helpers.adcp_factories import create_test_format_id
 
         declaration = {"format_kind": "image", "params": {"width": 300, "height": 250, "pixel_ratios": [2]}}
@@ -801,7 +831,11 @@ class TestAdCPContract:
         )
 
         dumped = format_obj.model_dump(mode="json", exclude_none=True)["canonical_parameters"]
-        assert dumped == {**declaration, "canonical_formats_only": False, "experimental": False}
+        assert dumped["format_kind"] == "image", "format_kind must survive the round trip"
+        assert dumped["params"].items() >= {"width": 300, "height": 250}.items(), (
+            f"the buyer's params must survive the round trip; got {dumped['params']}"
+        )
+        assert dumped["params"]["pixel_ratios"] == [2.0], "a list param must survive, not just scalars"
 
     def test_list_creative_formats_response_round_trips_the_reference_catalog(self):
         """A response re-parsed from its own wire serializes to the same wire, as a buyer reads it.
@@ -1044,8 +1078,6 @@ class TestAdCPContract:
             account="123456789",
             is_live=True,
             type="platform",
-            scope="account-specific",
-            decisioning_platform_segment_id="gam_segment_123",
             estimated_activation_duration_minutes=0,
         )
 
@@ -1065,10 +1097,13 @@ class TestAdCPContract:
             pricing_options=[
                 {"pricing_option_id": "cpm_usd", "cpm": 2.50, "currency": "USD", "model": "cpm"},
             ],
-            tenant_id="test_tenant",
-            created_at=datetime.now(),
-            updated_at=datetime.now(),
-            metadata={"category": "automotive", "confidence": 0.92},
+            # No tenant_id / created_at / updated_at / metadata. ``Signal`` declared those
+            # four with exclude=True and they are DELETED: core/signal-listing.json declares
+            # none of them (tenant_id appears on no node in the pinned bundle at all), and
+            # nothing under src/ or scripts/ constructs this class, so there was no value to
+            # route to a carrier. The refusal and absence are graded in
+            # tests/unit/test_signals_response_serialization.py; the assertion below keeps
+            # the wire-shape half here, where the rest of this contract lives.
         )
 
         # Test AdCP-compliant model_dump (external response)
@@ -1089,10 +1124,16 @@ class TestAdCPContract:
             assert field in adcp_response, f"Required AdCP field '{field}' missing from response"
             assert adcp_response[field] is not None, f"Required AdCP field '{field}' is None"
 
-        # Verify internal fields are excluded from AdCP response
+        # Verify the four deleted internal fields are on neither the model nor the wire.
+        # They used to be DECLARED with exclude=True, so this check could only ever grade the
+        # exclude marker; now it grades the stronger fact that nothing can put them there.
         internal_fields = ["tenant_id", "created_at", "updated_at", "metadata"]
         for field in internal_fields:
             assert field not in adcp_response, f"Internal field '{field}' exposed in AdCP response"
+            assert field not in Signal.model_fields, (
+                f"Internal field '{field}' was re-declared on Signal — the pin declares it on no "
+                f"node, and exclude=True would strip it from persistence too (pattern #4)"
+            )
 
         # Verify AdCP-specific requirements
         assert adcp_response["signal_type"] in ["marketplace", "custom", "owned"], "signal_type must be valid enum"
@@ -1119,12 +1160,15 @@ class TestAdCPContract:
         assert signal.signal_agent_segment_id == "signal_auto_intenders_q1_2025", "Primary ID should work"
         assert signal.signal_type == "marketplace", "signal_type field should work"
 
-        # The internal half of the split: every Field(exclude=True) field is CARRIED on the
-        # model, and the attribute is what existing means. There is no second dump shape to
-        # read them out of (CLAUDE.md pattern 4 — one serializer seat).
-        for field in internal_fields:
-            assert getattr(signal, field) is not None, f"Internal field '{field}' not carried on the model"
-        assert signal.deployments[0].scope == "account-specific", "deployment scope not carried on the model"
+        # There is no internal half left on this family. ``Signal``'s own four internal
+        # fields went one release earlier, and ``SignalDeployment``'s two -- ``scope`` and
+        # ``decisioning_platform_segment_id`` -- are gone with salesagent-gweku: neither is
+        # declared by ``core/deployment.json``, and the only sites that ever constructed or
+        # read them were this assertion and two sibling tests. Their absence is asserted
+        # positively instead, the way the Signal four are.
+        assert "scope" not in SignalDeployment.model_fields, "deployment scope is back on the model"
+        assert "decisioning_platform_segment_id" not in SignalDeployment.model_fields
+        assert "scope" not in adcp_response["deployments"][0], "deployment scope reached the wire"
 
         # Verify field count expectations (flexible to allow AdCP spec evolution)
         assert len(adcp_response) >= 8, f"AdCP response should have at least 8 core fields, got {len(adcp_response)}"
@@ -1532,96 +1576,6 @@ class TestAdCPContract:
         # Optional fields per official spec
         if "dry_run" in adcp_response and adcp_response["dry_run"] is not None:
             assert isinstance(adcp_response["dry_run"], bool), "dry_run must be boolean"
-
-    def test_list_creatives_request_adcp_compliance(self):
-        """Test that ListCreativesRequest model complies with AdCP list-creatives schema.
-
-        Now extends library ListCreativesRequest directly - all fields are spec-compliant.
-        """
-        from adcp.types import CreativeFilters as LibraryCreativeFilters
-
-        # adcp 3.6.0: Request pagination uses PaginationRequest (cursor + max_results)
-        from adcp.types import PaginationRequest
-        from adcp.types.generated_poc.creative.list_creatives_request import (
-            Sort as LibrarySort,
-        )  # TODO: different Sort from adcp.types.Sort
-
-        from src.core.schemas import ListCreativesRequest
-
-        # Create request using spec-compliant structured objects
-        # adcp 3.10: include_performance and include_sub_assets removed from spec;
-        # include_assignments, include_snapshot, include_items, include_variables remain
-        request = ListCreativesRequest(
-            filters=LibraryCreativeFilters(
-                status="approved",
-                format="display_300x250",
-                tags=["sports", "premium"],
-                created_after=datetime.now(UTC) - timedelta(days=30),
-                created_before=datetime.now(UTC),
-                media_buy_ids=["mb_123"],
-            ),
-            pagination=PaginationRequest(max_results=50),  # Request pagination uses cursor/max_results
-            sort=LibrarySort(field="created_date", direction="desc"),  # type: ignore[arg-type]
-            include_assignments=True,
-        )
-
-        # Test model_dump - should output AdCP-compliant structured fields
-        adcp_response = request.model_dump(exclude_none=False)
-
-        # Verify structured AdCP fields are present
-        assert "filters" in adcp_response, "AdCP structured 'filters' field must be present"
-        assert "sort" in adcp_response, "AdCP structured 'sort' field must be present"
-        assert "pagination" in adcp_response, "AdCP structured 'pagination' field must be present"
-
-        # Verify filters structure
-        filters = adcp_response["filters"]
-        # V3: Status is serialized as string (not enum) in model_dump
-        status = filters["status"]
-        status_value = status.value if hasattr(status, "value") else status
-        assert status_value == "approved", "filters.status should match input"
-        assert filters["format"] == "display_300x250", "filters.format should match input"
-        assert filters["tags"] == ["sports", "premium"], "filters.tags should match input"
-        assert "created_after" in filters, "filters.created_after should be present"
-        assert "created_before" in filters, "filters.created_before should be present"
-        assert filters["media_buy_ids"] == ["mb_123"], "filters.media_buy_ids should match input"
-
-        # Verify pagination structure (adcp 3.6.0: cursor-based pagination)
-        pagination = adcp_response["pagination"]
-        assert pagination["max_results"] == 50, "pagination.max_results should match input"
-
-        # Verify sort structure
-        sort = adcp_response["sort"]
-        # V3: Enums serialized as strings in model_dump
-        field_val = sort["field"].value if hasattr(sort["field"], "value") else sort["field"]
-        direction_val = sort["direction"].value if hasattr(sort["direction"], "value") else sort["direction"]
-        assert field_val == "created_date", "sort.field should match input"
-        assert direction_val == "desc", "sort.direction should match input"
-
-        # Fields WITH defaults should be present (adcp 3.10 spec fields)
-        assert "include_assignments" in adcp_response, "Field with default should be present"
-        assert adcp_response["include_assignments"] is True, "Default value should match"
-
-        # Verify all spec fields are present (per adcp 5.7 library schema)
-        spec_fields = {
-            "account",
-            "adcp_major_version",
-            "adcp_version",
-            "context",
-            "ext",
-            "fields",
-            "filters",
-            "include_assignments",
-            "include_items",
-            "include_pricing",
-            "include_purged",
-            "include_snapshot",
-            "include_variables",
-            "include_webhook_activity",
-            "pagination",
-            "sort",
-            "webhook_activity_limit",
-        }
-        assert set(adcp_response.keys()) == spec_fields, f"Fields should match spec: {set(adcp_response.keys())}"
 
     def test_list_creatives_response_adcp_compliance(self):
         """Test that ListCreativesResponse model complies with AdCP list-creatives response schema."""
@@ -2047,7 +2001,7 @@ class TestAdCPContract:
         # adcp 3.9: GetSignalsRequest is a regular model (not RootModel).
         # deliver_to replaced with top-level destinations + countries fields.
 
-        from adcp.types.generated_poc.core.destination import Destination1  # TODO: no stable alias in adcp.types
+        from adcp.types.domains.core.destination import Destination1  # TODO: no stable alias in adcp.types
 
         from src.core.schemas import GetSignalsRequest, SignalFilters
 
@@ -2318,9 +2272,9 @@ class TestAdCPContract:
             reporting_capabilities=default_reporting_capabilities(),
         )
         assert len(product_with_properties.publisher_properties) == 1
-        # publisher_properties is a discriminated union with RootModel wrapper (adcp 2.14.0+)
-        # Access via .root attribute
-        assert product_with_properties.publisher_properties[0].root.publisher_domain == "example.com"
+        # NO ``.root``: adcp 9 ships ``PublisherPropertySelector`` as the discriminated union
+        # of its arms rather than a RootModel wrapping them, so the element IS the selector.
+        assert product_with_properties.publisher_properties[0].publisher_domain == "example.com"
 
         # Invalid: missing publisher_properties (required)
         from pydantic import ValidationError

@@ -237,6 +237,12 @@ plus `e2e_rest` in-network) unless tagged with a specific transport. The `ctx`
 fixture is a mutable dict shared across steps, with `ctx["env"]` holding the
 harness environment.
 
+A scenario row that a transport cannot express at all (for example an `update_media_buy`
+without `media_buy_id` on REST, where the id is the URL path) is declared in
+`_TRANSPORT_INEXPRESSIBLE_ROWS` in `tests/bdd/conftest.py`, which the route census
+counts. That is the one place for it: not an assert in a step (a permanent red), not a
+skip (it reads as a pass), and not a transport-wide narrowing of the scenario.
+
 ```bash
 tox -e bdd
 ```

@@ -149,7 +149,7 @@ def _seed_account_for_principal(ctx: dict, *, sandbox: bool) -> None:
     account's flag, not this one's. Tools whose When sends no account still reach it
     through the principal's access grant.
     """
-    from adcp.types import AccountReference, AccountReferenceById
+    from adcp.types import AccountReferenceById
 
     from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 
@@ -162,7 +162,25 @@ def _seed_account_for_principal(ctx: dict, *, sandbox: bool) -> None:
     account = AccountFactory(tenant=ctx["tenant"], sandbox=sandbox)
     AgentAccountAccessFactory(tenant=ctx["tenant"], principal=ctx["principal"], account=account)
     env._commit_factory_data()
-    ctx["account_ref"] = AccountReference(root=AccountReferenceById(account_id=account.account_id))
+    ctx["account_ref"] = AccountReferenceById(account_id=account.account_id)
+    # AND onto the request itself when one has already been assembled, which is what makes
+    # the sentence above TRUE rather than merely intended.
+    #
+    # ``_ensure_request_defaults`` SETDEFAULTS ``account`` to the env's default account, so
+    # in a scenario whose request Given runs first -- which is the normal order, the request
+    # Given reads as the Background -- this step seeded a row that nothing then referenced.
+    # MEASURED on @T-UC-002-sandbox-no-live-ad-server before this line existed:
+    # ``identity.account`` at the create gate was
+    # ``Account(account_id='acct_test', ..., sandbox=False)``, the env default, while a
+    # sandbox account sat unreferenced in the database. So the scenario graded a PRODUCTION
+    # request and had never exercised sandbox at all, which is also why its production
+    # sibling behaved identically: both legs were sending the same account
+    # (salesagent-blugj, salesagent-9imdq).
+    #
+    # The dict shape is ``_ensure_request_defaults``'s own, because this overrides that
+    # default and the two must not disagree about how an account reference is spelled.
+    if "request_kwargs" in ctx:
+        ctx["request_kwargs"]["account"] = {"account_id": account.account_id}
     ctx.setdefault("tenant_id", "sandbox_tenant" if sandbox else "prod_tenant")
 
 

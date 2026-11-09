@@ -33,10 +33,9 @@ from src.core.config import get_settings
 from src.core.database.models import AuthorizedProperty, PublisherPartner
 from tests.harness._base import IntegrationEnv
 from tests.harness._realize import realize_e2e
-from tests.harness.admin_client import AdminClient, AdminResponse
+from tests.harness.admin_client import AdminOperatorMixin, AdminResponse
 
 if TYPE_CHECKING:
-    from tests.harness.transport import E2EConfig
     from tests.helpers.local_http_origin import LocalOrigin
 
 #: Every module that binds ``fetch_adagents`` for this seller's own authorization check.
@@ -147,14 +146,8 @@ def _auto_verify_off_on_the_live_stack(env: PublisherAuthorizationEnv) -> None:
     """
 
 
-class PublisherAuthorizationEnv(PublisherAdagentsMixin, IntegrationEnv):
+class PublisherAuthorizationEnv(AdminOperatorMixin, PublisherAdagentsMixin, IntegrationEnv):
     """Drive the three admin actions that read a publisher's file, and read what they wrote."""
-
-    def __init__(self, *, e2e_config: E2EConfig | None = None, **kwargs: Any) -> None:
-        super().__init__(e2e_config=e2e_config, **kwargs)
-        self._admin: AdminClient | None = None
-        # None drives the admin app in this process; a URL drives that live server.
-        self._admin_base_url: str | None = e2e_config.base_url if e2e_config is not None else None
 
     # ── seller and tenant state ───────────────────────────────────────────
 
@@ -225,13 +218,10 @@ class PublisherAuthorizationEnv(PublisherAdagentsMixin, IntegrationEnv):
         return self.query(model, tenant_id=self._tenant_id, **filters)
 
     def _admin_request(self, method: str, path: str) -> AdminResponse:
-        """One authenticated request to the tenant's admin route at *path*, on either transport."""
+        """One authenticated request to the tenant's admin route at *path*, on either transport.
+
+        The publisher's file is served first, so the action reads what the scenario chose.
+        """
         self._commit_factory_data()
         self.serve_adagents()
-        if self._admin is None:
-            # Opened on the first action, after every Given: the in-process app is composed
-            # under the settings a Given chose.
-            self._admin = AdminClient(self._admin_base_url)
-            self._guard("admin_client", self._admin.close)
-            self._admin.authenticate(self._tenant_id)
-        return self._admin.request(method, f"/tenant/{self._tenant_id}/{path}")
+        return self.admin_request(self._tenant_id, method, path)

@@ -1,0 +1,651 @@
+<title>Delivery Xfail Flip Candidates</title>
+<style>
+  :root {
+    --bg: #fbfaf8; --fg: #1d1c1a; --muted: #5d5a55; --rule: #ddd8d0;
+    --card: #ffffff; --accent: #7a4a1f; --accent-soft: #f3ece3;
+    --exec: #1f5c36; --exec-bg: #e6f1e9; --read: #6b4d13; --read-bg: #f6eeda;
+    --bad: #8c2420; --bad-bg: #f8e9e8; --code-bg: #f2efe9;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #17161a; --fg: #ebe8e3; --muted: #a39e96; --rule: #35323a;
+      --card: #1f1e23; --accent: #d9a46a; --accent-soft: #2a2520;
+      --exec: #8fd0a6; --exec-bg: #1c2d22; --read: #d9bb7a; --read-bg: #2c2718;
+      --bad: #e89a94; --bad-bg: #33201f; --code-bg: #26242b;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #17161a; --fg: #ebe8e3; --muted: #a39e96; --rule: #35323a;
+    --card: #1f1e23; --accent: #d9a46a; --accent-soft: #2a2520;
+    --exec: #8fd0a6; --exec-bg: #1c2d22; --read: #d9bb7a; --read-bg: #2c2718;
+    --bad: #e89a94; --bad-bg: #33201f; --code-bg: #26242b;
+  }
+  body {
+    background: var(--bg); color: var(--fg); margin: 0;
+    font: 16px/1.62 "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 68rem; margin: 0 auto; padding: 3.5rem 1.5rem 6rem; }
+  h1 { font-size: 2.05rem; line-height: 1.2; margin: 0 0 .4rem; letter-spacing: -.015em; }
+  h2 {
+    font-size: 1.28rem; margin: 3.2rem 0 .9rem; padding-bottom: .35rem;
+    border-bottom: 2px solid var(--accent); letter-spacing: -.01em;
+  }
+  h3 { font-size: 1.04rem; margin: 2rem 0 .5rem; }
+  p, li { max-width: 60rem; }
+  .sub { color: var(--muted); font-size: .95rem; margin: 0 0 2rem; }
+  code, .mono {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: .855em; background: var(--code-bg); padding: .1em .36em;
+    border-radius: 3px; word-break: break-word;
+  }
+  .tag {
+    display: inline-block; font-family: ui-monospace, Menlo, monospace;
+    font-size: .68rem; font-weight: 700; letter-spacing: .06em;
+    padding: .11em .45em; border-radius: 3px; vertical-align: .08em;
+    white-space: nowrap;
+  }
+  .exec { color: var(--exec); background: var(--exec-bg); }
+  .read { color: var(--read); background: var(--read-bg); }
+  .scroll { overflow-x: auto; margin: 1.1rem 0 1.6rem; border: 1px solid var(--rule); border-radius: 6px; background: var(--card); }
+  table { border-collapse: collapse; width: 100%; font-family: system-ui, -apple-system, sans-serif; font-size: .845rem; }
+  th, td { text-align: left; padding: .6rem .7rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { background: var(--accent-soft); font-weight: 700; font-size: .76rem; text-transform: uppercase; letter-spacing: .045em; white-space: nowrap; }
+  tr:last-child td { border-bottom: 0; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .cat { font-weight: 700; white-space: nowrap; }
+  .c1 { color: var(--exec); } .c2 { color: var(--accent); } .c3 { color: var(--read); }
+  .c4 { color: var(--bad); } .c5 { color: var(--muted); }
+  .box {
+    background: var(--card); border: 1px solid var(--rule);
+    border-left: 4px solid var(--accent); border-radius: 0 6px 6px 0;
+    padding: .9rem 1.1rem; margin: 1.3rem 0;
+  }
+  .box.warn { border-left-color: var(--bad); background: var(--bad-bg); }
+  .box p:first-child { margin-top: 0; } .box p:last-child { margin-bottom: 0; }
+  .kpi { display: flex; flex-wrap: wrap; gap: .8rem; margin: 1.6rem 0 2rem; }
+  .kpi div {
+    flex: 1 1 10rem; background: var(--card); border: 1px solid var(--rule);
+    border-radius: 6px; padding: .85rem 1rem;
+  }
+  .kpi b { display: block; font-size: 1.85rem; line-height: 1.1; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+  .kpi span { display: block; color: var(--muted); font-size: .78rem; font-family: system-ui, sans-serif; margin-top: .3rem; }
+  blockquote {
+    margin: 1rem 0; padding: .2rem 0 .2rem 1.1rem;
+    border-left: 3px solid var(--rule); color: var(--muted); font-style: italic;
+  }
+  ul, ol { padding-left: 1.3rem; }
+  li { margin: .3rem 0; }
+  hr { border: 0; border-top: 1px solid var(--rule); margin: 3rem 0; }
+  .fin { color: var(--muted); font-size: .88rem; }
+</style>
+
+<div class="wrap">
+
+<h1>Delivery xfails: creative-related flip candidates</h1>
+<p class="sub">
+Assessment only &mdash; no production code, no routing and no scenario was changed.
+Worktree <code>sa-xf-dl</code>, branch <code>assess/xfail-delivery</code>, HEAD
+<code>ccd3fe7ca</code>; <code>git diff --stat</code> empty at finish.
+Pin: AdCP 3.2 schemas shipped by <code>adcp 9.0.0b2+prs1435.1415.1447.1456</code>.
+Scope: <code>tests/bdd/test_uc004_deliver_media_buy_metrics.py</code> and
+<code>tests/bdd/features/BR-UC-022-creative-delivery-features.feature</code>. BDD only.
+Date: 2026-10-10.
+</p>
+
+<p>
+<b>Evidence marking.</b> Every claim carries
+<span class="tag exec">EXEC</span> (something ran &mdash; a BDD slice on the CI box, a
+probe through the pinned SDK, a jsonschema validation, a run-artifact query) or
+<span class="tag read">READ</span> (source or a fetched document was read).
+Code cites <code>file:line</code> at <code>ccd3fe7ca</code>; obligations cite the pinned
+JSON file or the upstream <code>.mdx</code> fetched verbatim.
+Measurements through a Python interpreter were taken in the sibling worktree
+<code>sa-v9adopt</code>, which is at the same commit with the two files involved
+byte-identical (<code>md5</code> compared, <span class="tag exec">EXEC</span>).
+</p>
+
+<h2>The headline: 658 items, 79 routing entries, zero of them creative</h2>
+
+<div class="kpi">
+  <div><b>658</b><span>UC-004 xfailed items (486 in-process + 172 e2e_rest)</span></div>
+  <div><b>79</b><span>distinct routing entries governing them &mdash; 8.3 items per entry</span></div>
+  <div><b>592</b><span>of those items are DORMANCY, not spec-production gaps (90%)</span></div>
+  <div><b>0</b><span>creative-related routing entries, and 0 creative-related items</span></div>
+</div>
+
+<p>
+<span class="tag exec">EXEC</span> Counted from the latest full run's reports,
+<code>test-results/innet_091026_1726/bdd_inprocess.json</code> and
+<code>bdd_e2e.json</code>, by joining each xfailed item's <code>keywords</code> to its
+<code>T-UC-004-*</code> scenario tag. 486 + 172 = 658, matching the figure in the task.
+</p>
+
+<div class="box warn">
+<p><b>The first number to internalise: 592 of the 658 are not gaps at all.</b>
+57 of the 79 entries are listed in <code>tests/bdd/dormant_scenarios.txt</code> &mdash;
+scenarios with an unbound step. <code>tests/bdd/conftest.py:313&ndash;325</code> converts
+<code>StepDefinitionNotFoundError</code> into an xfail, so such a scenario is reported as
+an expected failure while grading nothing. There is no routing to lift: the fix is to
+write the missing step. <span class="tag exec">EXEC</span></p>
+<p>That leaves <b>66 items under 22 entries</b> as the real spec-production-gap surface of
+UC-004, and the whole set is webhook, date-range, sandbox, filter-default, attribution,
+auction-rate and partial-success work. <b>None of the 22 turns on creative format
+identity.</b></p>
+</div>
+
+<h3>The 22 real routing entries, for the record</h3>
+<div class="scroll"><table>
+<tr><th>Items</th><th>Entry</th><th>Items</th><th>Entry</th></tr>
+<tr><td class="num">6</td><td><code>webhook-notification-type</code></td><td class="num">4</td><td><code>partition-reporting-dims</code></td></tr>
+<tr><td class="num">4</td><td><code>daterange-equal</code></td><td class="num">4</td><td><code>boundary-reporting-dims</code></td></tr>
+<tr><td class="num">4</td><td><code>daterange-invalid</code></td><td class="num">4</td><td><code>sandbox-happy</code></td></tr>
+<tr><td class="num">4</td><td><code>daterange-end-only</code></td><td class="num">4</td><td><code>sandbox-validation</code></td></tr>
+<tr><td class="num">4</td><td><code>attr-unsupported</code></td><td class="num">4</td><td><code>filter-default</code></td></tr>
+<tr><td class="num">4</td><td><code>adapter-partial</code></td><td class="num">4</td><td><code>webhook-scheduled</code></td></tr>
+<tr><td class="num">4</td><td><code>package-auction-rate</code></td><td class="num">4</td><td><code>ext-c</code></td></tr>
+<tr><td class="num">8</td><td colspan="3">eight e2e-only webhook rows, 1 item each: <code>circuit-open</code>, <code>circuit-halfopen</code>, <code>circuit-recovery</code>, <code>retry-success</code>, <code>retry-network</code>, <code>ssrf-blocked</code>, <code>no-aggregated</code>, <code>ext-f</code></td></tr>
+</table></div>
+
+<h2>Why the creative-related UC-004 set is empty</h2>
+
+<p>
+<span class="tag exec">EXEC</span> <code>git grep</code> over the 2115-line feature file
+<code>tests/bdd/features/BR-UC-004-deliver-media-buy-metrics.feature</code> returns
+<b>zero</b> occurrences of <code>format_id</code>, <code>format_ids</code>,
+<code>format_kind</code>, <code>format_options</code>, <code>format_option_ref</code>,
+<code>v1_format_ref</code>, <code>by_creative</code> or <code>by_format</code>.
+The only token matching <code>creative</code> is the media-buy status enum value
+<code>pending_creatives</code> (feature:171, 1010, 2005), which is a lifecycle state, not a
+format identity. The step module
+<code>tests/bdd/steps/domain/uc004_delivery.py</code> has five <code>creative</code>
+matches, all of them that same enum value or comments.
+</p>
+
+<p>
+The ungraded surface is specific and large. <span class="tag exec">EXEC</span> The pinned
+<code>3.2/bundled/media-buy/get-media-buy-delivery-request.json</code>
+<code>#/properties/reporting_dimensions</code> declares <b>17</b> dimension keys:
+<code>audience, catalog_item, collection, collection_property, creative, demographic,
+device_platform, device_type, format, geo, installment, installment_property, keyword,
+placement, placement_property, property, spot</code>. The UC-004 feature exercises
+<b>five</b> of them (<code>device_type</code>, <code>geo</code>, <code>audience</code>,
+<code>placement</code>, <code>device_platform</code>), and the boundary table even names
+itself <q>all 5 dimensions at once</q> (feature:866). The two creative-related
+dimensions, <code>creative</code> and <code>format</code>, appear in no scenario and in no
+Examples row.
+</p>
+
+<p>
+Production reads three. <span class="tag read">READ</span>
+<code>src/core/tools/media_buy_delivery.py:442</code> (<code>placement</code>),
+<code>:893</code> (<code>geo</code>) and <code>:951</code> (<code>device_type</code>) are
+the only sites that consult <code>req.reporting_dimensions</code>. The other fourteen keys
+are accepted and ignored.
+</p>
+
+<div class="box">
+<p><b>The fields themselves already exist on the wire.</b>
+<span class="tag exec">EXEC</span> <code>PackageDelivery</code>
+(<code>src/core/schemas/delivery.py:167</code>) extends the pinned
+<code>ByPackageItem</code> and redeclares only three breakdown lists, so it <i>inherits</i>
+<code>by_creative</code>, <code>by_format</code> and all six of their truncation and
+applied-sort siblings. <code>ReportingDimensions</code> in the pinned SDK validates
+<code>{"creative": {"limit": 5, "sort_by": "impressions"}, "format": {}}</code> without
+complaint, and this repo adds no local redeclaration of it
+(<code>src/core/schemas/delivery.py:98&ndash;100</code> says so explicitly).</p>
+<p>So nothing is blocked on schema work. What is missing is the aggregation and the
+scenarios.</p>
+</div>
+
+<h2>Measured: what a creative/format dimension scenario does today</h2>
+
+<p>
+I added four probe scenarios and one Examples row to the UC-004 feature, ran them on
+<code>noetis-b-vm</code>, and reverted. Predictions were written to a scratchpad file
+<i>before</i> the run; all four held, including the exact failure text.
+Run: cassini bdd slice <code>33b0205e</code>, <q>6 failed, 15 passed, 1056 deselected</q>
+in 37.66s. <span class="tag exec">EXEC</span>
+</p>
+
+<div class="scroll"><table>
+<tr><th>Probe</th><th>Predicted</th><th>Measured (mcp / a2a / rest)</th><th>What it establishes</th></tr>
+<tr>
+  <td>Valid partition row <code>{"creative": {}, "format": {}}</code> on <code>T-UC-004-partition-reporting-dims</code></td>
+  <td>PASS</td><td><b>PASSED</b> 3/3</td>
+  <td>Both keys reach production and are accepted. The partition table can be extended with no production change.</td>
+</tr>
+<tr>
+  <td>Seller supports <code>creative</code>; request <code>{"creative": {}}</code>; Then packages include <code>by_creative</code> breakdown arrays</td>
+  <td>FAIL &mdash; <q>missing 'by_creative' breakdown array: None</q></td>
+  <td><b>FAILED</b> 3/3 with exactly that text</td>
+  <td>BR-RULE-091 INV-1 is unmet for <code>creative</code>. A real, named production gap.</td>
+</tr>
+<tr>
+  <td>Same for <code>format</code> / <code>by_format</code></td>
+  <td>FAIL</td><td><b>FAILED</b> 3/3, <q>missing 'by_format' breakdown array: None</q></td>
+  <td>Same gap for the format dimension.</td>
+</tr>
+<tr>
+  <td>Request <code>{"creative": {}}</code>; Then packages do NOT include <code>by_creative</code></td>
+  <td>PASS</td><td><b>PASSED</b> 3/3</td>
+  <td>INV-2 silent omission holds &mdash; but see the trap section: it holds because the key is ignored entirely.</td>
+</tr>
+<tr>
+  <td>Given <code>the seller supports reporting dimension "creative_sorted_by"</code></td>
+  <td>Given assertion passes</td><td><b>PASSED</b> 3/3</td>
+  <td>The Given's vocabulary derivation admits names that are not dimensions. See trap T1.</td>
+</tr>
+</table></div>
+
+<h2>BR-UC-022: 131 scenario instances, none of them routed, none of them owed</h2>
+
+<p>
+<span class="tag read">READ</span> <code>BR-UC-022-creative-delivery-features.feature</code>
+is <b>unbound</b>: it is listed in <code>UNBOUND_ALLOWLIST</code> at
+<code>tests/unit/test_architecture_feature_file_bound.py:49</code> under
+<code>FIXME(#1947)</code>, there is no <code>test_uc022_*.py</code> module, no
+<code>scenarios()</code> call names it, and <code>git grep</code> finds no mention of it in
+<code>tests/bdd/conftest.py</code> or <code>tests/bdd/e2e_rest_known_failures.txt</code>.
+Its scenarios are therefore <b>not xfailed</b> &mdash; they do not exist as items at all.
+<span class="tag exec">EXEC</span> 81 scenarios and outlines expand to <b>131 scenario
+instances</b>, which would be ~393 items across the three in-process transports.
+</p>
+
+<p>
+Every one of its 77 <code>When</code> lines invokes <code>get_creative_features</code> (40)
+or <code>get_creative_delivery</code> (37). <span class="tag exec">EXEC</span> Neither is a
+tool of this seller: <code>src/core/tools/registry.py:206&ndash;271</code> holds 14
+<code>ToolSpec</code> rows and neither name is among them.
+</p>
+
+<div class="box warn">
+<p><b>And neither is owed.</b> <span class="tag exec">EXEC</span> In the pinned 3.2 MCP
+profile tree, <code>get-creative-delivery</code> and <code>get-creative-features</code>
+appear under <code>profiles/creative/</code> and <code>profiles/production/</code> and are
+<b>absent from <code>profiles/media-buy/</code></b>, whose 29-tool surface is what this
+sales agent implements. The upstream writing is explicit
+(<code>docs/creative/task-reference/get_creative_delivery.mdx</code>, fetched verbatim
+<span class="tag exec">EXEC</span>):</p>
+<blockquote>This is a Creative Protocol task. Call it on any agent that declares
+<code>"creative"</code> in <code>supported_protocols</code> and exposes the
+<code>get_creative_delivery</code> tool &mdash; whether that's a dedicated creative service
+or a sales agent implementing the Creative Protocol.</blockquote>
+<p><span class="tag exec">EXEC</span> This seller declares <code>media_buy</code> only
+(<code>DEFAULT_SUPPORTED_PROTOCOLS</code>,
+<code>src/core/schemas/capability_declarations.py:252</code>) and <i>refuses</i> a
+<code>creative</code> declaration: <code>_BACKED_PROTOCOLS</code> at <code>:242</code> is
+<code>{media_buy, measurement, signals}</code>, and <code>_reject_unbacked</code> raises
+<code>AdCPConfigurationError</code> for anything outside it. So UC-022 is category 3 at the
+feature level &mdash; it asserts an obligation this seller has not taken on and cannot take
+on without first backing the Creative Protocol. <b>Binding it would manufacture ~393
+failures, not reveal 393 flips.</b></p>
+</div>
+
+<h2>Ranked candidates</h2>
+
+<p>
+Ranked by value of acting on it. The <q>routing entry</q> column is the honest answer in
+most rows: there is no routing, because the behavior has no scenario. A flip prediction
+without an execution probe is marked <span class="tag read">READ</span>.
+</p>
+
+<div class="scroll"><table>
+<tr>
+  <th>#</th><th>Scenario / family</th><th>Routing entry</th><th>Cat</th>
+  <th>Blocker</th><th>Smallest change that would flip it</th><th>Conf.</th>
+</tr>
+
+<tr>
+  <td class="num">1</td>
+  <td><b><code>geo_level=metro</code> without <code>system</code> must be refused</b><br>
+      <span class="fin">feature:871 boundary row, feature:849 partition row</span></td>
+  <td><code>boundary-reporting-dims</code> + <code>partition-reporting-dims</code> +
+      1 line in <code>e2e_rest_known_failures.txt:80</code><br>
+      <span class="fin">~5 items, 3 entries</span></td>
+  <td class="cat c3">3</td>
+  <td><b>The reason is factually wrong.</b> Both entries say the spec requires a
+      <code>system</code> for metro and that production wrongly accepts it. The pin
+      <i>permits</i> metro with no system.</td>
+  <td>Reground the row: change the expectation from <code>invalid</code> to
+      <code>valid</code> (and from <code>error "INVALID_REQUEST"</code> to
+      <code>valid</code>), then delete all three routing entries. No production change.</td>
+  <td><span class="tag exec">EXEC</span><br>certain</td>
+</tr>
+
+<tr>
+  <td class="num">2</td>
+  <td><b><code>by_format</code> breakdown keyed on <code>format_kind</code></b> &mdash;
+      BR-RULE-091 INV-1 for the <code>format</code> dimension</td>
+  <td><b>none</b> &mdash; no scenario exists</td>
+  <td class="cat c2">2</td>
+  <td>Production never populates <code>by_format</code>; <code>reporting_dimensions.format</code>
+      is read nowhere.</td>
+  <td>Aggregate the package's assigned creatives by their recorded
+      <code>format_kind</code> and sum the metrics, plus
+      <code>by_format_truncated</code>. The field and its item type are already
+      inherited; the identity column already exists on the Creative row.
+      <b>Fix trap T2 first.</b></td>
+  <td><span class="tag exec">EXEC</span><br>certain it fails today</td>
+</tr>
+
+<tr>
+  <td class="num">3</td>
+  <td><b><code>by_creative</code> breakdown</b> &mdash; BR-RULE-091 INV-1 for the
+      <code>creative</code> dimension</td>
+  <td><b>none</b> &mdash; no scenario exists</td>
+  <td class="cat c2">2</td>
+  <td>Same: nothing populates <code>by_creative</code>.</td>
+  <td>Per-creative rows from <code>CreativeAssignment</code> plus adapter metrics;
+      <code>creative_id</code> is the required identity, <code>creative_name</code>
+      optional. Plus <code>by_creative_truncated</code>, which the pin makes binding
+      whenever the request included <code>reporting_dimensions.creative</code>.
+      <b>Fix trap T2 first.</b></td>
+  <td><span class="tag exec">EXEC</span><br>certain it fails today</td>
+</tr>
+
+<tr>
+  <td class="num">4</td>
+  <td><b>Reporting-dimensions tables stale at a 5-dimension vocabulary</b><br>
+      <span class="fin"><code>all_dimensions</code> row feature:843;
+      <q>all 5 dimensions at once</q> feature:866</span></td>
+  <td>the same two <code>*-reporting-dims</code> entries, but their row filters do not
+      touch these rows &mdash; the stale rows pass</td>
+  <td class="cat c3">3</td>
+  <td>The family carries <b>no <code>@source</code> annotation at all</b>, alone among the
+      UC-004 dimension families (49 <code>@source</code> lines in the file, none in
+      feature:655&ndash;885), and names 5 of the pin's 17 dimensions.</td>
+  <td>Add the measured-valid rows for <code>creative</code> and <code>format</code>, rename
+      the boundary row off the literal <q>5</q>, and add the <code>@source</code> line.
+      Pure coverage; measured PASS.</td>
+  <td><span class="tag exec">EXEC</span><br>high</td>
+</tr>
+
+<tr>
+  <td class="num">5</td>
+  <td><b>BR-RULE-091 INV-2 for <code>creative</code> / <code>format</code></b> &mdash;
+      unsupported dimension silently omitted</td>
+  <td><b>none</b> &mdash; no scenario exists</td>
+  <td class="cat c4">4&rarr;1</td>
+  <td>Passes today. On its own it is near-vacuous: it passes <i>because</i> production
+      ignores the key, so it would pass equally if the dimension were deleted from the
+      DTO.</td>
+  <td>Only land it <i>paired</i> with #2 or #3, which is what makes the pair falsifiable
+      in both directions. Alone it is coverage theatre.</td>
+  <td><span class="tag exec">EXEC</span><br>passes, graded weakly</td>
+</tr>
+
+<tr>
+  <td class="num">6</td>
+  <td><b>UC-022: <q>manifest missing <code>format_id</code></q> must be refused</b><br>
+      <span class="fin">UC-022 feature:275, 448, and rows at 829, 844</span></td>
+  <td><b>none</b> &mdash; feature unbound (<code>#1947</code>)</td>
+  <td class="cat c3">3</td>
+  <td><b>Factually wrong against the pin.</b> <code>3.2/core/creative-manifest.json</code>
+      has <code>required: ["assets"]</code> only, and documents <code>format_id</code> as
+      <q>DEPRECATED in 3.2 &hellip; Mutually exclusive with format_kind</q>, with
+      <code>format_kind</code> as the <q>Canonical 3.2 path</q>. A manifest with
+      <code>format_kind</code> + <code>assets</code> and no <code>format_id</code> is
+      valid.</td>
+  <td>Rewrite the family around the XOR the pin actually states (exactly one of
+      <code>format_kind</code> / <code>format_id</code>) rather than around a mandatory
+      <code>format_id</code>. Do this before binding, not after.</td>
+  <td><span class="tag read">READ</span><br>certain</td>
+</tr>
+
+<tr>
+  <td class="num">7</td>
+  <td><b>UC-022 INV-3: <code>format_id</code> with <code>width</code> but no
+      <code>height</code> must be refused</b><br>
+      <span class="fin">UC-022 feature:478, and rows at 851</span></td>
+  <td><b>none</b> &mdash; feature unbound</td>
+  <td class="cat c3">3</td>
+  <td><code>3.2/core/format-id.json</code> has <code>required: ["agent_url", "id"]</code>,
+      no <code>dependentRequired</code> and no <code>allOf</code>. The co-dependency exists
+      only in the <code>width</code>/<code>height</code> field descriptions
+      (<q>When specified, height must also be specified</q>) &mdash; the same
+      description-only shape already recorded as debt item C10 for UC-004.</td>
+  <td>Either delete the row or reground it as a description-only obligation a
+      schema-driven seller does not refuse. The sibling row <code>width=0</code> is
+      correct and stays (<code>minimum: 1</code> is formal).</td>
+  <td><span class="tag read">READ</span><br>certain</td>
+</tr>
+
+<tr>
+  <td class="num">8</td>
+  <td><b>All 131 UC-022 scenario instances</b> (~393 items at 3 transports)</td>
+  <td><b>none</b> &mdash; unbound, <code>#1947</code></td>
+  <td class="cat c3">3</td>
+  <td>Both tools belong to the Creative Protocol, which this seller declares no support
+      for and actively refuses to declare.</td>
+  <td>Decide the question before writing any step: either back the Creative Protocol
+      (a feature programme, not a flip) or move the feature out of this agent's BDD
+      surface. Do not bind it as-is.</td>
+  <td><span class="tag exec">EXEC</span><br>high</td>
+</tr>
+
+<tr>
+  <td class="num">9</td>
+  <td><b><code>CreativeDeliveryData</code> carries only the deprecated identity</b><br>
+      <span class="fin"><code>src/core/schemas/delivery.py:396&ndash;406</code></span></td>
+  <td>n/a &mdash; no scenario, schemas only (GH #1030)</td>
+  <td class="cat c5">5</td>
+  <td>It declares <code>format_id: dict[str, Any] | None</code> &mdash; an untyped dict of
+      the field 3.2 deprecates &mdash; and declares no <code>format_kind</code> and no
+      <code>format_option_ref</code>, which
+      <code>3.2/bundled/creative/get-creative-delivery-response.json</code> makes the
+      canonical pair.</td>
+  <td>Nothing to flip. If #8 is ever resolved toward implementing the protocol, this model
+      is where the format-kind-canonical premise has to land first.</td>
+  <td><span class="tag read">READ</span><br>certain</td>
+</tr>
+
+<tr>
+  <td class="num">10</td>
+  <td><b>The 57 dormant UC-004 entries</b> (592 items)</td>
+  <td><code>tests/bdd/dormant_scenarios.txt</code>, 60 UC-004 lines</td>
+  <td class="cat c4">4</td>
+  <td>An unbound step. There is no routing to lift and no production claim being made.
+      None of the 47 distinct missing sentences names a format or a creative breakdown
+      (<span class="tag exec">EXEC</span>, grouped by sentence).</td>
+  <td>Out of scope for a flip hunt. These are a step-authoring programme tracked as
+      <code>salesagent-8j5nf</code>; treating any of them as a flip candidate will produce
+      a scenario that passes while grading nothing.</td>
+  <td><span class="tag exec">EXEC</span><br>certain</td>
+</tr>
+</table></div>
+
+<h2>Reasons found factually wrong</h2>
+
+<h3>R1. <q>metro requires a system</q> &mdash; the pin says the opposite, and always did</h3>
+
+<p>Three places encode the same wrong obligation:</p>
+<ul>
+  <li><code>tests/bdd/conftest.py:2828</code> &mdash;
+      <q>AdCP spec defines metro/postal_area system requirement only in field description;
+      no validator. See docs/test-debt-bdd-strict-markers.md item C10.</q></li>
+  <li><code>tests/bdd/conftest.py:3511</code> &mdash;
+      <q>reporting_dimensions validation not implemented &mdash; production accepts invalid
+      configs.</q></li>
+  <li><code>tests/bdd/e2e_rest_known_failures.txt:80</code> &mdash; the same row, one of only
+      8 active lines in that ledger.</li>
+</ul>
+
+<p>
+<span class="tag exec">EXEC</span> The pinned 3.2 request schema <i>does</i> carry a formal
+constraint &mdash; <code>#/properties/reporting_dimensions/properties/geo/allOf</code>, three
+<code>if</code>/<code>then</code> branches &mdash; so the <q>no validator</q> half of the
+C10 reason is stale. But its metro branch reads:
+</p>
+
+<p class="mono" style="display:block;background:var(--code-bg);padding:.8rem;border-radius:5px;overflow-x:auto">
+"then": { "anyOf": [ {"not": {"required": ["system"]}},
+&nbsp;&nbsp;&nbsp;&nbsp;{"properties": {"system": {"$ref": "#/$defs/MetroAreaSystem"}}, "required": ["system"]} ],
+&nbsp;&nbsp;"not": {"required": ["country"]} }
+</p>
+
+<p>
+The first <code>anyOf</code> arm permits <code>system</code> being absent outright, and the
+field's own description says <q>Omit to request the level without selecting a specific
+system.</q> Validated directly: <code>{"geo": {"geo_level": "metro"}}</code> is
+<b>VALID</b> against the pinned bundle under <code>Draft202012Validator</code>, while
+<code>{"geo": {"limit": 10}}</code> correctly fails on the required
+<code>geo_level</code>. <span class="tag exec">EXEC</span>
+</p>
+
+<p>
+And this is not a 3.2 regression. The same document validates as <b>VALID</b> at the
+<code>3.1</code>, <code>3.1.15</code> and <code>3.2</code> schema sets the SDK ships
+&mdash; three measurements, not one. <span class="tag exec">EXEC</span> The row has
+always demanded a refusal no version of the spec mandates. Production accepting it is
+correct; the <i>scenario</i> is the defect.
+</p>
+
+<p>
+The misreading is traceable to one line of the feature itself. The invariant comment at
+feature:708 reads <q>BR-RULE-091 INV-5: geo_level=metro/postal_area -&gt; system field
+specifies classification</q> &mdash; which is true of a <code>system</code> that is
+<i>present</i>. The two rows extrapolated <q>specifies</q> into <q>is required</q>. That
+comment is where a fixer should start. <span class="tag read">READ</span>
+</p>
+
+<div class="box">
+<p>Acting on R1 removes the only non-dormant reporting-dimensions routing in UC-004 and one
+of the eight remaining e2e_rest ledger lines. It is the single highest-value item in this
+report and needs no production change &mdash; but it is a <b>scenario correction</b>, so it
+belongs to whoever owns regrounding, not to a graduation pass.</p>
+</div>
+
+<h3>R2. UC-022's format_id obligations are inverse to the 3.2 design</h3>
+
+<p>
+Rows 6 and 7 above. UC-022 treats <code>format_id</code> as the mandatory identity of a
+creative manifest and derives five or more refusals from that premise. The pin deprecates
+<code>format_id</code> in 3.2, makes it mutually exclusive with <code>format_kind</code>,
+and requires only <code>assets</code>. The feature is grounded in the 3.1 shape throughout.
+<span class="tag read">READ</span>
+</p>
+
+<h2>Traps &mdash; call these out before anyone writes a scenario here</h2>
+
+<h3>T1. The Given's dimension vocabulary admits 43 things that are not dimensions</h3>
+
+<p>
+<code>_assert_wire_carries_dimension</code>
+(<code>tests/bdd/steps/domain/uc004_delivery.py:1091</code>) derives the legal dimension
+names from <code>PackageDelivery.model_fields</code> by taking every <code>by_*</code> field
+and stripping the prefix &mdash; excluding only names ending <code>_truncated</code>. It
+does not exclude <code>_sorted_by</code>, <code>_sort_direction</code>,
+<code>_pagination</code> or <code>_suppressed</code>.
+<span class="tag exec">EXEC</span> The accepted set is <b>60 names</b>, of which <b>17</b>
+are real dimensions; the other 43 are applied-sort echoes and pagination flags.
+<code>the seller supports reporting dimension "creative_sorted_by"</code> therefore passes,
+which I confirmed by running it: PASSED on all three transports.
+</p>
+
+<p>
+The derivation's docstring is right about the principle &mdash; the wire surface should be
+the vocabulary &mdash; and wrong about the filter. A dimension is a <code>by_*</code> field
+whose type is a list; the echoes are scalars. One-line defect, reported not fixed. Note also
+that the positive and negative sentences still share a body, which the sibling comment at
+<code>:1148</code> already flags as the shape to stop sharing.
+</p>
+
+<h3>T2. The breakdown Then step derives the wrong identity column for exactly these two dimensions</h3>
+
+<p>
+<code>then_packages_include_breakdown</code>
+(<code>tests/bdd/steps/domain/uc004_delivery.py:3077</code>) is a strong assertion &mdash; it
+requires a non-empty list, <code>impressions</code> on every entry, a non-empty dimension
+identifier, and distinct identifiers across rows. Its identity column comes from
+<code>dimension_key = field[3:]</code>.
+</p>
+
+<p>
+<span class="tag exec">EXEC</span> That derivation is correct for the three dimensions the
+feature currently uses and wrong for both creative-related ones:
+</p>
+
+<div class="scroll"><table>
+<tr><th>Breakdown field</th><th>Pinned item type</th><th>Required identity field</th><th><code>field[3:]</code></th><th></th></tr>
+<tr><td><code>by_device_type</code></td><td><code>ByDeviceTypeItem</code></td><td><code>device_type</code></td><td><code>device_type</code></td><td>correct</td></tr>
+<tr><td><code>by_creative</code></td><td><code>CreativeDeliveryMetrics</code></td><td><code>creative_id</code></td><td><code>creative</code></td><td><b>wrong</b></td></tr>
+<tr><td><code>by_format</code></td><td><code>ByFormatItem</code></td><td><code>format_kind</code></td><td><code>format</code></td><td><b>wrong</b></td></tr>
+</table></div>
+
+<p>
+This is the trap, and it is specific: after production starts populating
+<code>by_creative</code> and <code>by_format</code>, the scenario will <i>still</i> fail
+&mdash; on a missing <code>creative</code> / <code>format</code> attribute that no pinned
+item type ever had &mdash; and the failure will be misread as the production gap not being
+closed. Fix the step's identity resolution before writing candidates #2 and #3.
+</p>
+
+<p>
+<code>ByFormatItem</code> is also worth naming for its own sake: it requires
+<code>format_kind</code> non-nullable and declares <b>no <code>format_id</code> at all</b>.
+<span class="tag exec">EXEC</span> Delivery reporting is the one surface where the canonical
+kind is not merely preferred but the only expressible identity, which makes #2 the cleanest
+possible first consumer of the format-kind premise that
+<code>docs/audits/format-kind-canonical-analysis.html</code> found already built at the
+type and persistence layers with zero comparisons keying on it.
+</p>
+
+<h3>T3. The silent-omission scenario is unfalsifiable on its own</h3>
+
+<p>
+Candidate #5. It passes, and it would pass with <code>reporting_dimensions</code> removed
+from the DTO entirely, because production reads neither key. A seller that implements
+nothing scores the same as one that implements the negotiated contract correctly. It is only
+real as the second half of a pair with #2 or #3.
+</p>
+
+<h3>T4. The dormancy xfail looks exactly like a gap xfail in a run report</h3>
+
+<p>
+592 of 658 items. A flip hunt reading only outcomes sees 79 entries worth of
+<q>expected failure</q> and cannot tell the 57 dormant ones from the 22 gap ones; the reason
+string is not serialized by <code>pytest-json-report</code>. The join that separates them is
+the tag set in <code>tests/bdd/dormant_scenarios.txt</code>.
+<span class="tag exec">EXEC</span> Any count of <q>delivery xfails</q> that does not subtract
+dormancy overstates the gap surface by an order of magnitude.
+</p>
+
+<h3>T5. A new UC-004 scenario must carry a <code>T-UC-004-*</code> tag or it silently xfails</h3>
+
+<p>
+My first probe run used <code>@T-PROBE-*</code> tags and all 12 items came back XFAIL with
+nothing wrong in the scenario. <code>detect_uc</code>
+(<code>scripts/audit/storyboard_spec.py</code>) derives the use-case bucket from the
+<code>T-UC-&lt;n&gt;</code> tag itself; with no match <code>resolve_env_route</code> returns
+<code>None</code>, meaning NOT WIRED, and the scenario is xfailed without a harness ever
+running. Re-tagged to <code>@T-UC-004-probe-*</code>, the same scenarios executed and gave
+the results above. <span class="tag exec">EXEC</span> Worth knowing: a scenario added here
+under the wrong tag reads as a passing suite.
+</p>
+
+<h2>Deliberately not claimed</h2>
+<ul>
+  <li>No judgement on the 22 non-dormant UC-004 entries beyond the two
+      <code>*-reporting-dims</code> ones. Webhook, sandbox, date-range, attribution,
+      auction-rate and partial-success reasons were not re-grounded &mdash; they are not
+      creative-related and belong to other owners.</li>
+  <li>No storyboard work of any kind.</li>
+  <li>The only execution evidence is the <code>33b0205e</code> probe slice plus interpreter
+      probes. I did not run the full UC-004 module, so I make no claim about the current
+      pass/xfail state of any entry other than the ones the run artifact reports.</li>
+  <li>Candidates #2 and #3 are sized as <q>aggregate and sum</q>, which is the shape, not an
+      estimate. Where the per-creative metrics come from on each adapter was not
+      investigated; the mock adapter is the only one I confirmed synthesizes breakdowns at
+      all (<code>src/adapters/mock_ad_server.py:1323</code> for
+      <code>by_device_type</code>).</li>
+</ul>
+
+<hr>
+<p class="fin">
+Assessment only. Probes added and reverted; <code>git diff --stat</code> empty and
+<code>git status --porcelain</code> clean at finish. No routing entry, ratchet, ledger or
+floor file was touched.
+</p>
+
+</div>

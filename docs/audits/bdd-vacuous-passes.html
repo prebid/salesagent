@@ -1,0 +1,532 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BDD vacuous passes — classified audit</title>
+<style>
+  :root{
+    --bg:#fbfaf8; --panel:#fff; --ink:#1b1b1d; --muted:#5d6068; --line:#e2e0da;
+    --red:#a3271f; --green:#1f6b3f; --amber:#8a5a08; --blue:#1f4f8a;
+    --code:#f3f1ec;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#131416; --panel:#1a1c1f; --ink:#e8e6e1; --muted:#a0a3aa; --line:#2d3034;
+      --red:#f08a80; --green:#7fd3a0; --amber:#e0b35c; --blue:#8fbdf0; --code:#202327;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#131416; --panel:#1a1c1f; --ink:#e8e6e1; --muted:#a0a3aa; --line:#2d3034;
+    --red:#f08a80; --green:#7fd3a0; --amber:#e0b35c; --blue:#8fbdf0; --code:#202327;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+    overflow-x:hidden;}
+  .wrap{max-width:1180px;margin:0 auto;padding:40px 24px 90px}
+  h1{font-size:30px;line-height:1.2;margin:0 0 6px;letter-spacing:-.02em}
+  h2{font-size:21px;margin:46px 0 12px;padding-bottom:7px;border-bottom:2px solid var(--line);letter-spacing:-.01em}
+  h3{font-size:16px;margin:28px 0 8px}
+  .sub{color:var(--muted);margin:0 0 28px;font-size:14.5px}
+  code,kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.875em;
+    background:var(--code);padding:1px 5px;border-radius:4px;word-break:break-word}
+  .scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:14px 0;
+    border:1px solid var(--line);border-radius:9px;background:var(--panel)}
+  table{border-collapse:collapse;width:100%;font-size:13.5px;min-width:720px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-weight:650;font-size:12px;text-transform:uppercase;letter-spacing:.055em;
+    color:var(--muted);background:var(--code);position:sticky;top:0}
+  tr:last-child td{border-bottom:none}
+  .red{color:var(--red);font-weight:650}
+  .green{color:var(--green);font-weight:650}
+  .amber{color:var(--amber);font-weight:650}
+  .tag{display:inline-block;font:600 11px/1.5 ui-monospace,Menlo,monospace;
+    padding:1px 7px;border-radius:999px;border:1px solid var(--line);white-space:nowrap}
+  .tag.E{color:var(--green);border-color:var(--green)}
+  .tag.R{color:var(--blue);border-color:var(--blue)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:11px;
+    padding:18px 20px;margin:16px 0}
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:18px 0 6px}
+  .kpi{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+  .kpi b{display:block;font-size:25px;line-height:1.1;letter-spacing:-.02em;font-weight:680}
+  .kpi span{display:block;font-size:11.5px;color:var(--muted);text-transform:uppercase;
+    letter-spacing:.05em;margin-top:5px}
+  ul,ol{padding-left:22px} li{margin:5px 0}
+  .note{border-left:3px solid var(--line);padding:2px 0 2px 15px;color:var(--muted);font-size:14.5px;margin:14px 0}
+  .lead{font-size:17px}
+  footer{margin-top:60px;padding-top:18px;border-top:1px solid var(--line);
+    color:var(--muted);font-size:13px}
+  .nowrap{white-space:nowrap}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>BDD scenarios that pass without grading anything</h1>
+<p class="sub">
+  Classified inventory with mutation evidence &middot; worktree <code>sa-vac</code>,
+  branch <code>audit/vacuous-bdd</code> at <code>fef6265d0</code> &middot; pinned AdCP <strong>3.2.1</strong>
+  (SDK <code>9.0.0b1</code>, <code>tests/helpers/adcp_pin.py:20</code>) &middot; audit date 2026-10-09
+</p>
+
+<div class="card">
+  <p class="lead" style="margin-top:0"><strong>Every claim below is tagged.</strong></p>
+  <p style="margin-bottom:0">
+    <span class="tag E">EXECUTION</span> — measured by running a mutated tree against a byte-identical
+    baseline and diffing per-nodeid outcomes.
+    <span class="tag R">READING</span> — established from source, not run. Per the audit brief, a finding
+    without a mutation result is a READING claim however obvious it looks.
+  </p>
+</div>
+
+<h2>1. UC-026 re-run after the mock fix</h2>
+
+<p>
+  <code>tests/bdd/test_uc026_package_media_buy.py</code>, serial, on this worktree's own Postgres
+  (<code>agent-pg-sa-vac</code>, port 58204), on a tree that contains both
+  <code>d68c33668</code> (the graduation lane's finding) and <code>70f74f781</code>
+  (the mock <code>affected_packages</code> / <code>paused</code> fix) — both verified ancestors of HEAD.
+</p>
+
+<div class="kpis">
+  <div class="kpi"><b>729</b><span>collected</span></div>
+  <div class="kpi"><b>447</b><span>passed</span></div>
+  <div class="kpi"><b>186</b><span>xfailed</span></div>
+  <div class="kpi"><b>96</b><span>xpassed</span></div>
+  <div class="kpi"><b class="green">0</b><span>failed / errored</span></div>
+</div>
+
+<p>
+  447 + 186 + 96 = 729, reconciling exactly against <code>collected 729 items</code>; zero
+  <code>FAILED</code> and zero <code>ERROR</code> lines; 26m17s.
+</p>
+
+<h3>The mock fix moved exactly 9 nodeids, and broke nothing</h3>
+
+<p>
+  Against the brief's prior measurement (447 passed / 195 xfailed / <strong>87</strong> xpassed), the
+  tree carrying <code>70f74f781</code> reports <strong>96</strong> xpassed and 186 xfailed. The nine that
+  moved from xfail to xpass are precisely the three scenarios whose action the mock now reports a package
+  for, on all three transports:
+</p>
+
+<div class="scroll">
+<table>
+<thead><tr><th>Nodeid</th><th>a2a</th><th>mcp</th><th>rest</th></tr></thead>
+<tbody>
+<tr><td><code>test_update_package_budget_via_package_id</code></td><td class="green">xpass</td><td class="green">xpass</td><td class="green">xpass</td></tr>
+<tr><td><code>test_pause_a_running_package</code></td><td class="green">xpass</td><td class="green">xpass</td><td class="green">xpass</td></tr>
+<tr><td><code>test_resume_a_paused_package</code></td><td class="green">xpass</td><td class="green">xpass</td><td class="green">xpass</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>
+  These nine are the <strong>opposite</strong> of a vacuous xpass: they pass because the effect is now
+  readable on the response. They are candidates for graduation per
+  <code>.claude/rules/workflows/xpass-graduation.md</code>, one at a time. Nothing regressed — the brief
+  anticipated that some rows might now FAIL, and none did.
+</p>
+
+<h3>The other 87 are the vacuity, and the suite says so itself</h3>
+
+<p>
+  <span class="tag E">EXECUTION</span> All 87 remaining xpasses are on the <code>rest</code> transport,
+  and <strong>all 87 carry an xfail reason that already names the defect</strong> — the phrase
+  "<em>the REST rows XPASS but vacuously: the harness REST update dispatch is wired, and
+  <code>the outcome should be success…</code> grades no effect because <code>update_media_buy</code>
+  returns <code>affected_packages=[]</code></em>" appears in 87 of 96 reasons.
+</p>
+<p>
+  So the population the brief sent this audit after is not undiscovered. It is diagnosed, labelled in
+  place, and unmoved by the mock fix — because that fix addressed pause/resume, and these rows are
+  keyword, overlay-conflict and replacement-semantics operations for which <strong>no production handler
+  exists at all</strong>. Mutation M4 below establishes that independently.
+</p>
+
+<h2>2. The six classes, and which are actually open</h2>
+
+<p>
+  The headline result of this audit is that <strong>three of the six classes are already closed by
+  dedicated machinery</strong>, and the brief's expectation that they would be the bulk of the problem
+  does not survive measurement. What remains open is concentrated in classes 1 and 2.
+</p>
+
+<div class="scroll">
+<table>
+<thead><tr><th>Class</th><th>Verdict</th><th>Population (scope stated)</th><th>Evidence</th></tr></thead>
+<tbody>
+<tr>
+  <td><strong>1. No effect to read</strong></td>
+  <td class="red">OPEN — largest</td>
+  <td><strong>87 nodeids measured</strong> (every remaining UC-026 xpass), over
+      <strong>54 Examples rows in 13 outlines</strong> of
+      <code>BR-UC-026-package-media-buy.feature</code> whose outcome cell names an EFFECT
+      ("success with keyword added") and which bind to <code>the outcome should be</code>. No other
+      wired feature uses that step.</td>
+  <td><span class="tag E">EXECUTION</span> (M4, and the 87/96 xpass reasons)</td>
+</tr>
+<tr>
+  <td><strong>2. Production hardcode</strong></td>
+  <td class="red">OPEN</td>
+  <td>27 of 76 park-table entries in <code>tests/bdd/conftest.py</code> cite a production constant or an
+      unbacked surface. Plus at least one row that <em>passes</em> and therefore cannot be parked at all
+      (measured below).</td>
+  <td><span class="tag E">EXECUTION</span> (M1, M1b)</td>
+</tr>
+<tr>
+  <td><strong>3. Weak Then</strong></td>
+  <td class="green">CLOSED</td>
+  <td>892 <code>@then</code> bindings; transitive-call-graph scan over <code>tests/bdd/</code> +
+      <code>tests/harness/</code> gives 859 STRONG, 29 WEAK-ONLY, 4 NO-ASSERT — and all 29/4 are
+      legitimate absence or negative assertions, not vacuity.</td>
+  <td><span class="tag R">READING</span></td>
+</tr>
+<tr>
+  <td><strong>4. Self-derived expectation</strong></td>
+  <td class="amber">MOSTLY CLOSED — 1 open instance</td>
+  <td>The pattern's obvious home (filter/sort outlines) is clean: UC-018's expected sets are derived from
+      the seeded library <em>filtered by the statuses the Gherkin names</em>, and compared by exact set
+      equality. One confirmed open instance survives in UC-004.</td>
+  <td><span class="tag E">EXECUTION</span> (M3)</td>
+</tr>
+<tr>
+  <td><strong>5. Simulated rather than exercised</strong></td>
+  <td class="green">CLOSED for BDD</td>
+  <td>The one harness site that authors a response payload itself is <strong>unreachable from any wired
+      BDD scenario</strong>. The circuit-breaker simulation is real but already has a standing guard.</td>
+  <td><span class="tag E">EXECUTION</span> (M5) + <span class="tag R">READING</span></td>
+</tr>
+<tr>
+  <td><strong>6. No conformance check</strong></td>
+  <td class="green">CLOSED</td>
+  <td>2668 scenarios in <code>tests/bdd/features/</code>; 1116 carry a pinned-schema Then. Of the 1552 that
+      do not, only <strong>85</strong> sit in a feature that has a test module, and those are almost all
+      <code>local-*</code> / admin features where a response-schema check does not apply.</td>
+  <td><span class="tag R">READING</span></td>
+</tr>
+</tbody>
+</table>
+</div>
+
+<div class="note">
+  <strong>A denominator warning that matters.</strong> 18 of the 61 feature files have no
+  <code>tests/bdd/test_*.py</code> module at all, so roughly 1150 of those 2668 scenarios are never
+  collected. A scenario that is not collected does not <em>pass</em> vacuously — it does not pass. Every
+  population figure above is scoped to wired features, and says so. Mixing the two is how a
+  "1552-scenario conformance hole" gets reported when the real number is 85.
+</div>
+
+<h2>3. Sampled scenarios, with the mutation applied and the result</h2>
+
+<p>
+  Five mutations, each run against a byte-identical baseline of the same pytest selection, diffed
+  per-nodeid. Baseline and mutant node sets were reconciled (identical counts, no baseline-only or
+  mutant-only ids) and exit codes checked before any number below was quoted.
+</p>
+
+<div class="scroll">
+<table>
+<thead><tr>
+  <th>#</th><th>Target (<code>file:line</code>)</th><th>Mutation applied</th>
+  <th>Selection</th><th>Baseline</th><th>Under mutation</th><th class="nowrap">Went red</th><th>Reads as</th>
+</tr></thead>
+<tbody>
+<tr>
+  <td><strong>M1</strong></td>
+  <td><code>src/services/webhook_delivery_service.py:347-353</code></td>
+  <td>Replace the <code>is_final</code> / <code>is_adjusted</code> selector with the out-of-enum
+      constant <code>"MUTATED_M1"</code></td>
+  <td>UC-004 <code>-k notification_type</code><br>24 items</td>
+  <td>—</td>
+  <td>9 failed, 15 xfailed</td>
+  <td class="green">yes, 9</td>
+  <td>Production runs, and the pinned-schema check catches the invalid enum at
+      <code>tests/bdd/steps/generic/then_schema.py:250</code>
+      ("<code>'MUTATED_M1' is not one of ['scheduled','final','delayed','adjusted','window_update']</code>").
+      Refutes the reading-based hypothesis that the payload was harness-authored.</td>
+</tr>
+<tr>
+  <td><strong>M1b</strong></td>
+  <td><code>src/services/webhook_delivery_service.py:347-353</code></td>
+  <td>Same selector pinned to the <em>in-spec</em> constant <code>"scheduled"</code>, so the schema check
+      cannot trivially catch it — isolating whether the <em>selection</em> is graded</td>
+  <td>UC-004 <code>-k webhook</code><br>165 items</td>
+  <td>99 passed<br>66 xfailed</td>
+  <td>93 passed, <span class="red">6 failed</span><br>66 xfailed</td>
+  <td class="green">yes, 6</td>
+  <td><strong>Class 2.</strong> <code>final</code> and <code>adjusted</code> rows red on all three
+      transports; all three <code>[scheduled]</code> rows stayed green. 3 of 12 in-process nodeids of
+      this outline cannot fail.</td>
+</tr>
+<tr>
+  <td><strong>M3</strong></td>
+  <td><code>src/core/tools/creatives/listing.py:386</code></td>
+  <td><code>statuses = None</code> — the buyer's <code>filters.statuses</code> is never applied</td>
+  <td>UC-018 <code>-k default-query</code><br>45 items</td>
+  <td>45 passed</td>
+  <td>27 passed, <span class="red">18 failed</span></td>
+  <td class="green">yes, 18</td>
+  <td><strong>Not class 4.</strong> Every statuses row reddened on every transport. The 27 that stayed
+      green send no statuses filter or are rejected at validation first — correct blindness, not
+      vacuity.</td>
+</tr>
+<tr>
+  <td><strong>M4</strong></td>
+  <td><code>tests/bdd/steps/domain/uc026_package_media_buy.py:1327</code> (test-side)</td>
+  <td>The four <em>valid</em> partitions of <code>@T-UC-026-partition-keyword-add</code> send
+      <strong>no keyword operation at all</strong> — the entire subject of the scenario removed from
+      the request</td>
+  <td>UC-026 <code>-k test_keyword_targets_add_partition_validation</code><br>24 items</td>
+  <td>20 passed<br>4 xpassed</td>
+  <td>20 passed<br>4 xpassed</td>
+  <td class="red">NO — 0</td>
+  <td><strong>Class 1, confirmed.</strong> Byte-for-byte identical outcomes. A scenario named "Keyword
+      targets add partition validation" cannot tell a keyword operation from its complete absence.</td>
+</tr>
+<tr>
+  <td><strong>M5</strong></td>
+  <td><code>tests/harness/_mixins.py:1290</code> (test-side)</td>
+  <td><code>raise AssertionError</code> on entry to <code>WebhookMixin.call_deliver</code> — a liveness
+      probe, not a behaviour change</td>
+  <td>UC-004 <code>-k webhook</code><br>165 items</td>
+  <td>99 passed<br>66 xfailed</td>
+  <td>99 passed<br>66 xfailed</td>
+  <td class="red">NO — 0</td>
+  <td><strong>Class 5 refuted.</strong> The harness site that authors a response payload itself is never
+      reached by any of these 165 nodeids. Dead code for BDD, not a live vacuity.</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+<div class="note">
+  <strong>Two of the five mutations contradicted what the source said.</strong> M1 refuted the reading
+  that UC-004's webhook payload is harness-authored (three in-repo docstrings say so, and they are
+  stale — see below). M3 refuted this audit's own prediction that the
+  <code>all_statuses_explicit</code> row could not fail; it does fail, because the archival-exclusion
+  default means an unfiltered read returns 4 of 5 creatives rather than all 5. Both are the reason the
+  brief requires a mutation and not a reading.
+</div>
+
+<h2>4. What the two open classes actually look like</h2>
+
+<h3>Class 1 — the effect named in the Examples column that nothing reads</h3>
+
+<p>
+  <code>tests/bdd/steps/domain/uc026_package_media_buy.py:2003</code> binds
+  <code>the outcome should be {outcome}</code>. Its success branch delegates to
+  <code>then_operation_succeeds</code> (<code>:1968</code>), whose entire contract is: no error in
+  <code>ctx</code>, a payload actually arrived, and the status is not a failure value. The outcome cell
+  says <em>"success with keyword added"</em>; nothing reads a keyword.
+</p>
+<p>
+  <span class="tag R">READING</span> The reason is upstream of the test.
+  <code>keyword_targets_add</code> and <code>keyword_targets_remove</code> appear
+  <strong>zero times under <code>src/</code></strong>, and <code>AdCPPackageUpdate</code>
+  (<code>src/core/schemas/_base.py:3045</code>) does not declare them, so there is no handler and no
+  declared field. <code>src/core/tools/media_buy_update.py</code> appends an
+  <code>AffectedPackage</code> on five branches only (budget, creative_ids, creatives,
+  creative_assignments, targeting_overlay). AdCP 3.2.1
+  <code>update-media-buy-response.json#/oneOf/0/properties/affected_packages</code> defines the field as
+  full Package objects showing complete post-update state, so a keyword op that modified a package would
+  have to report one — and does not, because nothing implements it.
+</p>
+<p>
+  The <code>70f74f781</code> mock fix does <strong>not</strong> reach these rows. It made the mock report
+  the package for the two actions that change one (pause / resume); the keyword actions still fall through
+  to the empty return, because there is no production handler for the mock to be called from.
+</p>
+
+<h3>Class 2 — a row whose expected value coincides with production's only possible answer</h3>
+
+<p>
+  <span class="tag E">EXECUTION</span> This is the sharpest finding of the audit, and it <em>refines</em>
+  what the in-tree ledger records.
+</p>
+<p>
+  <code>tests/bdd/conftest.py:1943</code> notes that over <code>e2e_rest</code>, the
+  <code>[scheduled]</code> row of <code>@T-UC-004-webhook-notification-type</code> cannot fail, because
+  <code>src/services/delivery_webhook_scheduler.py:332</code> assigns
+  <code>NotificationType.scheduled</code> unconditionally. True — and the same row is equally
+  unfalsifiable on <strong>all three in-process transports</strong>, for a different reason: there the
+  payload is built by <code>src/services/webhook_delivery_service.py:347-353</code>, which <em>does</em>
+  select the type, but <code>"scheduled"</code> is its <code>else</code> branch. A row asking for the
+  default value cannot distinguish a working selector from a constant.
+</p>
+<p>
+  Pinning that selector to the in-spec constant <code>"scheduled"</code> (mutation M1b) turned the
+  <code>final</code> and <code>adjusted</code> rows <span class="red">RED on all three transports (6/6)</span>
+  and left all three <code>scheduled</code> rows <span class="green">GREEN</span>. Measured, per nodeid:
+</p>
+
+<div class="scroll">
+<table>
+<thead><tr><th>Row (&times; a2a / mcp / rest)</th><th>Baseline</th><th>Under M1b</th><th>Reads as</th></tr></thead>
+<tbody>
+<tr><td><code>[*-scheduled-should]</code></td><td>passed</td><td class="green">passed</td><td class="red">cannot fail — grades nothing</td></tr>
+<tr><td><code>[*-final-should not]</code></td><td>passed</td><td class="red">failed</td><td class="green">genuinely graded</td></tr>
+<tr><td><code>[*-adjusted-should]</code></td><td>passed</td><td class="red">failed</td><td class="green">genuinely graded</td></tr>
+<tr><td><code>[*-delayed-should]</code></td><td>xfailed</td><td>xfailed</td><td>ledgered gap — no <code>is_delayed</code> flag exists</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>
+  So 3 of the 12 in-process nodeids of this one outline are unfalsifiable, and the outline looks fully
+  green. The row is not parkable: it <em>passes</em>, and a strict xfail would fail the suite — exactly
+  the bind <code>tests/bdd/conftest.py:2769</code> records for the sibling UC-004 sort-fallback case.
+</p>
+
+<h3>The class-5 candidate that looked worst and is dead</h3>
+
+<p>
+  <code>tests/harness/_mixins.py:1261</code> (<code>WebhookMixin.call_deliver</code>, payload authored at
+  <code>:1299-1312</code>) writes the
+  response payload itself, including <code>notification_type</code> and <code>next_expected_at</code>,
+  and its own docstring says it "mirrors the payload shape that <code>WebhookDeliveryService</code>
+  produces so that BDD Then steps can assert on payload fields <em>without requiring the full service
+  stack</em>." A scenario asserting <code>notification_type == "&lt;type&gt;"</code> against that payload
+  would be reading back the Examples column it was handed.
+</p>
+<p>
+  <span class="tag E">EXECUTION</span> It is not reached. The BDD route table sends <code>@webhook</code>
+  to <code>"circuit-breaker"</code> (<code>scripts/audit/storyboard_spec.py:831</code>) and therefore to
+  <code>CircuitBreakerEnv</code>, whose <code>CircuitBreakerMixin</code>
+  (<code>tests/harness/_mixins.py:1335</code>) extends <code>LocalOriginMixin</code> and
+  <strong>not</strong> <code>WebhookMixin</code> — so its own <code>call_deliver</code>
+  (<code>:1728</code>), which translates to production's <code>is_final</code> / <code>is_adjusted</code>
+  flags and calls <code>send_delivery_webhook</code>, is the one that runs. That is why M1 and M1b
+  reddened real rows at all. Enumerating every env the route table can build (11 by dotted string, 7 by
+  callable) finds no <code>WebhookEnv</code>; it is live only in
+  <code>tests/integration/test_delivery_webhook_behavioral.py</code>.
+</p>
+<p>
+  <strong>Three places in the repo say otherwise</strong> and are stale:
+  <code>tests/bdd/conftest.py:6</code>, <code>tests/bdd/conftest.py:6831</code>
+  ("UC-004 @webhook &rarr; WebhookEnv (unit variant, no DB needed)") and
+  <code>tests/CLAUDE.md:144</code>. Mutation beat reading here: those docstrings are what led this audit
+  to the wrong hypothesis first, and only the mutation corrected it.
+</p>
+
+<h2>5. The machinery that already closes classes 3, 5 and 6</h2>
+
+<ul>
+  <li><strong>Class 3</strong> — <code>tests/unit/test_architecture_bdd_assertion_strength.py</code>
+    bans four weak-assertion shapes (<code>hasattr</code>, getattr-existence,
+    <code>len(x) &gt; 0</code>, early-return on a ctx flag) with <strong>all four allowlists
+    empty</strong>. Plus 32 further <code>test_architecture_bdd_*.py</code> guards.</li>
+  <li><strong>Class 5</strong> — <code>tests/unit/test_architecture_bdd_breaker_scenarios_graded_live.py</code>
+    is the standing check that the two UC-004 breaker scenarios stop grading a dict in the test process
+    (#2060). It is unusually honest about its own limit: it grades the structural criteria and says
+    plainly that the behavioural half can only be graded by a bdd-in-network run.</li>
+  <li><strong>Dormancy</strong> — <code>tests/bdd/dormant_scenarios.txt</code>, 150 keyed entries,
+    shrink-only, enforced <em>per-test</em> rather than by a count so it fires on a subset run.</li>
+  <li><strong>Vacuous rows</strong> — <code>_UC010_PARKED_ROWS</code>
+    (<code>tests/bdd/conftest.py:1467</code>) parks an individual Examples row that would pass vacuously,
+    with <code>run=False</code> so it does not execute and cannot report XPASS. Its comment states the
+    principle exactly: "a test that cannot fail is not coverage."</li>
+</ul>
+
+<div class="note">
+  That last mechanism is the right one and it exists <strong>for UC-010 only</strong> — one table, one
+  entry. There is no general equivalent, which is why the UC-004 <code>[scheduled]</code> row and the 54
+  UC-026 effect rows have nowhere to be recorded.
+</div>
+
+<h2>6. Smallest next action per class, ordered by scenarios made real</h2>
+
+<ol>
+  <li>
+    <strong>Class 1 &mdash; 87 nodeids, and 9 ready to graduate today.</strong> Two separable steps:
+    <ul>
+      <li><strong>Now, with no production change:</strong> graduate the 9 nodeids the mock fix already
+        made real (<code>test_update_package_budget_via_package_id</code>,
+        <code>test_pause_a_running_package</code>, <code>test_resume_a_paused_package</code> &times; 3
+        transports) by removing the tag that routes them, following
+        <code>.claude/rules/workflows/xpass-graduation.md</code> one scenario at a time. Their effect
+        <em>is</em> readable now, which is why they xpass.</li>
+      <li><strong>Then, blocked on production:</strong> the other 87 need a handler before an assertion
+        can exist at all. <code>keyword_targets_add</code> / <code>keyword_targets_remove</code> have
+        none under <code>src/</code>, which is why the graduation lane wrote the effect assertion,
+        measured it RED 6/6, and reverted
+        (<code>tests/bdd/steps/domain/uc026_package_media_buy.py:2019-2048</code>: a Then that cannot pass until production
+        changes belongs in the same change as the production fix). Implement the handler and its
+        <code>affected_packages</code> reporting together, then restore the assertion derived from
+        <code>ctx["update_kwargs"]</code> in that same change.</li>
+    </ul>
+  </li>
+  <li>
+    <strong>Class 2 &mdash; 3 nodeids now, and a reusable mechanism.</strong> Generalise
+    <code>_UC010_PARKED_ROWS</code> into one row-level park table keyed on
+    <code>(tag, nodeid substring)</code> that is not UC-scoped, and move the UC-004
+    <code>[scheduled]</code> rows into it. One table, one loop in
+    <code>pytest_collection_modifyitems</code> — the loop at <code>tests/bdd/conftest.py:2393</code> already does
+    exactly this and only needs its table widened. This is what makes every future "row whose expected
+    value is production's default" recordable instead of invisible.
+  </li>
+  <li>
+    <strong>Class 4 &mdash; 6 nodeids.</strong> <code>@T-UC-004-dim-sortby-fallback</code> is the one
+    confirmed open instance and the in-tree note at <code>tests/bdd/conftest.py:2751-2770</code> already carries its
+    mutation proof (deleting the spend fallback and falling back to the wrong metric each left all 6
+    GREEN). The fix is in the fixture, not the assertion: production synthesises every placement metric
+    from one weight vector, so seed placements whose metric orderings <em>disagree</em> and the existing
+    <code>sorted(..., reverse=True)</code> assertion becomes falsifiable. Same shape as the non-vacuity
+    guard UC-018 already carries at <code>tests/bdd/test_uc018_list_creatives.py:1058</code>.
+  </li>
+  <li>
+    <strong>Class 5 &mdash; 0 scenarios, 3 lines of documentation.</strong> Nothing to fix in the suite.
+    Correct the three stale claims that <code>WebhookEnv</code> is the UC-004 <code>@webhook</code> env
+    (<code>tests/bdd/conftest.py:6</code> and <code>:6831</code>, <code>tests/CLAUDE.md:144</code>). They
+    cost this audit a wrong hypothesis; they will cost the next reader the same.
+  </li>
+  <li>
+    <strong>Classes 3 and 6 &mdash; no action.</strong> Both are closed by guards with empty allowlists or
+    by scope. Do not spend effort here.
+  </li>
+</ol>
+
+<h2>7. What was sampled, and what was not</h2>
+
+<p><strong>Sampled by execution:</strong> <code>test_uc026_package_media_buy.py</code> (full module, 729
+items), <code>test_uc004_deliver_media_buy_metrics.py</code> (<code>-k webhook</code>, 165 items, twice —
+baseline and two mutants), <code>test_uc018_list_creatives.py</code>
+(<code>-k default-query</code>, 45 items, baseline and mutant), and the keyword-add partition outline.</p>
+
+<p><strong>Sampled by reading only:</strong> every <code>@then</code> binding in
+<code>tests/bdd/steps/</code> and <code>tests/bdd/test_*.py</code> (892, via AST + transitive call graph);
+all 61 feature files for conformance-check coverage; all five park tables in
+<code>tests/bdd/conftest.py</code>.</p>
+
+<p><strong>Not sampled.</strong> Stated plainly, because each is a real limit on the verdicts above:</p>
+<ul>
+  <li><strong>The <code>e2e_rest</code> transport.</strong> No live Docker stack was brought up, so every
+    mutation result is in-process only (a2a / mcp / rest). The class-2 finding is <em>stronger</em> for
+    it — the in-process half was previously unexamined — but any claim about
+    <code>tests/bdd/e2e_rest_known_failures.txt</code> (8 live entries) needs a bdd-in-network run.</li>
+  <li><strong>UC-006, UC-010, UC-011, UC-019 by execution.</strong> These carry the largest step modules
+    (7220, 3138, 4919, 3399 lines) and were read, not mutated. UC-010's extensive park tables suggest
+    prior lanes covered it; UC-006 and UC-019 are the largest unmeasured surfaces in this audit.</li>
+  <li><strong>The 18 unwired features.</strong> ~1150 scenarios that never collect. Out of scope here
+    (they do not pass), but they are the biggest single block of ungraded obligation in the tree.</li>
+  <li><strong>The payload-capture artifact.</strong> <code>tests/bdd/payload_capture.py:12</code> records
+    that 5421 of 8182 measured nodeids dispatch nothing. That is a strong class-1/class-5 prospecting
+    signal and was not mined — it needs a full-suite run to populate.</li>
+</ul>
+
+<footer>
+  <p><strong>Tree state.</strong> No production or test change is left behind.
+  <code>git diff --stat src/</code> is empty; every mutation listed in section 3 was reverted and the
+  revert verified before the next was applied. The audit touched no park table, no
+  <code>known_failures.txt</code>, no <code>.storyboard-pass-floor</code>, and neither ratchet (42, 168).</p>
+  <p><strong>Note on the pin.</strong> <code>CLAUDE.md</code> states AdCP 3.1.1 via <code>adcp==6.6.0</code>.
+  This worktree pins <strong>3.2.1</strong> via SDK <code>9.0.0b1+prs1435.1415.1456</code>
+  (<code>tests/helpers/adcp_pin.py:20</code>, confirmed by
+  <code>adcp.get_adcp_spec_version()</code>). The branch descends from an SDK-9 adoption line, so 3.2.1
+  is authoritative here and all spec citations above use it.</p>
+</footer>
+
+</div>
+</body>
+</html>

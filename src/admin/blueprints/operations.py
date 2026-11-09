@@ -5,9 +5,6 @@ import logging
 from typing import Any
 
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
-
-# FIXME(#1388): Package has a local subclass; import from src.core.schemas (Pattern #7/#4).
-from adcp.types import Package
 from flask import Blueprint, request
 from sqlalchemy import select
 
@@ -17,7 +14,7 @@ from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.principal import PrincipalRepository
 from src.core.errors.details import RejectionReasonDetails
 from src.core.exceptions import AdCPMediaBuyRejectedError
-from src.core.schemas import CreateMediaBuyError, CreateMediaBuySuccess, Error
+from src.core.schemas import CreateMediaBuyError, CreateMediaBuySuccess, Error, Package
 from src.core.tools.media_buy_create import ApprovalOutcome
 from src.core.webhooks.delivery import WebhookTaskContext
 from src.services.protocol_webhook_service import get_protocol_webhook_service
@@ -490,7 +487,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     webhook_config = db_session.scalars(stmt_webhook).first()
 
                 if webhook_config and media_buy_data:
-                    # A rejection is NOT a completed media buy. adcp 6.6 defaults
+                    # A rejection is NOT a completed media buy. the pinned SDK defaults
                     # CreateMediaBuySuccess.status="completed"/confirmed_at, so embedding a
                     # Success here would assert the buy COMPLETED inside a status="rejected"
                     # webhook. Spec 3.1.1 create-media-buy-response.json models a non-success
