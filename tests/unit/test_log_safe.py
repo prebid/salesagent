@@ -51,18 +51,20 @@ class TestLogSafe:
 class TestCallSites:
     """The sites CodeQL named actually route through it."""
 
-    def test_malformed_ai_config_warning_cannot_forge_a_line(self, caplog):
+    def test_malformed_ai_config_warning_cannot_forge_a_line(self, caplog, tenant_row):
         """src/services/ai/config.py: the ValidationError embeds the rejected value."""
         from src.services.ai.config import TenantAIConfig
 
         with caplog.at_level(logging.WARNING, logger="src.services.ai.config"):
-            TenantAIConfig.coerce({"provider": "x\nWARNING forged", "settings": {"temperature": 99}})
+            TenantAIConfig.from_tenant(
+                tenant_row(ai_config={"provider": "x\nWARNING forged", "settings": {"temperature": 99}})
+            )
 
         records = [r for r in caplog.records if r.name == "src.services.ai.config"]
         assert len(records) == 1
         assert len(records[0].getMessage().splitlines()) == 1
 
-    def test_the_tenant_label_in_that_warning_cannot_forge_a_line(self, caplog):
+    def test_the_tenant_label_in_that_warning_cannot_forge_a_line(self, caplog, tenant_row):
         """The SECOND value reaching that log line, through ``source``.
 
         ``from_tenant`` builds the label as ``f"tenant ai_config for tenant {id!r}"``
@@ -72,9 +74,8 @@ class TestCallSites:
         than the tenant identifier.
         """
         from src.services.ai.config import TenantAIConfig
-        from tests.factories import TenantFactory
 
-        tenant = TenantFactory.build(tenant_id="acme\nWARNING forged", ai_config={"settings": {"temperature": 99}})
+        tenant = tenant_row(tenant_id="acme\nWARNING forged", ai_config={"settings": {"temperature": 99}})
         with caplog.at_level(logging.WARNING, logger="src.services.ai.config"):
             TenantAIConfig.from_tenant(tenant)
 
@@ -84,7 +85,7 @@ class TestCallSites:
         assert len(message.splitlines()) == 1, f"the tenant identifier forged a line: {message!r}"
         assert "forged" in message, "escaped, not deleted"
 
-    def test_a_non_string_tenant_identifier_cannot_forge_a_line(self, caplog):
+    def test_a_non_string_tenant_identifier_cannot_forge_a_line(self, caplog, tenant_row):
         """The case ``!r`` does NOT cover, which is why the label is escaped.
 
         ``repr()`` of a ``str`` already escapes its line breaks, so a forged string
@@ -94,13 +95,12 @@ class TestCallSites:
         escape this is the input that forges the line, so it is the one that grades the fix.
         """
         from src.services.ai.config import TenantAIConfig
-        from tests.factories import TenantFactory
 
         class Sneaky:
             def __repr__(self) -> str:
                 return "acme\nWARNING forged"
 
-        tenant = TenantFactory.build(tenant_id=Sneaky(), ai_config={"settings": {"temperature": 99}})
+        tenant = tenant_row(tenant_id=Sneaky(), ai_config={"settings": {"temperature": 99}})
         with caplog.at_level(logging.WARNING, logger="src.services.ai.config"):
             TenantAIConfig.from_tenant(tenant)
 

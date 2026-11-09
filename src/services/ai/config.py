@@ -49,7 +49,7 @@ class TenantAIConfig(BaseModel):
 
     # extra="ignore": forward compatible with future fields. hide_input_in_errors: a
     # ValidationError renders the value it rejected, and a stored row carries the seller's
-    # API key, so a malformed row would otherwise put that key in the WARNING `coerce` logs.
+    # API key, so a malformed row would otherwise put that key in the WARNING `from_tenant` logs.
     model_config = {"extra": "ignore", "hide_input_in_errors": True}
 
     # Model selection - accepts any Pydantic AI provider string
@@ -67,50 +67,24 @@ class TenantAIConfig(BaseModel):
     settings: ModelSettings = Field(default_factory=ModelSettings)
 
     @classmethod
-    def coerce(cls, value: Any, *, source: str = "tenant ai_config") -> "TenantAIConfig":
-        """Tolerant parse of a STORED AI configuration value; caller mistakes still raise.
-
-        Two failure modes arrive here and they need opposite answers:
-
-        * **Malformed stored data** - a dict or list that came out of the JSONB column
-          but does not satisfy this model (a settings block outside ModelSettings'
-          bounds, a list where an object belongs). The seller's row is broken; the
-          buyer's request is not. That degrades to a bare TenantAIConfig() with one
-          WARNING. Strict parsing here raised pydantic's ValidationError, which
-          subclasses ValueError and so was normalised by every transport into a
-          VALIDATION_ERROR/correctable envelope naming a field (e.g.
-          "settings.temperature") that does not exist in the buyer's request schema.
-        * **A caller passing the wrong Python type** - a str, an int, an arbitrary
-          object. `src/core/database/json_type.py` raises TypeError itself for anything
-          that is not a dict or list, so these shapes CANNOT come from the column; they
-          only come from a caller that passed the wrong argument (the reason this exists
-          is `build_order_name_context(..., gemini_key)` landing a key string in the
-          `tenant_ai_config` parameter). That raises TypeError naming the parameter and
-          the offending type. Degrading it instead hid the mistake behind a log line and
-          silently ran the AI feature on some other configuration.
-
-        `source` names the value being parsed; it appears in both messages so the log
-        or traceback identifies which tenant and which parameter is at fault.
-        """
-        if isinstance(value, cls):
-            return value
-        if value is None:
-            return cls()
-        parsed = cls._parse_stored(value, source=source)
-        return cls() if parsed is None else parsed
-
-    @classmethod
     def _parse_stored(cls, value: Any, *, source: str) -> "TenantAIConfig | None":
-        """`coerce`'s parse, reporting a malformed value as None instead of a bare config.
+        """`from_tenant`'s parse of the stored row: the config, or None for a row that does not parse.
 
-        `from_tenant` needs to tell "the row does not parse" from "the row parses to
-        nothing", because only the second may fall back to the platform's credential.
+        Malformed stored data (a dict or list out of the JSONB column that does not satisfy
+        this model) is the seller's broken row, not the buyer's request, so it is logged once
+        and answered None, which `from_tenant` turns into `UNUSABLE_AI_CONFIG`. Raising
+        pydantic's ValidationError instead reached the buyer as a VALIDATION_ERROR naming a
+        field (``settings.temperature``) their request schema does not have.
+
+        Any other Python type cannot come out of the column (`src/core/database/json_type.py`
+        refuses everything that is not a dict or list), so it raises TypeError rather than
+        being logged as seller data.
         """
         if not isinstance(value, Mapping | list):
             raise TypeError(
                 f"{source} must be a JSON object (dict) or None, got {type(value).__name__}. "
-                "PostgreSQL JSONB only ever yields dict, list or None, so this value comes "
-                "from a caller passing the wrong argument - pass it by keyword."
+                "PostgreSQL JSONB only ever yields dict, list or None, so this value did not "
+                "come from the ai_config column."
             )
         try:
             return cls.model_validate(value)

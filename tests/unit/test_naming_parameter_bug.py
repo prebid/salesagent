@@ -41,8 +41,8 @@ class TestBuildOrderNameContextParameters:
         """Everything after end_time is keyword-only, so a key string passed positionally raises.
 
         The live example was ``build_order_name_context(..., gemini_key)``: an API-key
-        string landing in the AI-configuration parameter. That used to be caught deeper
-        down, by TenantAIConfig.coerce; the signature now refuses it before the call runs.
+        string landing in the AI-configuration parameter. The signature refuses it before
+        the call runs.
         """
         request = MagicMock()
         request.brand = MagicMock(domain="testbrand.com")

@@ -21,7 +21,6 @@ from src.services.ai.config import (
     uses_legacy_gemini_api_key,
 )
 from src.services.ai.factory import PROVIDER_MODELS, ResolvedAIConfig
-from tests.factories import TenantFactory
 from tests.helpers.settings_injection import PlatformAICredential
 
 
@@ -78,106 +77,66 @@ class TestTenantAIConfig:
         assert not hasattr(config, "future_field")
 
 
-class TestTenantAIConfigCoerce:
-    """TenantAIConfig.coerce is the one tolerant parse of a stored ai_config value."""
+class TestTenantAIConfigFromTenantParse:
+    """How from_tenant parses the stored ai_config row: the one parse of that column."""
 
-    def test_dict_is_parsed(self):
-        """A well-formed dict parses into a real config."""
-        config = TenantAIConfig.coerce({"provider": "anthropic", "model": "claude-sonnet-4-20250514"})
-        assert config.provider == "anthropic"
-        assert config.model == "claude-sonnet-4-20250514"
+    def test_well_formed_row_is_parsed(self, tenant_row):
+        """A well-formed row with a key parses into the seller's own config."""
+        config = TenantAIConfig.from_tenant(
+            tenant_row(ai_config={"provider": "anthropic", "model": "claude-sonnet-4-20250514", "api_key": "k"})
+        )
+        assert config == TenantAIConfig(provider="anthropic", model="claude-sonnet-4-20250514", api_key="k")
 
-    def test_existing_instance_passes_through_unchanged(self):
-        """An already-parsed TenantAIConfig is returned as the same object, not re-validated."""
-        original = TenantAIConfig(provider="openai", api_key="k")
-        assert TenantAIConfig.coerce(original) is original
-
-    def test_none_yields_platform_defaults(self):
-        """None means 'nothing configured' — a bare config, so the factory uses platform defaults."""
-        config = TenantAIConfig.coerce(None)
-        assert config.provider is None
-        assert config.api_key is None
-
-    def test_malformed_settings_degrade_to_defaults_with_one_warning(self, caplog):
+    def test_malformed_settings_are_unusable_with_one_warning(self, tenant_row, caplog):
         """A settings block that violates ModelSettings bounds must NOT raise.
 
         Regression guard: TenantAIConfig.model_validate raises pydantic's
         ValidationError, which subclasses ValueError, so a malformed seller-side
         ai_config row reached the buyer as a VALIDATION_ERROR/correctable envelope
         naming 'settings.temperature' — a field that does not exist in the request
-        schema. A broken config row must degrade the AI feature, not fail the request.
+        schema. A broken config row must switch the AI feature off, not fail the request.
         """
         with caplog.at_level(logging.WARNING, logger="src.services.ai.config"):
-            config = TenantAIConfig.coerce({"provider": "gemini", "settings": {"temperature": 9}})
+            config = TenantAIConfig.from_tenant(
+                tenant_row(ai_config={"provider": "gemini", "api_key": "k", "settings": {"temperature": 9}})
+            )
 
-        assert config.provider is None, "malformed config must fall back to platform defaults entirely"
-        assert config.settings.temperature == 0.3
+        assert config is UNUSABLE_AI_CONFIG
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
         assert len(warnings) == 1, f"expected exactly one WARNING, got {[r.message for r in warnings]}"
 
-    def test_list_from_the_jsonb_column_degrades_instead_of_raising(self, caplog):
-        """A list is a shape the JSONB column can hold, so it is malformed DATA: degrade.
+    def test_list_from_the_jsonb_column_is_unusable_instead_of_raising(self, tenant_row, caplog):
+        """A list is a shape the JSONB column can hold, so it is malformed DATA: unusable, logged once.
 
-        Before coerce, the factory's `elif tenant_ai_config:` branch bound such a value
-        straight to `config`, and the next line (`config.api_key`) died with AttributeError.
+        The factory's old `elif tenant_ai_config:` branch bound such a value straight to
+        `config`, and the next line (`config.api_key`) died with AttributeError.
         """
         with caplog.at_level(logging.WARNING, logger="src.services.ai.config"):
-            config = TenantAIConfig.coerce(["provider", "gemini"])
+            config = TenantAIConfig.from_tenant(tenant_row(ai_config=["provider", "gemini"]))
 
-        assert config == TenantAIConfig()
+        assert config is UNUSABLE_AI_CONFIG
         assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 1
 
     @pytest.mark.parametrize("value", ["gemini", 42, object()])
-    def test_caller_type_mistake_raises_type_error(self, value, caplog):
-        """A str/int/object can only come from a caller bug, so it must RAISE.
+    def test_a_value_the_column_cannot_hold_raises_type_error(self, tenant_row, value, caplog):
+        """A str/int/object cannot come out of the JSONB column, so it RAISES rather than being logged.
 
-        `src/core/database/json_type.py` raises TypeError itself for anything that is
-        not a dict or list, so these shapes never come out of the ai_config column. They
-        come from a caller passing the wrong argument — the live example being
-        `build_order_name_context(..., gemini_key)`, which lands an API-key string in
-        the `tenant_ai_config` parameter. Degrading that to platform defaults hid the
-        mistake behind a log line and quietly ran the AI feature on somebody else's
-        configuration; `code-patterns.md` names exactly that shape as wrong.
+        `src/core/database/json_type.py` raises TypeError itself for anything that is not
+        a dict or list. Logging such a value as malformed seller data would hide whatever
+        put it on the row; `code-patterns.md` names that shape as wrong.
 
-        The message must name both the offending type and the parameter, because the
-        caller's only clue is this exception.
+        The message names the offending type and the tenant's ai_config, because the
+        traceback is the only clue.
         """
         with caplog.at_level(logging.WARNING, logger="src.services.ai.config"):
             with pytest.raises(TypeError) as excinfo:
-                TenantAIConfig.coerce(value)
+                TenantAIConfig.from_tenant(tenant_row(ai_config=value))
 
         assert type(value).__name__ in str(excinfo.value)
-        assert "ai_config" in str(excinfo.value)
+        assert "ai_config for tenant 't1'" in str(excinfo.value)
         assert [r.message for r in caplog.records if r.levelno == logging.WARNING] == [], (
-            "a caller mistake is raised, not logged-and-swallowed"
+            "a value the column cannot hold is raised, not logged-and-swallowed"
         )
-
-    def test_source_label_names_the_offending_parameter(self):
-        """`source` identifies which value was wrong — the caller's only clue."""
-        with pytest.raises(TypeError, match="naming.tenant_ai_config"):
-            TenantAIConfig.coerce("AIzaSy...", source="naming.tenant_ai_config")
-
-    def test_empty_dict_yields_platform_defaults(self):
-        """An empty ai_config is valid and simply carries nothing."""
-        assert TenantAIConfig.coerce({}) == TenantAIConfig()
-
-
-@pytest.fixture
-def tenant_row(monkeypatch):
-    """An unsaved ORM ``Tenant`` row, built the way production reads one.
-
-    ``Tenant.gemini_api_key`` encrypts on write and decrypts on read, so a row carrying the
-    legacy column needs an ``ENCRYPTION_KEY``; a per-test Fernet key round-trips through the
-    real property rather than stubbing it.
-    """
-    from cryptography.fernet import Fernet
-
-    monkeypatch.setenv("ENCRYPTION_KEY", Fernet.generate_key().decode())
-
-    def make(**fields):
-        return TenantFactory.build(**{"tenant_id": "t1", **fields})
-
-    return make
 
 
 class TestTenantAIConfigFromTenant:
@@ -267,8 +226,9 @@ class TestTenantAIConfigFromTenant:
         assert isinstance(config, TenantAIConfig)
         assert config.api_key == "legacy-key"
 
-    def test_a_row_naming_no_model_and_no_legacy_key_is_nothing(self, tenant_row):
-        assert TenantAIConfig.from_tenant(tenant_row(ai_config={"settings": {"temperature": 0.5}})) is None
+    @pytest.mark.parametrize("ai_config", [{}, {"settings": {"temperature": 0.5}}], ids=["empty", "settings-only"])
+    def test_a_row_naming_no_model_and_no_legacy_key_is_nothing(self, tenant_row, ai_config):
+        assert TenantAIConfig.from_tenant(tenant_row(ai_config=ai_config)) is None
 
     def test_malformed_ai_config_is_unusable(self, tenant_row, caplog):
         """A row that does not parse is UNUSABLE — never a config the factory refills, never nothing.
