@@ -436,6 +436,7 @@ class TestIdempotencyKeyLookup:
         mock_req = MagicMock()
         mock_req.model_dump.return_value = {"test": True}
         mock_req.po_number = None
+        mock_req.name = None
         mock_req.idempotency_key = idem_key
 
         from datetime import datetime

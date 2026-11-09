@@ -13,7 +13,7 @@ delivery-only terminal ``failed``::
     pending_creatives, pending_start, active, paused, completed,
     rejected, canceled, failed
 
-(``get-media-buy-delivery-response.json`` status enum; AdCP spec 3.1.0-beta.3.)
+(``get-media-buy-delivery-response.json`` status enum.)
 The two callers adapt this single result to their own surface:
 
 - ``get_media_buy_delivery`` uses the canonical string directly and overlays
@@ -36,10 +36,40 @@ the reference date is the buyer-visible difference.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import date
 from typing import Any
 
+from adcp.server.helpers import valid_actions_for_status
+
 from src.core.database.models import PersistedMediaBuyStatus
+
+#: The ``update_media_buy`` actions the SDK's state machine lists that THIS seller does not
+#: perform, each mapped to the request field that asks for it.
+#:
+#: ``adcp.server.helpers.MEDIA_BUY_STATE_MACHINE`` is a reference table -- its own docstring
+#: says to "inspect or extend" it -- and it lists ``add_packages`` for every pre-terminal
+#: status. ``media-buy/update-media-buy-request.json`` (``/properties/new_packages``) ties
+#: the advertisement to the capability: "Sellers that support mid-flight package additions
+#: advertise ``add_packages`` in both ``valid_actions[]`` (deprecated) and as an entry in
+#: ``available_actions[]`` (authoritative). Sellers that do not support this MUST reject
+#: with ACTION_NOT_ALLOWED (preferred) or UNSUPPORTED_FEATURE (legacy)." This seller does
+#: not add packages to a live buy, so it neither advertises the action nor accepts the field.
+#: ONE declaration, read twice: :func:`seller_valid_actions` leaves the action out of every
+#: ``valid_actions[]`` this seller emits, and ``update_media_buy`` refuses the field it maps
+#: to.
+UNSUPPORTED_ACTIONS: Mapping[str, str] = {"add_packages": "new_packages"}
+
+
+def seller_valid_actions(status: str) -> list[str]:
+    """The ``valid_actions[]`` this seller advertises for a media buy in *status*.
+
+    The SDK's state machine for the status, less :data:`UNSUPPORTED_ACTIONS`. Every surface
+    that emits ``valid_actions`` (create, update and get_media_buys) reads it here, so the
+    three cannot advertise different sets for one buy.
+    """
+    return [action for action in valid_actions_for_status(status) if action not in UNSUPPORTED_ACTIONS]
+
 
 # Keyed by the vocabulary TYPE rather than by bare strings, so a member with no
 # projection row is a missing key here rather than a value nobody notices. The
@@ -93,7 +123,7 @@ TERMINAL_STATUSES: frozenset[str] = frozenset({"paused", "completed", "rejected"
 # of these states gets its LAST notification: ``notification_type = "final"``
 # and no ``next_expected_at`` (the spec pins next_expected_at as "only present
 # ... when notification_type is not 'final'" — get-media-buy-delivery-response.json
-# @ v3.1-04f59d2d5 — and promises "one final notification when the campaign
+# -04f59d2d5 — and promises "one final notification when the campaign
 # completes" — optimization-reporting.mdx §Publisher Commitment). Derived from
 # TERMINAL_STATUSES minus ``paused``: pausing is an explicit decision but the
 # buy may resume and report again, so a next scheduled report is still a
@@ -114,7 +144,7 @@ NO_MORE_DATA_STATUSES: frozenset[str] = TERMINAL_STATUSES - {"paused"}
 #     Date-refining it to "active" made a past-start buy with unapproved
 #     creatives read as serving.
 #   - "pending_approval" -> "pending_start" (INTERPRETATION, graded but not
-#     spec-mandated): AdCP 3.1 has no "awaiting seller approval" wire status. Of
+# spec-mandated): has no "awaiting seller approval" wire status. Of
 #     the two pre-serving states, pending_start ("ready to serve, waiting for its
 #     flight date") is the closest — a buy the seller has yet to accept is not
 #     "serving" and has no creatives gap to report (that is pending_creatives).

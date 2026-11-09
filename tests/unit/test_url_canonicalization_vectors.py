@@ -9,22 +9,28 @@ that run.
 
 Two things are graded here, deliberately separately:
 
-* the VENDORED implementation (``src/vendor/adcp_canonical``) against the raw vectors —
-  a contract test on code we copied but did not write, which goes red if the copy is
-  edited or if a future refresh drifts;
+* the PINNED SDK's implementation (``adcp.signing.canonical``) against the raw vectors —
+  a contract test on code we consume but did not write, which goes red if a pin bump
+  drifts;
 * ``canonical_agent_url``, the seam the rest of the codebase actually calls, against the
-  EQUIVALENCES the spec defines — which is the property call sites depend on, and the
-  one that must survive salesagent-3xcdk deleting the vendored copy.
+  EQUIVALENCES the spec defines — which is the property call sites depend on.
 
-The second set is written against the SPEC, not against either implementation. When the
-migration lands and the seam points back at the SDK, these assertions do not change.
-That is the point of writing them this way.
+The second set is written against the SPEC, not against either implementation, which is
+why it did not change when the vendored copy went away.
 
-Why the vendored copy exists at all: the pinned SDK (adcp 6.6.0) fails 14 of the 37
-vectors published for the current spec — IDN hosts never reach Punycode, the DNS root
-dot survives, a trailing empty query is dropped, and six of the eight authority shapes
-the spec requires be REJECTED are accepted. 6.6.0 is terminal on its line. See
-``src/vendor/adcp_canonical/__init__.py``.
+The vendored copy this used to grade (``src/vendor/adcp_canonical``, adcp 7.0.2 verbatim)
+is deleted. It existed because the then-pinned adcp 6.6.0 failed 14 of the 37 published
+vectors — IDN hosts never reached Punycode, the DNS root dot survived, a trailing empty
+query was dropped, and six of the eight authority shapes the spec requires be REJECTED
+were accepted. The pin is now 9.0.0b1, measured at 37/37 with zero failures, so the copy
+had no remaining reason to exist.
+
+One divergence outlives it, and ``canonical_agent_url`` still completes it: the SDK
+applies spec step 5 ("if the path is empty AND an authority is present, substitute ``/``")
+only when a query is present, so ``https://host`` canonicalizes to ``https://host``
+where RFC 3986 §6.2.3 and the AdCP algorithm both require ``https://host/``. No published
+vector covers the empty-path-no-query case, which is why the SDK passes 37/37 while
+diverging. An upstream PR fixes it; until that lands in the pin, the seam applies step 5.
 """
 
 from __future__ import annotations
@@ -34,9 +40,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from adcp.signing.canonical import TargetUriMalformedError, canonicalize_target_uri
 
 from src.core.schemas import canonical_agent_url
-from src.vendor.adcp_canonical import TargetUriMalformedError, canonicalize_target_uri
 
 VECTORS = Path(__file__).parent.parent / "fixtures" / "adcp_canonicalization_vectors_pinned" / "canonicalization.json"
 
@@ -161,23 +167,29 @@ def test_canonical_agent_url_keeps_these_apart(rule: str, left: str, right: str)
     assert canonical_agent_url(left) != canonical_agent_url(right), rule
 
 
-def test_the_seam_applies_step_5_which_the_vendored_copy_does_not():
-    """The one rule `canonical_agent_url` adds, and the reason it has to.
+@pytest.mark.parametrize(
+    "spelling",
+    ["https://h.example.com", "https://h.example.com/", "https://H.Example.COM:443", "https://h.example.com:443/"],
+)
+def test_every_spelling_of_one_agent_canonicalizes_to_one_string(spelling: str):
+    """An agent_url has ONE canonical spelling, and nothing downstream may compensate.
 
-    Step 5 substitutes `/` for an empty path when an authority is present. The vendored
-    implementation applies it only when a query is present, and no conformance vector
-    covers the no-query case -- so it passes every vector while still leaving
-    `https://h.com` and `https://h.com/` as two agents. That is the spelling difference
-    a human actually types, so the seam closes it.
+    This replaces a tripwire. Step 5 substitutes `/` for an empty path when an authority
+    is present; the SDK used to gate that on a query being present, so `https://h.com`
+    and `https://h.com/` canonicalized to two different strings and
+    `canonical_agent_url` patched the difference back out afterwards. The predecessor
+    test asserted that divergence precisely so it would fail the day the SDK closed it.
+    It did -- adcp-client-python#1456 -- and the patch is gone.
 
-    This test is the tripwire for the migration: when the SDK closes the gap, the first
-    assertion below starts failing, and the shim in `canonical_agent_url` can go.
+    So the property worth grading is no longer "the seam adds a rule the SDK lacks" but
+    the one call sites actually depend on: every spelling a human produces for one agent
+    arrives as a single string, from one conversion, with no site left asking which form
+    it was handed. Both ends are asserted -- the SDK's own output and the seam's -- so a
+    future pin that re-opens the gap fails here rather than silently inviting a shim
+    back.
     """
-    assert canonicalize_target_uri("https://h.example.com") == "https://h.example.com", (
-        "vendored copy no longer leaves an empty path alone -- drop the step-5 shim in "
-        "canonical_agent_url (salesagent-3xcdk)"
-    )
-    assert canonical_agent_url("https://h.example.com") == "https://h.example.com/"
+    assert canonicalize_target_uri(spelling) == "https://h.example.com/"
+    assert canonical_agent_url(spelling) == "https://h.example.com/"
 
 
 def test_a_malformed_agent_url_raises_rather_than_comparing_equal_to_something():

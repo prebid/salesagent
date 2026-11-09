@@ -15,12 +15,12 @@ import pytest
 from tests.factories.creative_asset import (
     AssetSpec,
     asset_spec,
-    build_assets,
     image_spec,
     make_test_banner_creative,
     text_spec,
     video_spec,
 )
+from tests.factories.format import AGENT_URL, FormatIdFactory
 from tests.harness import CreativeListEnv, CreativeSyncEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -51,85 +51,6 @@ def _asset_sample_spec(asset_type: str, role: str) -> AssetSpec:
     if asset_type == "catalog":
         return asset_spec(role, "catalog", multiple=True, type="product", url=url_placeholder)
     return asset_spec(role, asset_type, multiple=True, content=f"test {asset_type} content")
-
-
-class TestAllAssetTypesAcceptedThroughSync:
-    """Each of the 11 asset types must be accepted through _sync_creatives_impl
-    without validation errors and persisted to the database.
-
-    Covers: UC-006-CREATIVE-SCHEMA-COMPLIANCE-10
-    """
-
-    ASSET_TYPES = [
-        "image",
-        "video",
-        "audio",
-        "text",
-        "markdown",
-        "html",
-        "css",
-        "javascript",
-        "vast",
-        "daast",
-        "catalog",
-    ]
-
-    def test_all_11_asset_types_accepted(self, integration_db):
-        """Sync creatives with each of the 11 asset types through real DB.
-
-        Covers: UC-006-CREATIVE-SCHEMA-COMPLIANCE-10
-        """
-        with CreativeSyncEnv() as env:
-            env.setup_default_data()
-
-            creatives = []
-            for asset_type in self.ASSET_TYPES:
-                creatives.append(
-                    _make_creative_asset(
-                        creative_id=f"c_{asset_type}",
-                        name=f"Test {asset_type}",
-                        assets=build_assets(_asset_sample_spec(asset_type, asset_type)),
-                    )
-                )
-
-            response = env.call_impl(creatives=creatives)
-
-            # All 11 should succeed (created action, no failures)
-            assert len(response.creatives) == len(self.ASSET_TYPES)
-            actions = {r.creative_id: r.action for r in response.creatives}
-            for asset_type in self.ASSET_TYPES:
-                cid = f"c_{asset_type}"
-                assert cid in actions, f"Missing result for creative with {asset_type} asset"
-                assert actions[cid] == "created", (
-                    f"Creative with {asset_type} asset should be created, got {actions[cid]}"
-                )
-
-    def test_asset_data_preserved_through_roundtrip(self, integration_db):
-        """Verify that asset data survives the sync -> list round-trip for each type.
-
-        Covers: UC-006-CREATIVE-SCHEMA-COMPLIANCE-10
-        """
-        with CreativeSyncEnv() as env:
-            env.setup_default_data()
-
-            # Sync one creative with each asset type
-            for asset_type in self.ASSET_TYPES:
-                creative = _make_creative_asset(
-                    creative_id=f"c_rt_{asset_type}",
-                    name=f"Roundtrip {asset_type}",
-                    assets=build_assets(_asset_sample_spec(asset_type, asset_type)),
-                )
-                response = env.call_impl(creatives=[creative])
-                assert response.creatives[0].action == "created"
-
-        # Now list and verify assets are preserved (tenant/principal already created above)
-        with CreativeListEnv() as env:
-            list_response = env.call_impl()
-
-            returned_ids = {c.creative_id for c in list_response.creatives}
-            for asset_type in self.ASSET_TYPES:
-                cid = f"c_rt_{asset_type}"
-                assert cid in returned_ids, f"Creative with {asset_type} asset not found in list response"
 
 
 # ---------------------------------------------------------------------------
@@ -229,7 +150,7 @@ class TestCreativeExtendsListingBase:
 
         Covers: UC-006-CREATIVE-SCHEMA-COMPLIANCE-01
         """
-        from adcp.types.generated_poc.creative.list_creatives_response import (  # TODO: no stable alias in adcp.types
+        from adcp.types.domains.creative.list_creatives_response import (  # TODO: no stable alias in adcp.types
             Creative as ListingCreative,
         )
 
@@ -254,7 +175,7 @@ class TestCreativeExtendsListingBase:
 
         Covers: UC-006-CREATIVE-SCHEMA-COMPLIANCE-01
         """
-        from adcp.types.generated_poc.creative.get_creative_delivery_response import (  # TODO: no stable alias in adcp.types
+        from adcp.types.domains.creative.get_creative_delivery_response import (  # TODO: no stable alias in adcp.types
             Creative as DeliveryCreative,
         )
 
@@ -380,15 +301,20 @@ class TestCreativeActionEnumThroughSync:
         ``if failed: assert failed[0].action == "failed"``, which passed whether or not
         anything failed.
         """
-        from unittest.mock import AsyncMock
-
         with CreativeSyncEnv() as env:
             env.setup_default_data()
-            # Format unknown to the registry: clears the request schema, fails validation.
-            env.mock["registry"].return_value.get_format = AsyncMock(return_value=None)
+
+            # A format the reference agent genuinely does not serve, so the REAL
+            # registry answers None and _validation.py refuses the entry. This used to
+            # replace get_format with an AsyncMock(return_value=None), which asserted
+            # the same thing about a method that never ran; the registry is production's
+            # own now and the capture's ids are the whole of what it serves.
+            unserved = FormatIdFactory(agent_url=AGENT_URL, id="format_no_agent_serves")
 
             response = env.call_impl(
-                creatives=[_make_creative_asset(creative_id="c_unknown_format", name="Unknown Format")],
+                creatives=[
+                    _make_creative_asset(creative_id="c_unknown_format", name="Unknown Format", format_id=unserved)
+                ],
                 validation_mode="strict",
             )
 

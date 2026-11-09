@@ -14,20 +14,13 @@ exercises over a test, and no buyer-visible surface owns it: there is nothing to
 drive through ``dispatch_request`` and nothing to read back off a wire. The
 outer surface that owns this is the helper itself.
 
-And the lane cannot substitute a wire test for it. ``_verify_signed``
-(``src/core/signing/verifier.py``) calls ``_strict_header_precheck`` fourteen
-lines above ``reject_malformed_target``, both apply the same
-``malformed_authority_reason`` rule, and ``_target_uri``
-(``src/core/signing/capture.py``) builds the authority FROM the ``Host`` header
-— so every authority the target gate would refuse, the precheck refuses first
-with ``request_signature_header_malformed`` at checklist step 1. The verifier's
-``_MALFORMED_VALUE_RULES`` table names that pre-emption as deliberate: "Only the
-CODE differs by caller — checklist step 1 here, ``request_target_uri_malformed``
-there". No wire refusal carrying ``request_target_uri_malformed`` exists to
-drive; the only residue is a request with NO Host header and a malformed
-``scope["server"]`` (the fallback branch in ``_target_uri``), which no HTTP
-client produces and which a test would have to hand-build — a detector, which
-this epic's own correction bars.
+The wire refusal carrying the code is graded elsewhere: ``_target_uri``
+(``src/core/signing/capture.py``) builds the authority FROM the ``Host`` header,
+``reject_malformed_target`` refuses a malformed one with
+``request_target_uri_malformed``, and request vectors ``negative/026`` and
+``negative/031`` drive exactly that through the real app
+(``tests/integration/test_signing_conformance_vectors.py``). This test grades the
+harness half — that the vocabulary does not veto the code before the wire is read.
 
 Covers: salesagent-nx8jp.13 (clause 3 — the challenge vocabulary).
 """

@@ -54,6 +54,17 @@ def _dispatch_update(ctx: dict, payload: dict) -> None:
     dispatch_via_client(ctx, "update_media_buy", payload)
 
 
+def stamp_correlation_id(ctx: dict, payload: dict) -> None:
+    """Put a fresh ``context.correlation_id`` on *payload* and stash it on ``ctx["correlation_id"]``.
+
+    The one writer of the key the correlation-echo Then below reads, so every When that
+    feeds that Then stamps the same way.
+    """
+    correlation_id = mint(str(uuid4()))
+    ctx["correlation_id"] = correlation_id
+    payload["context"] = {"correlation_id": correlation_id}
+
+
 @given("the buyer fabricates a media_buy_id that does not exist in the seller catalog")
 def given_fabricated_nonexistent_media_buy_id(ctx: dict) -> None:
     """Stash a guaranteed-nonexistent media_buy_id — nothing to seed against."""
@@ -69,13 +80,8 @@ def when_update_media_buy_with_unknown_id(ctx: dict) -> None:
     T-UC-003-storyboard-package-not-found, which reuses the correlation_id-echo
     Then step below, can graduate later without a rewrite.
     """
-    correlation_id = mint(str(uuid4()))
-    ctx["correlation_id"] = correlation_id
-    payload = {
-        "media_buy_id": ctx["fabricated_media_buy_id"],
-        "paused": True,
-        "context": {"correlation_id": correlation_id},
-    }
+    payload = {"media_buy_id": ctx["fabricated_media_buy_id"], "paused": True}
+    stamp_correlation_id(ctx, payload)
     _dispatch_update(ctx, payload)
 
 
@@ -95,18 +101,13 @@ def when_update_media_buy_recancel(ctx: dict) -> None:
     the same contract the sibling storyboard When step uses, so the shared
     correlation-echo Then step below works unmodified.
     """
-    correlation_id = mint(str(uuid4()))
-    ctx["correlation_id"] = correlation_id
     media_buy = ctx["existing_media_buy"]
     assert media_buy is not None, (
         "No existing_media_buy in ctx — the re-cancel scenario needs the Background's "
         "seeded buy, mutated to canceled status by the Given step"
     )
-    payload = {
-        "media_buy_id": media_buy.media_buy_id,
-        "canceled": True,
-        "context": {"correlation_id": correlation_id},
-    }
+    payload = {"media_buy_id": media_buy.media_buy_id, "canceled": True}
+    stamp_correlation_id(ctx, payload)
     _dispatch_update(ctx, payload)
 
 

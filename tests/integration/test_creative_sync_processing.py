@@ -16,15 +16,47 @@ from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
+from src.core.schemas import CreativeFormatIdentity
 from tests.factories.creative_asset import (
-    build_assets,
     image_spec,
+    named_format_assets,
+    prompt_assets,
     text_spec,
 )
 from tests.harness import CreativeSyncEnv
-from tests.helpers.creative_test_helpers import assert_stored_creative_assets, creative_payload
+from tests.helpers.creative_test_helpers import (
+    DEFAULT_FORMAT_REFERENCE,
+    assert_stored_creative_assets,
+    creative_payload,
+)
 
-DEFAULT_AGENT_URL = "https://creative.test.example.com"
+#: The committed capture's own reference -- the only ``(agent_url, id)`` pair that
+#: resolves through production's two routes (``find_format``'s pair match and
+#: ``is_operator_agent``'s no-dial branch). It replaces a local
+#: ``"https://creative.test.example.com"`` / ``"display_300x250"`` pair, which named a
+#: format no agent serves at an agent no capture carries and only ever worked because
+#: the registry was a stand-in (salesagent-6xtxb).
+DEFAULT_AGENT_URL = DEFAULT_FORMAT_REFERENCE["agent_url"]
+
+#: The default format's assets with the banner at a different url than ``creative_payload``'s
+#: default: a resync carrying it changes revision content, which is what review on update is
+#: decided on. A rename alone is metadata and keeps the review state
+#: (docs/creative/specification.mdx, v3.2.7, § Creative revision identity).
+_REVISED_ASSETS = named_format_assets(media_url="https://example.com/banner-revised.png")
+
+#: A STATIC captured format whose only required asset is text, so a creative in it carries
+#: no media url of its own: the one way to reach the paths that depend on the agent's
+#: preview alone. The display default requires an image, and the seller holds a creative to
+#: its named format's required assets.
+_TEXT_ONLY_FORMAT = {"agent_url": DEFAULT_AGENT_URL, "id": "display_generative"}
+_TEXT_ONLY_ASSETS = named_format_assets(_TEXT_ONLY_FORMAT["id"], prompt="Nothing renderable here")
+
+
+def _refused_for_its_manifest(creative_result) -> None:
+    """The entry failed CREATIVE_VALIDATION_FAILED_GENERIC: it lacks what its named format requires."""
+    assert creative_result.action == "failed"
+    assert _error_codes(creative_result.errors) == ["CREATIVE_VALIDATION_FAILED_GENERIC"]
+
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -48,7 +80,7 @@ def _creative(**overrides) -> dict:
         **{
             "creative_id": "c_proc_1",
             "name": "Processing Test",
-            "format_id": {"id": "display_300x250", "agent_url": DEFAULT_AGENT_URL},
+            "format_id": dict(DEFAULT_FORMAT_REFERENCE),
             **overrides,
         }
     )
@@ -96,7 +128,7 @@ class TestGenerativeUpdatePromptExtraction:
                     _creative(
                         creative_id="c_gen_up_msg",
                         format_id=fmt,
-                        assets=build_assets(text_spec("message", content="Initial prompt")),
+                        assets=prompt_assets("Initial prompt", text_spec("message", content="Initial prompt")),
                     )
                 ]
             )
@@ -110,7 +142,9 @@ class TestGenerativeUpdatePromptExtraction:
                     _creative(
                         creative_id="c_gen_up_msg",
                         format_id=fmt,
-                        assets=build_assets(text_spec("message", content="Updated holiday banner")),
+                        assets=prompt_assets(
+                            "Updated holiday banner", text_spec("message", content="Updated holiday banner")
+                        ),
                     )
                 ]
             )
@@ -131,7 +165,7 @@ class TestGenerativeUpdatePromptExtraction:
                     _creative(
                         creative_id="c_gen_up_brief",
                         format_id=fmt,
-                        assets=build_assets(text_spec("message", content="Initial")),
+                        assets=prompt_assets("Initial", text_spec("message", content="Initial")),
                     )
                 ]
             )
@@ -142,7 +176,7 @@ class TestGenerativeUpdatePromptExtraction:
                     _creative(
                         creative_id="c_gen_up_brief",
                         format_id=fmt,
-                        assets=build_assets(text_spec("brief", content="Promote summer sale")),
+                        assets=prompt_assets("Promote summer sale", text_spec("brief", content="Promote summer sale")),
                     )
                 ]
             )
@@ -151,8 +185,14 @@ class TestGenerativeUpdatePromptExtraction:
             call_args = env.mock["registry"].return_value.build_creative.call_args
             assert call_args[1]["message"] == "Promote summer sale"
 
-    def test_update_with_inputs_context_description(self, integration_db):
-        """Update generative creative with inputs[0].context_description → extracted."""
+    def test_update_with_inputs_and_no_prompt_asset_is_refused(self, integration_db):
+        """Update generative creative with only inputs[0].context_description → refused.
+
+        The captured generative format REQUIRES its ``generation_prompt`` asset, and the
+        seller holds a creative to its named format's required assets (core/format.json:
+        "Required assets must be provided for a valid creative"), so an update carrying no
+        prompt asset is refused before any build, whatever its ``inputs`` say.
+        """
         with CreativeSyncEnv() as env:
             env.setup_default_data()
             fmt = env.setup_generative_build()
@@ -162,7 +202,7 @@ class TestGenerativeUpdatePromptExtraction:
                     _creative(
                         creative_id="c_gen_up_inputs",
                         format_id=fmt,
-                        assets=build_assets(text_spec("message", content="Initial")),
+                        assets=prompt_assets("Initial", text_spec("message", content="Initial")),
                     )
                 ]
             )
@@ -177,24 +217,23 @@ class TestGenerativeUpdatePromptExtraction:
             creative["inputs"] = [{"name": "campaign_brief", "context_description": "Design for Q4 campaign"}]
 
             result = env.call_impl(creatives=[creative])
-            assert result.creatives[0].action == "updated"
-            call_args = env.mock["registry"].return_value.build_creative.call_args
-            assert call_args[1]["message"] == "Design for Q4 campaign"
+            _refused_for_its_manifest(result.creatives[0])
+            assert not env.mock["registry"].return_value.build_creative.called
 
 
 class TestGenerativeUpdateNoPrompt:
-    """Update without prompt preserves existing data.
+    """An update carrying no prompt asset is refused, and nothing is built.
 
-    BDD: UC-006-GENERATIVE-CREATIVE-BUILD-07
-    Given an EXISTING generative creative with previously generated content
-    And the update request has no prompt in assets or inputs
-    When the system processes the update
-    Then the generative build is SKIPPED
-    And existing creative data is preserved unchanged
+    BDD: UC-006 @T-UC-006-rule-036-inv5
+    Given an EXISTING generative creative
+    And the update request carries no prompt asset
+    Then the entry is refused CREATIVE_VALIDATION_FAILED_GENERIC: the captured generative
+    format requires ``generation_prompt``, and the seller holds a creative to its named
+    format's required assets
     """
 
-    def test_update_no_prompt_skips_build(self, integration_db):
-        """Update with no message/brief/prompt → build_creative NOT called."""
+    def test_update_no_prompt_is_refused(self, integration_db):
+        """Update with no prompt asset → refused, build_creative NOT called."""
         with CreativeSyncEnv() as env:
             env.setup_default_data()
             fmt = env.setup_generative_build()
@@ -205,7 +244,7 @@ class TestGenerativeUpdateNoPrompt:
                     _creative(
                         creative_id="c_gen_no_prompt",
                         format_id=fmt,
-                        assets=build_assets(text_spec("message", content="Initial prompt")),
+                        assets=prompt_assets("Initial prompt", text_spec("message", content="Initial prompt")),
                     )
                 ]
             )
@@ -223,8 +262,7 @@ class TestGenerativeUpdateNoPrompt:
                 ]
             )
 
-            assert result.creatives[0].action == "updated"
-            # build_creative should NOT have been called
+            _refused_for_its_manifest(result.creatives[0])
             assert not env.mock["registry"].return_value.build_creative.called
 
 
@@ -257,7 +295,7 @@ class TestGenerativeUpdateUserAssets:
                     _creative(
                         creative_id="c_gen_user_assets",
                         format_id=fmt,
-                        assets=build_assets(text_spec("message", content="Initial")),
+                        assets=prompt_assets("Initial", text_spec("message", content="Initial")),
                     )
                 ]
             )
@@ -272,7 +310,7 @@ class TestGenerativeUpdateUserAssets:
                     _creative(
                         creative_id="c_gen_user_assets",
                         format_id=fmt,
-                        assets=build_assets(text_spec("message", content="Refine it"), hero_image_spec),
+                        assets=prompt_assets("Refine it", text_spec("message", content="Refine it"), hero_image_spec),
                     )
                 ]
             )
@@ -308,7 +346,7 @@ class TestGenerativeUpdatePromotedOfferings:
                     _creative(
                         creative_id="c_gen_promo",
                         format_id=fmt,
-                        assets=build_assets(text_spec("message", content="Initial")),
+                        assets=prompt_assets("Initial", text_spec("message", content="Initial")),
                     )
                 ]
             )
@@ -319,7 +357,8 @@ class TestGenerativeUpdatePromotedOfferings:
                     _creative(
                         creative_id="c_gen_promo",
                         format_id=fmt,
-                        assets=build_assets(
+                        assets=prompt_assets(
+                            "Build with offerings",
                             text_spec("message", content="Build with offerings"),
                             text_spec("promoted_offerings", content="Widget Pro | $99"),
                         ),
@@ -350,7 +389,7 @@ class TestGenerativeUpdateGeminiKeyMissing:
                     _creative(
                         creative_id="c_no_gemini_up",
                         format_id=fmt,
-                        assets=build_assets(text_spec("message", content="Initial")),
+                        assets=prompt_assets("Initial", text_spec("message", content="Initial")),
                     )
                 ]
             )
@@ -363,7 +402,7 @@ class TestGenerativeUpdateGeminiKeyMissing:
                     _creative(
                         creative_id="c_no_gemini_up",
                         format_id=fmt,
-                        assets=build_assets(text_spec("message", content="Try to update")),
+                        assets=prompt_assets("Try to update", text_spec("message", content="Try to update")),
                     )
                 ]
             )
@@ -386,17 +425,18 @@ class TestApprovalModeUpdate:
         """Update with auto-approve → status=approved in DB."""
         with CreativeSyncEnv() as env:
             env.setup_default_data()
-            env.configure_tenant_field("approval_mode", "auto-approve")
 
-            # Create (auto-approve)
+            # Create under the default require-human, so the status is not already approved
             env.call_impl(creatives=[_creative(creative_id="c_auto_up")])
 
-            # Update with format change to trigger approval logic
+            env.configure_tenant_field("approval_mode", "auto-approve")
+
+            # Update with changed content, which is what re-applies the approval mode
             result = env.call_impl(
                 creatives=[
                     _creative(
                         creative_id="c_auto_up",
-                        name="Updated Auto",
+                        assets=_REVISED_ASSETS,
                     )
                 ]
             )
@@ -430,7 +470,7 @@ class TestApprovalModeUpdate:
                     creatives=[
                         _creative(
                             creative_id="c_ai_up",
-                            name="Updated for AI Review",
+                            assets=_REVISED_ASSETS,
                         )
                     ]
                 )
@@ -452,42 +492,72 @@ class TestStaticPreviewUpdate:
 
     BDD: UC-006-EXT-H-01/02 (update path)
 
-    Static creatives require preview validation via the creative agent.
-    The format must be in all_formats for the preview call to execute.
+    Static creatives require preview validation via the creative agent. The format must
+    be in all_formats for the preview call to execute — and it is, by default: the env's
+    registry serves the committed capture, which carries ``DEFAULT_FORMAT_REFERENCE``'s
+    static ``display_300x250_image``. A ``_setup_static_format`` helper used to narrow
+    the catalogue to a hand-rolled ``MagicMock`` format for that purpose, in two
+    identical copies in this file; both are gone. A stand-in format is the defect
+    1883dedc4 names: ``canonical_kind_for`` reads ``spec.canonical.kind`` off it and puts
+    a child mock's repr through the pinned vocabulary.
     """
 
-    def _setup_static_format(self, env):
-        """Set up a static format in all_formats so preview_creative is called."""
-        from adcp.types import FormatId as LibraryFormatId
-
-        mock_format = MagicMock()
-        mock_format.format_id = LibraryFormatId(agent_url=DEFAULT_AGENT_URL, id="display_300x250")
-        mock_format.agent_url = DEFAULT_AGENT_URL
-        mock_format.output_format_ids = None  # Static (not generative)
-        env.set_run_async_result([mock_format])
-
     def test_update_no_format_no_url_fails(self, integration_db):
-        """Update creative: no matching format in registry AND no media_url → action=failed.
+        """Update creative: NO PREVIEWS from the agent and no media_url → action=failed.
 
         BDD: UC-006-EXT-H-01 (update path)
-        When the creative has no matching format_obj and no user-provided media_url,
-        the system returns action=failed.
-        Lines covered: 392-418 (_processing.py)
+
+        KNOWN RED — a production defect, filed as salesagent-2je8o. The refusal this
+        asserts exists on the CREATE path and not on the UPDATE path, measured by
+        nesting rather than by reading the message:
+
+            _create_new_creative        refusal at indent 20, inside the
+                                        `if format_obj and is_agent_backed(...)` arm
+                                        (the `else` of `if preview_result and
+                                        preview_result.get("previews")`)
+            _update_existing_creative   the SAME refusal at indent 16, as the `else` of
+                                        `if format_obj and is_agent_backed(...)` itself
+
+        So an update whose format resolves and whose agent returns no previews proceeds
+        to 'updated' with no url at all, while the identical create is rejected
+        CREATIVE_REJECTED/no_previews. The update's copy is also attached to a branch
+        where no preview was attempted, so its own message ("Preview generation returned
+        nothing") describes something that did not happen.
+
+        The premise this file used to state — "no matching format_obj" — was not
+        reachable: it held only while the harness served an EMPTY catalogue to
+        `list_all_formats` and a MagicMock to `get_format`, i.e. while two stand-ins
+        disagreed. Under a reference-formats deployment (every test deployment and the
+        e2e server) both reads consult one override, so a format that passes validation
+        is always in all_formats. The reachable premise is the one named above, and it
+        is the premise this test's assertion was always really about.
         """
+        from unittest.mock import AsyncMock
+
         with CreativeSyncEnv() as env:
             env.setup_default_data()
-            # Do NOT set up all_formats → format_obj will be None
 
-            # Create succeeds (no format validation without format_obj)
-            env.call_impl(creatives=[_creative(creative_id="c_no_preview_up")])
+            # A format whose required assets carry no url (_TEXT_ONLY_FORMAT), so the
+            # creative has none of its own. Create succeeds because the agent previews it.
+            env.mock["registry"].return_value.preview_creative = AsyncMock(
+                return_value={"previews": [{"renders": [{"preview_url": "https://example.com/preview.png"}]}]}
+            )
+            env.call_impl(
+                creatives=[
+                    _creative(creative_id="c_no_preview_up", format_id=_TEXT_ONLY_FORMAT, assets=_TEXT_ONLY_ASSETS)
+                ]
+            )
 
-            # Update: format still not in all_formats, no url in assets
+            # Update with no url anywhere while the agent returns no previews, which is
+            # exactly the state the create path refuses.
+            env.mock["registry"].return_value.preview_creative = AsyncMock(return_value={})
             result = env.call_impl(
                 creatives=[
                     _creative(
                         creative_id="c_no_preview_up",
                         name="Updated No Preview",
-                        assets={},  # No url in assets
+                        format_id=_TEXT_ONLY_FORMAT,
+                        assets=_TEXT_ONLY_ASSETS,
                     )
                 ]
             )
@@ -520,7 +590,7 @@ class TestStaticPreviewUpdate:
             creative = _creative(
                 creative_id="c_url_fallback_up",
                 name="Updated With URL",
-                assets=build_assets(image_spec("banner", url=media_url)),
+                assets=named_format_assets(media_url=media_url),
             )
 
             result = env.call_impl(creatives=[creative])
@@ -535,7 +605,6 @@ class TestStaticPreviewUpdate:
 
         with CreativeSyncEnv() as env:
             env.setup_default_data()
-            self._setup_static_format(env)
 
             # preview_creative returns valid result for create
             env.mock["registry"].return_value.preview_creative = AsyncMock(
@@ -568,15 +637,6 @@ class TestStaticPreviewDimensionExtraction:
     Lines covered: 351-383 (update), 687-702 (create)
     """
 
-    def _setup_static_format(self, env):
-        from adcp.types import FormatId as LibraryFormatId
-
-        mock_format = MagicMock()
-        mock_format.format_id = LibraryFormatId(agent_url=DEFAULT_AGENT_URL, id="display_300x250")
-        mock_format.agent_url = DEFAULT_AGENT_URL
-        mock_format.output_format_ids = None
-        env.set_run_async_result([mock_format])
-
     def test_update_preview_dimensions_extracted(self, integration_db):
         """Update: preview agent returns dimensions → stored in DB."""
         from unittest.mock import AsyncMock
@@ -596,7 +656,6 @@ class TestStaticPreviewDimensionExtraction:
 
         with CreativeSyncEnv() as env:
             env.setup_default_data()
-            self._setup_static_format(env)
 
             # Create with a basic preview
             env.mock["registry"].return_value.preview_creative = AsyncMock(
@@ -641,15 +700,16 @@ class TestStaticPreviewDimensionExtraction:
 
         with CreativeSyncEnv() as env:
             env.setup_default_data()
-            self._setup_static_format(env)
 
             env.mock["registry"].return_value.preview_creative = AsyncMock(return_value=preview_with_dims)
-            # Use empty assets so preview URL is not overshadowed by user URL
+            # A format whose required assets carry no url, so the preview URL is not
+            # overshadowed by a user URL.
             result = env.call_impl(
                 creatives=[
                     _creative(
                         creative_id="c_dims_create",
-                        assets={},
+                        format_id=_TEXT_ONLY_FORMAT,
+                        assets=_TEXT_ONLY_ASSETS,
                     )
                 ]
             )
@@ -679,17 +739,21 @@ class TestFormatChangeOnUpdate:
                 creatives=[
                     _creative(
                         creative_id="c_fmt_change",
-                        format_id={"id": "display_300x250", "agent_url": DEFAULT_AGENT_URL},
+                        format_id=dict(DEFAULT_FORMAT_REFERENCE),
                     )
                 ]
             )
 
-            # Update with format B
+            # Update with format B. Both halves of the change must be formats the
+            # reference agent SERVES, or the update is refused at validation and the
+            # test reads 'failed' instead of grading the replacement: the bare
+            # ``display_728x90`` is not one of the capture's ids, ``_image`` is.
+            format_b = "display_728x90_image"
             result = env.call_impl(
                 creatives=[
                     _creative(
                         creative_id="c_fmt_change",
-                        format_id={"id": "display_728x90", "agent_url": DEFAULT_AGENT_URL},
+                        format_id={"id": format_b, "agent_url": DEFAULT_AGENT_URL},
                     )
                 ]
             )
@@ -698,24 +762,25 @@ class TestFormatChangeOnUpdate:
 
             with get_db_session() as session:
                 db = session.scalars(select(DBCreative).filter_by(creative_id="c_fmt_change")).first()
-                assert "728x90" in db.format
+                stored = CreativeFormatIdentity.from_row(db).assertion
+                assert stored is not None and str(stored.id) == format_b, (
+                    f"the update must replace the stored format reference with format B; stored {stored!r}"
+                )
 
 
 # ── CREATE Edge Cases (covers lines 543-570, 687-702, 787-821) ────────────
 
 
-class TestCreateNameFallback:
-    """Generative create with no assets/inputs uses creative name as fallback.
+class TestCreateNoPromptAsset:
+    """A new generative creative carrying no prompt asset is refused, not built from its name.
 
-    BDD: UC-006-GENERATIVE-CREATIVE-BUILD-06
-    Given a NEW generative creative with no assets and no inputs
-    And the creative name is "Holiday Sale Banner"
-    When the system extracts the prompt
-    Then "Create a creative for: Holiday Sale Banner" is used as the build prompt
+    BDD: UC-006 @T-UC-006-rule-036-inv4
+    The captured generative format requires ``generation_prompt``, and the seller holds a
+    creative to its named format's required assets.
     """
 
-    def test_name_used_as_fallback_prompt(self, integration_db):
-        """Create generative creative with no message → name used as fallback."""
+    def test_create_without_prompt_asset_is_refused(self, integration_db):
+        """Create generative creative with no prompt asset → refused, nothing built."""
         with CreativeSyncEnv() as env:
             env.setup_default_data()
             fmt = env.setup_generative_build()
@@ -731,9 +796,8 @@ class TestCreateNameFallback:
                 ]
             )
 
-            assert result.creatives[0].action == "created"
-            call_args = env.mock["registry"].return_value.build_creative.call_args
-            assert "Holiday Sale Banner" in call_args[1]["message"]
+            _refused_for_its_manifest(result.creatives[0])
+            assert not env.mock["registry"].return_value.build_creative.called
 
 
 class TestCreateAutoApprove:

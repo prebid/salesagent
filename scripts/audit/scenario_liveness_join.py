@@ -152,24 +152,70 @@ def _reject_narrowed_run(path: Path, run: dict[str, Any] | None) -> None:
     records its own scope, so the distinction is in the file rather than
     inferred from it.
 
-    ``run`` is absent in an artifact written before that landed. Treated as
-    legacy and allowed through: it is a gitignored, regenerated file, and
-    refusing it would fail the first run after an upgrade rather than the
-    condition worth catching.
+    TWO narrowings, because pytest records them in two places and for a long time
+    only one was asked about. ``-k``/``-m`` land on ``selection``/``markers``; a run
+    narrowed by PATH leaves both EMPTY and lands on ``args``. That was the hole, and
+    it was the form actually in use: ``pytest tests/bdd/test_uc010_...py`` sets
+    neither expression, so a 24-record artifact over a suite of some eight thousand
+    parametrized scenarios was accepted as a full measurement and every scenario it
+    did not name read as dormant. The ``-k`` door was watched and the path door was
+    not (salesagent-peq79).
+
+    There is deliberately NO floor on ``collected``. A floor needs a number, and the
+    only honest source for it is one full run's count -- which goes stale the day a
+    scenario is added or removed, failing the build for a non-reason, or needs ratchet
+    machinery to maintain it. It is also unsound in both directions: near the true
+    count, suite shrinkage breaks it; low enough to survive shrinkage, and the largest
+    single module -- over a thousand items on its own -- passes. ``args`` needs no
+    number. A run that asked for the suite root or an ancestor asked the whole
+    question; anything else asked a narrower one.
+
+    ``run`` is absent in an artifact written before that landed, and ``args`` is
+    absent in one written before THIS landed. Both treated as legacy and allowed
+    through: it is a gitignored, regenerated file, and refusing it would fail the
+    first run after an upgrade rather than the condition worth catching.
     """
     if not run:
         return
     selection = run.get("selection") or ""
     markers = run.get("markers") or ""
-    if not selection and not markers:
-        return
-    raise storyboard_spec.StoryboardAuditError(
-        f"{path} was written by a NARROWED bdd run "
-        f"(-k {selection!r}, -m {markers!r}; {run.get('collected')} collected). "
-        "Every scenario it does not name would report dormant, which is a claim about "
-        "production rather than about the question that was asked. Re-run the full suite "
-        "(`pytest tests/bdd`) before regenerating anything that quotes liveness."
-    )
+    if selection or markers:
+        raise storyboard_spec.StoryboardAuditError(
+            f"{path} was written by a NARROWED bdd run "
+            f"(-k {selection!r}, -m {markers!r}; {run.get('collected')} collected). "
+            "Every scenario it does not name would report dormant, which is a claim about "
+            "production rather than about the question that was asked. Re-run the full suite "
+            "(`pytest tests/bdd`) before regenerating anything that quotes liveness."
+        )
+    args = run.get("args")
+    suite = run.get("suite") or ""
+    narrower = [a for a in args or () if not _asks_for_suite(a, suite)] if args and suite else []
+    if narrower:
+        raise storyboard_spec.StoryboardAuditError(
+            f"{path} was written by a bdd run narrowed BY PATH to {narrower} "
+            f"({run.get('collected')} collected of the {suite!r} suite). It records no -k and "
+            "no -m, so it used to pass as a full measurement; every scenario outside those "
+            "paths would report dormant, which is a claim about production rather than about "
+            "the question that was asked. Re-run the full suite (`pytest tests/bdd`) before "
+            "regenerating anything that quotes liveness."
+        )
+
+
+def _asks_for_suite(arg: str, suite: str) -> bool:
+    """Whether collection argument *arg* asked for the whole *suite*.
+
+    True for the suite itself and for any ancestor of it -- ``tests`` and ``.`` both
+    collect every bdd scenario on the way past. Compared as posix strings because
+    that is how the writer records them; the trailing slash is what keeps
+    ``tests/bdd-extra`` from counting as a parent of ``tests/bdd``.
+
+    An ABSOLUTE *arg* is false here for every ancestor, and that is correct rather
+    than a hole: the writer resolves each argument repo-relative (``_scope_paths``,
+    measured -- invoking pytest with a full path records ``tests/bdd/...``), so the
+    only arg that stays absolute is one pointing OUTSIDE the repo, which collects no
+    bdd scenario and therefore measured no part of this suite.
+    """
+    return arg in {".", suite} or suite.startswith(f"{arg}/")
 
 
 def build_index(

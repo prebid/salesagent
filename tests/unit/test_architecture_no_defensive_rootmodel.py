@@ -1,6 +1,16 @@
 """Guard: no defensive hasattr(x, 'root') RootModel unwrapping.
 
 Replaces .pre-commit-hooks/check_rootmodel_access.py (PR 4 of #1234).
+
+Known gap, tracked in #2339: PATTERN sees only the ``hasattr`` probe, so a BARE
+``x.root`` passes. That is not a lesser offence -- at the adcp 9 pin
+``GeoCountry``, ``Country`` and ``BrandId`` are ``str`` subclasses whose ``.root``
+is a deprecated shim, so the bare read is wrong today and works by accident.
+Widening the pattern is not a one-liner. ``src/`` holds 19 ``.root`` reads: 12 on
+``str`` subclasses that should lose the ``.root``, 5 on genuine RootModels
+(``StatusFilter``, ``LocalizedName``, ``Tagline``) that must be excluded on
+measured grounds, our own ``PricingOption`` proxy, and one in creative-format
+territory. #2339 carries the per-type measurement and the closed accounting.
 """
 
 from __future__ import annotations
@@ -49,7 +59,15 @@ def test_no_defensive_rootmodel_access() -> None:
     assert not violations, format_failure(
         summary="No defensive hasattr(x, 'root') RootModel unwrapping",
         violations=violations,
-        fix_hint="Use direct .root access or model_dump(); add '# noqa: rootmodel' if genuinely needed.",
+        fix_hint=(
+            "Read the value. The type already states what it carries, so no probe is "
+            "needed and there is nothing to unwrap. Do NOT substitute '.root' or "
+            "'model_dump()': a RootModel standing where a class or a plain value "
+            "belonged is a data-model defect to delete, not a shape to accommodate, "
+            "and '.root' on an SDK type that is now a str subclass is deprecated and "
+            "works only by accident. '# noqa: rootmodel' records debt, it does not "
+            "make the probe correct."
+        ),
         docs_link="docs/development/structural-guards.md",
     )
 

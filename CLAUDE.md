@@ -47,7 +47,6 @@ AST-scanning tests enforce architecture invariants on every `make quality` run. 
 
 | Guard | Enforces | Test file |
 |-------|----------|-----------|
-| Schema inheritance | Redeclarations are inherited unless reshaped or weakened | `test_architecture_schema_inheritance.py` |
 | No ToolError anywhere but the edge | Business logic raises AdCPSalesAgentError; ToolError is minted only on the way out | `ruff-boundary.toml` (TID251 over `src/` + `scripts/`, in `make quality`) + `test_ruff_boundary_bans.py` |
 | Transport-agnostic _impl | `_impl` has zero transport imports | `test_transport_agnostic_impl.py` |
 | `_impl` signature | Every implementation is exactly `(req: <DTO>, identity: ResolvedIdentity)` for a protected tool, `identity: AccountIdentity` when the DTO requires `account`, or `identity: PublicIdentity` for a public one; the DTO matches the registry row, and the identity annotation IS the row's credential policy (`ToolSpec.requires_credential` derives it; the registry refuses `AccountIdentity` on a DTO whose `account` is optional) | `ToolImpl` protocol on `ToolSpec.impl` (mypy) + `.ast-grep/rules/impl-signature-is-request-and-identity.yml` |
@@ -94,17 +93,28 @@ AST-scanning tests enforce architecture invariants on every `make quality` run. 
 
 ## AdCP spec version
 
-This project targets AdCP spec **3.1.1** via the `adcp==6.6.0` Python SDK. See
-[docs/adcp-spec-version.md](docs/adcp-spec-version.md) for the version mapping
-and bump procedure. The CI guard at `tests/unit/test_adcp_spec_version.py`
-fails on pin drift.
+This project targets AdCP through the `adcp` Python SDK, pinned exactly in
+`pyproject.toml`. The SDK reports the spec version it targets —
+`adcp.get_adcp_spec_version()`, reached in Python through
+`scripts.audit.storyboard_spec.pinned_version(repo)` — and that is the only
+authority. **No number is written here**: a version restated in prose rots, and
+no document in this repository states one.
+
+See [docs/adcp-spec-version.md](docs/adcp-spec-version.md) for how to resolve the
+pin and for the bump procedure. The CI guard at
+`tests/unit/test_adcp_spec_version.py` fails on pin drift.
 
 ### Spec-grounding gate (MANDATORY before implementing protocol behavior)
 
 **Any change to AdCP/protocol BEHAVIOR** — a tool's request/response contract, error emission, idempotency, governance, or capabilities — **must cite, before you write the code, the authoritative spec section + version that mandates it, plus the conformance storyboard step that grades it** (or note "ungraded"). Record the citation in the PR description and/or the planning note.
 
 - **Which version is authoritative:** the version the repo PINS — *unless* there is active work to comply with a different target version (a bump/migration in flight), in which case that TARGET version is the pin. Confirm which applies first.
-- **Where the spec lives** (`github.com/adcontextprotocol/adcp`): the written spec at `docs/building/by-layer/L<0-4>/*.mdx`, read at the pinned tag (idempotency, auth and error taxonomy are all in `L1/security.mdx`) — there is NO `dist/docs/<version>/` for the pinned version, `dist/docs/` stops at `3.1.0`; the graded, executable contract does keep a version-numbered root, at `dist/compliance/<version>/<area>/*.yaml` (`domains/`, `protocols/`, `universal/`, `test-kits/` — there are no yaml files directly under `<version>/`). That writing is NOT vendored — the venv carries only `_schemas/` — so read it with `gh api "repos/adcontextprotocol/adcp/contents/docs/building/by-layer/L1/security.mdx?ref=v3.1.1" --jq '.content' | base64 -d`, which returns the literal text. `WebFetch` on the `raw.githubusercontent.com` URL is the fallback when the gh rate limit is spent, but it summarizes: trust its verbatim quotes, not its interpretation. The installed `adcp` SDK — codes, types, even reference implementations such as `adcp.server.idempotency` — is a CROSS-CHECK, **not** the authority; it can diverge from the spec, and does (see #2215).
+- **Where the spec lives** (`github.com/adcontextprotocol/adcp`): the written spec at `docs/building/by-layer/L<0-4>/*.mdx`, read at the pinned tag (idempotency, auth and error taxonomy are all in `L1/security.mdx`) — there is NO `dist/docs/<version>/` for the pinned version, `dist/docs/` stops at `3.1.0`; the graded, executable contract does keep a version-numbered root, at `dist/compliance/<version>/<area>/*.yaml` (`domains/`, `protocols/`, `universal/`, `test-kits/` — there are no yaml files directly under `<version>/`). That writing is NOT vendored — the venv carries only `_schemas/` — so read it at the tag the INSTALLED SDK reports, derived in the same command rather than typed:
+
+    SPEC=$(uv run python -c 'import adcp; print(adcp.get_adcp_spec_version())')
+    gh api "repos/adcontextprotocol/adcp/contents/docs/building/by-layer/L1/security.mdx?ref=v$SPEC" --jq '.content' | base64 -d
+
+which returns the literal text. **Never type a version here — not into the ref, not into a `dist/` path segment.** This line used to carry a typed tag one minor behind the installed SDK, so every agent obeying this MANDATORY gate read the wrong spec; it cost two lanes a design each, because they quoted a clause that exists at the older version and was deliberately REMOVED at the pinned one. A removed clause is the spec declining to require something — a different answer, not a missing one. A typed path is the same trap and quieter: an older bundle's `dist/schemas/<older>/…` still resolves at the pinned tag, so it reads the wrong schema without erroring. `WebFetch` on the `raw.githubusercontent.com` URL is the fallback when the gh rate limit is spent, but it summarizes: trust its verbatim quotes, not its interpretation. The installed `adcp` SDK — codes, types, even reference implementations such as `adcp.server.idempotency` — is a CROSS-CHECK, **not** the authority; it can diverge from the spec, and does (see #2215).
 - **Why:** grounding protocol behavior in downstream artifacts (an internal contract item, or the mere existence of an SDK error code) instead of the written spec + storyboard has produced an entire feature built inverse to the spec. The spec is the contract; everything else is derived.
 - **Enforcement:** reviewers reject protocol-behavior changes that don't cite the spec; this complements the pin-drift guard above. Background: [docs/adcp-spec-version.md](docs/adcp-spec-version.md).
 
@@ -129,27 +139,38 @@ class Product(LibraryProduct):
 - Only redeclare a parent field to narrow it to a local subclass (Pattern #4 re-serializes the instance)
 - Mark internal-only fields with `exclude=True`
 - Run `pytest tests/unit/test_adcp_contract.py` before commit
-- **Enforced by:** `tests/unit/test_architecture_schema_inheritance.py`, which grades
-  redeclarations against the library parent. There is deliberately no suite comparing a
-  model's field set to the pinned schema: the DTO IS the pinned model minus a declared
-  omission, so what it declares is inherited and a comparison only asserts that Python
-  inheritance works. See
-  [docs/development/building-tools.md](docs/development/building-tools.md) § What a tool
-  declares: the DTO.
-- The inheritance guard was once deleted on the ground that such a guard "has to
-  enumerate how this repo spells its imports — every spelling it does not know is a
-  silent hole." The premise was true of the previous implementation and is no longer true of
-  this one: the REDEFINITION rule decides membership by walking the live MRO and testing
-  `__module__`, so it consults no import spelling and has no spelling to miss. The
-  companion `test_all_library_types_have_local_subclass` is still alias-keyed, and is the
-  remaining place where a differently-spelled import goes unexamined.
-- A redeclaration needs an allowlist row unless it is **neither reshaped nor weakened**:
-  same annotation (or a subclass), nullability not added, `is_required()` not relaxed,
-  metadata a superset, no default introduced. A redeclaration that keeps the parent's
-  type but is *weaker* — dropping a `Ge` or a `MinLen`, going required→optional — needs
-  a row NAMING the weakened axis. Do not widen the admission rule to make it pass: a
-  hand-written row names itself and can be audited, whereas a derived rule that admits a
-  widening is invisible and permanent.
+- **A FIELD YOU ADD MUST HAVE A DECLARED SURFACE.** Extending a pinned model by inheritance
+  is the point of adopting it and is not restricted. What causes trouble is adding a field
+  without deciding its surface, because two of the three are buyer-visible: a field on a
+  **request DTO is ADVERTISED** (`_register_tool` derives the announced shape from the DTO —
+  `ListAccountsRequest.idempotency_key` reached the advertised contract and grew a boundary
+  predicate to ignore itself); a field on a **response model is ON THE WIRE** unless
+  `Field(exclude=True)` (nine were emitted to buyers until `9094a72d2`); and
+  **`exclude=True` means gone, not internal** — it strips from the wire, persistence and the
+  idempotency hash alike, so such a field cannot persist where it lives (16 are in that state,
+  including `Product.implementation_config`). A seller-owned field that must PERSIST has no
+  spelling on a wire model today; `salesagent-3zmsd` is the ORM/mapper layer that gives it one.
+- **Most existing additions have no live reason.** Measured 2026-10-17: 51 added-field
+  declaration sites across 99 adoption sites. Three carried justifications the regenerated SDK
+  has since absorbed, and `TaskSummary`'s six are a field set `GetTaskStatusResponse` lost a
+  release earlier. The capability is fine; those were not using it deliberately.
+- **There is no structural guard for this, deliberately.** `test_architecture_schema_inheritance.py`
+  was deleted on 2026-10-17, for the second time in this repo's history — the first deletion
+  is recorded below. It did not have a hole; it SPECIFIED the defect. Its rule was "a
+  redeclaration needs an allowlist row unless it is neither reshaped nor weakened", and an
+  identical restatement is neither, so six pure restatements passed it by design and one had
+  silently dropped the pin's `deprecated=True`. 178 guard files and 1525 guard tests did not
+  catch any of the 51 additions; a box run, a per-nodeid delta and a field census did. The
+  owner's ruling: a guard that promises consistency it does not deliver costs refactoring
+  speed twice over, so it goes.
+- Its first deletion was argued on the ground that such a guard "has to enumerate how this
+  repo spells its imports — every spelling it does not know is a silent hole", and it was
+  reinstated on the ground that walking the live MRO answers that. Both are true and neither
+  mattered: the rule it enforced admitted the thing it existed to prevent.
+- **What grades this instead:** behaviour. `tests/unit/test_adcp_contract.py` before commit,
+  and the BDD scenarios on a2a, mcp, rest and e2e_rest, measured on a box run against a named
+  baseline per nodeid. A field invented on a DTO is observable — `_register_tool` derives the
+  advertised shape from the DTO, so an invented field becomes a parameter buyers can send.
 
 ### 2. Flask: prevent route conflicts
 **Pre-commit hook detects duplicate routes** — run it manually: `uv run python .pre-commit-hooks/check_route_conflicts.py`

@@ -100,12 +100,19 @@ class TestDeliveryLoopErrorHandling:
         with (
             patch("src.core.tools.media_buy_delivery.get_adapter", return_value=adapter),
             patch("src.core.tools.media_buy_delivery.MediaBuyUoW", return_value=mock_uow),
+            # ``get_max_sequence_number() -> int``. Unpatched, the mocked UoW's MagicMock
+            # session makes the repository answer a MagicMock where the response's
+            # ``sequence_number: int | None`` takes an int -- which adcp 6.6.0's lax
+            # ``int | None`` coerced through ``__int__`` and adcp 9's ``Strict(strict=True)``
+            # refuses, correctly, since the pinned schema types the field ``integer``.
+            patch("src.core.tools.media_buy_delivery.DeliveryRepository") as delivery_repo_cls,
             patch("src.core.tools.media_buy_delivery._get_target_media_buys", return_value=target_buys),
             patch(
                 "src.core.tools.media_buy_delivery._get_pricing_options",
                 side_effect=lambda option_ids, **_: pricing_options_for(option_ids),
             ),
         ):
+            delivery_repo_cls.return_value.get_max_sequence_number.return_value = 0
             response = _get_media_buy_delivery_impl(req, identity)
 
         # The good media buy should still be in the response

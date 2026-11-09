@@ -34,6 +34,7 @@ import secrets
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, TypedDict
+from urllib.parse import urlsplit
 
 from adcp.signing.agent_resolver import BrandAgentType
 from pydantic import Field, ValidationInfo, field_validator, model_validator
@@ -309,7 +310,13 @@ class IntegrationSettings(BaseSettings):
 
     model_config = _ENV
 
+    #: The MCP endpoint the seller dials for its operator creative agent, and nothing else.
+    #: It is never compared to a format reference: that is ``creative_agent_origin``.
     creative_agent_url: str | None = None
+    #: The operator creative agent's IDENTITY: an origin (``scheme://host[:port]``), the
+    #: thing a format reference's ``agent_url`` is recognized by. ``None`` means the public
+    #: reference agent, ``https://creative.adcontextprotocol.org``.
+    creative_agent_origin: str | None = None
     approximated_api_key: str | None = None
     approximated_backend_url: str = "adcp-sales-agent.fly.dev"
     approximated_proxy_ip: str = "37.16.24.200"
@@ -321,6 +328,20 @@ class IntegrationSettings(BaseSettings):
     anthropic_api_key: str | None = None
     groq_api_key: str | None = None
     aws_access_key_id: str | None = None
+
+    @field_validator("creative_agent_origin")
+    @classmethod
+    def _creative_agent_origin_is_an_origin(cls, v: str | None) -> str | None:
+        """Refuse anything but ``scheme://host[:port]``: a path, query or fragment is not identity."""
+        if v is None:
+            return v
+        parts = urlsplit(v)
+        if not parts.scheme or not parts.hostname or parts.path or parts.query or parts.fragment or "@" in parts.netloc:
+            raise ValueError(
+                f"CREATIVE_AGENT_ORIGIN must be an origin, scheme://host[:port] with no path, query, "
+                f"fragment or userinfo; got {v!r}. The endpoint the seller dials is CREATIVE_AGENT_URL."
+            )
+        return v
 
     def provider_api_key(self, provider: str) -> str | None:
         """The API key for an AI *provider* name as ``services.ai`` spells it."""
@@ -356,7 +377,7 @@ class LimitSettings(BaseSettings):
 # Characters that make an override key a PATTERN rather than one counterparty's keyid.
 _KEYID_PATTERN_CHARS = "*?%[]"
 
-#: AdCP 3.1.1 ``security.mdx`` §per-keyid cap, and the signed-requests test kit's
+#: ``security.mdx`` §per-keyid cap, and the signed-requests test kit's
 #: ``production_min_per_keyid_cap_requests``.
 _PRODUCTION_MIN_PER_KEYID_CAP = 1_000_000
 

@@ -303,8 +303,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/services/delivery_webhook_scheduler.py", "_send_report_for_media_buy"),
     ("src/services/dynamic_pricing_service.py", "_calculate_product_pricing"),
     ("src/services/dynamic_products.py", "archive_expired_variants"),
-    ("src/services/dynamic_products.py", "generate_variants_for_brief"),
-    ("src/services/dynamic_products.py", "generate_variants_from_signals"),
     ("src/services/format_metrics_service.py", "_process_and_store_metrics"),
     ("src/services/format_metrics_service.py", "aggregate_all_tenants"),
     # _update_adapter_config_targeting_keys removed — uses AdapterConfigRepository
