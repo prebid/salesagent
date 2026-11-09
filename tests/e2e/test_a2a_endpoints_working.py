@@ -312,12 +312,6 @@ class TestA2ARequestHandler:
 
         self.handler = AdCPRequestHandler()
 
-    def test_handler_initialization(self):
-        """Test that handler initializes correctly."""
-        assert self.handler is not None
-        assert hasattr(self.handler, "tasks")
-        assert isinstance(self.handler.tasks, dict)
-
     def test_handler_has_required_methods(self):
         """Test that handler has all required A2A methods."""
         required_methods = [
@@ -333,8 +327,7 @@ class TestA2ARequestHandler:
             assert callable(method), f"Method {method_name} is not callable"
 
     # Native task access is graded over HTTP in local-a2a-task-ownership.feature:
-    # authentication precedes lookup, and missing/foreign IDs share the same code
-    # and data. A direct handler call with MagicMock context bypassed that contract.
+    # every caller receives TaskNotFound for both returned and unknown native IDs.
 
     def test_core_skills_are_dispatchable_over_a2a(self):
         """The core skills are dispatchable over A2A, per the registry.

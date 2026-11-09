@@ -6,7 +6,7 @@ authorized-property records that back the claim, and return plain dicts. The
 route layer (``src/routes/well_known.py``) owns the reads; this module owns the
 SHAPE, which is what the schemas grade.
 
-Two trust roots, two surfaces (AdCP 3.1.1 ``security.mdx``:1105-1111):
+Two trust roots, two surfaces (``security.mdx``:1105-1111):
 
 * **brand.json -> ``agents[].jwks_uri`` -> JWKS** is authoritative for REQUEST
   signatures and operator-side webhook signatures. This is the chain a verifier
@@ -52,8 +52,8 @@ from adcp import get_adcp_spec_version
 # unless the new variant is a superset of our keys, so the binding itself is pinned by
 # ``test_the_brand_agent_variant_is_still_the_one_we_bind`` in
 # tests/unit/test_adcp_spec_version.py.
-from adcp.types.generated_poc.brand import BrandDiscovery3 as LibraryBrandAgentDocument
-from adcp.types.generated_poc.core.agent_signing_key import AgentSigningKey as LibraryAgentSigningKey
+from adcp.types.domains.brand_discovery import BrandDiscovery3 as LibraryBrandAgentDocument
+from adcp.types.domains.core.agent_signing_key import AgentSigningKey as LibraryAgentSigningKey
 from pydantic import BaseModel, field_serializer
 
 from src.core.agent_identity import agent_endpoint_urls, agent_entry_id, canonical_agent_url, jwks_uri
@@ -260,6 +260,13 @@ def build_adagents_json(
             # webhooks get rejected against our own published document.
             entry["signing_keys"] = [_published_jwk(key) for key in keys]
         document["authorized_agents"].append(entry)
+
+    # The publisher format catalog (RFC S3): canonical-formats-migration.mdx § Seller
+    # migration step 3, "Publish reusable publisher options in /.well-known/adagents.json".
+    # Authored on the tenant and published as stored -- adagents.json#/properties/formats is
+    # "Publisher-authoritative", so it is never synthesized from product declarations.
+    if tenant.publisher_format_options:
+        document["formats"] = list(tenant.publisher_format_options)
 
     if last_updated := _last_updated(keys):
         document["last_updated"] = last_updated

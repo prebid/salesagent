@@ -7,11 +7,10 @@ Supports both standard A2A message format and JSON-RPC 2.0.
 import json
 import logging
 import uuid
-from collections.abc import AsyncGenerator, Callable, Mapping
-from dataclasses import dataclass
+from collections.abc import AsyncGenerator, Mapping
 
 # Import core functions for direct calls (raw functions without FastMCP decorators)
-from typing import Any
+from typing import Any, NoReturn
 
 from a2a.server.context import ServerCallContext
 from a2a.server.events.event_queue import Event
@@ -37,7 +36,6 @@ from a2a.types import (
     MethodNotFoundError,
     Part,
     PushNotificationNotSupportedError,
-    Role,
     SendMessageRequest,
     SubscribeToTaskRequest,
     Task,
@@ -49,15 +47,23 @@ from a2a.types import (
 )
 from a2a.utils.errors import A2AError
 from adcp.server.mcp_tools import ADCP_TOOL_DEFINITIONS
-from adcp.types.generated_poc.enums.task_status import TaskStatus as LibraryTaskStatus
+
+# The spec's nine-value task status, off the PUBLIC surface. Until the pinned SDK,
+# ``adcp.types.TaskStatus`` resolved to a hand-written five-value enum and the real one was
+# reachable only through the private generated tree, which is why this import used to go
+# there. the pinned SDK deletes the hand-written enum outright and ``GeneratedTaskStatus`` is the
+# public name for the generated one (identity-checked: it IS
+# ``adcp.types.domains.enums.task_status.TaskStatus``). The local ALIAS stays, because
+# ``TaskStatus`` above is a2a's protobuf message of the same name.
+from adcp.types import GeneratedTaskStatus as LibraryTaskStatus
 from google.protobuf import json_format, struct_pb2
 
 from src.a2a_server.context_builder import EXCHANGE_STATE_KEY
 from src.core.exceptions import AdcpFailure
 from src.core.helpers import enum_value
-from src.core.resolved_identity import PublicIdentity, TransportProtocol
+from src.core.resolved_identity import TransportProtocol
 from src.core.signing.capture import HttpExchange
-from src.core.tools._boundary import failure_response, serve, task_owner
+from src.core.tools._boundary import failure_response, serve
 from src.core.tools._wire import to_wire
 from src.core.tools.registry import TOOLS
 from src.core.version import get_version
@@ -99,7 +105,7 @@ def _dict_to_struct(d: dict) -> struct_pb2.Struct:
     return s
 
 
-# Field names typed `integer` (not `number`) in the pinned AdCP v3.1.1 schema
+# Field names typed `integer` (not `number`) in the pinned schema
 # that this server can place in an A2A Part.data (via _dict_to_value above).
 #
 # google.protobuf.Value/Struct -- the well-known types backing Part.data --
@@ -147,17 +153,11 @@ A2A_WIRE_INTEGER_FIELDS = frozenset(
 )
 
 
-#: AdCP envelope status -> A2A Task state. The mapping A2A's Task state IS, declared once.
-#:
-#: TOTAL over ``enums/task-status.json``: all nine members are keys, because the consumer
-#: subscripts it. A partial mapping plus a default is how a status nobody had thought about
-#: came to report COMPLETED, and it is what the inline ``== "submitted"`` compares this
-#: replaces did for seven of the nine.
-#:
-#: The two vocabularies turn out to be the same set, one name apart, so every row is an exact
-#: counterpart rather than a judgement. ``unknown`` -> ``UNSPECIFIED`` is the only rename.
+#: AdCP 3.2.7 A2A profile: a submitted AdCP operation is the completed result
+#: of this invocation. Its durable task_id remains in the artifact payload.
+#: The remaining envelope statuses retain their existing A2A mapping.
 _TASK_STATE_BY_ADCP_STATUS: dict[LibraryTaskStatus, TaskState] = {
-    LibraryTaskStatus.submitted: TaskState.TASK_STATE_SUBMITTED,
+    LibraryTaskStatus.submitted: TaskState.TASK_STATE_COMPLETED,
     LibraryTaskStatus.working: TaskState.TASK_STATE_WORKING,
     LibraryTaskStatus.input_required: TaskState.TASK_STATE_INPUT_REQUIRED,
     LibraryTaskStatus.completed: TaskState.TASK_STATE_COMPLETED,
@@ -198,25 +198,46 @@ def restore_a2a_integer_types(data: Any, integer_field_names: frozenset[str] = A
     return data
 
 
-@dataclass
-class _OwnedTask:
-    """A task and its server-only owner, retained together. Unbound tasks fail closed."""
-
-    task: Task
-    owner: tuple[str, str] | None = None
-
-    def bind(self, identity: PublicIdentity) -> None:
-        if identity.principal_id is not None:
-            self.owner = (identity.tenant_id, identity.principal_id)
+def _parse_skill_invocation(message: Message) -> tuple[list[str], str, Any]:
+    """Read and validate one explicit skill invocation before allocating a Task."""
+    text_parts: list[str] = []
+    skill: str | None = None
+    parameters: Any = {}
+    for part in message.parts:
+        # Text is recorded on the Task and routes nothing.
+        if part.text:
+            text_parts.append(part.text)
+        elif part.HasField("data"):
+            data = json_format.MessageToDict(part.data)
+            if isinstance(data, dict) and "skill" in data:
+                # One skill per message. The pinned 3.1.1 text describes an A2A invocation
+                # as one DataPart naming one skill and says nothing about batching, so a
+                # message naming two is malformed rather than a batch: refused whole,
+                # before anything runs.
+                if skill is not None:
+                    raise InvalidRequestError(
+                        message="One skill per message. Send each skill invocation as its own message."
+                    )
+                if not isinstance(data["skill"], str):
+                    raise InvalidRequestError(message="Skill must be a string naming an explicit skill.")
+                skill = data["skill"]
+                # ``input`` is the A2A spelling; ``parameters`` is accepted for the same value.
+                parameters = data.get("input") or data.get("parameters", {})
+    if skill is None:
+        # Guessing a tool from text is a translation concern. If it returns, it belongs IN
+        # FRONT of this seam -- resolving text to (skill, parameters) and then invoking like
+        # any other caller -- not beside it with its own response and its own auth story.
+        raise InvalidRequestError(
+            message=(
+                "This agent is invoked by explicit skill. Send a data part carrying "
+                "{'skill': <name>, 'input': {...}}; a text-only message names no skill."
+            )
+        )
+    return text_parts, skill, parameters
 
 
 class AdCPRequestHandler(RequestHandler):
     """Request handler for AdCP A2A operations supporting JSON-RPC 2.0."""
-
-    def __init__(self):
-        """Initialize the AdCP A2A request handler."""
-        self.tasks: dict[str, _OwnedTask] = {}  # In-memory task storage
-        logger.info("AdCP Request Handler initialized for direct function calls")
 
     def _headers_of(self, context: ServerCallContext) -> Mapping[str, str]:
         """The request headers the SDK's context builder placed on the call context.
@@ -258,40 +279,9 @@ class AdCPRequestHandler(RequestHandler):
         # half-serves. See ``_refuse_envelope_push_config``.
         self._refuse_envelope_push_config(params)
 
-        text_parts: list[str] = []
-        skill: str | None = None
-        parameters: Any = {}
-        for part in params.message.parts:
-            # Text is recorded on the Task and routes nothing.
-            if part.text:
-                text_parts.append(part.text)
-            elif part.HasField("data"):
-                data = json_format.MessageToDict(part.data)
-                if isinstance(data, dict) and "skill" in data:
-                    # One skill per message. The pinned 3.1.1 text describes an A2A invocation
-                    # as one DataPart naming one skill and says nothing about batching, so a
-                    # message naming two is malformed rather than a batch: refused whole,
-                    # before anything runs.
-                    if skill is not None:
-                        raise InvalidRequestError(
-                            message="One skill per message. Send each skill invocation as its own message."
-                        )
-                    skill = data["skill"]
-                    # ``input`` is the A2A spelling; ``parameters`` is accepted for the same value.
-                    parameters = data.get("input") or data.get("parameters", {})
-        if skill is None:
-            # Guessing a tool from text is a translation concern. If it returns, it belongs IN
-            # FRONT of this seam -- resolving text to (skill, parameters) and then invoking like
-            # any other caller -- not beside it with its own response and its own auth story.
-            raise InvalidRequestError(
-                message=(
-                    "This agent is invoked by explicit skill. Send a data part carrying "
-                    "{'skill': <name>, 'input': {...}}; a text-only message names no skill."
-                )
-            )
+        text_parts, skill, parameters = _parse_skill_invocation(params.message)
 
         task_id = f"task_{uuid.uuid4().hex[:12]}"
-        # Register only at return sites: protocol errors expose no Task to track.
         # In protobuf, message_id is always a string (empty string default).
         msg_id = params.message.message_id or None
         task = Task(
@@ -301,8 +291,6 @@ class AdCPRequestHandler(RequestHandler):
             # Recorded so a refused request is diagnosable; nothing routes on it.
             metadata=_dict_to_struct({"request_text": " ".join(text_parts).strip(), "skill": skill}),
         )
-        owned_task = _OwnedTask(task)
-
         try:
             # The request HEADERS, not an identity: the boundary resolves the caller once and
             # reads the row's auth declaration itself. A2A holds no identity of its own.
@@ -316,57 +304,16 @@ class AdCPRequestHandler(RequestHandler):
             # JSON-RPC layer. AuthChallengeResponder reads a refused credential off the artifact
             # (``adcp_error_code_in``, shape 4), so the 401 handshake needs no branch here keyed
             # on an error class.
-            result = await self._dispatch_skill(skill, parameters, headers, exchange, on_resolved=owned_task.bind)
+            result = await self._dispatch_skill(skill, parameters, headers, exchange)
 
-            # An async operation returns a Task with status=submitted and NO artifacts. The
-            # SAME read the final state uses, so the two cannot disagree.
-            #
-            # The payload still travels, in ``status.message.parts``. Pinned
-            # L0/a2a-response-format.mdx puts submitted among the INTERIM statuses, whose
-            # data is "carried in `status.message.parts[]` (not in `artifacts`)" because
-            # "artifacts ... are read as the final deliverable once the task reaches a
-            # terminal state", and its quick-reference row for submitted returns
-            # ``{ status, taskId, message, data? }``. What travels there is the AdCP envelope
-            # the boundary built -- its ``task_id``, its ``message``, and the buyer's own
-            # ``context``, which core/context.json says the agent MUST preserve unchanged in
-            # the response.
-            if LibraryTaskStatus(result["status"]) is LibraryTaskStatus.submitted:
-                task.status.CopyFrom(
-                    TaskStatus(
-                        state=TaskState.TASK_STATE_SUBMITTED,
-                        message=Message(
-                            message_id=f"msg_{uuid.uuid4().hex[:12]}",
-                            context_id=task.context_id,
-                            task_id=task_id,
-                            role=Role.ROLE_AGENT,
-                            parts=_result_parts(result),
-                        ),
-                    )
-                )
-                logger.info("Task %s requires manual approval, returning status=submitted with no artifacts", task_id)
-                self.tasks[task_id] = owned_task
-                return task
-
+            # The direct AdCP payload is the invocation's result, including a submitted
+            # operation's durable task_id and buyer context (AdCP 3.2.7 A2A profile,
+            # "Submitted AdCP work"). Native A2A task IDs never identify that operation.
+            status = LibraryTaskStatus(result["status"])
             task.artifacts.append(
                 Artifact(artifact_id="skill_result_1", name=f"{skill}_result", parts=_result_parts(result))
             )
-
-            # The Task state is the RESPONSE's own status, mapped once. ``status`` is required
-            # on the response envelope and defaulted to ``completed``, so it is never absent;
-            # subscripted, not ``.get``-with-a-default, because a missing ``status`` would mean
-            # a response that did not come from the boundary, and answering COMPLETED for it
-            # would report success for something never examined.
-            #
-            # A per-creative ``pending_review`` deliberately does NOT make the Task
-            # ``submitted``. Pinned ``creative/sync-creatives-response.json`` declares three
-            # branches: a synchronous success required to carry ``creatives`` ("best-effort
-            # processing with per-item status/failures"), a terminal failure carrying
-            # ``errors``, and a submitted envelope whose ``status`` is ``const: "submitted"``
-            # and which carries ``task_id`` and NO creatives. Per-creative review state is
-            # therefore per-item information inside branch one, and promoting it to a
-            # task-level status would claim the shape that cannot carry the creatives it just
-            # processed.
-            task.status.CopyFrom(TaskStatus(state=_TASK_STATE_BY_ADCP_STATUS[LibraryTaskStatus(result["status"])]))
+            task.status.CopyFrom(TaskStatus(state=_TASK_STATE_BY_ADCP_STATUS[status]))
 
         except A2AError:
             raise
@@ -380,7 +327,6 @@ class AdCPRequestHandler(RequestHandler):
                 message=f"message processing failed: {response.errors[0].message}", data=to_wire(response)
             ) from e
 
-        self.tasks[task_id] = owned_task
         return task
 
     async def on_message_send_stream(
@@ -405,64 +351,31 @@ class AdCPRequestHandler(RequestHandler):
         # result is already Task | Message — yield it directly
         yield result
 
-    async def _get_task_or_raise(self, task_id: str, context: ServerCallContext, operation: str) -> Task:
-        """Return the in-memory task, or raise ``TaskNotFoundError``.
+    @staticmethod
+    def _task_not_found(task_id: str) -> NoReturn:
+        """Native receipts are not retained; durable work is queried through AdCP.
 
-        A bare ``None`` return makes the SDK synthesize a generic internal error;
-        the A2A spec defines ``TaskNotFoundError`` for an unknown task id, so
-        raising it is the correct thing to do here and is what an A2A client
-        should be able to react to precisely.
-
-        A client sees the spec's ``-32001``, because the SDK's own dispatcher maps
-        ``A2AError -> code``. The routes must not carry ``enable_v0_3_compat=True``: that
-        dispatches through ``a2a.compat.v0_3.jsonrpc_adapter``, whose ``handle_request``
-        ends in a bare ``except Exception -> CoreInternalError`` with no such mapping, so
-        every raise here would reach the client as ``-32603`` (#1670).
-
-        The requested id rides both the message and structured ``data``, and both reach a
-        client. The same compat adapter would rebuild the error as
-        ``CoreInternalError(message=str(e))``, dropping ``data`` and returning
-        ``data: null`` on the real route.
-
-        Shared by ``on_get_task`` and ``on_cancel_task`` so both surface the
-        same error.
+        A2A 1.0 permits TaskNotFound for completed tasks that have been purged.
+        The SDK serializes this error as JSON-RPC -32001, preserving the
+        caller-supplied ID in both the message and structured data.
         """
-        try:
-            owner = await task_owner(operation, self._headers_of(context), self._exchange_of(context))
-        except AdcpFailure as failure:
-            raise InternalError(message=failure.response.errors[0].message, data=to_wire(failure.response)) from failure
-        owned_task = self.tasks.get(task_id)
-        if owned_task is None or owned_task.owner != owner:
-            raise TaskNotFoundError(message=f"Task not found: {task_id}", data={"task_id": task_id})
-        return owned_task.task
+        raise TaskNotFoundError(message=f"Task not found: {task_id}", data={"task_id": task_id})
 
     async def on_get_task(
         self,
         params: GetTaskRequest,
         context: ServerCallContext,
     ) -> Task:
-        """Handle 'tasks/get' method to retrieve task status.
-
-        Raises ``TaskNotFoundError`` for an unknown task id — see
-        ``_get_task_or_raise``. Inaccessible tasks have the same -32001 response.
-        """
-        return await self._get_task_or_raise(params.id, context, "GetTask")
+        """Native receipts have no retrievable lifecycle after the invocation."""
+        self._task_not_found(params.id)
 
     async def on_cancel_task(
         self,
         params: CancelTaskRequest,
         context: ServerCallContext,
     ) -> Task:
-        """Handle 'tasks/cancel' method to cancel a task.
-
-        Raises ``TaskNotFoundError`` for an unknown task id — cancelling a task
-        that does not exist is the same not-found condition as get, not a silent
-        no-op. Inaccessible tasks have the same -32001 response.
-        """
-        task = await self._get_task_or_raise(params.id, context, "CancelTask")
-        # CopyFrom mutates the Task held by its ownership record in place.
-        task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_CANCELED))
-        return task
+        """Native cancellation cannot mutate a durable AdCP operation."""
+        self._task_not_found(params.id)
 
     async def on_list_tasks(
         self,
@@ -528,7 +441,7 @@ class AdCPRequestHandler(RequestHandler):
         read ``params.message.parts`` and nothing else, so a registration sent here was
         silently DROPPED: the buyer received 200 for a webhook that was never registered.
         Worse, since the config never reached the validated request, neither the
-        security.mdx @ v3.1.1 :1464 log duty nor the :1465 signature escalation ran for a
+        security.mdx :1464 log duty nor the :1465 signature escalation ran for a
         payload carrying ``authentication`` — the two obligations the AdCP field triggers on
         every transport, including this one. Dropping and declining are indistinguishable
         from inside this agent and opposite from outside it.
@@ -555,8 +468,6 @@ class AdCPRequestHandler(RequestHandler):
         parameters: Any,
         headers: Mapping[str, str],
         exchange: HttpExchange | None = None,
-        *,
-        on_resolved: Callable[[PublicIdentity], None] | None = None,
     ) -> dict[str, Any]:
         """Run one skill through ``serve`` and return the body the artifact DataPart carries.
 
@@ -574,9 +485,7 @@ class AdCPRequestHandler(RequestHandler):
             available_skills = [name for name, spec in TOOLS.items() if spec.a2a]
             raise MethodNotFoundError(message=f"Unknown skill '{skill_name}'. Available skills: {available_skills}")
         try:
-            response = await serve(
-                skill_name, parameters, headers, TransportProtocol.A2A, exchange, on_resolved=on_resolved
-            )
+            response = await serve(skill_name, parameters, headers, TransportProtocol.A2A, exchange)
         except AdcpFailure as failure:
             # A2A's wire failure marker is the Task STATE, set by the caller from the
             # response's own ``status``. This transport adds nothing to the BODY.
@@ -589,8 +498,9 @@ def _derived_skills() -> list[AgentSkill]:
 
     ``id`` and ``name`` are the tool name -- a REST route, an MCP tool and an A2A skill for
     one tool carry one name, so there is nothing here that could diverge from the other two
-    transports. ``description`` comes from the pinned SDK, the same source MCP registration
-    reads. ``tags`` come off the DTO (``DTO.TAGS``): the SDK carries none, so they are ours,
+    transports. ``description`` is ``ToolSpec.advertised_description``, the one answer MCP
+    registration reads too: the pinned SDK's sentence, or the pinned request schema's own for
+    a deprecated compatibility surface. ``tags`` come off the DTO (``DTO.TAGS``): the SDK carries none, so they are ours,
     but they describe the tool's shape like the field descriptions beside them rather than
     its wiring -- so they sit with the shape, not in the registry.
 
@@ -603,7 +513,8 @@ def _derived_skills() -> list[AgentSkill]:
         AgentSkill(
             id=name,
             name=name,
-            description=descriptions.get(name, (spec.impl.__doc__ or "").strip().split("\n")[0]),
+            description=spec.advertised_description(descriptions.get(name))
+            or (spec.impl.__doc__ or "").strip().split("\n")[0],
             tags=list(getattr(spec.dto, "TAGS", ())),
         )
         for name, spec in TOOLS.items()

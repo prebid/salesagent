@@ -94,6 +94,23 @@
                     {% endif %}
                 </div>
             </div>
+
+            <div class="card mt-4">
+                <div class="card-body">
+                    <h4>Publisher Format Catalog</h4>
+                    <p class="text-muted">
+                        Reusable format options published as <code>formats[]</code> in the
+                        <code>/.well-known/adagents.json</code> served at <code>{{ tenant.primary_domain }}</code>.
+                        A product references one with <code>publisher_domain: "{{ tenant.primary_domain }}"</code>
+                        and its <code>format_option_id</code>. Each entry is a canonical format declaration
+                        with a unique <code>format_option_id</code>. Leave empty to publish no catalog.
+                    </p>
+                    <form method="POST" action="{{ url_for('authorized_properties.update_publisher_format_catalog', tenant_id=tenant.tenant_id) }}">
+                        <textarea name="publisher_format_options" class="form-control mb-2" rows="10" style="font-family: monospace;">{% if tenant.publisher_format_options %}{{ tenant.publisher_format_options | tojson(indent=2) }}{% endif %}</textarea>
+                        <button type="submit" class="btn btn-primary">Save Catalog</button>
+                    </form>
+                </div>
+            </div>
         </div>
     </div>
 </div>

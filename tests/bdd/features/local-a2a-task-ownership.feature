@@ -1,98 +1,47 @@
-# Local native A2A behavior, ungraded by the AdCP 3.1.1 storyboard.
-# Authority: A2A 1.0 specification §3.3.2 (authentication and inaccessible tasks),
-# §13.1 (authenticated task access). These operations have no MCP/AdCP REST equivalent.
-# https://a2a-protocol.org/v1.0.0/specification/#332-error-handling
-# Tenant/principal ownership is this seller's access policy for its transient handles.
-# Durable storage and terminal-task cancellation semantics are separate work.
+# Local retention policy: A2A 1.0 §3.3.2 permits TaskNotFound for purged tasks.
+# AdCP v3.2.7 L0/a2a-profile-extension.mdx §Submitted AdCP work requires a
+# completed A2A receipt with the independent AdCP task_id in its artifact.
+# Native receipt retention is ungraded by the AdCP storyboards.
 @a2a-task-ownership
-Feature: Native A2A task handles belong to their creator
+Feature: Native A2A receipts finish with the invocation
 
-  @T-LOCAL-a2a-task-owner-read
-  Scenario Outline: The owner can retrieve every retained outcome
-    Given a "<state>" task created by "owner"
-    When "owner" calls "GetTask" for the "existing" task
-    Then the task state is "<state>"
-
-    Examples:
-      | state     |
-      | completed |
-      | submitted |
-      | failed    |
-
-  @T-LOCAL-a2a-task-owner-cancel
-  Scenario: The owner can cancel a submitted task
-    Given a "submitted" task created by "owner"
-    When "owner" calls "CancelTask" for the "existing" task
-    Then the task state is "canceled"
-    When "owner" calls "GetTask" for the "existing" task
-    Then the task state is "canceled"
-
-  @T-LOCAL-a2a-task-signed-owner
-  Scenario: A caller presenting a signature and bearer owns the submitted task
-    Given a "submitted" task created by "signed-owner"
-    When "signed-owner" calls "GetTask" for the "existing" task
-    Then the task state is "submitted"
-    When "sibling" calls "CancelTask" for the "existing" task
-    Then the task is not found
-    And the owner's task is unchanged
-    When "signed-owner" calls "CancelTask" for the "existing" task
-    Then the task state is "canceled"
-
-  @T-LOCAL-a2a-task-signature-precheck
-  Scenario Outline: Task access preserves signature prechecks
-    Given a "submitted" task created by "signed-owner"
-    When "malformed-signature" calls "<operation>" for the "existing" task
-    Then task access fails with "request_signature_header_malformed"
-    And the owner's task is unchanged
-
-    Examples:
-      | operation  |
-      | GetTask    |
-      | CancelTask |
-
-  @T-LOCAL-a2a-task-foreign-owner
-  Scenario Outline: Foreign tasks are indistinguishable from absent tasks
-    Given a "submitted" task created by "owner"
+  @T-LOCAL-a2a-task-purged
+  Scenario Outline: Returned receipts cannot be retrieved or canceled
+    Given an A2A invocation producing "<outcome>"
+    When "owner" invokes the prepared AdCP skill
+    Then the native receipt state is "<receipt_state>"
+    And the receipt contains the AdCP "<outcome>" result
     When "<caller>" calls "<operation>" for the "existing" task
     Then the task is not found
-    And the owner's task is unchanged
     When "<caller>" calls "<operation>" for the "missing" task
     Then the refusal matches the inaccessible task
 
     Examples:
-      | caller       | operation  |
-      | sibling      | GetTask    |
-      | sibling      | CancelTask |
-      | other-tenant | GetTask    |
-      | other-tenant | CancelTask |
+      | outcome   | receipt_state | caller       | operation  |
+      | completed | completed     | owner        | GetTask    |
+      | completed | completed     | owner        | CancelTask |
+      | failed    | failed        | owner        | GetTask    |
+      | failed    | failed        | owner        | CancelTask |
+      | submitted | completed     | owner        | GetTask    |
+      | submitted | completed     | owner        | CancelTask |
+      | submitted | completed     | sibling      | GetTask    |
+      | submitted | completed     | sibling      | CancelTask |
+      | submitted | completed     | other-tenant | GetTask    |
+      | submitted | completed     | other-tenant | CancelTask |
+      | completed | completed     | anonymous    | GetTask    |
+      | completed | completed     | anonymous    | CancelTask |
+      | completed | completed     | invalid      | GetTask    |
+      | completed | completed     | invalid      | CancelTask |
 
-  @T-LOCAL-a2a-task-authentication
-  Scenario Outline: Authentication precedes task lookup
-    Given a "submitted" task created by "owner"
-    When "<caller>" calls "<operation>" for the "<target>" task
-    Then task access fails with "<code>"
-    And the owner's task is unchanged
-
-    Examples:
-      | caller    | operation  | target   | code         |
-      | anonymous | GetTask    | existing | AUTH_MISSING |
-      | anonymous | GetTask    | missing  | AUTH_MISSING |
-      | anonymous | CancelTask | existing | AUTH_MISSING |
-      | anonymous | CancelTask | missing  | AUTH_MISSING |
-      | invalid   | GetTask    | existing | AUTH_INVALID |
-      | invalid   | GetTask    | missing  | AUTH_INVALID |
-      | invalid   | CancelTask | existing | AUTH_INVALID |
-      | invalid   | CancelTask | missing  | AUTH_INVALID |
-
-  @T-LOCAL-a2a-task-anonymous-owner
-  Scenario Outline: An anonymous discovery task cannot be claimed by a later caller
-    Given a "completed" task created by "anonymous"
-    When "owner" calls "<operation>" for the "existing" task
+  @T-LOCAL-a2a-task-adcp-polling
+  Scenario: Native cancellation cannot cancel the durable AdCP operation
+    Given an A2A invocation producing "submitted"
+    When "owner" invokes the prepared AdCP skill
+    Then the native receipt state is "completed"
+    And the receipt contains the AdCP "submitted" result
+    And the AdCP task handle is distinct from the native receipt
+    When "owner" calls "CancelTask" for the "existing" task
     Then the task is not found
-    When "owner" calls "<operation>" for the "missing" task
-    Then the refusal matches the inaccessible task
-
-    Examples:
-      | operation  |
-      | GetTask    |
-      | CancelTask |
+    When the owner polls the durable AdCP task
+    Then the receipt contains the AdCP "input-required" result
+    And the durable AdCP task still has the submitted handle

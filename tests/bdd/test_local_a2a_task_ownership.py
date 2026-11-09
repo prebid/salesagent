@@ -1,4 +1,4 @@
-"""Native A2A task access is scoped to the creator's tenant and principal."""
+"""Native A2A receipts are purged; durable operations use AdCP polling."""
 
 from pytest_bdd import scenarios
 

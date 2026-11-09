@@ -34,6 +34,13 @@ def mock_all_external_dependencies():
     mock_first_result = MagicMock()
     mock_first_result.gemini_api_key = None  # Prevents str type validation errors in naming
     mock_first_result.order_name_template = None
+    # Every row this blanket mock answers with is the SAME object, so it is also the
+    # ``AdapterConfig`` every ``read_adapter_config`` sees — and a MagicMock
+    # ``adapter_type`` is TRUTHY while naming no adapter in ``ADAPTER_REGISTRY``, so
+    # ``get_adapter_class`` refuses it. ``None`` is the honest answer for a suite that
+    # persists nothing: no row's adapter_type, which is the "no adapter configured" state
+    # ``resolve_tenant_adapter_type`` already falls back from.
+    mock_first_result.adapter_type = None
     mock_session.scalars.return_value.first.return_value = mock_first_result
 
     with patch("src.core.database.database_session.get_db_session") as mock_db:

@@ -6,6 +6,8 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import httpx
+
 from src.core.credentials import hash_token
 from tests.factories import AdapterConfigFactory, MediaBuyFactory, PrincipalFactory, TenantFactory
 from tests.factories.principal import plaintext_token_for
@@ -23,7 +25,7 @@ from tests.helpers.credentials import credential_headers
 class A2ATaskOwnershipEnv(BareIntegrationEnv):
     """Seed callers through factories and retain task IDs received on the wire."""
 
-    def setup_task(self, state: str, creator: str = "owner") -> None:
+    def prepare_task(self, state: str) -> None:
         tenant, principal = self.setup_default_data()
         PrincipalFactory(tenant=tenant, principal_id="sibling")
         other = TenantFactory(tenant_id="other-tenant")
@@ -49,16 +51,9 @@ class A2ATaskOwnershipEnv(BareIntegrationEnv):
                 "media_buy_id": buy.media_buy_id if state == "submitted" else "missing-buy",
                 "end_time": (now + timedelta(days=60)).isoformat(),
             }
+        parameters["context"] = {"trace": "native-receipt"}
+        self.skill, self.parameters = skill, parameters
         self._commit_factory_data()
-        if creator == "signed-owner":
-            self.enable_request_signing()
-        response = self._post(_a2a_message_send_body(skill, parameters), creator)
-        self.created_task = response.json()["result"]["task"]
-        self.task_id = self.created_task["id"]
-        from src.app import _request_handler
-
-        self._guard("a2a_task", lambda: _request_handler.tasks.pop(self.task_id, None))
-        assert self.created_task["status"]["state"] == f"TASK_STATE_{state.upper()}", self.created_task
 
     def _caller(self, caller: str) -> dict[str, str]:
         if caller == "owner":
@@ -74,31 +69,39 @@ class A2ATaskOwnershipEnv(BareIntegrationEnv):
         raise ValueError(f"Unknown caller {caller}")
 
     def _post(self, body: dict, caller: str) -> Any:
-        if caller in {"signed-owner", "malformed-signature"}:
-            raw, headers = self.wire_request(
-                path=_A2A_PATH,
-                body=body,
-                signed="malformed" if caller == "malformed-signature" else True,
-                extra=dict(_A2A_VERSION_HEADER),
-            )
-            return self.get_rest_client().post(_A2A_PATH, content=raw, headers=headers)
-        response = self.get_rest_client().post(
-            _A2A_PATH, headers={**self._caller(caller), **_A2A_VERSION_HEADER}, json=body
-        )
-        return response
+        headers = {**self._caller(caller), **_A2A_VERSION_HEADER}
+        if self.e2e_config is not None:
+            return httpx.post(f"{self.e2e_config.base_url}{_A2A_PATH}", headers=headers, json=body, timeout=30)
+        return self.get_rest_client().post(_A2A_PATH, headers=headers, json=body)
 
     def call_via(self, transport: Transport, **kwargs: Any) -> TransportResult:
-        assert transport is Transport.A2A
-        task_id = self.task_id if kwargs.get("target", "existing") == "existing" else "missing-task"
-        response = self._post(
-            {"jsonrpc": "2.0", "id": "ownership-call", "method": kwargs["operation"], "params": {"id": task_id}},
-            kwargs["caller"],
-        )
-        return unwrap_a2a_native_response(response)
+        assert transport in (Transport.A2A, Transport.E2E_A2A)
+        action = kwargs.get("action")
+        if action == "invoke":
+            body = _a2a_message_send_body(self.skill, self.parameters)
+        elif action == "poll":
+            body = _a2a_message_send_body("get_task_status", {"task_id": self.adcp_task_id})
+        else:
+            task_id = self.task_id if kwargs.get("target", "existing") == "existing" else "missing-task"
+            body = {"jsonrpc": "2.0", "id": "task-call", "method": kwargs["operation"], "params": {"id": task_id}}
+        result = unwrap_a2a_native_response(self._post(body, kwargs["caller"]))
+        if action == "invoke":
+            self.task_id = result.wire_response["task"]["id"]
+            # Preserve the actual submitted handle for a later, independent poll.
+            if self.skill == "update_media_buy" and self.parameters["media_buy_id"] != "missing-buy":
+                self.adcp_task_id = self.adcp_result(result)["task_id"]
+        return result
 
-    def assert_unchanged(self) -> None:
-        result = self.call_via(Transport.A2A, operation="GetTask", caller="owner")
-        assert result.wire_response == self.created_task
+    @staticmethod
+    def adcp_result(result: TransportResult) -> dict[str, Any]:
+        assert result.has_wire
+        task = result.wire_response["task"]
+        artifacts = task["artifacts"]
+        assert len(artifacts) == 1, task
+        parts = [part["data"] for part in artifacts[0]["parts"] if "data" in part]
+        assert len(parts) == 1, artifacts
+        assert "adcp_task_id" not in artifacts[0].get("metadata", {})
+        return parts[0]
 
     @staticmethod
     def assert_not_found(result: TransportResult) -> None:

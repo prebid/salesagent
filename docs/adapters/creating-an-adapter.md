@@ -91,8 +91,15 @@ under-report your platform:
   serve snapshots.
 - `get_available_inventory()` — inventory discovery for AI-driven product
   configuration; returns empty inventory by default.
-- `get_creative_formats()` — creative format definitions, for adapters that
-  also act as creative agents.
+- `creative_formats(tenant_id)` — a classmethod returning the `Format`
+  declarations this adapter serves itself, for adapters that also act as
+  creative agents; empty by default. Every format it answers MUST carry
+  `canonical.kind`. An adapter-served format's `agent_url` is a pseudo-URL with
+  no host to fetch a declaration from, and its id is outside
+  `registries/v1-canonical-mapping.json`, so the adapter's own declaration is
+  the only route by which a creative naming the format can be given a
+  `format_kind` — without one, `sync_creatives` refuses every such creative. A
+  format whose canonical kind the adapter cannot name must not be served.
 
 ## Register the adapter
 
