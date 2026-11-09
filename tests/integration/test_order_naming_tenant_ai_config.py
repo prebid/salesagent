@@ -2,7 +2,7 @@
 
 ``get_adapter`` hands the adapter the tenant's resolved AI configuration
 (``TenantContext.ai_config``), the way it hands over the naming templates, and the adapter
-passes it to ``build_order_name_context``. The adapters used to read the tenant row
+passes it to ``render_order_name``. The adapters used to read the tenant row
 themselves and hand over ``gemini_api_key`` alone, so a seller who configured AI in the
 Admin UI (``tenants.ai_config``) got no ``{auto_name}``: the naming fell back to the brand
 name.

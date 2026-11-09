@@ -152,21 +152,17 @@ class GAMWorkflowManager(BaseWorkflowManager):
         """
         step_id = f"c{uuid.uuid4().hex[:8]}"  # 9 chars total
 
-        # Use pre-loaded naming template or fallback to default
-        from src.core.utils.naming import apply_naming_template, build_order_name_context
+        from src.core.utils.naming import render_order_name
 
-        effective_template = order_name_template or "{campaign_name|brand_name} - {media_buy_id} - {date_range}"
-
-        naming_context = build_order_name_context(
+        order_name = render_order_name(
+            order_name_template,
             request,
             packages,
             start_time,
             end_time,
-            template=effective_template,
             tenant_ai_config=tenant_ai_config,
             media_buy_id=media_buy_id,
         )
-        order_name = apply_naming_template(effective_template, naming_context)
 
         # Build detailed action list for humans to manually create the order
         total_budget_amount = request.total_budget

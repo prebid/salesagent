@@ -577,12 +577,9 @@ class GoogleAdManager(AdServerAdapter):
                 raise AdCPWorkflowError()
 
         # Automatic mode - create order directly
-        # Use pre-loaded naming template, or fallback to default
         from src.adapters.gam.utils.constants import GAM_NAME_LIMITS
         from src.adapters.gam.utils.naming import truncate_name_with_suffix
-        from src.core.utils.naming import apply_naming_template, build_order_name_context
-
-        order_name_template = self._order_name_template or "{campaign_name|brand_name} - {media_buy_id} - {date_range}"
+        from src.core.utils.naming import render_order_name
 
         # Get currency from the request's package pricing (validated upstream in media_buy_create.py)
         # All packages in a media buy use the same currency
@@ -594,16 +591,15 @@ class GoogleAdManager(AdServerAdapter):
 
         # Generate a pre-order media_buy_id for naming (GAM order_id replaces this in the response)
         pre_order_id = f"gam_{uuid.uuid4().hex[:8]}"
-        context = build_order_name_context(
+        base_order_name = render_order_name(
+            self._order_name_template,
             request,
             packages,
             start_time,
             end_time,
-            template=order_name_template,
             tenant_ai_config=self._tenant_ai_config,
             media_buy_id=pre_order_id,
         )
-        base_order_name = apply_naming_template(order_name_template, context)
 
         # Add unique identifier to prevent duplicate order names
         unique_suffix = f"mb_{pre_order_id}"

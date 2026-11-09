@@ -174,7 +174,7 @@ class MockAdServer(AdServerAdapter):
         "configured nothing".
         """
         super().__init__(config, principal, creative_engine, tenant_id)
-        self._order_name_template = order_name_template or "{campaign_name|brand_name} - {media_buy_id} - {date_range}"
+        self._order_name_template = order_name_template
         self._tenant_ai_config = tenant_ai_config
 
         # Initialize HITL configuration from principal's platform_mappings
@@ -891,20 +891,17 @@ class MockAdServer(AdServerAdapter):
         # Use tenant_id from adapter instance (set during construction)
         tenant_id = self.tenant_id or "unknown"
 
-        # Generate order name using naming template
-        from src.core.utils.naming import apply_naming_template, build_order_name_context
+        from src.core.utils.naming import render_order_name
 
-        # Build context and apply template
-        context = build_order_name_context(
+        order_name = render_order_name(
+            self._order_name_template,
             request,
             packages,
             start_time,
             end_time,
-            template=self._order_name_template,
             tenant_ai_config=self._tenant_ai_config,
             media_buy_id=media_buy_id,
         )
-        order_name = apply_naming_template(self._order_name_template, context)
 
         # Default priority for campaigns (standard = 8, guaranteed = 4)
         priority = 4 if any(p.delivery_type == "guaranteed" for p in packages) else 8

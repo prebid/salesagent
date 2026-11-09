@@ -33,6 +33,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: The order name template for a seller who configured none. ``Tenant.order_name_template``'s
+#: server default spells the same string.
+DEFAULT_ORDER_NAME_TEMPLATE = "{campaign_name|brand_name} - {media_buy_id} - {date_range}"
+
 #: One template placeholder, ``{variable}`` or ``{var1|var2|var3}``.
 _PLACEHOLDER = re.compile(r"\{([^}]+)\}")
 
@@ -222,7 +226,7 @@ def apply_naming_template(
     return result
 
 
-def build_order_name_context(
+def _build_order_name_context(
     request: AdapterCreateRequest,
     packages: list,
     start_time: datetime,
@@ -281,6 +285,38 @@ def build_order_name_context(
         "start_date": start_time.strftime("%Y-%m-%d"),
         "end_date": end_time.strftime("%Y-%m-%d"),
     }
+
+
+def render_order_name(
+    template: str | None,
+    request: AdapterCreateRequest,
+    packages: list,
+    start_time: datetime,
+    end_time: datetime,
+    *,
+    tenant_ai_config: SellerAIConfig = None,
+    media_buy_id: str | None = None,
+) -> str:
+    """The order name *template* renders to; ``None`` is `DEFAULT_ORDER_NAME_TEMPLATE`.
+
+    The one way an adapter names an order. The context is built for the same template it
+    is then applied to, so ``{auto_name}`` is asked of the model exactly when the applied
+    template uses it. Built and applied separately, a site could pass two templates and
+    compute a name it throws away, or miss one it needs, with no error.
+
+    Ad-server rules (a unique suffix, a length limit) stay with the caller, after this.
+    """
+    effective = template or DEFAULT_ORDER_NAME_TEMPLATE
+    context = _build_order_name_context(
+        request,
+        packages,
+        start_time,
+        end_time,
+        template=effective,
+        tenant_ai_config=tenant_ai_config,
+        media_buy_id=media_buy_id,
+    )
+    return apply_naming_template(effective, context)
 
 
 def build_line_item_name_context(
