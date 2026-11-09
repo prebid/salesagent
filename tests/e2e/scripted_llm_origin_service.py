@@ -27,7 +27,8 @@ catalog order, which the scenario then fails on.
 
 Which question is being asked is read off the request's output tool, the ``final_result``
 tool pydantic-ai declares: a ``rankings`` property is the ranking agent's
-``ProductRankingResult``, a ``status`` property the policy agent's ``PolicyAnalysis``.
+``ProductRankingResult``, a ``status`` property the policy agent's ``PolicyAnalysis``, a
+``name`` property the naming agent's ``OrderName``.
 
 A key holds SEVERAL entries per question, told apart by their ``require_text``: the e2e
 servers share one platform key, so scenarios running at once each script it, and an entry
@@ -78,7 +79,7 @@ SCRIPT_CONTROL_PREFIX = "/_control/script/"
 OUTPUT_TOOL_NAME = "final_result"
 
 #: Which question an output tool asks, by a property only that output model declares.
-_QUESTION_BY_PROPERTY = {"rankings": "ranking", "status": "policy"}
+_QUESTION_BY_PROPERTY = {"rankings": "ranking", "status": "policy", "name": "naming"}
 
 
 class _ScriptStore:
@@ -248,7 +249,7 @@ class _ScriptedLlmHandler(JsonRequestHandler):
             self._write_json(400, {"error": f"script body is not valid JSON: {exc}"})
             return
         if not isinstance(script, dict) or not set(script) <= set(_QUESTION_BY_PROPERTY.values()):
-            self._write_json(400, {"error": f"a script maps 'ranking'/'policy' to an entry, got {script!r}"})
+            self._write_json(400, {"error": f"a script maps 'ranking'/'policy'/'naming' to an entry, got {script!r}"})
             return
         store: _ScriptStore = self.server.script_store  # type: ignore[attr-defined]
         self._write_json(200, store.install(path[len(SCRIPT_CONTROL_PREFIX) :], script))

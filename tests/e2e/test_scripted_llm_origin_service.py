@@ -171,3 +171,68 @@ async def test_an_entry_for_another_scenario_answers_nothing(origin: str) -> Non
 
     with pytest.raises(AIProviderError, match="does not contain the scripted text"):
         await _rank(_seller_model(), custom_prompt=f"{_PROMPT} [scenario-b]")
+
+
+def _naming_request():
+    from decimal import Decimal
+
+    from src.adapters.base import AdapterCreateRequest
+
+    return AdapterCreateRequest(brand={"domain": "naming.example.com"}, total_budget=Decimal("1000.00"))
+
+
+_NAMING_CONFIGS = pytest.mark.parametrize(
+    "config",
+    [
+        TenantAIConfig(provider="gemini", model="gemini-2.0-flash", api_key=_SELLER_KEY),
+        TenantAIConfig(provider="anthropic", model="claude-scripted", api_key=_SELLER_KEY),
+    ],
+    ids=["gemini", "anthropic"],
+)
+
+
+def _three_names(config: TenantAIConfig) -> list[str]:
+    from datetime import UTC, datetime
+
+    from src.core.utils.naming import generate_auto_name
+
+    install_script(_SELLER_KEY, naming={"output": {"name": "Scripted Order Name"}})
+    start, end = datetime(2026, 12, 1, tzinfo=UTC), datetime(2026, 12, 31, tzinfo=UTC)
+    return [generate_auto_name(_naming_request(), [], start, end, tenant_ai_config=config) for _ in range(3)]
+
+
+@_NAMING_CONFIGS
+async def test_order_naming_runs_from_a_running_loop_more_than_once(origin: str, config: TenantAIConfig) -> None:
+    """The write path calls the naming model through run_async_in_sync_context, on a fresh loop each time.
+
+    From a running loop the bridge runs the coroutine on a new loop in a worker thread. An
+    exception that is not a provider failure (a client bound to a closed loop raises
+    RuntimeError) is not caught any more, so it would fail create_media_buy; the second and
+    third calls are where such a client would surface.
+    """
+    assert _three_names(config) == ["Scripted Order Name"] * 3
+
+
+@_NAMING_CONFIGS
+def test_order_naming_runs_from_sync_code_more_than_once(origin: str, config: TenantAIConfig) -> None:
+    """The same from sync code (the mock adapter's own path), where the bridge runs the loop itself."""
+    assert _three_names(config) == ["Scripted Order Name"] * 3
+
+
+async def test_a_naming_provider_failure_falls_back_to_the_brand_name(origin: str) -> None:
+    from datetime import UTC, datetime
+
+    from src.core.utils.naming import generate_auto_name
+
+    install_script(_SELLER_KEY, naming={"fail_status": 503})
+    config = TenantAIConfig(provider="gemini", model="gemini-2.0-flash", api_key=_SELLER_KEY)
+
+    name = generate_auto_name(
+        _naming_request(),
+        [],
+        datetime(2026, 12, 1, tzinfo=UTC),
+        datetime(2026, 12, 31, tzinfo=UTC),
+        tenant_ai_config=config,
+    )
+
+    assert name == "naming.example.com"

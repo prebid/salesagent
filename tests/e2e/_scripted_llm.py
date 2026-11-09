@@ -34,7 +34,7 @@ def scripted_llm_origin() -> str:
 def install_script(api_key: str, **entries: dict) -> None:
     """Script the answers the origin gives a call carrying ``api_key``, one entry per question.
 
-    ``entries`` is ``ranking=`` and/or ``policy=``, each an entry as the service module
+    ``entries`` is ``ranking=``, ``policy=`` and/or ``naming=``, each an entry as the service module
     documents it. Raises when the origin does not accept the script: a script that silently
     failed to install would surface as a catalog-order mismatch, blaming production.
     """

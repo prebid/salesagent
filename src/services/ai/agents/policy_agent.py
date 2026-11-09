@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
     from pydantic_ai import Agent
-
-logger = logging.getLogger(__name__)
 
 
 class PolicyAnalysis(BaseModel):
