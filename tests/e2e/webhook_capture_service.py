@@ -331,9 +331,6 @@ class _CaptureRequestHandler(JsonRequestHandler):
         raw = self._read_raw_body()
         return json.loads(raw) if raw else {}
 
-    def _handle_health(self) -> None:
-        self._write_json(200, {"compose_project_name": self.server.compose_project_name})  # type: ignore[attr-defined]
-
     def _route(self, method: str) -> None:
         """Split the query off ONCE, then dispatch on the bare path.
 
@@ -346,7 +343,7 @@ class _CaptureRequestHandler(JsonRequestHandler):
         in the store as a delivery and corrupted the very count the
         circuit-breaker Then steps read.
         """
-        path, _, query = self.path.partition("?")
+        path, query = self._bare_path, self.path.partition("?")[2]
 
         if method == "POST":
             control = _CONTROL_PATH_RE.match(path)
@@ -486,10 +483,9 @@ class _CaptureRequestHandler(JsonRequestHandler):
         self._write_json(status, snapshot)
 
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler name
-        if self.path == "/health":
-            self._handle_health()
-        else:
-            self._route("GET")
+        if self._answer_health():
+            return
+        self._route("GET")
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib handler name
         self._route("POST")

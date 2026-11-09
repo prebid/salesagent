@@ -44,6 +44,9 @@ from contextlib import AbstractContextManager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
+#: The path every origin answers with its compose project (:meth:`JsonRequestHandler._answer_health`).
+HEALTH_PATH = "/health"
+
 
 class JsonRequestHandler(BaseHTTPRequestHandler):
     """A ``BaseHTTPRequestHandler`` that speaks JSON and keeps quiet.
@@ -54,6 +57,24 @@ class JsonRequestHandler(BaseHTTPRequestHandler):
     """
 
     protocol_version = "HTTP/1.1"
+
+    @property
+    def _bare_path(self) -> str:
+        """The request path with its query split off."""
+        return self.path.partition("?")[0]
+
+    def _answer_health(self) -> bool:
+        """Answer ``GET /health`` and return True; return False for every other path.
+
+        Every origin answers it the same way: its compose project
+        (:func:`compose_project_name`, put on the server by :func:`run_origin`), which a
+        readback client checks to prove it reached its OWN stack. Each ``do_GET`` starts
+        with ``if self._answer_health(): return``.
+        """
+        if self._bare_path != HEALTH_PATH:
+            return False
+        self._write_json(200, {"compose_project_name": self.server.compose_project_name})  # type: ignore[attr-defined]
+        return True
 
     def _write_json(self, status: int, body: dict, extra_headers: dict[str, str] | None = None) -> None:
         """Send *body* as JSON with an explicit length and no keep-alive.

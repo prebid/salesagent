@@ -55,7 +55,6 @@ GENERATE_CONTENT_RE = re.compile(r"^/v1beta/models/[^/:]+:generateContent$")
 
 #: ``PUT /_control/script/<api key>`` installs or extends that key's script.
 SCRIPT_CONTROL_PREFIX = "/_control/script/"
-HEALTH_PATH = "/health"
 
 #: The output tool pydantic-ai declares for an agent with a structured ``output_type``.
 OUTPUT_TOOL_NAME = "final_result"
@@ -133,13 +132,12 @@ class _ScriptedLlmHandler(JsonRequestHandler):
     """Answers ``generateContent`` from the store; ``/_control/script`` writes the store."""
 
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler name
-        if self.path.split("?", 1)[0] == HEALTH_PATH:
-            self._write_json(200, {"status": "ok", "compose_project_name": self.server.compose_project_name})  # type: ignore[attr-defined]
+        if self._answer_health():
             return
         self._write_json(404, {"error": f"no document at {self.path!r}"})
 
     def do_PUT(self) -> None:  # noqa: N802 - stdlib handler name
-        path = self.path.split("?", 1)[0]
+        path = self._bare_path
         if not path.startswith(SCRIPT_CONTROL_PREFIX) or not path[len(SCRIPT_CONTROL_PREFIX) :]:
             self._write_json(404, {"error": f"no control endpoint at {self.path!r}"})
             return
@@ -157,7 +155,7 @@ class _ScriptedLlmHandler(JsonRequestHandler):
         self._write_json(200, store.extend(path[len(SCRIPT_CONTROL_PREFIX) :], script))
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib handler name
-        if not GENERATE_CONTENT_RE.match(self.path.split("?", 1)[0]):
+        if not GENERATE_CONTENT_RE.match(self._bare_path):
             self._write_json(404, _api_error(404, f"no model method at {self.path!r}"))
             return
         try:
