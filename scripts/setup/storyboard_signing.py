@@ -64,7 +64,6 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from scripts.setup.seed_products import publishers_whole  # noqa: E402
 from scripts.setup.seed_storyboard_tenant import STORYBOARD_TOKEN, kit_runner_is_passthrough_only  # noqa: E402
 from scripts.setup.seed_storyboard_tenant import (  # noqa: E402
     STORYBOARD_VIRTUAL_HOST as _SEEDED_STORYBOARD_VIRTUAL_HOST,
@@ -479,7 +478,7 @@ def _seed_vector_product(session: Session, tenant_id: str) -> None:
     """
     from sqlalchemy import select
 
-    from scripts.setup.seed_products import canonical_declaration
+    from scripts.setup.seed_products import canonical_declaration, publishers_whole
     from src.core.database.models import PricingOption, Product
     from tests.factories.product import DEFAULT_PRICING_OPTION_ID
     from tests.factories.request import PackageRequestFactory
