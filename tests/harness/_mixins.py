@@ -1937,12 +1937,14 @@ def _e2e_script_policy(env: Any, entry: dict[str, Any]) -> None:
     """Script the policy verdict for the seller's key, and for the platform's if the env declared one.
 
     The platform's key answers the same verdict, so a check that ran on it instead of the
-    seller's credential shows on the wire (a BLOCKED brief is refused).
+    seller's credential shows on the wire (a BLOCKED brief is refused). Every entry answers
+    only a prompt carrying this env's nonce, which the brief carries (``scripted_brief``),
+    so a verdict another scenario scripted for the shared platform key never answers this one.
     """
     from tests.e2e._scripted_llm import install_script
 
     for api_key in env.scripted_api_keys():
-        install_script(api_key, policy=entry)
+        install_script(api_key, policy={**entry, "require_text": env.scripted_nonce})
 
 
 def _e2e_set_policy_approved(env: Any) -> None:
@@ -1952,7 +1954,9 @@ def _e2e_set_policy_approved(env: Any) -> None:
 
 def _e2e_set_policy_unavailable(env: Any) -> None:
     """E2E realization of :meth:`ProductMixin.set_policy_unavailable`: the origin answers 503."""
-    _e2e_script_policy(env, {"fail_status": 503})
+    from tests.e2e._scripted_llm import MODEL_UNAVAILABLE
+
+    _e2e_script_policy(env, MODEL_UNAVAILABLE.entry)
 
 
 def _policy_service_answering(check: Any) -> MagicMock:
@@ -2009,17 +2013,18 @@ class ProductMixin:
 
     @realize_e2e(_e2e_set_policy_unavailable)
     def set_policy_unavailable(self) -> None:
-        """The policy model is down: the check fails as pydantic-ai fails on an HTTP 503.
+        """The policy model is down: the provider answers HTTP 503.
 
-        In-process the check raises ``ModelHTTPError`` into ``_get_products_impl``, whose
-        handler fails open. Over e2e the real service's agent meets the same 503 from the
-        scripted origin and fails open itself (``check_policy_compliance`` answers ALLOWED
-        with a warning). Both are the seller's fail-open, and both let the request proceed.
+        On both legs the real ``PolicyCheckService`` meets the failure (in-process from a
+        model that raises it, over e2e from the scripted origin), ``run_agent`` raises
+        ``AIProviderError``, and ``_get_products_impl`` fails open on it.
         """
-        from pydantic_ai.exceptions import ModelHTTPError
+        from src.services.policy_check_service import PolicyCheckService
+        from tests.e2e._scripted_llm import MODEL_UNAVAILABLE
 
-        failure = ModelHTTPError(status_code=503, model_name="scripted", body="unavailable")
-        self.mock["policy_service"].return_value = _policy_service_answering({"side_effect": failure})  # type: ignore[attr-defined]
+        # The real service on a model that fails: production's run_agent classifies the
+        # failure and get_products fails open on it, the path the e2e leg takes too.
+        self.mock["policy_service"].return_value = PolicyCheckService(model=MODEL_UNAVAILABLE.model())  # type: ignore[attr-defined]
 
     #: The platform's own AI key, once a scenario declares one (``ProductEnv.set_platform_ai_credential``).
     _platform_ai_key: str | None = None
@@ -2040,6 +2045,24 @@ class ProductMixin:
         if self.__dict__.get("_scripted_model_key") is None:
             self.__dict__["_scripted_model_key"] = f"seller-ai-key-{uuid4().hex}"
         return str(self.__dict__["_scripted_model_key"])
+
+    @property
+    def scripted_nonce(self) -> str:
+        """A text minted once per env, which tags this scenario's prompts.
+
+        Over e2e every scenario shares one scripted origin and one platform key, and an
+        installed script is never removed. A script entry answers only a prompt carrying
+        its ``require_text``, so each scenario puts this nonce in what it sends the model
+        (the seller's ranking prompt, the buyer's brief) and in its entries' ``require_text``.
+        A script from another scenario then answers nothing here, whatever the test order.
+        """
+        if self.__dict__.get("_scripted_nonce") is None:
+            self.__dict__["_scripted_nonce"] = f"scenario-{uuid4().hex[:12]}"
+        return str(self.__dict__["_scripted_nonce"])
+
+    def scripted_brief(self, brief: str) -> str:
+        """``brief`` tagged with :attr:`scripted_nonce`, for a request whose policy check is scripted."""
+        return f"{brief} [{self.scripted_nonce}]"
 
     @realize_e2e(_e2e_set_policy_blocked)
     def set_policy_blocked(self, reason: str = "Policy violation") -> None:

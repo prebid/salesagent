@@ -51,6 +51,7 @@ from src.core.schemas import (
 )
 from src.core.validation_helpers import safe_parse_json_field
 from src.services.ai import AIServiceFactory
+from src.services.ai.factory import AIProviderError
 from src.services.policy_check_service import PolicyCheckService, PolicyStatus
 
 logger = logging.getLogger(__name__)
@@ -321,7 +322,9 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
                     },
                 )
 
-            except Exception as e:
+            except AIProviderError as e:
+                # The provider failed the check (run_agent classifies it); any other
+                # exception is a defect and propagates instead of passing an unscreened brief.
                 # structural-guard: fail-open is conformant at AdCP.
                 # `errors` is required on get-products-response.json only in its
                 # `if status == "failed"` branch; this path completes and returns
@@ -822,15 +825,12 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
                 )
             else:
                 logger.debug("[GET_PRODUCTS] AI ranking configured but AI not enabled (no API key)")
-        except (TypeError, AttributeError):
-            # A programming error in this path, not a provider failure: it propagates (#1093).
-            raise
-        except Exception as e:
+        except AIProviderError as e:
             # structural-guard: no spec surface covers ranking.
-            # Every other exception, as the policy check and order naming catch: each
-            # provider's client raises its own types (an unreachable endpoint is
-            # httpx.ConnectError, a dropped connection httpx.RemoteProtocolError, neither an
-            # OSError), and any of them escaping turned discovery into INTERNAL_ERROR.
+            # The provider failed the call (run_agent classifies it: unreachable, refused,
+            # or answered unusably), as the policy check and order naming catch it. Any
+            # other exception is a defect in this path and propagates (#1093), rather than
+            # turning into a catalog-order answer nothing on the wire shows.
             # This degrades ORDER only — and the set returned is a SUPERSET, because
             # the <0.1 relevance filter stops running too, so the buyer loses nothing
             # they were entitled to. The spec defines no ordering guarantee for

@@ -5,6 +5,10 @@ import pkgutil
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, NamedTuple
 
+from pydantic_ai.exceptions import AgentRunError, UserError
+
+from src.core.logging_config import log_safe
+from src.core.security.outbound_http import is_transport_failure
 from src.services.ai.config import (
     UNUSABLE_AI_CONFIG,
     SellerAIConfig,
@@ -14,6 +18,8 @@ from src.services.ai.config import (
 )
 
 if TYPE_CHECKING:
+    from pydantic_ai import Agent, AgentRunResult
+
     from src.core.database.models import Tenant
 
 logger = logging.getLogger(__name__)
@@ -150,6 +156,11 @@ class AIServiceFactory:
         The one call every consumer makes: None means "skip the AI step", and a model
         means it can run. `platform_fallback` is `resolve`'s. The API key goes to the
         provider object, never to a global environment variable.
+
+        A model pydantic-ai refuses to construct (``UserError``, or ``ImportError`` for a
+        provider whose SDK is not installed) is also None: the configuration cannot run,
+        which is the same answer as one `resolve` refuses, and the caller skips the AI step.
+        Any other exception is a defect and propagates.
         """
         resolved = self.resolve(seller_ai, platform_fallback=platform_fallback)
         if resolved is None:
@@ -159,8 +170,41 @@ class AIServiceFactory:
 
         logger.debug("Creating Pydantic AI model: %s:%s", resolved.provider, resolved.model)
         model_path, provider_path = PROVIDER_MODELS[resolved.provider]
-        provider = pkgutil.resolve_name(provider_path)(api_key=resolved.api_key)
-        return pkgutil.resolve_name(model_path)(resolved.model, provider=provider)
+        try:
+            provider = pkgutil.resolve_name(provider_path)(api_key=resolved.api_key)
+            return pkgutil.resolve_name(model_path)(resolved.model, provider=provider)
+        except (UserError, ImportError) as e:
+            logger.warning("Cannot build the %s model; AI is unavailable: %s", resolved.provider, log_safe(e))
+            return None
+
+
+class AIProviderError(Exception):
+    """The AI provider failed the call: unreachable, refused it, or answered unusably.
+
+    Raised by :func:`run_agent` so a consumer that degrades when the model is unavailable
+    (ranking, the policy check, order naming) catches this one type, while a defect in its
+    own code still propagates.
+    """
+
+
+async def run_agent[OutputT](agent: "Agent[None, OutputT]", prompt: str) -> "AgentRunResult[OutputT]":
+    """Run *agent* on *prompt*, raising :class:`AIProviderError` when the provider fails.
+
+    The one place a provider failure is told apart from everything else. pydantic-ai wraps
+    most provider failures in ``AgentRunError`` (``ModelHTTPError``, ``ModelAPIError``,
+    ``UnexpectedModelBehavior``, ``UsageLimitExceeded``, ...) and reports a model it cannot
+    use as ``UserError``. It does not wrap every SDK's transport: google-genai raises
+    ``httpx.ConnectError`` unwrapped for an unreachable endpoint and
+    ``httpx.RemoteProtocolError`` for a dropped connection, which ``is_transport_failure``
+    recognises without importing httpx outside the egress seam. Anything else is not the
+    provider and propagates unchanged.
+    """
+    try:
+        return await agent.run(prompt)
+    except Exception as e:
+        if isinstance(e, AgentRunError | UserError) or is_transport_failure(e):
+            raise AIProviderError(f"{type(e).__name__}: {e}") from e
+        raise
 
 
 def tenant_ai_enabled(tenant: "Tenant", *, platform_fallback: bool = True) -> bool:

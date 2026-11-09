@@ -109,6 +109,12 @@ services:
       # GEMINI_API_KEY, unless a scenario scripts it) is refused as the real API refuses an
       # invalid key.
       GOOGLE_GEMINI_BASE_URL: http://scripted-llm:8080
+      # The same origin for an Anthropic model (the Anthropic SDK reads this variable when
+      # no base URL is passed, and AIServiceFactory passes none). Production must refuse to
+      # build some Anthropic configurations; one it builds anyway calls the origin and is
+      # answered from the seller's script, so the scenario fails, instead of failing
+      # against api.anthropic.com and letting the consumer fail open.
+      ANTHROPIC_BASE_URL: http://scripted-llm:8080
       SUPER_ADMIN_EMAILS: ${SUPER_ADMIN_EMAILS:-}
       ADCP_TESTING: ${ADCP_TESTING:-true}
       FLASK_SECRET_KEY: "${FLASK_SECRET_KEY:-adcp-test-stack-session-signing-key}"
@@ -1002,10 +1008,10 @@ services:
       timeout: 5s
       retries: 5
 
-  # Scripted Gemini origin (tests/e2e/scripted_llm_origin_service.py): the model every
-  # server in this stack calls (GOOGLE_GEMINI_BASE_URL above). Answers a generateContent
-  # call from a script the test installs for the API key the call carries, and refuses
-  # every other key. The test programs it by service name over its control plane
+  # Scripted LLM origin (tests/e2e/scripted_llm_origin_service.py): the model every
+  # server in this stack calls (GOOGLE_GEMINI_BASE_URL and ANTHROPIC_BASE_URL above).
+  # Answers a generateContent or Messages call from a script the test installs for the
+  # API key the call carries, and refuses every other key. The test programs it by service name over its control plane
   # (tests/e2e/_scripted_llm.py).
   scripted-llm:
     image: python:3.12-slim

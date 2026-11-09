@@ -12,12 +12,15 @@ Tests are ordered by migration risk: HIGH_RISK first, then MEDIUM_RISK.
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic_ai.exceptions import ModelHTTPError
 
 from src.core.exceptions import AdCPAuthorizationError, AdCPSalesAgentError, AdCPValidationError
 from src.core.format_resolver import NamedFormats
 from src.core.resolved_identity import PublicIdentity, ResolvedIdentity
 from src.core.tenant_context import TenantContext
+from src.services.ai.factory import AIProviderError
 from src.services.policy_check_service import PolicyCheckResult, PolicyStatus
+from tests.e2e._scripted_llm import MODEL_UNAVAILABLE, ScriptedFailure
 from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
 from tests.harness._identity import make_identity
 from tests.harness.product import ProductEnv
@@ -258,7 +261,8 @@ class TestRankingFailureFailopen:
 
             with patch("src.services.ai.factory.get_factory") as mock_factory:
                 factory_inst = MagicMock()
-                factory_inst.build.side_effect = RuntimeError("AI service unavailable")
+                # The provider fails the call: a model that answers like an unavailable one.
+                factory_inst.build.return_value = MODEL_UNAVAILABLE.model()
                 mock_factory.return_value = factory_inst
 
                 env.mock["ranking_factory"].stop()
@@ -284,7 +288,9 @@ class TestRankingFailureFailopen:
             PricingOptionFactory(product=ProductFactory(tenant=tenant, product_id="p_first"))
 
             factory = env.mock["ranking_factory"].return_value
-            factory.build.side_effect = RuntimeError("503 upstream\nWARNING forged entry")
+            factory.build.return_value = ScriptedFailure(
+                {}, lambda: ModelHTTPError(status_code=503, model_name="m", body="503 upstream\nWARNING forged entry")
+            ).model()
 
             with caplog.at_level("WARNING", logger="src.core.tools.products"):
                 await env.call_impl(brief="campaign")
@@ -396,7 +402,8 @@ class TestPolicyServiceFailopenPipeline:
             env._identity = _lazy_identity("pol-failopen", "p1")
 
             mock_policy_inst = MagicMock()
-            mock_policy_inst.check_brief_compliance = AsyncMock(side_effect=RuntimeError("Gemini API timeout"))
+            # What the real service raises when the provider fails the check (run_agent).
+            mock_policy_inst.check_brief_compliance = AsyncMock(side_effect=AIProviderError("Gemini API timeout"))
             env.mock["policy_service"].return_value = mock_policy_inst
 
             response = await env.call_impl(brief="Normal campaign")
@@ -549,7 +556,7 @@ class TestBriefPolicyComplianceMatrix:
             (True, True, None, PolicyStatus.ALLOWED, False, False, None),
             (False, True, None, None, False, False, None),
             (True, False, None, None, False, False, None),
-            (True, True, RuntimeError("Down"), None, False, False, None),
+            (True, True, AIProviderError("Down"), None, False, False, None),
         ],
         ids=[
             "BLOCKED",

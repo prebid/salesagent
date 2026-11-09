@@ -4,7 +4,9 @@ import logging
 import os
 from unittest.mock import patch
 
+import httpx
 import pytest
+from pydantic_ai.exceptions import ModelHTTPError, UserError
 
 from src.core.config import load_settings
 from src.services.ai import (
@@ -20,7 +22,7 @@ from src.services.ai.config import (
     UNUSABLE_AI_CONFIG,
     uses_legacy_gemini_api_key,
 )
-from src.services.ai.factory import PROVIDER_MODELS, ResolvedAIConfig
+from src.services.ai.factory import PROVIDER_MODELS, AIProviderError, ResolvedAIConfig, run_agent
 from tests.helpers.settings_injection import PlatformAICredential
 
 
@@ -652,3 +654,60 @@ class TestAIServiceFactory:
 
             assert isinstance(model, OpenAIChatModel)
             assert os.environ.get("OPENAI_API_KEY") is None
+
+    @pytest.mark.parametrize("refusal", [ImportError("the SDK is not installed"), UserError("unusable model")])
+    def test_a_model_pydantic_ai_refuses_to_construct_builds_nothing(self, refusal):
+        """A construction refusal is "AI unavailable" (None), the answer the caller already handles."""
+
+        def refuse(*args, **kwargs):
+            raise refusal
+
+        with patch("src.services.ai.factory.pkgutil.resolve_name", return_value=refuse):
+            assert AIServiceFactory().build(TenantAIConfig(provider="openai", model="gpt-4o", api_key="k")) is None
+
+    def test_a_defect_while_constructing_propagates(self):
+        def broken(*args, **kwargs):
+            raise KeyError("defect")
+
+        with patch("src.services.ai.factory.pkgutil.resolve_name", return_value=broken):
+            with pytest.raises(KeyError, match="defect"):
+                AIServiceFactory().build(TenantAIConfig(provider="openai", model="gpt-4o", api_key="k"))
+
+
+def _agent_whose_model_raises(exc: Exception):
+    """A real pydantic-ai agent whose model call raises *exc*, the way a vendor client would."""
+    from pydantic_ai import Agent
+    from pydantic_ai.models.function import FunctionModel
+
+    def fail(messages, info):
+        raise exc
+
+    return Agent(FunctionModel(fail))
+
+
+class TestRunAgent:
+    """run_agent is the one place a provider failure is told apart from a defect."""
+
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            pytest.param(lambda: ModelHTTPError(status_code=503, model_name="m", body="down"), id="ModelHTTPError"),
+            pytest.param(lambda: UserError("unusable model"), id="UserError"),
+            pytest.param(lambda: httpx.ConnectError("unreachable"), id="httpx.ConnectError"),
+            pytest.param(lambda: httpx.RemoteProtocolError("dropped"), id="httpx.RemoteProtocolError"),
+        ],
+    )
+    async def test_a_provider_failure_raises_ai_provider_error(self, exc):
+        cause = exc()
+
+        with pytest.raises(AIProviderError) as excinfo:
+            await run_agent(_agent_whose_model_raises(cause), "prompt")
+
+        assert excinfo.value.__cause__ is cause
+
+    @pytest.mark.parametrize("exc", [ValueError("defect"), KeyError("defect"), TypeError("defect")])
+    async def test_any_other_exception_propagates_unchanged(self, exc):
+        with pytest.raises(type(exc)) as excinfo:
+            await run_agent(_agent_whose_model_raises(exc), "prompt")
+
+        assert excinfo.value is exc

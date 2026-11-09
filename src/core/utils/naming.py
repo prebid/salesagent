@@ -23,6 +23,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from src.core.helpers.brand_key import brand_key_parts
+from src.core.logging_config import log_safe
 
 if TYPE_CHECKING:
     # The caller is always an adapter (or an adapter's workflow manager), so `request`
@@ -119,6 +120,7 @@ def generate_auto_name(
         "Acme Corp Brand Awareness - Premium Video"
     """
     from src.services.ai import AIServiceFactory
+    from src.services.ai.factory import AIProviderError
 
     try:
         model = AIServiceFactory().build(tenant_ai_config)
@@ -167,8 +169,10 @@ def generate_auto_name(
 
         return generated_name
 
-    except Exception as e:
-        logger.warning(f"Failed to generate auto_name with AI: {e}, falling back")
+    except AIProviderError as e:
+        # The provider failed the call (run_agent classifies it). Any other exception is a
+        # defect in this path and propagates rather than becoming a fallback name.
+        logger.warning(f"Failed to generate auto_name with AI: {log_safe(e)}, falling back")
         return _get_fallback_name(request)
 
 

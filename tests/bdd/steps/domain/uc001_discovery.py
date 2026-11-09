@@ -223,9 +223,10 @@ def when_get_products_with_brief(ctx: dict) -> None:
     """Dispatch get_products with a brief through the current transport.
 
     One brief for every wording: whether it is "non-compliant" or "compliant" is the
-    scripted policy model's verdict (a Given), not a property of the text.
+    scripted policy model's verdict (a Given), not a property of the text. It carries the
+    env's nonce (``scripted_brief``), which is what the scripted verdict answers to over e2e.
     """
-    dispatch_request(ctx, brief=_BRIEF)
+    dispatch_request(ctx, brief=ctx["env"].scripted_brief(_BRIEF))
 
 
 # ── Then steps ──────────────────────────────────────────────────────

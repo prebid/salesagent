@@ -45,7 +45,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, patch
 
 from src.core.schemas import GetProductsResponse
@@ -55,6 +55,9 @@ from tests.harness._realize import realize_e2e
 from tests.harness.admin_client import AdminOperatorMixin
 from tests.harness.database_faults import DatabaseFaultMixin
 from tests.harness.egress import EgressHatchMixin
+
+if TYPE_CHECKING:
+    from tests.e2e._scripted_llm import ScriptedFailure
 
 
 class ProductEnv(AdminOperatorMixin, DatabaseFaultMixin, ProductMixin, IntegrationEnv):
@@ -81,6 +84,7 @@ class ProductEnv(AdminOperatorMixin, DatabaseFaultMixin, ProductMixin, Integrati
         set_platform_ai_credential()       -- the platform has a Gemini key of its own
         set_tenant_ai_ranking(prompt)      -- the seller's ranking prompt
         set_ranking_scores(scores)         -- deterministic relevance scores
+        set_ranking_failure(failure)       -- the ranking model fails as a ScriptedFailure declares
         set_ranking_unavailable()          -- the ranking model answers 503
         set_ranking_connection_dropped()   -- the ranking model's endpoint drops the connection
 
@@ -113,10 +117,9 @@ class ProductEnv(AdminOperatorMixin, DatabaseFaultMixin, ProductMixin, Integrati
         # got which. See ``set_ranking_scores`` for why that needs grading at all.
         self._tenant_ranking_prompt: str | None = None
         self._dispatched_brief: str | None = None
-        # The scripted ranking model's answer: scores by product_id, or the failure it raises.
+        # The scripted ranking model's answer: scores by product_id, or the declared failure.
         self._scripted_scores: dict[str, float] = {}
-        self._scripted_ranking_failure: Exception | None = None
-        self._e2e_seller_ranking_failure: dict[str, Any] | None = None
+        self._ranking_failure: ScriptedFailure | None = None
         self._ranking_patch_started = False
         # The platform's own AI credential: none unless the scenario declares one.
         self._platform_credential: Any = None
@@ -135,13 +138,17 @@ class ProductEnv(AdminOperatorMixin, DatabaseFaultMixin, ProductMixin, Integrati
         return super().call_via(transport, **kwargs)
 
     def _write_ranking_prompt(self, ranking_prompt: str) -> None:
-        """Write ``tenant.product_ranking_prompt`` and remember it for the scripted model.
+        """Write ``tenant.product_ranking_prompt``, tagged with this env's nonce, and remember it.
 
         The scripted model grades which text reached which slot of the ranking prompt,
-        against the prompt recorded here; see ``set_ranking_scores``.
+        against the prompt recorded here; see ``set_ranking_scores``. The nonce
+        (``scripted_nonce``) makes the prompt this scenario's own, so over e2e a ranking
+        script another scenario installed for the shared platform key never answers this
+        scenario's call.
         """
-        self.configure_tenant_field("product_ranking_prompt", ranking_prompt)
-        self._tenant_ranking_prompt = ranking_prompt
+        tagged = f"{ranking_prompt} [{self.scripted_nonce}]"
+        self.configure_tenant_field("product_ranking_prompt", tagged)
+        self._tenant_ranking_prompt = tagged
 
     def _stated_platform_credential(self) -> Any:
         """The platform credential this env states in-process: started once, undone with the env."""
@@ -243,7 +250,8 @@ class ProductEnv(AdminOperatorMixin, DatabaseFaultMixin, ProductMixin, Integrati
         platform's key always answers the scores, so a fallback to it is visible. Each
         answers only when the prompt carries the seller's ranking prompt in the seller's
         slot (``require_text``), which is how the e2e leg grades the argument roles the
-        in-process stub grades directly.
+        in-process stub grades directly. That prompt carries this env's nonce, so the entry
+        answers no other scenario's call.
         """
         from tests.e2e._scripted_llm import install_script
 
@@ -253,8 +261,9 @@ class ProductEnv(AdminOperatorMixin, DatabaseFaultMixin, ProductMixin, Integrati
             for product_id, score in self._scripted_scores.items()
         ]
         scores = {"output": {"rankings": rankings}, "require_text": prefix}
+        failure = {**self._ranking_failure.entry, "require_text": prefix} if self._ranking_failure else None
         seller_key, *platform_keys = self.scripted_api_keys()
-        install_script(seller_key, ranking=self._e2e_seller_ranking_failure or scores)
+        install_script(seller_key, ranking=failure or scores)
         for platform_key in platform_keys:
             install_script(platform_key, ranking=scores)
 
@@ -304,62 +313,57 @@ class ProductEnv(AdminOperatorMixin, DatabaseFaultMixin, ProductMixin, Integrati
         self._scripted_scores.update(scores)
         self._install_scripted_ranking()
 
-    def _fail_ranking(self, in_process: Exception, e2e_entry: dict[str, Any]) -> None:
-        """The seller's ranking model fails: ``in_process`` raised by the stub, ``e2e_entry`` scripted."""
+    def _e2e_set_ranking_failure(self, failure: ScriptedFailure) -> None:
+        """E2E realization of :meth:`set_ranking_failure`: the origin answers the failure's entry."""
+        self._ranking_failure = failure
+        self._e2e_install_ranking()
+
+    @realize_e2e(_e2e_set_ranking_failure)
+    def set_ranking_failure(self, failure: ScriptedFailure) -> None:
+        """The seller's ranking model fails as ``failure`` declares (``tests/e2e/_scripted_llm.py``).
+
+        In-process production's own ranking runs on ``failure.model()``, which raises
+        ``failure.exception()``; over e2e the origin answers ``failure.entry``, which makes
+        the live server's client raise that same exception. Either way production's
+        ``run_agent`` is what classifies it.
+        """
         self._scripted_prompt_prefix()
-        self._scripted_ranking_failure = in_process
-        self._e2e_seller_ranking_failure = e2e_entry
+        self._ranking_failure = failure
         self._install_scripted_ranking()
 
-    def _e2e_set_ranking_unavailable(self) -> None:
-        """E2E realization of :meth:`set_ranking_unavailable`: the origin answers 503."""
-        self._e2e_seller_ranking_failure = {"fail_status": 503}
-        self._e2e_install_ranking()
-
-    @realize_e2e(_e2e_set_ranking_unavailable)
     def set_ranking_unavailable(self) -> None:
-        """The ranking model is down: the call fails as pydantic-ai fails on an HTTP 503.
+        """The ranking model is down: the provider answers HTTP 503."""
+        from tests.e2e._scripted_llm import MODEL_UNAVAILABLE
 
-        ``ModelHTTPError`` is what ``GoogleModel`` raises when the API answers a 5xx, so the
-        in-process failure is the exception production meets over e2e, where the scripted
-        origin really answers 503.
-        """
-        from pydantic_ai.exceptions import ModelHTTPError
+        self.set_ranking_failure(MODEL_UNAVAILABLE)
 
-        self._fail_ranking(
-            ModelHTTPError(status_code=503, model_name="scripted", body="unavailable"), {"fail_status": 503}
-        )
-
-    def _e2e_set_ranking_connection_dropped(self) -> None:
-        """E2E realization of :meth:`set_ranking_connection_dropped`: the origin closes the connection."""
-        self._e2e_seller_ranking_failure = {"drop_connection": True}
-        self._e2e_install_ranking()
-
-    @realize_e2e(_e2e_set_ranking_connection_dropped)
     def set_ranking_connection_dropped(self) -> None:
         """The seller's provider endpoint drops the connection without answering.
 
-        ``httpx.RemoteProtocolError`` is what the Gemini client raises when the origin
-        closes the connection mid-request (``tests/e2e/test_scripted_llm_origin_service.py``
-        pins it). It is no ``OSError``, so it is the case a narrower ``except`` let escape.
+        It is no ``OSError``, so it is the case a narrower ``except`` let escape.
         """
-        import httpx
+        from tests.e2e._scripted_llm import CONNECTION_DROPPED
 
-        self._fail_ranking(
-            httpx.RemoteProtocolError("Server disconnected without sending a response."), {"drop_connection": True}
-        )
+        self.set_ranking_failure(CONNECTION_DROPPED)
 
     def _install_scripted_ranking(self) -> None:
         """Replace ``rank_products_async`` with the scripted model, once per env."""
         if self._ranking_patch_started:
             return
+        from src.services.ai.agents import ranking_agent
         from src.services.ai.agents.ranking_agent import ProductRanking, ProductRankingResult
 
         expected_prompt = self._tenant_ranking_prompt
+        production_ranking = ranking_agent.rank_products_async
 
         async def _scripted_ranking(agent: Any, custom_prompt: str, brief: str, products: list) -> Any:
-            if self._scripted_ranking_failure is not None:
-                raise self._scripted_ranking_failure
+            if self._ranking_failure is not None:
+                # Production's ranking, on a model that fails: the prompt is built and the
+                # failure classified by production, not by this stub.
+                with agent.override(model=self._ranking_failure.model()):
+                    return await production_ranking(
+                        agent=agent, custom_prompt=custom_prompt, brief=brief, products=products
+                    )
             expected_brief = self._dispatched_brief
             if expected_brief is None:
                 raise AssertionError(

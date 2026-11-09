@@ -10,9 +10,9 @@ scenario that fails as "catalog order":
 * pydantic-ai accepts the origin's response as the agent's structured output, for both
   output models (``ProductRankingResult`` and ``PolicyAnalysis``);
 * every refusal the origin answers (an unscripted key, a scripted failure, a prompt that
-  does not carry the scripted text) raises a ``RuntimeError``, and a dropped connection
-  raises ``httpx.RemoteProtocolError``; the ranking path in ``products.py`` catches both to
-  fall back to catalog order.
+  does not carry the scripted text) and a dropped connection reach production's
+  ``run_agent`` as a provider failure, which raises ``AIProviderError``: the one type
+  get_products' ranking and policy check catch to fail open.
 
 So this runs the origin IN-PROCESS on loopback and drives production's real agents and
 real ``PolicyCheckService`` against it: no Docker, no compose network. The stack wiring is
@@ -30,6 +30,7 @@ import pytest
 
 from src.services.ai import AIServiceFactory, TenantAIConfig
 from src.services.ai.agents.ranking_agent import create_ranking_agent, rank_products_async
+from src.services.ai.factory import AIProviderError
 from src.services.policy_check_service import PolicyCheckService, PolicyStatus
 from tests.e2e._scripted_llm import install_script, ranking_prompt_prefix
 from tests.e2e.scripted_llm_origin_service import run_scripted_llm_origin
@@ -43,13 +44,19 @@ _BRIEF = "video campaign for a sports launch"
 def origin() -> Iterator[str]:
     """The origin on a loopback port, with the Gemini client and the control client both aimed at it."""
     with run_scripted_llm_origin(host="127.0.0.1", port=0) as base_url:
-        with patch.dict(os.environ, {"GOOGLE_GEMINI_BASE_URL": base_url, "SCRIPTED_LLM_ORIGIN": base_url}):
+        aimed = {"GOOGLE_GEMINI_BASE_URL": base_url, "ANTHROPIC_BASE_URL": base_url, "SCRIPTED_LLM_ORIGIN": base_url}
+        with patch.dict(os.environ, aimed):
             yield base_url
 
 
 def _seller_model(api_key: str = _SELLER_KEY):
     """The model production builds for a seller who configured Gemini in the Admin UI."""
     return AIServiceFactory().build(TenantAIConfig(provider="gemini", model="gemini-2.0-flash", api_key=api_key))
+
+
+def _anthropic_model(api_key: str = _SELLER_KEY):
+    """The model production builds for a seller who configured Anthropic."""
+    return AIServiceFactory().build(TenantAIConfig(provider="anthropic", model="claude-scripted", api_key=api_key))
 
 
 async def _rank(model, custom_prompt: str = _PROMPT, brief: str = _BRIEF):
@@ -80,40 +87,87 @@ async def test_policy_service_returns_the_scripted_verdict(origin: str) -> None:
 async def test_a_call_with_an_unscripted_key_raises_what_ranking_catches(origin: str) -> None:
     install_script(_SELLER_KEY, ranking={"output": {"rankings": []}})
 
-    with pytest.raises(RuntimeError, match="API key not valid"):
+    with pytest.raises(AIProviderError, match="API key not valid"):
         await _rank(_seller_model(api_key="the-platform-key"))
 
 
 async def test_a_scripted_failure_raises_what_ranking_catches(origin: str) -> None:
     install_script(_SELLER_KEY, ranking={"fail_status": 503})
 
-    with pytest.raises(RuntimeError, match="503"):
+    with pytest.raises(AIProviderError, match="503"):
         await _rank(_seller_model())
 
 
-async def test_a_dropped_connection_raises_what_ranking_now_catches(origin: str) -> None:
-    """No OSError, RuntimeError or ImportError: the narrower except let this escape as INTERNAL_ERROR."""
+async def test_a_dropped_connection_raises_what_ranking_catches(origin: str) -> None:
+    """google-genai raises it unwrapped, and it is no OSError; run_agent still classifies it."""
     install_script(_SELLER_KEY, ranking={"drop_connection": True})
 
-    with pytest.raises(httpx.RemoteProtocolError) as excinfo:
+    with pytest.raises(AIProviderError) as excinfo:
         await _rank(_seller_model())
 
-    assert not isinstance(excinfo.value, ImportError | RuntimeError | OSError)
+    assert isinstance(excinfo.value.__cause__, httpx.RemoteProtocolError)
 
 
-async def test_a_scripted_policy_failure_fails_open_inside_the_service(origin: str) -> None:
-    """What BR-RULE-002 INV-4 meets over e2e: the real service answers ALLOWED with a warning."""
+async def test_a_scripted_policy_failure_raises_what_get_products_fails_open_on(origin: str) -> None:
+    """What BR-RULE-002 INV-4 meets over e2e: the real service raises AIProviderError."""
     install_script(_SELLER_KEY, policy={"fail_status": 503})
 
-    result = await PolicyCheckService(model=_seller_model()).check_brief_compliance(brief=_BRIEF)
-
-    assert result.status == PolicyStatus.ALLOWED
-    assert result.warnings and "503" in result.warnings[0]
+    with pytest.raises(AIProviderError, match="503"):
+        await PolicyCheckService(model=_seller_model()).check_brief_compliance(brief=_BRIEF)
 
 
 async def test_the_seller_prompt_in_the_brief_slot_is_refused(origin: str) -> None:
     """The swap the in-process stub grades directly: the brief where the seller's prompt goes."""
     install_script(_SELLER_KEY, ranking={"output": {"rankings": []}, "require_text": _prompt_prefix()})
 
-    with pytest.raises(RuntimeError, match="does not contain the scripted text"):
+    with pytest.raises(AIProviderError, match="does not contain the scripted text"):
         await _rank(_seller_model(), custom_prompt=_BRIEF, brief=_PROMPT)
+
+
+async def test_an_anthropic_model_is_answered_from_the_same_script(origin: str) -> None:
+    """ANTHROPIC_BASE_URL: a built Anthropic model reaches the origin and gets the seller's answer.
+
+    This is what makes the "refuses to build" Examples grade the refusal on e2e: a model
+    built anyway is answered, and ranking happens, instead of failing at the real vendor.
+    """
+    rankings = [{"product_id": "prod_a", "relevance_score": 0.4, "reason": "scripted"}]
+    install_script(_SELLER_KEY, ranking={"output": {"rankings": rankings}, "require_text": _prompt_prefix()})
+    install_script(_SELLER_KEY, policy={"output": {"status": "blocked", "reason": "scripted block"}})
+
+    ranked = await _rank(_anthropic_model())
+    verdict = await PolicyCheckService(model=_anthropic_model()).check_brief_compliance(brief=_BRIEF)
+
+    assert [(r.product_id, r.relevance_score) for r in ranked.rankings] == [("prod_a", 0.4)]
+    assert (verdict.status, verdict.reason) == (PolicyStatus.BLOCKED, "scripted block")
+
+
+async def test_entries_on_one_key_are_chosen_by_their_required_text(origin: str) -> None:
+    """Two scenarios scripting the shared platform key at once: each prompt gets its own entry."""
+    for nonce, score in (("[scenario-a]", 0.1), ("[scenario-b]", 0.2)):
+        rankings = [{"product_id": "prod", "relevance_score": score, "reason": nonce}]
+        install_script(_SELLER_KEY, ranking={"output": {"rankings": rankings}, "require_text": nonce})
+
+    answers = {
+        nonce: (await _rank(_seller_model(), custom_prompt=f"{_PROMPT} {nonce}")).rankings[0].relevance_score
+        for nonce in ("[scenario-a]", "[scenario-b]")
+    }
+
+    assert answers == {"[scenario-a]": 0.1, "[scenario-b]": 0.2}
+
+
+async def test_reinstalling_the_same_required_text_replaces_the_entry(origin: str) -> None:
+    for score in (0.1, 0.7):
+        rankings = [{"product_id": "prod", "relevance_score": score, "reason": "scripted"}]
+        install_script(_SELLER_KEY, ranking={"output": {"rankings": rankings}, "require_text": "[scenario-a]"})
+
+    result = await _rank(_seller_model(), custom_prompt=f"{_PROMPT} [scenario-a]")
+
+    assert [r.relevance_score for r in result.rankings] == [0.7]
+
+
+async def test_an_entry_for_another_scenario_answers_nothing(origin: str) -> None:
+    """The leak the nonce closes: another scenario's entry on the shared key must not answer this call."""
+    install_script(_SELLER_KEY, ranking={"output": {"rankings": []}, "require_text": "[scenario-a]"})
+
+    with pytest.raises(AIProviderError, match="does not contain the scripted text"):
+        await _rank(_seller_model(), custom_prompt=f"{_PROMPT} [scenario-b]")

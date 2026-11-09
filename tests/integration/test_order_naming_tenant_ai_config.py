@@ -97,21 +97,22 @@ def _request() -> AdapterCreateRequest:
 
 
 @contextmanager
-def _sellers_ai_only() -> Iterator[AsyncMock]:
-    """No platform credential, and the vendor model call answering ``_AI_NAME``."""
+def _sellers_ai_only(failure: BaseException | None = None) -> Iterator[AsyncMock]:
+    """No platform credential, and the vendor model call answering ``_AI_NAME`` (or raising ``failure``)."""
     with (
         PlatformAICredential(),
         patch(
-            "src.services.ai.agents.naming_agent.generate_name_async", new=AsyncMock(return_value=_AI_NAME)
+            "src.services.ai.agents.naming_agent.generate_name_async",
+            new=AsyncMock(return_value=_AI_NAME, side_effect=failure),
         ) as model_call,
     ):
         yield model_call
 
 
-def _create_mock_buy(tenant):
+def _create_mock_buy(tenant, failure: BaseException | None = None):
     principal = PrincipalFactory(tenant=tenant)
     adapter = _adapter_for(tenant, principal)
-    with _sellers_ai_only() as model_call:
+    with _sellers_ai_only(failure) as model_call:
         result = adapter._create_media_buy_immediate(_request(), [_package()], _START, _END)
     return adapter._media_buys[result.media_buy_id]["name"], model_call
 
@@ -142,6 +143,26 @@ def test_a_template_without_auto_name_never_asks_the_model(bound_factory_session
 
     assert model_call.await_count == 0, "the model was asked for a name the template does not use"
     assert name.startswith("naming.example.com - "), name
+
+
+def test_a_provider_failure_falls_back_to_the_brand_name(bound_factory_session):
+    """The seller's provider failing the call (``AIProviderError``) names the order after the brand."""
+    from src.services.ai.factory import AIProviderError
+
+    tenant = _seller_tenant(bound_factory_session, {"provider": "gemini", "api_key": "seller-key"}, None)
+
+    name, model_call = _create_mock_buy(tenant, AIProviderError("ModelHTTPError: 503"))
+
+    assert model_call.await_count == 1
+    assert name == "naming.example.com"
+
+
+def test_a_defect_in_the_naming_path_fails_the_buy(bound_factory_session):
+    """Anything but a provider failure is a defect: it propagates instead of becoming a fallback name."""
+    tenant = _seller_tenant(bound_factory_session, {"provider": "gemini", "api_key": "seller-key"}, None)
+
+    with pytest.raises(ValueError, match="naming defect"):
+        _create_mock_buy(tenant, ValueError("naming defect"))
 
 
 def _create_gam_buy(session, ai_config, gemini_api_key, *, manual_approval: bool):
