@@ -266,7 +266,7 @@ Feature: BR-UC-019 Query Media Buys
     # A future end_time also prevents the live scheduler from completing this seed
     # between the Given and When (#2503), which could mask a broken read-time resolver.
     # Date-column precedence is a seller storage invariant, ungraded by the storyboard;
-    # AdCP 3.1.1 enums/media-buy-status.json defines active as currently running.
+    # AdCP 3.2.7 enums/media-buy-status.json defines active as currently running.
 
   @T-UC-019-partition-status-filter @partition @status_filter
   Scenario Outline: Default status filter behavior - <partition>

@@ -225,6 +225,20 @@ def _day_offset(phrase: str) -> int:
     raise ValueError(f"unrecognized relative day {phrase!r}; expected 'today', 'in N days' or 'N days ago'")
 
 
+def _seed_relative_media_buy(
+    ctx: dict, principal_id: str, mb_id: str, start_offset: str, end_offset: str, **timestamp_offsets: str
+) -> None:
+    """Anchor every flight edge to one UTC instant and persist the complete window once."""
+    now = datetime.now(UTC)
+    today = now.date()
+    offsets = {"start_date": start_offset, "end_date": end_offset, **timestamp_offsets}
+    columns = {
+        field: (today if field in {"start_date", "end_date"} else now) + timedelta(days=_day_offset(offset))
+        for field, offset in offsets.items()
+    }
+    _seed_simple_media_buy(ctx, principal_id, mb_id, **columns)
+
+
 @given(
     parsers.parse(
         'the principal "{principal_id}" owns media buy "{mb_id}" '
@@ -242,20 +256,7 @@ def given_principal_owns_media_buy_relative_window(
     active). Placing the window relative to the real clock is what lets that
     refinement be graded over a real HTTP transport.
     """
-    _register_principal(ctx, principal_id)
-    env = ctx["env"]
-    today = datetime.now(UTC).date()
-    real_id = _generate_unique_id(mb_id)
-    mb = MediaBuyFactory(
-        tenant=ctx["tenant"],
-        principal=ctx["principal"],
-        media_buy_id=real_id,
-        status="active",
-        start_date=today + timedelta(days=_day_offset(start_offset)),
-        end_date=today + timedelta(days=_day_offset(end_offset)),
-    )
-    env._commit_factory_data()
-    _register_media_buy(ctx, mb_id, mb)
+    _seed_relative_media_buy(ctx, principal_id, mb_id, start_offset, end_offset)
 
 
 @given(parsers.parse('today is "{today_str}"'))
@@ -437,15 +438,7 @@ def given_media_buy_relative_timestamp(
     with a past end_date and no end_time could be completed by the live scheduler
     before a later Given supplied the future timestamp (GH #2503).
     """
-    now = datetime.now(UTC)
-    _seed_simple_media_buy(
-        ctx,
-        principal_id,
-        mb_id,
-        start_date=now.date() + timedelta(days=_day_offset(start_offset)),
-        end_date=now.date() + timedelta(days=_day_offset(end_offset)),
-        **{field: now + timedelta(days=_day_offset(time_offset))},
-    )
+    _seed_relative_media_buy(ctx, principal_id, mb_id, start_offset, end_offset, **{field: time_offset})
 
 
 @given(parsers.parse('the principal "{principal_id}" owns media buys in various statuses'))
@@ -1297,14 +1290,7 @@ def _get_media_buys(ctx: dict) -> list:
 @then(parsers.parse('the media buy "{mb_id}" should have status "{status}"'))
 def then_response_includes_mb_with_status(ctx: dict, mb_id: str, status: str) -> None:
     """Assert exactly one matching buy and its status in the captured wire JSON."""
-    real_id = _resolve_media_buy_id(ctx, mb_id)
-    buys = wire_field(ctx, "media_buys")
-    matching = [buy for buy in buys if buy["media_buy_id"] == real_id]
-    assert len(matching) == 1, (
-        f"Expected media buy '{mb_id}' (real_id={real_id}) in response, "
-        f"got IDs: {[buy['media_buy_id'] for buy in buys]}"
-    )
-    actual = matching[0]["status"]
+    actual = _wire_media_buy(ctx, mb_id)["status"]
     assert actual == status, f"Expected status '{status}' for '{mb_id}', got '{actual}'"
 
 
