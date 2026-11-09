@@ -240,6 +240,7 @@ def docker_services_e2e(request):
         a2a_port = mcp_port  # A2A is on same port as MCP (unified FastAPI process)
         admin_port = mcp_port  # Admin is on same port as MCP (unified FastAPI process)
         postgres_port = int(os.getenv("POSTGRES_PORT", "5435"))
+        creative_agent_port = int(os.getenv("E2E_CREATIVE_AGENT_PORT", "8091"))
         # The TLS listener is OPTIONAL here: in-network it has no host port at
         # all (it is reached by its dotted network alias via E2E_TLS_BASE_URL),
         # and an older stack may predate it. Absent -> live_server has no "tls"
@@ -293,9 +294,15 @@ def docker_services_e2e(request):
             else find_free_port(30000, 32000)
         )
 
+        creative_agent_port = (
+            int(os.getenv("E2E_CREATIVE_AGENT_PORT"))
+            if os.getenv("E2E_CREATIVE_AGENT_PORT")
+            else find_free_port(10000, 15000)
+        )
+
         print(
             f"Using ports: Server={mcp_port} (MCP+A2A+Admin), Postgres={postgres_port}, "
-            f"TLS={tls_port}, WebhookCapture={webhook_capture_port}"
+            f"TLS={tls_port}, WebhookCapture={webhook_capture_port}, CreativeAgent={creative_agent_port}"
         )
 
         # Set port env vars in os.environ for ONE consumer: the docker-compose
@@ -313,6 +320,7 @@ def docker_services_e2e(request):
         os.environ["POSTGRES_PORT"] = str(postgres_port)
         os.environ["ADCP_TLS_PORT"] = str(tls_port)
         os.environ["WEBHOOK_CAPTURE_PORT"] = str(webhook_capture_port)
+        os.environ["E2E_CREATIVE_AGENT_PORT"] = str(creative_agent_port)
 
         env = os.environ.copy()
         # Set 5 seconds interval for delivery webhooks in E2E tests
@@ -365,7 +373,7 @@ def docker_services_e2e(request):
 
     # The reuse and standalone paths converge before any seeding or test runs.
     wait_for_e2e_stack(
-        ports=e2e_ports(mcp=mcp_port, postgres=postgres_port),
+        ports=e2e_ports(mcp=mcp_port, postgres=postgres_port, creative_agent=creative_agent_port),
         host=e2e_host(),
         timeout_s=60.0 if use_existing_services else 120.0,
     )

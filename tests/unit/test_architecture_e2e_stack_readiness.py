@@ -1,6 +1,7 @@
-"""Both fixture paths and the legacy utility must share the ordered gate."""
+"""Both fixture paths must share the complete ordered gate."""
 
 import ast
+import inspect
 from pathlib import Path
 
 import pytest
@@ -59,26 +60,23 @@ def test_fixture_waits_once_after_both_startup_paths():
     assert waits[0].lineno < min(n.lineno for n in ast.walk(fixture) if isinstance(n, ast.Yield))
 
 
-def test_utility_has_no_independent_readiness_loop():
-    tree = parse_module(ROOT / "tests/e2e/utils.py")
-    wrapper = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "wait_for_server_readiness")
-    assert not any(isinstance(n, (ast.For, ast.While)) for n in ast.walk(wrapper))
-    assert any(
-        isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "wait_for_e2e_stack"
-        for n in ast.walk(wrapper)
-    )
-
-
 def test_no_tracked_e2e_caller_can_reduce_the_gate():
+    from tests.e2e import stack_readiness
+
+    assert set(inspect.signature(stack_readiness.wait_for_e2e_stack).parameters) == {
+        "ports",
+        "compose_files",
+        "host",
+        "timeout_s",
+        "poll_interval_s",
+    }
+    assert [name for name, _probe in stack_readiness._PROBES] == ["postgres", "creative-agent", "adcp_health"]
     paths = [p for p in iter_git_tracked_files(ROOT) if p.is_relative_to(ROOT / "tests/e2e") and p.suffix == ".py"]
     assert len(paths) > 3, "The guard must scan the E2E tree, including future callers"
     for path in paths:
         tree = parse_module(path)
         if path.name != "stack_readiness.py":
             assert not _health_poll_lines(tree), f"{path} introduces an independent readiness loop"
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "wait_for_e2e_stack":
-                assert all(kw.arg != "required" for kw in node.keywords), f"{path}:{node.lineno} narrows readiness"
 
 
 @pytest.mark.parametrize("url", ['"http://proxy/health"', 'f"http://{host}/health"', 'url="http://proxy/health"'])

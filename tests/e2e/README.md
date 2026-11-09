@@ -16,7 +16,7 @@ start a stack:
   `make test-stack-up` writes it to `.test-stack.env`) or with the
   `--skip-docker` pytest option, the fixture reuses the already-running
   services at the published ports (`ADCP_SALES_PORT`, `POSTGRES_PORT`,
-  `ADCP_TLS_PORT`, `WEBHOOK_CAPTURE_PORT`).
+  `ADCP_TLS_PORT`, `WEBHOOK_CAPTURE_PORT`, `E2E_CREATIVE_AGENT_PORT`).
 - Otherwise, the fixture builds and starts its own stack on dynamically
   allocated ports and tears it down at session end.
 
@@ -24,8 +24,9 @@ Both paths use `stack_readiness.wait_for_e2e_stack` before seeding: PostgreSQL,
 then the creative agent, then the server's `/health`. Each attempt stops at the
 first failing check. The reuse path has a 60-second budget; standalone startup
 has 120 seconds. On timeout the helper names the failed check and dumps Compose
-logs once when the CLI is available. In-network runners probe service addresses;
-the host path inspects Compose health for the unpublished creative agent.
+logs once when the CLI is available. Both topologies probe the creative agent
+over HTTP at `/api/creative-agent/health`: its service address in-network, or
+its separately allocated published port on the host.
 
 Either way, the fixture seeds the server database through
 `scripts/setup/init_database_ci.py` — the `ci-test` and `iso-test` tenants,

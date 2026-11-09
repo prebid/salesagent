@@ -4,13 +4,12 @@ from contextlib import contextmanager
 from urllib.parse import urlparse
 
 import psycopg2
-import pytest
 from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
 from sqlalchemy import select
 
 from scripts.setup.init_database_ci import CI_TEST_TENANT_ID
-from tests.e2e.stack_readiness import compose_exec_argv, e2e_ports, use_container_exec, wait_for_e2e_stack
+from tests.e2e.stack_readiness import compose_exec_argv, use_container_exec
 from tests.helpers.credentials import credential_headers
 
 
@@ -228,18 +227,6 @@ def wait_until(predicate, timeout_seconds: float, poll_interval: float = 0.5) ->
             return True
         time.sleep(poll_interval)
     return bool(predicate())
-
-
-def wait_for_server_readiness(mcp_url: str, *, postgres_port: int, timeout: float = 60.0) -> None:
-    """Delegate to the full stack gate, using the caller's resolved ports."""
-    parsed = urlparse(mcp_url)
-    if parsed.hostname is None or parsed.port is None:
-        pytest.fail("E2E server URL must include a host and an explicit port")
-    wait_for_e2e_stack(
-        ports=e2e_ports(mcp=parsed.port, postgres=postgres_port),
-        host=parsed.hostname,
-        timeout_s=timeout,
-    )
 
 
 def force_approve_media_buy_in_db(live_server: dict, media_buy_id: str):

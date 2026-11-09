@@ -21,6 +21,10 @@ services:
     ports:
       - "127.0.0.1:${POSTGRES_PORT:-5435}:5432"
 
+  creative-agent:
+    ports:
+      - "127.0.0.1:${E2E_CREATIVE_AGENT_PORT:-8091}:8080"
+
   proxy:
     ports:
       - "127.0.0.1:${ADCP_SALES_PORT:-8092}:8000"

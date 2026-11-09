@@ -1,28 +1,18 @@
-"""Shared E2E stack readiness — ordered probes + one structured failure path.
+"""One ordered E2E readiness gate: PostgreSQL, creative agent, then sales agent.
 
-SSOT for ``docker_services_e2e`` (verify-only and standalone) and
-``wait_for_server_readiness``. Required hard-gate order:
-
-    postgres → creative-agent → adcp ``/health``
-
-Creative-agent has no host-published port in the e2e ports overlay; on the
-host path we inspect compose health, and in-network we HTTP-probe the
-compose service name. Do not assume ``localhost:9999`` (that is the
-standalone ``creative-agent-stack.sh`` network).
+Every probe dials the service. Host runners use published ports; in-network
+runners use Compose service addresses. Compose is used only for diagnostics.
 """
 
 from __future__ import annotations
 
-import json
 import os
-import re
 import shutil
 import socket
 import subprocess
 import time
-from collections.abc import Mapping, Sequence
-from enum import StrEnum
-from typing import Final, NotRequired, Protocol, TypedDict, cast
+from collections.abc import Sequence
+from typing import Final, NamedTuple, Protocol, TypedDict
 from urllib.parse import urlparse
 
 import httpx
@@ -47,41 +37,18 @@ BASE_E2E_COMPOSE_FILE: Final[str] = DEFAULT_E2E_COMPOSE_FILES[0]
 
 _CREATIVE_AGENT_IN_NETWORK_HEALTH: Final[str] = "http://creative-agent:8080/api/creative-agent/health"
 
-# Shared diagnostic fragment for host-path compose JSON-ps failures (three branches).
-_COMPOSE_JSON_PS_REQUIRED: Final[str] = "Compose V2 JSON ps is required for host-path creative-agent gating"
-
-# Parenthetical health token in compose State/Status when Health is empty.
-_STATE_HEALTH_RE: Final[re.Pattern[str]] = re.compile(r"\((healthy|unhealthy|starting)\)")
-
-
-class ServiceHealth(StrEnum):
-    """Closed set of compose healthcheck verdicts — fail-closed outside HEALTHY."""
-
-    HEALTHY = "healthy"
-    UNHEALTHY = "unhealthy"
-    STARTING = "starting"
-    UNKNOWN = "unknown"
-
-
-class _ComposePsRecord(TypedDict):
-    """Known keys from ``docker compose ps --format json`` (extra keys allowed)."""
-
-    Health: NotRequired[str]
-    State: NotRequired[str]
-    Status: NotRequired[str]
-    Name: NotRequired[str]
-
 
 class E2EPorts(TypedDict):
     """Published ports the ordered hard gate needs — typos fail at the type boundary."""
 
     mcp: int
     postgres: int
+    creative_agent: int
 
 
-def e2e_ports(*, mcp: int, postgres: int) -> E2EPorts:
+def e2e_ports(*, mcp: int, postgres: int, creative_agent: int) -> E2EPorts:
     """Build the ports mapping every wait/probe call site must share."""
-    return {"mcp": mcp, "postgres": postgres}
+    return {"mcp": mcp, "postgres": postgres, "creative_agent": creative_agent}
 
 
 class _Probe(Protocol):
@@ -99,45 +66,31 @@ def e2e_host_default() -> str:
     return os.getenv("ADCP_TEST_HOST", "localhost")
 
 
-def _e2e_db_env_url() -> str | None:
-    """Read the e2e DB URL env chain once — SSOT for endpoint + URL resolvers."""
-    return os.getenv("E2E_DATABASE_URL") or os.getenv("DATABASE_URL")
+class E2EDatabase(NamedTuple):
+    """One resolved connection, shared by TCP readiness and direct DB consumers."""
 
-
-def resolve_e2e_db_endpoint(
-    *,
-    fallback_host: str = "localhost",
-    fallback_port: int = 5432,
-) -> tuple[str, int]:
-    """Resolve (host, port) for the e2e Postgres endpoint.
-
-    Preference: ``E2E_DATABASE_URL`` → ``DATABASE_URL`` → ``(fallback_host, fallback_port)``.
-    SSOT for ``_probe_postgres`` and ``conftest.e2e_db_url`` so the readiness gate
-    and direct-DB helpers cannot drift on defaults.
-    """
-    db_url = _e2e_db_env_url()
-    if db_url:
-        parsed = urlparse(db_url)
-        return (parsed.hostname or fallback_host, parsed.port or fallback_port)
-    return (fallback_host, fallback_port)
+    url: str
+    host: str
+    port: int
 
 
 def e2e_db_url_build(*, host: str = "localhost", port: int = 5432) -> str:
-    """Build the canonical e2e Postgres URL (no env read) — for setdefault/seed paths."""
+    """Build the canonical e2e Postgres URL without reading the environment."""
     return f"postgresql://adcp_user:secure_password_change_me@{_http_authority(host, port)}/adcp"
 
 
-def e2e_db_url_default(*, fallback_host: str = "localhost", fallback_port: int = 5432) -> str:
-    """Full Postgres URL for direct-DB e2e helpers — env wins, else build from endpoint.
+def resolve_e2e_db(*, fallback_host: str = "localhost", fallback_port: int = 5432) -> E2EDatabase:
+    """Resolve the environment chain once, preserving the configured DSN verbatim."""
+    url = os.getenv("E2E_DATABASE_URL") or os.getenv("DATABASE_URL")
+    if url:
+        parsed = urlparse(url)
+        return E2EDatabase(url, parsed.hostname or fallback_host, parsed.port or fallback_port)
+    return E2EDatabase(e2e_db_url_build(host=fallback_host, port=fallback_port), fallback_host, fallback_port)
 
-    SSOT for ``conftest.e2e_db_url`` (mirrors the ``e2e_host_default`` wrapper
-    naming rule — shared stem + ``_default``, no ``db``/``database`` token split).
-    """
-    env_url = _e2e_db_env_url()
-    if env_url:
-        return env_url
-    host, port = resolve_e2e_db_endpoint(fallback_host=fallback_host, fallback_port=fallback_port)
-    return e2e_db_url_build(host=host, port=port)
+
+def e2e_db_url_default(*, fallback_host: str = "localhost", fallback_port: int = 5432) -> str:
+    """Full Postgres URL from the same connection resolver the probe uses."""
+    return resolve_e2e_db(fallback_host=fallback_host, fallback_port=fallback_port).url
 
 
 def in_network(host: str) -> bool:
@@ -151,12 +104,7 @@ def use_container_exec(host: str) -> bool:
 
 
 def compose_argv(compose_files: Sequence[str]) -> list[str]:
-    """Build compose argv, preferring the Compose V2 plugin when available.
-
-    Host-path creative-agent gating needs ``ps --format json``. Prefer
-    ``docker compose`` (plugin) over a legacy ``docker-compose`` V1 binary that
-    may lack JSON ``ps`` and make health always look unknown.
-    """
+    """Build compose argv for lifecycle commands and failure diagnostics."""
     argv: list[str]
     if shutil.which("docker"):
         try:
@@ -246,102 +194,6 @@ def _dump_e2e_compose_logs(compose_files: Sequence[str]) -> None:
         print(f"Could not get container status: {exc}")
 
 
-def _map_health_token(token: str) -> ServiceHealth:
-    """Map a normalized health token to the closed enum (unknown otherwise)."""
-    try:
-        return ServiceHealth(token)
-    except ValueError:
-        return ServiceHealth.UNKNOWN
-
-
-def health_of(record: Mapping[str, object]) -> ServiceHealth:
-    """Pure compose-ps verdict — fetch is elsewhere; this never substring-matches.
-
-    ``"unhealthy"`` must not count as ready because it contains ``"healthy"``.
-    Empty Health falls back to a parenthetical token in State/Status only.
-    """
-    raw = record.get("Health")
-    if isinstance(raw, str) and raw.strip():
-        return _map_health_token(raw.strip().lower())
-
-    for key in ("State", "Status"):
-        state = str(record.get(key) or "").lower()
-        match = _STATE_HEALTH_RE.search(state)
-        if match:
-            return _map_health_token(match.group(1))
-    return ServiceHealth.UNKNOWN
-
-
-def _compose_service_health(service: str, compose_files: Sequence[str]) -> tuple[ServiceHealth | None, str | None]:
-    """Return ``(health, error_diag)``.
-
-    ``health`` is a ``ServiceHealth`` from a successful parse, or None when
-    compose JSON-ps could not be fetched/parsed. ``error_diag`` is set when
-    health could not be determined due to a tooling/parse failure.
-    """
-    if not compose_available():
-        return None, "docker/compose unavailable for host-path health inspect"
-    try:
-        result = subprocess.run(
-            [*compose_argv(compose_files), "ps", "--format", "json", service],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return None, (
-            f"compose ps --format json for {service!r} raised {type(exc).__name__}: {exc}; {_COMPOSE_JSON_PS_REQUIRED}"
-        )
-    if result.returncode != 0 or not result.stdout.strip():
-        return None, (
-            f"compose ps --format json for {service!r} failed "
-            f"(rc={result.returncode}, stdout_empty={not bool(result.stdout.strip())}); "
-            f"{_COMPOSE_JSON_PS_REQUIRED}. "
-            f"stderr={result.stderr.strip()!r}"
-        )
-
-    # Compose v2 may emit one JSON object, an array, or NDJSON lines.
-    payload = result.stdout.strip()
-    records: list[_ComposePsRecord] = []
-    try:
-        parsed = json.loads(payload)
-        if isinstance(parsed, list):
-            records = [cast(_ComposePsRecord, r) for r in parsed if isinstance(r, dict)]
-        elif isinstance(parsed, dict):
-            records = [cast(_ComposePsRecord, parsed)]
-    except json.JSONDecodeError:
-        for line in payload.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(obj, dict):
-                records.append(cast(_ComposePsRecord, obj))
-
-    if not records:
-        return None, (
-            f"compose ps --format json for {service!r} produced no parseable records; "
-            f"{_COMPOSE_JSON_PS_REQUIRED}. "
-            f"raw_stdout={payload[:200]!r}"
-        )
-    return health_of(records[0]), None
-
-
-def _compose_reports_ready(health: ServiceHealth | None) -> bool:
-    """True only when compose reports an explicit healthcheck pass — fail-closed."""
-    return health is ServiceHealth.HEALTHY
-
-
-def _compose_service_ready(service: str, compose_files: Sequence[str]) -> bool:
-    """True when compose reports the named service as healthcheck-ready."""
-    health, _err = _compose_service_health(service, compose_files)
-    return _compose_reports_ready(health)
-
-
 def _tcp_open(host: str, port: int, *, timeout_s: float = 2.0) -> bool:
     try:
         with socket.create_connection((host, port), timeout=timeout_s):
@@ -375,8 +227,8 @@ def _probe_postgres(
     del compose_files  # host path must use the published port — no compose-health degrade
     if in_network(host):
         # Runner is on the compose network — shared env/default endpoint SSOT.
-        db_host, db_port = resolve_e2e_db_endpoint(fallback_host="postgres", fallback_port=5432)
-        return _tcp_open(db_host, db_port)
+        connection = resolve_e2e_db(fallback_host="postgres", fallback_port=5432)
+        return _tcp_open(connection.host, connection.port)
 
     postgres_port = ports.get("postgres")
     if postgres_port is None:
@@ -391,11 +243,14 @@ def _probe_creative_agent(
     host: str,
     compose_files: Sequence[str],
 ) -> bool:
-    del ports  # creative-agent has no host-published port in the e2e overlay
+    del compose_files
     if in_network(host):
         return _http_ok(_CREATIVE_AGENT_IN_NETWORK_HEALTH)
 
-    return _compose_service_ready("creative-agent", compose_files)
+    port = ports.get("creative_agent")
+    if port is None:
+        return False
+    return _http_ok(f"http://{_http_authority(host, int(port))}/api/creative-agent/health")
 
 
 def _probe_adcp_health(
@@ -405,7 +260,6 @@ def _probe_adcp_health(
     compose_files: Sequence[str],
 ) -> bool:
     del compose_files  # adcp readiness is HTTP /health on the published port
-    # Live contract: producers emit {"mcp": …, "postgres": …} only — no admin/adcp keys.
     port = ports.get("mcp")
     if port is None:
         return False
@@ -431,7 +285,7 @@ def wait_for_e2e_stack(
 ) -> None:
     """Require postgres, creative-agent and server health, in that order.
 
-    Both fixture paths and the legacy utility use this gate. A failed check
+    Both fixture paths use this gate. A failed check
     prevents later probes in that attempt; timeout emits one diagnostic dump.
     """
     host = e2e_host_default() if host is None else host
@@ -452,10 +306,4 @@ def wait_for_e2e_stack(
         time.sleep(min(poll_interval_s, remaining))
 
     _dump_e2e_compose_logs(compose_files)
-    detail = ""
-    if failed == "creative-agent" and use_container_exec(host):
-        health, error = _compose_service_health("creative-agent", compose_files)
-        detail = f"; compose_ps_diag={error}" if error else f"; compose_health={health}"
-    pytest.fail(
-        f"E2E stack not ready after {timeout_s}s — failed probe: {failed} (host={host}; ports={dict(ports)}{detail})"
-    )
+    pytest.fail(f"E2E stack not ready after {timeout_s}s — failed probe: {failed} (host={host}; ports={dict(ports)})")
