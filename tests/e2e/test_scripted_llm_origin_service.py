@@ -155,7 +155,7 @@ async def test_entries_on_one_key_are_chosen_by_their_required_text(origin: str)
     assert answers == {"[scenario-a]": 0.1, "[scenario-b]": 0.2}
 
 
-async def test_reinstalling_the_same_required_text_replaces_the_entry(origin: str) -> None:
+async def test_the_latest_matching_entry_answers(origin: str) -> None:
     for score in (0.1, 0.7):
         rankings = [{"product_id": "prod", "relevance_score": score, "reason": "scripted"}]
         install_script(_SELLER_KEY, ranking={"output": {"rankings": rankings}, "require_text": "[scenario-a]"})

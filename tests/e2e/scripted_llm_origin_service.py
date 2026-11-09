@@ -32,8 +32,8 @@ tool pydantic-ai declares: a ``rankings`` property is the ranking agent's
 A key holds SEVERAL entries per question, told apart by their ``require_text``: the e2e
 servers share one platform key, so scenarios running at once each script it, and an entry
 from one scenario must neither overwrite nor answer another's. A call is answered by the
-most recently installed entry whose ``require_text`` the prompt contains; installing an
-entry with the same ``require_text`` again replaces it. Each scenario puts its own nonce in
+most recently installed entry whose ``require_text`` the prompt contains, so a scenario that
+scripts the same question again is answered by its latest script. Each scenario puts its own nonce in
 that text (``ProductEnv.scripted_nonce``), so an entry outlives its scenario harmlessly.
 
 A script entry per question is one of:
@@ -89,15 +89,14 @@ class _ScriptStore:
         self._entries: dict[str, dict[str, list[dict]]] = {}
 
     def install(self, api_key: str, script: dict) -> dict:
-        """Add each question's entry for ``api_key``, replacing one with the same ``require_text``.
+        """Add each question's entry for ``api_key``; the newest matching entry answers.
 
         Returns the key's entries by question, as the control plane's readback.
         """
         with self._lock:
             questions = self._entries.setdefault(api_key, {})
             for question, entry in script.items():
-                kept = [e for e in questions.get(question, []) if e.get("require_text") != entry.get("require_text")]
-                questions[question] = [*kept, entry]
+                questions.setdefault(question, []).append(entry)
             return {question: list(entries) for question, entries in questions.items()}
 
     def knows(self, api_key: str) -> bool:
