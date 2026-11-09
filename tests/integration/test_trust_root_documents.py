@@ -123,7 +123,8 @@ def _seed(env, slug: str, **key_kwargs):
     The subdomain is deliberately hyphenated — hyphens are legal there and
     ILLEGAL in brand.json's ``brand_agent_entry.id`` (``^[a-z0-9_]+$``).
     """
-    from tests.factories import AuthorizedPropertyFactory, SigningKeyFactory, TenantFactory
+    from tests.factories import SigningKeyFactory, TenantFactory
+    from tests.factories.publisher import authorize_properties
 
     tenant = TenantFactory(
         tenant_id=f"tr_{slug}",
@@ -132,7 +133,8 @@ def _seed(env, slug: str, **key_kwargs):
     )
     key_kwargs.setdefault("not_before", _NOW - timedelta(days=1))
     key = SigningKeyFactory(tenant=tenant, **key_kwargs)
-    AuthorizedPropertyFactory(tenant=tenant, publisher_domain=tenant.virtual_host_name, tags=["premium_news"])
+    # The tenant's own host is a publisher: its stored adagents.json authorizes a property there.
+    authorize_properties(tenant, tenant.virtual_host_name, [("own_home", ("premium_news",))])
     env.get_session()  # commits pending factory data
     return tenant, key
 
@@ -220,9 +222,9 @@ def _publishable(env, tenant_id: str, *, now: datetime = _NOW, purpose: str = RE
 
 def _authorizations(env, tenant) -> list:
     """The properties the route builds the tenant's adagents.json from, read the way it reads them."""
-    from src.core.database.repositories.authorized_property import AuthorizedPropertyRepository
+    from src.core.database.repositories.publisher import PublisherRepository
 
-    repo = AuthorizedPropertyRepository(env.get_session(), tenant.tenant_id)
+    repo = PublisherRepository(env.get_session(), tenant.tenant_id)
     return repo.list_for_publisher_domain(tenant.virtual_host_name)
 
 
@@ -298,33 +300,6 @@ class TestCanonicalAgentUrlIsTheOneIdentity:
             )
             assert card_url.endswith(served["a2a"]), (
                 f"the card must advertise the A2A path this app serves ({served['a2a']!r}); got {card_url!r}"
-            )
-
-    def test_construct_agent_url_derives_from_the_canonical_helper(self, integration_db):
-        """R-M2: the admin blueprint's URL builder is the second migrated call site,
-        not a third independent derivation.
-
-        Its PRODUCTION/localhost ladder is what makes the adagents authorization
-        checks compare against a different string from the one we publish.
-
-        No environment variable is neutralized here, and that is the point rather than
-        an omission: ``canonical_agent_url`` reads STORED TENANT STATE first — the
-        seeded ``virtual_host`` — and its only fallback is
-        ``get_settings().runtime``, so ``os.environ`` steers nothing on this path.
-        ``src/core/config.py`` is the one env reader (``ruff-environment.toml``) and it
-        builds its ``Settings`` once, so a ``monkeypatch.delenv`` would be a safeguard
-        that neutralizes nothing while implying env still decides the answer.
-        """
-        from src.admin.blueprints.authorized_properties import _construct_agent_url
-        from src.core.agent_identity import canonical_agent_url
-
-        with BareIntegrationEnv(tenant_id="trust_root_env_c") as env:
-            env.setup_default_data()
-            tenant, _ = _seed(env, "c")
-
-            assert _construct_agent_url(tenant.tenant_id) == canonical_agent_url(tenant), (
-                "_construct_agent_url must return the canonical agent URL, not a PRODUCTION-flag / "
-                "localhost-port derivation of its own"
             )
 
     def test_agent_entry_ids_satisfy_the_schema_charset_for_a_hyphenated_subdomain(self, integration_db):

@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 import pytest
 
-from scripts.setup.seed_products import publishers_whole
+from scripts.setup.seed_products import whole_publisher_selections
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
     AdapterConfig,
@@ -165,7 +165,7 @@ def setup_gam_tenant_with_all_pricing_models(integration_db):
                 }
             ],
             delivery_type="guaranteed",
-            properties=publishers_whole(session, "test_gam_pricing_tenant"),
+            publisher_selections=whole_publisher_selections(session, "test_gam_pricing_tenant"),
             targeting_template={},
             implementation_config={
                 "targeted_ad_unit_ids": ["23312403856"],
@@ -218,7 +218,7 @@ def setup_gam_tenant_with_all_pricing_models(integration_db):
                 },
             ],
             delivery_type="non_guaranteed",
-            properties=publishers_whole(session, "test_gam_pricing_tenant"),
+            publisher_selections=whole_publisher_selections(session, "test_gam_pricing_tenant"),
             targeting_template={},
             implementation_config={
                 "targeted_ad_unit_ids": ["23312403856"],
@@ -279,7 +279,7 @@ def setup_gam_tenant_with_all_pricing_models(integration_db):
                 }
             ],
             delivery_type="guaranteed",
-            properties=publishers_whole(session, "test_gam_pricing_tenant"),
+            publisher_selections=whole_publisher_selections(session, "test_gam_pricing_tenant"),
             targeting_template={},
             implementation_config={
                 "targeted_ad_unit_ids": ["23312403856"],
@@ -332,7 +332,7 @@ def setup_gam_tenant_with_all_pricing_models(integration_db):
                 },
             ],
             delivery_type="guaranteed",
-            properties=publishers_whole(session, "test_gam_pricing_tenant"),
+            publisher_selections=whole_publisher_selections(session, "test_gam_pricing_tenant"),
             targeting_template={},
             implementation_config={
                 "targeted_ad_unit_ids": ["45623890123"],

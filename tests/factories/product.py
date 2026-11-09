@@ -2,70 +2,41 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 from decimal import Decimal
 
 import factory
 from factory import LazyAttribute, Sequence, SubFactory
 
-from src.core.database.models import PricingOption, Product
+from src.core.database.models import PricingOption, Product, ProductPublisherSelection
 from src.core.helpers.publisher_property_helpers import AuthorizedPropertyRef
 from src.core.schemas.pricing import CpmPricingOption
-from tests.factories.core import AuthorizedPropertyFactory, TenantFactory
+from tests.factories.core import TenantFactory
+from tests.factories.publisher import (  # noqa: F401 -- re-exported for the tests that seed selections
+    SellsPublishersMixin,
+    authorize_publishers,
+    authorize_selected_properties,
+    domain_property_id,
+)
 from tests.factories.request import _RequestFactory
 
 
 def authorized_refs(*domains: str) -> tuple[AuthorizedPropertyRef, ...]:
-    """One verified untagged property per publisher domain, as ``list_refs`` returns them."""
+    """One authorized untagged property per publisher domain, as ``PublisherCatalog.refs`` holds them."""
     return tuple(
         AuthorizedPropertyRef(
-            property_id=domain.replace(".", "_").replace("-", "_"),
+            property_id=domain_property_id(domain),
             publisher_domain=domain,
             tags=(),
-            name=domain,
+            name=domain_property_id(domain),
             property_type="website",
         )
         for domain in domains
     )
 
 
-def authorize_publishers(tenant, *domains: str) -> None:
-    """Store *tenant*'s verified property on each publisher domain its test products name.
-
-    A product's selectors are offered only for a publisher the seller holds a verified
-    property of (#1845), so a test seeding explicit selectors seeds this too.
-    """
-    for domain in domains:
-        AuthorizedPropertyFactory(tenant=tenant, publisher_domain=domain)
-
-
-def authorize_selected_properties(tenant, selectors: Iterable[dict]) -> None:
-    """Store *tenant*'s verified property behind every id and tag *selectors* name.
-
-    A stored selector is sold per property (#1845): ``by_id`` keeps only the ids of its
-    publisher's verified properties and ``by_tag`` only the tags one of them carries. So a
-    test storing such selectors seeds those properties. Property ids are unique per tenant,
-    so two publishers' selectors cannot share one; two selectors of one publisher can.
-    """
-    for selector in selectors:
-        domain = selector["publisher_domain"]
-        for property_id in selector.get("property_ids") or ():
-            _SelectedPropertyFactory(tenant=tenant, property_id=property_id, publisher_domain=domain)
-        for tag in selector.get("property_tags") or ():
-            _SelectedPropertyFactory(tenant=tenant, property_id=f"{tag}_carrier", publisher_domain=domain, tags=[tag])
-
-
-class _SelectedPropertyFactory(AuthorizedPropertyFactory):
-    """:class:`AuthorizedPropertyFactory` reusing a property already stored, for :func:`authorize_selected_properties`."""
-
-    class Meta:
-        sqlalchemy_get_or_create = ("tenant_id", "property_id")
-        sqlalchemy_session_factory = lambda: AuthorizedPropertyFactory._meta.sqlalchemy_session  # noqa: E731
-
-
-#: The seller's one verified property on the publisher a test product sells. The ONE
-#: spelling of the default publisher: a product names only publishers the seller holds a
-#: verified property of (#1845).
+#: The property the default publisher's stored adagents.json authorizes a test product's
+#: seller for. The ONE spelling of the default publisher: a product names only publishers
+#: whose document authorizes the seller (#1845).
 ONE_AUTHORIZED_PROPERTY = authorized_refs("publisher.example.com")
 DEFAULT_PUBLISHER_DOMAIN = ONE_AUTHORIZED_PROPERTY[0].publisher_domain
 
@@ -74,28 +45,26 @@ def default_publisher_properties() -> list[dict]:
     """The selector a test product carries unless it names its own ``properties``.
 
     The shape the admin product form stores: it names its publisher, and the product is
-    offered because ``ProductFactory`` also seeds the seller's verified property there
-    (:class:`DefaultPublisherPropertyFactory`).
+    offered because ``ProductFactory`` also stores that publisher's document authorizing
+    the seller (:func:`~tests.factories.publisher.authorize_publishers`).
     """
     return [{"publisher_domain": DEFAULT_PUBLISHER_DOMAIN, "selection_type": "all"}]
 
 
-class DefaultPublisherPropertyFactory(AuthorizedPropertyFactory):
-    """The verified property behind :func:`default_publisher_properties`, once per tenant.
+def default_publisher_selections(session, tenant_id: str) -> list[ProductPublisherSelection]:
+    """Selection rows naming the default publisher, for a product a test builds by hand on *session*.
 
-    Created only by ``ProductFactory`` and in the session that created the product, so it
-    needs no binding of its own and is not in ``ALL_FACTORIES``.
+    The publisher's document authorizing *tenant_id* is stored on *session* first (without a
+    fetch, as a seed stores it), so the selection's foreign key holds and the product is
+    offered. Call it before adding the product to the session.
     """
+    from scripts.setup.seed_products import seed_verified_website
 
-    class Meta:
-        sqlalchemy_get_or_create = ("tenant_id", "property_id")
-        sqlalchemy_session_factory = lambda: ProductFactory._meta.sqlalchemy_session  # noqa: E731
-
-    property_id = ONE_AUTHORIZED_PROPERTY[0].property_id
-    publisher_domain = DEFAULT_PUBLISHER_DOMAIN
+    seed_verified_website(session, tenant_id, DEFAULT_PUBLISHER_DOMAIN)
+    return ProductPublisherSelection.from_selectors(tenant_id, default_publisher_properties())
 
 
-class ProductFactory(factory.alchemy.SQLAlchemyModelFactory):
+class ProductFactory(SellsPublishersMixin, factory.alchemy.SQLAlchemyModelFactory):
     class Meta:
         model = Product
         sqlalchemy_session = None
@@ -129,20 +98,25 @@ class ProductFactory(factory.alchemy.SQLAlchemyModelFactory):
     format_options = None
     targeting_template = factory.LazyFunction(lambda: {"geo": ["US"]})
     delivery_type = "guaranteed"
-    properties = factory.LazyFunction(default_publisher_properties)
     delivery_measurement = factory.LazyFunction(lambda: {"provider": "publisher"})
+    # The publishers the product sells, as selectors (``properties=[...]``); stored as
+    # selection rows, each publisher created first (SellsPublishersMixin).
+    publisher_selections = LazyAttribute(lambda o: ProductPublisherSelection.from_selectors(o.tenant_id, o.properties))
+
+    class Params:
+        properties = factory.LazyFunction(default_publisher_properties)
 
     @factory.post_generation
     def authorize_publisher(obj, create, extracted, **kwargs):  # noqa: N805 -- factory_boy hook
-        """Seed the seller's verified property on the default publisher a product names.
+        """Store the default publisher's document authorizing the seller, for a product naming it.
 
-        A product is offered only for a publisher the seller holds a verified property of,
-        so the default selector comes with that property rather than past the check.
+        A product is offered only for a publisher whose stored adagents.json authorizes the
+        seller, so the default selector comes with that document rather than past the check.
         ``authorize_publisher=False`` leaves it out, for a product that is tenant data only
         (a catalogue's channels) and must not add a publisher to the seller's portfolio.
         """
-        if create and extracted is not False and obj.properties == default_publisher_properties():
-            DefaultPublisherPropertyFactory(tenant=obj.tenant)
+        if create and extracted is not False and obj.stored_publisher_properties == default_publisher_properties():
+            authorize_publishers(obj.tenant, DEFAULT_PUBLISHER_DOMAIN)
 
 
 class StoredPlacementFactory(factory.DictFactory):
@@ -177,6 +151,17 @@ FIRST_PUBLISHER_LEADERBOARD = {
     "params": {"width": 728, "height": 90},
     "publisher_domain": FIRST_PUBLISHER_DOMAIN,
 }
+#: The key a product stores the first publisher's leaderboard by (owner decision 2).
+FIRST_PUBLISHER_LEADERBOARD_KEY = {"publisher_domain": FIRST_PUBLISHER_DOMAIN, "format_option_id": "leaderboard"}
+
+
+def catalog_first_publisher_leaderboard(tenant) -> None:
+    """Both publishers authorize *tenant*, and the first declares the leaderboard in its formats[]."""
+    from tests.factories.publisher import declare_format_options
+
+    authorize_publishers(tenant, *(selector["publisher_domain"] for selector in TWO_PUBLISHER_PROPERTIES))
+    entry = {key: value for key, value in FIRST_PUBLISHER_LEADERBOARD.items() if key != "publisher_domain"}
+    declare_format_options(tenant, FIRST_PUBLISHER_DOMAIN, [entry])
 
 
 class PricingOptionFactory(factory.alchemy.SQLAlchemyModelFactory):

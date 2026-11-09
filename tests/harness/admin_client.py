@@ -217,7 +217,13 @@ class AdminOperatorMixin:
         return self._admin
 
     def admin_request(
-        self, tenant_id: str, method: str, path: str, *, data: dict[str, str] | None = None
+        self,
+        tenant_id: str,
+        method: str,
+        path: str,
+        *,
+        data: dict[str, str] | None = None,
+        json: dict[str, Any] | None = None,
     ) -> AdminResponse:
-        """One authenticated request to *tenant_id*'s admin route at *path*."""
-        return self.admin_client(tenant_id).request(method, f"/tenant/{tenant_id}/{path}", data=data)
+        """One authenticated request to *tenant_id*'s admin route at *path*, with a form or JSON body."""
+        return self.admin_client(tenant_id).request(method, f"/tenant/{tenant_id}/{path}", data=data, json=json)

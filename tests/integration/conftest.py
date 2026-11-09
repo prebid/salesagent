@@ -14,7 +14,7 @@ import pytest
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 from sqlalchemy import create_engine, delete, select
 
-from scripts.setup.seed_products import publishers_whole
+from scripts.setup.seed_products import seed_verified_website, whole_publisher_selections
 from src.admin.app import create_app
 
 # Registers the ci-test tenant/principal fixture for this package. Imported by
@@ -26,7 +26,7 @@ from tests.integration.conftest_ci_seed import ci_test_principal  # noqa: F401
 
 admin_app = create_app()
 from src.core.database.database_session import get_db_session
-from src.core.database.models import MediaBuy, MediaPackage, Principal, Tenant
+from src.core.database.models import MediaBuy, MediaPackage, Principal, ProductPublisherSelection, Tenant
 from tests.fixtures import TenantFactory
 from tests.helpers.local_http_origin import run_local_origin
 from tests.helpers.local_mcp_origin import MCPOrigin, run_mcp_origin
@@ -217,7 +217,6 @@ def authenticated_admin_session(admin_client, integration_db):
 def test_tenant_with_data(integration_db):
     """Create a test tenant in the database with proper configuration and all required setup data."""
     from src.core.database.models import (
-        AuthorizedProperty,
         CurrencyLimit,
         GAMInventory,
         Principal,
@@ -271,17 +270,10 @@ def test_tenant_with_data(integration_db):
         )
         db_session.add(property_tag)
 
-        # AuthorizedProperty (required for setup validation)
-        auth_property = AuthorizedProperty(
-            tenant_id=tenant_id,
-            property_id=f"{tenant_id}_property_1",
-            property_type="website",
-            name="Fixture Default Property",  # Unique name to avoid conflicts with test assertions
-            identifiers=[{"type": "domain", "value": "fixture-default.example.com"}],
-            publisher_domain="fixture-default.example.com",
-            verification_status="verified",
-        )
-        db_session.add(auth_property)
+        # The fixture publisher, whose stored adagents.json authorizes the tenant (required for
+        # setup validation). Unique name to avoid conflicts with test assertions.
+        db_session.flush()
+        seed_verified_website(db_session, tenant_id, "fixture-default.example.com", name="Fixture Default Property")
 
         # Principal (required for setup completion)
         # Include both kevel and mock mappings to support ad_server="kevel" (which is production-ready)
@@ -357,7 +349,6 @@ def sample_tenant(integration_db):
 
     from src.core.database.database_session import get_db_session
     from src.core.database.models import (
-        AuthorizedProperty,
         CurrencyLimit,
         GAMInventory,
         PropertyTag,
@@ -404,17 +395,9 @@ def sample_tenant(integration_db):
         )
         session.add(property_tag)
 
-        # Add required AuthorizedProperty (required for setup checklist)
-        auth_property = AuthorizedProperty(
-            tenant_id=tenant.tenant_id,
-            property_id="example_property",
-            property_type="website",
-            name="Example Property",
-            identifiers=[{"type": "domain", "value": "example.com"}],
-            publisher_domain="example.com",
-            verification_status="verified",
-        )
-        session.add(auth_property)
+        # The publisher whose stored adagents.json authorizes the tenant (required for the setup checklist)
+        session.flush()
+        seed_verified_website(session, tenant.tenant_id, "example.com", name="Example Property")
 
         # Add GAMInventory records (required for inventory sync status in setup checklist)
         inventory_items = [
@@ -552,7 +535,7 @@ def sample_products(integration_db, sample_tenant):
                 ],
                 targeting_template={"geo_country": {"values": ["US"], "required": False}},
                 delivery_type="guaranteed",
-                properties=publishers_whole(session, sample_tenant["tenant_id"]),
+                publisher_selections=whole_publisher_selections(session, sample_tenant["tenant_id"]),
                 is_custom=False,
                 countries=["US"],
                 measurement=None,
@@ -598,7 +581,7 @@ def sample_products(integration_db, sample_tenant):
                 ],
                 targeting_template={},
                 delivery_type="non_guaranteed",
-                properties=publishers_whole(session, sample_tenant["tenant_id"]),
+                publisher_selections=whole_publisher_selections(session, sample_tenant["tenant_id"]),
                 price_guidance={"floor": 10.0, "p50": 20.0, "p75": 30.0, "p90": 40.0},
                 is_custom=False,
                 countries=["US", "CA"],
@@ -821,9 +804,14 @@ def create_test_product_with_pricing(
             "notes": "MRC-accredited viewability",
         }
 
-    if "properties" not in product_kwargs:
-        # Every publisher of the tenant whole, as a seeded product names them.
-        product_kwargs["properties"] = publishers_whole(session, tenant_id)
+    # The publishers the product sells: explicit ``properties`` selectors, or every publisher
+    # of the tenant whole, as a seeded product names them.
+    selectors = product_kwargs.pop("properties", None)
+    product_kwargs["publisher_selections"] = (
+        whole_publisher_selections(session, tenant_id)
+        if selectors is None
+        else ProductPublisherSelection.from_selectors(tenant_id, selectors)
+    )
 
     # Fix measurement - remove invalid fields
     if "measurement" in product_kwargs and isinstance(product_kwargs["measurement"], dict):
@@ -953,12 +941,10 @@ def add_required_setup_data(session, tenant_id: str):
     from sqlalchemy.orm import attributes
 
     from src.core.database.models import (
-        AuthorizedProperty,
         CurrencyLimit,
         GAMInventory,
         Principal,
         PropertyTag,
-        PublisherPartner,
         Tenant,
         TenantAuthConfig,
     )
@@ -987,33 +973,10 @@ def add_required_setup_data(session, tenant_id: str):
         )
         session.add(auth_config)
 
-    # PublisherPartner
-    stmt_publisher = select(PublisherPartner).filter_by(
-        tenant_id=tenant_id, publisher_domain="fixture-default.example.com"
-    )
-    if not session.scalars(stmt_publisher).first():
-        publisher_partner = PublisherPartner(
-            tenant_id=tenant_id,
-            publisher_domain="fixture-default.example.com",
-            display_name="Fixture Default Publisher",
-            is_verified=True,
-            sync_status="success",
-        )
-        session.add(publisher_partner)
-
-    # AuthorizedProperty
-    stmt_property = select(AuthorizedProperty).filter_by(tenant_id=tenant_id)
-    if not session.scalars(stmt_property).first():
-        authorized_property = AuthorizedProperty(
-            tenant_id=tenant_id,
-            property_id=f"{tenant_id}_property_1",
-            property_type="website",
-            name="Fixture Default Property",
-            identifiers=[{"type": "domain", "value": "fixture-default.example.com"}],
-            publisher_domain="fixture-default.example.com",
-            verification_status="verified",
-        )
-        session.add(authorized_property)
+    # The fixture publisher: its adagents.json stored without a fetch, authorizing this tenant
+    # for one website (the apply half of the ingest service, as a seed stores it).
+    session.flush()
+    seed_verified_website(session, tenant_id, "fixture-default.example.com", name="Fixture Default Property")
 
     # CurrencyLimit
     stmt_currency = select(CurrencyLimit).filter_by(tenant_id=tenant_id, currency_code="USD")

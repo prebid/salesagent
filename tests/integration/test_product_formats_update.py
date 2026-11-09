@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import attributes
 
-from scripts.setup.seed_products import publishers_whole
+from scripts.setup.seed_products import whole_publisher_selections
 from src.core.database.models import Product
 from tests.helpers.adcp_factories import create_test_product
 
@@ -51,7 +51,7 @@ def sample_product(integration_db):
                 if hasattr(product_data.delivery_type, "value")
                 else product_data.delivery_type
             ),
-            properties=publishers_whole(session, "test_tenant"),
+            publisher_selections=whole_publisher_selections(session, "test_tenant"),
         )
         session.add(product)
         session.commit()

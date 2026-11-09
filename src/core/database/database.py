@@ -8,9 +8,9 @@ from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
     AdapterConfig,
-    AuthorizedProperty,
     CurrencyLimit,
     Product,
+    ProductPublisherSelection,
     Tenant,
     TenantAuthConfig,
 )
@@ -128,15 +128,22 @@ def init_db(exit_on_error=False):
                     )
                     db_session.add(currency_limit)
 
-                # Add authorized property for demo
-                db_session.add(
-                    AuthorizedProperty.verified_website(
-                        tenant_id="default",
-                        property_id="default-property",
+                # The demo publisher: a stored adagents.json authorizing the demo tenant for one
+                # website, stored without a fetch (properties come only from a publisher's file).
+                from src.services.publisher_ingest import seed_document, website_document
+
+                db_session.flush()
+                seed_document(
+                    db_session,
+                    "default",
+                    "example.com",
+                    website_document(
+                        new_tenant.agent_url,
                         domain="example.com",
+                        property_id="default_property",
                         name="Default Property",
                         tags=["default"],
-                    )
+                    ),
                 )
 
                 # Add SSO configuration for demo (simulates configured SSO)
@@ -319,8 +326,10 @@ def init_db(exit_on_error=False):
                         format_options=p["format_options"],
                         targeting_template=p["targeting_template"],
                         implementation_config=p.get("implementation_config"),
-                        # Every publisher of the demo tenant whole: its one property above.
-                        properties=[{"publisher_domain": "example.com", "selection_type": "all"}],
+                        # Every publisher of the demo tenant whole: its one publisher above.
+                        publisher_selections=ProductPublisherSelection.from_selectors(
+                            "default", [{"publisher_domain": "example.com", "selection_type": "all"}]
+                        ),
                         delivery_type="guaranteed" if is_fixed else "non_guaranteed",
                     )
                     db_session.add(new_product)

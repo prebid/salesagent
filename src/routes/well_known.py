@@ -24,7 +24,7 @@ decrypt under the deployment KEK) — a structural guard
 that exactly one named function in this module calls
 ``resolve_signing_material``/``_resolve_signing_provider``. The other three
 handlers read only what they already read: ``publishable_at()`` and (for
-adagents.json) the authorized-property records. Each handler is its own
+adagents.json) the properties the stored file at the tenant's own host authorizes. Each handler is its own
 closure over the shared ``(uow, tenant, now)`` — none receives a parameter
 it discards, unlike the three-argument union shape this module used before
 the fourth document.
@@ -162,13 +162,13 @@ def _adagents_json_handler(uow: TrustRootUoWType, tenant: Tenant, now: datetime)
     — request signatures are governed by brand.json's ``jwks_uri``. Both are
     built from the same key set so the two cannot drift.
     """
-    assert uow.authorized_properties is not None
+    assert uow.publishers is not None
     # An adagents.json served at OUR host speaks for the properties on that
     # host — never for properties a publisher hosts elsewhere, whose own
     # adagents.json is the document a verifier consults. ``publisher_domain`` is a
     # hostname (its pattern admits no colon), so the lookup is by the stored hostname,
     # never by ``virtual_host``, which keeps the port.
-    properties = uow.authorized_properties.list_for_publisher_domain(tenant.virtual_host_name)
+    properties = uow.publishers.list_for_publisher_domain(tenant.virtual_host_name)
     if not properties:
         # A host that owns no property publishes no adagents.json (seller-setup.mdx "Who
         # publishes what"). An empty file is not a fallback: with neither sales

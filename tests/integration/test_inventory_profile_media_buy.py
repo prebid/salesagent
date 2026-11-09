@@ -17,6 +17,7 @@ from sqlalchemy import select
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
     InventoryProfile,
+    InventoryProfilePublisherSelection,
     Principal,
 )
 from src.core.resolved_identity import AccountIdentity
@@ -25,6 +26,7 @@ from src.core.tools.media_buy_create import _create_media_buy_impl
 from tests.factories import PricingOptionFactory
 from tests.factories.account import seed_default_account
 from tests.factories.principal import plaintext_token_for
+from tests.factories.publisher import held_selections
 from tests.helpers.adcp_factories import create_test_db_product, create_test_package_request
 from tests.integration.media_buy_helpers import make_media_buy_identity
 from tests.utils.database_helpers import bind_factories_to_session
@@ -79,13 +81,18 @@ async def test_create_media_buy_with_profile_based_product(sample_tenant):
             format_ids=[
                 {"agent_url": "https://test.example.com", "id": "display_300x250"},
             ],
-            publisher_properties=[
-                {
-                    "selection_type": "by_id",
-                    "publisher_domain": "example.com",
-                    "property_ids": ["example_property"],
-                }
-            ],
+            publisher_selections=held_selections(
+                session,
+                InventoryProfilePublisherSelection,
+                sample_tenant["tenant_id"],
+                [
+                    {
+                        "selection_type": "by_id",
+                        "publisher_domain": "example.com",
+                        "property_ids": ["example_com"],
+                    }
+                ],
+            ),
         )
         session.add(profile)
         session.flush()
@@ -181,13 +188,18 @@ async def test_create_media_buy_with_profile_formats(sample_tenant):
                 {"agent_url": "https://test.example.com", "id": "display_300x250"},
                 {"agent_url": "https://test.example.com", "id": "display_728x90"},
             ],
-            publisher_properties=[
-                {
-                    "selection_type": "by_id",
-                    "publisher_domain": "example.com",
-                    "property_ids": ["example_property"],
-                }
-            ],
+            publisher_selections=held_selections(
+                session,
+                InventoryProfilePublisherSelection,
+                sample_tenant["tenant_id"],
+                [
+                    {
+                        "selection_type": "by_id",
+                        "publisher_domain": "example.com",
+                        "property_ids": ["example_com"],
+                    }
+                ],
+            ),
         )
         session.add(profile)
         session.flush()
@@ -274,13 +286,18 @@ async def test_multiple_products_same_profile_in_media_buy(sample_tenant):
             format_ids=[
                 {"agent_url": "https://test.example.com", "id": "display_300x250"},
             ],
-            publisher_properties=[
-                {
-                    "selection_type": "by_id",
-                    "publisher_domain": "example.com",
-                    "property_ids": ["example_property"],
-                }
-            ],
+            publisher_selections=held_selections(
+                session,
+                InventoryProfilePublisherSelection,
+                sample_tenant["tenant_id"],
+                [
+                    {
+                        "selection_type": "by_id",
+                        "publisher_domain": "example.com",
+                        "property_ids": ["example_com"],
+                    }
+                ],
+            ),
         )
         session.add(profile)
         session.flush()
@@ -377,13 +394,18 @@ async def test_media_buy_reflects_profile_updates(sample_tenant):
             format_ids=[
                 {"agent_url": "https://test.example.com", "id": "display_300x250"},
             ],
-            publisher_properties=[
-                {
-                    "selection_type": "by_id",
-                    "publisher_domain": "old.example.com",
-                    "property_ids": ["old_property"],
-                }
-            ],
+            publisher_selections=held_selections(
+                session,
+                InventoryProfilePublisherSelection,
+                sample_tenant["tenant_id"],
+                [
+                    {
+                        "selection_type": "by_id",
+                        "publisher_domain": "old.example.com",
+                        "property_ids": ["old_property"],
+                    }
+                ],
+            ),
         )
         session.add(profile)
         session.flush()
@@ -430,16 +452,15 @@ async def test_media_buy_reflects_profile_updates(sample_tenant):
             "placements": ["new_placement"],
             "include_descendants": True,
         }
-        # The updated profile names the property sample_tenant holds verified; the
+        # The updated profile names the property sample_tenant's publisher authorizes; the
         # original names one it does not. So the buy below succeeds only if the
         # catalogue reads the CURRENT profile (#1845).
-        profile.publisher_properties = [
-            {
-                "selection_type": "by_id",
-                "publisher_domain": "example.com",
-                "property_ids": ["example_property"],
-            }
-        ]
+        profile.publisher_selections = held_selections(
+            session,
+            InventoryProfilePublisherSelection,
+            sample_tenant["tenant_id"],
+            [{"selection_type": "by_id", "publisher_domain": "example.com", "property_ids": ["example_com"]}],
+        )
         session.commit()
 
         # Read as VALUES before any nested session closes this one -- see the note in

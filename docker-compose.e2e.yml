@@ -84,13 +84,6 @@ services:
       # it explicit so a future Dockerfile/env change can't silently flip the
       # boundary to production's lenient extra="ignore".
       ENVIRONMENT: development
-      # Read each publisher partner's adagents.json, as production does. Left unset, a
-      # non-production server verifies every partner without reading the file
-      # (Settings.publisher_auto_verify_allowed), and local-publisher-authorization.feature,
-      # which grades that check on e2e_admin, would grade nothing. Every server in this
-      # stack inherits it: the storyboard server through this anchor, and the per-worker
-      # servers because run_all_tests.sh starts them from this service.
-      PUBLISHER_AUTO_VERIFY: "false"
       SKIP_NGINX: "true"
       SKIP_CRON: "true"
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}

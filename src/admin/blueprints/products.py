@@ -5,6 +5,7 @@ import json
 import logging
 import uuid
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -20,17 +21,26 @@ from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
-from src.core.database.models import PersistedMediaBuyStatus, PricingOption, Product, ProductInventoryMapping, Tenant
+from src.core.database.models import (
+    PersistedMediaBuyStatus,
+    PricingOption,
+    Product,
+    ProductInventoryMapping,
+    ProductPublisherSelection,
+    Tenant,
+)
 from src.core.database.product_pricing import get_product_pricing_options
-from src.core.database.repositories.authorized_property import AuthorizedPropertyRepository
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.principal import PrincipalRepository
 from src.core.database.repositories.product import offer_refusal
+from src.core.database.repositories.publisher import PublisherRepository
 from src.core.format_resolver import linked_format_contract
 from src.core.format_satisfaction import refuse_outside_common_intersection
 from src.core.helpers.publisher_property_helpers import (
     STALE_SELECTION_MESSAGE,
     RenderedSelection,
+    SelectableProperty,
+    authorized_selectors,
     id_selection,
     judge_selection_save,
     kept_choices,
@@ -39,7 +49,13 @@ from src.core.helpers.publisher_property_helpers import (
     publisher_tag_selection,
     selection_digest,
 )
-from src.core.publisher_format_catalog import format_declarations_type, refuse_options_under_agent_host
+from src.core.publisher_format_catalog import (
+    PublisherCatalog,
+    format_declarations_type,
+    format_option_refusal,
+    option_key,
+    stored_declaration,
+)
 from src.core.schemas import Format
 from src.services.gam_product_config_service import GAMProductConfigService
 
@@ -116,7 +132,14 @@ def _parse_format_entries(formats_parsed: list[dict]) -> list[dict]:
     return entries
 
 
-def _parse_authored_format_options(raw: str | None, agent_host: str) -> list[dict] | None:
+#: The refusal of a publisher-backed format option that carries more than its key.
+PUBLISHER_OPTION_KEY_ONLY = (
+    "A format option naming a publisher_domain references that publisher's adagents.json formats[] entry, "
+    "and carries only publisher_domain and format_option_id: the publisher's catalog supplies the rest."
+)
+
+
+def _parse_authored_format_options(raw: str | None) -> list[dict] | None:
     """The canonical arm of core/product.json's root anyOf, as the operator authored it.
 
     Validated at AUTHOR time against the pinned discriminated union
@@ -134,9 +157,10 @@ def _parse_authored_format_options(raw: str | None, agent_host: str) -> list[dic
     deprecated arm is satisfied by its KEY alone -- an empty array asserts a declaration
     that is not there.
 
-    A declaration naming *agent_host* (``Tenant.virtual_host_name``) as its publisher is
-    refused: this agent publishes no format options, so no buyer could resolve it (see
-    ``src/core/publisher_format_catalog.py``).
+    A declaration naming a ``publisher_domain`` references that publisher's catalog entry and
+    is stored as its key alone (``core/product-format-declaration.json``: the pair is the
+    identity); anything more is refused. Whether the key resolves is asked once the
+    selection is known (:func:`_refuse_unresolved_format_options`).
     """
     if not raw or not raw.strip():
         return None
@@ -146,16 +170,40 @@ def _parse_authored_format_options(raw: str | None, agent_host: str) -> list[dic
         raise ValueError(f"format_options is not valid JSON: {e}") from e
     if not document:
         return None
+    if not isinstance(document, list):
+        raise ValueError("format_options must be a JSON array of declarations")
+    product_local = [d for d in document if not (isinstance(d, dict) and option_key(d))]
+    for declaration in document:
+        if declaration not in product_local and (
+            set(declaration) != {"publisher_domain", "format_option_id"} or not declaration["format_option_id"]
+        ):
+            raise ValueError(PUBLISHER_OPTION_KEY_ONLY)
     try:
-        format_declarations_type().validate_python(document)
+        if product_local:
+            format_declarations_type().validate_python(product_local)
     except ValidationError as e:
         first = e.errors()[0]
         location = "/".join(str(part) for part in first["loc"]) or "format_options"
         raise ValueError(
             f"format_options is not a valid canonical format declaration ({location}: {first['msg']})"
         ) from e
-    refuse_options_under_agent_host(document, agent_host)
-    return document
+    return [dict(stored_declaration(declaration)) for declaration in document]
+
+
+def _publisher_catalog(db_session, tenant_id: str) -> PublisherCatalog:
+    """What the tenant's publishers authorize now: what a form offers and a save is checked against."""
+    return PublisherRepository(db_session, tenant_id).catalog(datetime.now(UTC))
+
+
+def _refuse_unresolved_format_options(declarations, selectors: list[dict], catalog: PublisherCatalog) -> None:
+    """``ValueError`` when a publisher-backed format option of a product selling *selectors* does not resolve.
+
+    The rule ``get_products`` applies (``offer_refusal``): a product saved with such an option
+    would not be offered, so the form refuses it instead.
+    """
+    refusal = format_option_refusal(declarations, authorized_selectors(selectors, catalog.refs), catalog)
+    if refusal:
+        raise ValueError(f"format_options do not resolve: {refusal}")
 
 
 def _refuse_a_product_with_no_format_arm(
@@ -631,8 +679,8 @@ def list_products(tenant_id):
                 }
 
             # What a buyer is sold is resolved against these, so the page marks a product
-            # get_products leaves out (#1845): it names no verified publisher.
-            verified_properties = AuthorizedPropertyRepository(db_session, tenant_id).list_refs()
+            # get_products leaves out (#1845).
+            catalog = _publisher_catalog(db_session, tenant_id)
 
             # Convert products to dict format for template
             products_list = []
@@ -702,7 +750,7 @@ def list_products(tenant_id):
                     ),
                     "inventory_profile": inventory_profile_dict,
                     "not_offered_reason": offer_refusal(
-                        product, product.resolve_publisher_properties(verified_properties)
+                        product, product.resolve_publisher_properties(catalog.refs), catalog
                     ),
                     # Dynamic product fields
                     "is_dynamic": getattr(product, "is_dynamic", False),
@@ -724,15 +772,14 @@ def list_products(tenant_id):
         return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
 
 
-def _offered_and_known(db_session, tenant_id: str) -> tuple[list, list]:
-    """The seller's verified properties, which the edit page offers, and all of them, pending included."""
-    repository = AuthorizedPropertyRepository(db_session, tenant_id)
-    return repository.list_refs(), repository.list_refs(include_unverified=True)
+def _own_selectors(product: Product) -> list[dict]:
+    """The selectors the product itself stores, whatever profile it links."""
+    return [row.as_selector() for row in product.publisher_selections]
 
 
 def _selection_digest(product: Product) -> str:
-    """The digest of the column a product's selection is stored in (``selection_digest``)."""
-    return selection_digest(product.properties)
+    """The digest of the product's own stored selection (``selection_digest``)."""
+    return selection_digest(_own_selectors(product))
 
 
 #: The form field holding the choices of each property mode that builds selectors. ``full``
@@ -744,14 +791,15 @@ _SELECTION_FIELDS = {
 }
 
 
-def _selectors_from_product_form(db_session, tenant_id: str, property_mode: str) -> tuple[list[dict], str | None]:
+def _selectors_from_product_form(
+    authorized: list[SelectableProperty] | tuple[SelectableProperty, ...], property_mode: str
+) -> tuple[list[dict], str | None]:
     """The product form's ``tags`` (``domain:tag``) or ``property_ids`` choices as selectors, or why not.
 
-    Checked against the seller's VERIFIED properties by the validators the inventory-profile
-    form uses (``publisher_property_helpers.tag_selection`` / ``id_selection``), because a
-    selection only a pending property backs is one ``get_products`` would not sell.
+    Checked against the *authorized* properties by the validators the inventory-profile form
+    uses (``publisher_property_helpers.tag_selection`` / ``id_selection``), because a
+    selection no authorized property backs is one ``get_products`` would not sell.
     """
-    authorized = AuthorizedPropertyRepository(db_session, tenant_id).list_refs()
     choices = request.form.getlist(_SELECTION_FIELDS[property_mode])
     if property_mode == "tags":
         return publisher_tag_selection(choices, authorized)
@@ -779,9 +827,9 @@ def _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_d
     )
 
     with get_db_session() as db_session:
-        # The verified properties: a pending one cannot be selected until its publisher is seen
-        # to authorize this agent, so it is not offered.
-        properties_list = AuthorizedPropertyRepository(db_session, tenant_id).list_refs()
+        # The properties the publishers authorize now; nothing else can be selected.
+        catalog = _publisher_catalog(db_session, tenant_id)
+        properties_list = catalog.refs
 
         # Load property tags
         property_tags = db_session.scalars(
@@ -815,6 +863,7 @@ def _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_d
                 inventory_synced=inventory_synced,
                 formats=get_creative_formats(tenant_id=tenant_id),
                 authorized_properties=properties_list,
+                publisher_format_options=list(catalog.options.values()),
                 property_tags=property_tags,
                 currencies=currencies,
                 signals_agents=signals_agents,
@@ -832,6 +881,7 @@ def _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_d
                 adapter_type=adapter_type,
                 formats=formats,
                 authorized_properties=properties_list,
+                publisher_format_options=list(catalog.options.values()),
                 property_tags=property_tags,
                 currencies=currencies,
                 principals=principals_list,
@@ -910,15 +960,24 @@ def add_product(tenant_id):
                 # contract the product will be SERVED, so a product linked to a profile
                 # that declares formats is not made to author declarations its profile
                 # then overrides.
+                catalog = _publisher_catalog(db_session, tenant_id)
                 try:
-                    format_options = _parse_authored_format_options(
-                        form_data.get("format_options"), tenant.virtual_host_name
-                    )
+                    format_options = _parse_authored_format_options(form_data.get("format_options"))
                     # ``None`` for the legacy arm, literally: a product created here HAS no
                     # legacy arm, and its canonical declarations come from the product or
                     # its profile, never from a legacy-only profile's ``format_ids``.
-                    contract = linked_format_contract(profile=profile, format_options=format_options, format_ids=None)
-                    _refuse_a_product_with_no_format_arm(None, contract.format_options)
+                    contract = linked_format_contract(
+                        profile=profile,
+                        format_options=format_options,
+                        format_ids=None,
+                        publisher_options=catalog.options,
+                    )
+                    # The arm as AUTHORED: a publisher-backed option that does not resolve is
+                    # an authored option, refused with its own reason once the selection is
+                    # known (``_refuse_unresolved_format_options``).
+                    _refuse_a_product_with_no_format_arm(
+                        None, (profile.format_options if profile else None) or format_options
+                    )
                 except ValueError as e:
                     flash(str(e), "error")
                     return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
@@ -1164,11 +1223,20 @@ def add_product(tenant_id):
                 if property_mode not in _SELECTION_FIELDS:
                     flash(f"Unknown property selection mode: {property_mode}", "error")
                     return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
-                selectors, refusal = _selectors_from_product_form(db_session, tenant_id, property_mode)
+                selectors, refusal = _selectors_from_product_form(catalog.refs, property_mode)
                 if refusal:
                     flash(refusal, "error")
                     return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
-                product_kwargs["properties"] = selectors
+                product_kwargs["publisher_selections"] = ProductPublisherSelection.from_selectors(tenant_id, selectors)
+                try:
+                    _refuse_unresolved_format_options(
+                        (profile.format_options if profile else None) or format_options,
+                        profile.stored_publisher_properties if profile else selectors,
+                        catalog,
+                    )
+                except ValueError as e:
+                    flash(str(e), "error")
+                    return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
 
                 # Handle dynamic product fields
                 is_dynamic = form_data.get("is_dynamic") in [True, "true", "on", 1, "1"]
@@ -1229,7 +1297,6 @@ def add_product(tenant_id):
                 # The contract the product is SERVED, whichever arm supplies it: a linked
                 # profile announces its declarations on the product's behalf.
                 try:
-                    refuse_options_under_agent_host(product.format_contract.format_options, tenant.virtual_host_name)
                     refuse_outside_common_intersection(product)
                 except ValueError as e:
                     db_session.rollback()
@@ -1346,9 +1413,7 @@ def edit_product(tenant_id, product_id):
     if request.method == "POST":
         if format_options_submitted:
             try:
-                authored_format_options = _parse_authored_format_options(
-                    request.form.get("format_options"), tenant.virtual_host_name
-                )
+                authored_format_options = _parse_authored_format_options(request.form.get("format_options"))
             except ValueError as e:
                 flash(str(e), "error")
                 return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
@@ -1365,6 +1430,7 @@ def edit_product(tenant_id, product_id):
             if not product:
                 flash("Product not found", "error")
                 return redirect(url_for("products.list_products", tenant_id=tenant_id))
+            catalog = _publisher_catalog(db_session, tenant_id)
 
             if request.method == "POST":
                 # Sanitize form data
@@ -1430,13 +1496,15 @@ def edit_product(tenant_id, product_id):
 
                     attributes.flag_modified(product, "format_options")
 
-                # The anyOf, and the served contract's options under the agent host, now that both arms
-                # and the profile link carry their post-edit values: the contract the product
-                # will be served, so a linked profile's declarations count.
+                # The anyOf, now that both arms and the profile link carry their post-edit
+                # values: the contract the product will be served, so a linked profile's
+                # declarations count.
                 try:
-                    contract = product.format_contract
-                    _refuse_a_product_with_no_format_arm(list(contract.format_ids), contract.format_options)
-                    refuse_options_under_agent_host(contract.format_options, tenant.virtual_host_name)
+                    linked = product.inventory_profile if product.inventory_profile_id else None
+                    _refuse_a_product_with_no_format_arm(
+                        list(product.format_contract.format_ids),
+                        (linked.format_options if linked else None) or product.format_options,
+                    )
                 except ValueError as e:
                     flash(str(e), "error")
                     return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
@@ -1482,17 +1550,30 @@ def edit_product(tenant_id, product_id):
                     # what the page rendered: the boxes cannot express every stored selection, so
                     # writing them back would rewrite what the save never touched.
                     if request.form.getlist(_SELECTION_FIELDS[property_mode]):
-                        selectors, refusal = _selectors_from_product_form(db_session, tenant_id, property_mode)
+                        selectors, refusal = _selectors_from_product_form(catalog.refs, property_mode)
                         if refusal:
                             flash(refusal, "error")
                             return redirect(
                                 url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id)
                             )
                         # A stored choice this section shows no box for is kept (kept_choices).
-                        verified, known = _offered_and_known(db_session, tenant_id)
-                        kept = kept_choices(product.properties, verified, known, property_mode)
-                        product.properties = kept_selectors(selectors, kept)
-                        attributes.flag_modified(product, "properties")
+                        kept = kept_choices(_own_selectors(product), catalog.refs, property_mode)
+                        product.publisher_selections = ProductPublisherSelection.from_selectors(
+                            tenant_id, kept_selectors(selectors, kept)
+                        )
+
+                # A publisher-backed format option must resolve for the product as saved: its
+                # declarations and its selection (its profile's, when it links one).
+                try:
+                    profile = product.inventory_profile if product.inventory_profile_id else None
+                    _refuse_unresolved_format_options(
+                        (profile.format_options if profile else None) or product.format_options,
+                        product.stored_publisher_properties,
+                        catalog,
+                    )
+                except ValueError as e:
+                    flash(str(e), "error")
+                    return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
 
                 # No ``line_item_type`` is read here. The GAM form does not submit one -- no
                 # template in this repository declares a field by that name -- so the branches
@@ -1862,18 +1943,18 @@ def edit_product(tenant_id, product_id):
             principals = PrincipalRepository(db_session, tenant_id).list_all()
             principals_list = [{"principal_id": p.principal_id, "name": p.name} for p in principals]
 
-            # Offer the VERIFIED properties and pre-select what the product sells: its selectors
-            # resolved against them, as list_products and get_products resolve them.
-            authorized_properties_list, known_properties = _offered_and_known(db_session, tenant_id)
+            # Offer the authorized properties and pre-select what the product sells: its
+            # selectors resolved against them, as list_products and get_products resolve them.
+            authorized_properties_list = catalog.refs
             rendered_selection = RenderedSelection(
                 product_form_fields(
-                    product.resolve_publisher_properties(authorized_properties_list), authorized_properties_list
+                    product.resolve_publisher_properties(authorized_properties_list), list(authorized_properties_list)
                 ),
                 _selection_digest(product),
             )
             # What each section shows disabled: the stored choices it has no box for.
             kept_by_mode = {
-                mode: kept_choices(product.properties, authorized_properties_list, known_properties, mode)
+                mode: kept_choices(_own_selectors(product), authorized_properties_list, mode)
                 for mode in ("tags", "property_ids")
             }
 
@@ -1932,6 +2013,7 @@ def edit_product(tenant_id, product_id):
                     inventory_profiles=inventory_profiles,
                     principals=principals_list,
                     authorized_properties=authorized_properties_list,
+                    publisher_format_options=list(catalog.options.values()),
                     rendered_selection=rendered_selection,
                     kept_by_mode=kept_by_mode,
                 )
@@ -1948,6 +2030,7 @@ def edit_product(tenant_id, product_id):
                     currencies=currencies,
                     principals=principals_list,
                     authorized_properties=authorized_properties_list,
+                    publisher_format_options=list(catalog.options.values()),
                     rendered_selection=rendered_selection,
                     kept_by_mode=kept_by_mode,
                     **_legacy_format_facts(product),

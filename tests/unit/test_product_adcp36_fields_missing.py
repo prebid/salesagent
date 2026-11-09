@@ -23,7 +23,7 @@ from src.core.database.models import PricingOption
 from src.core.database.models import Product as ProductModel
 from src.core.product_conversion import convert_product_model_to_schema, default_reporting_capabilities
 from src.core.schemas import Product as ProductSchema
-from tests.factories.product import ONE_AUTHORIZED_PROPERTY
+from tests.factories.product import ONE_AUTHORIZED_PROPERTY, default_publisher_properties
 from tests.helpers.adcp_factories import create_test_db_product
 
 ADCP_36_PRODUCT_FIELDS = {
@@ -139,6 +139,7 @@ def _make_db_product_for_conversion(**overrides) -> ProductModel:
     """
     product = create_test_db_product(
         tenant_id="conv_test",
+        properties=default_publisher_properties(),
         product_id="conv_test_001",
         name="Conversion Test",
         delivery_type="non_guaranteed",

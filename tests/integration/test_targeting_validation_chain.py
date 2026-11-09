@@ -15,7 +15,7 @@ from decimal import Decimal
 
 import pytest
 
-from scripts.setup.seed_products import publishers_whole
+from scripts.setup.seed_products import whole_publisher_selections
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Product
 from src.core.exceptions import AdCPValidationError
@@ -52,7 +52,7 @@ def targeting_tenant(integration_db):
             delivery_type="guaranteed",
             targeting_template={},
             implementation_config={},
-            properties=publishers_whole(session, TENANT_ID),
+            publisher_selections=whole_publisher_selections(session, TENANT_ID),
         )
         session.add(product)
         session.flush()

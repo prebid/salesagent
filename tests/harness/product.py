@@ -53,10 +53,15 @@ from tests.harness._mixins import ProductMixin
 from tests.harness.admin_client import AdminOperatorMixin
 from tests.harness.database_faults import DatabaseFaultMixin
 from tests.harness.egress import EgressHatchMixin
+from tests.harness.publisher_authorization import PublisherAdagentsMixin
 
 
-class ProductEnv(AdminOperatorMixin, DatabaseFaultMixin, ProductMixin, IntegrationEnv):
+class ProductEnv(PublisherAdagentsMixin, AdminOperatorMixin, DatabaseFaultMixin, ProductMixin, IntegrationEnv):
     """Integration test environment for _get_products_impl.
+
+    A property is authorized only by a publisher's stored adagents.json: a scenario writes
+    what each publisher serves and the seller ingests it in this process on every transport
+    (``PublisherAdagentsMixin.ingest_in_runner``), into the database the buyer's transport reads.
 
     Only mocks external services (policy, dynamic variants,
     AI ranking, property list resolution). Everything else is real:
@@ -74,6 +79,8 @@ class ProductEnv(AdminOperatorMixin, DatabaseFaultMixin, ProductMixin, Integrati
         set_ranking_disabled()           -- disable AI ranking
         call_impl(brief, **kw)           -- call _get_products_impl
     """
+
+    ingest_in_runner = True
 
     # Dispatch declaration: the base owns call_mcp/call_a2a.
     MCP_TOOL = "get_products"

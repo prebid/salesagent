@@ -45,7 +45,8 @@ from adcp.types.domains.enums.channels import MediaChannel
 
 from src.adapters.mock_ad_server import MockAdServer
 from tests.factories import ProductFactory
-from tests.factories.core import PublisherPartnerFactory, set_adapter_type
+from tests.factories.core import set_adapter_type
+from tests.factories.publisher import authorize_publishers
 from tests.harness._base import IntegrationEnv
 
 
@@ -53,7 +54,7 @@ def _tenant_with_a_portfolio(env: IntegrationEnv) -> tuple:
     """Seed a tenant that has a ``media_buy.portfolio`` at all, then return it.
 
     ``primary_channels`` lives on ``Portfolio``, and ``Portfolio`` is only emitted
-    for a tenant with at least one real ``PublisherPartner`` row: ``publisher_domains``
+    for a tenant with at least one publisher whose stored adagents.json authorizes it: ``publisher_domains``
     is REQUIRED with ``minItems: 1`` there (pinned v3.1.1
     get-adcp-capabilities-response.json), so ``_get_adcp_capabilities_impl`` omits the
     whole section rather than fabricate a ``<subdomain>.example.com`` domain the seller
@@ -68,7 +69,7 @@ def _tenant_with_a_portfolio(env: IntegrationEnv) -> tuple:
     (tests/bdd/steps/domain/uc010_capabilities.py), and for the same reason.
     """
     tenant, principal = env.setup_default_data()
-    PublisherPartnerFactory(tenant=tenant)
+    authorize_publishers(tenant, "partner.example.com")
     env._commit_factory_data()
     return tenant, principal
 

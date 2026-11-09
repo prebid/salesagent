@@ -599,23 +599,18 @@ def describe_seller(identity: PublicIdentity) -> SellerCapabilities:
     )
     try:
         with TrustRootUoW(tenant_id) as uow:
-            tenant_config = uow.tenant_config
-            authorized_properties = uow.authorized_properties
-            assert tenant_config is not None and authorized_properties is not None
+            publishers = uow.publishers
+            assert publishers is not None
 
             def _resolve_publisher_domains() -> list[PublisherDomain]:
                 # The publishers this seller is authorized to represent
                 # (get-adcp-capabilities-response.json portfolio.publisher_domains), each of
-                # which a buyer checks at https://<domain>/.well-known/adagents.json. Two
-                # tables record a publisher that has verified the seller, and neither is a
-                # superset of the other, so both are read and unioned. Unverified rows are
-                # left out: claiming a publisher whose authorization was never seen sends the
-                # buyer to a file that does not list this agent.
-                stored = set(authorized_properties.list_verified_publisher_domains())
-                stored.update(
-                    partner.publisher_domain for partner in tenant_config.list_publisher_partners(verified=True)
-                )
-                return _publisher_domains_on_wire(stored, advisories)
+                # which a buyer checks at https://<domain>/.well-known/adagents.json. Those
+                # whose stored file authorizes this agent now: fresh, with a property in
+                # effect -- the rule get_products sells by (publisher_format_catalog.
+                # authorized_properties), so the portfolio names exactly the publishers a
+                # product may name.
+                return _publisher_domains_on_wire(publishers.authorizing_domains(datetime.now(UTC)), advisories)
 
             publisher_domains = _resolve_or_degrade(
                 advisories, "publisher domains", _resolve_publisher_domains, default=[]

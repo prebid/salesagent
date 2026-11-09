@@ -284,9 +284,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration/test_media_buy_v3.py", "mb_creatives"),
     ("tests/integration/test_media_buy_v3.py", "test_unsupported_currency_rejected"),
     ("tests/integration/test_media_buy_v3.py", "test_ownership_mismatch_rejected"),
-    # tests/integration/test_mock_adapter_publisher_sync.py
-    ("tests/integration/test_mock_adapter_publisher_sync.py", "mock_tenant"),
-    ("tests/integration/test_mock_adapter_publisher_sync.py", "publisher_partner"),
     # tests/integration/test_mock_ai_per_creative.py
     ("tests/integration/test_mock_ai_per_creative.py", "mock_adapter"),
     # tests/integration/test_pricing_models_integration.py
@@ -451,10 +448,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/admin/test_accounts_blueprint.py", "test_tenant"),
     ("tests/admin/test_accounts_blueprint.py", "test_list_page_shows_created_account"),
     ("tests/admin/test_accounts_blueprint.py", "test_suspend_account"),
-    # tests/admin/test_authorized_properties.py
-    ("tests/admin/test_authorized_properties.py", "test_tenant"),
-    ("tests/admin/test_authorized_properties.py", "test_list_page_shows_existing_property"),
-    ("tests/admin/test_authorized_properties.py", "test_delete_property_removes_from_db"),
     # tests/admin/test_creatives_blueprint.py
     ("tests/admin/test_creatives_blueprint.py", "test_tenant"),
     ("tests/admin/test_creatives_blueprint.py", "_create_creative"),
@@ -650,13 +643,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/admin/test_accounts_blueprint.py", "test_list_page_shows_created_account"),
     ("tests/admin/test_accounts_blueprint.py", "test_suspend_account"),
     ("tests/admin/test_accounts_blueprint.py", "test_tenant"),
-    ("tests/admin/test_authorized_properties.py", "test_create_property_missing_required_fields_redirects"),
-    ("tests/admin/test_authorized_properties.py", "test_create_property_saves_to_db"),
-    ("tests/admin/test_authorized_properties.py", "test_create_tag_missing_fields_redirects_without_creation"),
-    ("tests/admin/test_authorized_properties.py", "test_create_tag_saves_to_db"),
-    ("tests/admin/test_authorized_properties.py", "test_delete_property_removes_from_db"),
-    ("tests/admin/test_authorized_properties.py", "test_list_page_shows_existing_property"),
-    ("tests/admin/test_authorized_properties.py", "test_tenant"),
     ("tests/admin/test_creatives_blueprint.py", "_create_creative"),
     ("tests/admin/test_creatives_blueprint.py", "test_approve_creates_review_record"),
     ("tests/admin/test_creatives_blueprint.py", "test_approve_creative_sets_status_approved"),
@@ -1052,12 +1038,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_media_buy_v3.py", "test_unsupported_currency_rejected"),
     ("tests/integration/test_minimum_spend_validation.py", "setup_test_data"),
     ("tests/integration/test_minimum_spend_validation.py", "test_no_minimum_when_not_set"),
-    ("tests/integration/test_mock_adapter_publisher_sync.py", "mock_tenant"),
-    ("tests/integration/test_mock_adapter_publisher_sync.py", "publisher_partner"),
-    ("tests/integration/test_mock_adapter_publisher_sync.py", "test_sync_creates_authorized_property"),
-    ("tests/integration/test_mock_adapter_publisher_sync.py", "test_sync_creates_property_tag"),
-    ("tests/integration/test_mock_adapter_publisher_sync.py", "test_sync_is_idempotent"),
-    ("tests/integration/test_mock_adapter_publisher_sync.py", "test_sync_property_has_verified_status"),
     ("tests/integration/test_mock_ai_per_creative.py", "mock_adapter"),
     ("tests/integration/test_pricing_helpers.py", "test_auto_generated_product_id"),
     ("tests/integration/test_pricing_helpers.py", "test_create_auction_product"),

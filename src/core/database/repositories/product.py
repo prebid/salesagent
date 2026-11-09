@@ -8,19 +8,16 @@ is set at construction time and injected into all queries automatically.
 from __future__ import annotations
 
 import logging
-from collections.abc import Collection, Iterable, Sequence
+from collections.abc import Collection, Iterable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
-from src.core.database.models import PricingOption, Product
+from src.core.database.models import InventoryProfile, PricingOption, Product, Publisher, Tenant
 from src.core.format_satisfaction import refuse_outside_common_intersection
-from src.core.publisher_format_catalog import agent_host_refusal
-
-if TYPE_CHECKING:
-    from src.core.helpers.publisher_property_helpers import SelectableProperty
+from src.core.publisher_format_catalog import PublisherCatalog, format_option_refusal
 
 logger = logging.getLogger(__name__)
 
@@ -33,13 +30,11 @@ class OfferedProduct:
     publisher_properties: list[dict]
 
 
-def offered_products(
-    products: Iterable[Product], authorized_properties: Sequence[SelectableProperty]
-) -> list[OfferedProduct]:
-    """The *products* buyers are offered: each naming a publisher of the *authorized_properties*.
+def offered_products(products: Iterable[Product], catalog: PublisherCatalog) -> list[OfferedProduct]:
+    """The *products* buyers are offered: each naming a publisher that authorizes this agent.
 
-    *authorized_properties* are the tenant's VERIFIED properties
-    (``AuthorizedPropertyRepository.list_refs``). AdCP 3.2.7 ``core/product.json`` requires
+    *catalog* is what the tenant's publishers' stored adagents.json files authorize now
+    (``PublisherRepository.catalog``). AdCP 3.2.7 ``core/product.json`` requires
     ``publisher_properties`` with ``minItems: 1``, and each entry names the publisher whose
     adagents.json a buyer verifies the seller against
     (``governance/property/authorized-properties.mdx``), so a product resolving to none has no
@@ -50,8 +45,8 @@ def offered_products(
     """
     offered = []
     for product in products:
-        publisher_properties = product.resolve_publisher_properties(authorized_properties)
-        refusal = offer_refusal(product, publisher_properties)
+        publisher_properties = product.resolve_publisher_properties(catalog.refs)
+        refusal = offer_refusal(product, publisher_properties, catalog)
         if refusal is None:
             offered.append(OfferedProduct(product, publisher_properties))
         else:
@@ -59,26 +54,22 @@ def offered_products(
     return offered
 
 
-def offer_refusal(product: Product, publisher_properties: list[dict]) -> str | None:
+def offer_refusal(product: Product, publisher_properties: list[dict], catalog: PublisherCatalog) -> str | None:
     """Why buyers are not offered *product*, or ``None`` when they are.
 
     *publisher_properties* is what :meth:`Product.resolve_publisher_properties` resolved for it.
-    A product is also withheld when a format option names the agent host as its publisher:
-    that option names a catalog no file publishes, so no buyer can resolve it, and
-    ``core/product.json`` ``format_options`` makes an unresolved reference "fail closed"
-    (``src/core/publisher_format_catalog.py``).
+    A product is also withheld when a format option it references by
+    ``{publisher_domain, format_option_id}`` does not resolve against a fresh publisher's
+    ``formats[]`` it sells: ``core/product.json`` ``format_options`` makes an unresolved
+    publisher format-option reference "fail closed" (``format_option_refusal``).
     """
     if not publisher_properties:
         return (
-            "its property selection names no publisher this seller holds a verified authorized property of. "
-            "Add and verify the publisher's properties under Authorized Properties."
+            "its property selection names no property a publisher's adagents.json authorizes this seller for. "
+            "Add the publisher under Publishers and refresh it."
         )
-    declarations = product.format_contract.format_options or ()
-    # The tenant is read only for a contract with a publisher-scoped option: a dynamic variant
-    # reaches here detached (#2291), and product-local declarations name no host to compare.
-    if not any(declaration.get("publisher_domain") for declaration in declarations):
-        return None
-    return agent_host_refusal(declarations, product.tenant.virtual_host_name)
+    authored = product.inventory_profile.format_options if product.inventory_profile_id else None
+    return format_option_refusal(authored or product.format_options, publisher_properties, catalog)
 
 
 class ProductRepository:
@@ -168,14 +159,17 @@ class ProductRepository:
     def list_for_offer(self, product_ids: Collection[str] | None = None) -> list[Product]:
         """The tenant's products, or only *product_ids*, loaded for :func:`offered_products` and conversion.
 
-        Pricing options, inventory profile and tenant are loaded eagerly, ordered by product_id.
+        Pricing options, publisher selections (the product's and its inventory profile's),
+        and the tenant with its publishers' format catalogs are loaded eagerly, ordered by
+        product_id.
         """
         stmt = (
             select(Product)
             .options(
                 selectinload(Product.pricing_options),
-                selectinload(Product.inventory_profile),
-                selectinload(Product.tenant),
+                selectinload(Product.publisher_selections),
+                selectinload(Product.inventory_profile).selectinload(InventoryProfile.publisher_selections),
+                selectinload(Product.tenant).selectinload(Tenant.publishers).selectinload(Publisher.format_options),
             )
             .where(Product.tenant_id == self._tenant_id)
             .order_by(Product.product_id)
@@ -219,8 +213,14 @@ class ProductRepository:
             raise ValueError(
                 f"Tenant mismatch: product.tenant_id={product.tenant_id!r} != repository tenant_id={self._tenant_id!r}"
             )
-        refuse_outside_common_intersection(product)
+        # Added before the check, so the pending product reads its tenant's publishers' format
+        # catalogs (``Product.format_contract``); a refused product leaves the session again.
         self._session.add(product)
+        try:
+            refuse_outside_common_intersection(product)
+        except ValueError:
+            self._session.expunge(product)
+            raise
         self._session.flush()
         return product
 

@@ -27,7 +27,7 @@ from typing import Any
 
 from bs4 import BeautifulSoup
 
-from src.core.database.models import AuthorizedProperty, InventoryProfile, Product, Tenant
+from src.core.database.models import InventoryProfile, Product, PublisherProperty, Tenant
 from tests.harness.admin_client import AdminResponse
 from tests.harness.product import ProductEnv
 
@@ -202,25 +202,19 @@ class AdminInventoryProfileEnv(ProductEnv):
         self.open_profile_edit_form(profile_id)
         return self.save_open_form(f"Renamed {profile_id}")
 
-    def verify_property(self, property_id: str) -> None:
-        """Mark the seller's property *property_id* verified, as the verification service does."""
-        row = self._stored(AuthorizedProperty, property_id=property_id)
-        assert row is not None, f"no authorized property {property_id!r}"
-        row.verification_status = "verified"
-        self.get_session().commit()
-
     def migrated_selection(
         self, *, property_tags: list[str] | None = None, property_ids: list[str] | None = None
     ) -> list[dict]:
         """The selectors revision 3c38b1ee241f converts a legacy selection to, over this tenant's properties.
 
-        The migration's own conversion, run on the authorized properties the scenario stored,
-        so a scenario grades the product the upgrade leaves behind. A selection the migration
-        would refuse fails here, as the upgrade would.
+        The migration's own conversion, run on the properties the scenario's publishers'
+        files authorize, so a scenario grades the product the upgrade leaves behind. A
+        selection the migration would refuse fails here, as the upgrade would.
         """
+        self.get_session().expire_all()
         rows = [
             (row.property_id, row.publisher_domain, row.tags or [])
-            for row in self.query(AuthorizedProperty, tenant_id=self.tenant_id)
+            for row in self.query(PublisherProperty, tenant_id=self.tenant_id)
         ]
         selectors = _legacy_selection_migration().legacy_selectors(property_tags, property_ids, rows)
         assert selectors, f"the migration refuses this selection: it matches no authorized property ({rows})"

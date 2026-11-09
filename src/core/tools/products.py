@@ -7,6 +7,7 @@ shared implementation pattern from CLAUDE.md.
 import logging
 import time
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from typing import Any, cast
 
 from adcp.types import PropertyListReference
@@ -390,9 +391,9 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
     from src.core.database.repositories.uow import ProductUoW
 
     with ProductUoW(tenant.tenant_id) as uow:
-        assert uow.authorized_properties is not None
+        assert uow.publishers is not None
         # Once per request: dynamic variants resolve their selectors against these too (#1845).
-        authorized_properties = uow.authorized_properties.list_refs()
+        publisher_catalog = uow.publishers.catalog(datetime.now(UTC))
 
         # Convert the offered database Product models to AdCP Product schema
         products = []
@@ -492,7 +493,7 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
         if dynamic_variants:
             # Convert Product models to Product schemas for response
 
-            for offered_variant in offered_products(dynamic_variants, authorized_properties):
+            for offered_variant in offered_products(dynamic_variants, publisher_catalog):
                 products.append(
                     convert_product_model_to_schema(
                         offered_variant.product,

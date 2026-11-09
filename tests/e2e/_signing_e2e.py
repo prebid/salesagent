@@ -350,7 +350,6 @@ def drop_tenant(live_server: dict, tenant_id: str) -> None:
     from src.core.database.models import (
         AdapterConfig,
         AuditLog,
-        AuthorizedProperty,
         Context,
         Creative,
         CreativeAssignment,
@@ -360,6 +359,7 @@ def drop_tenant(live_server: dict, tenant_id: str) -> None:
         Principal,
         Product,
         PropertyTag,
+        Publisher,
         PushNotificationConfig,
         SigningKey,
         Tenant,
@@ -394,7 +394,7 @@ def drop_tenant(live_server: dict, tenant_id: str) -> None:
             PropertyTag,
             AdapterConfig,
             SigningKey,
-            AuthorizedProperty,
+            Publisher,
             AuditLog,
             Tenant,
         ):
@@ -533,7 +533,8 @@ def provisioned_trust_root_tenant(
     The row is removed at both ends: ``virtual_host`` is host-routing state
     shared by the whole e2e session.
     """
-    from tests.factories import AuthorizedPropertyFactory, PrincipalFactory, SigningKeyFactory, TenantFactory
+    from tests.factories import PrincipalFactory, SigningKeyFactory, TenantFactory
+    from tests.factories.publisher import authorize_properties
 
     drop_tenant(live_server, tenant_id)
     free_host(live_server, host)
@@ -545,9 +546,10 @@ def provisioned_trust_root_tenant(
                 virtual_host=host,
             )
             key = SigningKeyFactory(tenant=tenant, kid=f"adcp-{slug}-key") if mint_key else None
-            # publisher_domain is a hostname (its pattern admits no colon); *host* carries the
-            # port the stack listens on, and the adagents.json lookup drops it.
-            AuthorizedPropertyFactory(tenant=tenant, publisher_domain=hostname_of(host), tags=["premium_news"])
+            # The tenant's own host is a publisher: its stored adagents.json authorizes a property
+            # there. publisher_domain is a hostname (its pattern admits no colon); *host* carries
+            # the port the stack listens on, and the adagents.json lookup drops it.
+            authorize_properties(tenant, hostname_of(host), [("own_home", ("premium_news",))])
             if buyer_access_token is not None:
                 _seed_buying_surface(env, tenant, access_token=buyer_access_token)
             for access_token, agent_url in (counterparty_principals or {}).items():

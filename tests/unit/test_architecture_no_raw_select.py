@@ -99,16 +99,8 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/auth.py", "tenant_login"),
     # _construct_agent_url removed — the agent URL is stored tenant state, reached
     # through a repository instead of selected here
-    ("src/admin/blueprints/authorized_properties.py", "_save_properties_batch"),
-    ("src/admin/blueprints/authorized_properties.py", "create_property"),
     ("src/admin/blueprints/authorized_properties.py", "create_property_tag"),
-    ("src/admin/blueprints/authorized_properties.py", "delete_property"),
-    ("src/admin/blueprints/authorized_properties.py", "edit_property"),
-    ("src/admin/blueprints/authorized_properties.py", "list_authorized_properties"),
-    ("src/admin/blueprints/authorized_properties.py", "list_authorized_properties_api"),
     ("src/admin/blueprints/authorized_properties.py", "list_property_tags"),
-    ("src/admin/blueprints/authorized_properties.py", "sync_properties_from_adagents"),
-    ("src/admin/blueprints/authorized_properties.py", "upload_authorized_properties"),
     # create_tenant fixed — its duplicate check goes through TenantLookupRepository
     # get_tenant_from_hostname fixed — the admin plane's one host -> tenant lookup now goes
     # through TenantLookupRepository.find_active_by_virtual_host, and public.landing and
@@ -180,11 +172,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     # landing fixed — it asks core.get_tenant_from_hostname instead of selecting tenants
     ("src/admin/blueprints/public.py", "provision_tenant"),
     ("src/admin/blueprints/public.py", "signup_complete"),
-    ("src/admin/blueprints/publisher_partners.py", "add_publisher_partner"),
-    ("src/admin/blueprints/publisher_partners.py", "delete_publisher_partner"),
-    ("src/admin/blueprints/publisher_partners.py", "get_publisher_properties"),
-    ("src/admin/blueprints/publisher_partners.py", "list_publisher_partners"),
-    ("src/admin/blueprints/publisher_partners.py", "sync_publisher_partners"),
     ("src/admin/blueprints/settings.py", "get_approximated_token"),
     ("src/admin/blueprints/settings.py", "register_approximated_domain"),
     ("src/admin/blueprints/settings.py", "test_ai_connection"),
@@ -337,8 +324,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/services/policy_service.py", "_update_currencies"),
     ("src/services/policy_service.py", "get_policies"),
     ("src/services/policy_service.py", "update_policies"),
-    ("src/services/property_discovery_service.py", "_batch_sync_properties"),
-    ("src/services/property_discovery_service.py", "_batch_sync_tags"),
     # _check_critical_tasks, _check_optional_tasks and get_bulk_setup_status removed — the
     # tenant, its auth config and its verified partners come through the repositories
     ("src/services/setup_checklist_service.py", "get_setup_status"),

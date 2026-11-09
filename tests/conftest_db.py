@@ -6,7 +6,7 @@ import time
 from datetime import UTC
 from pathlib import Path
 
-from scripts.setup.seed_products import publishers_whole
+from scripts.setup.seed_products import whole_publisher_selections
 
 #: Used by the table-cleanup except blocks below, which referenced it undefined --
 #: a NameError there would have masked the delete failure it exists to report.
@@ -96,7 +96,6 @@ def test_database(test_database_url):
     from src.core.database.models import (  # noqa: F401
         AdapterConfig,
         AuditLog,
-        AuthorizedProperty,
         Base,
         Context,
         Creative,
@@ -112,6 +111,7 @@ def test_database(test_database_url):
         Product,
         ProductInventoryMapping,
         PropertyTag,
+        Publisher,
         PushNotificationConfig,
         Strategy,
         StrategyState,
@@ -311,7 +311,7 @@ def test_product(db_session, test_tenant):
         ],
         targeting_template={},
         delivery_type="guaranteed",
-        properties=publishers_whole(db_session, test_tenant.tenant_id),
+        publisher_selections=whole_publisher_selections(db_session, test_tenant.tenant_id),
     )
     db_session.add(product)
     db_session.commit()
@@ -614,7 +614,6 @@ def integration_db():
     from src.core.database.models import (
         AdapterConfig,
         AuditLog,
-        AuthorizedProperty,
         Creative,
         CreativeAssignment,
         FormatPerformanceMetrics,
@@ -626,6 +625,7 @@ def integration_db():
         Product,
         ProductInventoryMapping,
         PropertyTag,
+        Publisher,
         PushNotificationConfig,
         Strategy,
         StrategyState,
@@ -645,7 +645,7 @@ def integration_db():
         Product,
         MediaBuy,
         Creative,
-        AuthorizedProperty,
+        Publisher,
         Strategy,
         AuditLog,
         CreativeAssignment,

@@ -12,9 +12,9 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Any, Protocol
 
 from adcp.types.domains.protocol.get_adcp_capabilities_response import PublisherDomain
 from pydantic import ValidationError
@@ -94,7 +94,7 @@ class SelectableProperty(Protocol):
     """The three facts of an authorized property that a selector is built from."""
 
     @property
-    def property_id(self) -> str: ...
+    def property_id(self) -> str | None: ...
 
     @property
     def publisher_domain(self) -> str: ...
@@ -105,14 +105,16 @@ class SelectableProperty(Protocol):
 
 @dataclass(frozen=True)
 class AuthorizedPropertyRef:
-    """An authorized property as a value, so it outlives the session that read it.
+    """A property a publisher's adagents.json authorizes this agent for, as a value.
 
-    ``get_products`` converts dynamic variants after its unit of work has closed, where an
-    ORM row would raise on its first attribute read. ``name`` and ``property_type`` are what
-    the admin forms show of it.
+    A value so it outlives the session that read it: ``get_products`` converts dynamic
+    variants after its unit of work has closed, where an ORM row would raise on its first
+    attribute read. ``name`` and ``property_type`` are what the admin forms show of it.
+    ``property_id`` is optional in ``core/property.json``; a property without one is sold
+    only through an ``all`` or ``by_tag`` selector.
     """
 
-    property_id: str
+    property_id: str | None
     publisher_domain: str
     tags: tuple[str, ...]
     name: str
@@ -149,7 +151,7 @@ def by_id_selectors(properties: Iterable[SelectableProperty]) -> list[dict]:
     """
     return [
         {"publisher_domain": domain, "property_ids": [p.property_id for p in props], "selection_type": "by_id"}
-        for domain, props in _by_publisher(properties).items()
+        for domain, props in _by_publisher(p for p in properties if p.property_id).items()
     ]
 
 
@@ -186,41 +188,66 @@ def by_tag_selectors(tags: Sequence[str], properties: Iterable[SelectablePropert
 
 
 def authorized_selectors(selectors: list[dict] | None, properties: Iterable[SelectableProperty]) -> list[dict]:
-    """Stored selectors narrowed to the verified *properties* they name; the rest are dropped.
+    """Stored selectors narrowed to the authorized *properties* they name; the rest are dropped.
 
-    An inventory profile or a product's own ``properties`` already name their publishers,
-    and a buyer verifies each one at ``https://<publisher_domain>/.well-known/adagents.json``
-    (AdCP 3.2.7 ``governance/property/authorized-properties.mdx``). The seller's verified
-    row is its proof of authorization for that one property, so the check is per property,
-    as :func:`id_selection` and :func:`tag_selection` check a form's choice: a ``by_id``
-    selector keeps the ids of its publisher's verified properties, a ``by_tag`` selector
-    keeps the tags a verified property of its publisher carries, and an ``all`` selector
-    stays while its publisher has a verified property. A selector left naming nothing is
-    dropped -- a row the old profile form stored with the seller's own host, or a publisher
-    or property never verified, is not offered (#1845).
+    An inventory profile or a product already names its publishers, and a buyer checks each
+    selector against ``https://<publisher_domain>/.well-known/adagents.json``
+    (``governance/property/authorized-properties.mdx``: the buyer checks each product's
+    ``publisher_properties`` against the publisher's ``authorized_agents[]``, and a missing
+    file is "unauthorized (fail closed)"). *properties* are what the publishers' stored
+    files authorize this agent for now (``PublisherCatalog.refs``), so the check is per
+    property, as :func:`id_selection` and :func:`tag_selection` check a form's choice: a
+    ``by_id`` selector keeps the ids of its publisher's authorized properties, a ``by_tag``
+    selector keeps the tags an authorized property of its publisher carries, and an ``all``
+    selector stays while its publisher authorizes a property. A selector left naming
+    nothing is dropped, and a product left with none is not offered (#1845).
 
     A kept selector names its publisher canonically, as *properties* do, and a ``by_tag`` one
     is built by :func:`publisher_tag_selector`, as a form's tag choice is.
     """
-    verified = _by_publisher(properties)
+    authorized = _by_publisher(properties)
     kept = []
     for selector in ensure_selection_type(selectors or []) or []:
         domain = canonical_publisher_domain(str(selector.get("publisher_domain") or ""))
-        if domain not in verified:
+        if domain not in authorized:
             continue
         if selector["selection_type"] == "by_tag":
-            carried = carried_tags(verified[domain])
+            carried = carried_tags(authorized[domain])
             tags = [tag for tag in selector.get("property_tags") or () if tag in carried]
             if tags:
                 kept.append(publisher_tag_selector(domain, tags))
         elif selector["selection_type"] == "by_id":
-            ids = {p.property_id for p in verified[domain]}
+            ids = {p.property_id for p in authorized[domain]}
             property_ids = [i for i in selector.get("property_ids") or () if i in ids]
             if property_ids:
                 kept.append({**selector, "publisher_domain": domain, "property_ids": property_ids})
         else:
             kept.append({**selector, "publisher_domain": domain})
     return kept
+
+
+def selected_properties(
+    selectors: Iterable[Mapping[str, Any]], properties: Iterable[SelectableProperty]
+) -> list[SelectableProperty]:
+    """The *properties* *selectors* select: those of an ``all`` selector's publisher, by id, or by tag.
+
+    *selectors* are already narrowed by :func:`authorized_selectors`, so the seller's
+    ``all_inventory`` tag has become ``all``.
+    """
+    properties = list(properties)
+    chosen: list[SelectableProperty] = []
+    for selector in selectors:
+        for prop in properties:
+            if prop.publisher_domain != selector["publisher_domain"] or prop in chosen:
+                continue
+            kind = selector["selection_type"]
+            if (
+                kind == "all"
+                or (kind == "by_id" and prop.property_id in (selector.get("property_ids") or ()))
+                or (kind == "by_tag" and set(prop.tags or ()) & set(selector.get("property_tags") or ()))
+            ):
+                chosen.append(prop)
+    return chosen
 
 
 @dataclass(frozen=True)
@@ -234,8 +261,8 @@ class PreselectedChoices:
 def preselected_choices(selectors: Iterable[dict], authorized: Iterable[SelectableProperty]) -> PreselectedChoices:
     """The boxes the product edit page checks for *selectors*, among those it offers.
 
-    It offers the *authorized* (verified) properties, and the boxes cannot express every
-    stored selection: a pending publisher's selector, ``all``, a mix of modes. Those are shown
+    It offers the *authorized* properties, and the boxes cannot express every stored
+    selection: a selector of a publisher that authorizes nothing now, ``all``, a mix of modes. Those are shown
     disabled and kept (:func:`kept_choices`).
     """
     authorized = list(authorized)
@@ -246,7 +273,9 @@ def preselected_choices(selectors: Iterable[dict], authorized: Iterable[Selectab
         tags |= {
             f"{selector['publisher_domain']}:{tag}" for tag in selector.get("property_tags") or () if tag in carried
         }
-        property_ids |= {p.property_id for p in offered if p.property_id in (selector.get("property_ids") or ())}
+        property_ids |= {
+            p.property_id for p in offered if p.property_id and p.property_id in (selector.get("property_ids") or ())
+        }
     return PreselectedChoices(frozenset(tags), frozenset(property_ids))
 
 
@@ -269,22 +298,21 @@ class KeptChoice:
     status: str
 
 
-def kept_choices(
-    stored: list[dict] | None, verified: Sequence[SelectableProperty], known: Sequence[SelectableProperty], mode: str
-) -> list[KeptChoice]:
+#: The status of a kept choice no authorized property backs.
+NOT_AUTHORIZED_STATUS = "not authorized by the publisher's adagents.json"
+
+
+def kept_choices(stored: list[dict] | None, authorized: Sequence[SelectableProperty], mode: str) -> list[KeptChoice]:
     """The choices of the *stored* selectors the product edit page's *mode* section has no box for.
 
-    The page offers a box per tag a *verified* property carries (tags section) and per verified
-    property id (the ids and full sections). A stored choice with no box in the section the
-    save comes from -- a pending property, one the other mode selects, an ``all`` selector --
-    is kept. *known* are all the seller's properties, pending ones included, for the status.
+    The page offers a box per tag an *authorized* property carries (tags section) and per
+    authorized property id (the ids and full sections). A stored choice with no box in the
+    section the save comes from -- a property the publisher does not authorize now, one the
+    other mode selects, an ``all`` selector -- is kept.
     """
-    boxes = {
-        "tag": {(p.publisher_domain, tag) for p in verified for tag in p.tags or ()},
-        "id": {(p.publisher_domain, p.property_id) for p in verified},
-    }
-    pending = {(p.publisher_domain, tag) for p in known for tag in p.tags or ()} | {
-        (p.publisher_domain, p.property_id) for p in known
+    boxes: dict[str, set[tuple[str, str]]] = {
+        "tag": {(p.publisher_domain, tag) for p in authorized for tag in p.tags or ()},
+        "id": {(p.publisher_domain, p.property_id) for p in authorized if p.property_id},
     }
     section = _SECTION_KIND.get(mode)
     kept = []
@@ -297,12 +325,7 @@ def kept_choices(
         for value in selector.get("property_tags" if kind == "tag" else "property_ids") or ():
             if kind == section and (domain, value) in boxes[kind]:
                 continue
-            if (domain, value) in boxes[kind]:
-                status = "selected in the other selection mode"
-            elif (domain, value) in pending:
-                status = "awaiting verification"
-            else:
-                status = "not an authorized property"
+            status = "selected in the other selection mode" if (domain, value) in boxes[kind] else NOT_AUTHORIZED_STATUS
             kept.append(KeptChoice(domain, kind, value, status))
     return kept
 
@@ -356,7 +379,7 @@ class RenderedSelection:
 
     The page embeds it (:meth:`token`) and its save is judged against it
     (:func:`judge_selection_save`), never against a selection recomputed when the save
-    arrives: a property verified in between would change that recomputation, and a save
+    arrives: a publisher refreshed in between would change that recomputation, and a save
     that touched nothing would then rewrite what the product or profile sells.
     """
 
@@ -427,7 +450,7 @@ def profile_form_prefill(selectors: list[dict] | None, authorized: Sequence[Sele
     """The mode and values that save *selectors* back exactly as they are stored.
 
     A tags or property-ids pre-fill is used only when submitting it regenerates *selectors*.
-    Anything else (a pending publisher's selector, a mix of modes, ``all``, a hand-written entry) is
+    Anything else (a selector of a publisher that authorizes nothing now, a mix of modes, ``all``, a hand-written entry) is
     shown whole as JSON, the one mode that can hold it, so saving the page cannot lose it.
     """
     if not selectors:
@@ -453,8 +476,9 @@ def refuse_property_tag(tag: str) -> str | None:
 def tag_selection(tags: Sequence[str], authorized: Sequence[SelectableProperty]) -> tuple[list[dict], str | None]:
     """An admin form's tag choice as selectors over the seller's *authorized* properties, or why not.
 
-    *authorized* are the VERIFIED properties (``AuthorizedPropertyRepository.list_refs``),
-    which is what ``get_products`` sells, so a tag only a pending property carries is
+    *authorized* are the properties the publishers authorize this agent for now
+    (``PublisherCatalog.refs``), which is what ``get_products`` sells, so a tag only an
+    unauthorized property carries is
     refused rather than stored and then silently not offered. Every requested tag must be
     carried; ``all_inventory`` is the seller's own and is carried whenever any property is.
 
@@ -468,7 +492,7 @@ def tag_selection(tags: Sequence[str], authorized: Sequence[SelectableProperty])
     carried = carried_tags(authorized)
     missing = [tag for tag in tags if tag not in carried]
     if missing:
-        return [], f"No verified authorized property carries the tags: {', '.join(missing)}"
+        return [], f"No authorized property carries the tags: {', '.join(missing)}"
     return by_tag_selectors(tags, authorized), None
 
 
@@ -503,9 +527,9 @@ def selector_selection(
 ) -> tuple[list[dict], str | None]:
     """An admin form's JSON selectors, accepted only when each is sold as written, or why not.
 
-    *authorized* are the VERIFIED properties, and each selector is resolved by
+    *authorized* are the authorized properties, and each selector is resolved by
     :func:`authorized_selectors`, the rule ``get_products`` applies to a stored selector. One
-    it would drop, or narrow by an id or a tag, names something no verified property backs,
+    it would drop, or narrow by an id or a tag, names something no authorized property backs,
     so it is refused rather than stored and then silently not sold. A selector already
     *stored* is kept as it is: an edit form carries over what it did not change.
 
@@ -519,7 +543,7 @@ def selector_selection(
         if selector not in stored and not _sold_as_written(selector, authorized)
     ]
     if refused:
-        return [], f"Not verified authorized publisher selections: {', '.join(refused)}"
+        return [], f"Not authorized publisher selections: {', '.join(refused)}"
     return selectors, None
 
 
@@ -541,8 +565,9 @@ def id_selection(
 ) -> tuple[list[dict], str | None]:
     """An admin form's property choice as ``by_id`` selectors over the seller's *authorized* properties, or why not.
 
-    *authorized* are the VERIFIED properties, as for :func:`tag_selection`: an ID that names
-    no verified property of this seller (unknown, another tenant's, or pending) is refused.
+    *authorized* are the authorized properties, as for :func:`tag_selection`: an ID that
+    names no property a publisher authorizes this seller for (unknown, another tenant's, or
+    listed but not authorized) is refused.
 
     Returns ``(selectors, None)``, or ``([], refusal)``.
     """
@@ -552,5 +577,5 @@ def id_selection(
     chosen = [p for p in authorized if p.property_id in wanted]
     unknown = wanted - {p.property_id for p in chosen}
     if unknown:
-        return [], f"Not verified authorized properties: {', '.join(sorted(unknown))}"
+        return [], f"Not authorized properties: {', '.join(sorted(unknown))}"
     return by_id_selectors(chosen), None

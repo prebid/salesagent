@@ -10,7 +10,9 @@ Feature: BR-ADMIN-INVENTORY-PROFILE-publishers Which publishers the operator's s
   # adagents.json, and a buyer verifies a product at every
   # publisher_properties[].publisher_domain (AdCP 3.2.7
   # governance/property/authorized-properties.mdx). So the profile form stores one
-  # selector per publisher of the VERIFIED authorized properties the selection matches:
+  # selector per publisher of the AUTHORIZED properties the selection matches -- the
+  # properties each publisher's stored adagents.json authorizes this agent for, the only
+  # way a property becomes authorized (src/services/publisher_ingest.py):
   # core/product.json admits only the singular publisher_domain form on a product, and
   # core/publisher-property-selector.json makes property ids publisher-scoped. The
   # seller's own host is no publisher and the form no longer offers it as a default.
@@ -19,23 +21,24 @@ Feature: BR-ADMIN-INVENTORY-PROFILE-publishers Which publishers the operator's s
   # (see BR-UC-GET-PRODUCTS-publisher-domain.feature for what that claims).
   #
   # The product add and edit forms store selectors the same way and refuse a selection
-  # the same way, through the one validator the profile form uses: a tag or property only
-  # a pending property backs is not offered, and is refused if submitted anyway, because
+  # the same way, through the one validator the profile form uses: a tag or property no
+  # authorized property backs is not offered, and is refused if submitted anyway, because
   # get_products would not sell it. The edit form preselects what the product sells, the
-  # verified publishers only.
+  # authorizing publishers only.
   #
   # Saving an edit form with its selection untouched changes nothing about that selection.
   # Each edit page embeds the selection it rendered and a digest of the stored columns, and
   # a save is compared with what the page rendered, never with a selection recomputed when
-  # it arrives, because the form cannot express a pending publisher's selector, an all
-  # selector or a mix of modes, and a property verified in between changes a
+  # it arrives, because the form cannot express the selector of a publisher that
+  # authorizes nothing, an all selector or a mix of modes, and a publisher refreshed in
+  # between changes a
   # recomputation. A save that changes the boxes keeps the stored choices the saving
   # section has no box for, shown disabled with their status. A page opened before its stored selection changed is refused. A profile
   # page pre-fills tags or property ids only when they regenerate the stored selectors,
   # and shows them as JSON otherwise.
   #
   # The products page marks a product get_products leaves out because it names no
-  # verified publisher, so the operator sees the gap rather than only a server log line.
+  # authorizing publisher, so the operator sees the gap rather than only a server log line.
   #
   # Transports: the admin form surface, in process (Flask test client) and over e2e
   # (requests against the live stack), through AdminInventoryProfileEnv.
@@ -68,16 +71,16 @@ Feature: BR-ADMIN-INVENTORY-PROFILE-publishers Which publishers the operator's s
     Then inventory profile "edited" stores publisher_properties [{"publisher_domain": "news.example", "property_ids": ["news_home"], "selection_type": "by_id"}, {"publisher_domain": "sports.example", "property_ids": ["sports_home"], "selection_type": "by_id"}]
 
   @T-ADMIN-INVPROFILE-005 @admin_inventory_profile @requires_db
-  Scenario: a tag no verified property carries is refused
+  Scenario: a tag no authorized property carries is refused
     When the operator creates inventory profile "orphan" selecting tags "podcast"
-    Then the page contains "No verified authorized property carries the tags: podcast"
+    Then the page contains "No authorized property carries the tags: podcast"
     And no inventory profile "orphan" is stored
 
   @T-ADMIN-INVPROFILE-006 @admin_inventory_profile @requires_db
-  Scenario: a property awaiting verification is refused on submit
-    Given the seller's property "podcast_home" of publisher "podcast.example" tagged "podcast" awaits verification
+  Scenario: a property its publisher does not authorize is refused on submit
+    Given the publisher "podcast.example" lists property "podcast_home" tagged "podcast" without authorizing the seller for it
     When the operator creates inventory profile "podcasts" selecting properties "podcast_home"
-    Then the page contains "Not verified authorized properties: podcast_home"
+    Then the page contains "Not authorized properties: podcast_home"
     And no inventory profile "podcasts" is stored
 
   @T-ADMIN-INVPROFILE-007 @admin_inventory_profile @requires_db
@@ -106,38 +109,38 @@ Feature: BR-ADMIN-INVENTORY-PROFILE-publishers Which publishers the operator's s
     Then product "home_pages" stores publisher_properties [{"publisher_domain": "news.example", "property_ids": ["news_home"], "selection_type": "by_id"}, {"publisher_domain": "weather.example", "property_ids": ["weather_home"], "selection_type": "by_id"}]
 
   @T-ADMIN-INVPROFILE-011 @admin_inventory_profile @requires_db
-  Scenario: the product form refuses a tag only a property awaiting verification carries
-    Given the seller's property "podcast_home" of publisher "podcast.example" tagged "podcast" awaits verification
+  Scenario: the product form refuses a tag only a property its publisher does not authorize carries
+    Given the publisher "podcast.example" lists property "podcast_home" tagged "podcast" without authorizing the seller for it
     When the operator creates product "podcasts" selecting tags "podcast.example:podcast"
-    Then the page contains "No verified authorized property carries the tags: podcast"
+    Then the page contains "No authorized property carries the tags: podcast"
     And no product "podcasts" is stored
 
   @T-ADMIN-INVPROFILE-012 @admin_inventory_profile @requires_db
-  Scenario: the product form refuses a property awaiting verification
-    Given the seller's property "podcast_home" of publisher "podcast.example" tagged "podcast" awaits verification
+  Scenario: the product form refuses a property its publisher does not authorize
+    Given the publisher "podcast.example" lists property "podcast_home" tagged "podcast" without authorizing the seller for it
     When the operator creates product "podcasts" selecting properties "news_home, podcast_home"
-    Then the page contains "Not verified authorized properties: podcast_home"
+    Then the page contains "Not authorized properties: podcast_home"
     And no product "podcasts" is stored
 
   @T-ADMIN-INVPROFILE-013 @admin_inventory_profile @requires_db
-  Scenario: the product edit form refuses a tag only a property awaiting verification carries
-    Given the seller's property "podcast_home" of publisher "podcast.example" tagged "podcast" awaits verification
+  Scenario: the product edit form refuses a tag only a property its publisher does not authorize carries
+    Given the publisher "podcast.example" lists property "podcast_home" tagged "podcast" without authorizing the seller for it
     And the seller offers product "news" naming publisher_properties [{"publisher_domain": "news.example", "property_ids": ["news_home"], "selection_type": "by_id"}]
     When the operator edits product "news" to select tags "podcast.example:podcast"
-    Then the page contains "No verified authorized property carries the tags: podcast"
+    Then the page contains "No authorized property carries the tags: podcast"
     And product "news" stores publisher_properties [{"publisher_domain": "news.example", "property_ids": ["news_home"], "selection_type": "by_id"}]
 
   @T-ADMIN-INVPROFILE-014 @admin_inventory_profile @requires_db
-  Scenario: the product edit form refuses a property awaiting verification
-    Given the seller's property "podcast_home" of publisher "podcast.example" tagged "podcast" awaits verification
+  Scenario: the product edit form refuses a property its publisher does not authorize
+    Given the publisher "podcast.example" lists property "podcast_home" tagged "podcast" without authorizing the seller for it
     And the seller offers product "news" naming publisher_properties [{"publisher_domain": "news.example", "property_ids": ["news_home"], "selection_type": "by_id"}]
     When the operator edits product "news" to select properties "podcast_home"
-    Then the page contains "Not verified authorized properties: podcast_home"
+    Then the page contains "Not authorized properties: podcast_home"
     And product "news" stores publisher_properties [{"publisher_domain": "news.example", "property_ids": ["news_home"], "selection_type": "by_id"}]
 
   @T-ADMIN-INVPROFILE-015 @admin_inventory_profile @requires_db
   Scenario: the product edit form preselects only the properties the product sells
-    Given the seller's property "podcast_home" of publisher "podcast.example" tagged "podcast" awaits verification
+    Given the publisher "podcast.example" lists property "podcast_home" tagged "podcast" without authorizing the seller for it
     And the seller offers product "mixed" naming publisher_properties [{"publisher_domain": "news.example", "property_ids": ["news_home"], "selection_type": "by_id"}, {"publisher_domain": "podcast.example", "property_ids": ["podcast_home"], "selection_type": "by_id"}]
     When the operator opens the edit form of product "mixed"
     Then the form preselects exactly the properties "news_home"
@@ -149,15 +152,15 @@ Feature: BR-ADMIN-INVENTORY-PROFILE-publishers Which publishers the operator's s
     Then product "premium" is renamed and its stored selection is unchanged
 
   @T-ADMIN-INVPROFILE-017 @admin_inventory_profile @requires_db
-  Scenario: saving a product edit form keeps a pending publisher's stored selector
-    Given the seller's property "podcast_home" of publisher "podcast.example" tagged "premium" awaits verification
+  Scenario: saving a product edit form keeps a stored selector of a publisher that authorizes nothing
+    Given the publisher "podcast.example" lists property "podcast_home" tagged "premium" without authorizing the seller for it
     And the seller offers product "mixed" naming publisher_properties [{"publisher_domain": "news.example", "property_tags": ["premium"], "selection_type": "by_tag"}, {"publisher_domain": "podcast.example", "property_tags": ["premium"], "selection_type": "by_tag"}]
     When the operator renames product "mixed" through its edit form, changing nothing else
     Then product "mixed" is renamed and its stored selection is unchanged
 
   @T-ADMIN-INVPROFILE-018 @admin_inventory_profile @requires_db
-  Scenario: saving a product edit form keeps a migrated property id selection with a pending id
-    Given the seller's property "news_extra" of publisher "news.example" tagged "premium" awaits verification
+  Scenario: saving a product edit form keeps a migrated property id selection with an unauthorized id
+    Given the publisher "news.example" lists property "news_extra" tagged "premium" without authorizing the seller for it
     And the seller offers product "ids" migrated from legacy property ids "news_home, news_extra"
     When the operator renames product "ids" through its edit form, changing nothing else
     Then product "ids" is renamed and its stored selection is unchanged
@@ -169,8 +172,8 @@ Feature: BR-ADMIN-INVENTORY-PROFILE-publishers Which publishers the operator's s
     Then product "both" is renamed and its stored selection is unchanged
 
   @T-ADMIN-INVPROFILE-020 @admin_inventory_profile @requires_db
-  Scenario: saving a product edit form is not refused over a stored pending property
-    Given the seller's property "news_extra" of publisher "news.example" tagged "premium" awaits verification
+  Scenario: saving a product edit form is not refused over a stored unauthorized property
+    Given the publisher "news.example" lists property "news_extra" tagged "premium" without authorizing the seller for it
     And the seller offers product "stored_ids" naming publisher_properties [{"publisher_domain": "news.example", "property_ids": ["news_home", "news_extra"], "selection_type": "by_id"}]
     When the operator renames product "stored_ids" through its edit form, changing nothing else
     Then product "stored_ids" is renamed and its stored selection is unchanged
@@ -195,31 +198,31 @@ Feature: BR-ADMIN-INVENTORY-PROFILE-publishers Which publishers the operator's s
 
   @T-ADMIN-INVPROFILE-024 @admin_inventory_profile @requires_db
   Scenario: saving a profile edit form keeps selectors its tags and property ids cannot regenerate
-    Given the seller's property "podcast_home" of publisher "podcast.example" tagged "premium" awaits verification
+    Given the publisher "podcast.example" lists property "podcast_home" tagged "premium" without authorizing the seller for it
     And an inventory profile "stored" storing publisher_properties [{"publisher_domain": "news.example", "property_tags": ["premium"], "selection_type": "by_tag"}, {"publisher_domain": "podcast.example", "property_tags": ["premium"], "selection_type": "by_tag"}]
     When the operator renames inventory profile "stored" through its edit form, changing nothing else
     Then inventory profile "stored" is renamed and its stored selection is unchanged
 
   @T-ADMIN-INVPROFILE-026 @admin_inventory_profile @requires_db
-  Scenario: the product form's full mode refuses a property awaiting verification
-    Given the seller's property "podcast_home" of publisher "podcast.example" tagged "podcast" awaits verification
+  Scenario: the product form's full mode refuses a property its publisher does not authorize
+    Given the publisher "podcast.example" lists property "podcast_home" tagged "podcast" without authorizing the seller for it
     When the operator creates product "legacy" in full mode selecting properties "podcast_home"
-    Then the page contains "Not verified authorized properties: podcast_home"
+    Then the page contains "Not authorized properties: podcast_home"
     And no product "legacy" is stored
 
   @T-ADMIN-INVPROFILE-027 @admin_inventory_profile @requires_db
-  Scenario: the profile form's JSON mode refuses a publisher awaiting verification
-    Given the seller's property "podcast_home" of publisher "podcast.example" tagged "podcast" awaits verification
+  Scenario: the profile form's JSON mode refuses a publisher that authorizes nothing
+    Given the publisher "podcast.example" lists property "podcast_home" tagged "podcast" without authorizing the seller for it
     When the operator creates inventory profile "podcasts" in JSON mode storing publisher_properties [{"publisher_domain": "podcast.example", "selection_type": "all"}]
-    Then the page contains "Not verified authorized publisher selections: podcast.example"
+    Then the page contains "Not authorized publisher selections: podcast.example"
     And no inventory profile "podcasts" is stored
 
   @T-ADMIN-INVPROFILE-028 @admin_inventory_profile @requires_db
-  Scenario: a product edit page saved after a property verifies leaves the stored selection unchanged
-    Given the seller's property "podcast_home" of publisher "podcast.example" tagged "premium" awaits verification
+  Scenario: a product edit page saved after a publisher starts authorizing a property leaves the stored selection unchanged
+    Given the publisher "podcast.example" lists property "podcast_home" tagged "premium" without authorizing the seller for it
     And the seller offers product "premium" migrated from legacy property tags "premium"
     When the operator opens the edit form of product "premium"
-    And the seller's property "podcast_home" becomes verified
+    And the publisher "podcast.example" starts authorizing the seller for property "podcast_home"
     And the operator saves the open edit form of product "premium", changing only its name
     Then product "premium" is renamed and its stored selection is unchanged
 
@@ -233,20 +236,20 @@ Feature: BR-ADMIN-INVENTORY-PROFILE-publishers Which publishers the operator's s
     And product "news" stores publisher_properties [{"publisher_domain": "weather.example", "property_ids": ["weather_home"], "selection_type": "by_id"}]
 
   @T-ADMIN-INVPROFILE-030 @admin_inventory_profile @requires_db
-  Scenario: a profile edit page saved after a property verifies leaves the stored selection unchanged
-    Given the seller's property "podcast_home" of publisher "podcast.example" tagged "premium" awaits verification
+  Scenario: a profile edit page saved after a publisher starts authorizing a property leaves the stored selection unchanged
+    Given the publisher "podcast.example" lists property "podcast_home" tagged "premium" without authorizing the seller for it
     When the operator creates inventory profile "tagged" selecting tags "premium"
     And the operator opens the edit form of inventory profile "tagged"
-    And the seller's property "podcast_home" becomes verified
+    And the publisher "podcast.example" starts authorizing the seller for property "podcast_home"
     And the operator saves the open edit form of inventory profile "tagged", changing only its name
     Then inventory profile "tagged" is renamed and its stored selection is unchanged
 
   @T-ADMIN-INVPROFILE-031 @admin_inventory_profile @requires_db
-  Scenario: a changed product edit save keeps a pending publisher's stored selector
-    Given the seller's property "podcast_home" of publisher "podcast.example" tagged "premium" awaits verification
+  Scenario: a changed product edit save keeps a stored selector of a publisher that authorizes nothing
+    Given the publisher "podcast.example" lists property "podcast_home" tagged "premium" without authorizing the seller for it
     And the seller offers product "mixed" naming publisher_properties [{"publisher_domain": "news.example", "property_tags": ["premium"], "selection_type": "by_tag"}, {"publisher_domain": "podcast.example", "property_tags": ["premium"], "selection_type": "by_tag"}]
     When the operator opens the edit form of product "mixed"
-    Then the form shows "podcast.example:premium" kept as stored, with the status "awaiting verification"
+    Then the form shows "podcast.example:premium" kept as stored, with the status "not authorized by the publisher's adagents.json"
     When the operator saves the open edit form of product "mixed", also checking tags "sports.example:premium"
     Then product "mixed" stores publisher_properties [{"publisher_domain": "news.example", "property_tags": ["premium"], "selection_type": "by_tag"}, {"publisher_domain": "sports.example", "property_tags": ["premium"], "selection_type": "by_tag"}, {"publisher_domain": "podcast.example", "property_tags": ["premium"], "selection_type": "by_tag"}]
 
@@ -259,8 +262,8 @@ Feature: BR-ADMIN-INVENTORY-PROFILE-publishers Which publishers the operator's s
     Then product "both" stores publisher_properties [{"publisher_domain": "news.example", "property_tags": ["premium"], "selection_type": "by_tag"}, {"publisher_domain": "sports.example", "property_tags": ["premium"], "selection_type": "by_tag"}, {"publisher_domain": "weather.example", "property_ids": ["weather_home"], "selection_type": "by_id"}]
 
   @T-ADMIN-INVPROFILE-025 @admin_inventory_profile @requires_db
-  Scenario: the forms offer only verified properties
-    Given the seller's property "podcast_home" of publisher "podcast.example" tagged "podcast" awaits verification
+  Scenario: the forms offer only authorized properties
+    Given the publisher "podcast.example" lists property "podcast_home" tagged "podcast" without authorizing the seller for it
     And the seller offers product "premium" migrated from legacy property tags "premium"
     And an inventory profile "existing" exists
     When the operator opens the add product form
@@ -283,5 +286,30 @@ Feature: BR-ADMIN-INVENTORY-PROFILE-publishers Which publishers the operator's s
     Given the seller offers product "news" naming publisher_properties [{"publisher_domain": "news.example", "property_ids": ["news_home"], "selection_type": "by_id"}]
     When the operator opens the edit form of product "news"
     And the operator saves the open edit form of product "news", declaring format option "homepage_mrec" under the seller's own host
-    Then the page contains "the host this sales agent answers at"
+    Then the page contains "is not in the format catalog of a publisher"
     And product "news" stores no format option under the seller's own host
+
+  # A product stores a publisher's format option by its key alone and is served the
+  # publisher's current catalog entry (core/product-format-declaration.json: the pair
+  # {publisher_domain, format_option_id} is the identity; core/product.json format_options:
+  # an unresolved reference "MUST fail closed"). The form refuses a key no fresh publisher's
+  # stored formats[] answers, rather than storing a product get_products would not offer,
+  # and offers the catalog to pick from.
+  @T-ADMIN-INVPROFILE-034 @admin_inventory_profile @requires_db
+  Scenario: the product edit form refuses a format option its publisher's catalog does not declare
+    Given the seller offers product "news" naming publisher_properties [{"publisher_domain": "news.example", "property_ids": ["news_home"], "selection_type": "by_id"}]
+    When the operator opens the edit form of product "news"
+    And the operator saves the open edit form of product "news", declaring format option "missing_mrec" of "news.example"
+    Then the page contains "missing_mrec"
+    And the page contains "of news.example is not in the format catalog of a publisher"
+    And product "news" stores no format option of "news.example"
+
+  @T-ADMIN-INVPROFILE-035 @admin_inventory_profile @requires_db
+  Scenario: the product edit form offers the publisher's catalog and stores a chosen option as its key
+    Given the publisher "news.example" declares format option {"format_option_id": "news_mrec", "format_kind": "image", "params": {"width": 300, "height": 250}} in its adagents.json
+    And the seller ingested the adagents.json of "news.example"
+    And the seller offers product "news" naming publisher_properties [{"publisher_domain": "news.example", "property_ids": ["news_home"], "selection_type": "by_id"}]
+    When the operator opens the edit form of product "news"
+    Then the page contains ""publisher_domain": "news.example", "format_option_id": "news_mrec""
+    When the operator saves the open edit form of product "news", declaring format option "news_mrec" of "news.example"
+    Then product "news" stores format options [{"publisher_domain": "news.example", "format_option_id": "news_mrec"}]

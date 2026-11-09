@@ -5,7 +5,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 from scripts.ops.migrate import run_migrations
-from scripts.setup.seed_products import canonical_declaration, publishers_whole
+from scripts.setup.seed_products import canonical_declaration, whole_publisher_selections
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AdapterConfig, Product, Tenant, TenantManagementConfig
@@ -162,8 +162,7 @@ def init_db(exit_on_error=False):
             )
 
             # Always create basic products for demo/testing. Each names every publisher the
-            # tenant holds an authorized property of (#1845); none are seeded here, so `[]`.
-            whole_publishers = publishers_whole(session, "default")
+            # tenant holds (#1845); none are seeded here, so `[]`.
             basic_products = [
                 Product(
                     tenant_id="default",
@@ -182,7 +181,7 @@ def init_db(exit_on_error=False):
                         "placement_ids": ["premium_300x250"],
                         "ad_unit_path": "/1234/premium/display",
                     },
-                    properties=whole_publishers,
+                    publisher_selections=whole_publisher_selections(session, "default"),
                 ),
                 Product(
                     tenant_id="default",
@@ -201,7 +200,7 @@ def init_db(exit_on_error=False):
                         "placement_ids": ["sports_video_preroll"],
                         "ad_unit_path": "/1234/sports/video",
                     },
-                    properties=whole_publishers,
+                    publisher_selections=whole_publisher_selections(session, "default"),
                 ),
             ]
             for product in basic_products:
@@ -316,7 +315,7 @@ def init_db(exit_on_error=False):
                         cpm=p.get("cpm"),
                         price_guidance=p.get("price_guidance"),
                         implementation_config=p.get("implementation_config"),
-                        properties=whole_publishers,
+                        publisher_selections=whole_publisher_selections(session, "default"),
                     )
                     session.add(product)
 

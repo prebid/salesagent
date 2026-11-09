@@ -41,10 +41,12 @@ from tests.factories import (
 )
 from tests.factories.core import seed_property_tag_selection
 from tests.factories.product import (
-    FIRST_PUBLISHER_LEADERBOARD,
+    FIRST_PUBLISHER_LEADERBOARD_KEY,
     PRODUCT_LOCAL_MREC,
     TWO_PUBLISHER_PROPERTIES,
+    catalog_first_publisher_leaderboard,
 )
+from tests.factories.publisher import declare_format_options
 from tests.helpers.admin_product_form import minimal_product_create_form, minimal_product_edit_form
 from tests.helpers.admin_session import admin_auth_session, admin_test_app
 
@@ -155,7 +157,9 @@ def test_the_operator_form_authors_a_canonical_only_product(operator, seller, fa
 
     # SERVABLE: the production conversion whose raise takes the whole tenant's discovery
     # down accepts this row, and carries the kind that was authored.
-    served = convert_product_model_to_schema(row, adapter_type="mock", publisher_properties=row.properties)
+    served = convert_product_model_to_schema(
+        row, adapter_type="mock", publisher_properties=row.stored_publisher_properties
+    )
     assert [declaration.format_kind for declaration in served.format_options] == ["image"]
 
 
@@ -194,7 +198,9 @@ def test_a_product_linked_to_a_canonical_profile_authors_no_declarations_of_its_
     assert row is not None, "the operator form refused a product whose profile declares its formats"
     assert row.format_options is None
     assert row.format_ids is None
-    served = convert_product_model_to_schema(row, adapter_type="mock", publisher_properties=row.properties)
+    served = convert_product_model_to_schema(
+        row, adapter_type="mock", publisher_properties=row.stored_publisher_properties
+    )
     assert [declaration.format_kind for declaration in served.format_options] == ["image"]
 
 
@@ -283,7 +289,9 @@ def test_the_edit_form_authors_the_canonical_arm_on_a_legacy_product(operator, s
 
     # Served through the production conversion: the legacy arm a 3.x buyer receives is the
     # declaration's asserted ref, as the pinned FormatReferenceStructuredObject.
-    served = convert_product_model_to_schema(row, adapter_type="mock", publisher_properties=row.properties)
+    served = convert_product_model_to_schema(
+        row, adapter_type="mock", publisher_properties=row.stored_publisher_properties
+    )
     assert [declaration.format_kind for declaration in served.format_options] == ["image"]
     assert [reference.id for reference in served.format_ids] == ["display_300x250_image"]
     assert type(served.format_ids[0]) is not dict
@@ -394,37 +402,58 @@ def test_editing_a_legacy_product_leaves_its_stored_arm_untouched(operator, sell
     assert row.name == "Renamed Legacy Product", "the edit did not take effect, so the arm survived vacuously"
 
 
-# ── A publisher's option is the buyer's to resolve ─────────────────────────────────────
+# ── A publisher's option is referenced by its key ──────────────────────────────────────
 #
-# core/product-format-declaration.json publisher_domain: the "Namespace for format_option_id
-# when this declaration references or narrows a publisher-declared format option from that
-# publisher's adagents.json top-level formats[]". This seller holds no copy of any publisher's
-# catalog, and core/placement.json format_options says "buyers MUST also resolve" a publisher
-# reference, so the form stores one as authored. The agent host is refused instead
-# (BR-ADMIN-INVENTORY-PROFILES.feature): this agent publishes no formats[].
+# core/product-format-declaration.json: "Publisher-scoped canonical declarations are
+# addressable only by the complete {publisher_domain, format_option_id} identity pair", and
+# adagents.json formats[] is the "Publisher-authoritative format catalog". So a product stores
+# the key alone, and is served the publisher's current entry; the form refuses anything more,
+# and a key no publisher's stored catalog answers (BR-ADMIN-INVENTORY-PROFILE-publishers grades
+# that refusal on both admin transports).
 
-#: One publisher-declared option, as a product names it.
-PUBLISHER_OPTION = {
-    "format_kind": "image",
-    "format_option_id": "homepage_mrec",
-    "params": {"width": 300, "height": 250},
-    "publisher_domain": "another-publisher.example",
-}
+#: One option a publisher's catalog declares.
+PUBLISHER_ENTRY = {"format_kind": "image", "format_option_id": "homepage_mrec", "params": {"width": 300, "height": 250}}
 
 
-def test_another_publishers_option_is_stored_as_authored(operator, seller, factory_session):
+def _sold_option_key(tag_selection: str) -> dict:
+    """The key of :data:`PUBLISHER_ENTRY` at the publisher the seller fixture's tag selection sells."""
+    return {"publisher_domain": tag_selection.split(":", 1)[0], "format_option_id": "homepage_mrec"}
+
+
+def test_a_publishers_option_is_stored_as_its_key(operator, seller, factory_session):
     tenant, tag_selection = seller
+    key = _sold_option_key(tag_selection)
+    declare_format_options(tenant, key["publisher_domain"], [PUBLISHER_ENTRY])
 
     response = operator.post(
         f"/tenant/{tenant.tenant_id}/products/add",
         data=minimal_product_create_form(
-            tag_selection, product_id="foreign_option", format_options=json.dumps([PUBLISHER_OPTION])
+            tag_selection, product_id="publisher_option", format_options=json.dumps([key])
         ),
     )
 
     assert response.status_code in (301, 302), response.data[:2000]
-    row = _stored(factory_session, tenant.tenant_id, "foreign_option")
-    assert row is not None and row.format_options == [PUBLISHER_OPTION]
+    row = _stored(factory_session, tenant.tenant_id, "publisher_option")
+    assert row is not None and row.format_options == [key]
+
+
+def test_a_publishers_option_carrying_more_than_its_key_is_refused(operator, seller, factory_session):
+    tenant, tag_selection = seller
+    key = _sold_option_key(tag_selection)
+    declare_format_options(tenant, key["publisher_domain"], [PUBLISHER_ENTRY])
+
+    response = operator.post(
+        f"/tenant/{tenant.tenant_id}/products/add",
+        data=minimal_product_create_form(
+            tag_selection,
+            product_id="narrowed_option",
+            format_options=json.dumps([{**key, "format_kind": "image", "params": {"width": 1}}]),
+        ),
+        follow_redirects=True,
+    )
+
+    assert b"carries only publisher_domain and format_option_id" in response.data, response.data[:2000]
+    assert _stored(factory_session, tenant.tenant_id, "narrowed_option") is None
 
 
 # ── RFC F3, author side (salesagent-ol033.20.8.2): the common intersection ───────────────
@@ -456,6 +485,7 @@ def test_editing_in_an_option_scoped_to_one_publisher(
 ):
     """Stored, or refused with the stored declarations left as they were."""
     tenant, _ = seller
+    catalog_first_publisher_leaderboard(tenant)
     ProductFactory(
         tenant=tenant,
         product_id="sliced",
@@ -468,13 +498,15 @@ def test_editing_in_an_option_scoped_to_one_publisher(
 
     response = operator.post(
         f"/tenant/{tenant.tenant_id}/products/sliced/edit",
-        data=minimal_product_edit_form(format_options=json.dumps([PRODUCT_LOCAL_MREC, FIRST_PUBLISHER_LEADERBOARD])),
+        data=minimal_product_edit_form(
+            format_options=json.dumps([PRODUCT_LOCAL_MREC, FIRST_PUBLISHER_LEADERBOARD_KEY])
+        ),
         follow_redirects=True,
     )
 
     stored = _stored(factory_session, tenant.tenant_id, "sliced").format_options
     if accepted:
-        assert stored == [PRODUCT_LOCAL_MREC, FIRST_PUBLISHER_LEADERBOARD], response.data[:2000]
+        assert stored == [PRODUCT_LOCAL_MREC, FIRST_PUBLISHER_LEADERBOARD_KEY], response.data[:2000]
     else:
         assert _INTERSECTION_REFUSAL in response.data
         assert stored == [PRODUCT_LOCAL_MREC]
@@ -494,6 +526,7 @@ def test_a_profile_scoping_an_option_is_refused_for_a_linked_product_without_pla
     placements differ, so the refusal is the product's rule and not a rule about profiles.
     """
     tenant, _ = seller
+    catalog_first_publisher_leaderboard(tenant)
     profile = InventoryProfileFactory(
         tenant=tenant,
         format_ids=None,
@@ -509,7 +542,7 @@ def test_a_profile_scoping_an_option_is_refused_for_a_linked_product_without_pla
             "name": profile.name,
             "targeted_ad_unit_ids": "[]",
             "targeted_placement_ids": "[]",
-            "format_options": json.dumps([PRODUCT_LOCAL_MREC, FIRST_PUBLISHER_LEADERBOARD]),
+            "format_options": json.dumps([PRODUCT_LOCAL_MREC, FIRST_PUBLISHER_LEADERBOARD_KEY]),
             "property_mode": "full",
             "publisher_properties": json.dumps(TWO_PUBLISHER_PROPERTIES),
         },
@@ -519,7 +552,7 @@ def test_a_profile_scoping_an_option_is_refused_for_a_linked_product_without_pla
     factory_session.expire_all()
     stored = factory_session.get(InventoryProfile, profile.id).format_options
     if accepted:
-        assert stored == [PRODUCT_LOCAL_MREC, FIRST_PUBLISHER_LEADERBOARD], response.data[:2000]
+        assert stored == [PRODUCT_LOCAL_MREC, FIRST_PUBLISHER_LEADERBOARD_KEY], response.data[:2000]
     else:
         assert _INTERSECTION_REFUSAL in response.data
         assert stored == [PRODUCT_LOCAL_MREC]

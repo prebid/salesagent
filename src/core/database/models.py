@@ -1,8 +1,8 @@
 """SQLAlchemy models for database schema."""
 
 import logging
-from collections.abc import Sequence
-from datetime import datetime
+from collections.abc import Iterable, Mapping, Sequence
+from datetime import datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
@@ -43,6 +43,7 @@ from src.core.credentials import hash_token, mint_token, token_prefix
 from src.core.database.json_type import JSONType
 from src.core.errors.details import ConfigurationDetails
 from src.core.exceptions import AdCPConfigurationError, AdCPPersistedStateError
+from src.core.http_utils import canonical_publisher_domain
 from src.core.json_validators import PLACEMENTS_ARE_EXPLICIT_CHECK, PLACEMENTS_ARE_EXPLICIT_SQL, JSONValidatorMixin
 
 # The ONE NotificationConfig, whose authentication block is the one Authentication class
@@ -208,6 +209,9 @@ class Tenant(Base, JSONValidatorMixin):
 
     # Relationships
     products = relationship("Product", back_populates="tenant", cascade="all, delete-orphan")
+    # Read-only: a publisher row and what is derived from it are written by
+    # ``PublisherRepository`` alone. ``Product.format_contract`` reads the format catalogs here.
+    publishers: Mapped[list["Publisher"]] = relationship(viewonly=True, order_by="Publisher.domain")
     # No `principals` collection. It has no reader, and a relationship traversal is the
     # one way to reach Principal rows without importing the class — which is what the
     # TID251 ban on `src.core.database.models.Principal` outside the four repository
@@ -439,10 +443,6 @@ class Product(Base, JSONValidatorMixin):
     channels: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
     # Type hint: implementation config dict
     implementation_config: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
-    # The publishers the product sells: AdCP publisher-property selectors, one per publisher
-    # (core/product.json publisher_properties). Revision 3c38b1ee241f converted the legacy
-    # property_tags / property_ids columns into these and dropped them.
-    properties: Mapped[list[dict]] = mapped_column(JSONType, nullable=False)
     # Note: PR #79 fields (estimated_exposures, floor_cpm, recommended_cpm) are NOT stored in database
     # They are calculated dynamically from product_performance_metrics table
 
@@ -518,12 +518,22 @@ class Product(Base, JSONValidatorMixin):
     allowed_principal_ids: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
 
     # Relationships
-    tenant = relationship("Tenant", back_populates="products")
+    # load_on_pending: a product built in a session reads its tenant's publishers' format
+    # catalogs (``format_contract``) before its first flush.
+    tenant = relationship("Tenant", back_populates="products", load_on_pending=True)
     inventory_profile = relationship("InventoryProfile", back_populates="products")
     # No SQLAlchemy cascade - let database CASCADE handle pricing_options deletion
     # This avoids triggering the prevent_empty_pricing_options constraint
     # Use passive_deletes=True to tell SQLAlchemy to rely on database CASCADE
     pricing_options = relationship("PricingOption", back_populates="product", passive_deletes=True)
+    # The publishers the product sells, one selector per row (core/product.json
+    # publisher_properties). A linked inventory profile's selections replace these
+    # (:attr:`publisher_selection_rows`).
+    # Loaded with the product (selectin), so a product read in one session still names its
+    # publishers after that session closes, as the JSON column it replaced did.
+    publisher_selections: Mapped[list["ProductPublisherSelection"]] = relationship(
+        cascade="all, delete-orphan", passive_deletes=True, order_by="ProductPublisherSelection.id", lazy="selectin"
+    )
 
     # Effective properties - auto-resolve from inventory profile if set
     @property
@@ -541,25 +551,39 @@ class Product(Base, JSONValidatorMixin):
         from the declarations and no stored ``format_ids`` column is read. Only a product
         with no canonical arm is served the legacy arm it, or its profile, authored.
 
+        A publisher-backed declaration is stored as its key alone and served as the
+        publisher's current catalog entry (``publisher_format_catalog.resolve_declarations``),
+        read through the tenant's publishers only when a declaration names one.
+
         The FK column is tested before the relationship so a detached row with no profile
         never triggers a lazy load.
         """
         from src.core.format_resolver import linked_format_contract
+        from src.core.publisher_format_catalog import names_a_publisher, options_by_key
 
         profile = self.inventory_profile if self.inventory_profile_id and self.inventory_profile else None
-        return linked_format_contract(profile=profile, format_options=self.format_options, format_ids=self.format_ids)
+        authored = [*((profile.format_options or []) if profile else []), *(self.format_options or [])]
+        publisher_options = (
+            options_by_key(self.tenant.publishers) if names_a_publisher(authored) and self.tenant is not None else {}
+        )
+        return linked_format_contract(
+            profile=profile,
+            format_options=self.format_options,
+            format_ids=self.format_ids,
+            publisher_options=publisher_options,
+        )
 
     def resolve_publisher_properties(self, authorized_properties: Sequence["SelectableProperty"]) -> list[dict]:
         """This product's ``publisher_properties``, one selector per publisher.
 
-        *authorized_properties* are the seller's VERIFIED authorized properties, loaded once
-        per request by the caller (``AuthorizedPropertyRepository.list_refs``). An inventory
-        profile's selectors, or else the product's own ``properties``, name their publishers,
-        and are narrowed to the verified properties they name (``authorized_selectors``).
+        *authorized_properties* are the properties the seller's publishers authorize it for
+        now (``PublisherCatalog.refs``), loaded once per request by the caller. An inventory
+        profile's selections, or else the product's own, name their publishers, and are
+        narrowed to the authorized properties they name (``authorized_selectors``).
 
         A tenant is a SELLER: its host is where its agent answers, not a publisher, and a
         buyer verifies a product at ``https://<publisher_domain>/.well-known/adagents.json``
-        (#1845). So a product no verified property backs resolves to ``[]`` rather than
+        (#1845). So a product no authorized property backs resolves to ``[]`` rather than
         borrowing the host; the caller does not offer it.
         """
         from src.core.helpers.publisher_property_helpers import authorized_selectors
@@ -567,16 +591,21 @@ class Product(Base, JSONValidatorMixin):
         return authorized_selectors(self.stored_publisher_properties, authorized_properties)
 
     @property
+    def publisher_selection_rows(self) -> list["_PublisherSelectionColumns"]:
+        """The selection rows this product sells: its inventory profile's, or else its own."""
+        if self.inventory_profile_id and self.inventory_profile:
+            return list(self.inventory_profile.publisher_selections)
+        return list(self.publisher_selections)
+
+    @property
     def stored_publisher_properties(self) -> list[dict]:
         """The selectors this product's publishers are stored as: its inventory profile's, or else its own.
 
         What the seller authored, before :meth:`resolve_publisher_properties` narrows it to the
-        verified properties buyers are sold. Format coverage reads it to slice a multi-publisher
+        authorized properties buyers are sold. Format coverage reads it to slice a multi-publisher
         product by the publishers it names (``format_satisfaction.coverage_publishers``).
         """
-        if self.inventory_profile_id and self.inventory_profile:
-            return list(self.inventory_profile.publisher_properties or [])
-        return list(self.properties or [])
+        return [row.as_selector() for row in self.publisher_selection_rows]
 
     @property
     def effective_implementation_config(self) -> dict:
@@ -2065,16 +2094,6 @@ class InventoryProfile(Base, JSONValidatorMixin):
     # rename_formats_to_format_ids), which tolerates NULL.
     format_ids: Mapped[list | None] = mapped_column(JSONType, nullable=True)
 
-    # Publisher properties (AdCP spec-compliant)
-    # Structure: [
-    #   {
-    #     "publisher_domain": "cnn.com",
-    #     "property_ids": ["cnn_homepage"],  # OR
-    #     "property_tags": ["premium_news"]
-    #   }
-    # ]
-    publisher_properties: Mapped[list] = mapped_column(JSONType, nullable=False)
-
     # Optional default targeting template
     # Structure: AdCP targeting object
     targeting_template: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
@@ -2092,6 +2111,18 @@ class InventoryProfile(Base, JSONValidatorMixin):
     # Relationships
     tenant = relationship("Tenant")
     products = relationship("Product", back_populates="inventory_profile")
+    # The publishers the profile sells, one selector per row; a linked product sells these.
+    publisher_selections: Mapped[list["InventoryProfilePublisherSelection"]] = relationship(
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="InventoryProfilePublisherSelection.id",
+        lazy="selectin",
+    )
+
+    @property
+    def stored_publisher_properties(self) -> list[dict]:
+        """The selectors this profile's publishers are stored as."""
+        return [row.as_selector() for row in self.publisher_selections]
 
     __table_args__ = (
         UniqueConstraint("tenant_id", "profile_id", name="uq_inventory_profile"),
@@ -2548,68 +2579,6 @@ class StrategyState(Base, JSONValidatorMixin):
     )
 
 
-class AuthorizedProperty(Base, JSONValidatorMixin):
-    """Properties (websites, apps, etc.) that this agent is authorized to represent.
-
-    Used for the list_authorized_properties AdCP endpoint.
-    Stores property details and verification status.
-    """
-
-    __tablename__ = "authorized_properties"
-
-    property_id: Mapped[str] = mapped_column(String(100), nullable=False, primary_key=True)
-    tenant_id: Mapped[str] = mapped_column(String(50), nullable=False, primary_key=True)
-    property_type: Mapped[str] = mapped_column(String(20), nullable=False)
-    name: Mapped[str] = mapped_column(String(255), nullable=False)
-    identifiers: Mapped[list[dict]] = mapped_column(JSONType, nullable=False)
-    tags: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
-    publisher_domain: Mapped[str] = mapped_column(String(255), nullable=False)
-    verification_status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
-    verification_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    verification_error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
-    )
-
-    # Relationships
-    tenant = relationship("Tenant", backref="authorized_properties")
-
-    @classmethod
-    def verified_website(
-        cls, *, tenant_id: str, property_id: str, domain: str, name: str, tags: list[str] | None = None
-    ) -> "AuthorizedProperty":
-        """A website on *domain* whose publisher already authorizes this agent.
-
-        The row a seed writes for a publisher it controls: the domain is both the property's
-        identifier and its publisher, and it is stored ``verified`` because no verification
-        fetch will run for it.
-        """
-        return cls(
-            tenant_id=tenant_id,
-            property_id=property_id,
-            property_type="website",
-            name=name,
-            identifiers=[{"type": "domain", "value": domain}],
-            tags=tags,
-            publisher_domain=domain,
-            verification_status="verified",
-        )
-
-    __table_args__ = (
-        ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
-        CheckConstraint(
-            "property_type IN ('website', 'mobile_app', 'ctv_app', 'dooh', 'podcast', 'radio', 'streaming_audio')",
-            name="ck_property_type",
-        ),
-        CheckConstraint("verification_status IN ('pending', 'verified', 'failed')", name="ck_verification_status"),
-        Index("idx_authorized_properties_tenant", "tenant_id"),
-        Index("idx_authorized_properties_domain", "publisher_domain"),
-        Index("idx_authorized_properties_type", "property_type"),
-        Index("idx_authorized_properties_verification", "verification_status"),
-    )
-
-
 class PropertyTag(Base, JSONValidatorMixin):
     """Metadata for property tags used in authorized properties.
 
@@ -2637,43 +2606,235 @@ class PropertyTag(Base, JSONValidatorMixin):
     )
 
 
-class PublisherPartner(Base, JSONValidatorMixin):
-    """Publisher domains that this tenant has partnerships with.
+#: How long a publisher's last successfully fetched adagents.json stays usable.
+#: managed-networks.mdx: on a 5xx or timeout "serve the previously cached file for up to 24
+#: hours", and "repeated failures MUST NOT extend the cache" -- the window is measured from the
+#: most recent SUCCESSFUL fetch (``Publisher.fetched_at``), never from a failed attempt.
+PUBLISHER_DOCUMENT_FRESHNESS = timedelta(hours=24)
 
-    Tracks which publishers the tenant works with and verification status
-    of whether the tenant's agent is listed in each publisher's adagents.json.
 
-    The actual property IDs/tags are fetched fresh from adagents.json (not cached),
-    but this table tracks partnership status and last sync time.
+class Publisher(Base, JSONValidatorMixin):
+    """A publisher this tenant sells for, and the last valid adagents.json it served.
+
+    One row per (tenant, publisher). ``adagents`` is the publisher's
+    ``https://{domain}/.well-known/adagents.json`` as last fetched successfully; the
+    authorized properties (:class:`PublisherProperty`) and the publisher's format catalog
+    (:class:`PublisherFormatOption`) are derived from it on every successful fetch
+    (``src/services/publisher_ingest.py``) and never written any other way.
+
+    Authorization is not a stored flag. The publisher authorizes this agent while its
+    document is fresh (:meth:`is_fresh`) and a derived property is in effect; past the
+    window it authorizes nothing, evaluated at read time from ``fetched_at``.
     """
 
-    __tablename__ = "publisher_partners"
+    __tablename__ = "publishers"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    tenant_id: Mapped[str] = mapped_column(String(50), nullable=False)
-    publisher_domain: Mapped[str] = mapped_column(String(255), nullable=False)
-    display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    is_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    sync_status: Mapped[str] = mapped_column(
-        String(20), nullable=False, default="pending", comment="pending, success, error"
+    tenant_id: Mapped[str] = mapped_column(
+        String(50), ForeignKey("tenants.tenant_id", ondelete="CASCADE"), primary_key=True
     )
-    sync_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Canonical (``src.core.http_utils.canonical_publisher_domain``): the host the document is fetched from.
+    domain: Mapped[str] = mapped_column(String(255), primary_key=True)
+    display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # The last VALID document; NULL until the first successful fetch.
+    adagents: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    catalog_etag: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # The document's own ``last_updated``: a fetched document older than this is refused.
+    last_updated: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # The last SUCCESSFUL fetch, which the freshness window is measured from.
+    fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    fetch_attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    fetch_status: Mapped[str] = mapped_column(String(20), nullable=False, default="never_fetched")
+    fetch_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
 
-    # Relationships
-    tenant = relationship("Tenant", backref="publisher_partners")
+    properties: Mapped[list["PublisherProperty"]] = relationship(
+        back_populates="publisher", cascade="all, delete-orphan", passive_deletes=True, order_by="PublisherProperty.id"
+    )
+    format_options: Mapped[list["PublisherFormatOption"]] = relationship(
+        back_populates="publisher", cascade="all, delete-orphan", passive_deletes=True
+    )
+
+    def is_fresh(self, now: datetime) -> bool:
+        """Whether the stored document may still be used at *now* (:data:`PUBLISHER_DOCUMENT_FRESHNESS`)."""
+        return self.fetched_at is not None and now - self.fetched_at <= PUBLISHER_DOCUMENT_FRESHNESS
 
     __table_args__ = (
-        ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
-        UniqueConstraint("tenant_id", "publisher_domain", name="uq_tenant_publisher"),
-        CheckConstraint("sync_status IN ('pending', 'success', 'error')", name="ck_sync_status"),
-        Index("idx_publisher_partners_tenant", "tenant_id"),
-        Index("idx_publisher_partners_domain", "publisher_domain"),
-        Index("idx_publisher_partners_verified", "is_verified"),
+        CheckConstraint(
+            "fetch_status IN ('ok', 'not_found', 'invalid', 'unreachable', 'never_fetched')",
+            name="ck_publishers_fetch_status",
+        ),
+        Index("idx_publishers_tenant", "tenant_id"),
+    )
+
+
+class PublisherProperty(Base, JSONValidatorMixin):
+    """A property a publisher's adagents.json authorizes this agent for.
+
+    Derived from :attr:`Publisher.adagents` and replaced wholesale on every successful
+    fetch. One row per authorizing ``authorized_agents[]`` entry and property, carrying that
+    entry's qualifiers: ``effective_from`` / ``effective_until`` decide whether the row is in
+    effect (:meth:`in_effect`); ``placement_ids`` and ``countries`` are stored as data.
+
+    ``property_id`` is optional in ``core/property.json``, so a property authorized without
+    one is stored without one: it can be sold through an ``all`` or ``by_tag`` selection,
+    never through ``by_id``.
+    """
+
+    __tablename__ = "publisher_properties"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    publisher_domain: Mapped[str] = mapped_column(String(255), nullable=False)
+    property_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    property_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    identifiers: Mapped[list[dict]] = mapped_column(JSONType, nullable=False)
+    tags: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
+    effective_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    effective_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    placement_ids: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
+    countries: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
+
+    publisher: Mapped[Publisher] = relationship(back_populates="properties")
+
+    def in_effect(self, now: datetime) -> bool:
+        """Whether the authorizing entry's ``effective_from`` / ``effective_until`` window holds *now*."""
+        return (self.effective_from is None or self.effective_from <= now) and (
+            self.effective_until is None or now < self.effective_until
+        )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "publisher_domain"], ["publishers.tenant_id", "publishers.domain"], ondelete="CASCADE"
+        ),
+        Index("idx_publisher_properties_publisher", "tenant_id", "publisher_domain"),
+    )
+
+
+class PublisherFormatOption(Base, JSONValidatorMixin):
+    """One entry of a publisher's adagents.json ``formats[]`` catalog.
+
+    adagents.json ``formats``: the "Publisher-authoritative format catalog"; "Products
+    selling this publisher's inventory SHOULD reference these declarations by
+    ``format_option_id``", and an entry "without scope applies to all properties in the
+    file; with scope, only to the named subset" -- the union of
+    ``applies_to_property_ids`` and ``applies_to_property_tags``. ``declaration`` is the
+    ``core/product-format-declaration.json`` document the entry carries, without its scope.
+    Replaced wholesale on every successful fetch.
+    """
+
+    __tablename__ = "publisher_format_options"
+
+    tenant_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    publisher_domain: Mapped[str] = mapped_column(String(255), primary_key=True)
+    format_option_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    declaration: Mapped[dict] = mapped_column(JSONType, nullable=False)
+    applies_to_property_ids: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
+    applies_to_property_tags: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
+
+    publisher: Mapped[Publisher] = relationship(back_populates="format_options")
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "publisher_domain"], ["publishers.tenant_id", "publishers.domain"], ondelete="CASCADE"
+        ),
+    )
+
+
+class _PublisherSelectionColumns:
+    """The columns of one publisher-property selector, shared by the product and profile tables.
+
+    A selection names its publisher by foreign key (``publishers``), so a publisher the
+    tenant does not hold cannot be selected, and deleting a publisher removes the
+    selections of it. What the selection SELLS is decided on read against the publisher's
+    derived properties (``publisher_property_helpers.authorized_selectors``).
+    """
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    publisher_domain: Mapped[str] = mapped_column(String(255), nullable=False)
+    selection_type: Mapped[str] = mapped_column(String(10), nullable=False)
+    property_ids: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
+    property_tags: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
+
+    @classmethod
+    def from_selector(cls, tenant_id: str, selector: Mapping[str, Any]) -> Any:
+        """A row for one ``core/publisher-property-selector.json`` document.
+
+        A selector the admin JSON mode stored without ``selection_type`` takes the arm its
+        fields name (``ensure_selection_type``).
+        """
+        from src.core.helpers.publisher_property_helpers import ensure_selection_type
+
+        selector = (ensure_selection_type([dict(selector)]) or [dict(selector)])[0]
+        return cls(  # type: ignore[call-arg]
+            tenant_id=tenant_id,
+            publisher_domain=canonical_publisher_domain(str(selector["publisher_domain"])),
+            selection_type=selector["selection_type"],
+            property_ids=list(selector["property_ids"]) if selector.get("property_ids") else None,
+            property_tags=list(selector["property_tags"]) if selector.get("property_tags") else None,
+        )
+
+    @classmethod
+    def from_selectors(cls, tenant_id: str, selectors: Iterable[Mapping[str, Any]]) -> list[Any]:
+        """One row per selector of *selectors*, in order."""
+        return [cls.from_selector(tenant_id, selector) for selector in selectors]
+
+    def as_selector(self) -> dict[str, Any]:
+        """This row as the ``core/publisher-property-selector.json`` document it stores."""
+        selector: dict[str, Any] = {"publisher_domain": self.publisher_domain}
+        if self.selection_type == "by_id":
+            selector["property_ids"] = list(self.property_ids or ())
+        elif self.selection_type == "by_tag":
+            selector["property_tags"] = list(self.property_tags or ())
+        selector["selection_type"] = self.selection_type
+        return selector
+
+
+def _selection_table_args(prefix: str, owner: ForeignKeyConstraint) -> tuple:
+    return (
+        owner,
+        ForeignKeyConstraint(
+            ["tenant_id", "publisher_domain"], ["publishers.tenant_id", "publishers.domain"], ondelete="CASCADE"
+        ),
+        CheckConstraint("selection_type IN ('all', 'by_id', 'by_tag')", name=f"ck_{prefix}_selection_type"),
+    )
+
+
+class ProductPublisherSelection(_PublisherSelectionColumns, Base, JSONValidatorMixin):
+    """One publisher a product sells, as a selector over that publisher's properties."""
+
+    __tablename__ = "product_publisher_selections"
+
+    product_id: Mapped[str] = mapped_column(String(100), nullable=False)
+
+    __table_args__ = (
+        *_selection_table_args(
+            "product_publisher_selections",
+            ForeignKeyConstraint(
+                ["tenant_id", "product_id"], ["products.tenant_id", "products.product_id"], ondelete="CASCADE"
+            ),
+        ),
+        Index("idx_product_publisher_selections_product", "tenant_id", "product_id"),
+    )
+
+
+class InventoryProfilePublisherSelection(_PublisherSelectionColumns, Base, JSONValidatorMixin):
+    """One publisher an inventory profile sells, as a selector over that publisher's properties."""
+
+    __tablename__ = "inventory_profile_publisher_selections"
+
+    inventory_profile_id: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (
+        *_selection_table_args(
+            "inventory_profile_publisher_selections",
+            ForeignKeyConstraint(["inventory_profile_id"], ["inventory_profiles.id"], ondelete="CASCADE"),
+        ),
+        Index("idx_inventory_profile_publisher_selections_profile", "inventory_profile_id"),
     )
 
 

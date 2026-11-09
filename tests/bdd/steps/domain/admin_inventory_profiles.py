@@ -140,9 +140,12 @@ def when_open_product_edit_form(ctx: dict, product_id: str) -> None:
     ctx["admin_page"] = _env(ctx).open_product_edit_form(product_id)
 
 
-@when(parsers.parse('the seller\'s property "{property_id}" becomes verified'))
-def when_property_verified(ctx: dict, property_id: str) -> None:
-    _env(ctx).verify_property(property_id)
+@when(parsers.parse('the publisher "{publisher}" starts authorizing the seller for property "{property_id}"'))
+def when_publisher_starts_authorizing(ctx: dict, publisher: str, property_id: str) -> None:
+    """The publisher's file adds an entry for this agent, and the seller refreshes it."""
+    env = _env(ctx)
+    env.authorize(publisher, ctx["tenant"].agent_url, authorization_type="property_ids", property_ids=[property_id])
+    env.ingest_publisher(publisher)
 
 
 @when(
@@ -176,6 +179,20 @@ def when_save_open_product_form_declaring_agent_host_option(ctx: dict, product_i
     ctx["admin_page"] = env.save_open_form_with(format_options=json.dumps(_agent_host_option(env, option_id)))
 
 
+@when(
+    parsers.parse(
+        'the operator saves the open edit form of product "{product_id}", declaring format option "{option_id}" '
+        'of "{publisher}"'
+    )
+)
+def when_save_open_product_form_declaring_publisher_option(
+    ctx: dict, product_id: str, option_id: str, publisher: str
+) -> None:
+    """Save the open page with one publisher-backed option, as its key alone."""
+    option = [{"publisher_domain": publisher, "format_option_id": option_id}]
+    ctx["admin_page"] = _env(ctx).save_open_form_with(format_options=json.dumps(option))
+
+
 @when("the operator opens the add inventory profile form")
 def when_open_add_form(ctx: dict) -> None:
     ctx["admin_page"] = _env(ctx).admin_page("inventory-profiles/add")
@@ -194,13 +211,18 @@ def when_open_products_page(ctx: dict) -> None:
 # ── Then steps ──────────────────────────────────────────────────────
 
 
+def _stored_selectors(row: Any) -> list[dict]:
+    """The selectors a product or profile itself stores (its own selection rows)."""
+    return [selection.as_selector() for selection in row.publisher_selections]
+
+
 def _product_selection(row: Any) -> str:
-    """The column a product's selection is stored in, as the bytes a comparison can hold."""
-    return json.dumps(row.properties)
+    """A product's stored selection, as the bytes a comparison can hold."""
+    return json.dumps(_stored_selectors(row))
 
 
 def _profile_selection(row: Any) -> str:
-    return json.dumps(row.publisher_properties)
+    return json.dumps(_stored_selectors(row))
 
 
 def _assert_renamed_with_selection_unchanged(ctx: dict, row: Any, renamed: str, selection: str) -> None:
@@ -209,22 +231,22 @@ def _assert_renamed_with_selection_unchanged(ctx: dict, row: Any, renamed: str, 
     assert selection == ctx["selection_before_save"], f"stored {selection}, was {ctx['selection_before_save']}"
 
 
-def _assert_stored_selectors(ctx: dict, row: Any, field: str, expected: str) -> None:
-    """*row*'s selector column *field* equals the *expected* JSON, the row having been stored."""
+def _assert_stored_selectors(ctx: dict, row: Any, expected: str) -> None:
+    """*row*'s stored selection equals the *expected* JSON, the row having been stored."""
     page = _require_admin_page(ctx)
     assert row is not None, f"nothing stored; the form answered {page.status_code}"
-    stored = getattr(row, field)
+    stored = _stored_selectors(row)
     assert stored == json.loads(expected), f"stored {stored!r}"
 
 
 @then(parsers.parse('inventory profile "{profile_id}" stores publisher_properties {expected}'))
 def then_profile_stores(ctx: dict, profile_id: str, expected: str) -> None:
-    _assert_stored_selectors(ctx, _env(ctx).stored_inventory_profile(profile_id), "publisher_properties", expected)
+    _assert_stored_selectors(ctx, _env(ctx).stored_inventory_profile(profile_id), expected)
 
 
 @then(parsers.parse('product "{product_id}" stores publisher_properties {expected}'))
 def then_product_stores(ctx: dict, product_id: str, expected: str) -> None:
-    _assert_stored_selectors(ctx, _env(ctx).stored_product(product_id), "properties", expected)
+    _assert_stored_selectors(ctx, _env(ctx).stored_product(product_id), expected)
 
 
 @then(parsers.parse('product "{product_id}" is renamed and its stored selection is unchanged'))
@@ -295,6 +317,22 @@ def then_product_stores_no_agent_host_option(ctx: dict, product_id: str) -> None
     host = env.agent_host()
     named = [d for d in stored.format_options or [] if d.get("publisher_domain") == host]
     assert named == [], f"product {product_id!r} stores format options under the seller's own host: {named}"
+
+
+@then(parsers.parse('product "{product_id}" stores no format option of "{publisher}"'))
+def then_product_stores_no_option_of(ctx: dict, product_id: str, publisher: str) -> None:
+    stored = _env(ctx).stored_product(product_id)
+    assert stored is not None, f"product {product_id!r} is not stored"
+    named = [d for d in stored.format_options or [] if d.get("publisher_domain") == publisher]
+    assert named == [], f"product {product_id!r} stores format options of {publisher!r}: {named}"
+
+
+@then(parsers.parse('product "{product_id}" stores format options {expected}'))
+def then_product_stores_format_options(ctx: dict, product_id: str, expected: str) -> None:
+    page = _require_admin_page(ctx)
+    stored = _env(ctx).stored_product(product_id)
+    assert stored is not None, f"product {product_id!r} is not stored; the form answered {page.status_code}"
+    assert stored.format_options == json.loads(expected), f"product {product_id!r} stores {stored.format_options!r}"
 
 
 @then("the page does not name the seller's own host")
@@ -388,15 +426,12 @@ def when_modal_edits(ctx: dict, profile_id: str, width: int, height: int) -> Non
 
 
 def _agent_host_option(env: Any, option_id: str) -> list[dict[str, Any]]:
-    """One image declaration naming the seller's own host as the publisher of *option_id*."""
-    return [
-        {
-            "format_kind": "image",
-            "format_option_id": option_id,
-            "publisher_domain": env.agent_host(),
-            "params": {"width": 300, "height": 250},
-        }
-    ]
+    """One publisher-backed option key naming the seller's own host as the publisher of *option_id*.
+
+    The key alone, as a product stores a publisher's option: the host's adagents.json carries
+    no ``formats[]``, so the key resolves in no catalog the seller holds.
+    """
+    return [{"publisher_domain": env.agent_host(), "format_option_id": option_id}]
 
 
 @when(
@@ -443,7 +478,7 @@ def then_refusal_names_agent_host(ctx: dict) -> None:
     body = response.data.decode()
     assert response.status_code in (200, 400), f"{response.status_code}: {body[:200]!r}"
     host = ctx["env"].agent_host()
-    assert f"name {host}, the host this sales agent answers at" in body, (
+    assert f"of {host} is not in the format catalog of a publisher" in body, (
         f"the refusal does not name {host}: {body[:2000]}"
     )
 

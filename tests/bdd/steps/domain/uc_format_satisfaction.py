@@ -1444,6 +1444,12 @@ def _store_product(
     """
     from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
 
+    if not properties:
+        # A publisher-scoped option belongs to a publisher the product sells
+        # (publisher_format_catalog.format_option_refusal), so a product carrying one and naming
+        # no publishers of its own sells that option's publisher.
+        scoped = list(dict.fromkeys(d["publisher_domain"] for d in format_options or () if d.get("publisher_domain")))
+        properties = [{"publisher_domain": domain, "selection_type": "all"} for domain in scoped] or None
     if properties:
         # A product is offered only for a publisher the seller holds a verified property of
         # (#1845); the default publisher's comes with ProductFactory, a named one's here.

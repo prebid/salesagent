@@ -49,10 +49,10 @@ CI_TEST_TOKEN = "ci-test-token"
 
 
 def _ensure_example_property(session, tenant_id: str) -> None:
-    """Give *tenant_id* the CI seed's one authorized property, ``example.com``, unless it has it.
+    """Give *tenant_id* the CI seed's one publisher, ``example.com``, unless it has it.
 
-    The setup checklist counts authorized properties, and a product names only the
-    publishers of verified rows on the wire (#1845).
+    The setup checklist counts authorized properties, and a product names only publishers
+    whose stored adagents.json authorizes this agent (#1845).
     """
     from scripts.setup.seed_products import seed_verified_website
 
@@ -498,7 +498,7 @@ def init_db_ci():
             saved_products = session.scalars(stmt_verify).all()
             print(f"\n✅ Verification: {len(saved_products)} products found in database for tenant {tenant_id}")
             for prod in saved_products:
-                print(f"   - {prod.product_id}: {prod.name}, properties={prod.properties}")
+                print(f"   - {prod.product_id}: {prod.name}, publishers={prod.stored_publisher_properties}")
 
             # Also verify pricing_options exist
             from src.core.database.models import PricingOption as PricingOptionModel
@@ -516,10 +516,9 @@ def init_db_ci():
 
             # CRITICAL: Fail if products missing property authorization
             for prod in saved_products:
-                if not prod.properties:
+                if not prod.stored_publisher_properties:
                     print(f"\n❌ CRITICAL ERROR: Product {prod.product_id} names no publisher!")
-                    print(f"   properties: {prod.properties}")
-                    print("   Products must name their publishers in properties per AdCP spec")
+                    print("   Products must name their publishers per AdCP spec")
                     sys.exit(1)
 
             print("\n✅ Database initialization complete:")

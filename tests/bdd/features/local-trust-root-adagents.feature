@@ -1,7 +1,8 @@
 # adagents.json is served at the tenant's own host only when that host owns a property.
 #
 # A tenant is a sales agent. Its own host is not a publisher, unless the tenant also
-# holds an authorized property on it. The adagents.json served at that host speaks for
+# holds a stored adagents.json for it that authorizes a property (stored without a fetch
+# for a host the tenant controls, src/services/publisher_ingest.py seed_document). The adagents.json served at that host speaks for
 # the properties on that host and no others: a property the tenant sells on another
 # publisher's domain is authorized by THAT publisher's adagents.json, which a buyer
 # fetches from that domain.
@@ -38,12 +39,13 @@ Feature: adagents.json is published only by a host that owns a property
   @T-ADAGENTS-own-host-property
   Scenario: A host served on a port publishes a valid adagents.json for its own properties only
     Given the tenant is served on port 8443 of its host
-    And the tenant holds an authorized property on its own host with verification status "pending"
+    And the tenant holds an authorized property on its own host with verification status "verified"
+    And the stored adagents.json of the tenant's own host was last fetched 25 hours ago
     And the tenant holds an authorized property on "other-publisher.example" with verification status "verified"
     When the buyer fetches adagents.json naming the seller by Host
     Then the adagents.json validates against the pinned schema
     And the adagents.json claims only the property on the tenant's own host
-    # The own-host property is "pending" on purpose. Verifying a property fetches the
-    # adagents.json at its domain, so for a property on this host the verification reads
-    # this very document; requiring "verified" first would mean it never becomes verified
-    # (AuthorizedPropertyRepository.list_for_publisher_domain).
+    # The own host's stored document is past its 24-hour freshness window on purpose.
+    # Refreshing a publisher at this host fetches this very document, so requiring a fresh
+    # one to build it from would mean it could never become fresh
+    # (PublisherRepository.list_for_publisher_domain).

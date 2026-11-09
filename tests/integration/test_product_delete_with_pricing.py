@@ -8,7 +8,7 @@ which tells SQLAlchemy to rely on database CASCADE instead of explicit DELETE st
 import pytest
 from sqlalchemy import select
 
-from scripts.setup.seed_products import publishers_whole
+from scripts.setup.seed_products import whole_publisher_selections
 from src.core.database.database_session import get_db_session
 from src.core.database.models import PricingOption, Product, Tenant
 from tests.factories import PricingOptionFactory
@@ -41,7 +41,7 @@ def test_product_deletion_with_pricing_options(integration_db):
             format_ids=[{"agent_url": "http://test.com", "format_id": "test_format"}],
             targeting_template={},
             delivery_type="guaranteed",
-            properties=publishers_whole(session, tenant.tenant_id),
+            publisher_selections=whole_publisher_selections(session, tenant.tenant_id),
         )
         session.add(product)
         session.flush()
@@ -115,7 +115,7 @@ def test_pricing_option_direct_deletion_bypasses_trigger_due_to_cascade(integrat
             format_ids=[{"agent_url": "http://test.com", "format_id": "test_format"}],
             targeting_template={},
             delivery_type="guaranteed",
-            properties=publishers_whole(session, tenant.tenant_id),
+            publisher_selections=whole_publisher_selections(session, tenant.tenant_id),
         )
         session.add(product)
         session.flush()

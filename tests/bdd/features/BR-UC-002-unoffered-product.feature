@@ -1,6 +1,6 @@
 # Hand-authored feature: create_media_buy against a catalog holding a product buyers are not offered (#1845).
 #
-# A product no verified property backs has no valid publisher_properties entry
+# A product no authorized property backs has no valid publisher_properties entry
 # (core/product.json: required, minItems 1), so get_products leaves it out and
 # get_product_catalog does too. Neither the product nor its tenant's other products may
 # fail on it: an offered product still sells, and the unoffered one is unknown to the buyer
@@ -20,7 +20,7 @@ Feature: BR-UC-002 A catalog holding a product buyers are not offered
   Scenario: an offered product sells in a tenant that also holds an unoffered one
     Given a valid create_media_buy request
     And the account exists and is active
-    And the tenant also holds product "unoffered" that no verified property backs
+    And the tenant also holds product "unoffered" that no authorized property backs
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy success spec
     And the result should be success
@@ -29,7 +29,7 @@ Feature: BR-UC-002 A catalog holding a product buyers are not offered
   Scenario: the unoffered product is not found
     Given a valid create_media_buy request
     And the account exists and is active
-    And the tenant also holds product "unoffered" that no verified property backs
+    And the tenant also holds product "unoffered" that no authorized property backs
     But a package references the unoffered product "unoffered"
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy error spec
@@ -58,12 +58,31 @@ Feature: BR-UC-002 A catalog holding a product buyers are not offered
     And the wire error details should include missing_product_ids "host_option"
     And no media buy record should be persisted
 
+  # A product references a publisher's format option by {publisher_domain,
+  # format_option_id}; the publisher's stored adagents.json formats[] declares no such
+  # option, so the reference resolves nowhere and fails closed (core/product.json
+  # format_options): the product is not offered, and the buy is refused as for any
+  # unoffered product.
+  @T-UC-002-ext-unresolved-publisher-format-option @extension @error @requires_db
+  Scenario: a buy selecting a publisher format option its publisher's catalog does not declare is refused
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And the tenant also holds product "missing_option" referencing format option "news_mrec" of "news.example", which its publisher's catalog does not declare
+    But a package references product "missing_option" selecting format option "news_mrec" of "news.example"
+    When the Buyer Agent sends the create_media_buy request
+    Then the response is compliant with the create_media_buy error spec
+    And the operation should fail
+    And the error code should be "PRODUCT_NOT_FOUND"
+    And the error recovery should be "correctable"
+    And the wire error details should include missing_product_ids "missing_option"
+    And no media buy record should be persisted
+
   @T-UC-002-ext-unoffered-product-manual-approval @extension @error @requires_db
   Scenario: the unoffered product is not found when the tenant requires manual approval
     Given a valid create_media_buy request
     And the account exists and is active
     And the tenant requires manual approval
-    And the tenant also holds product "unoffered" that no verified property backs
+    And the tenant also holds product "unoffered" that no authorized property backs
     But a package references the unoffered product "unoffered"
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy error spec

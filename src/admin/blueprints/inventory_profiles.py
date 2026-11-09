@@ -16,9 +16,13 @@ from collections.abc import Sequence
 
 from flask import Blueprint, Flask, Response, flash, jsonify, redirect, render_template, request, session, url_for
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
 
-from src.admin.blueprints.products import _format_labels, _parse_authored_format_options
+from src.admin.blueprints.products import (
+    _format_labels,
+    _parse_authored_format_options,
+    _publisher_catalog,
+    _refuse_unresolved_format_options,
+)
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.admin.utils.operator_errors import safe_error_message
@@ -26,16 +30,17 @@ from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import (
     InventoryProfile,
+    InventoryProfilePublisherSelection,
     Product,
     PropertyTag,
     Tenant,
 )
-from src.core.database.repositories.authorized_property import AuthorizedPropertyRepository
 from src.core.format_resolver import format_contract
 from src.core.format_satisfaction import refuse_outside_common_intersection
 from src.core.helpers.publisher_property_helpers import (
     STALE_SELECTION_MESSAGE,
     RenderedSelection,
+    SelectableProperty,
     id_selection,
     judge_selection_save,
     profile_form_prefill,
@@ -43,6 +48,7 @@ from src.core.helpers.publisher_property_helpers import (
     selector_selection,
     tag_selection,
 )
+from src.core.publisher_format_catalog import options_by_key, resolve_declarations
 
 logger = logging.getLogger(__name__)
 
@@ -73,15 +79,15 @@ _JSON_MODES = frozenset({"full", "all", "specific"})
 
 
 def _selectors_from_form(
-    session: Session, tenant_id: str, property_mode: str, stored: list | None = None
+    authorized: Sequence[SelectableProperty], property_mode: str, stored: list | None = None
 ) -> tuple[list[dict], str | None]:
     """The form's property selection as selectors, one per publisher, in any of its modes.
 
-    Each selector names the publisher whose verified authorized properties it matches,
-    never the tenant's own host: a tenant is a seller representing many publishers (#1845),
-    and AdCP 3.2.7 ``core/publisher-property-selector.json`` makes property IDs
-    publisher-scoped. A pending property is not offered, and is refused if submitted anyway,
-    because a product would not sell it (``AuthorizedPropertyRepository.list_refs``). The
+    Each selector names the publisher whose *authorized* properties it matches, never the
+    tenant's own host: a tenant is a seller representing many publishers (#1845), and AdCP
+    3.2.7 ``core/publisher-property-selector.json`` makes property IDs publisher-scoped. A
+    property no publisher authorizes this agent for is not offered, and is refused if
+    submitted anyway, because a product would not sell it (``PublisherCatalog.refs``). The
     product forms validate through the same ``tag_selection`` / ``id_selection``. The JSON
     modes are held to the rule ``get_products`` sells stored selectors by
     (``selector_selection``), so every mode offers what it accepts; a selector the profile
@@ -89,7 +95,6 @@ def _selectors_from_form(
 
     Returns ``(selectors, None)``, or ``([], message)`` when the selection is unusable.
     """
-    authorized = AuthorizedPropertyRepository(session, tenant_id).list_refs()
     if property_mode == "tags":
         tags = [tag for tag in (t.strip().lower() for t in request.form.get("property_tags", "").split(",")) if tag]
         return tag_selection(tags, authorized)
@@ -124,8 +129,13 @@ def _get_inventory_summary(inventory_config: dict) -> str:
 
 
 def _profile_format_labels(profile: InventoryProfile) -> list[str]:
-    """One label per format the profile declares, read off its format contract."""
-    return _format_labels(format_contract(format_options=profile.format_options, format_ids=profile.format_ids))
+    """One label per format the profile declares, read off its format contract.
+
+    A publisher-backed declaration is labelled as its publisher's current catalog entry.
+    """
+    options = options_by_key(profile.tenant.publishers) if profile.format_options else {}
+    declarations = resolve_declarations(profile.format_options, options) if profile.format_options else None
+    return _format_labels(format_contract(format_options=declarations, format_ids=profile.format_ids))
 
 
 def _get_format_summary(profile: InventoryProfile) -> str:
@@ -219,7 +229,7 @@ def list_inventory_profiles(tenant_id: str):
                     "description": profile.description,
                     "inventory_summary": _get_inventory_summary(profile.inventory_config),
                     "format_summary": _get_format_summary(profile),
-                    "property_summary": _get_property_summary(profile.publisher_properties),
+                    "property_summary": _get_property_summary(profile.stored_publisher_properties),
                     "product_count": product_count,
                     "created_at": profile.created_at,
                     "updated_at": profile.updated_at,
@@ -278,10 +288,9 @@ def add_inventory_profile(tenant_id: str):
                 # announced from. format_ids is not authored here (core/product.json: "Do not
                 # author a new product from format_ids alone"); a legacy projection comes from
                 # the declarations' v1_format_ref.
+                catalog = _publisher_catalog(prop_session, tenant_id)
                 try:
-                    format_options = _parse_authored_format_options(
-                        form_data.get("format_options"), tenant.virtual_host_name
-                    )
+                    format_options = _parse_authored_format_options(form_data.get("format_options"))
                 except ValueError as e:
                     flash(str(e), "error")
                     return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
@@ -290,10 +299,15 @@ def add_inventory_profile(tenant_id: str):
                     return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
 
                 if property_mode in {"tags", "property_ids"} | _JSON_MODES:
-                    publisher_properties, error = _selectors_from_form(prop_session, tenant_id, property_mode)
+                    publisher_properties, error = _selectors_from_form(catalog.refs, property_mode)
                     if error:
                         flash(error, "error")
                         return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
+                try:
+                    _refuse_unresolved_format_options(format_options, publisher_properties, catalog)
+                except ValueError as e:
+                    flash(str(e), "error")
+                    return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
 
             # Parse targeting template (optional)
             targeting_template = None
@@ -328,7 +342,9 @@ def add_inventory_profile(tenant_id: str):
                     description=description if description else None,
                     inventory_config=inventory_config,
                     format_options=format_options,
-                    publisher_properties=publisher_properties,
+                    publisher_selections=InventoryProfilePublisherSelection.from_selectors(
+                        tenant_id, publisher_properties
+                    ),
                     targeting_template=targeting_template,
                 )
 
@@ -354,8 +370,9 @@ def add_inventory_profile(tenant_id: str):
     with get_db_session() as session:
         tenant = session.get(Tenant, tenant_id)
 
-        # The verified properties: a pending one is not selectable
-        authorized_properties = AuthorizedPropertyRepository(session, tenant_id).list_refs()
+        # The properties the publishers authorize now; nothing else is selectable.
+        catalog = _publisher_catalog(session, tenant_id)
+        authorized_properties = catalog.refs
 
         # Get property tags (as PropertyTag objects, not strings)
         property_tags_list: Sequence[PropertyTag] = session.scalars(
@@ -367,6 +384,7 @@ def add_inventory_profile(tenant_id: str):
         tenant_id=tenant_id,
         tenant=tenant,
         authorized_properties=authorized_properties,
+        publisher_format_options=list(catalog.options.values()),
         property_tags=property_tags_list,
         active_tab="inventory_profiles",
     )
@@ -383,6 +401,7 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
         if not profile or profile.tenant_id != tenant_id:
             flash("Inventory profile not found", "error")
             return redirect(url_for("inventory_profiles.list_inventory_profiles", tenant_id=tenant_id))
+        catalog = _publisher_catalog(session, tenant_id)
 
         if request.method == "POST":
             try:
@@ -390,7 +409,7 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
                 selection_save = judge_selection_save(
                     request.form.get("rendered_selection"),
                     request.form.getlist,
-                    selection_digest(profile.publisher_properties),
+                    selection_digest(profile.stored_publisher_properties),
                 )
                 if selection_save == "stale":
                     flash(STALE_SELECTION_MESSAGE.format(subject="profile"), "error")
@@ -431,9 +450,7 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
                 # Refused like the add form refuses it: flash and return to the form. Left to the
                 # handler's catch-all, the rolled-back profile rendered detached and answered 500.
                 try:
-                    authored_format_options = _parse_authored_format_options(
-                        form_data.get("format_options"), tenant_obj.virtual_host_name
-                    )
+                    authored_format_options = _parse_authored_format_options(form_data.get("format_options"))
                 except ValueError as e:
                     flash(str(e), "error")
                     return redirect(
@@ -449,7 +466,7 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
                 # A save posting what the page rendered leaves the stored selection as it is.
                 if property_mode in {"tags", "property_ids"} | _JSON_MODES and selection_save == "changed":
                     publisher_properties, error = _selectors_from_form(
-                        session, tenant_id, property_mode, profile.publisher_properties
+                        catalog.refs, property_mode, profile.stored_publisher_properties
                     )
                     if error:
                         flash(error, "error")
@@ -458,7 +475,20 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
                                 "inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id
                             )
                         )
-                    profile.publisher_properties = publisher_properties
+                    profile.publisher_selections = InventoryProfilePublisherSelection.from_selectors(
+                        tenant_id, publisher_properties
+                    )
+
+                # A publisher-backed format option must resolve for the profile as saved.
+                try:
+                    _refuse_unresolved_format_options(
+                        profile.format_options, profile.stored_publisher_properties, catalog
+                    )
+                except ValueError as e:
+                    flash(str(e), "error")
+                    return redirect(
+                        url_for("inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id)
+                    )
 
                 # Update targeting template
                 targeting_json = form_data.get("targeting_template", "").strip()
@@ -518,14 +548,14 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
         # GET: Show form with existing data
         tenant = session.get(Tenant, tenant_id)
 
-        authorized_properties = AuthorizedPropertyRepository(session, tenant_id).list_refs()
+        authorized_properties = list(catalog.refs)
 
         property_tags_list: Sequence[PropertyTag] = session.scalars(
             select(PropertyTag).where(PropertyTag.tenant_id == tenant_id).order_by(PropertyTag.tag_id)
         ).all()
 
-        prefill = profile_form_prefill(profile.publisher_properties, authorized_properties)
-        rendered_selection = RenderedSelection(prefill.fields(), selection_digest(profile.publisher_properties))
+        prefill = profile_form_prefill(profile.stored_publisher_properties, authorized_properties)
+        rendered_selection = RenderedSelection(prefill.fields(), selection_digest(profile.stored_publisher_properties))
 
         # Rendered inside the session: a POST that failed in the handler above rolled back,
         # which expires ``profile``, and the form reads it back from the stored row.
@@ -537,6 +567,7 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
             prefill=prefill,
             rendered_selection=rendered_selection,
             authorized_properties=authorized_properties,
+            publisher_format_options=list(catalog.options.values()),
             property_tags=property_tags_list,
             active_tab="inventory_profiles",
         )
@@ -602,7 +633,7 @@ def get_inventory_profile_api(tenant_id: str, profile_id: int):
                 "include_descendants": profile.inventory_config.get("include_descendants", True),
                 "format_options": profile.format_options,
                 "formats": profile.format_ids,
-                "publisher_properties": profile.publisher_properties,
+                "publisher_properties": profile.stored_publisher_properties,
                 "property_mode": "all",  # Default to "all" mode for now (no DB column yet)
                 "targeting_template": profile.targeting_template,
             }
@@ -629,7 +660,7 @@ def preview_inventory_profile(tenant_id: str, profile_id: int):
                 "placement_count": len(profile.inventory_config.get("placements", [])),
                 "format_count": len(_profile_format_labels(profile)),
                 "format_summary": _get_format_summary(profile),
-                "property_summary": _get_property_summary(profile.publisher_properties),
+                "property_summary": _get_property_summary(profile.stored_publisher_properties),
             }
         )
 
@@ -661,7 +692,7 @@ def list_inventory_profiles_api(tenant_id: str):
                     "description": profile.description,
                     "inventory_summary": _get_inventory_summary(profile.inventory_config),
                     "format_summary": _get_format_summary(profile),
-                    "property_summary": _get_property_summary(profile.publisher_properties),
+                    "property_summary": _get_property_summary(profile.stored_publisher_properties),
                     "product_count": product_count,
                     "created_at": profile.created_at.isoformat() if profile.created_at else None,
                     "updated_at": profile.updated_at.isoformat() if profile.updated_at else None,

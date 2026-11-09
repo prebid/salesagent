@@ -25,6 +25,7 @@ from tests.factories.core import seed_property_tag_selection
 from tests.factories.creative import DEFAULT_CREATIVE_AGENT_URL
 from tests.factories.inventory_profile import InventoryProfileFactory
 from tests.factories.product import default_publisher_properties
+from tests.factories.publisher import declare_format_options
 from tests.helpers.admin_product_form import minimal_product_create_form
 
 #: The params a stored "image" declaration carries. Concrete values, so an announcement that
@@ -432,14 +433,18 @@ def given_operator_product_across_two_publishers(ctx: dict, scope: str) -> None:
     authors no placements. Both declarations are complete image options. The 300x250 is
     product-local in both rows; the 728x90 is product-local or scoped to the FIRST publisher,
     which is the one difference between the two scenarios. Neither publisher is the tenant's
-    own, so the seller's publisher format catalog (RFC S3) is not consulted.
+    own; a publisher-scoped option is declared in the first publisher's formats[] and referenced by its key.
 
     The response is kept, not asserted: whether the form accepts is the scenario's Then.
     """
     selections = [seed_property_tag_selection(ctx["tenant"], ctx["env"]) for _ in range(2)]
     leaderboard = _sized_image_option("operator_leaderboard", 728, 90)
     if scope == "publisher-scoped":
-        leaderboard["publisher_domain"] = selections[0].split(":", 1)[0]
+        # The first publisher's catalog declares the option; the product references it by its
+        # key alone (core/product-format-declaration.json: the pair is the identity).
+        first_publisher = selections[0].split(":", 1)[0]
+        declare_format_options(ctx["tenant"], first_publisher, [leaderboard])
+        leaderboard = {"publisher_domain": first_publisher, "format_option_id": leaderboard["format_option_id"]}
     else:
         assert scope == "product-local", f"the scenario names an unknown scope: {scope!r}"
     ctx["admin_response"] = _post_operator_product(

@@ -2,7 +2,7 @@
 
 Pure builders — no session, no request, no clock. They take a tenant, ONE
 ``SigningKeyRepository.publishable_at()`` result, and (for adagents.json) the
-authorized-property records that back the claim, and return plain dicts. The
+properties the stored file at this host authorizes (the claim's backing), and return plain dicts. The
 route layer (``src/routes/well_known.py``) owns the reads; this module owns the
 SHAPE, which is what the schemas grade.
 
@@ -60,7 +60,7 @@ from src.core.agent_identity import agent_endpoint_urls, agent_entry_id, canonic
 from src.core.signing._rfc3339 import rfc3339
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from src.core.database.models import AuthorizedProperty, SigningKey, Tenant
+    from src.core.database.models import PublisherProperty, SigningKey, Tenant
 
 
 #: The schema origin every trust-root document points ``$schema`` at, DERIVED from the
@@ -207,15 +207,16 @@ def build_brand_json(tenant: Tenant, keys: Sequence[SigningKey]) -> dict[str, An
     return _validated(PublishedBrandDocument, document)
 
 
-def _property_entry(prop: AuthorizedProperty) -> dict[str, Any]:
-    """One ``core/property.json`` object built from an authorized-property record."""
+def _property_entry(prop: PublisherProperty) -> dict[str, Any]:
+    """One ``core/property.json`` object built from a stored authorized property."""
     entry: dict[str, Any] = {
-        "property_id": prop.property_id,
         "property_type": prop.property_type,
         "name": prop.name,
         "identifiers": prop.identifiers,
         "publisher_domain": prop.publisher_domain,
     }
+    if prop.property_id:
+        entry["property_id"] = prop.property_id
     if prop.tags:
         entry["tags"] = list(prop.tags)
     return entry
@@ -224,12 +225,12 @@ def _property_entry(prop: AuthorizedProperty) -> dict[str, Any]:
 def build_adagents_json(
     tenant: Tenant,
     keys: Sequence[SigningKey],
-    authorizations: Sequence[AuthorizedProperty],
+    authorizations: Sequence[PublisherProperty],
 ) -> dict[str, Any]:
     """The inline variant of adagents.json for *tenant*.
 
-    *authorizations* are the tenant's existing authorized-property records — the
-    document NEVER fabricates one. Fabricating an entry would mean
+    *authorizations* are the properties the stored file at this host authorizes this agent
+    for (``PublisherRepository.list_for_publisher_domain``) — the document NEVER fabricates one. Fabricating an entry would mean
     self-attesting an authorization no publisher granted, and this file's entire
     purpose is to be a publisher's attestation. An empty *authorizations* is
     refused with ``ValueError``: with no backing record there is no document to

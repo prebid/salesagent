@@ -16,8 +16,14 @@ import pytest
 from sqlalchemy import delete, select
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import InventoryProfile, Product, Tenant
-from tests.factories.product import default_publisher_properties
+from src.core.database.models import (
+    InventoryProfile,
+    InventoryProfilePublisherSelection,
+    Product,
+    ProductPublisherSelection,
+    Tenant,
+)
+from tests.factories.publisher import held_selections
 
 
 @pytest.mark.integration
@@ -68,12 +74,17 @@ class TestInventoryProfileTransitions:
                     {"agent_url": "https://example.com", "id": "format_a1"},
                     {"agent_url": "https://example.com", "id": "format_a2"},
                 ],
-                publisher_properties=[
-                    {
-                        "publisher_domain": "site-a.com",
-                        "property_ids": ["site_a_main"],
-                    }
-                ],
+                publisher_selections=held_selections(
+                    session,
+                    InventoryProfilePublisherSelection,
+                    tenant,
+                    [
+                        {
+                            "publisher_domain": "site-a.com",
+                            "property_ids": ["site_a_main"],
+                        }
+                    ],
+                ),
             )
             session.add(profile)
             session.commit()
@@ -105,12 +116,17 @@ class TestInventoryProfileTransitions:
                     {"agent_url": "https://example.com", "id": "format_b1"},
                     {"agent_url": "https://example.com", "id": "format_b2"},
                 ],
-                publisher_properties=[
-                    {
-                        "publisher_domain": "site-b.com",
-                        "property_ids": ["site_b_main"],
-                    }
-                ],
+                publisher_selections=held_selections(
+                    session,
+                    InventoryProfilePublisherSelection,
+                    tenant,
+                    [
+                        {
+                            "publisher_domain": "site-b.com",
+                            "property_ids": ["site_b_main"],
+                        }
+                    ],
+                ),
             )
             session.add(profile)
             session.commit()
@@ -130,8 +146,8 @@ class TestInventoryProfileTransitions:
             "format_ids": [],
             "targeting_template": {},
             "delivery_type": "standard",
-            "properties": default_publisher_properties(),
         }
+        selectors = kwargs.pop("properties", [])
         defaults.update(kwargs)
 
         with get_db_session() as session:
@@ -139,6 +155,7 @@ class TestInventoryProfileTransitions:
                 tenant_id=tenant_id,
                 product_id=product_id,
                 name=name,
+                publisher_selections=held_selections(session, ProductPublisherSelection, tenant_id, selectors),
                 **defaults,
             )
             session.add(product)
@@ -159,6 +176,7 @@ class TestInventoryProfileTransitions:
             {
                 "publisher_domain": "custom-site.com",
                 "property_ids": ["custom_property"],
+                "selection_type": "by_id",
             }
         ]
         self.create_product(
@@ -178,7 +196,7 @@ class TestInventoryProfileTransitions:
             product = session.scalars(stmt).first()
 
             assert product.format_ids == custom_formats
-            assert product.properties == custom_properties
+            assert product.stored_publisher_properties == custom_properties
             assert list(product.format_contract.format_ids) == custom_formats
 
             # Get profile data for comparison
@@ -198,7 +216,7 @@ class TestInventoryProfileTransitions:
 
             # Assert custom data still exists in database (not deleted)
             assert product.format_ids == custom_formats
-            assert product.properties == custom_properties
+            assert [row.as_selector() for row in product.publisher_selections] == custom_properties
 
         # Cleanup
         with get_db_session() as session:
@@ -247,11 +265,14 @@ class TestInventoryProfileTransitions:
                 {
                     "publisher_domain": "new-custom-site.com",
                     "property_ids": ["new_custom_property"],
+                    "selection_type": "by_id",
                 }
             ]
 
             product.format_ids = custom_formats
-            product.properties = custom_properties
+            product.publisher_selections = held_selections(
+                session, ProductPublisherSelection, tenant, custom_properties
+            )
 
             session.commit()
             session.refresh(product)

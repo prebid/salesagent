@@ -1,7 +1,7 @@
 """CapabilitiesEnv — integration test environment for _get_adcp_capabilities_impl.
 
 Patches: adapter CLASS resolver + audit logger ONLY.
-Real: TrustRootUoW (verified publishers AND signing-key backing, in one
+Real: TrustRootUoW (authorizing publishers AND signing-key backing, in one
 session), the full response builder (all hit real DB).
 
 Production reads adapter default_channels/get_targeting_capabilities off a
@@ -118,7 +118,7 @@ class CapabilitiesEnv(IntegrationEnv):
     """Integration test environment for get_adcp_capabilities.
 
     Only mocks the adapter factory and the audit logger. Everything else is
-    real: real DB, real TrustRootUoW (verified publishers and signing-key
+    real: real DB, real TrustRootUoW (authorizing publishers and signing-key
     backing), real transport dispatch. Capabilities is a pure read — no adapter
     I/O beyond attribute access on the mock.
 
@@ -214,7 +214,7 @@ class CapabilitiesEnv(IntegrationEnv):
         setup against the identical production read
         (``media_buy.portfolio.primary_channels`` unions each product's effective
         channels -- src/core/helpers/channel_helpers.py). Its sibling
-        ``given_publisher_partnerships`` already seeds ``PublisherPartner`` this way,
+        ``given_publisher_partnerships`` already seeds publisher documents this way,
         which is why publisher_domains has always graded over a real transport
         while channels did not.
 
@@ -234,7 +234,7 @@ class CapabilitiesEnv(IntegrationEnv):
 
         tenant = self.get_session().get(Tenant, self._tenant_id)
         for channel in channels:
-            # Channels only: a verified property would add a publisher to the portfolio
+            # Channels only: an authorizing publisher would add a publisher to the portfolio
             # the scenario did not declare.
             ProductFactory(tenant=tenant, channels=[channel], authorize_publisher=False)
         self._commit_factory_data()
@@ -580,13 +580,13 @@ class CapabilitiesEnv(IntegrationEnv):
     def _realize_tenant_config_db_failure(self) -> None:
         """E2E realization: the capabilities session's first read fails in the database.
 
-        The publisher-partner read is the first in that session, so its failure aborts the
+        The publishers read is the first in that session, so its failure aborts the
         transaction and every read after it fails too: the state the in-process patch
         describes, reached in the live server's own database.
         """
-        from src.core.database.models import PublisherPartner
+        from src.core.database.models import Publisher
 
-        self._fail_table_for_scenario(PublisherPartner.__tablename__)
+        self._fail_table_for_scenario(Publisher.__tablename__)
 
     @realize_e2e(_realize_tenant_config_db_failure)
     def break_tenant_config_db(self) -> None:
@@ -594,7 +594,7 @@ class CapabilitiesEnv(IntegrationEnv):
 
         Patches TrustRootUoW at the seller-capabilities service seam — the module
         that assembles the response and therefore opens the session — so BOTH reads it
-        owns fail: the verified publisher domains (portfolio omitted) and, since #1291 D1, the
+        owns fail: the authorizing publisher domains (portfolio omitted) and, since #1291 D1, the
         signing-key backing (keyless posture, no identity block). Registered with
         ``_guard``, so it is stopped on ctx-independent env teardown along with
         everything else — including when a later ``__enter__`` step raises.

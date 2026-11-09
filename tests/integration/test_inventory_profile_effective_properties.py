@@ -16,8 +16,9 @@ from decimal import Decimal
 import pytest
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import InventoryProfile, Product, Tenant
+from src.core.database.models import InventoryProfile, InventoryProfilePublisherSelection, Product, Tenant
 from tests.factories import PricingOptionFactory
+from tests.factories.publisher import held_selections
 from tests.helpers.adcp_factories import create_test_db_product
 
 
@@ -62,12 +63,17 @@ def test_profile(integration_db, test_tenant):
                 {"agent_url": "http://test.example.com", "id": "display_300x250_image"},
                 {"agent_url": "http://test.example.com", "id": "display_728x90_image"},
             ],
-            publisher_properties=[
-                {
-                    "publisher_domain": "example.com",
-                    "property_ids": ["example_homepage"],
-                }
-            ],
+            publisher_selections=held_selections(
+                session,
+                InventoryProfilePublisherSelection,
+                test_tenant.tenant_id,
+                [
+                    {
+                        "publisher_domain": "example.com",
+                        "property_ids": ["example_homepage"],
+                    }
+                ],
+            ),
             targeting_template={"geo_country": {"values": ["US"], "required": False}},
         )
         session.add(profile)

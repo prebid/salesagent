@@ -20,7 +20,7 @@ from src.core.database.models import PricingOption
 from src.core.database.models import Product as ProductModel
 from src.core.product_conversion import convert_product_model_to_schema, default_reporting_capabilities
 from src.core.schemas import Product
-from tests.factories.product import ONE_AUTHORIZED_PROPERTY
+from tests.factories.product import ONE_AUTHORIZED_PROPERTY, default_publisher_properties
 from tests.helpers.adcp_factories import (
     create_test_cpm_pricing_option,
     create_test_db_product,
@@ -59,6 +59,7 @@ def _make_db_product(**overrides) -> ProductModel:
         "name": "DM Test Product",
         "delivery_type": "guaranteed",
         "delivery_measurement": {"provider": "test_provider"},
+        "properties": default_publisher_properties(),
     }
     defaults.update(overrides)
     product = create_test_db_product(**defaults)

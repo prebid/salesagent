@@ -496,9 +496,9 @@ Feature: BR-UC-010 Discover Seller Capabilities
     And the response should include media_buy.portfolio with publisher_domains "news.example", "partner.example", "sports.example"
     # publisher_domains are the publishers this seller is AUTHORIZED to represent, and a
     # buyer checks each one by fetching https://<domain>/.well-known/adagents.json. A domain
-    # whose authorization this seller has not verified (a pending or failed property, a
-    # partner whose check failed) is not one it can claim. The two tables that record a
-    # verified publisher are unioned, so a publisher known through both is listed once.
+    # whose stored adagents.json does not authorize this seller now (never fetched, or its
+    # last fetch failed with nothing stored) is not one it can claim. A publisher is one row
+    # (canonical domain), so it is listed once however it was given.
     # Ungraded by storyboards: the one pinned compliance yaml that reads portfolio
     # (media-buy scenarios/portfolio_routing_scope.yaml) grades only its routing allowlists,
     # never publisher_domains.
@@ -567,7 +567,8 @@ Feature: BR-UC-010 Discover Seller Capabilities
     And the response should carry one SERVICE_UNAVAILABLE advisory for capability "publisher domains"
     # A port survives canonicalization and is not admitted by the pattern. It is a different
     # origin from the bare host the buyer would fetch, so the port is not dropped to make the
-    # row fit. An empty domain reaches `verified` through auto-verify. One bad row costs that
+    # row fit. (An empty domain is refused when the operator adds a publisher and cannot be
+    # fetched, so it never authorizes this seller and has no row here.) One bad row costs that
     # row: the valid publishers stay on the wire, and the advisory tells the buyer that the
     # read degraded (errors: "Task-specific errors and warnings").
     # Ungraded by storyboards: the one pinned compliance yaml that reads portfolio
@@ -578,7 +579,6 @@ Feature: BR-UC-010 Discover Seller Capabilities
 
     Examples:
       | partition        | rejected_row                                                                                            |
-      | empty partner    | the tenant has verified publisher partnerships with domains ""                                          |
       | partner on port  | the tenant has verified publisher partnerships with domains "news.example.com:8443"                     |
       | property on port | the tenant holds an authorized property on "news.example.com:8443" with verification status "verified"  |
 

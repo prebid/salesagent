@@ -212,8 +212,7 @@ fixture by way of `_build_admin_env`.
    as it stands, the harness or the stack is extended until it can:
    `local-publisher-authorization.feature` serves a publisher's adagents.json from a
    TLS origin in the runner (`publisher.adcp-e2e.dev`, the runner's alias on the
-   stack's non-private subnet), and the stack's servers start with
-   `PUBLISHER_AUTO_VERIFY=false`, the setting its in-process leg patches.
+   stack's non-private subnet).
 2. **One registry row builds the env.** `ENV_ROUTES["ADMIN"]`
    (`tests/bdd/conftest.py:5061`) names `_build_admin_env` (`:4782-4806`), and
    `_run_env_route` is the single consumer. That builder is the only one that

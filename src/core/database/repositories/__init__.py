@@ -17,12 +17,12 @@ Usage:
 
 from src.core.database.repositories.account import AccountRepository
 from src.core.database.repositories.adapter_config import AdapterConfigRepository, TenantNotConfiguredError
-from src.core.database.repositories.authorized_property import AuthorizedPropertyRepository
 from src.core.database.repositories.currency_limit import CurrencyLimitRepository
 from src.core.database.repositories.delivery_simulation import DeliverySimulationConfigRepository
 from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.product import ProductRepository
+from src.core.database.repositories.publisher import PublisherRepository
 from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
 from src.core.database.repositories.replay_nonce import ReplayNonceRepository
 from src.core.database.repositories.signing_key import SigningKeyRepository
@@ -32,6 +32,7 @@ from src.core.database.repositories.uow import (
     AccountUoW,
     MediaBuyUoW,
     ProductUoW,
+    PublisherUoW,
     PushNotificationConfigUoW,
     SigningKeyUoW,
     TenantConfigUoW,
@@ -43,7 +44,6 @@ from src.core.database.repositories.workflow import WorkflowRepository
 __all__ = [
     "AccountRepository",
     "AccountUoW",
-    "AuthorizedPropertyRepository",
     "AdapterConfigRepository",
     "TenantNotConfiguredError",
     "CurrencyLimitRepository",
@@ -53,6 +53,8 @@ __all__ = [
     "MediaBuyUoW",
     "ProductRepository",
     "ProductUoW",
+    "PublisherRepository",
+    "PublisherUoW",
     "PushNotificationConfigRepository",
     "PushNotificationConfigUoW",
     "ReplayNonceRepository",

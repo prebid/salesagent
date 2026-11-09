@@ -19,8 +19,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import attributes
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Product
+from src.core.database.models import Product, ProductPublisherSelection
 from src.core.database.repositories.product import ProductRepository
+from src.core.publisher_format_catalog import stored_declaration
 from src.core.signals_agent_registry import get_signals_agent_registry
 
 logger = logging.getLogger(__name__)
@@ -343,7 +344,9 @@ def create_variant_from_template(
         # contract is copied as its declarations alone; its legacy projection is derived
         # from them, so storing it beside them would be a second authored catalog.
         "format_ids": None if contract.format_options else (list(contract.format_ids) or None),
-        "format_options": list(contract.format_options) if contract.format_options else None,
+        # A publisher-backed declaration is stored as its key alone, as on every product, and
+        # served as the publisher's current entry (``publisher_format_catalog``).
+        "format_options": [stored_declaration(d) for d in contract.format_options] if contract.format_options else None,
         "targeting_template": template.targeting_template,
         "delivery_type": template.delivery_type,
         "measurement": template.measurement,
@@ -352,7 +355,9 @@ def create_variant_from_template(
         "is_custom": False,  # Variants are generated, not custom
         "countries": template.countries,
         "implementation_config": template.implementation_config,
-        "properties": template.properties,
+        "publisher_selections": ProductPublisherSelection.from_selectors(
+            template.tenant_id, template.stored_publisher_properties
+        ),
         "delivery_measurement": template.delivery_measurement,
         "product_card": template.product_card,
         "product_card_detailed": template.product_card_detailed,

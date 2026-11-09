@@ -336,8 +336,15 @@ class TestSetupChecklistMockAdapter:
                 mock_session.scalars.side_effect = scalars_side_effect
                 mock_session.scalar.side_effect = scalar_side_effect
 
-                # Mock GEMINI_API_KEY env var
-                with patch("os.getenv") as mock_getenv:
+                # Mock GEMINI_API_KEY env var. The authorized properties are a repository read
+                # (one authorizing publisher, two properties), not a counted scalar.
+                with (
+                    patch("os.getenv") as mock_getenv,
+                    patch(
+                        "src.services.setup_checklist_service.PublisherRepository.count_authorized",
+                        return_value=(1, 2),
+                    ),
+                ):
                     mock_getenv.return_value = "fake-api-key"
 
                     # This should NOT raise AdCPConfigurationError when all requirements met

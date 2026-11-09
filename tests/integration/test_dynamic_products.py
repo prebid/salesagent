@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from scripts.setup.seed_products import publishers_whole
+from scripts.setup.seed_products import whole_publisher_selections
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Product, Tenant
 from src.services.dynamic_products import (
@@ -118,7 +118,7 @@ def _create_dynamic_template(
             format_ids=[{"agent_url": "https://creative.example.com", "id": "display_300x250"}],
             targeting_template={"geo": ["US"]},
             delivery_type="standard",
-            properties=publishers_whole(session, tenant_id),
+            publisher_selections=whole_publisher_selections(session, tenant_id),
             is_dynamic=True,
             signals_agent_ids=signals_agent_ids,
             max_signals=max_signals,
@@ -452,7 +452,7 @@ class TestArchiveExpiredVariants:
                 format_ids=[],
                 targeting_template={},
                 delivery_type="standard",
-                properties=publishers_whole(session, "test_tenant"),
+                publisher_selections=whole_publisher_selections(session, "test_tenant"),
                 is_dynamic_variant=True,
                 parent_product_id="tmpl_001",
                 expires_at=datetime.now(UTC) - timedelta(days=1),
@@ -481,7 +481,7 @@ class TestArchiveExpiredVariants:
                 format_ids=[],
                 targeting_template={},
                 delivery_type="standard",
-                properties=publishers_whole(session, "test_tenant"),
+                publisher_selections=whole_publisher_selections(session, "test_tenant"),
                 is_dynamic_variant=True,
                 parent_product_id="tmpl_001",
                 expires_at=datetime.now(UTC) + timedelta(days=10),
@@ -504,7 +504,7 @@ class TestArchiveExpiredVariants:
                 format_ids=[],
                 targeting_template={},
                 delivery_type="standard",
-                properties=publishers_whole(session, "test_tenant"),
+                publisher_selections=whole_publisher_selections(session, "test_tenant"),
                 is_dynamic_variant=True,
                 parent_product_id="tmpl_001",
                 expires_at=datetime.now(UTC) - timedelta(days=5),
@@ -530,7 +530,7 @@ class TestArchiveExpiredVariants:
                     format_ids=[],
                     targeting_template={},
                     delivery_type="standard",
-                    properties=publishers_whole(session, tid),
+                    publisher_selections=whole_publisher_selections(session, tid),
                     is_dynamic_variant=True,
                     parent_product_id="tmpl_001",
                     expires_at=datetime.now(UTC) - timedelta(days=1),
@@ -562,7 +562,7 @@ class TestArchiveExpiredVariants:
                     format_ids=[],
                     targeting_template={},
                     delivery_type="standard",
-                    properties=publishers_whole(session, tid),
+                    publisher_selections=whole_publisher_selections(session, tid),
                     is_dynamic_variant=True,
                     parent_product_id="tmpl_001",
                     expires_at=datetime.now(UTC) - timedelta(days=1),

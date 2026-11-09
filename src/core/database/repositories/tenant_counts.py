@@ -4,7 +4,7 @@ Cross-tenant by design, like ``tenant_lookup``: the bulk setup checklist and the
 admin tenant list grade a page of tenants with one grouped query per metric
 rather than one query per tenant. A model whose rows are repository-private
 (``Principal``) or whose predicate belongs to its repository
-(``PublisherPartner``'s verified rule) keeps a named wrapper in its own module
+(a ``Publisher``'s authorizing rule) keeps a named wrapper in its own module
 that calls this.
 """
 

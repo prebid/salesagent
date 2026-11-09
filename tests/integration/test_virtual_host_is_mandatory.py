@@ -417,7 +417,6 @@ def test_every_publisher_of_this_tenants_agent_url_names_the_same_origin(monkeyp
     A deployment-wide override must not outrank the tenant's own stored host, because that
     is how every tenant collapses onto one URL.
     """
-    from src.admin.blueprints.authorized_properties import _construct_agent_url
     from src.core.agent_identity import canonical_agent_url
     from src.core.config import get_settings
     from tests.factories import TenantFactory
@@ -432,7 +431,9 @@ def test_every_publisher_of_this_tenants_agent_url_names_the_same_origin(monkeyp
         from src.core.tenant_context import TenantContext
 
         published = canonical_agent_url(TenantContext(tenant_id=tenant.tenant_id, virtual_host=tenant.virtual_host))
-        verified = _construct_agent_url("pub-origin-t")
+        # What the ingest compares each authorized_agents[] entry against
+        # (src/services/publisher_ingest.py passes ``tenant.agent_url``).
+        verified = tenant.agent_url
 
         assert verified == published, (
             f"the adagents.json verifier derived {verified!r} while the card publishes {published!r}"

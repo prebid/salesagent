@@ -104,7 +104,7 @@ class TestDatabaseProductsIntegration:
                 "is_custom",
                 "countries",
                 "implementation_config",
-                "properties",
+                "publisher_selections",
                 "pricing_options",
             ]
             for field in valid_product_fields:

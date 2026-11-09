@@ -17,8 +17,8 @@ Usage:
         steps = uow.workflows.list_by_tenant(statuses=["pending"])
         # auto-commits when exiting the `with` block
 
-    with TenantConfigUoW(tenant_id) as uow:
-        partners = uow.tenant_config.list_publisher_partners()
+    with PublisherUoW(tenant_id) as uow:
+        publishers = uow.publishers.list_all()
         # auto-commits when exiting the `with` block
 
 """
@@ -28,6 +28,7 @@ from __future__ import annotations
 import logging
 import warnings
 from collections.abc import Collection, Mapping
+from datetime import UTC, datetime
 from types import TracebackType
 from typing import Any, ClassVar, Self
 
@@ -35,13 +36,13 @@ from sqlalchemy.orm import Session
 
 from src.core.database.database_session import get_db_session
 from src.core.database.repositories.account import AccountRepository
-from src.core.database.repositories.authorized_property import AuthorizedPropertyRepository
 from src.core.database.repositories.creative import CreativeAssignmentRepository, CreativeRepository
 from src.core.database.repositories.currency_limit import CurrencyLimitRepository
 from src.core.database.repositories.effects import begin_effects, drain_after_commit, end_effects
 from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.product import OfferedProduct, ProductRepository, offered_products
+from src.core.database.repositories.publisher import PublisherRepository
 from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
 from src.core.database.repositories.signing_key import SigningKeyRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
@@ -212,7 +213,7 @@ class _OffersProducts:
     """The one read of the products buyers are offered, for a UoW holding both repositories it needs."""
 
     products: ProductRepository | None
-    authorized_properties: AuthorizedPropertyRepository | None
+    publishers: PublisherRepository | None
 
     def list_offered(self, product_ids: Collection[str] | None = None) -> list[OfferedProduct]:
         """The tenant's offered products (:func:`offered_products`), or only those of *product_ids*.
@@ -221,8 +222,8 @@ class _OffersProducts:
         here, so a product one of them refuses as unknown is unknown to the others too.
         """
         assert self.products is not None
-        assert self.authorized_properties is not None
-        return offered_products(self.products.list_for_offer(product_ids), self.authorized_properties.list_refs())
+        assert self.publishers is not None
+        return offered_products(self.products.list_for_offer(product_ids), self.publishers.catalog(datetime.now(UTC)))
 
 
 class MediaBuyUoW(_OffersProducts, BaseUoW):
@@ -239,7 +240,7 @@ class MediaBuyUoW(_OffersProducts, BaseUoW):
 
     media_buys: MediaBuyRepository | None
     products: ProductRepository | None
-    authorized_properties: AuthorizedPropertyRepository | None
+    publishers: PublisherRepository | None
     creatives: CreativeRepository | None
     # create_media_buy and update_media_buy both write a package's creative
     # assignments in the same transaction as the buy itself. They used to do it
@@ -254,7 +255,7 @@ class MediaBuyUoW(_OffersProducts, BaseUoW):
         assert self._session is not None
         self.media_buys = MediaBuyRepository(self._session, self._tenant_id)
         self.products = ProductRepository(self._session, self._tenant_id)
-        self.authorized_properties = AuthorizedPropertyRepository(self._session, self._tenant_id)
+        self.publishers = PublisherRepository(self._session, self._tenant_id)
         self.creatives = CreativeRepository(self._session, self._tenant_id)
         self.assignments = CreativeAssignmentRepository(self._session, self._tenant_id)
         self.currency_limits = CurrencyLimitRepository(self._session, self._tenant_id)
@@ -263,7 +264,7 @@ class MediaBuyUoW(_OffersProducts, BaseUoW):
     def _clear_repos(self) -> None:
         self.media_buys = None
         self.products = None
-        self.authorized_properties = None
+        self.publishers = None
         self.creatives = None
         self.assignments = None
         self.currency_limits = None
@@ -274,7 +275,7 @@ class ProductUoW(_OffersProducts, BaseUoW):
     """Unit of Work for Product operations.
 
     Wraps a database session and provides a tenant-scoped ProductRepository, plus the
-    authorized properties a product's legacy selectors resolve against (#1845).
+    publishers whose files decide what a product sells (#1845).
     Auto-commits on clean exit, rolls back on exception.
 
     Args:
@@ -282,16 +283,16 @@ class ProductUoW(_OffersProducts, BaseUoW):
     """
 
     products: ProductRepository | None
-    authorized_properties: AuthorizedPropertyRepository | None
+    publishers: PublisherRepository | None
 
     def _init_repos(self) -> None:
         assert self._session is not None
         self.products = ProductRepository(self._session, self._tenant_id)
-        self.authorized_properties = AuthorizedPropertyRepository(self._session, self._tenant_id)
+        self.publishers = PublisherRepository(self._session, self._tenant_id)
 
     def _clear_repos(self) -> None:
         self.products = None
-        self.authorized_properties = None
+        self.publishers = None
 
 
 class WorkflowUoW(BaseUoW):
@@ -482,12 +483,12 @@ class TrustRootUoW(BaseUoW):
     """Unit of Work for what this agent publishes about itself (#1291 A3, D1).
 
     One session over the tenant (whose stored host IS the agent identity), its
-    publishable key set, and its authorized properties. Two readers open it, and each
+    publishable key set, and its publishers. Two readers open it, and each
     needs all three in one session:
 
     * the trust-root documents: the JWKS and the adagents pin must describe the same
       key set, and two sessions could observe a rotation from either side of it;
-    * ``get_adcp_capabilities``: the portfolio's verified publishers, the signing
+    * ``get_adcp_capabilities``: the portfolio's authorizing publishers, the signing
       posture, and the identity block derived from the ORM ``Tenant``, which must stay
       attached while it is read. No session in this codebase sets
       ``expire_on_commit=False``, so a row handed out of the block raises
@@ -501,28 +502,31 @@ class TrustRootUoW(BaseUoW):
 
     tenant_config: TenantConfigRepository | None
     signing_keys: SigningKeyRepository | None
-    authorized_properties: AuthorizedPropertyRepository | None
+    publishers: PublisherRepository | None
 
     _REPOSITORIES: ClassVar[Mapping[str, type]] = {
         "tenant_config": TenantConfigRepository,
         "signing_keys": SigningKeyRepository,
-        "authorized_properties": AuthorizedPropertyRepository,
+        "publishers": PublisherRepository,
     }
 
 
-class AuthorizedPropertyUoW(BaseUoW):
-    """Unit of Work for verifying this tenant's authorized properties.
+class PublisherUoW(BaseUoW):
+    """Unit of Work for a tenant's publishers: one publisher's ingest, or the admin pages over them.
 
-    One unit per property verification: the read, the adagents.json check and the
-    status write share a session that nothing else opens. A bulk run reads the
-    pending properties in one unit, closes it, then opens one unit per property, so no
-    unit is ever nested in another (the shared scoped session would detach the
-    outer unit's rows, see #1644).
+    One unit per publisher ingest: the stored document, the derived rows and the fetch
+    outcome are written in one transaction, so a reader never sees a document beside the
+    properties of another. The tenant is in the same unit because the derivation compares
+    each ``authorized_agents[]`` entry against its ``agent_url``.
 
     Args:
         tenant_id: Tenant scope for all repository queries.
     """
 
-    authorized_properties: AuthorizedPropertyRepository | None
+    publishers: PublisherRepository | None
+    tenant_config: TenantConfigRepository | None
 
-    _REPOSITORIES: ClassVar[Mapping[str, type]] = {"authorized_properties": AuthorizedPropertyRepository}
+    _REPOSITORIES: ClassVar[Mapping[str, type]] = {
+        "publishers": PublisherRepository,
+        "tenant_config": TenantConfigRepository,
+    }

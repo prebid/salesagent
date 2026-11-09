@@ -4,7 +4,7 @@
      Stores selections in AdCP discriminated union format.
 
      Required template variables:
-     - authorized_properties: the verified properties (AuthorizedPropertyRepository.list_refs), the only ones offered
+     - authorized_properties: the properties the publishers authorize now (PublisherCatalog.refs), the only ones offered
      - kept_by_mode: (optional, edit mode) per section mode, the stored choices it shows disabled (kept_choices)
      - rendered_selection: (optional, edit mode) the RenderedSelection of what the product sells:
        its fields pick the mode and the checked boxes (product_form_fields), and it is embedded so
@@ -230,9 +230,9 @@
         </div>
         {% else %}
         <div class="no-properties-warning">
-            <strong style="color: #856404;">No verified property tags found</strong><br>
+            <strong style="color: #856404;">No authorized property tags found</strong><br>
             <small style="color: #856404; display: block; margin-top: 0.5rem;">
-                Property tags are derived from your verified authorized properties. Add publisher partnerships and verify their properties first.
+                Property tags come from the properties your publishers' adagents.json files authorize. Add a publisher under Publishers first.
             </small>
         </div>
         {% endif %}
@@ -275,9 +275,9 @@
         </div>
         {% else %}
         <div class="no-properties-warning">
-            <strong>No verified publisher properties found</strong><br>
+            <strong>No authorized publisher properties found</strong><br>
             <small style="display: block; margin-top: 0.5rem;">
-                You need to add publisher partnerships and verify their properties first.
+                Add a publisher under Publishers first; its adagents.json supplies the properties it authorizes.
             </small>
         </div>
         {% endif %}
@@ -311,7 +311,7 @@
         </div>
         {% else %}
         <div class="no-properties-warning">
-            No verified publisher properties found. Add publisher partnerships and verify their properties first.
+            No authorized publisher properties found. Add a publisher under Publishers first; its adagents.json supplies the properties it authorizes.
         </div>
         {% endif %}
     </div>

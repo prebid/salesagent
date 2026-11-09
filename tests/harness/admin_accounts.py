@@ -249,24 +249,16 @@ class AdminAccountEnv:
         return self._inventory_profile(profile_id).id
 
     def authorize_publisher(self, domain: str) -> None:
-        """Store this tenant's verified website property on *domain*, unless it has it.
+        """Store *domain*'s adagents.json authorizing this tenant for one website, unless it is stored.
 
-        The profile forms accept a publisher selector only for a publisher the seller holds a
-        verified property of (``selector_selection``), as ``get_products`` sells it.
+        The profile forms accept a publisher selector only for a publisher whose stored file
+        authorizes the seller (``selector_selection``), as ``get_products`` sells it. Stored
+        without a fetch, through the ingest service's apply half, as a seed stores it.
         """
-        from sqlalchemy import select
+        from scripts.setup.seed_products import seed_verified_website
 
-        from src.core.database.models import AuthorizedProperty
-
-        property_id = domain.replace(".", "_")
         with get_db_session() as session:
-            stmt = select(AuthorizedProperty).filter_by(tenant_id=self._tenant_id, property_id=property_id)
-            if session.scalars(stmt).first() is None:
-                session.add(
-                    AuthorizedProperty.verified_website(
-                        tenant_id=self._tenant_id, property_id=property_id, domain=domain, name=domain
-                    )
-                )
+            if seed_verified_website(session, self._tenant_id, domain):
                 session.commit()
 
     def products_path(self, path: str = "") -> str:

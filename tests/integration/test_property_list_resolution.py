@@ -87,7 +87,7 @@ class TestPropertyListResolution:
                 property_targeting_allowed=False,
             )
             PricingOptionFactory(product=p1, pricing_model="cpm", rate=Decimal("10.0"), is_fixed=True)
-            authorize_selected_properties(tenant, p1.properties)
+            authorize_selected_properties(tenant, p1.stored_publisher_properties)
 
             # Product with non-matching property IDs
             p2 = ProductFactory(
@@ -104,7 +104,7 @@ class TestPropertyListResolution:
                 property_targeting_allowed=False,
             )
             PricingOptionFactory(product=p2, pricing_model="cpm", rate=Decimal("10.0"), is_fixed=True)
-            authorize_selected_properties(tenant, p2.properties)
+            authorize_selected_properties(tenant, p2.stored_publisher_properties)
 
             # Product with selection_type="all" (always matches)
             p3 = ProductFactory(
@@ -119,7 +119,7 @@ class TestPropertyListResolution:
                 ],
             )
             PricingOptionFactory(product=p3, pricing_model="cpm", rate=Decimal("10.0"), is_fixed=True)
-            authorize_selected_properties(tenant, p3.properties)
+            authorize_selected_properties(tenant, p3.stored_publisher_properties)
 
             # Mock resolve_property_list to return identifiers matching p1
             env.set_property_list(["prop_alpha", "prop_beta"])
@@ -258,7 +258,7 @@ class TestPropertyListResolution:
                 countries=["US"],
             )
             PricingOptionFactory(product=p_us, pricing_model="cpm", rate=Decimal("12.0"), is_fixed=True)
-            authorize_selected_properties(tenant, p_us.properties)
+            authorize_selected_properties(tenant, p_us.stored_publisher_properties)
 
             # Product targeting EU sites (different property IDs)
             p_eu = ProductFactory(
@@ -276,7 +276,7 @@ class TestPropertyListResolution:
                 countries=["DE", "FR"],
             )
             PricingOptionFactory(product=p_eu, pricing_model="cpm", rate=Decimal("12.0"), is_fixed=True)
-            authorize_selected_properties(tenant, p_eu.properties)
+            authorize_selected_properties(tenant, p_eu.stored_publisher_properties)
 
             # Product with partial overlap (property_targeting_allowed=True means ANY match)
             p_mixed = ProductFactory(
@@ -293,7 +293,7 @@ class TestPropertyListResolution:
                 property_targeting_allowed=True,
             )
             PricingOptionFactory(product=p_mixed, pricing_model="cpm", rate=Decimal("12.0"), is_fixed=True)
-            authorize_selected_properties(tenant, p_mixed.properties)
+            authorize_selected_properties(tenant, p_mixed.stored_publisher_properties)
 
             # Simulate resolution returning only US identifiers
             # The external service has already applied countries_all=["US"] AND channels_any=["web"]
@@ -343,7 +343,7 @@ class TestPropertyListResolution:
                 ],
             )
             PricingOptionFactory(product=p_all, pricing_model="cpm", rate=Decimal("10.0"), is_fixed=True)
-            authorize_selected_properties(tenant, p_all.properties)
+            authorize_selected_properties(tenant, p_all.stored_publisher_properties)
 
             # Product with specific property IDs
             p_specific = ProductFactory(
@@ -359,7 +359,7 @@ class TestPropertyListResolution:
                 ],
             )
             PricingOptionFactory(product=p_specific, pricing_model="cpm", rate=Decimal("10.0"), is_fixed=True)
-            authorize_selected_properties(tenant, p_specific.properties)
+            authorize_selected_properties(tenant, p_specific.stored_publisher_properties)
 
             # Resolve returns empty set (no matching identifiers)
             env.set_property_list([])

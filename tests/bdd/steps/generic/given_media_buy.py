@@ -780,16 +780,17 @@ def given_nonexistent_product(ctx: dict, product_id: str) -> None:
 
 
 @given(
-    parsers.parse(
-        'a package references product "{product_id}" selecting format option "{option_id}" of the seller\'s own host'
+    parsers.re(
+        r'a package references product "(?P<product_id>[^"]+)" selecting format option "(?P<option_id>[^"]+)" '
+        r'of (?:the seller\'s own host|"(?P<publisher>[^"]+)")'
     )
 )
-def given_package_selects_agent_host_option(ctx: dict, product_id: str, option_id: str) -> None:
-    """Point the first package at *product_id*, priced by its own option, naming the agent host as publisher.
+def given_package_selects_publisher_option(ctx: dict, product_id: str, option_id: str, publisher: str | None) -> None:
+    """Point the first package at *product_id*, priced by its own option, selecting a publisher's option.
 
     ``core/format-option-ref.json`` publisher branch: ``{scope, publisher_domain,
-    format_option_id}``. The pricing option is the product's stored one, so the package is
-    valid in every other respect.
+    format_option_id}``; the publisher is the one named, or the agent host. The pricing option
+    is the product's stored one, so the package is valid in every other respect.
     """
     kwargs = _ensure_request_defaults(ctx)
     assert kwargs.get("packages"), "No packages in request to point at the product"
@@ -801,7 +802,7 @@ def given_package_selects_agent_host_option(ctx: dict, product_id: str, option_i
         format_option_refs=[
             {
                 "scope": "publisher",
-                "publisher_domain": ctx["tenant"].virtual_host_name,
+                "publisher_domain": publisher or ctx["tenant"].virtual_host_name,
                 "format_option_id": option_id,
             }
         ],

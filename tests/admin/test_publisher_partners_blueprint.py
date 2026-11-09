@@ -1,16 +1,14 @@
 """Integration tests for duplicate handling in the publisher-partners blueprint.
 
 Reproduces salesagent-cdw2 on one of its six sites
-(``src/admin/blueprints/publisher_partners.py``).
+(``src/admin/blueprints/publisher_partners.py``, through ``PublisherRepository.add``).
 
-``add_publisher_partner`` pre-checks for an existing ``(tenant_id,
-publisher_domain)`` row and answers a clean ``409 {"error": "Publisher already
-exists"}`` when it finds one. That pre-check runs inside the request's own
-transaction, so it cannot see a row a *concurrent* transaction has staged but not
-yet committed. When the concurrent writer commits first, the ``uq_tenant_publisher``
-unique constraint fires at ``session.commit()`` and the handler's blanket
-``except Exception`` turns the loser's response into a ``500`` carrying a raw
-psycopg2 message — for exactly the condition it explains politely when it wins.
+Adding a publisher pre-checks for an existing ``(tenant_id, domain)`` row and answers a
+clean ``409 {"error": "Publisher already exists"}`` when it finds one. That pre-check runs
+inside the request's own transaction, so it cannot see a row a *concurrent* transaction has
+staged but not yet committed. When the concurrent writer commits first, the
+``publishers_pkey`` primary key fires, and the loser must get the same 409 rather than a
+``500`` carrying a raw psycopg2 message.
 
 Requires PostgreSQL (``integration_db`` via the ``factory_session`` fixture).
 Uses factory-boy factories per ``tests/CLAUDE.md`` — no inline ``session.add()``
@@ -23,9 +21,9 @@ import pytest
 from sqlalchemy import delete
 
 from src.admin.app import create_app
-from src.admin.blueprints import publisher_partners as publisher_partners_module
 from src.core.database.models import Tenant
-from tests.factories import PublisherPartnerFactory, TenantFactory
+from src.core.database.repositories import uow as uow_module
+from tests.factories import PublisherFactory, TenantFactory
 from tests.helpers import concurrent_commit_in_write_window
 
 app = create_app()
@@ -54,7 +52,7 @@ class TestAddPublisherPartnerDuplicate:
         This is the polite answer the same code path gives when it wins the race.
         """
         tenant = TenantFactory()
-        PublisherPartnerFactory(tenant=tenant, publisher_domain=DUPLICATE_DOMAIN)
+        PublisherFactory(tenant=tenant, domain=DUPLICATE_DOMAIN)
 
         response = client.post(
             f"/tenant/{tenant.tenant_id}/publisher-partners",
@@ -68,16 +66,14 @@ class TestAddPublisherPartnerDuplicate:
         """The loser of the race must get the same clean 409, not a 500.
 
         Reproduces salesagent-cdw2: the pre-check passes (no row yet), a concurrent
-        transaction commits the row, and our commit hits uq_tenant_publisher. The
-        handler has no IntegrityError branch, so the blanket ``except Exception``
-        answers 500 with a raw driver message.
+        transaction commits the row, and our flush hits publishers_pkey.
         """
         tenant = TenantFactory()
 
         def commit_conflicting_row():
-            PublisherPartnerFactory(tenant=tenant, publisher_domain=DUPLICATE_DOMAIN)
+            PublisherFactory(tenant=tenant, domain=DUPLICATE_DOMAIN)
 
-        with concurrent_commit_in_write_window(publisher_partners_module, commit_conflicting_row):
+        with concurrent_commit_in_write_window(uow_module, commit_conflicting_row):
             response = client.post(
                 f"/tenant/{tenant.tenant_id}/publisher-partners",
                 json={"publisher_domain": DUPLICATE_DOMAIN, "display_name": "Contested"},
@@ -91,7 +87,7 @@ class TestAddPublisherPartnerDuplicate:
 
         Mechanism, with no production patching: an independent transaction
         DELETEs the tenant inside the write window. The handler read it before
-        that, so its INSERT trips ``publisher_partners_tenant_id_fkey`` — a
+        that, so its INSERT trips ``publishers_tenant_id_fkey`` — a
         foreign-key violation, not a duplicate.
 
         This grades the ROUTE's answer, not the narrowing: here the re-resolve
@@ -106,7 +102,7 @@ class TestAddPublisherPartnerDuplicate:
             factory_session.execute(delete(Tenant).where(Tenant.tenant_id == tenant.tenant_id))
             factory_session.commit()
 
-        with concurrent_commit_in_write_window(publisher_partners_module, delete_the_tenant):
+        with concurrent_commit_in_write_window(uow_module, delete_the_tenant):
             response = client.post(
                 f"/tenant/{tenant.tenant_id}/publisher-partners",
                 json={"publisher_domain": DUPLICATE_DOMAIN, "display_name": "Contested"},
@@ -128,7 +124,7 @@ class TestUnexpectedDbErrorDoesNotLeakDriverInternals:
     def test_data_error_500_carries_no_driver_internals(self, client, factory_session):
         """Deterministic non-duplicate DB error: a value the column cannot hold.
 
-        ``publisher_domain`` is String(255); an oversized value passes every
+        ``domain`` is String(255); an oversized value passes every
         handler check and dies at flush with a DataError the handler does not
         narrow. The operator may be told the write failed — but never shown the
         driver name, the SQL statement, or the bound parameters.

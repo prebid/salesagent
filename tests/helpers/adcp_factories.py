@@ -25,7 +25,6 @@ from src.core.schemas import Package, PackageRequest
 from src.core.schemas.product import Product
 from tests.factories import PricingOptionFactory
 from tests.factories.creative_asset import build_assets, image_spec
-from tests.factories.product import default_publisher_properties
 
 
 def create_test_product(
@@ -852,7 +851,8 @@ def create_test_db_product(
 
     This factory creates database Product records (from src.core.database.models.Product)
     for tests that need to insert Products into the database. The model stores its
-    publishers as selectors in ``properties``, announced as ``publisher_properties``.
+    publishers as selection rows (``publisher_selections``), announced as
+    ``publisher_properties``.
 
     Use this factory for integration tests that create Product database records.
     Use create_test_product() for AdCP-compliant Product objects without tenant_id.
@@ -863,7 +863,9 @@ def create_test_db_product(
         name: Product name
         description: Product description
         format_ids: List of format ID dicts with {agent_url: str, id: str}. Defaults to display_300x250
-        properties: Publisher property selectors. Default: default_publisher_properties()
+        properties: Publisher property selectors stored as selection rows. Default: none. A
+            selection references its publisher by foreign key, so a test that persists a
+            product naming publishers stores those publishers first (``tests.factories.publisher``).
         delivery_type: "guaranteed" or "non_guaranteed"
         targeting_template: Targeting template dict. Defaults to empty dict
         inventory_profile_id: Optional inventory profile ID to link
@@ -892,6 +894,7 @@ def create_test_db_product(
     """
     # Import database Product model
     from src.core.database.models import Product as DBProduct
+    from src.core.database.models import ProductPublisherSelection
 
     # Default format_ids if not provided
     if format_ids is None:
@@ -901,11 +904,6 @@ def create_test_db_product(
                 "id": "display_300x250",
             }
         ]
-
-    # An explicit selector if no property authorization provided. It is offered only where the
-    # tenant holds the verified property ONE_AUTHORIZED_PROPERTY names (#1845)
-    if properties is None:
-        properties = default_publisher_properties()
 
     # Default targeting_template
     if targeting_template is None:
@@ -917,7 +915,7 @@ def create_test_db_product(
         name=name,
         description=description,
         format_ids=format_ids,
-        properties=properties,
+        publisher_selections=ProductPublisherSelection.from_selectors(tenant_id, properties or []),
         delivery_type=delivery_type,
         targeting_template=targeting_template,
         inventory_profile_id=inventory_profile_id,

@@ -25,7 +25,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from scripts.setup.seed_products import publishers_whole
+from scripts.setup.seed_products import whole_publisher_selections
 from tests.e2e.conftest import (
     GAM_TEST_AD_UNIT_IDS,
     GAM_TEST_ADVERTISER_ID,
@@ -254,7 +254,7 @@ def _seed_lifecycle_test_data():
             format_ids=[],
             targeting_template={},
             delivery_type="non_guaranteed",
-            properties=publishers_whole(session, GAM_LIFECYCLE_TENANT_ID),
+            publisher_selections=whole_publisher_selections(session, GAM_LIFECYCLE_TENANT_ID),
             implementation_config={
                 "order_name_template": "E2E-NONGUAR-{po_number}-{timestamp}",
                 "line_item_type": "PRICE_PRIORITY",
@@ -278,7 +278,7 @@ def _seed_lifecycle_test_data():
             format_ids=[],
             targeting_template={},
             delivery_type="guaranteed",
-            properties=publishers_whole(session, GAM_LIFECYCLE_TENANT_ID),
+            publisher_selections=whole_publisher_selections(session, GAM_LIFECYCLE_TENANT_ID),
             implementation_config={
                 "order_name_template": "E2E-GUAR-{po_number}-{timestamp}",
                 "line_item_type": "STANDARD",
@@ -302,7 +302,7 @@ def _seed_lifecycle_test_data():
             format_ids=[],
             targeting_template={},
             delivery_type="non_guaranteed",
-            properties=publishers_whole(session, GAM_LIFECYCLE_TENANT_ID),
+            publisher_selections=whole_publisher_selections(session, GAM_LIFECYCLE_TENANT_ID),
             implementation_config={
                 "order_name_template": "E2E-HOUSE-{po_number}-{timestamp}",
                 "line_item_type": "HOUSE",

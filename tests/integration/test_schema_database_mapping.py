@@ -25,7 +25,6 @@ from tests.factories.product import (
     ONE_AUTHORIZED_PROPERTY,
     PricingOptionFactory,
     ProductFactory,
-    default_publisher_properties,
 )
 from tests.helpers.adcp_factories import create_test_db_product
 from tests.utils.database_helpers import (
@@ -305,7 +304,7 @@ class TestSchemaFieldMapping:
                 "description",
                 "format_ids",
                 "delivery_type",
-                "properties",
+                "publisher_selections",
             ]
 
             conversion_data = {}
@@ -318,7 +317,7 @@ class TestSchemaFieldMapping:
             # Verify we got the expected data
             assert conversion_data["product_id"] == "conversion_test_001"
             assert conversion_data["name"] == "Conversion Test Product"
-            assert conversion_data["properties"] == default_publisher_properties()
+            assert conversion_data["publisher_selections"] == []
 
             # Test that unsafe field access (what caused the bug) fails predictably
             unsafe_fields = ["pricing", "cost_basis", "margin"]

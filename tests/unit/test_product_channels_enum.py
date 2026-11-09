@@ -8,7 +8,7 @@ DB string-to-enum conversion correctly.
 from adcp.types._generated import MediaChannel
 
 from src.core.schemas import Product
-from tests.factories.product import ONE_AUTHORIZED_PROPERTY
+from tests.factories.product import ONE_AUTHORIZED_PROPERTY, default_publisher_properties
 from tests.helpers.adcp_factories import create_test_product
 
 
@@ -93,6 +93,7 @@ class TestProductChannelsConversion:
 
         product = create_test_db_product(
             tenant_id="channel_test",
+            properties=default_publisher_properties(),
             product_id="channel_test_001",
             name="Channel Test Product",
             delivery_type="non_guaranteed",

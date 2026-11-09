@@ -1,11 +1,14 @@
 """Steps for BR-UC-GET-PRODUCTS-publisher-domain: which publishers a product names (#1845).
 
-Setup stores REAL ``AuthorizedProperty`` and ``Product`` rows through their factories, and
-dispatch goes through the shared ``dispatch_request`` (via the inventory-profile module's
-``When the buyer requests products``), so the same rows are read on every transport.
+A property is authorized only by a publisher's adagents.json: each Given writes what the
+publisher's file says and the seller ingests it (``PublisherAdagentsMixin``), then stores
+REAL ``Product`` rows through the factory. Dispatch goes through the shared
+``dispatch_request`` (via the inventory-profile module's ``When the buyer requests
+products``), so the same rows are read on every transport.
 
-Assertions read the serialized wire body: ``publisher_properties`` is compared whole, so a
-selector naming any other domain -- the seller's own agent host included -- fails it.
+Assertions read the serialized wire body: ``publisher_properties`` and ``format_options`` are
+compared whole, so a selector naming any other domain -- the seller's own agent host
+included -- fails it.
 """
 
 from __future__ import annotations
@@ -14,9 +17,9 @@ import json
 
 from pytest_bdd import given, parsers, then
 
-from tests.bdd.steps._outcome_helpers import wire_entry, wire_field
+from tests.bdd.steps._outcome_helpers import wire_dict, wire_entry, wire_field
 from tests.bdd.steps.generic._table import comma_list
-from tests.factories import AuthorizedPropertyFactory, InventoryProfileFactory, PricingOptionFactory, ProductFactory
+from tests.factories import InventoryProfileFactory, PricingOptionFactory, ProductFactory
 
 
 def _offer(ctx: dict, product_id: str, selectors: list[dict]) -> None:
@@ -30,21 +33,64 @@ def _offer(ctx: dict, product_id: str, selectors: list[dict]) -> None:
 
 @given(parsers.parse('the seller is authorized for property "{property_id}" of publisher "{domain}" tagged "{tag}"'))
 def given_authorized_property(ctx: dict, property_id: str, domain: str, tag: str) -> None:
-    AuthorizedPropertyFactory(tenant=ctx["tenant"], property_id=property_id, publisher_domain=domain, tags=[tag])
+    """The publisher's file lists the property and authorizes this agent for it; the seller ingests it."""
+    env = ctx["env"]
+    env.list_property(domain, property_id, tags=[tag])
+    env.authorize(domain, ctx["tenant"].agent_url, authorization_type="property_ids", property_ids=[property_id])
+    env.ingest_publisher(domain)
 
 
 @given(
-    parsers.parse('the seller\'s property "{property_id}" of publisher "{domain}" tagged "{tag}" awaits verification')
-)
-def given_pending_property(ctx: dict, property_id: str, domain: str, tag: str) -> None:
-    """A property as the add form and the upload store it: its publisher not yet seen to authorize us."""
-    AuthorizedPropertyFactory(
-        tenant=ctx["tenant"],
-        property_id=property_id,
-        publisher_domain=domain,
-        tags=[tag],
-        verification_status="pending",
+    parsers.parse(
+        'the publisher "{domain}" lists property "{property_id}" tagged "{tag}" without authorizing the seller for it'
     )
+)
+def given_unauthorized_property(ctx: dict, property_id: str, domain: str, tag: str) -> None:
+    """The publisher's file lists the property and no entry for this agent names it; the seller ingests it."""
+    env = ctx["env"]
+    env.list_property(domain, property_id, tags=[tag])
+    env.ingest_publisher(domain)
+
+
+@given(
+    parsers.parse(
+        'the seller offers product "{product_id}" selling publisher "{domain}" whole with format option "{option_id}" '
+        'of "{option_domain}"'
+    )
+)
+def given_product_with_publisher_option(
+    ctx: dict, product_id: str, domain: str, option_id: str, option_domain: str
+) -> None:
+    _offer_with_option(ctx, product_id, {"publisher_domain": domain, "selection_type": "all"}, option_id, option_domain)
+
+
+@given(
+    parsers.parse(
+        'the seller offers product "{product_id}" selling property "{property_id}" of publisher "{domain}" '
+        'with format option "{option_id}" of "{option_domain}"'
+    )
+)
+def given_product_of_property_with_publisher_option(
+    ctx: dict, product_id: str, property_id: str, domain: str, option_id: str, option_domain: str
+) -> None:
+    selector = {"publisher_domain": domain, "property_ids": [property_id], "selection_type": "by_id"}
+    _offer_with_option(ctx, product_id, selector, option_id, option_domain)
+
+
+def _offer_with_option(ctx: dict, product_id: str, selector: dict, option_id: str, option_domain: str) -> None:
+    """A priced product selling *selector*, storing a publisher-backed format option as its key alone.
+
+    Owner decision 2: the product stores ``{publisher_domain, format_option_id}`` and nothing
+    else; the publisher's catalog supplies ``format_kind`` and ``params`` on every read.
+    """
+    product = ProductFactory(
+        tenant=ctx["tenant"],
+        product_id=product_id,
+        properties=[selector],
+        format_ids=None,
+        format_options=[{"publisher_domain": option_domain, "format_option_id": option_id}],
+    )
+    PricingOptionFactory(product=product)
 
 
 @given(parsers.parse('the seller offers product "{product_id}" migrated from legacy property tags "{tags}"'))
@@ -65,9 +111,9 @@ def given_product_migrated_from_nothing(ctx: dict, product_id: str) -> None:
     _offer(ctx, product_id, ctx["env"].migrated_selection(property_tags=[]))
 
 
-@given(parsers.parse('the tenant also holds product "{product_id}" that no verified property backs'))
+@given(parsers.parse('the tenant also holds product "{product_id}" that no authorized property backs'))
 def given_unoffered_product(ctx: dict, product_id: str) -> None:
-    # A publisher the tenant holds no property of, so ProductFactory seeds none for it.
+    # A publisher whose file the seller never fetched, so it authorizes nothing.
     _offer(ctx, product_id, [{"publisher_domain": "unbacked-publisher.example", "selection_type": "all"}])
 
 
@@ -131,6 +177,35 @@ def given_operator_saved_profile(ctx: dict, profile_id: str, property_ids: str) 
 # ── Then steps ──────────────────────────────────────────────────────
 
 
+@then(parsers.parse('product "{product_id}" announces format_options {expected}'))
+def then_product_announces_format_options(ctx: dict, product_id: str, expected: str) -> None:
+    """Exactly the *expected* options, by key, each with the publisher's ``format_kind`` and ``params``.
+
+    The wire model fills each declaration's pinned defaults (``canonical_formats_only``,
+    the params' own defaults), so each expected member must be on the wire with its value
+    and the options are matched whole by their key; nothing the publisher declared may be
+    lost or changed.
+    """
+    announced = wire_entry(ctx, "products", product_id=product_id).get("format_options") or []
+    wanted = json.loads(expected)
+    key = lambda option: (option.get("publisher_domain"), option.get("format_option_id"))  # noqa: E731
+    assert sorted(map(key, announced), key=str) == sorted(map(key, wanted), key=str), (
+        f"product {product_id!r} announced format_options {announced!r}"
+    )
+    for option in wanted:
+        served = next(o for o in announced if key(o) == key(option))
+        lost = {
+            name: (value, served.get(name))
+            for name, value in option.items()
+            if name != "params" and served.get(name) != value
+        } | {
+            f"params.{name}": (value, (served.get("params") or {}).get(name))
+            for name, value in option.get("params", {}).items()
+            if (served.get("params") or {}).get(name) != value
+        }
+        assert not lost, f"the publisher's declaration came back changed or absent (expected, got): {lost}"
+
+
 @then(parsers.parse('product "{product_id}" announces publisher_properties {expected}'))
 def then_product_announces(ctx: dict, product_id: str, expected: str) -> None:
     announced = wire_entry(ctx, "products", product_id=product_id)["publisher_properties"]
@@ -155,3 +230,23 @@ def then_no_agent_host_format_namespace(ctx: dict) -> None:
 def then_exact_products(ctx: dict, product_ids: str) -> None:
     received = sorted(product["product_id"] for product in wire_field(ctx, "products"))
     assert received == sorted(comma_list(product_ids)), f"received products {received!r}"
+
+
+@then("the buyer receives no products")
+def then_no_products(ctx: dict) -> None:
+    received = [product["product_id"] for product in wire_dict(ctx).get("products") or []]
+    assert received == [], f"received products {received!r}"
+
+
+@given(
+    parsers.parse(
+        'the tenant also holds product "{product_id}" referencing format option "{option_id}" of "{domain}", '
+        "which its publisher's catalog does not declare"
+    )
+)
+def given_product_with_undeclared_publisher_option(ctx: dict, product_id: str, option_id: str, domain: str) -> None:
+    """A priced product selling *domain* whole, whose stored file authorizes the seller and declares no formats."""
+    from tests.factories.publisher import authorize_publishers
+
+    authorize_publishers(ctx["tenant"], domain)
+    _offer_with_option(ctx, product_id, {"publisher_domain": domain, "selection_type": "all"}, option_id, domain)

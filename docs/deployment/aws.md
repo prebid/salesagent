@@ -237,13 +237,13 @@ seeding helper to make the check meaningful:
 from decimal import Decimal
 from scripts.setup.seed_products import seed_product
 from src.core.database.database_session import get_db_session
-from src.core.database.models import AuthorizedProperty, PropertyTag
+from scripts.setup.seed_products import seed_verified_website
+from src.core.database.models import PropertyTag
 T = "t1"
 with get_db_session() as s:
     s.add(PropertyTag(tag_id="all_inventory", tenant_id=T, name="All inventory", description="Every property"))
-    s.add(AuthorizedProperty(property_id="example_com", tenant_id=T, property_type="website", name="example.com",
-        identifiers=[{"type": "domain", "value": "example.com"}], tags=["all_inventory"],
-        publisher_domain="example.com", verification_status="verified"))
+    # A stored adagents.json for example.com authorizing the tenant, as a seed stores it (no fetch).
+    seed_verified_website(s, T, "example.com")
     seed_product(s, T, {"product_id": "t1_display_ros", "name": "Run of site display",
         "description": "Display on every page of example.com",
         "formats": [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"}],
