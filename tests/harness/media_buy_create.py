@@ -478,6 +478,8 @@ class MediaBuyCreateEnv(PublisherAdagentsMixin, AdminOperatorMixin, PeerCreative
             config={},
             principal=Principal(principal_id=self._principal_id, name=self._principal_id, platform_mappings={}),
             tenant_id=self._tenant_id,
+            order_name_template=None,
+            tenant_ai_config=None,
         ).validate_media_buy_request
         mock_adapter.add_creative_assets.return_value = None
         mock_adapter.associate_creatives.return_value = None

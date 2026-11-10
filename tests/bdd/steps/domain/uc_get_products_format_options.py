@@ -19,7 +19,7 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then
 
-from tests.bdd.steps._outcome_helpers import wire_advisory_errors, wire_entry, wire_field
+from tests.bdd.steps._outcome_helpers import wire_advisory_errors, wire_entry, wire_product_ids
 from tests.factories import PricingOptionFactory, ProductFactory
 from tests.factories.core import seed_property_tag_selection
 from tests.factories.creative import DEFAULT_CREATIVE_AGENT_URL
@@ -677,11 +677,6 @@ def then_divergence_details(ctx: dict, omitted_ids: str, asserted_ids: str) -> N
     )
 
 
-def _announced_product_ids(ctx: dict) -> list[str]:
-    """The ``product_id`` of every product the buyer received, read off the wire."""
-    return [product.get("product_id") for product in wire_field(ctx, "products")]
-
-
 @then("the buyer is announced the operator's product with both options")
 def then_operator_product_announced(ctx: dict) -> None:
     """The form stored the product, and get_products serves it with the two options authored."""
@@ -709,7 +704,7 @@ def then_operator_product_refused(ctx: dict) -> None:
     assert b"every format option must be accepted by all of them" in response.data, (
         "the form was not refused for an option not every publisher accepts"
     )
-    assert _OPERATOR_PRODUCT_ID not in _announced_product_ids(ctx), (
+    assert _OPERATOR_PRODUCT_ID not in wire_product_ids(ctx), (
         "the buyer was announced the product the admin form refused"
     )
 

@@ -61,6 +61,7 @@ from src.core.exceptions import (
 from src.core.product_conversion import convert_product_model_to_schema
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import GetProductsRequest
+from src.services.ai.factory import AIProviderError
 from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
 from tests.factories.principal import plaintext_token_for
 from tests.harness._base import INVALID_TOKEN, IntegrationEnv
@@ -615,7 +616,8 @@ class TestExtensionA:
         """
         with patch("src.core.tools.products.PolicyCheckService") as MockService:
             mock_instance = MockService.return_value
-            mock_instance.check_brief_compliance = AsyncMock(side_effect=ConnectionError("Service unavailable"))
+            # What the real service raises when the provider fails the check (run_agent).
+            mock_instance.check_brief_compliance = AsyncMock(side_effect=AIProviderError("Service unavailable"))
 
             # Should NOT raise - fail open
             result = await _call_get_products(
@@ -1079,8 +1081,7 @@ class TestEmptyResults:
         """
         with patch("src.services.ai.factory.get_factory") as mock_factory:
             mock_ai = Mock()
-            mock_ai.is_ai_enabled.return_value = True
-            mock_ai.create_model.return_value = Mock()
+            mock_ai.build.return_value = Mock()
             mock_factory.return_value = mock_ai
 
             with patch("src.services.ai.agents.ranking_agent.create_ranking_agent") as mock_agent:

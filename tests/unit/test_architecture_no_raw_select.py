@@ -67,7 +67,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/adapters/gam/managers/targeting.py", "_load_axe_keys"),
     ("src/adapters/gam/managers/targeting.py", "_load_custom_targeting_key_ids"),
     # sync_custom_targeting_keys removed — uses AdapterConfigRepository
-    ("src/adapters/gam/managers/workflow.py", "create_manual_order_workflow_step"),
     ("src/adapters/gam_reporting_api.py", "get_ad_unit_breakdown"),
     ("src/adapters/gam_reporting_api.py", "get_advertiser_summary"),
     ("src/adapters/gam_reporting_api.py", "get_country_breakdown"),
@@ -77,7 +76,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/adapters/google_ad_manager.py", "create_media_buy"),
     ("src/adapters/google_ad_manager.py", "get_media_buy_delivery"),
     ("src/adapters/google_ad_manager.py", "get_packages_snapshot"),
-    ("src/adapters/mock_ad_server.py", "_create_media_buy_immediate"),
     ("src/adapters/mock_ad_server.py", "mock_product_config"),
     ("src/adapters/mock_ad_server.py", "register_ui_routes"),
     ("src/adapters/mock_ad_server.py", "wrapped_view"),
