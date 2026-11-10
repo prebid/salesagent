@@ -1434,6 +1434,7 @@ def _store_product(
     placements: list[dict[str, Any]] | None = None,
     properties: list[dict[str, Any]] | None = None,
     inventory_profile_id: int | None = None,
+    authorize: bool = True,
 ) -> None:
     """Store one product with the given arms and point the buyer's package at it.
 
@@ -1450,9 +1451,11 @@ def _store_product(
         # no publishers of its own sells that option's publisher.
         scoped = list(dict.fromkeys(d["publisher_domain"] for d in format_options or () if d.get("publisher_domain")))
         properties = [{"publisher_domain": domain, "selection_type": "all"} for domain in scoped] or None
-    if properties:
+    if properties and authorize:
         # A product is offered only for a publisher the seller holds a verified property of
         # (#1845); the default publisher's comes with ProductFactory, a named one's here.
+        # ``authorize=False`` when the scenario's publisher served its own file and the seller
+        # ingested it: that document is the one graded, so nothing stores another.
         authorize_publishers(ctx["tenant"], *dict.fromkeys(s["publisher_domain"] for s in properties))
     product = ProductFactory(
         tenant=ctx["tenant"],
@@ -1503,6 +1506,24 @@ def given_declaration_across_publishers(ctx: dict, declaration: str, publishers:
     coverage rule slices it by (formats.mdx § Matching and satisfaction).
     """
     _store_declaring_product(ctx, declaration, with_legacy_arm=True, publishers=publishers)
+
+
+@given(parsers.parse('the seller sells publisher "{publisher}" whole by its format option "{option_id}"'))
+def given_product_selling_publisher_option(ctx: dict, publisher: str, option_id: str) -> None:
+    """A product selling *publisher* whole and carrying its option by the key alone.
+
+    The publisher's ingested adagents.json declares the option (owner decision 2: the product
+    stores ``{publisher_domain, format_option_id}`` and the publisher's catalog supplies the
+    rest on every read).
+    """
+    _store_product(
+        ctx,
+        f"publisher_option_{option_id}",
+        format_ids=None,
+        format_options=[{"publisher_domain": publisher, "format_option_id": option_id}],
+        properties=[{"publisher_domain": publisher, "selection_type": "all"}],
+        authorize=False,
+    )
 
 
 @given(parsers.parse("the seller publishes only a deprecated format sized {width:d}x{height:d}"))

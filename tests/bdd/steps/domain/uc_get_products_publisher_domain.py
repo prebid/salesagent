@@ -77,8 +77,24 @@ def given_product_of_property_with_publisher_option(
     _offer_with_option(ctx, product_id, selector, option_id, option_domain)
 
 
+@given(
+    parsers.parse(
+        'the seller offers product "{product_id}" carrying format option "{option_id}" of "{option_domain}" '
+        "and naming publisher_properties {selectors}"
+    )
+)
+def given_product_selling_selectors_with_publisher_option(
+    ctx: dict, product_id: str, option_id: str, option_domain: str, selectors: str
+) -> None:
+    _offer_with_options(ctx, product_id, json.loads(selectors), option_id, option_domain)
+
+
 def _offer_with_option(ctx: dict, product_id: str, selector: dict, option_id: str, option_domain: str) -> None:
-    """A priced product selling *selector*, storing a publisher-backed format option as its key alone.
+    _offer_with_options(ctx, product_id, [selector], option_id, option_domain)
+
+
+def _offer_with_options(ctx: dict, product_id: str, selectors: list[dict], option_id: str, option_domain: str) -> None:
+    """A priced product selling *selectors*, storing a publisher-backed format option as its key alone.
 
     Owner decision 2: the product stores ``{publisher_domain, format_option_id}`` and nothing
     else; the publisher's catalog supplies ``format_kind`` and ``params`` on every read.
@@ -86,7 +102,7 @@ def _offer_with_option(ctx: dict, product_id: str, selector: dict, option_id: st
     product = ProductFactory(
         tenant=ctx["tenant"],
         product_id=product_id,
-        properties=[selector],
+        properties=selectors,
         format_ids=None,
         format_options=[{"publisher_domain": option_domain, "format_option_id": option_id}],
     )
@@ -246,17 +262,3 @@ def then_exact_products(ctx: dict, product_ids: str) -> None:
 def then_no_products(ctx: dict) -> None:
     received = [product["product_id"] for product in wire_dict(ctx).get("products") or []]
     assert received == [], f"received products {received!r}"
-
-
-@given(
-    parsers.parse(
-        'the tenant also holds product "{product_id}" referencing format option "{option_id}" of "{domain}", '
-        "which its publisher's catalog does not declare"
-    )
-)
-def given_product_with_undeclared_publisher_option(ctx: dict, product_id: str, option_id: str, domain: str) -> None:
-    """A priced product selling *domain* whole, whose stored file authorizes the seller and declares no formats."""
-    from tests.factories.publisher import authorize_publishers
-
-    authorize_publishers(ctx["tenant"], domain)
-    _offer_with_option(ctx, product_id, {"publisher_domain": domain, "selection_type": "all"}, option_id, domain)

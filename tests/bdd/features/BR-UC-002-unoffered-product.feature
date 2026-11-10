@@ -89,7 +89,10 @@ Feature: BR-UC-002 A catalog holding a product buyers are not offered
   Scenario: a buy selecting a publisher format option its publisher's catalog does not declare is refused
     Given a valid create_media_buy request
     And the account exists and is active
-    And the tenant also holds product "missing_option" referencing format option "news_mrec" of "news-psatest.com", which its publisher's catalog does not declare
+    And the publisher "news-psatest.com" lists property "news_home" named "News home" in its adagents.json
+    And the publisher "news-psatest.com" authorizes this agent for properties "news_home"
+    And the seller ingested the adagents.json of "news-psatest.com"
+    And the seller offers product "missing_option" selling publisher "news-psatest.com" whole with format option "news_mrec" of "news-psatest.com"
     But a package references product "missing_option" selecting format option "news_mrec" of "news-psatest.com"
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy error spec
@@ -97,6 +100,28 @@ Feature: BR-UC-002 A catalog holding a product buyers are not offered
     And the error code should be "PRODUCT_NOT_FOUND"
     And the error recovery should be "correctable"
     And the wire error details should include missing_product_ids "missing_option"
+    And no media buy record should be persisted
+
+  # The publisher's ingested formats[] declares two options and the product carries one.
+  # core/product-format-declaration.json: "Sellers MUST reject create_media_buy requests
+  # targeting any format_kind (or format option reference) not present in this list --
+  # typically with UNSUPPORTED_FEATURE". The publisher declaring the other option does not
+  # put it on the product.
+  @T-UC-002-ext-publisher-option-not-carried @extension @error @requires_db
+  Scenario: a buy selecting a publisher option the product does not carry is refused UNSUPPORTED_FEATURE
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And the publisher "news-psatest.com" lists property "news_home" named "News home" in its adagents.json
+    And the publisher "news-psatest.com" authorizes this agent for properties "news_home"
+    And the publisher "news-psatest.com" declares format option {"format_option_id": "news_mrec", "format_kind": "image", "params": {"width": 300, "height": 250}} in its adagents.json
+    And the publisher "news-psatest.com" declares format option {"format_option_id": "news_leaderboard", "format_kind": "image", "params": {"width": 728, "height": 90}} in its adagents.json
+    And the seller ingested the adagents.json of "news-psatest.com"
+    And the seller offers product "news" selling publisher "news-psatest.com" whole with format option "news_mrec" of "news-psatest.com"
+    But a package references product "news" selecting format option "news_leaderboard" of "news-psatest.com"
+    When the Buyer Agent sends the create_media_buy request
+    Then the response is compliant with the create_media_buy error spec
+    And the operation should fail
+    And the error code should be "UNSUPPORTED_FEATURE"
     And no media buy record should be persisted
 
   @T-UC-002-ext-unoffered-product-manual-approval @extension @error @requires_db

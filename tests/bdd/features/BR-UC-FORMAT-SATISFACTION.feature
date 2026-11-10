@@ -867,6 +867,21 @@ Feature: A format selector must satisfy the canonical declaration the product pu
       | streamhaus_and_other | image_300x250,image_728x90 | satisfaction_image_mrec,satisfaction_image_leaderboard |
       | streamhaus_only      | image_728x90               | satisfaction_image_leaderboard                         |
 
+  # The publisher's ingested adagents.json declares the option and the product stores only its
+  # key {publisher_domain, format_option_id}. A creative naming that key (core/format-option-ref.json
+  # publisher arm; formats.mdx: "An exact publisher claim must match both publisher_domain and
+  # format_option_id") satisfies the option the publisher's file declares.
+  @T-UC-FORMAT-SATISFACTION-publisher-file-option-creative @format_satisfaction @requires_db
+  Scenario: a creative naming a publisher's option by its key is accepted when the publisher's file declares it
+    Given the publisher "news-psatest.com" lists property "news_home" named "News home" in its adagents.json
+    And the publisher "news-psatest.com" authorizes this agent for properties "news_home"
+    And the publisher "news-psatest.com" declares format option {"format_option_id": "satisfaction_image_leaderboard", "format_kind": "image", "params": {"width": 728, "height": 90}} in its adagents.json
+    And the seller ingested the adagents.json of "news-psatest.com"
+    And the seller sells publisher "news-psatest.com" whole by its format option "satisfaction_image_leaderboard"
+    And the buyer assigns canonical "image" creatives carrying the "image_728x90" manifests naming product options "satisfaction_image_leaderboard"
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer receives the media buy
+
   @T-UC-FORMAT-SATISFACTION-publisher-slices-creatives-uncovered @format_satisfaction @requires_db
   Scenario: creatives satisfying only one publisher's scoped option leave another publisher's slice uncovered
     Given the seller declares canonical format options "local_and_publisher_options" across publishers "streamhaus_and_other"

@@ -390,6 +390,22 @@ Feature: A product names the publishers whose inventory it sells
     When the buyer requests products
     Then the buyer receives exactly the products "premium"
 
+  # An option resolves only while its publisher's stored file is usable: past 24 hours after
+  # the last successful fetch the publisher authorizes nothing (managed-networks.mdx
+  # :623-626), so the product no longer sells it and an option of it fails closed
+  # (core/product.json format_options). The same product without the option is still
+  # offered for its other publisher.
+  @T-UC-GET-PRODUCTS-format-option-stale @publisher_domain_resolution @requires_db
+  Scenario: a product's option of a publisher whose file is past 24 hours fails closed
+    Given the publisher "news-psatest.com" declares format option {"format_option_id": "news_mrec", "format_kind": "image", "params": {"width": 300, "height": 250}} in its adagents.json
+    And the seller ingested the adagents.json of "news-psatest.com"
+    And the seller offers product "with_option" carrying format option "news_mrec" of "news-psatest.com" and naming publisher_properties [{"publisher_domain": "news-psatest.com", "selection_type": "all"}, {"publisher_domain": "sports-psatest.com", "selection_type": "all"}]
+    And the seller offers product "without_option" naming publisher_properties [{"publisher_domain": "news-psatest.com", "selection_type": "all"}, {"publisher_domain": "sports-psatest.com", "selection_type": "all"}]
+    And the seller's last successful fetch of "news-psatest.com" was 25 hours ago
+    When the buyer requests products
+    Then the buyer receives exactly the products "without_option"
+    And product "without_option" announces publisher_properties [{"publisher_domain": "sports-psatest.com", "selection_type": "all"}]
+
   # A format option's publisher_domain names the publisher whose adagents.json formats[]
   # declares it. The host this agent serves its own adagents.json at publishes no formats[],
   # so an option under it resolves nowhere and the product is not offered.
