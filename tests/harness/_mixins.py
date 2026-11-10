@@ -22,6 +22,7 @@ from uuid import uuid4
 import httpx
 
 from src.adapters.mock_ad_server import simulate_breakdowns
+from src.core.config import get_settings
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
     AdapterPackageDelivery,
@@ -48,7 +49,7 @@ from tests.helpers.local_http_origin import (
     OriginResponse,
     responds,
 )
-from tests.helpers.tls_material import load_gen_test_tls, start_tls_origin
+from tests.helpers.tls_material import start_tls_origin, trust_test_ca
 
 
 def _e2e_capture_url(env: Any) -> str:
@@ -458,9 +459,52 @@ def _attach_reporting_webhook(env: Any, media_buy: Any) -> None:
 
     The URL comes from :func:`_registered_webhook_url`, so what the media buy says and
     what the registration says can never diverge.
+
+    THE REST OF THE DOCUMENT COMES FROM THE FACTORY, for the same reason the URL comes
+    from a resolver: a hand-written literal here diverges from what a real
+    ``create_media_buy`` writes, and the divergence is invisible until production starts
+    reading a field the literal omits. It did. The literal was
+    ``{"url": ..., "frequency": "daily"}`` and
+    ``core/reporting-webhook.json`` requires ``authentication`` and
+    ``reporting_frequency`` alongside ``url`` — so it carried neither the auth block nor
+    the cadence under its real name — while the interim correlation agreement
+    (``webhooks.mdx`` :656-673) wants ``operation_id``. Production writes all of them:
+    :meth:`MediaBuyRepository.create_from_request` stores
+    ``req.model_dump(mode="json")`` and ``adcp.types.ReportingWebhook`` declares no
+    aliases, so a real buyer's document carries every field under its own name.
+
+    Omitting ``operation_id`` is what broke six UC-004 e2e_rest scenarios
+    (salesagent-8qela.170). ``DeliveryWebhookScheduler`` asks
+    :func:`~src.core.webhooks.registration.reporting_stream_id_missing` of THIS document
+    before it gathers anything, and suppresses the whole stream when the id is absent —
+    correctly, per :666, which forbids fabricating one or reading it off the URL. So the
+    seed decided whether any delivery was attempted at all, and the assertion read
+    ``assert []``. It is e2e-only because this function runs only on the live-server
+    branch (:func:`_deliver_via_live_server`) and the gate lives only in the scheduler,
+    which the in-process branch never enters.
+
+    The factory's ``authentication`` default does NOT decide the signing mode here, and
+    that is worth stating because it looks as though it should. The scheduler prefers a
+    stored ``PushNotificationConfig`` row whenever one matches the URL —
+    "a stored row still wins: a real registration outranks whatever the request carried
+    inline" (``delivery_webhook_scheduler.py``) — and consults this document's
+    ``authentication`` only when no row exists. Every scenario here registers a row, so
+    ``the reporting_webhook registers no authentication block`` keeps selecting RFC 9421
+    off the row it asserts on, and this document cannot flip it to legacy HMAC.
+
+    MEASURED, in process against a real origin through this very function: 0 POSTs
+    and a ``False`` verdict on the literal, 1 POST and ``True`` on the factory
+    payload. ``tests/integration/test_delivery_webhooks_integration.py`` seeds the
+    same document through the same factory for the same reason. (Carried over from
+    this line's own independent fix of the same defect, salesagent-8qela.173 -- the
+    rest of that write-up said what the paragraphs above already say.)
     """
+    from tests.factories.webhook import ReportingWebhookRequestFactory
+
     raw_request = dict(media_buy.raw_request or {})
-    raw_request["reporting_webhook"] = {"url": _registered_webhook_url(env), "frequency": "daily"}
+    raw_request["reporting_webhook"] = ReportingWebhookRequestFactory.payload(
+        url=_registered_webhook_url(env),
+    )
     media_buy.raw_request = raw_request
     env._commit_factory_data()
 
@@ -799,12 +843,23 @@ class DeliveryPollMixin:
         packages: list[dict[str, Any]] | None,
         conversions: float | None = None,
         conversion_value: float | None = None,
+        by_placement: list[dict[str, Any]] | None = None,
     ) -> AdapterGetMediaBuyDeliveryResponse:
         """Normalize set_adapter_response params into the delivery intent.
 
         Shared by both transports: the in-process branch injects this object on
         the MagicMock; the e2e branch persists its wire dump. Single source of
         the packages-list-vs-scalars + totals-auto-sum logic.
+
+        ``by_placement`` carries per-placement metrics the seller reports. It is
+        threaded here rather than injected by a step because the e2e branch gets
+        it for free: ``_persist_simulation_config`` dumps this whole response into
+        the ``delivery_simulation_configs`` row the live server's MockAdServer
+        reads back verbatim, so a scenario that names placement metrics grades the
+        same data on every transport. Without it ``_build_placement_breakdown``
+        synthesizes a split from ONE weight vector, which is rank-identical across
+        spend / impressions / clicks — so every sort_by request produces the same
+        order and no sort assertion can fail (GH #2059).
         """
         if packages is not None:
             by_package = [
@@ -812,6 +867,7 @@ class DeliveryPollMixin:
                     package_id=p["package_id"],
                     impressions=p.get("impressions", 0),
                     spend=p.get("spend", 0.0),
+                    by_placement=by_placement,
                 )
                 for p in packages
             ]
@@ -819,7 +875,9 @@ class DeliveryPollMixin:
             total_spend = float(sum(p.get("spend", 0.0) for p in packages))
             totals = DeliveryTotals(impressions=total_impressions, spend=total_spend)
         else:
-            simulated_geo, simulated_device_type = simulate_breakdowns(float(impressions), float(spend))
+            simulated_geo, simulated_device_type, simulated_placement = simulate_breakdowns(
+                float(impressions), float(spend)
+            )
             by_package = [
                 AdapterPackageDelivery(
                     package_id=package_id,
@@ -827,6 +885,13 @@ class DeliveryPollMixin:
                     spend=spend,
                     by_geo=simulated_geo,
                     by_device_type=simulated_device_type,
+                    # ``is not None`` rather than ``or``: a scenario passing ``[]`` is
+                    # saying the adapter reported zero placements, which must not be
+                    # overwritten by the simulated split. Only an unsupplied value falls
+                    # back. The fallback keeps the rows a scenario that never named any
+                    # placements used to receive from the delivery tool's own synthesis,
+                    # which production no longer does.
+                    by_placement=by_placement if by_placement is not None else simulated_placement,
                 )
             ]
             totals = DeliveryTotals(impressions=float(impressions), spend=spend)
@@ -859,6 +924,7 @@ class DeliveryPollMixin:
         packages: list[dict[str, Any]] | None = None,
         conversions: float | None = None,
         conversion_value: float | None = None,
+        by_placement: list[dict[str, Any]] | None = None,
     ) -> None:
         """Configure adapter to return specific delivery data for a media buy.
 
@@ -867,12 +933,22 @@ class DeliveryPollMixin:
         ``package_id``, ``impressions``, and ``spend`` keys. Totals are auto-computed
         as the sum of per-package values. ``conversions`` / ``conversion_value``
         are totals-level (spec-optional metrics; omitted when None).
+        ``by_placement`` sets the per-placement metrics the seller reports, for a
+        scenario that grades which metric the breakdown was sorted by.
 
         In-process: injects the response on the adapter MagicMock. E2E: persists
         a ``DeliverySimulationConfig`` row the live server's Mock adapter reads.
         """
         resp = self._build_adapter_delivery(
-            media_buy_id, impressions, spend, package_id, clicks, packages, conversions, conversion_value
+            media_buy_id,
+            impressions,
+            spend,
+            package_id,
+            clicks,
+            packages,
+            conversions,
+            conversion_value,
+            by_placement,
         )
         self._realize_adapter_response(resp)
 
@@ -1028,14 +1104,19 @@ class LocalOriginMixin:
             return
 
         # The bundle's path, trusted before the origin starts; start_tls_origin writes it.
-        combined_cert = load_gen_test_tls().COMBINED_CERT
-        self._ssl_cert_file = patch.dict(os.environ, {"SSL_CERT_FILE": str(combined_cert)})
-        self._ssl_cert_file.start()
-        self._guard("ssl_cert_file", self._ssl_cert_file.stop)
+        trust_test_ca(self._guard)
 
         self._origin = start_tls_origin(self._guard, "local_origin")
 
-        self._egress_hatches = patch.dict(os.environ, egress_hatch_env(private=True))
+        # Both halves. The settings object is what the seam reads. The environment is what a
+        # rebuild of the settings reads, which a step dropping the cached object causes. Read
+        # the settings before patching the environment: an object first built under the patch
+        # would take the hatch as its own value, and releasing the patch would restore that.
+        limits = get_settings().limits
+        self._egress_hatches_env = patch.dict(os.environ, egress_hatch_env(private=True))
+        self._egress_hatches_env.start()
+        self._guard("egress_hatches_env", self._egress_hatches_env.stop)
+        self._egress_hatches = patch.object(limits, "adcp_outbound_allow_private", True)
         self._egress_hatches.start()
         self._guard("egress_hatches", self._egress_hatches.stop)
 
@@ -1839,6 +1920,62 @@ class CircuitBreakerMixin(LocalOriginMixin):
         )
 
 
+def _e2e_set_policy_blocked(env: Any, reason: str = "Policy violation") -> None:
+    """E2E realization of :meth:`ProductMixin.set_policy_blocked`.
+
+    The live server's policy check is a real ``PolicyCheckService`` on the seller's own AI
+    configuration, whose model calls the scripted origin with the seller's API key
+    (``scripted_model_key``). Scripting a BLOCKED ``PolicyAnalysis`` for that key is the
+    same verdict the in-process mock returns. The verdict is served only if the check runs:
+    a seller with no usable configuration never calls the origin, as in-process the mocked
+    service is never constructed.
+    """
+    _e2e_script_policy(env, {"output": {"status": "blocked", "reason": reason}})
+
+
+def _e2e_script_policy(env: Any, entry: dict[str, Any]) -> None:
+    """Script the policy verdict for the seller's key, and for the platform's if the env declared one.
+
+    The platform's key answers the same verdict, so a check that ran on it instead of the
+    seller's credential shows on the wire (a BLOCKED brief is refused). Every entry answers
+    only a prompt carrying this env's nonce, which the brief carries (``scripted_brief``),
+    so a verdict another scenario scripted for the shared platform key never answers this one.
+    """
+    from tests.e2e._scripted_llm import install_script
+
+    for api_key in env.scripted_api_keys():
+        install_script(api_key, policy={**entry, "require_text": env.scripted_nonce})
+
+
+def _e2e_set_policy_approved(env: Any) -> None:
+    """E2E realization of :meth:`ProductMixin.set_policy_approved`: an ALLOWED verdict, scripted."""
+    _e2e_script_policy(env, {"output": {"status": "allowed"}})
+
+
+def _e2e_set_policy_unavailable(env: Any) -> None:
+    """E2E realization of :meth:`ProductMixin.set_policy_unavailable`: the origin answers 503."""
+    from tests.e2e._scripted_llm import MODEL_UNAVAILABLE
+
+    _e2e_script_policy(env, MODEL_UNAVAILABLE.entry)
+
+
+def _policy_service_answering(check: Any) -> MagicMock:
+    """A stand-in ``PolicyCheckService`` whose model answers ``check``; the rest is production's.
+
+    Only the model call (``check_brief_compliance``) is scripted. ``check_product_eligibility``
+    is the real service's, a pure rule with no model in it, so the products that survive a
+    verdict are decided by production, not by a MagicMock that answers anything.
+    """
+    from unittest.mock import AsyncMock
+
+    from src.services.policy_check_service import PolicyCheckService
+
+    instance = MagicMock()
+    instance.check_brief_compliance = AsyncMock(**check)
+    instance.check_product_eligibility = PolicyCheckService().check_product_eligibility
+    return instance
+
+
 class ProductMixin:
     """Shared fluent API for _get_products_impl testing.
 
@@ -1850,39 +1987,94 @@ class ProductMixin:
         {"dynamic_variants", "resolve_property_list"}
 
     Fluent API:
-        set_policy_approved()            -- policy check returns approved
+        set_policy_approved()            -- policy check returns allowed
         set_policy_blocked(reason)       -- policy check returns blocked
+        set_policy_unavailable()         -- policy model fails
         set_dynamic_variants(variants)   -- configure dynamic variant generation
         set_property_list(ids)           -- configure property list resolver
         set_ranking_disabled()           -- disable AI ranking
         call_impl(brief, **kw)           -- call _get_products_impl
     """
 
+    @realize_e2e(_e2e_set_policy_approved)
     def set_policy_approved(self) -> None:
         """Configure PolicyCheckService to approve the brief.
 
-        Note: Policy checks are only invoked when the tenant dict has
-        ``advertising_policy.enabled = True`` AND ``gemini_api_key`` set.
+        Note: Policy checks are only invoked when the tenant has
+        ``advertising_policy.enabled = True`` AND an AI configuration of its own
+        (``TenantAIConfig.from_tenant`` resolves one).
         By default the harness identity has neither, so this is a no-op
         unless the test explicitly configures the tenant.
         """
-        from unittest.mock import AsyncMock
+        from src.services.policy_check_service import PolicyCheckResult, PolicyStatus
 
-        mock_result = MagicMock(status="approved", reason=None, restrictions=[])
-        mock_instance = MagicMock()
-        mock_instance.check_brief_compliance = AsyncMock(return_value=mock_result)
-        self.mock["policy_service"].return_value = mock_instance  # type: ignore[attr-defined]
+        verdict = PolicyCheckResult(status=PolicyStatus.ALLOWED)
+        self.mock["policy_service"].return_value = _policy_service_answering({"return_value": verdict})  # type: ignore[attr-defined]
 
+    @realize_e2e(_e2e_set_policy_unavailable)
+    def set_policy_unavailable(self) -> None:
+        """The policy model is down: the provider answers HTTP 503.
+
+        On both legs the real ``PolicyCheckService`` meets the failure (in-process from a
+        model that raises it, over e2e from the scripted origin), ``run_agent`` raises
+        ``AIProviderError``, and ``_get_products_impl`` fails open on it.
+        """
+        from src.services.policy_check_service import PolicyCheckService
+        from tests.e2e._scripted_llm import MODEL_UNAVAILABLE
+
+        # The real service on a model that fails: production's run_agent classifies the
+        # failure and get_products fails open on it, the path the e2e leg takes too.
+        self.mock["policy_service"].return_value = PolicyCheckService(model=MODEL_UNAVAILABLE.model())  # type: ignore[attr-defined]
+
+    #: The platform's own AI key, once a scenario declares one (``ProductEnv.set_platform_ai_credential``).
+    _platform_ai_key: str | None = None
+
+    def scripted_api_keys(self) -> list[str]:
+        """The keys a scripted answer is installed for: the seller's, and the platform's if declared."""
+        return [self.scripted_model_key, *([self._platform_ai_key] if self._platform_ai_key else [])]
+
+    @property
+    def scripted_model_key(self) -> str:
+        """The API key a scenario puts in the seller's own AI configuration.
+
+        Minted once per env, so scenarios sharing the e2e stack's one scripted origin cannot
+        read each other's scripts. In-process nothing authenticates with it; over e2e the
+        scripted origin (``tests/e2e/scripted_llm_origin_service.py``) answers a call
+        carrying it, and refuses every other key as the real API refuses an invalid one.
+        """
+        if self.__dict__.get("_scripted_model_key") is None:
+            self.__dict__["_scripted_model_key"] = f"seller-ai-key-{uuid4().hex}"
+        return str(self.__dict__["_scripted_model_key"])
+
+    @property
+    def scripted_nonce(self) -> str:
+        """A text minted once per env, which tags this scenario's prompts.
+
+        Over e2e every scenario shares one scripted origin and one platform key, and an
+        installed script is never removed. A script entry answers only a prompt carrying
+        its ``require_text``, so each scenario puts this nonce in what it sends the model
+        (the seller's ranking prompt, the buyer's brief) and in its entries' ``require_text``.
+        A script from another scenario then answers nothing here, whatever the test order.
+        """
+        if self.__dict__.get("_scripted_nonce") is None:
+            self.__dict__["_scripted_nonce"] = f"scenario-{uuid4().hex[:12]}"
+        return str(self.__dict__["_scripted_nonce"])
+
+    def scripted_brief(self, brief: str) -> str:
+        """``brief`` tagged with :attr:`scripted_nonce`, for a request whose policy check is scripted."""
+        return f"{brief} [{self.scripted_nonce}]"
+
+    @realize_e2e(_e2e_set_policy_blocked)
     def set_policy_blocked(self, reason: str = "Policy violation") -> None:
-        """Configure PolicyCheckService to block the brief."""
-        from unittest.mock import AsyncMock
+        """Configure PolicyCheckService to block the brief.
 
-        from src.services.policy_check_service import PolicyStatus
+        Over e2e the live server builds the real service on the seller's own AI
+        configuration, so the verdict is scripted on the origin that model calls.
+        """
+        from src.services.policy_check_service import PolicyCheckResult, PolicyStatus
 
-        mock_result = MagicMock(status=PolicyStatus.BLOCKED, reason=reason, restrictions=[])
-        mock_instance = MagicMock()
-        mock_instance.check_brief_compliance = AsyncMock(return_value=mock_result)
-        self.mock["policy_service"].return_value = mock_instance  # type: ignore[attr-defined]
+        verdict = PolicyCheckResult(status=PolicyStatus.BLOCKED, reason=reason)
+        self.mock["policy_service"].return_value = _policy_service_answering({"return_value": verdict})  # type: ignore[attr-defined]
 
     def set_dynamic_variants(self, variants: list[Any] | None = None) -> None:
         """Configure generate_variants_for_brief to return specific variants.
@@ -1901,9 +2093,9 @@ class ProductMixin:
         self.mock["resolve_property_list"].return_value = property_ids or []  # type: ignore[attr-defined]
 
     def set_ranking_disabled(self) -> None:
-        """Disable AI ranking by making the factory report AI as not enabled."""
+        """Disable AI ranking by making the factory build no model."""
         mock_factory = MagicMock()
-        mock_factory.is_ai_enabled.return_value = False
+        mock_factory.build.return_value = None
         self.mock["ranking_factory"].return_value = mock_factory  # type: ignore[attr-defined]
 
     def _configure_product_mocks(self) -> None:
@@ -1912,7 +2104,7 @@ class ProductMixin:
         Call from _configure_mocks() in concrete classes.
 
         Defaults:
-        - PolicyCheckService: not invoked (no gemini_api_key in tenant dict)
+        - PolicyCheckService: not invoked (no AI configuration of the seller's own)
         - Dynamic variants: returns [] (already AsyncMock via ASYNC_PATCHES)
         - DynamicPricingService: pass-through in unit mode, real in integration mode
         - Property list resolver: returns [] (already AsyncMock via ASYNC_PATCHES)
@@ -2026,7 +2218,7 @@ class AccountListDispatchMixin:
 
     def _parse_list_rest_response(self, data: dict[str, Any]) -> Any:
         # revive, not the constructor: a served document carries the context the boundary
-        # stamped and AdcpResponse refuses that field on construction.
+        # stamped and SalesAgentAdcpResponse refuses that field on construction.
         from src.core.schemas.account import ListAccountsResponse
 
         return ListAccountsResponse.revive(data)

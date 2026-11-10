@@ -130,6 +130,7 @@ class TestGAMTenantSetup:
             adapter = GoogleAdManager(
                 config=config,
                 principal=principal,
+                tenant_ai_config=None,
             )
 
         # Verify the error mentions the missing parameters

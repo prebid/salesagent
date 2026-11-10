@@ -77,6 +77,21 @@ def e2e_ca_bundle() -> str:
     return os.getenv("E2E_CA_BUNDLE") or str(REPO_ROOT / ".test-tls" / "ca.pem")
 
 
+def e2e_combined_ca_bundle() -> str:
+    """ABSOLUTE path to the public roots CONCATENATED with that CA — for ``SSL_CERT_FILE``.
+
+    The sibling of :func:`e2e_ca_bundle`, and the two are not interchangeable.
+    ``SSL_CERT_FILE`` REPLACES the file half of the process's default trust store, so
+    pointing it at the private CA alone would break every real HTTPS connection the
+    same process makes (``uv sync`` against pypi.org, for one). Written as a path
+    rather than imported from ``scripts/dev/gen_test_tls.py``: that module is named
+    ``test_*`` where it is re-exported, and the sibling-import guard admits only three
+    deferred importers of it. ``ensure_test_tls()`` rebuilds this file on every call,
+    so the path is all a caller needs.
+    """
+    return str(REPO_ROOT / ".test-tls" / "combined-ca.pem")
+
+
 def e2e_tls_base_url(tls_port: int | None) -> str | None:
     """The origin the stack serves TLS on, or ``None`` when it publishes none.
 
@@ -222,6 +237,18 @@ def docker_services_e2e(request):
     # so a stack already serving the existing leaf is never disturbed.
     ensure_test_tls()
     os.environ.setdefault("E2E_CA_BUNDLE", e2e_ca_bundle())
+    # And the trust anchor for a client whose context we CANNOT pass a cafile into.
+    # ``adcp.signing``'s own fetchers build ``ssl.create_default_context()`` with no
+    # cafile (``ip_pinned_transport._build_ssl_context``) and hop 3
+    # (``async_default_jwks_fetcher``) takes no client-factory seam at all, so
+    # SSL_CERT_FILE — honoured at the OpenSSL level — is the only way the SDK can
+    # verify this stack's leaf (``test_trust_root_e2e`` walks it). COMBINED, never
+    # ``ca.pem``: this variable REPLACES the process's default cafile, so the private
+    # CA alone would break every real HTTPS connection this process makes (see
+    # docs/design/webhook-testing-architecture.md § Choose the bundle by what the
+    # client is checking). ``setdefault`` because the in-network runner already sets
+    # it to the same file (``docker-compose.e2e.yml``); this is the host path's parity.
+    os.environ.setdefault("SSL_CERT_FILE", e2e_combined_ca_bundle())
 
     if use_existing_services:
         print("Using existing Docker services (ADCP_TESTING=true or --skip-docker)")

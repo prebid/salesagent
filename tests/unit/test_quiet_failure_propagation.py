@@ -237,8 +237,7 @@ class TestAIRankingExceptionPropagation:
         identity = _make_identity(product_ranking_prompt="Rank by relevance")
 
         mock_factory = MagicMock()
-        mock_factory.is_ai_enabled.return_value = True
-        mock_factory.create_model.return_value = MagicMock()
+        mock_factory.build.return_value = MagicMock()
 
         patches = _base_patches(mock_uow) + [
             patch(

@@ -60,6 +60,7 @@ from src.core.exceptions import (
 from src.core.product_conversion import convert_product_model_to_schema
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import GetProductsRequest
+from src.services.ai.factory import AIProviderError
 from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
 from tests.factories.principal import plaintext_token_for
 from tests.harness._base import INVALID_TOKEN, IntegrationEnv
@@ -508,9 +509,12 @@ class TestMainFlow:
         result = await _call_get_products(brief="adapter test")
         for product in result.products:
             for po in product.pricing_options:
-                inner = po.root
-                # Mock adapter supports CPM, so should be annotated
-                assert hasattr(inner, "supported") or hasattr(inner, "pricing_model")
+                # No ``.root``: adcp 9 types ``Product.pricing_options`` as a discriminated
+                # union of the ARMS (CpmPricingOption | VcpmPricingOption | ...), not a
+                # RootModel wrapping them, so the element already IS the inner model.
+                # At adcp 6.6.0 it was ``list[PricingOption]`` with a ``root``, which is why
+                # this read used to work.
+                assert hasattr(po, "supported") or hasattr(po, "pricing_model")
 
     @pytest.mark.asyncio
     async def test_adapter_pricing_option_lookup_correctness(self, uc001_products):
@@ -523,9 +527,9 @@ class TestMainFlow:
         for product in result.products:
             assert len(product.pricing_options) > 0
             for po in product.pricing_options:
-                inner = po.root
-                assert inner.pricing_option_id is not None
-                assert inner.currency is not None
+                # The element IS the arm at adcp 9 -- see test_adapter_support_annotation.
+                assert po.pricing_option_id is not None
+                assert po.currency is not None
 
 
 # ===========================================================================
@@ -611,7 +615,8 @@ class TestExtensionA:
         """
         with patch("src.core.tools.products.PolicyCheckService") as MockService:
             mock_instance = MockService.return_value
-            mock_instance.check_brief_compliance = AsyncMock(side_effect=ConnectionError("Service unavailable"))
+            # What the real service raises when the provider fails the check (run_agent).
+            mock_instance.check_brief_compliance = AsyncMock(side_effect=AIProviderError("Service unavailable"))
 
             # Should NOT raise - fail open
             result = await _call_get_products(
@@ -1075,8 +1080,7 @@ class TestEmptyResults:
         """
         with patch("src.services.ai.factory.get_factory") as mock_factory:
             mock_ai = Mock()
-            mock_ai.is_ai_enabled.return_value = True
-            mock_ai.create_model.return_value = Mock()
+            mock_ai.build.return_value = Mock()
             mock_factory.return_value = mock_ai
 
             with patch("src.services.ai.agents.ranking_agent.create_ranking_agent") as mock_agent:
@@ -1163,9 +1167,11 @@ class TestFilteredDiscovery:
         Spec: product-filters.json — "true = products offering fixed pricing
         (at least one option with fixed_price)"
 
-        Bug: — getattr(po, "is_fixed", None) returns None on
-        PricingOption RootModel wrappers because fixed_price lives on po.root,
-        not po directly.
+        Bug: — getattr(po, "is_fixed", None) returns None because the filter
+        reads a field the pricing option does not carry; ``fixed_price`` lives on
+        the option itself. (At adcp 6.6.0 the option was a ``PricingOption``
+        RootModel and the field lived on ``po.root``; adcp 9 types the list as a
+        discriminated union of the arms, so there is no wrapper.)
         """
         result = await _call_get_products(
             brief="display ads",

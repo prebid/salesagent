@@ -28,13 +28,29 @@ hazard the environment route had, removed rather than patched.
 
 from __future__ import annotations
 
+import os
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
+from unittest.mock import patch
 
 if TYPE_CHECKING:
+    from types import TracebackType
+
     import pytest
 
     from src.core.config import LimitSettings
+
+# Where the platform's AI credential comes from. With PYDANTIC_AI_PROVIDER unset the
+# platform provider is Google, so GEMINI_API_KEY is the key that counts; the others are
+# removed so an ambient provider/model/key from the developer's shell cannot make a
+# different vendor the platform's.
+PLATFORM_AI_ENV: tuple[str, ...] = (
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "PYDANTIC_AI_PROVIDER",
+    "PYDANTIC_AI_MODEL",
+)
 
 
 def inject_limits(monkeypatch: pytest.MonkeyPatch, **overrides: Any) -> LimitSettings:
@@ -51,6 +67,10 @@ def inject_limits(monkeypatch: pytest.MonkeyPatch, **overrides: Any) -> LimitSet
         The injected ``LimitSettings``, for a caller that wants to read a shipped default
         off it without a second import.
     """
+    # Compose the app first. src.app calls load_settings() when it is imported, which
+    # replaces the settings object, so an injection made before a later first import of it (an
+    # env entered after this call, say) would be discarded.
+    import src.app  # noqa: F401
     import src.core.config as config_module
     from src.core.config import LimitSettings, get_settings
 
@@ -65,3 +85,58 @@ def inject_limits(monkeypatch: pytest.MonkeyPatch, **overrides: Any) -> LimitSet
     limits = current.limits.model_copy(update=overrides)
     monkeypatch.setattr(config_module, "_settings", replace(current, limits=limits))
     return limits
+
+
+class PlatformAICredential:
+    """The platform's AI credential, stated for the length of a test: none, or one Gemini key.
+
+    ``tests/conftest.py`` sets ``GEMINI_API_KEY`` for every test, and
+    ``AIServiceFactory.build`` falls back to the platform key, so a test about the
+    SELLER's own configuration has to remove it or every tenant looks AI-enabled.
+
+    Pinned in the ENVIRONMENT, unlike :func:`inject_limits`: a composition root rebuilds
+    the settings from the environment whenever it starts (the REST leg imports
+    ``src.app``, which calls ``load_settings()``), so a value put only on the settings
+    object is undone by the first REST dispatch. The settings are reloaded on every
+    change and again after the environment is restored.
+
+    A harness env calls :meth:`start` and registers :meth:`stop` with its guard; a test
+    uses it as a context manager.
+    """
+
+    def __init__(self, gemini_api_key: str | None = None) -> None:
+        """``gemini_api_key`` is the platform key :meth:`start` states; ``None`` is none."""
+        self._environ = patch.dict(os.environ)
+        self._gemini_api_key = gemini_api_key
+
+    def start(self) -> None:
+        self._environ.start()
+        self.set(self._gemini_api_key)
+
+    def set(self, gemini_api_key: str | None) -> None:
+        """Replace the platform credential: ``None`` removes it."""
+        from src.core.config import load_settings
+
+        for var in PLATFORM_AI_ENV:
+            os.environ.pop(var, None)
+        if gemini_api_key is not None:
+            os.environ["GEMINI_API_KEY"] = gemini_api_key
+        load_settings()
+
+    def stop(self) -> None:
+        from src.core.config import load_settings
+
+        self._environ.stop()
+        load_settings()
+
+    def __enter__(self) -> PlatformAICredential:
+        self.start()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        self.stop()

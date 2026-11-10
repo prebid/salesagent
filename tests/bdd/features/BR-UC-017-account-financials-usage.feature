@@ -154,8 +154,8 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     # collects on no transport. Greening it requires the full UC-017 binding plus the greenfield tool.
     # get_account_financials is operator-billed only: agent- and advertiser-billed accounts are
     # invoiced outside the operator's billing relationship, so financials are UNSUPPORTED_FEATURE
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/get-account-financials-request.json pointer=/properties/account/description
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/billing-party.json pointer=/enum (advertiser is a valid billing-party the gate must handle)
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/get-account-financials-request.json pointer=/properties/account/description
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/billing-party.json pointer=/enum (advertiser is a valid billing-party the gate must handle)
 
   @T-UC-017-ext-b-fin @extension @ext-b @error @get-financials @post-f1 @post-f2 @post-f3
   Scenario: Get account financials -- unresolvable account returns ACCOUNT_NOT_FOUND
@@ -814,7 +814,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And the error should include "suggestion" field
     And the suggestion should contain "use a new idempotency_key"
     # Gap fill: DUPLICATE_REQUEST error code needs explicit assertion
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/get-account-financials-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/get-account-financials-request.json
 
   @T-UC-017-main-usage-creative-link @main-flow @report-usage @happy-path @v3-1 @vendor-link
   Scenario: Report usage -- creative agent record links to creative_id
@@ -824,7 +824,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     Then the response contains accepted count of 1
     And the response does not contain an errors array
     # Per RFC: creative_id required for creative agents; links usage to a specific creative for billing verification
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/get-account-financials-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/get-account-financials-request.json
 
   @T-UC-017-main-usage-property-list-link @main-flow @report-usage @happy-path @v3-1 @vendor-link
   Scenario: Report usage -- property list agent record links to property_list_id
@@ -834,7 +834,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     Then the response contains accepted count of 1
     And the response does not contain an errors array
     # Per RFC: property_list_id required for property list agents; links usage to a specific property list for billing verification
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/get-account-financials-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/get-account-financials-request.json
 
   @T-UC-017-main-usage-rights-link @main-flow @report-usage @happy-path @v3-1 @vendor-link
   Scenario: Report usage -- brand rights agent record links to rights_id
@@ -844,7 +844,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     Then the response contains accepted count of 1
     And the response does not contain an errors array
     # Per schema: rights_id required for brand/rights agents; links usage records to specific rights grants for cap tracking and overage calculation
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/get-account-financials-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/get-account-financials-request.json
 
   @T-UC-017-main-usage-media-buy-link @main-flow @report-usage @happy-path @v3-1 @vendor-link
   Scenario: Report usage -- usage record links to media_buy_id for campaign attribution
@@ -871,7 +871,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     # billing reconciliation can link usage back to the exact produced leaf (pricing_option_id
     # alone is not unique across leaves); omitted on the canonical path where creative_id IS the
     # build_variant_id, and for creatives with no build-variant lineage
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/report-usage-request.json pointer=/properties/usage/items/properties/build_variant_id
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/report-usage-request.json pointer=/properties/usage/items/properties/build_variant_id
 
   @T-UC-017-part-cap-gate @partition @cap-gate @get-financials
   Scenario Outline: Capability gate partition -- <partition>
@@ -1307,7 +1307,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And error.details.scope equals "capability"
     And error.details.supported_billing equals ["operator", "agent"]
     # Caller can pick a permitted value without re-fetching capabilities
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/get-account-financials-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/get-account-financials-request.json
 
   @T-UC-017-billing-not-supported-account-scope @v31 @billing-not-supported @error-details @schema @br-18
   Scenario: BILLING_NOT_SUPPORTED at account scope omits supported_billing
@@ -1318,7 +1318,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And error.details.scope equals "account"
     And error.details may omit supported_billing
     # Advice: try the next-most-permissive value the capability allows
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/get-account-financials-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/get-account-financials-request.json
 
   @T-UC-017-billing-not-supported-uniform-response @v31 @billing-not-supported @uniform-response @security @br-18
   Scenario: BILLING_NOT_SUPPORTED uniform response omits scope when agent identity is not established
@@ -1326,7 +1326,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     When the Seller Agent returns BILLING_NOT_SUPPORTED
     Then error.details.scope is omitted
     # Emitting scope "account" to an unauthenticated caller would itself act as a per-account oracle
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/get-account-financials-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/get-account-financials-request.json
 
   @T-UC-017-billing-not-permitted-for-agent-with-suggestion @v31 @billing-not-permitted-for-agent @error-details @schema @br-19
   Scenario: BILLING_NOT_PERMITTED_FOR_AGENT with retryable suggestion -- agent may retry autonomously
@@ -1337,7 +1337,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And error.details.rejected_billing equals "agent"
     And error.details.suggested_billing equals "operator"
     And the buyer agent MAY retry report_usage autonomously with billing = "operator"
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/get-account-financials-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/get-account-financials-request.json
 
   @T-UC-017-billing-not-permitted-for-agent-terminal @v31 @billing-not-permitted-for-agent @error-details @schema @br-19
   Scenario: BILLING_NOT_PERMITTED_FOR_AGENT without suggestion is terminal-pending-onboarding
@@ -1348,7 +1348,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And the rejection is terminal-pending-onboarding for the agent
     And a human at the buyer must complete payments-relationship onboarding offline before retry succeeds
     And error.details MUST NOT carry the agent's permitted-billing subset or other per-account commercial state
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/get-account-financials-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/get-account-financials-request.json
 
   @T-UC-017-account-setup-required-details @v31 @account-setup-required @error-details @schema @br-20
   Scenario: ACCOUNT_SETUP_REQUIRED carries setup_url and setup_steps so buyer can finish onboarding

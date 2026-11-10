@@ -11,6 +11,12 @@ This reads the runner's OWN record -- ``test-results/storyboard_run_<protocol>.j
 the ``--json`` stdout published by ``tests/storyboard/test_storyboard_conformance.py`` --
 and reports gained, lost and still-failing as sets of identified steps.
 
+Every lost pass carries the HEAD run's own disposition for that step -- skipped (with the
+runner's ``skip_reason``), failed, or absent from the record entirely. Without it the three
+are indistinguishable, and only the middle one is a regression: a corpus bump that adds a
+prerequisite turns passes into SKIPS, which removes their failing items and makes the
+failure count IMPROVE while conformance drops.
+
 A step is identified by ``<track>::<scenario>::<task>``, which is what the runner nests
 its results under and what ``storyboard_collected.json`` keys its check ids on.
 
@@ -48,6 +54,70 @@ _FALLBACK_KEYS: set[str] = set()
 _COLLIDED_KEYS: set[str] = set()
 
 
+def _walk(record: Path) -> tuple[dict[str, bool], dict[str, str]]:
+    """One pass over *record*: the graded-pass map, and EVERY step's disposition.
+
+    Two maps rather than one because the first provokes a question it cannot answer. The
+    pass map drops every skipped step, which is correct for comparing passing SETS and is
+    exactly why a lost pass used to arrive with no cause attached: the step is simply gone
+    from the head side, indistinguishable from a step the head run never had.
+
+    Measured on the 3.1.1 -> 3.2.1 corpus bump, that ambiguity was the whole diagnosis. 84
+    passes were lost on both protocols and the failure count went DOWN (15 -> 3), because
+    the corpus added ``prerequisites.controller_seeding: true`` to 19 storyboards and this
+    agent does not expose ``comply_test_controller`` -- so 57 of the 84 became
+    ``missing_test_controller`` skips, 19 became ``capability_profile_mismatch`` (the
+    3.2-mandated ``covers_content_digest: required`` posture makes the legacy signing
+    vectors structurally ungradable), and 2 ceased to exist because 3.2 deleted the phase.
+    Three different diseases, one indistinguishable symptom. The disposition map is the
+    difference between reading that off the records and re-deriving it by hand.
+
+    The disposition is the HEAD run's own word for what it did -- ``skip:<skip_reason>``,
+    ``not_selected:<selection_reason>``, ``skip_marker``, ``passed``, ``failed`` -- never
+    this tool's interpretation of it. A graded verdict overwrites a skip for the same
+    identity; a skip never overwrites a graded verdict.
+    """
+    data = json.loads(record.read_text())
+    graded: dict[str, bool] = {}
+    disposition: dict[str, str] = {}
+    for track in data.get("tracks") or []:
+        for scenario in track.get("scenarios") or []:
+            for step in scenario.get("steps") or []:
+                # ORDER MATTERS, and it is measured against REAL runner records rather than
+                # against the storyboard definitions. The yaml gives every step an ``id``, but
+                # the runner does NOT emit one -- a record carries ``step``, ``task``,
+                # ``details``, ``duration_ms``, ``observation_data``, ``passed`` and nothing
+                # else. So ``step_id`` is here only for a future runner that publishes it, and
+                # what actually identifies a step today is ``step``, its title: measured over
+                # 358 steps, keying on ``step`` loses 0 identities and keying on ``task`` loses
+                # 90. ``task`` is the tool name, repeated by every step that calls it.
+                identity = step.get("step_id") or step.get("id") or step.get("step")
+                if not identity:
+                    identity = step.get("task")
+                    _FALLBACK_KEYS.add(f"{scenario.get('scenario')}::{identity}")
+                key = f"{track.get('track')}::{scenario.get('scenario')}::{identity}"
+                if step.get("skipped"):
+                    disposition.setdefault(key, f"skip:{step.get('skip_reason') or 'unspecified'}")
+                    continue
+                if step.get("selection_reason"):
+                    disposition.setdefault(key, f"not_selected:{step.get('selection_reason')}")
+                    continue
+                # Matched against the SCENARIO and TASK, never the key. The key used to carry
+                # the task, so testing the key happened to work; keyed on ``step_id`` it would
+                # miss a marker that the task names and the scenario does not.
+                named = f"{scenario.get('scenario') or ''}::{step.get('task') or step.get('step') or ''}"
+                if any(marker in named for marker in _SKIP_MARKERS):
+                    disposition.setdefault(key, "skip_marker")
+                    continue
+                if key in graded:
+                    # Two steps with ONE identity: the collapse this keying exists to avoid.
+                    # Loud, because a silent overwrite is what made a lost pass invisible.
+                    _COLLIDED_KEYS.add(key)
+                graded[key] = bool(step.get("passed"))
+                disposition[key] = "passed" if graded[key] else "failed"
+    return graded, disposition
+
+
 def _steps(record: Path) -> dict[str, bool]:
     """Every step in *record*, keyed ``track::scenario::step_id``, mapped to passed.
 
@@ -67,39 +137,11 @@ def _steps(record: Path) -> dict[str, bool]:
 
     Skip markers are excluded here rather than by the caller, so no consumer can
     accidentally count one.
+
+    The walk itself is :func:`_walk`, shared with the disposition map so the two cannot
+    disagree about which steps are graded.
     """
-    data = json.loads(record.read_text())
-    out: dict[str, bool] = {}
-    for track in data.get("tracks") or []:
-        for scenario in track.get("scenarios") or []:
-            for step in scenario.get("steps") or []:
-                # ORDER MATTERS, and it is measured against REAL runner records rather than
-                # against the storyboard definitions. The yaml gives every step an ``id``, but
-                # the runner does NOT emit one -- a record carries ``step``, ``task``,
-                # ``details``, ``duration_ms``, ``observation_data``, ``passed`` and nothing
-                # else. So ``step_id`` is here only for a future runner that publishes it, and
-                # what actually identifies a step today is ``step``, its title: measured over
-                # 358 steps, keying on ``step`` loses 0 identities and keying on ``task`` loses
-                # 90. ``task`` is the tool name, repeated by every step that calls it.
-                identity = step.get("step_id") or step.get("id") or step.get("step")
-                if not identity:
-                    identity = step.get("task")
-                    _FALLBACK_KEYS.add(f"{scenario.get('scenario')}::{identity}")
-                key = f"{track.get('track')}::{scenario.get('scenario')}::{identity}"
-                if step.get("skipped") or step.get("selection_reason"):
-                    continue
-                # Matched against the SCENARIO and TASK, never the key. The key used to carry
-                # the task, so testing the key happened to work; keyed on ``step_id`` it would
-                # miss a marker that the task names and the scenario does not.
-                named = f"{scenario.get('scenario') or ''}::{step.get('task') or step.get('step') or ''}"
-                if any(marker in named for marker in _SKIP_MARKERS):
-                    continue
-                if key in out:
-                    # Two steps with ONE identity: the collapse this keying exists to avoid.
-                    # Loud, because a silent overwrite is what made a lost pass invisible.
-                    _COLLIDED_KEYS.add(key)
-                out[key] = bool(step.get("passed"))
-    return out
+    return _walk(record)[0]
 
 
 def runner_score(record: Path) -> dict[str, Any]:
@@ -133,16 +175,32 @@ def _record_for(where: Path, protocol: str) -> Path | None:
     return None
 
 
-def _compare(base: dict[str, bool], head: dict[str, bool]) -> dict[str, Any]:
+def _compare(base: dict[str, bool], head: dict[str, bool], head_disposition: dict[str, str]) -> dict[str, Any]:
+    """Gained, lost and still-failing, with each lost pass carrying the head's own verdict.
+
+    ``lost_cause`` is what turns the lost list from a symptom into a diagnosis. A pass the
+    head run SKIPPED and a pass the head run FAILED are different diseases that the set
+    difference renders identically, and the skip is the one that hides: it removes its own
+    failing item, so a tree that skipped more can report fewer failures. ``absent`` means
+    the head record has no step of that identity at all -- usually a phase the corpus
+    deleted, or a storyboard that collapsed to a single capability-gate marker.
+    """
     base_pass = {k for k, v in base.items() if v}
     head_pass = {k for k, v in head.items() if v}
+    lost = sorted(base_pass - head_pass)
+    lost_cause = {k: head_disposition.get(k, "absent") for k in lost}
+    causes: dict[str, int] = {}
+    for cause in lost_cause.values():
+        causes[cause] = causes.get(cause, 0) + 1
     return {
         "base_graded": len(base),
         "head_graded": len(head),
         "base_passed": len(base_pass),
         "head_passed": len(head_pass),
         "identical": sorted(base_pass) == sorted(head_pass),
-        "lost": sorted(base_pass - head_pass),
+        "lost": lost,
+        "lost_cause": lost_cause,
+        "lost_by_cause": dict(sorted(causes.items(), key=lambda kv: (-kv[1], kv[0]))),
         "gained": sorted(head_pass - base_pass),
         "failing_both": sorted({k for k, v in base.items() if not v} & {k for k, v in head.items() if not v}),
         "newly_failing": sorted({k for k, v in head.items() if not v} - set(base)),
@@ -166,7 +224,9 @@ def main() -> int:
         if base_rec is None or head_rec is None:
             missing.append(f"{protocol} (base={base_rec is not None} head={head_rec is not None})")
             continue
-        comparison = _compare(_steps(base_rec), _steps(head_rec))
+        base_graded, _ = _walk(base_rec)
+        head_graded, head_disposition = _walk(head_rec)
+        comparison = _compare(base_graded, head_graded, head_disposition)
         comparison["base_score"] = runner_score(base_rec)
         comparison["head_score"] = runner_score(head_rec)
         report[protocol] = comparison
@@ -214,8 +274,16 @@ def main() -> int:
             print(f"  graded-step identities compared: base={r['base_graded']} head={r['head_graded']}")
             print(f"  of those passing: base={r['base_passed']} head={r['head_passed']}  (NOT the score above)")
             print(f"  lost ({len(r['lost'])}) — passed on base, not on head:")
+            if r["lost_by_cause"]:
+                # The histogram first, because it is the diagnosis and the list is only its
+                # evidence: one cause with 57 entries is one fix, and 57 scattered causes
+                # are 57. Reading the list without it is how a corpus-wide skip gets
+                # mistaken for a production regression.
+                print("    by head disposition:")
+                for cause, count in r["lost_by_cause"].items():
+                    print(f"      {count:5d}  {cause}")
             for step in r["lost"]:
-                print(f"    - {step}")
+                print(f"    - [{r['lost_cause'][step]}] {step}")
             print(f"  gained ({len(r['gained'])}):")
             for step in r["gained"]:
                 print(f"    + {step}")

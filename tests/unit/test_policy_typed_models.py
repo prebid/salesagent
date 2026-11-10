@@ -6,8 +6,6 @@ and check_product_eligibility accepts Product (not dict).
 : Policy service should accept Pydantic models, not dicts.
 """
 
-from unittest.mock import patch
-
 import pytest
 
 from src.services.policy_check_service import PolicyCheckResult, PolicyCheckService, PolicyStatus
@@ -17,11 +15,7 @@ from tests.helpers.adcp_factories import create_test_brand_manifest, create_test
 @pytest.fixture
 def policy_service():
     """Policy service with AI disabled."""
-    import os
-
-    with patch.dict("os.environ", {}, clear=False):
-        os.environ.pop("GEMINI_API_KEY", None)
-        return PolicyCheckService(gemini_api_key=None)
+    return PolicyCheckService()
 
 
 class TestBriefComplianceTypedModel:

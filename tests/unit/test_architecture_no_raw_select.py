@@ -67,7 +67,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/adapters/gam/managers/targeting.py", "_load_axe_keys"),
     ("src/adapters/gam/managers/targeting.py", "_load_custom_targeting_key_ids"),
     # sync_custom_targeting_keys removed — uses AdapterConfigRepository
-    ("src/adapters/gam/managers/workflow.py", "create_manual_order_workflow_step"),
     ("src/adapters/gam_reporting_api.py", "get_ad_unit_breakdown"),
     ("src/adapters/gam_reporting_api.py", "get_advertiser_summary"),
     ("src/adapters/gam_reporting_api.py", "get_country_breakdown"),
@@ -77,7 +76,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/adapters/google_ad_manager.py", "create_media_buy"),
     ("src/adapters/google_ad_manager.py", "get_media_buy_delivery"),
     ("src/adapters/google_ad_manager.py", "get_packages_snapshot"),
-    ("src/adapters/mock_ad_server.py", "_create_media_buy_immediate"),
     ("src/adapters/mock_ad_server.py", "mock_product_config"),
     ("src/adapters/mock_ad_server.py", "register_ui_routes"),
     ("src/adapters/mock_ad_server.py", "wrapped_view"),
@@ -303,8 +301,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/services/delivery_webhook_scheduler.py", "_send_report_for_media_buy"),
     ("src/services/dynamic_pricing_service.py", "_calculate_product_pricing"),
     ("src/services/dynamic_products.py", "archive_expired_variants"),
-    ("src/services/dynamic_products.py", "generate_variants_for_brief"),
-    ("src/services/dynamic_products.py", "generate_variants_from_signals"),
     ("src/services/format_metrics_service.py", "_process_and_store_metrics"),
     ("src/services/format_metrics_service.py", "aggregate_all_tenants"),
     # _update_adapter_config_targeting_keys removed — uses AdapterConfigRepository

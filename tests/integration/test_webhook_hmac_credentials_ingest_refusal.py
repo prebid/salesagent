@@ -100,6 +100,7 @@ from __future__ import annotations
 
 import pytest
 
+from tests.factories.webhook import PushNotificationConfigRequestFactory
 from tests.harness.media_buy_create import MediaBuyCreateEnv
 from tests.harness.transport import Transport
 from tests.helpers.adcp_factories import create_test_media_buy_request_dict
@@ -192,13 +193,26 @@ def _create_kwargs(product, authentication: dict | None) -> dict:
     Everything else — brand, packages, pricing option, dates, idempotency key —
     comes from the shared builder, so a package/pricing rejection can never
     stand in for the refusal under test.
+
+    THE REGISTRATION ITSELF comes from ``PushNotificationConfigRequestFactory``
+    for the same reason, and the "ONLY defect" above is what it buys. A literal
+    here carried no ``operation_id``, so every document was wrong in TWO ways,
+    and which refusal a case got depended on the order the gate happens to run
+    its checks in — see the ordering note at
+    ``src/core/webhooks/registration.py``, which records that exact hazard. The
+    negative cases survived the ambiguity because the credential and scheme
+    verdicts are reached first; the POSITIVE control did not, and was refused for
+    ``push_notification_config.operation_id`` while asserting that a complete
+    HMAC registration is accepted.
     """
     return create_test_media_buy_request_dict(
         product_ids=[product.product_id],
         pricing_option_id="cpm_usd_fixed",
         total_budget=5000.0,
         po_number="HMAC-CREDS-INGEST",
-        push_notification_config={"url": _SAFE_URL, "authentication": authentication},
+        push_notification_config=PushNotificationConfigRequestFactory.payload(
+            url=_SAFE_URL, authentication=authentication
+        ),
     )
 
 
