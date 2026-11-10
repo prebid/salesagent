@@ -222,6 +222,7 @@ def get_product_suggestions(tenant_id):
 
         # Check existing products to mark which are already created
         with get_db_session() as db_session:
+            # FIXME(#1119): raw select on Product outside a repository
             stmt = select(Product.product_id).filter_by(tenant_id=tenant_id)
             existing_products = db_session.scalars(stmt).all()
             existing_ids = {product[0] for product in existing_products}

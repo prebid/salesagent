@@ -34,7 +34,13 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist, parse_module
+from tests.unit._architecture_helpers import (
+    SCOPE_NODES,
+    assert_violations_match_allowlist,
+    parse_module,
+    scope_bindings,
+    scope_nodes,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CREATIVE_REPO = _REPO_ROOT / "src" / "core" / "database" / "repositories" / "creative.py"
@@ -127,35 +133,28 @@ def _chain_base(node: ast.expr) -> tuple[ast.expr, list[ast.Call]]:
 def _accumulated_chains(tree: ast.Module) -> list[tuple[ast.Call, list[ast.Call]]]:
     """Merge accumulator-style queries into single (select_call, parts) chains.
 
-    Tracks simple ``name = select(...)...`` assignments per function scope and
-    folds subsequent ``name = name.where/filter/filter_by(...)`` statements into
-    the same chain, so the query is graded on its FULL accumulated filter set
-    (an unscoped accumulator is flagged; principal_id pinned in a later
-    statement is credited).
+    Tracks simple ``name = select(...)...`` assignments per scope and folds
+    subsequent ``name = name.where/filter/filter_by(...)`` statements into the
+    same chain, so the query is graded on its FULL accumulated filter set (an
+    unscoped accumulator is flagged; principal_id pinned in a later statement
+    is credited). Scopes and bindings are the shared ``scope_nodes`` /
+    ``scope_bindings`` (one walk for every guard that folds an accumulator): a
+    name the scope also binds another way -- a parameter, a loop target -- is
+    not folded, since the fold cannot know which binding a read sees; its
+    inline ``select(...)`` chain is still graded on its own.
     """
-    scopes: list[ast.AST] = [tree]
-    scopes.extend(n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)))
+    scopes: list[ast.AST] = [tree, *(n for n in ast.walk(tree) if isinstance(n, SCOPE_NODES))]
     merged: list[tuple[ast.Call, list[ast.Call]]] = []
-
-    def _local_assigns(scope: ast.AST) -> list[ast.Assign]:
-        """Assign statements in *scope*, not descending into nested functions."""
-        found: list[ast.Assign] = []
-        stack: list[ast.AST] = list(ast.iter_child_nodes(scope))
-        while stack:
-            node = stack.pop()
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            if isinstance(node, ast.Assign):
-                found.append(node)
-            stack.extend(ast.iter_child_nodes(node))
-        return sorted(found, key=lambda n: n.lineno)
 
     for scope in scopes:
         acc: dict[str, tuple[ast.Call, list[ast.Call]]] = {}
-        for stmt in _local_assigns(scope):
+        foldable = scope_bindings(scope)
+        for stmt in (n for n in scope_nodes(scope) if isinstance(n, ast.Assign)):
             if len(stmt.targets) != 1 or not isinstance(stmt.targets[0], ast.Name):
                 continue
             target = stmt.targets[0].id
+            if target not in foldable:
+                continue
             base, parts = _chain_base(stmt.value)
             if isinstance(base, ast.Call) and isinstance(base.func, ast.Name) and base.func.id == "select":
                 acc[target] = (base, list(parts))

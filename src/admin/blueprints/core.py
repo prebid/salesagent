@@ -90,6 +90,7 @@ def render_super_admin_index():
                 query = query.where((Tenant.ad_server.is_(None)) | (Tenant.ad_server == ""))
 
             # Activity filter (use EXISTS for better performance than subquery)
+            # FIXME(#1119): raw select on MediaBuy outside a repository
             if activity_filter == "has-activity":
                 query = query.where(
                     select(MediaBuy.media_buy_id).where(MediaBuy.tenant_id == Tenant.tenant_id).exists()

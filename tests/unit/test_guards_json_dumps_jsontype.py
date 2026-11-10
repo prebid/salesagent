@@ -24,10 +24,9 @@ from pathlib import Path
 from sqlalchemy.orm import class_mapper
 
 from src.core.database.json_type import JSONType
-from src.core.database.models import Base
+from tests.unit._architecture_helpers import orm_bindings, orm_classes
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-MODELS_MODULE = "src.core.database.models"
 
 # (file, "ClassName.attr" or ".attr") pairs permitted to violate — shrink-only.
 ALLOWLIST: set[tuple[str, str]] = set()
@@ -36,15 +35,14 @@ ALLOWLIST: set[tuple[str, str]] = set()
 def _jsontype_cols_by_class() -> dict[str, set[str]]:
     """ORM class name -> attribute names of its JSONType columns."""
     out: dict[str, set[str]] = {}
-    for mapper in Base.registry.mappers:
-        cls = mapper.class_
+    for name, cls in orm_classes().items():
         cols = {
             attr.key
             for attr in class_mapper(cls).column_attrs
             if any(isinstance(c.type, JSONType) for c in attr.columns)
         }
         if cols:
-            out[cls.__name__] = cols
+            out[name] = cols
     return out
 
 
@@ -65,12 +63,8 @@ def _scan_file(path: Path, by_class: dict[str, set[str]]) -> list[tuple[str, str
     """(rel_path, target-description, lineno) per violation in one file."""
     all_json_cols = set().union(*by_class.values()) if by_class else set()
     tree = ast.parse(path.read_text())
-    bindings: dict[str, str] = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module == MODELS_MODULE:
-            for alias in node.names:
-                bindings[alias.asname or alias.name] = alias.name
     rel = str(path.relative_to(REPO_ROOT))
+    bindings = orm_bindings(rel, tree)
     hits: list[tuple[str, str, int]] = []
     for node in ast.walk(tree):
         # Form A: Model(col=json.dumps(...)) with Model imported from models.py

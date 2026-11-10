@@ -78,6 +78,7 @@ class GAMInventoryService:
         BATCH_SIZE = 500  # Write every 500 items to keep memory usage low
 
         # Load ALL existing inventory IDs once (1 query instead of N)
+        # FIXME(#1119): raw select on GAMInventory outside a repository
         stmt = select(GAMInventory.inventory_type, GAMInventory.inventory_id, GAMInventory.id).where(
             GAMInventory.tenant_id == tenant_id
         )
@@ -488,6 +489,7 @@ class GAMInventoryService:
 
         # Load existing inventory IDs once
         logger.info(f"🔍 Loading existing {inventory_type} IDs from database...")
+        # FIXME(#1119): raw select on GAMInventory outside a repository
         stmt = select(GAMInventory.inventory_id, GAMInventory.id).where(
             and_(GAMInventory.tenant_id == tenant_id, GAMInventory.inventory_type == inventory_type)
         )
@@ -540,6 +542,7 @@ class GAMInventoryService:
 
         # Load existing key IDs once
         # Use a fresh query to avoid stale connection issues
+        # FIXME(#1119): raw select on GAMInventory outside a repository
         stmt = select(GAMInventory.inventory_id, GAMInventory.id).where(
             and_(GAMInventory.tenant_id == tenant_id, GAMInventory.inventory_type == "custom_targeting_key")
         )
@@ -603,6 +606,7 @@ class GAMInventoryService:
         """
         try:
             # Build mapping from gam_inventory table
+            # FIXME(#1119): raw select on GAMInventory outside a repository
             stmt = select(GAMInventory.name, GAMInventory.inventory_id).where(
                 and_(
                     GAMInventory.tenant_id == tenant_id,

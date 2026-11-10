@@ -766,6 +766,7 @@ def get_inventory_stats(tenant_id):
     try:
         with get_db_session() as db_session:
             # Get counts by inventory_type and status
+            # FIXME(#1119): raw select on GAMInventory outside a repository
             stmt = (
                 select(GAMInventory.inventory_type, GAMInventory.status, func.count())
                 .filter(GAMInventory.tenant_id == tenant_id)
@@ -897,6 +898,7 @@ def _get_inventory_stats(db_session, tenant_id):
             or 0
         )
 
+    # FIXME(#1119): raw select on GAMInventory outside a repository
     last_sync = db_session.scalar(
         select(GAMInventory.last_synced)
         .where(GAMInventory.tenant_id == tenant_id)

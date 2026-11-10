@@ -15,8 +15,13 @@ from tests.unit._architecture_helpers import (
     iter_git_tracked_files,
     postgres_image_ref,
     postgres_tag_pattern_map,
+    query_bindings,
     rel,
     scan_src,
+    scope_bindings,
+    scope_bound_names,
+    scope_nodes,
+    select_entity,
     uv_version_pattern_map,
 )
 
@@ -66,6 +71,82 @@ def test_iter_call_expressions_subtree_scope() -> None:
     assert len(calls) == 1
     assert isinstance(calls[0].func, ast.Name)
     assert calls[0].func.id == "inner_call"
+
+
+_SCOPE_SOURCE = """
+from sqlalchemy import select
+from src.core.database.models import User
+
+def f(p):
+    a = select(User)
+    a = a.where(User.email == "x")
+    b = 1
+    b += 1
+    for c in p:
+        pass
+    (d, e) = p
+    g = [h for h in p]
+
+    def inner():
+        pass
+"""
+
+
+def _function(tree: ast.Module) -> ast.FunctionDef:
+    return next(node for node in tree.body if isinstance(node, ast.FunctionDef))
+
+
+@pytest.mark.arch_guard
+def test_scope_bindings_keeps_only_names_bound_by_plain_assignment() -> None:
+    func = _function(ast.parse(_SCOPE_SOURCE))
+    bindings = scope_bindings(func)
+    assert set(bindings) == {"a", "g"}  # b: +=; c: for target; d, e: unpacking; p: parameter
+    assert len(bindings["a"]) == 2  # both assignments, in source order
+    assert scope_bound_names(func) == {"p", "a", "b", "c", "d", "e", "g", "inner"}  # h is the comprehension's
+
+
+@pytest.mark.arch_guard
+def test_scope_nodes_yields_a_nested_scope_without_entering_it() -> None:
+    func = _function(ast.parse(_SCOPE_SOURCE))
+    nodes = list(scope_nodes(func))
+    assert any(isinstance(node, ast.ListComp) for node in nodes)
+    assert any(isinstance(node, ast.FunctionDef) for node in nodes)
+    assert sum(isinstance(node, ast.Pass) for node in nodes) == 1  # the for body, not inner's
+    comprehension = next(node for node in nodes if isinstance(node, ast.ListComp))
+    assert scope_bound_names(comprehension) == {"h"}
+
+
+@pytest.mark.arch_guard
+def test_select_entity_resolves_by_import_and_never_by_spelling() -> None:
+    source = (
+        "from sqlalchemy import select as sa_select\n"
+        "from src.core.database.models import User as DBUser\n"
+        "from src.core.schemas import Product\n"
+        "import src.core.database.models as models\n"
+        "sa_select(DBUser)\n"
+        "sa_select(DBUser.email)\n"
+        "sa_select(Product)\n"
+        "sa_select(models.User)\n"
+        "sa_select(func.count())\n"
+        "select(DBUser)\n"
+    )
+    tree = ast.parse(source)
+    bindings = query_bindings("src/x.py", tree)
+    calls = [stmt.value for stmt in tree.body if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call)]
+    assert [select_entity(call, bindings) for call in calls] == ["User", "User", None, None, None, None]
+
+
+@pytest.mark.arch_guard
+def test_query_bindings_drops_a_name_the_module_rebinds() -> None:
+    source = (
+        "from sqlalchemy import select\n"
+        "from src.core.database.models import Tenant, User\n"
+        "def select(x):\n    return x\n"
+        "User = 1\n"
+    )
+    bindings = query_bindings("src/x.py", ast.parse(source))
+    assert bindings.select == frozenset()
+    assert bindings.orm == {"Tenant": "Tenant"}
 
 
 @pytest.mark.arch_guard
