@@ -173,6 +173,10 @@ class PublisherAdagentsMixin:
         """The operator syncs every publisher; the route ingests each one's file."""
         return self._publisher_route("post", "publisher-partners/sync")
 
+    def remove_publisher(self, publisher: str) -> AdminResponse:
+        """The operator removes *publisher*: its derived rows and every selection of it go with it."""
+        return self._publisher_route("delete", f"publisher-partners/{self.publisher_address(publisher)}")
+
     def open_partner_properties(self, publisher: str) -> AdminResponse:
         return self._publisher_route("get", f"publisher-partners/{self.publisher_address(publisher)}/properties")
 

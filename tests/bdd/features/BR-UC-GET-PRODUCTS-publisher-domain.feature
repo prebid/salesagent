@@ -137,6 +137,33 @@ Feature: A product names the publishers whose inventory it sells
     When the buyer requests products
     Then product "home_package" announces publisher_properties [{"publisher_domain": "news-psatest.com", "property_ids": ["news_home"], "selection_type": "by_id"}, {"publisher_domain": "weather-psatest.com", "property_ids": ["weather_home"], "selection_type": "by_id"}]
 
+  # A by_id selector names its properties; a stray all_inventory tag stored beside them does
+  # not widen it to the publisher whole (core/publisher-property-selector.json: the
+  # selection_type decides which members apply).
+  @T-UC-GET-PRODUCTS-publisher-all-inventory-by-id @publisher_domain_resolution @requires_db
+  Scenario: a stored by_id selector carrying a stray all_inventory tag stays by_id
+    Given the seller offers product "stray_tag" naming publisher_properties [{"publisher_domain": "news-psatest.com", "property_ids": ["news_home"], "property_tags": ["all_inventory"], "selection_type": "by_id"}]
+    When the buyer requests products
+    Then product "stray_tag" announces publisher_properties [{"publisher_domain": "news-psatest.com", "property_ids": ["news_home"], "selection_type": "by_id"}]
+
+  @T-UC-GET-PRODUCTS-publisher-product-form @publisher_domain_resolution @requires_db
+  Scenario: properties the operator selects on the product form are named one selector per publisher
+    Given the operator saves product "home_pages" selecting properties "news_home, weather_home"
+    When the buyer requests products
+    Then product "home_pages" announces publisher_properties [{"publisher_domain": "news-psatest.com", "property_ids": ["news_home"], "selection_type": "by_id"}, {"publisher_domain": "weather-psatest.com", "property_ids": ["weather_home"], "selection_type": "by_id"}]
+
+  # A selection references its publisher by foreign key, ON DELETE CASCADE: removing a
+  # publisher removes every selection of it, and a product left selecting no publisher has
+  # no publisher_properties (core/product.json: minItems 1), so it is not offered.
+  @T-UC-GET-PRODUCTS-publisher-removed @publisher_domain_resolution @requires_db
+  Scenario: removing a publisher drops its selections, and a product left with none is not offered
+    Given the seller offers product "news" naming publisher_properties [{"publisher_domain": "news-psatest.com", "selection_type": "all"}]
+    And the seller offers product "mixed" naming publisher_properties [{"publisher_domain": "news-psatest.com", "selection_type": "all"}, {"publisher_domain": "sports-psatest.com", "selection_type": "all"}]
+    When the operator removes the publisher "news-psatest.com"
+    And the buyer requests products
+    Then the buyer receives exactly the products "mixed"
+    And product "mixed" announces publisher_properties [{"publisher_domain": "sports-psatest.com", "selection_type": "all"}]
+
   @T-UC-GET-PRODUCTS-publisher-all-inventory-stored @publisher_domain_resolution @requires_db
   Scenario: a stored by_tag selector of the seller's all_inventory tag names its publisher whole
     Given the seller offers product "stored_whole" naming publisher_properties [{"publisher_domain": "news-psatest.com", "property_tags": ["all_inventory"], "selection_type": "by_tag"}]

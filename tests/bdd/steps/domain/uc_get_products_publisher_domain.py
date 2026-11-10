@@ -162,6 +162,16 @@ def given_profile_naming_agent_host(ctx: dict) -> None:
     )
 
 
+@given(parsers.parse('the operator saves product "{product_id}" selecting properties "{property_ids}"'))
+def given_operator_saved_product(ctx: dict, product_id: str, property_ids: str) -> None:
+    """Save the product through the real admin form (priced), and require that it was stored."""
+    env = ctx["env"]
+    page = env.create_product(product_id, property_mode="property_ids", selected_property_ids=comma_list(property_ids))
+    assert env.stored_product(product_id) is not None, (
+        f"the form stored no product {product_id!r}; it answered {page.status_code}"
+    )
+
+
 @given(parsers.parse('the operator saves inventory profile "{profile_id}" selecting properties "{property_ids}"'))
 def given_operator_saved_profile(ctx: dict, profile_id: str, property_ids: str) -> None:
     """Save the profile through the real admin form, and hold the row it stored."""

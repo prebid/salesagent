@@ -196,6 +196,12 @@ def when_add_publisher(ctx: dict, publisher: str) -> None:
     ctx["admin_page"] = _env(ctx).add_publisher(publisher)
 
 
+@when(parsers.parse('the operator removes the publisher "{publisher}"'))
+def when_remove_publisher(ctx: dict, publisher: str) -> None:
+    response = _publishers(ctx).remove_publisher(publisher)
+    assert response.status_code == 200, f"removing {publisher!r} answered {response.status_code}: {response.data!r}"
+
+
 @when("the operator syncs publisher partners")
 def when_sync(ctx: dict) -> None:
     ctx["admin_page"] = _env(ctx).sync_publisher_partners()

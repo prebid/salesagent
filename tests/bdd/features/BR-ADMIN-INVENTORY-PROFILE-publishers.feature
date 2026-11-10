@@ -217,6 +217,15 @@ Feature: BR-ADMIN-INVENTORY-PROFILE-publishers Which publishers the operator's s
     Then the page contains "Not authorized publisher selections: podcast-psatest.com"
     And no inventory profile "podcasts" is stored
 
+  # A selector references its publisher by foreign key, and only a publisher the tenant
+  # holds, whose ingested file authorizes this agent, can be sold: a publisher the tenant
+  # never added is refused on the form as one that authorizes nothing.
+  @T-ADMIN-INVPROFILE-036 @admin_inventory_profile @requires_db
+  Scenario: the profile form's JSON mode refuses a publisher the tenant does not hold
+    When the operator creates inventory profile "strangers" in JSON mode storing publisher_properties [{"publisher_domain": "stranger-psatest.com", "selection_type": "all"}]
+    Then the page contains "Not authorized publisher selections: stranger-psatest.com"
+    And no inventory profile "strangers" is stored
+
   @T-ADMIN-INVPROFILE-028 @admin_inventory_profile @requires_db
   Scenario: a product edit page saved after a publisher starts authorizing a property leaves the stored selection unchanged
     Given the publisher "podcast-psatest.com" lists property "podcast_home" tagged "premium" without authorizing the seller for it
