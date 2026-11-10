@@ -577,6 +577,9 @@ def then_error_code(ctx: dict, code: str) -> None:
         f"response, assert it there instead (see 'the <collection> entry carries error code')."
     )
     assert actual == code, f"Expected error code '{code}', got '{actual}'"
+    # The whole two-layer envelope, not the code alone: both layers carry the code and the
+    # recovery the code table gives it, which agrees with the pinned enumMetadata.
+    ctx["result"].assert_wire_error(code)
 
 
 # ── Error message content (generic) ───────────────────────────────────
