@@ -39,6 +39,28 @@ Feature: BR-UC-002 A catalog holding a product buyers are not offered
     And the wire error details should include missing_product_ids "unoffered"
     And no media buy record should be persisted
 
+  # A publisher's adagents.json authorizes this agent only by an authorized_agents[] entry
+  # naming it; one naming another agent authorizes nothing for this one
+  # (authorized-properties.mdx :209-210). The seller ingests the file the publisher serves,
+  # so a product selling only that publisher is not offered, and a buy of it is refused as
+  # for any unoffered product.
+  @T-UC-002-ext-unoffered-other-agent @extension @error @requires_db
+  Scenario: a buy of a product whose publisher's file authorizes only another agent is not found
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And the publisher "news-psatest.com" lists property "news_home" named "News home" in its adagents.json
+    And the publisher "news-psatest.com" authorizes "https://other-seller.example.com/mcp" for property "news_home"
+    And the seller ingested the adagents.json of "news-psatest.com"
+    And the seller offers product "other_agent" naming publisher_properties [{"publisher_domain": "news-psatest.com", "selection_type": "all"}]
+    But a package references the unoffered product "other_agent"
+    When the Buyer Agent sends the create_media_buy request
+    Then the response is compliant with the create_media_buy error spec
+    And the operation should fail
+    And the error code should be "PRODUCT_NOT_FOUND"
+    And the error recovery should be "correctable"
+    And the wire error details should include missing_product_ids "other_agent"
+    And no media buy record should be persisted
+
   # A format option naming the seller's own host as its publisher resolves in no catalog:
   # publisher_domain names the publisher whose adagents.json formats[] declares the option
   # (core/format-option-ref.json), and this agent publishes none. core/product.json

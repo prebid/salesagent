@@ -22,7 +22,9 @@ from src.core.schemas._base import CreateMediaBuyResult
 from tests.factories.mint import mint
 from tests.harness._base import IntegrationEnv, json_safe
 from tests.harness._realize import realize_e2e
+from tests.harness.admin_client import AdminOperatorMixin
 from tests.harness.peer_agent import PeerCreativeAgentMixin
+from tests.harness.publisher_authorization import PublisherAdagentsMixin
 from tests.harness.transport import DeliverResult
 
 # Sentinel for missing-key tests: pass idempotency_key=OMIT_IDEMPOTENCY_KEY to send a
@@ -175,7 +177,7 @@ def _restore_creative_ids(req: CreateMediaBuyRequest, flat: dict[str, Any]) -> N
             flat_pkgs[i]["creative_ids"] = cids
 
 
-class MediaBuyCreateEnv(PeerCreativeAgentMixin, IntegrationEnv):
+class MediaBuyCreateEnv(PublisherAdagentsMixin, AdminOperatorMixin, PeerCreativeAgentMixin, IntegrationEnv):
     """Integration test environment for _create_media_buy_impl.
 
     Mocks external services (adapter, audit, slack, context manager).
@@ -184,7 +186,9 @@ class MediaBuyCreateEnv(PeerCreativeAgentMixin, IntegrationEnv):
     the env carries ``set_egress_hatches`` (the @egress ingest-twin scenarios
     pin the hatch posture the refusal is graded under), and the dial to a
     tenant-configured creative agent when a package's format_id names one, which
-    is why it carries ``serve_peer_catalog``.
+    is why it carries ``serve_peer_catalog``. A publisher's adagents.json is served and
+    ingested through the operator's routes (``PublisherAdagentsMixin``), so a buy can be
+    graded against what a publisher's file says.
     """
 
     EXTERNAL_PATCHES = {

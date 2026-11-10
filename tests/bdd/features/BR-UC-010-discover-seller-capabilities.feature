@@ -485,12 +485,20 @@ Feature: BR-UC-010 Discover Seller Capabilities
   @T-UC-010-portfolio-verified-publishers @main-flow @post-s6 @partition @boundary
   Scenario: portfolio names each publisher that has verified the seller, once
     Given a tenant is resolvable from the request context
-    And the tenant holds an authorized property on "news-psatest.com" with verification status "verified"
-    And the tenant holds an authorized property on "sports-psatest.com" with verification status "verified"
+    And the publisher "news-psatest.com" lists property "news_home" named "News home" in its adagents.json
+    And the publisher "news-psatest.com" authorizes this agent for properties "news_home"
+    And the seller ingested the adagents.json of "news-psatest.com"
+    And the publisher "sports-psatest.com" lists property "sports_home" named "Sports home" in its adagents.json
+    And the publisher "sports-psatest.com" authorizes this agent for properties "sports_home"
+    And the seller ingested the adagents.json of "sports-psatest.com"
+    And the publisher "partner-psatest.com" lists property "partner_home" named "Partner home" in its adagents.json
+    And the publisher "partner-psatest.com" authorizes this agent for properties "partner_home"
+    And the seller ingested the adagents.json of "partner-psatest.com"
     And the tenant holds an authorized property on "pending-psatest.com" with verification status "pending"
-    And the tenant holds an authorized property on "failed-psatest.com" with verification status "failed"
-    And the tenant has verified publisher partnerships with domains "partner-psatest.com", "news-psatest.com"
-    And the tenant has unverified publisher partnerships with domains "unverified-psatest.com"
+    And the publisher "failed-psatest.com" now answers 404
+    And the seller ingested the adagents.json of "failed-psatest.com"
+    And the publisher "unverified-psatest.com" authorizes no agent in its adagents.json
+    And the seller ingested the adagents.json of "unverified-psatest.com"
     When the Buyer Agent calls get_adcp_capabilities
     Then the response is compliant with the get_adcp_capabilities spec
     And the response should include media_buy.portfolio with publisher_domains "news-psatest.com", "partner-psatest.com", "sports-psatest.com"
@@ -498,7 +506,9 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # buyer checks each one by fetching https://<domain>/.well-known/adagents.json. A domain
     # whose stored adagents.json does not authorize this seller now (never fetched, or its
     # last fetch failed with nothing stored) is not one it can claim. A publisher is one row
-    # (canonical domain), so it is listed once however it was given.
+    # (canonical domain), so it is listed once. Every file is
+    # one the publisher serves and the seller ingests (on e2e_rest the live server fetches
+    # it); "pending" is a publisher held and never fetched.
     # Ungraded by storyboards: the one pinned compliance yaml that reads portfolio
     # (media-buy scenarios/portfolio_routing_scope.yaml) grades only its routing allowlists,
     # never publisher_domains.

@@ -49,6 +49,8 @@ from adcp.types import GetAdcpCapabilitiesRequest, GetAdcpCapabilitiesResponse
 from src.adapters.base import TargetingCapabilities
 from tests.harness._base import IntegrationEnv
 from tests.harness._realize import e2e_unsupported, realize_e2e
+from tests.harness.admin_client import AdminOperatorMixin
+from tests.harness.publisher_authorization import PublisherAdagentsMixin
 
 #: Default channels seeded on the adapter mock — matches the feature fixture
 #: comment ("fixture seeds channels 'display, social, ctv' on the adapter").
@@ -114,7 +116,7 @@ def _full_targeting_capabilities() -> TargetingCapabilities:
     return TargetingCapabilities(**{f.name: True for f in fields(TargetingCapabilities)})
 
 
-class CapabilitiesEnv(IntegrationEnv):
+class CapabilitiesEnv(PublisherAdagentsMixin, AdminOperatorMixin, IntegrationEnv):
     """Integration test environment for get_adcp_capabilities.
 
     Only mocks the adapter factory and the audit logger. Everything else is
