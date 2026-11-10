@@ -69,7 +69,7 @@ def _tenant_with_a_portfolio(env: IntegrationEnv) -> tuple:
     (tests/bdd/steps/domain/uc010_capabilities.py), and for the same reason.
     """
     tenant, principal = env.setup_default_data()
-    authorize_publishers(tenant, "partner.example.com")
+    authorize_publishers(tenant, "partner.psatest.com")
     env._commit_factory_data()
     return tenant, principal
 

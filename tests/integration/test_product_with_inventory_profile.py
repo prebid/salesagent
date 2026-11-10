@@ -55,7 +55,7 @@ def test_create_product_with_inventory_profile(integration_db):
                 tenant_id,
                 [
                     {
-                        "publisher_domain": "example.com",
+                        "publisher_domain": "psatest.com",
                         "property_ids": ["prop_1"],
                     }
                 ],

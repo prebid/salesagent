@@ -459,7 +459,7 @@ class TestSetupChecklistService:
             db_session.add(auth_config3)
 
             db_session.flush()
-            seed_verified_website(db_session, tenant_ids[2], "example.com")
+            seed_verified_website(db_session, tenant_ids[2], "psatest.com")
 
             # Use create_test_db_product factory
             product3 = create_test_db_product(

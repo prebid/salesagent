@@ -108,7 +108,7 @@ def _agent_url_spelled(variant: str) -> str:
 #: The option id the product publishes, and the id a publisher-scoped declaration publishes
 #: under its own domain. Named once so a selector row and its declaration cannot drift.
 _PRODUCT_OPTION_ID = "satisfaction_image_mrec"
-_PUBLISHER_DOMAIN = "shorts.streamhaus.example"
+_PUBLISHER_DOMAIN = "shorts.streamhaus-psatest.com"
 
 #: A legacy id the SELLER names in a declaration's ``v1_format_ref`` and nothing else
 #: resolves: no registry glob, no size-encoded slug for the SDK to upgrade, absent from the

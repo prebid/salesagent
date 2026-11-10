@@ -273,7 +273,7 @@ def test_tenant_with_data(integration_db):
         # The fixture publisher, whose stored adagents.json authorizes the tenant (required for
         # setup validation). Unique name to avoid conflicts with test assertions.
         db_session.flush()
-        seed_verified_website(db_session, tenant_id, "fixture-default.example.com", name="Fixture Default Property")
+        seed_verified_website(db_session, tenant_id, "fixture-default.psatest.com", name="Fixture Default Property")
 
         # Principal (required for setup completion)
         # Include both kevel and mock mappings to support ad_server="kevel" (which is production-ready)
@@ -397,7 +397,7 @@ def sample_tenant(integration_db):
 
         # The publisher whose stored adagents.json authorizes the tenant (required for the setup checklist)
         session.flush()
-        seed_verified_website(session, tenant.tenant_id, "example.com", name="Example Property")
+        seed_verified_website(session, tenant.tenant_id, "psatest.com", name="Example Property")
 
         # Add GAMInventory records (required for inventory sync status in setup checklist)
         inventory_items = [
@@ -976,7 +976,7 @@ def add_required_setup_data(session, tenant_id: str):
     # The fixture publisher: its adagents.json stored without a fetch, authorizing this tenant
     # for one website (the apply half of the ingest service, as a seed stores it).
     session.flush()
-    seed_verified_website(session, tenant_id, "fixture-default.example.com", name="Fixture Default Property")
+    seed_verified_website(session, tenant_id, "fixture-default.psatest.com", name="Fixture Default Property")
 
     # CurrencyLimit
     stmt_currency = select(CurrencyLimit).filter_by(tenant_id=tenant_id, currency_code="USD")

@@ -38,7 +38,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 #: Every publisher these tests' products name; the seller holds a verified property on each,
 #: so property-list filtering is what decides which products are offered (#1845).
-_PUBLISHERS = ("example.com", "other.com")
+_PUBLISHERS = ("psatest.com", "other.com")
 
 
 # ---------------------------------------------------------------------------
@@ -46,7 +46,7 @@ _PUBLISHERS = ("example.com", "other.com")
 # ---------------------------------------------------------------------------
 
 
-def _make_selector_all(domain: str = "example.com") -> PublisherPropertySelector:
+def _make_selector_all(domain: str = "psatest.com") -> PublisherPropertySelector:
     """Create a 'select all' publisher property selector."""
     return PublisherPropertySelector1(
         publisher_domain=domain,
@@ -54,7 +54,7 @@ def _make_selector_all(domain: str = "example.com") -> PublisherPropertySelector
     )
 
 
-def _make_selector_by_id(property_ids: list[str], domain: str = "example.com") -> PublisherPropertySelector:
+def _make_selector_by_id(property_ids: list[str], domain: str = "psatest.com") -> PublisherPropertySelector:
     """Create a 'by_id' publisher property selector."""
     return PublisherPropertySelector2(
         publisher_domain=domain,
@@ -149,7 +149,7 @@ class TestPropertyListFilteringAllSelectorE2E:
                 tenant=tenant,
                 product_id="all_selector",
                 name="All Properties Product",
-                properties=[{"publisher_domain": "example.com", "selection_type": "all"}],
+                properties=[{"publisher_domain": "psatest.com", "selection_type": "all"}],
             )
             PricingOptionFactory(product=p, pricing_model="cpm", rate=Decimal("5.00"), is_fixed=True)
             authorize_selected_properties(tenant, p.stored_publisher_properties)
@@ -183,7 +183,7 @@ class TestPropertyListFilteringNoOverlapE2E:
                 name="No Overlap Product",
                 properties=[
                     {
-                        "publisher_domain": "example.com",
+                        "publisher_domain": "psatest.com",
                         "property_ids": ["prop_a", "prop_b"],
                         "selection_type": "by_id",
                     }
@@ -222,7 +222,7 @@ class TestPropertyListFilteringTargetingAllowedE2E:
                 name="Partial Overlap Product",
                 properties=[
                     {
-                        "publisher_domain": "example.com",
+                        "publisher_domain": "psatest.com",
                         "property_ids": ["prop_a", "prop_b", "prop_c"],
                         "selection_type": "by_id",
                     }
@@ -261,7 +261,7 @@ class TestPropertyListFilteringTargetingNotAllowedE2E:
                 name="Strict Partial Product",
                 properties=[
                     {
-                        "publisher_domain": "example.com",
+                        "publisher_domain": "psatest.com",
                         "property_ids": ["prop_a", "prop_b"],
                         "selection_type": "by_id",
                     }
@@ -296,7 +296,7 @@ class TestPropertyListFilteringTargetingNotAllowedE2E:
                 name="Strict Full Subset Product",
                 properties=[
                     {
-                        "publisher_domain": "example.com",
+                        "publisher_domain": "psatest.com",
                         "property_ids": ["prop_a", "prop_b"],
                         "selection_type": "by_id",
                     }
@@ -331,7 +331,7 @@ class TestPropertyListFilteringTargetingNotAllowedE2E:
                 name="Strict Exact Match Product",
                 properties=[
                     {
-                        "publisher_domain": "example.com",
+                        "publisher_domain": "psatest.com",
                         "property_ids": ["prop_a"],
                         "selection_type": "by_id",
                     }
@@ -368,7 +368,7 @@ class TestPropertyListFilteringEmptyResolvedListE2E:
                 tenant=tenant,
                 product_id="all_selector_empty",
                 name="All Selector Product",
-                properties=[{"publisher_domain": "example.com", "selection_type": "all"}],
+                properties=[{"publisher_domain": "psatest.com", "selection_type": "all"}],
             )
             PricingOptionFactory(product=p_all, pricing_model="cpm", rate=Decimal("5.00"), is_fixed=True)
             authorize_selected_properties(tenant, p_all.stored_publisher_properties)
@@ -379,7 +379,7 @@ class TestPropertyListFilteringEmptyResolvedListE2E:
                 name="Specific ID Product",
                 properties=[
                     {
-                        "publisher_domain": "example.com",
+                        "publisher_domain": "psatest.com",
                         "property_ids": ["prop_a"],
                         "selection_type": "by_id",
                     }
@@ -417,7 +417,7 @@ class TestPropertyListFilteringCombinedE2E:
                 tenant=tenant,
                 product_id="combo_all",
                 name="All Properties",
-                properties=[{"publisher_domain": "example.com", "selection_type": "all"}],
+                properties=[{"publisher_domain": "psatest.com", "selection_type": "all"}],
             )
             PricingOptionFactory(product=p1, pricing_model="cpm", rate=Decimal("5.00"), is_fixed=True)
             authorize_selected_properties(tenant, p1.stored_publisher_properties)
@@ -429,7 +429,7 @@ class TestPropertyListFilteringCombinedE2E:
                 name="Matching Product",
                 properties=[
                     {
-                        "publisher_domain": "example.com",
+                        "publisher_domain": "psatest.com",
                         "property_ids": ["prop_a"],
                         "selection_type": "by_id",
                     }
@@ -462,7 +462,7 @@ class TestPropertyListFilteringCombinedE2E:
                 name="Partial With Targeting",
                 properties=[
                     {
-                        "publisher_domain": "example.com",
+                        "publisher_domain": "psatest.com",
                         "property_ids": ["prop_a", "prop_b"],
                         "selection_type": "by_id",
                     }
@@ -479,7 +479,7 @@ class TestPropertyListFilteringCombinedE2E:
                 name="Partial Without Targeting",
                 properties=[
                     {
-                        "publisher_domain": "example.com",
+                        "publisher_domain": "psatest.com",
                         "property_ids": ["prop_a", "prop_b"],
                         "selection_type": "by_id",
                     }

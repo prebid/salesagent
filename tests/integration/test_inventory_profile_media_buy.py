@@ -88,8 +88,8 @@ async def test_create_media_buy_with_profile_based_product(sample_tenant):
                 [
                     {
                         "selection_type": "by_id",
-                        "publisher_domain": "example.com",
-                        "property_ids": ["example_com"],
+                        "publisher_domain": "psatest.com",
+                        "property_ids": ["psatest_com"],
                     }
                 ],
             ),
@@ -195,8 +195,8 @@ async def test_create_media_buy_with_profile_formats(sample_tenant):
                 [
                     {
                         "selection_type": "by_id",
-                        "publisher_domain": "example.com",
-                        "property_ids": ["example_com"],
+                        "publisher_domain": "psatest.com",
+                        "property_ids": ["psatest_com"],
                     }
                 ],
             ),
@@ -293,8 +293,8 @@ async def test_multiple_products_same_profile_in_media_buy(sample_tenant):
                 [
                     {
                         "selection_type": "by_id",
-                        "publisher_domain": "example.com",
-                        "property_ids": ["example_com"],
+                        "publisher_domain": "psatest.com",
+                        "property_ids": ["psatest_com"],
                     }
                 ],
             ),
@@ -401,7 +401,7 @@ async def test_media_buy_reflects_profile_updates(sample_tenant):
                 [
                     {
                         "selection_type": "by_id",
-                        "publisher_domain": "old.example.com",
+                        "publisher_domain": "old.psatest.com",
                         "property_ids": ["old_property"],
                     }
                 ],
@@ -459,7 +459,7 @@ async def test_media_buy_reflects_profile_updates(sample_tenant):
             session,
             InventoryProfilePublisherSelection,
             sample_tenant["tenant_id"],
-            [{"selection_type": "by_id", "publisher_domain": "example.com", "property_ids": ["example_com"]}],
+            [{"selection_type": "by_id", "publisher_domain": "psatest.com", "property_ids": ["psatest_com"]}],
         )
         session.commit()
 

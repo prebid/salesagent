@@ -69,7 +69,7 @@ def test_profile(integration_db, test_tenant):
                 test_tenant.tenant_id,
                 [
                     {
-                        "publisher_domain": "example.com",
+                        "publisher_domain": "psatest.com",
                         "property_ids": ["example_homepage"],
                     }
                 ],

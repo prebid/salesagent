@@ -647,7 +647,7 @@ class TestAdCPContract:
             delivery_measurement={"provider": "test_provider", "notes": "Test measurement"},  # Required per AdCP spec
             publisher_properties=[
                 create_test_publisher_properties_by_tag(
-                    publisher_domain="example.com", property_tags=["premium_sports"]
+                    publisher_domain="psatest.com", property_tags=["premium_sports"]
                 )
             ],
             pricing_options=[
@@ -668,7 +668,7 @@ class TestAdCPContract:
         adcp_response = product_with_properties.model_dump()
         assert "publisher_properties" in adcp_response
         assert len(adcp_response["publisher_properties"]) >= 1
-        assert adcp_response["publisher_properties"][0]["publisher_domain"] == "example.com"
+        assert adcp_response["publisher_properties"][0]["publisher_domain"] == "psatest.com"
         assert adcp_response["publisher_properties"][0]["property_tags"] == ["premium_sports"]
 
         # Test without publisher_properties should fail (strict validation enabled)
@@ -1912,7 +1912,7 @@ class TestAdCPContract:
     def test_property_identifier_adcp_compliance(self):
         """Test that PropertyIdentifier complies with AdCP property identifier schema."""
         # Create identifier with all required fields
-        identifier = PropertyIdentifier(type="domain", value="example.com")
+        identifier = PropertyIdentifier(type="domain", value="psatest.com")
 
         # Test AdCP-compliant response
         adcp_response = identifier.model_dump()
@@ -1937,7 +1937,7 @@ class TestAdCPContract:
         property_obj = Property(
             property_type="website",
             name="Example",
-            identifiers=[{"type": "domain", "value": "example.com"}],
+            identifiers=[{"type": "domain", "value": "psatest.com"}],
         )
 
         # Test AdCP-compliant response (mode="json" serializes enums to strings)
@@ -1956,7 +1956,7 @@ class TestAdCPContract:
         # Verify identifiers structure
         assert len(adcp_response["identifiers"]) == 1
         assert adcp_response["identifiers"][0]["type"] == "domain"
-        assert adcp_response["identifiers"][0]["value"] == "example.com"
+        assert adcp_response["identifiers"][0]["value"] == "psatest.com"
 
         # None-valued optional fields should be excluded (using exclude_none=True)
         assert "tags" not in adcp_response
@@ -1968,13 +1968,13 @@ class TestAdCPContract:
             property_type="mobile_app",
             name="Example App",
             identifiers=[{"type": "ios_bundle", "value": "com.example.app"}],
-            publisher_domain="example.com",
+            publisher_domain="psatest.com",
         )
         extras_response = property_with_extras.model_dump(mode="json", exclude_none=True)
         assert extras_response["property_type"] == "mobile_app"
         assert extras_response["name"] == "Example App"
         assert extras_response["identifiers"][0]["value"] == "com.example.app"
-        assert extras_response["publisher_domain"] == "example.com"
+        assert extras_response["publisher_domain"] == "psatest.com"
 
     def test_property_tag_metadata_adcp_compliance(self):
         """Test that PropertyTagMetadata complies with AdCP tag metadata schema."""
@@ -2258,7 +2258,7 @@ class TestAdCPContract:
             format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
             delivery_type="guaranteed",
             delivery_measurement={"provider": "test_provider", "notes": "Test measurement"},  # Required per AdCP spec
-            publisher_properties=[create_test_publisher_properties_by_tag(publisher_domain="example.com")],
+            publisher_properties=[create_test_publisher_properties_by_tag(publisher_domain="psatest.com")],
             pricing_options=[
                 create_test_cpm_pricing_option(
                     pricing_option_id="cpm_usd_fixed",
@@ -2273,7 +2273,7 @@ class TestAdCPContract:
         assert len(product_with_properties.publisher_properties) == 1
         # NO ``.root``: adcp 9 ships ``PublisherPropertySelector`` as the discriminated union
         # of its arms rather than a RootModel wrapping them, so the element IS the selector.
-        assert product_with_properties.publisher_properties[0].publisher_domain == "example.com"
+        assert product_with_properties.publisher_properties[0].publisher_domain == "psatest.com"
 
         # Invalid: missing publisher_properties (required)
         from pydantic import ValidationError

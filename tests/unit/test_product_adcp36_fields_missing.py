@@ -74,7 +74,7 @@ class TestProductAdcp36FieldsPersistence:
             publisher_properties=[
                 {
                     "selection_type": "by_id",
-                    "publisher_domain": "example.com",
+                    "publisher_domain": "psatest.com",
                     "property_ids": ["all_inventory"],
                 }
             ],
@@ -112,7 +112,7 @@ class TestProductAdcp36FieldsPersistence:
             publisher_properties=[
                 {
                     "selection_type": "by_id",
-                    "publisher_domain": "example.com",
+                    "publisher_domain": "psatest.com",
                     "property_ids": ["all_inventory"],
                 }
             ],

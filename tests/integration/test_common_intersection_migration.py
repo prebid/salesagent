@@ -36,9 +36,9 @@ _SCOPED = {
     "format_kind": "image",
     "format_option_id": "leaderboard",
     "params": {"width": 728, "height": 90},
-    "publisher_domain": "first.example",
+    "publisher_domain": "first-psatest.com",
 }
-_TWO = [{"publisher_domain": d, "selection_type": "all"} for d in ("first.example", "second.example")]
+_TWO = [{"publisher_domain": d, "selection_type": "all"} for d in ("first-psatest.com", "second-psatest.com")]
 _PLACEMENT = [{"kind": "seller_inline", "mode": "included", "placement_id": "hero", "name": "Hero"}]
 
 

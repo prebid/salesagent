@@ -37,7 +37,7 @@ def authorized_refs(*domains: str) -> tuple[AuthorizedPropertyRef, ...]:
 #: The property the default publisher's stored adagents.json authorizes a test product's
 #: seller for. The ONE spelling of the default publisher: a product names only publishers
 #: whose document authorizes the seller (#1845).
-ONE_AUTHORIZED_PROPERTY = authorized_refs("publisher.example.com")
+ONE_AUTHORIZED_PROPERTY = authorized_refs("publisher.psatest.com")
 DEFAULT_PUBLISHER_DOMAIN = ONE_AUTHORIZED_PROPERTY[0].publisher_domain
 
 
@@ -139,10 +139,10 @@ class StoredPlacementFactory(factory.DictFactory):
 #: common intersection accepted across every selected publisher/property scope"): two
 #: publishers' ``publisher_properties``, a product-local option every scope accepts, and an
 #: option scoped to the first publisher, which the second does not.
-FIRST_PUBLISHER_DOMAIN = "first-publisher.example"
+FIRST_PUBLISHER_DOMAIN = "first-publisher-psatest.com"
 TWO_PUBLISHER_PROPERTIES = [
     {"publisher_domain": domain, "selection_type": "all"}
-    for domain in (FIRST_PUBLISHER_DOMAIN, "second-publisher.example")
+    for domain in (FIRST_PUBLISHER_DOMAIN, "second-publisher-psatest.com")
 ]
 PRODUCT_LOCAL_MREC = {"format_kind": "image", "format_option_id": "mrec", "params": {"width": 300, "height": 250}}
 FIRST_PUBLISHER_LEADERBOARD = {

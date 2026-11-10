@@ -359,7 +359,7 @@ class TestSchemaFieldMapping:
             "publisher_properties": [
                 {
                     "selection_type": "by_id",
-                    "publisher_domain": "example.com",
+                    "publisher_domain": "psatest.com",
                     "property_ids": ["all_inventory"],
                 }
             ],
@@ -499,8 +499,8 @@ class TestSchemaFieldMapping:
                 "publisher_properties": [
                     {
                         "selection_type": "by_id",
-                        "publisher_domain": "example.com",
-                        "property_ids": ["example_com"],
+                        "publisher_domain": "psatest.com",
+                        "property_ids": ["psatest_com"],
                     }
                 ],
                 "pricing_options": [
@@ -552,7 +552,7 @@ class TestFieldAccessPatterns:
             "publisher_properties": [
                 {
                     "selection_type": "by_id",
-                    "publisher_domain": "example.com",
+                    "publisher_domain": "psatest.com",
                     "property_ids": ["all_inventory"],
                 }
             ],
@@ -609,7 +609,7 @@ class TestFieldAccessPatterns:
             "publisher_properties": [
                 {
                     "selection_type": "by_id",
-                    "publisher_domain": "example.com",
+                    "publisher_domain": "psatest.com",
                     "property_ids": ["all_inventory"],
                 }
             ],

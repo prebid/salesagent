@@ -84,7 +84,7 @@ def _create_property_selection(live_server: dict[str, str], tenant_id: str) -> d
     base_url = live_server["admin"]
     session = build_admin_test_session(base_url, tenant_id)
     suffix = uuid.uuid4().hex[:8]
-    publisher_domain = f"browser-{suffix}.example.com"
+    publisher_domain = f"browser-{suffix}.psatest.com"
     tag_id = f"ui_browser_{suffix}"
 
     tag_response = session.post(

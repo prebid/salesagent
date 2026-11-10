@@ -41,8 +41,8 @@ def test_updating_profile_formats_affects_all_products(integration_db, sample_te
                     {
                         "property_type": "website",
                         "name": "Example Website",
-                        "identifiers": [{"type": "domain", "value": "example.com"}],
-                        "publisher_domain": "example.com",
+                        "identifiers": [{"type": "domain", "value": "psatest.com"}],
+                        "publisher_domain": "psatest.com",
                     }
                 ],
             ),
@@ -130,8 +130,8 @@ def test_updating_profile_inventory_affects_product_implementation_config(integr
                     {
                         "property_type": "website",
                         "name": "Example Website",
-                        "identifiers": [{"type": "domain", "value": "example.com"}],
-                        "publisher_domain": "example.com",
+                        "identifiers": [{"type": "domain", "value": "psatest.com"}],
+                        "publisher_domain": "psatest.com",
                     }
                 ],
             ),

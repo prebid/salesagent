@@ -62,9 +62,9 @@ def at_previous(migration_db):
             text(
                 "INSERT INTO authorized_properties (property_id, tenant_id, property_type, name, identifiers, "
                 "publisher_domain, verification_status) VALUES ('typed_home', :tid, 'website', 'Typed', "
-                "CAST(:ident AS jsonb), 'typed.example', 'verified')"
+                "CAST(:ident AS jsonb), 'typed-psatest.com', 'verified')"
             ),
-            {"tid": _TENANT, "ident": json.dumps([{"type": "domain", "value": "typed.example"}])},
+            {"tid": _TENANT, "ident": json.dumps([{"type": "domain", "value": "typed-psatest.com"}])},
         )
         conn.execute(
             text(
@@ -116,7 +116,7 @@ def test_partners_become_publishers_and_selectors_move_to_child_tables(at_previo
     ) == [
         ("news-psatest.com", "News", "never_fetched", None, None),
         ("sports-psatest.com", "sports-psatest.com", "never_fetched", None, None),
-        ("typed.example", "typed.example", "never_fetched", None, None),
+        ("typed-psatest.com", "typed-psatest.com", "never_fetched", None, None),
         ("weather-psatest.com", "weather-psatest.com", "never_fetched", None, None),
     ]
     assert _rows(

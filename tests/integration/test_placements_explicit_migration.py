@@ -85,13 +85,13 @@ _BACKFILL = {
         [{"kind": "seller_inline", "mode": "included", "placement_id": "hero", "name": "Hero"}],
     ),
     "publisher_ref_without_mode": (
-        [{"kind": "publisher_ref", "placement_id": "pub", "publisher_domain": "publisher.example"}],
+        [{"kind": "publisher_ref", "placement_id": "pub", "publisher_domain": "publisher-psatest.com"}],
         [
             {
                 "kind": "publisher_ref",
                 "mode": "targetable",
                 "placement_id": "pub",
-                "publisher_domain": "publisher.example",
+                "publisher_domain": "publisher-psatest.com",
             }
         ],
     ),

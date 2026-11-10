@@ -251,7 +251,7 @@ def test_product_without_eager_loading_fails_validation(integration_db):
             "delivery_measurement": {"provider": "publisher", "notes": "Test measurement"},
             "publisher_properties": [
                 {
-                    "publisher_domain": f"test-{unique_id}.example.com",
+                    "publisher_domain": f"test-{unique_id}.psatest.com",
                     "property_tags": ["all_inventory"],
                     "selection_type": "by_tag",
                 }

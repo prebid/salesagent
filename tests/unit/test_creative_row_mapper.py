@@ -50,7 +50,7 @@ _BLOB_VALUES: dict[str, Any] = {
     "industry_identifiers": [{"type": "ad_id", "value": "ABCD1234567H"}],
     "inputs": [{"name": "brief", "context_description": "a summer sale banner"}],
     "placement_ids": ["plc_1", "plc_2"],
-    "placement_refs": [{"placement_id": "plc_1", "publisher_domain": "example.test"}],
+    "placement_refs": [{"placement_id": "plc_1", "publisher_domain": "psatest.com"}],
     "provenance": {"digital_source_type": "trained_algorithmic_media"},
     "representation_selection": {
         "creative_id": "cr_round_trip",

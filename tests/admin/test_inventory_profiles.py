@@ -140,7 +140,7 @@ class TestInventoryProfileCreate:
     def test_create_profile_with_tags_saves_to_db(self, client, test_tenant, factory_session):
         """POST with valid tag-based config creates a profile."""
         # The tag names the publishers of the tenant's authorized properties (#1845).
-        authorize_publishers(factory_session.get(Tenant, test_tenant), "tagged-publisher.example.com")
+        authorize_publishers(factory_session.get(Tenant, test_tenant), "tagged-publisher.psatest.com")
         _auth_session(client, test_tenant)
         response = client.post(
             f"/tenant/{test_tenant}/inventory-profiles/add",
@@ -311,7 +311,7 @@ class TestAddInventoryProfileDuplicateId:
         # add route refuses a selection naming none BEFORE it ever gets to the
         # uq_inventory_profile write this test grades.
         tenant = TenantFactory(virtual_host="contested-profile.real-configured-domain.test")
-        authorize_publishers(tenant, "tagged-publisher.example.com")
+        authorize_publishers(tenant, "tagged-publisher.psatest.com")
         _auth_session(client, tenant.tenant_id)
 
         def post_add():

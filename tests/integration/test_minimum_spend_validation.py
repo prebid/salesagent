@@ -147,7 +147,7 @@ class TestMinimumSpendValidation:
 
             # The publisher whose stored adagents.json authorizes the tenant (needed for setup validation)
             session.flush()
-            seed_verified_website(session, "test_minspend_tenant", "example.com", name="Test Property")
+            seed_verified_website(session, "test_minspend_tenant", "psatest.com", name="Test Property")
 
             # Create principal with both kevel and mock mappings
             principal = Principal.with_token(

@@ -77,14 +77,14 @@ def test_profile_properties_validation_rejects_invalid_structure():
     """
     # Test invalid property structures
     invalid_properties = [
-        {"publisher_domain": "example.com"},  # Missing all required fields
+        {"publisher_domain": "psatest.com"},  # Missing all required fields
         {
             "name": "Test",
-            "identifiers": [{"type": "domain", "value": "example.com"}],
+            "identifiers": [{"type": "domain", "value": "psatest.com"}],
         },  # Missing property_type
         {
             "property_type": "website",
-            "identifiers": [{"type": "domain", "value": "example.com"}],
+            "identifiers": [{"type": "domain", "value": "psatest.com"}],
         },  # Missing name
         {
             "property_type": "website",
@@ -93,7 +93,7 @@ def test_profile_properties_validation_rejects_invalid_structure():
         {
             "property_type": "invalid_type",
             "name": "Test",
-            "identifiers": [{"type": "domain", "value": "example.com"}],
+            "identifiers": [{"type": "domain", "value": "psatest.com"}],
         },  # Invalid property_type enum value
         {
             "property_type": "website",

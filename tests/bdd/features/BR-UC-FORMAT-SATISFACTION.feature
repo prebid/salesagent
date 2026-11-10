@@ -784,7 +784,7 @@ Feature: A format selector must satisfy the canonical declaration the product pu
   # refine), with the placement-coverage refusal: details.capability placement_uncovered.
   #
   # local_and_publisher_options is two_image_options with the 728x90 option scoped to
-  # shorts.streamhaus.example; the 300x250 stays product-local. streamhaus_and_other sells
+  # shorts.streamhaus-psatest.com; the 300x250 stays product-local. streamhaus_and_other sells
   # that publisher and other-psatest.com, streamhaus_only the first alone.
   #
   # Seller choice, recorded: a slice no declaration applies to is an empty set and fails
@@ -842,7 +842,7 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     Then the buyer is refused UNSUPPORTED_FEATURE naming the package's product for the uncovered publisher slice "other-psatest.com"
 
     # The recorded seller choice above, graded: publisher_only_options scopes both options to
-    # shorts.streamhaus.example, so other-psatest.com's slice is empty. The package names no
+    # shorts.streamhaus-psatest.com, so other-psatest.com's slice is empty. The package names no
     # selector and so "selects all formats supported by the product" (package-request.json),
     # yet none of them applies to that slice; accepting it would buy other-psatest.com's
     # inventory with no format that can serve it, which formats.mdx forbids ("it must not
@@ -898,7 +898,7 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # "REQUIRED on the manifest when the target product's format_options contains two or
     # more declarations sharing the same format_kind" (canonical-formats.mdx;
     # @T-UC-FORMAT-SATISFACTION-manifest-ref-required). The 728x90 option is scoped to
-    # shorts.streamhaus.example, so its ref is the publisher arm.
+    # shorts.streamhaus-psatest.com, so its ref is the publisher arm.
 
   # ── Coverage through the DEPRECATED arm: a legacy-only product's placements ───────────
   #

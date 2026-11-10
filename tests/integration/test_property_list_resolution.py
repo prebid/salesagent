@@ -30,7 +30,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 #: Every publisher these tests' products name; the seller holds a verified property on each,
 #: so property-list filtering is what decides which products are offered (#1845).
-_PUBLISHERS = ("example.com", "other.com", "us-publisher.com", "eu-publisher.com")
+_PUBLISHERS = ("psatest.com", "other.com", "us-publisher.com", "eu-publisher.com")
 
 
 # ---------------------------------------------------------------------------
@@ -79,7 +79,7 @@ class TestPropertyListResolution:
                 name="Matching Product",
                 properties=[
                     {
-                        "publisher_domain": "example.com",
+                        "publisher_domain": "psatest.com",
                         "property_ids": ["prop_alpha", "prop_beta"],
                         "selection_type": "by_id",
                     }
@@ -113,7 +113,7 @@ class TestPropertyListResolution:
                 name="All Properties Product",
                 properties=[
                     {
-                        "publisher_domain": "example.com",
+                        "publisher_domain": "psatest.com",
                         "selection_type": "all",
                     }
                 ],
@@ -337,7 +337,7 @@ class TestPropertyListResolution:
                 name="All Properties",
                 properties=[
                     {
-                        "publisher_domain": "example.com",
+                        "publisher_domain": "psatest.com",
                         "selection_type": "all",
                     }
                 ],
@@ -352,7 +352,7 @@ class TestPropertyListResolution:
                 name="Specific Properties",
                 properties=[
                     {
-                        "publisher_domain": "example.com",
+                        "publisher_domain": "psatest.com",
                         "property_ids": ["prop_x"],
                         "selection_type": "by_id",
                     }

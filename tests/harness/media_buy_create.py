@@ -271,7 +271,7 @@ class MediaBuyCreateEnv(PublisherAdagentsMixin, AdminOperatorMixin, PeerCreative
         tenant, principal = super().setup_default_data(**tenant_kwargs)
 
         if self._session.scalars(select(Publisher).filter_by(tenant_id=tenant.tenant_id)).first() is None:
-            authorize_publishers(tenant, "setup-publisher.example.com")
+            authorize_publishers(tenant, "setup-publisher.psatest.com")
         if self._session.scalars(select(TenantAuthConfig).filter_by(tenant_id=tenant.tenant_id)).first() is None:
             TenantAuthConfigFactory(tenant=tenant, oidc_enabled=True)
         if creating:

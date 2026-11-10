@@ -257,7 +257,7 @@ def create_test_format(
 
 
 def create_test_publisher_properties_by_tag(
-    publisher_domain: str = "test.example.com",
+    publisher_domain: str = "test.psatest.com",
     property_tags: list[str] | None = None,
     **kwargs,
 ) -> dict[str, Any]:
@@ -291,7 +291,7 @@ def create_test_publisher_properties_by_tag(
 
 
 def create_test_publisher_properties_by_id(
-    publisher_domain: str = "test.example.com",
+    publisher_domain: str = "test.psatest.com",
     property_ids: list[str] | None = None,
     **kwargs,
 ) -> dict[str, Any]:
@@ -325,7 +325,7 @@ def create_test_publisher_properties_by_id(
 
 
 def create_test_property_dict(
-    publisher_domain: str = "test.example.com",
+    publisher_domain: str = "test.psatest.com",
     property_id: str = "test_property_1",
     property_name: str = "Test Property",
     property_type: str = "website",
@@ -363,7 +363,7 @@ def create_test_property_dict(
 
 
 def create_test_property(
-    identifier: str = "test.example.com",
+    identifier: str = "test.psatest.com",
     type: str = "website",
     **kwargs,
 ) -> Property:

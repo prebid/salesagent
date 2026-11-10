@@ -94,7 +94,7 @@ _STORED_PLACEMENTS = [
     {
         "kind": "publisher_ref",
         "placement_id": "pub_header",
-        "publisher_domain": "publisher.example",
+        "publisher_domain": "publisher-psatest.com",
         "mode": "targetable",
     },
 ]

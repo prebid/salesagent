@@ -36,6 +36,6 @@ class InventoryProfileFactory(SellsPublishersMixin, factory.alchemy.SQLAlchemyMo
     class Params:
         publisher_properties = factory.LazyFunction(
             lambda: [
-                {"publisher_domain": "test.example.com", "property_tags": ["all_inventory"], "selection_type": "by_tag"}
+                {"publisher_domain": "test.psatest.com", "property_tags": ["all_inventory"], "selection_type": "by_tag"}
             ]
         )
