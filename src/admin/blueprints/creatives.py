@@ -21,6 +21,7 @@ from src.core.schemas.creative import SyncCreativeResult, SyncCreativesResponse
 from src.core.validation_helpers import run_async_in_sync_context
 from src.core.webhooks.delivery import WebhookTaskContext
 from src.core.webhooks.registration import accept_push_notification_config, stored_registration_fields
+from src.services.ai.factory import tenant_ai_enabled
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 # TODO: Missing module - these functions need to be implemented
@@ -381,7 +382,8 @@ def review_creatives(tenant_id, **kwargs):
 
         # Extract tenant attributes before UoW closes (avoid DetachedInstanceError)
         tenant_name = tenant.name
-        has_ai_review = bool(tenant.gemini_api_key and tenant.creative_review_criteria)
+        # The same two conditions `_perform_ai_review` gates on, in the same order.
+        has_ai_review = bool(tenant_ai_enabled(tenant) and tenant.creative_review_criteria)
         approval_mode = tenant.approval_mode
 
     return render_template(
@@ -1087,7 +1089,7 @@ def _ai_review_creative_impl_inner(
     from src.core.database.repositories.product import ProductRepository
     from src.core.database.repositories.tenant_config import TenantConfigRepository
     from src.core.metrics import ai_review_confidence, record_ai_review
-    from src.services.ai import AIServiceFactory
+    from src.services.ai import AIServiceFactory, TenantAIConfig
     from src.services.ai.agents.review_agent import (
         create_review_agent,
         parse_confidence_score,
@@ -1115,15 +1117,11 @@ def _ai_review_creative_impl_inner(
         if not tenant:
             return {"status": "pending_review", "error": "Tenant not found", "reason": "Configuration error"}
 
-        # Check AI availability - use factory to check tenant + platform config
-        factory = AIServiceFactory()
-
-        # The tenant's AI configuration: the column the admin AI settings write and the
-        # generative creative build reads its key from. A legacy gemini_api_key was moved
-        # into it by revision d8b2f4a6c1e3.
-        tenant_ai_config = tenant.ai_config
-
-        if not factory.is_ai_enabled(tenant_ai_config):
+        # The model the review runs on, or None: the same resolution the
+        # creative-management page asks (`tenant_ai_enabled`) for its `has_ai_review` flag,
+        # so the page and this impl cannot disagree about whether a review can run.
+        model = AIServiceFactory().build(TenantAIConfig.from_tenant(tenant))
+        if model is None:
             return {
                 "status": "pending_review",
                 "error": "AI not configured",
@@ -1157,8 +1155,7 @@ def _ai_review_creative_impl_inner(
                                 promoted_offering = product.name
 
         # Create Pydantic AI agent and run review
-        model_string = factory.create_model(tenant_ai_config)
-        agent = create_review_agent(model_string)
+        agent = create_review_agent(model)
 
         # Run async agent in a separate thread to avoid event loop conflicts with Flask
         def run_review_in_thread():

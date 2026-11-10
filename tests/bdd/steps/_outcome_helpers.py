@@ -145,6 +145,11 @@ def wire_field(ctx: dict, field: str) -> Any:
     return value
 
 
+def wire_product_ids(ctx: dict) -> list[str]:
+    """The ``product_id`` of every product in ``products[]``, in the order the buyer receives them."""
+    return [product["product_id"] for product in wire_field(ctx, "products")]
+
+
 def wire_dict(ctx: dict, path: str | None = None) -> dict:
     """Return the success-path wire body — the whole envelope, or the object at *path*.
 

@@ -1992,6 +1992,51 @@ def write_ast_grep_probe(root: Path, rel_dir: str, source: str, *, stem: str = "
     return rel_path
 
 
+# ── run_all_tests.sh: which services the in-network runner starts ───────────
+
+#: The line that brings the in-network stack up. Matched rather than parsed: the
+#: runner is a shell script, and the service list is the one thing here that has
+#: to stay in step with compose.
+_RUNNER_UP_LINE_RE = re.compile(r"^dc up -d (?P<services>.+)$", re.MULTILINE)
+
+#: A ``dc run --use-aliases ... <service> <cmd>`` invocation. A run container started
+#: WITH ``--use-aliases`` joins the network under its compose service's aliases, so nginx
+#: resolves an SNI route to it exactly as it does to an ``up -d`` service. Without the flag
+#: it would not, which is why the flag is what this matches on rather than ``dc run`` alone.
+_RUNNER_RUN_ALIASED_RE = re.compile(r"^dc run\b(?P<args>[^\n]*--use-aliases[^\n]*)$", re.MULTILINE)
+
+
+def runner_started_services(source: str) -> list[str]:
+    """Every service ``run_all_tests.sh`` makes reachable on the network.
+
+    TWO START FORMS, because the runner uses two. ``dc up -d`` names long-lived
+    services. ``dc run --use-aliases`` starts the suite container, and the flag is
+    what puts it on the network under its compose aliases — so nginx resolves an SNI
+    route to it identically. Reading only the ``up`` line reported the suite container
+    as never started, which is a false 502 warning for a service the server really can
+    dial (the storyboard runner's own webhook receiver is routed to it).
+    """
+    match = _RUNNER_UP_LINE_RE.search(source)
+    started = match.group("services").split() if match else []
+    for run in _RUNNER_RUN_ALIASED_RE.finditer(source):
+        # The service name is the first bare word after the flags and any `-e K=V`
+        # pairs; everything after it is the command to run inside the container.
+        tokens = run.group("args").split()
+        skip_next = False
+        for token in tokens:
+            if skip_next:
+                skip_next = False
+                continue
+            if token in {"-e", "--env", "-v", "--volume", "-w", "--workdir"}:
+                skip_next = True
+                continue
+            if token.startswith("-") or token.startswith("$"):
+                continue
+            started.append(token)
+            break
+    return started
+
+
 # ---------------------------------------------------------------------------
 # The one BDD collection that yields MARKER SETS (D25 helper home)
 #

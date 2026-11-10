@@ -98,6 +98,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.admin_inventory_profiles",
     "tests.bdd.steps.domain.uc_get_products_inventory",
     "tests.bdd.steps.domain.uc_get_products_pricing",
+    "tests.bdd.steps.domain.uc001_discovery",
     "tests.bdd.steps.domain.uc_get_products_format_options",
     "tests.bdd.steps.domain.uc_get_products_format_id_filter",
     "tests.bdd.steps.domain.uc_get_products_canonical_format_filters",
@@ -4516,49 +4517,19 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-019-inv-150-1",
         }
 
-        # --- UC-019: e2e_rest xfails for datetime-mock-dependent tests ---
-        # These scenarios use `And today is "<date>"` which patches datetime
-        # in-process. The patch has no effect on Docker — real datetime.now()
-        # is used, so status assertions fail.
-        #
-        # THE FIX IS THE SCENARIO, not this route. 2026-09-15: the three tags below
-        # that carried the whole status-refinement contract were rewritten to state
-        # their flight windows as offsets from the run date and to pin no clock at
-        # all, so each boundary is now graded identically on a2a, mcp, rest and
-        # e2e_rest. They are gone from this set. What that removed was not coverage
-        # but a false reading: under the old shape the rows expecting "completed"
-        # xpassed merely because the real calendar had drifted past a fixed 2026-03
-        # window, so a production that ignored the flight window entirely would have
-        # passed them, while the rows naming every other boundary could not run here
-        # at all. The three tags that REMAIN genuinely need a clock they cannot set
-        # (they pin start_time / end_time precedence against a fixed date) and are
-        # the real remainder of this gap.
+        # --- UC-019: e2e_rest xfails for remaining adapter/fixture gaps ---
+        # Graduated T-UC-019-inv-150-2/4/5 (GH #1830): real-clock-relative
+        # flights and contradictory date/timestamp edges pass on all four
+        # transports. The status assertions read the captured wire JSON;
+        # ignoring timestamps fails both precedence scenarios. INV-5 keeps its
+        # effective end in the future, so the live scheduler cannot complete
+        # the seed and mask a resolver regression (GH #2503).
         if is_e2e_rest and any(t.startswith("T-UC-019") for t in marker_names):
-            _UC019_E2E_DATETIME_TAGS: set[str] = {
-                "T-UC-019-inv-150-2",
-                "T-UC-019-inv-150-4",
-                "T-UC-019-inv-150-5",
-            }
             _UC019_E2E_MOCK_TAGS: set[str] = {
                 # Adapter mock (get_adapter patch) has no effect in Docker.
                 "T-UC-019-partition-snapshot",
                 "T-UC-019-boundary-snapshot",
             }
-            # The per-example exemption that used to sit here is deleted with the tags
-            # it exempted. It had also silently stopped matching: it keyed on nodeid
-            # substrings ("day after end_date", "post_flight") that a feature
-            # regeneration had renamed, which is why those rows reported XPASS rather
-            # than PASS. A substring exemption that decays into a no-op the moment
-            # someone rewords an Examples cell is the wrong mechanism; the scenario
-            # rewrite removes the need for one.
-            _inv150_5_graduated = "T-UC-019-inv-150-5" in marker_names  # all examples pass
-            if marker_names & _UC019_E2E_DATETIME_TAGS and not _inv150_5_graduated:
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="e2e_rest: datetime.now() mock has no effect in Docker — status computed from real date",
-                        strict=False,
-                    )
-                )
             if marker_names & _UC019_E2E_SUITE_DB_SEED_TAGS:
                 item.add_marker(
                     pytest.mark.xfail(
@@ -6443,14 +6414,24 @@ _UC_BUCKET_ROUTES: dict[str, EnvRoute] = {
         env_builder=_build_uc003_storyboard_generic_client_env,
         seed=_seed_uc003_storyboard_generic_client,
     ),
-    # The five rows below are keyed by the coarse `uc` bucket (from
+    # The seven rows below are keyed by the coarse `uc` bucket (from
     # storyboard_spec.detect_uc), not a per-scenario tag: they are what a scenario in these
     # UCs falls back to when no predicate row above claims it. ADMIN, COMPAT,
-    # UC-GET-PRODUCTS and UC-005 have no predicate rows at all — one env + one
-    # seed serves every scenario. UC-019 does have one (@post-create-poll needs
-    # create + list in a single scenario), so its bucket row is the remainder.
+    # UC-001, UC-GET-PRODUCTS and UC-005 have no predicate rows at all — one env
+    # + one seed serves every scenario. UC-019 does have one (@post-create-poll
+    # needs create + list in a single scenario), so its bucket row is the
+    # remainder.
     "ADMIN": EnvRoute(tag="ADMIN", env_builder=_build_admin_env),
     "COMPAT": EnvRoute(tag="COMPAT", env_builder=_build_product_env),
+    # UC-001 is get_products discovery, so it takes the SAME env as
+    # UC-GET-PRODUCTS. It had no row at all until now, which meant a
+    # `@T-UC-001-*` scenario xfailed with "No harness wired for UC-001" — the
+    # catch-all that exists for UCs whose harness does not exist yet, standing in
+    # for a harness that has existed all along. Adding the row binds nothing on
+    # its own: the generated BR-UC-001 feature carries 121 scenarios and NO
+    # `scenarios()` call binds it whole, so the only collected UC-001 scenarios
+    # are the ones test_uc001_discover_available_inventory.py binds by name.
+    "UC-001": EnvRoute(tag="UC-001", env_builder=_build_product_env),
     "UC-GET-PRODUCTS": EnvRoute(tag="UC-GET-PRODUCTS", env_builder=_build_product_env),
     # UC-005 seeds the tenant on EVERY transport, not e2e only. The e2e-only row said
     # "in-process the registry is mocked and the DB is per-test, so the in-process status
@@ -7637,8 +7618,8 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
     """Provide the appropriate harness for each BDD scenario.
 
     - A ``uc`` bucket with no marker_names-based sub-branching (ADMIN, COMPAT,
-      UC-GET-PRODUCTS, UC-005, UC-019) is a row in ``ENV_ROUTES`` and goes
-      through the one generic ``_run_env_route`` consumer.
+      UC-001, UC-GET-PRODUCTS, UC-005, UC-019) is a row in ``ENV_ROUTES`` and
+      goes through the one generic ``_run_env_route`` consumer.
     - UC-004 @polling → DeliveryPollEnv
     - UC-004 @webhook → WebhookEnv (unit variant, no DB needed)
     - UC-004 @webhook-reliability → CircuitBreakerEnv (unit variant)

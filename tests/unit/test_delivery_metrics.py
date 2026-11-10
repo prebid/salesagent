@@ -33,6 +33,7 @@ def gam_adapter(mock_principal):
         advertiser_id="789",
         trafficker_id="101112",
         tenant_id="test_tenant",
+        tenant_ai_config=None,
     )
 
 

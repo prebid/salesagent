@@ -225,6 +225,20 @@ def _day_offset(phrase: str) -> int:
     raise ValueError(f"unrecognized relative day {phrase!r}; expected 'today', 'in N days' or 'N days ago'")
 
 
+def _seed_relative_media_buy(
+    ctx: dict, principal_id: str, mb_id: str, start_offset: str, end_offset: str, **timestamp_offsets: str
+) -> None:
+    """Anchor every flight edge to one UTC instant and persist the complete window once."""
+    now = datetime.now(UTC)
+    today = now.date()
+    offsets = {"start_date": start_offset, "end_date": end_offset, **timestamp_offsets}
+    columns = {
+        field: (today if field in {"start_date", "end_date"} else now) + timedelta(days=_day_offset(offset))
+        for field, offset in offsets.items()
+    }
+    _seed_simple_media_buy(ctx, principal_id, mb_id, **columns)
+
+
 @given(
     parsers.parse(
         'the principal "{principal_id}" owns media buy "{mb_id}" '
@@ -242,20 +256,7 @@ def given_principal_owns_media_buy_relative_window(
     active). Placing the window relative to the real clock is what lets that
     refinement be graded over a real HTTP transport.
     """
-    _register_principal(ctx, principal_id)
-    env = ctx["env"]
-    today = datetime.now(UTC).date()
-    real_id = _generate_unique_id(mb_id)
-    mb = MediaBuyFactory(
-        tenant=ctx["tenant"],
-        principal=ctx["principal"],
-        media_buy_id=real_id,
-        status="active",
-        start_date=today + timedelta(days=_day_offset(start_offset)),
-        end_date=today + timedelta(days=_day_offset(end_offset)),
-    )
-    env._commit_factory_data()
-    _register_media_buy(ctx, mb_id, mb)
+    _seed_relative_media_buy(ctx, principal_id, mb_id, start_offset, end_offset)
 
 
 @given(parsers.parse('today is "{today_str}"'))
@@ -422,61 +423,22 @@ def given_principal_owns_multiple(ctx: dict, principal_id: str, mb1: str, mb2: s
 
 
 @given(
-    parsers.parse(
-        'the principal "{principal_id}" owns media buy "{mb_id}" with start_date "{start}" '
-        'and start_time "{start_time}" and end_date "{end}"'
+    parsers.re(
+        r'the principal "(?P<principal_id>[^"]+)" owns media buy "(?P<mb_id>[^"]+)" '
+        r"with start_date (?P<start_offset>[^,]+), end_date (?P<end_offset>[^,]+), "
+        r"and (?P<field>start_time|end_time) (?P<time_offset>.+)"
     )
 )
-def given_principal_owns_mb_with_start_time(
-    ctx: dict, principal_id: str, mb_id: str, start: str, start_time: str, end: str
+def given_media_buy_relative_timestamp(
+    ctx: dict, principal_id: str, mb_id: str, start_offset: str, end_offset: str, field: str, time_offset: str
 ) -> None:
-    """Create a media buy with start_time taking precedence over start_date (INV-150-4)."""
-    from datetime import datetime as dt
+    """Seed contradictory date/timestamp edges relative to the real UTC clock.
 
-    _register_principal(ctx, principal_id)
-    env = ctx["env"]
-    real_id = _generate_unique_id(mb_id)
-    start_dt = dt.fromisoformat(start_time)
-    mb = MediaBuyFactory(
-        tenant=ctx["tenant"],
-        principal=ctx["principal"],
-        media_buy_id=real_id,
-        status="active",
-        start_date=date.fromisoformat(start),
-        end_date=date.fromisoformat(end),
-        start_time=start_dt,
-    )
-    env._commit_factory_data()
-    _register_media_buy(ctx, mb_id, mb)
-
-
-@given(
-    parsers.parse(
-        'the principal "{principal_id}" owns media buy "{mb_id}" with start_date "{start}" '
-        'and end_date "{end}" and end_time "{end_time}"'
-    )
-)
-def given_principal_owns_mb_with_end_time(
-    ctx: dict, principal_id: str, mb_id: str, start: str, end: str, end_time: str
-) -> None:
-    """Create a media buy with end_time taking precedence over end_date (INV-150-5)."""
-    from datetime import datetime as dt
-
-    _register_principal(ctx, principal_id)
-    env = ctx["env"]
-    real_id = _generate_unique_id(mb_id)
-    end_dt = dt.fromisoformat(end_time)
-    mb = MediaBuyFactory(
-        tenant=ctx["tenant"],
-        principal=ctx["principal"],
-        media_buy_id=real_id,
-        status="active",
-        start_date=date.fromisoformat(start),
-        end_date=date.fromisoformat(end),
-        end_time=end_dt,
-    )
-    env._commit_factory_data()
-    _register_media_buy(ctx, mb_id, mb)
+    Persist the complete window in one factory call. An intermediate active buy
+    with a past end_date and no end_time could be completed by the live scheduler
+    before a later Given supplied the future timestamp (GH #2503).
+    """
+    _seed_relative_media_buy(ctx, principal_id, mb_id, start_offset, end_offset, **{field: time_offset})
 
 
 @given(parsers.parse('the principal "{principal_id}" owns media buys in various statuses'))
@@ -1325,19 +1287,11 @@ def _get_media_buys(ctx: dict) -> list:
 
 
 @then(parsers.parse('the response should include media buy "{mb_id}" with status "{status}"'))
+@then(parsers.parse('the media buy "{mb_id}" should have status "{status}"'))
 def then_response_includes_mb_with_status(ctx: dict, mb_id: str, status: str) -> None:
-    """Assert response includes the media buy with expected status."""
-    real_id = _resolve_media_buy_id(ctx, mb_id)
-    buys = _get_media_buys(ctx)
-    matching = [b for b in buys if getattr(b, "media_buy_id", None) == real_id]
-    assert len(matching) == 1, (
-        f"Expected media buy '{mb_id}' (real_id={real_id}) in response, "
-        f"got IDs: {[getattr(b, 'media_buy_id', None) for b in buys]}"
-    )
-    actual_status = getattr(matching[0], "status", None)
-    # Status may be an enum — convert to string
-    actual_str = actual_status.value if hasattr(actual_status, "value") else str(actual_status)
-    assert actual_str == status, f"Expected status '{status}' for {mb_id}, got '{actual_str}'"
+    """Assert exactly one matching buy and its status in the captured wire JSON."""
+    actual = _wire_media_buy(ctx, mb_id)["status"]
+    assert actual == status, f"Expected status '{status}' for '{mb_id}', got '{actual}'"
 
 
 @then(
@@ -1717,21 +1671,6 @@ def _current_suggestion(ctx: dict) -> str:
         f"Expected non-empty top-level suggestion string, got {suggestion!r}"
     )
     return suggestion
-
-
-@then(parsers.parse('the media buy "{mb_id}" should have status "{expected_status}"'))
-def then_media_buy_has_status(ctx: dict, mb_id: str, expected_status: str) -> None:
-    """Assert a specific media buy has the expected status in the response."""
-    real_id = _resolve_media_buy_id(ctx, mb_id)
-    buys = _get_media_buys(ctx)
-    matching = [b for b in buys if getattr(b, "media_buy_id", None) == real_id]
-    assert len(matching) == 1, (
-        f"Expected media buy '{mb_id}' (real_id={real_id}) in response, "
-        f"got IDs: {[getattr(b, 'media_buy_id', None) for b in buys]}"
-    )
-    actual = getattr(matching[0], "status", None)
-    actual_str = actual.value if hasattr(actual, "value") else str(actual)
-    assert actual_str == expected_status, f"Expected status '{expected_status}' for '{mb_id}', got '{actual_str}'"
 
 
 @then(parsers.parse("the error message should include field-level validation details"))

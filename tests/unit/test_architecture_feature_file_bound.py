@@ -85,7 +85,6 @@ FEATURES_DIR = BDD_DIR / "features"
 #     BR-UC-013, BR-UC-025 property-governance agent · BR-UC-028 collection
 #     governance · BR-UC-030 campaign governance · BR-UC-014 brand agent (SI)
 UNBOUND_ALLOWLIST: set[str] = {
-    "BR-UC-001-discover-available-inventory.feature",
     "BR-UC-008-manage-audience-signals.feature",
     "BR-UC-012-manage-content-standards.feature",
     "BR-UC-013-manage-property-lists.feature",

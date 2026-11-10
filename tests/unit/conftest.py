@@ -180,3 +180,23 @@ def make_users_test_client():
                 yield client, mock_session
 
     return _factory
+
+
+@pytest.fixture
+def tenant_row(monkeypatch):
+    """An unsaved ORM ``Tenant`` row, built the way production reads one.
+
+    ``Tenant.gemini_api_key`` encrypts on write and decrypts on read, so a row carrying the
+    legacy column needs an ``ENCRYPTION_KEY``; a per-test Fernet key round-trips through the
+    real property rather than stubbing it.
+    """
+    from cryptography.fernet import Fernet
+
+    monkeypatch.setenv("ENCRYPTION_KEY", Fernet.generate_key().decode())
+
+    def make(**fields):
+        from tests.factories import TenantFactory
+
+        return TenantFactory.build(**{"tenant_id": "t1", **fields})
+
+    return make
