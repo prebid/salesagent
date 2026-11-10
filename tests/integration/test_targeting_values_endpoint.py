@@ -4,66 +4,56 @@ This test validates that the /api/tenant/{id}/targeting/values/{key_id} endpoint
 correctly queries GAM in real-time to fetch custom targeting values.
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, patch
 
 import pytest
 
-from src.core.database.database_session import get_db_session
-from src.core.database.models import AdapterConfig, GAMInventory, Tenant
+from tests.factories import AdapterConfigFactory, GAMInventoryFactory, TenantFactory
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
-def test_get_targeting_values_endpoint(authenticated_admin_session, integration_db):
+@pytest.fixture
+def gam_custom_targeting_key(bound_factory_session):
+    """A GAM tenant with OAuth credentials and one synced custom targeting key."""
+    tenant = TenantFactory(ad_server="google_ad_manager")
+    AdapterConfigFactory(
+        tenant=tenant,
+        adapter_type="google_ad_manager",
+        gam_network_code="123456",
+        gam_refresh_token="test_refresh_token",
+    )
+    key = GAMInventoryFactory(
+        tenant=tenant,
+        inventory_type="custom_targeting_key",
+        inventory_id="11001",
+        name="sport",
+    )
+    return tenant, key
+
+
+@pytest.fixture
+def gam_discovery():
+    """Stand-in for the GAM API: the inventory discovery class, answering no values by default."""
+    with patch("src.adapters.gam_inventory_discovery.GAMInventoryDiscovery") as discovery_class:
+        discovery_class.return_value.discover_custom_targeting_values_for_key.return_value = []
+        yield discovery_class
+
+
+def _values_url(tenant_id, key_id):
+    return f"/api/tenant/{tenant_id}/targeting/values/{key_id}"
+
+
+def test_get_targeting_values_endpoint(authenticated_admin_session, gam_custom_targeting_key, gam_discovery):
     """Test /api/tenant/{id}/targeting/values/{key_id} queries GAM and returns values."""
-    # integration_db fixture sets up the database environment
-    # Use get_db_session() to interact with it
-    with get_db_session() as db_session:
-        # Create test tenant with GAM configuration
-        # Required (NOT NULL) and UNIQUE. Nothing routes to this host; it exists to satisfy the column.
-        tenant = Tenant(
-            tenant_id="test_tenant",
-            name="Test Tenant",
-            subdomain="test",
-            virtual_host="test-tenant.adcp.test",
-            ad_server="google_ad_manager",
-        )
-        db_session.add(tenant)
-        db_session.flush()
-
-        # Create adapter config
-        adapter_config = AdapterConfig(
-            tenant_id="test_tenant",
-            adapter_type="google_ad_manager",
-            gam_network_code="123456",
-            gam_refresh_token="test_refresh_token",
-        )
-        db_session.add(adapter_config)
-
-        # Create custom targeting key (synced from GAM)
-        key_id = "123456"
-        key = GAMInventory(
-            tenant_id="test_tenant",
-            inventory_type="custom_targeting_key",
-            inventory_id=key_id,
-            name="sport",
-            status="ACTIVE",
-            inventory_metadata={
-                "display_name": "Sport",
-                "type": "PREDEFINED",
-                "reportable_type": "ON",
-            },
-        )
-        db_session.add(key)
-        db_session.commit()
-
-    # Mock GAM client to return values
     from src.adapters.gam_inventory_discovery import CustomTargetingValue
 
-    mock_values = [
+    tenant, key = gam_custom_targeting_key
+    discover = gam_discovery.return_value.discover_custom_targeting_values_for_key
+    discover.return_value = [
         CustomTargetingValue(
             id="val_001",
-            custom_targeting_key_id=key_id,
+            custom_targeting_key_id=key.inventory_id,
             name="basketball",
             display_name="Basketball",
             match_type="EXACT",
@@ -71,7 +61,7 @@ def test_get_targeting_values_endpoint(authenticated_admin_session, integration_
         ),
         CustomTargetingValue(
             id="val_002",
-            custom_targeting_key_id=key_id,
+            custom_targeting_key_id=key.inventory_id,
             name="football",
             display_name="Football",
             match_type="EXACT",
@@ -79,7 +69,7 @@ def test_get_targeting_values_endpoint(authenticated_admin_session, integration_
         ),
         CustomTargetingValue(
             id="val_003",
-            custom_targeting_key_id=key_id,
+            custom_targeting_key_id=key.inventory_id,
             name="soccer",
             display_name="Soccer",
             match_type="BROAD",
@@ -87,35 +77,17 @@ def test_get_targeting_values_endpoint(authenticated_admin_session, integration_
         ),
     ]
 
-    with patch("src.adapters.gam_inventory_discovery.GAMInventoryDiscovery") as mock_gam_class:
-        with patch("googleads.ad_manager.AdManagerClient") as mock_ad_manager_client:
-            with patch("googleads.oauth2.GoogleRefreshTokenClient") as mock_oauth_client:
-                mock_gam_instance = MagicMock()
-                mock_gam_instance.discover_custom_targeting_values_for_key.return_value = mock_values
-                mock_gam_class.return_value = mock_gam_instance
+    with patch("googleads.ad_manager.AdManagerClient") as mock_ad_manager_client:
+        with patch("googleads.oauth2.GoogleRefreshTokenClient") as mock_oauth_client:
+            response = authenticated_admin_session.get(_values_url(tenant.tenant_id, key.inventory_id))
 
-                # Make request to API endpoint
-                response = authenticated_admin_session.get(f"/api/tenant/test_tenant/targeting/values/{key_id}")
-
-                # Validate OAuth client was created correctly
-                mock_oauth_client.assert_called_once()
-                oauth_call_kwargs = mock_oauth_client.call_args.kwargs
-                assert oauth_call_kwargs["refresh_token"] == "test_refresh_token"
-
-                # Validate AdManager client was created correctly
-                mock_ad_manager_client.assert_called_once()
-                ad_manager_call_args = mock_ad_manager_client.call_args
-                assert ad_manager_call_args.kwargs["network_code"] == "123456"
-
-                # Validate GAMInventoryDiscovery was instantiated with client and tenant_id
-                mock_gam_class.assert_called_once()
-                gam_call_kwargs = mock_gam_class.call_args.kwargs
-                assert "client" in gam_call_kwargs
-                assert gam_call_kwargs["tenant_id"] == "test_tenant"
-
-                mock_gam_instance.discover_custom_targeting_values_for_key.assert_called_once_with(
-                    key_id, max_values=1000
-                )
+    # The client is built from the tenant's stored credentials and network code.
+    mock_oauth_client.assert_called_once_with(client_id=ANY, client_secret=ANY, refresh_token="test_refresh_token")
+    mock_ad_manager_client.assert_called_once_with(
+        mock_oauth_client.return_value, "Prebid Sales Agent", network_code="123456"
+    )
+    gam_discovery.assert_called_once_with(client=mock_ad_manager_client.return_value, tenant_id=tenant.tenant_id)
+    discover.assert_called_once_with(key.inventory_id, max_values=1000)
 
     # Validate response
     assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.data}"
@@ -136,7 +108,7 @@ def test_get_targeting_values_endpoint(authenticated_admin_session, integration_
     assert basketball["display_name"] == "Basketball"
     assert basketball["match_type"] == "EXACT"
     assert basketball["status"] == "ACTIVE"
-    assert basketball["key_id"] == key_id
+    assert basketball["key_id"] == key.inventory_id
     assert basketball["key_name"] == "sport"
 
     # Check inactive value (soccer)
@@ -146,110 +118,43 @@ def test_get_targeting_values_endpoint(authenticated_admin_session, integration_
     assert soccer["match_type"] == "BROAD"
 
 
-def test_get_targeting_values_empty_result(authenticated_admin_session, integration_db):
+def test_get_targeting_values_empty_result(authenticated_admin_session, gam_custom_targeting_key, gam_discovery):
     """Test endpoint returns empty array when GAM returns no values for key."""
-    with get_db_session() as db_session:
-        # Create test tenant with GAM configuration
-        tenant = Tenant(
-            tenant_id="test_tenant_empty",
-            name="Test Tenant Empty",
-            subdomain="testempty",
-            virtual_host="test-tenant-empty.adcp.test",
-            ad_server="google_ad_manager",
-        )
-        db_session.add(tenant)
-        db_session.flush()
+    tenant, key = gam_custom_targeting_key
 
-        # Create adapter config
-        adapter_config = AdapterConfig(
-            tenant_id="test_tenant_empty",
-            adapter_type="google_ad_manager",
-            gam_network_code="123456",
-            gam_refresh_token="test_refresh_token",
-        )
-        db_session.add(adapter_config)
+    response = authenticated_admin_session.get(_values_url(tenant.tenant_id, key.inventory_id))
 
-        # Create custom targeting key with no values
-        key_id = "999999"
-        key = GAMInventory(
-            tenant_id="test_tenant_empty",
-            inventory_type="custom_targeting_key",
-            inventory_id=key_id,
-            name="empty_key",
-            status="ACTIVE",
-            inventory_metadata={"display_name": "Empty Key", "type": "FREEFORM"},
-        )
-        db_session.add(key)
-        db_session.commit()
-
-    # Mock GAM client to return no values
-    with patch("src.adapters.gam_inventory_discovery.GAMInventoryDiscovery") as mock_gam_class:
-        mock_gam_instance = MagicMock()
-        mock_gam_instance.discover_custom_targeting_values_for_key.return_value = []
-        mock_gam_class.return_value = mock_gam_instance
-
-        # Make request to API endpoint
-        response = authenticated_admin_session.get(f"/api/tenant/test_tenant_empty/targeting/values/{key_id}")
-
-    # Validate response
     assert response.status_code == 200
     data = response.json
     assert data["count"] == 0
     assert data["values"] == []
 
 
-def test_get_targeting_values_tenant_isolation(authenticated_admin_session, integration_db):
-    """Test endpoint requires GAM configuration (validates tenant isolation at config level)."""
-    with get_db_session() as db_session:
-        # Create tenant without GAM configuration
-        tenant = Tenant(
-            tenant_id="tenant_a",
-            name="Tenant A",
-            subdomain="tenanta",
-            virtual_host="tenant-a.adcp.test",
-        )
-        db_session.add(tenant)
+def test_get_targeting_values_is_never_cached(authenticated_admin_session, gam_custom_targeting_key, gam_discovery):
+    """The values come from GAM live, so no cache may serve an earlier answer (#1045)."""
+    tenant, key = gam_custom_targeting_key
 
-        # Create key
-        key_id = "shared_key_123"
-        key = GAMInventory(
-            tenant_id="tenant_a",
-            inventory_type="custom_targeting_key",
-            inventory_id=key_id,
-            name="category",
-            status="ACTIVE",
-            inventory_metadata={"display_name": "Category", "type": "PREDEFINED"},
-        )
-        db_session.add(key)
-        db_session.commit()
+    response = authenticated_admin_session.get(_values_url(tenant.tenant_id, key.inventory_id))
 
-    # Request values without GAM configured - should fail
-    response = authenticated_admin_session.get(f"/api/tenant/tenant_a/targeting/values/{key_id}")
+    assert response.status_code == 200, response.data
+    assert response.headers.get("Cache-Control") == "no-store"
+
+
+def test_get_targeting_values_tenant_isolation(authenticated_admin_session, bound_factory_session):
+    """A tenant with no ad server credentials is refused, never answered from another tenant's GAM."""
+    key = GAMInventoryFactory(inventory_type="custom_targeting_key")
+
+    response = authenticated_admin_session.get(_values_url(key.tenant_id, key.inventory_id))
 
     assert response.status_code == 400
-    data = response.json
-    assert "error" in data
-    # Updated to match new, more specific error message
-    assert "No adapter configured" in data["error"]
+    assert response.json == {"error": "No adapter configured for this tenant"}
 
 
-def test_get_targeting_values_requires_auth(admin_client, integration_db):
-    """Test endpoint requires authentication."""
-    with get_db_session() as db_session:
-        # Create test tenant and key
-        tenant = Tenant(
-            tenant_id="auth_test",
-            name="Auth Test",
-            subdomain="authtest",
-            virtual_host="auth-test.adcp.test",
-        )
-        db_session.add(tenant)
-        db_session.commit()
+def test_get_targeting_values_requires_auth(admin_client, bound_factory_session):
+    """An unauthenticated request is turned away even when the tenant and key exist."""
+    key = GAMInventoryFactory(inventory_type="custom_targeting_key")
 
-    key_id = "auth_key_123"
-
-    # Attempt to access without authentication
-    response = admin_client.get(f"/api/tenant/auth_test/targeting/values/{key_id}")
+    response = admin_client.get(_values_url(key.tenant_id, key.inventory_id))
 
     # Should redirect to login or return 401/403
     assert response.status_code in [302, 401, 403]

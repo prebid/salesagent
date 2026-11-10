@@ -4,6 +4,7 @@ This test file prevents regressions by ensuring every url_for() call in template
 points to an actual route that exists in the application.
 """
 
+import ast
 import re
 from pathlib import Path
 
@@ -80,6 +81,31 @@ class TestTemplateUrlValidation:
             else:
                 params[argument] = f"test_{argument}"
         return params
+
+    def test_all_python_url_for_calls_resolve(self):
+        """Every literal endpoint in admin Python must build against the live map."""
+        admin_dir = Path(__file__).resolve().parents[2] / "src" / "admin"
+        errors = []
+        with admin_app.test_request_context():
+            for path in admin_dir.rglob("*.py"):
+                for node in ast.walk(ast.parse(path.read_text())):
+                    if not isinstance(node, ast.Call):
+                        continue
+                    name = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", None)
+                    if name != "url_for":
+                        continue
+                    endpoint = (
+                        node.args[0]
+                        if node.args
+                        else next((kw.value for kw in node.keywords if kw.arg == "endpoint"), None)
+                    )
+                    if not isinstance(endpoint, ast.Constant) or not isinstance(endpoint.value, str):
+                        continue
+                    try:
+                        url_for(endpoint.value, **self.placeholder_params(endpoint.value))
+                    except BuildError as error:
+                        errors.append(f"{path.relative_to(admin_dir)}:{node.lineno}: {error}")
+        assert not errors, "Unresolvable admin endpoints:\n" + "\n".join(errors)
 
     def test_all_template_url_for_calls_resolve(self, authenticated_admin_session, test_tenant_with_data):
         """Test that every url_for call in templates can be resolved."""

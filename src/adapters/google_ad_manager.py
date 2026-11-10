@@ -1401,8 +1401,6 @@ class GoogleAdManager(AdServerAdapter):
                     affected_package = AffectedPackage(
                         package_id=package_id,
                         paused=is_pause,  # True if paused, False if resumed
-                        changes_applied=None,
-                        buyer_package_ref=None,
                     )
 
                     return AdapterUpdateResult(
@@ -1467,8 +1465,6 @@ class GoogleAdManager(AdServerAdapter):
                         AffectedPackage(
                             package_id=pkg.package_id,
                             paused=is_pause,  # True if paused, False if resumed
-                            changes_applied=None,
-                            buyer_package_ref=None,
                         )
                         for pkg in packages
                     ]

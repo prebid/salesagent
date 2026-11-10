@@ -72,7 +72,7 @@ from tests.helpers.local_http_origin import LocalOrigin, OriginResponse
 # Reused rather than restated: which escape hatches a case opens is one decision
 # with one home, and the backoff knob that keeps a retry case fast is the seam
 # suite's own helper.
-from tests.integration.gam_oauth_helpers import callback, log_in, start_flow
+from tests.integration.gam_oauth_helpers import callback, log_in, point_google_token_url_at, start_flow
 from tests.integration.property_list_helpers import allow_local_origin
 
 pytestmark = [pytest.mark.integration]
@@ -255,27 +255,11 @@ _GOOGLE_AUTH_CODE = "4/single-use-authorization-code"
 _GOOGLE_CALLBACK_URI = "https://sales-agent.example/admin/auth/gam/callback"
 
 
-def _point_google_token_url_at(origin: LocalOrigin, monkeypatch) -> None:
-    """Re-point the Google token endpoint at *origin*.
-
-    Monkeypatching the module constant IS the injection point: the service
-    holds Google's endpoint as a typed ``VendorConstant`` (salesagent-tbrk.6),
-    so a test can stand a local origin in for Google without production
-    growing a knob to be configured wrong in a deployment. It is also why the
-    exchange had to leave the Flask view — a literal inside ``gam_callback``
-    had no seam at all.
-    """
-    from src.core.security.egress.destination import VendorConstant
-    from src.services import google_oauth_client
-
-    monkeypatch.setattr(google_oauth_client, "GOOGLE_TOKEN_URL", VendorConstant(url=f"{origin.base_url}/token"))
-
-
 def _exchange_at(origin: LocalOrigin, monkeypatch):
     """Run the real token exchange against *origin* with the constants above."""
     from src.services.google_oauth_client import exchange_authorization_code
 
-    _point_google_token_url_at(origin, monkeypatch)
+    point_google_token_url_at(origin, monkeypatch)
     return exchange_authorization_code(
         _GOOGLE_AUTH_CODE,
         client_id=_GOOGLE_CLIENT_ID,
@@ -587,8 +571,9 @@ def test_google_token_exchange_does_not_retry_a_retryable_failure(local_origin_t
     assert local_origin_tls.hits == 1
 
 
+@pytest.mark.parametrize("script_root", ["", "/admin"])
 def test_gam_callback_flashes_googles_rejection_on_a_400(
-    local_origin_tls, monkeypatch, admin_client, gam_oauth_configured, bound_factory_session
+    local_origin_tls, monkeypatch, admin_client, gam_oauth_configured, bound_factory_session, script_root
 ):
     """``GET /auth/gam/callback`` turns Google's 400 into the operator's message.
 
@@ -612,15 +597,17 @@ def test_gam_callback_flashes_googles_rejection_on_a_400(
     """
     allow_local_origin(monkeypatch)
     fast_backoff(monkeypatch)
-    _point_google_token_url_at(local_origin_tls, monkeypatch)
+    point_google_token_url_at(local_origin_tls, monkeypatch)
     local_origin_tls.respond_with(400, body=b'{"error": "invalid_grant"}')
     tenant = TenantFactory(tenant_id="gam_oauth_tenant")
     log_in(admin_client, UserFactory(tenant=tenant))
 
-    response = callback(admin_client, start_flow(admin_client, tenant.tenant_id))
+    response = callback(
+        admin_client, start_flow(admin_client, tenant.tenant_id, script_root=script_root), script_root=script_root
+    )
 
     assert response.status_code == 302
-    assert urlsplit(response.headers["Location"]).path == "/tenant/gam_oauth_tenant/settings"
+    assert urlsplit(response.headers["Location"]).path == f"{script_root}/tenant/gam_oauth_tenant/settings"
     with admin_client.session_transaction() as session:
         assert session["_flashes"] == [
             (

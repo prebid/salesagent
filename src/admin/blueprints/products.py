@@ -4,13 +4,16 @@ import asyncio
 import json
 import logging
 import uuid
+from collections.abc import Sequence
 from decimal import Decimal
+from typing import Any
 
 from adcp.exceptions import ADCPConnectionError, ADCPError, ADCPTimeoutError
-from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
-from pydantic import BaseModel
+from flask import Blueprint, abort, flash, jsonify, redirect, render_template, request, url_for
+from pydantic import ValidationError
 from sqlalchemy import func, inspect, select
 from sqlalchemy.orm import joinedload
+from werkzeug.exceptions import HTTPException
 
 from src.admin.form_validation import sanitize_form_data
 from src.admin.utils import require_tenant_access
@@ -21,6 +24,9 @@ from src.core.database.models import PersistedMediaBuyStatus, PricingOption, Pro
 from src.core.database.product_pricing import get_product_pricing_options
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.principal import PrincipalRepository
+from src.core.format_resolver import linked_format_contract
+from src.core.format_satisfaction import refuse_outside_common_intersection
+from src.core.publisher_format_catalog import PublisherCatalog, format_declarations_type
 from src.core.schemas import Format
 from src.services.gam_product_config_service import GAMProductConfigService
 
@@ -95,6 +101,128 @@ def _parse_format_entries(formats_parsed: list[dict]) -> list[dict]:
             format_entry["duration_ms"] = float(fmt["duration_ms"])
         entries.append(format_entry)
     return entries
+
+
+def _parse_authored_format_options(raw: str | None, catalog: PublisherCatalog) -> list[dict] | None:
+    """The canonical arm of core/product.json's root anyOf, as the operator authored it.
+
+    Validated at AUTHOR time against the pinned discriminated union
+    (``format_declarations_type``, read off the DTO that serves the column, so the form
+    refuses exactly what ``convert_product_model_to_schema`` would refuse later). An invalid
+    declaration does not fail on the row -- it fails in
+    ``convert_product_model_to_schema``, which ``get_products`` runs in a loop that
+    re-raises, so one mis-authored product answers INTERNAL_ERROR for the whole tenant's
+    discovery. The validated models are discarded on purpose: the column stores the
+    document and ``product_conversion`` hands that document through untouched, so
+    validating here and storing the original is what keeps the two in agreement.
+
+    Returns ``None`` when the operator authored nothing, so an absent arm is recorded as
+    NULL rather than as ``[]``. The pin gives ``format_options`` ``minItems: 1``, and the
+    deprecated arm is satisfied by its KEY alone -- an empty array asserts a declaration
+    that is not there.
+
+    A declaration naming a publisher option in this seller's OWN namespace must name one its
+    publisher format catalog declares (*catalog*, read off the tenant by the caller): RFC S3,
+    see ``src/core/publisher_format_catalog.py``.
+    """
+    if not raw or not raw.strip():
+        return None
+    try:
+        document = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"format_options is not valid JSON: {e}") from e
+    if not document:
+        return None
+    try:
+        format_declarations_type().validate_python(document)
+    except ValidationError as e:
+        first = e.errors()[0]
+        location = "/".join(str(part) for part in first["loc"]) or "format_options"
+        raise ValueError(
+            f"format_options is not a valid canonical format declaration ({location}: {first['msg']})"
+        ) from e
+    catalog.refuse_unresolved(document)
+    return document
+
+
+def _refuse_a_product_with_no_format_arm(
+    format_ids: Sequence[Any] | None, format_options: Sequence[Any] | None
+) -> None:
+    """core/product.json's root anyOf, checked once where both arms are visible.
+
+    The pin's ``format_ids`` property says "Products MUST carry ``format_ids``,
+    ``format_options``, or both during the 3.x migration window", so the refusable state
+    is NEITHER arm -- never a missing legacy arm. It is refused at the authoring surface
+    because that is the only place an operator can still fix it: stored, the row passes
+    every column CHECK and then takes the tenant's whole product catalog down at
+    discovery time.
+
+    STILL TAKES BOTH ARMS, now that only one of them is authorable here. ``format_ids``
+    is no longer written by this surface, so on CREATE it is always ``None`` and this
+    reduces to "canonical declarations are required". On EDIT it is the arm ALREADY
+    STORED, which is exactly what must keep an existing legacy product editable: such a
+    product carries no ``format_options`` and authoring one must not be the price of
+    changing its name. Narrowing this to ``format_options`` alone would refuse every
+    legacy product's first edit.
+    """
+    if not format_ids and not format_options:
+        raise ValueError(
+            # No spec version in the sentence: 0d8d26d72 swept version literals out of
+            # src/ ("read the spec and SDK versions from the SDK, never from a comment")
+            # and `AdCP 3.2` now appears nowhere under src/. An operator does not need the
+            # release number to act on this -- they need to know the field is not theirs to
+            # fill -- so the whole clause goes rather than half of it.
+            "A product must declare at least one creative format: author canonical "
+            "format_options, or link an inventory profile that declares them. (format_ids is "
+            "deprecated and is no longer authored here; a product that already has one keeps it.)"
+        )
+
+
+def _legacy_format_facts(product) -> dict[str, object]:
+    """What the edit form shows, read-only, about the product's legacy named formats.
+
+    Read off ``Product.format_contract``, the same contract ``get_products`` announces, so
+    the form and the wire cannot disagree:
+
+    * ``announced_legacy_refs`` -- the ``format_ids`` a legacy buyer receives.
+    * ``legacy_refs_derived`` -- True when they are DERIVED from canonical declarations
+      (their ``v1_format_ref``), False when they are an authored legacy-only arm.
+    * ``inventory_profile_name`` -- the linked profile, when there is one, because a
+      profile supplies the contract on the product's behalf and is SHARED: changing it
+      changes every product linked to it (salesagent-ym571).
+    """
+    from src.core.format_resolver import CanonicalFormats, format_display, format_identity_or_none
+
+    contract = product.format_contract
+    identities = (format_identity_or_none(entry) for entry in contract.format_ids)
+    profile = product.inventory_profile if product.inventory_profile_id else None
+    return {
+        "announced_legacy_refs": [format_display(identity) for identity in identities if identity is not None],
+        "legacy_refs_derived": isinstance(contract, CanonicalFormats),
+        "inventory_profile_name": profile.name if profile else None,
+    }
+
+
+def _format_labels(contract) -> list[str]:
+    """One display label per format a contract declares, for the admin lists.
+
+    A canonical declaration shows its ``display_name`` when the seller gave one, else its
+    ``format_option_id``, else its ``format_kind``; it is not shown as a named format,
+    because the projection runs v1 -> v2 only. A legacy-only contract shows its ids.
+    """
+    from src.core.format_resolver import format_ref_id
+
+    if contract.format_options:
+        return [
+            str(
+                declaration.get("display_name")
+                or declaration.get("format_option_id")
+                or declaration.get("format_kind")
+                or "unknown"
+            )
+            for declaration in contract.format_options
+        ]
+    return [format_ref_id(ref) or "unknown" for ref in contract.format_ids]
 
 
 def _format_id_to_display_name(format_id: str) -> str:
@@ -198,7 +326,7 @@ def get_creative_formats(
 
         formats_list.append(format_dict)
 
-    # Sort by name (type field was removed from Format in adcp 3.12)
+    # Sort by name (type field was removed from Format in the pinned SDK)
     formats_list.sort(key=lambda x: x["name"])
 
     logger.info(f"get_creative_formats: Returning {len(formats_list)} formatted formats")
@@ -495,54 +623,11 @@ def list_products(tenant_id):
                 # Use helper function to get pricing options (handles legacy fallback)
                 pricing_options_list = get_product_pricing_options(product)
 
-                # Parse formats and resolve names from creative agents
-                formats_data = (
-                    product.format_ids
-                    if isinstance(product.format_ids, list)
-                    else json.loads(product.format_ids)
-                    if product.format_ids
-                    else []
-                )
-
-                # Debug: Log raw formats data
-                logger.info(
-                    f"[DEBUG] Product {product.product_id} raw product.format_ids from DB: {product.format_ids}"
-                )
-                logger.info(f"[DEBUG] Product {product.product_id} formats_data after parsing: {formats_data}")
-                logger.info(
-                    f"[DEBUG] Product {product.product_id} formats_data type: {type(formats_data)}, len: {len(formats_data)}"
-                )
-
-                # Display format IDs (like inventory profiles does)
-                # Don't resolve names during page rendering to avoid async issues
-                resolved_formats = []
-
-                for fmt in formats_data:
-                    format_id = None
-
-                    if isinstance(fmt, dict):
-                        # Database JSONB: uses "id" per AdCP spec
-                        format_id = fmt.get("id") or fmt.get("format_id")  # "id" is AdCP spec, "format_id" is legacy
-                    elif isinstance(fmt, BaseModel):
-                        # Pydantic object: uses "format_id" attribute (serializes to "id" in JSON)
-                        format_id = getattr(fmt, "format_id", None) or getattr(fmt, "id", None)
-                    elif isinstance(fmt, str):
-                        # Legacy: plain string format ID
-                        format_id = fmt
-                    else:
-                        logger.warning(f"Product {product.product_id} has unexpected format type {type(fmt)}: {fmt}")
-                        continue
-
-                    # Validate format_id
-                    if format_id:
-                        resolved_formats.append({"format_id": format_id, "name": format_id})
-
-                logger.info(f"[DEBUG] Product {product.product_id} resolved {len(resolved_formats)} formats")
-                if formats_data and not resolved_formats:
-                    logger.error(
-                        f"[DEBUG] Product {product.product_id} ERROR: Had {len(formats_data)} formats but resolved 0! "
-                        f"This means format resolution failed."
-                    )
+                # What the product is announced with: its canonical declarations, or the
+                # legacy arm of a product that has none (salesagent-gi2du).
+                resolved_formats = [
+                    {"format_id": label, "name": label} for label in _format_labels(product.format_contract)
+                ]
 
                 # Get inventory profile info if product uses one
                 inventory_profile_dict = None
@@ -747,61 +832,54 @@ def add_product(tenant_id):
                 return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
 
             with get_db_session() as db_session:
-                # Parse formats - expecting JSON string with FormatReference objects
-                # Supports both legacy format {agent_url, format_id} and new parameterized format
-                # {agent_url, id, width?, height?, duration_ms?}
-                formats_json = form_data.get("formats", "[]") or "[]"
-                formats = []
+                # format_ids IS NOT AUTHORED HERE. The pin deprecates it in AdCP 3.2,
+                # removes it in 4.0, and says outright "Do not author a new product from
+                # format_ids alone"; this epic's charter keeps format_id an INPUT only. So
+                # a product created here carries NO legacy arm and must author the
+                # canonical one, which `_refuse_a_product_with_no_format_arm` now enforces
+                # by reducing to exactly that. The column still EXISTS and existing rows
+                # keep their value -- not authored is not the same as dropped, and
+                # dropping it would be a migration this stage does not imply.
+
+                # The inventory profile, resolved FIRST because it decides the product's
+                # format contract: a linked profile supplies the declarations
+                # (``Product.format_contract``), so whether this product still has to author
+                # its own cannot be answered without it.
+                profile = None
+                inventory_profile_id = form_data.get("inventory_profile_id", "").strip()
+                if inventory_profile_id:
+                    try:
+                        profile_id = int(inventory_profile_id)
+                    except (ValueError, TypeError):
+                        flash("Invalid inventory profile ID", "error")
+                        return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
+                    # SECURITY: Verify profile belongs to this tenant
+                    from src.core.database.models import InventoryProfile
+
+                    profile = db_session.scalars(select(InventoryProfile).filter_by(id=profile_id)).first()
+                    if not profile or profile.tenant_id != tenant_id:
+                        flash(
+                            "Invalid inventory profile - profile not found or does not belong to this tenant",
+                            "error",
+                        )
+                        return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
+
+                # Parse the CANONICAL arm the pin tells new products to author, and refuse
+                # only the state the anyOf actually refuses: neither arm -- read off the
+                # contract the product will be SERVED, so a product linked to a profile
+                # that declares formats is not made to author declarations its profile
+                # then overrides.
                 try:
-                    formats_parsed = json.loads(formats_json)
-                    if isinstance(formats_parsed, list) and formats_parsed:
-                        # Validate formats against creative agent registry
-                        from src.core.creative_agent_registry import get_creative_agent_registry
-
-                        try:
-                            registry = get_creative_agent_registry()
-                            result = asyncio.run(registry.list_all_formats_with_errors(tenant_id=tenant_id))
-
-                            if result.errors and not result.formats:
-                                # Agent unreachable — graceful degradation
-                                logger.warning(
-                                    f"Creative agent errors ({len(result.errors)}), "
-                                    f"saving formats without validation: {result.errors[0].message}"
-                                )
-                                formats.extend(_parse_format_entries(formats_parsed))
-                                flash(
-                                    "Format validation unavailable (creative agent unreachable). "
-                                    "Formats will be verified when creating media buys.",
-                                    "warning",
-                                )
-                            else:
-                                # Agent reachable — validate format IDs
-                                valid_format_ids = {fmt.format_id.id for fmt in result.formats}
-
-                                all_entries = _parse_format_entries(formats_parsed)
-                                invalid_formats = [e["id"] for e in all_entries if e["id"] not in valid_format_ids]
-                                formats.extend(e for e in all_entries if e["id"] in valid_format_ids)
-
-                                if invalid_formats:
-                                    flash(
-                                        f"Invalid format IDs: {', '.join(invalid_formats)}. "
-                                        f"These formats do not exist in the creative agent.",
-                                        "error",
-                                    )
-                                    return _render_add_product_form(
-                                        tenant_id, tenant, adapter_type, currencies, form_data
-                                    )
-
-                                logger.info(f"Validated {len(formats)} formats for new product")
-
-                        except Exception as e:
-                            logger.error(f"Failed to validate formats: {e}")
-                            flash("Unable to validate formats. Please try again.", "error")
-                            return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
-
-                except json.JSONDecodeError as e:
-                    logger.error(f"Invalid JSON in formats field: {e}")
-                    flash("Invalid format data submitted. Please try again.", "error")
+                    format_options = _parse_authored_format_options(
+                        form_data.get("format_options"), PublisherCatalog.of(tenant)
+                    )
+                    # ``None`` for the legacy arm, literally: a product created here HAS no
+                    # legacy arm, and its canonical declarations come from the product or
+                    # its profile, never from a legacy-only profile's ``format_ids``.
+                    contract = linked_format_contract(profile=profile, format_options=format_options, format_ids=None)
+                    _refuse_a_product_with_no_format_arm(None, contract.format_options)
+                except ValueError as e:
+                    flash(str(e), "error")
                     return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
 
                 # Parse countries - from multi-select
@@ -837,7 +915,13 @@ def add_product(tenant_id):
                 if adapter_type == "google_ad_manager":
                     # Parse GAM-specific fields from unified form
                     gam_config_service = GAMProductConfigService()
-                    base_config = gam_config_service.generate_default_config(delivery_type, formats)
+                    # ``None`` for the legacy arm: a product created here has none. The
+                    # seeder takes ``format_options`` so it can derive its placeholder from
+                    # the canonical declarations (cd0d9921f) the product will be served --
+                    # its profile's when it links one.
+                    base_config = gam_config_service.generate_default_config(
+                        delivery_type, None, format_options=contract.format_options
+                    )
 
                     # Add ad unit/placement targeting if provided
                     ad_unit_ids = form_data.get("targeted_ad_unit_ids", "").strip()
@@ -925,7 +1009,14 @@ def add_product(tenant_id):
                 else:
                     # For other adapters, use simple config
                     gam_config_service = GAMProductConfigService()
-                    implementation_config = gam_config_service.generate_default_config(delivery_type, formats)
+                    # ``None`` for the legacy arm, because a product created here has no
+                    # legacy arm to hand over. ``generate_default_config`` declares
+                    # ``formats`` optional and takes ``format_options`` precisely so the
+                    # seeder can derive its sizes from the canonical declarations
+                    # (cd0d9921f) the product will be served -- its profile's when it links one.
+                    implementation_config = gam_config_service.generate_default_config(
+                        delivery_type, None, format_options=contract.format_options
+                    )
 
                 # Parse targeting template from form (includes custom targeting key-value pairs)
                 targeting_template_json = form_data.get("targeting_template", "{}")
@@ -956,39 +1047,28 @@ def add_product(tenant_id):
                     "tenant_id": tenant_id,
                     "name": form_data["name"],
                     "description": form_data.get("description", ""),
-                    "format_ids": formats,  # Fixed: was "formats", should be "format_ids"
+                    # The two arms of core/product.json's root anyOf, each recorded as
+                    # authored. NULL rather than [] for an arm the operator did not
+                    # author: the column is nullable precisely so an unauthored arm is
+                    # absent rather than present-and-empty.
+                    "format_options": format_options,
                     "delivery_type": delivery_type,
                     "targeting_template": targeting_template,
                     "implementation_config": implementation_config,
                 }
 
-                # Handle inventory profile association (optional)
-                # Check for inventory_profile_id directly (no need for inventory_mode radio button)
-                inventory_profile_id = form_data.get("inventory_profile_id", "").strip()
-                if inventory_profile_id:
-                    try:
-                        profile_id = int(inventory_profile_id)
-                        # SECURITY: Verify profile belongs to this tenant
-                        from src.core.database.models import InventoryProfile
-
-                        profile_stmt = select(InventoryProfile).filter_by(id=profile_id)
-                        profile = db_session.scalars(profile_stmt).first()
-                        if not profile or profile.tenant_id != tenant_id:
-                            flash(
-                                "Invalid inventory profile - profile not found or does not belong to this tenant",
-                                "error",
-                            )
-                            return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
-                        product_kwargs["inventory_profile_id"] = profile_id
-                    except (ValueError, TypeError):
-                        flash("Invalid inventory profile ID", "error")
-                        return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
+                # Inventory profile association (optional), resolved and checked above. The
+                # relationship too, so ``Product.format_contract`` reads the profile before the
+                # row is flushed.
+                if profile is not None:
+                    product_kwargs["inventory_profile_id"] = profile.id
+                    product_kwargs["inventory_profile"] = profile
 
                 # Only add countries if explicitly set
                 if countries is not None:
                     product_kwargs["countries"] = countries
 
-                # Handle channels field (AdCP 2.5 - advertising channels)
+                # Handle channels field (advertising channels)
                 channels = request.form.getlist("channels")
                 if channels:
                     product_kwargs["channels"] = channels
@@ -1096,7 +1176,7 @@ def add_product(tenant_id):
                             )
                             return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
 
-                    # Build AdCP 2.13.0 discriminated union format
+                    # Build discriminated union format
                     publisher_properties = []
                     for domain, tags in tags_by_domain.items():
                         publisher_properties.append(
@@ -1140,7 +1220,7 @@ def add_product(tenant_id):
                     for prop in properties:
                         properties_by_domain[prop.publisher_domain].append(prop.property_id)
 
-                    # Build AdCP 2.13.0 discriminated union format
+                    # Build discriminated union format
                     publisher_properties = []
                     for domain, prop_ids in properties_by_domain.items():
                         publisher_properties.append(
@@ -1255,6 +1335,16 @@ def add_product(tenant_id):
                 # Create product with correct fields matching the Product model
                 product = Product(**product_kwargs)
                 db_session.add(product)
+                # The contract the product is SERVED, whichever arm supplies it: a linked
+                # profile announces its declarations on the product's behalf, and those were
+                # checked against the catalog when the profile was authored, not since.
+                try:
+                    PublisherCatalog.of(tenant).refuse_unresolved(product.format_contract.format_options)
+                    refuse_outside_common_intersection(product)
+                except ValueError as e:
+                    db_session.rollback()
+                    flash(str(e), "error")
+                    return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
                 db_session.flush()  # Flush to get product ID before creating pricing options
 
                 # Create pricing options (already parsed above)
@@ -1315,10 +1405,18 @@ def add_product(tenant_id):
                 # Redirect to products list
                 return redirect(url_for("products.list_products", tenant_id=tenant_id))
 
-        except Exception as e:
-            logger.error(f"Error creating product: {e}", exc_info=True)
-            flash(f"Error creating product: {str(e)}", "error")
-            return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
+        except HTTPException:
+            # Werkzeug's own control flow, not a failure to report -- see the twin handler at
+            # the end of ``edit_product`` for why this is re-raised rather than rendered.
+            raise
+        except Exception:
+            # Says nothing to the operator about their input, for the same reason as
+            # ``edit_product``'s handler: every failure this function CAN act on is caught by
+            # one of its eight typed handlers, which re-render the form with a message. An
+            # exception arriving here is a defect in this code or an outage beneath it, and
+            # flashing ``str(e)`` asserted that the operator caused it.
+            logger.error(f"Unhandled error creating product for tenant {tenant_id}", exc_info=True)
+            abort(500)
 
     # GET request - show adapter-specific form (use helper with no form_data)
     return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data=None)
@@ -1349,71 +1447,27 @@ def edit_product(tenant_id, product_id):
         if not currencies:
             currencies = ["USD"]
 
-    # Pre-validate formats BEFORE opening database session to avoid session conflicts
-    validated_formats = None
+    # The canonical arm, parsed in the same pre-session window and for the same reason.
+    # Presence of the KEY is the operator's intent: the editor is always submitted, so a
+    # blank one clears the arm, while a POST that omits the field entirely leaves the
+    # stored declaration alone.
+    format_options_submitted = "format_options" in request.form
+    authored_format_options = None
     if request.method == "POST":
-        # Parse formats - expecting JSON string with FormatReference objects
-        # Supports both legacy format {agent_url, format_id} and new parameterized format
-        # {agent_url, id, width?, height?, duration_ms?}
-        formats_json = request.form.get("formats", "[]") or "[]"
-        try:
-            formats_parsed = json.loads(formats_json)
-            if isinstance(formats_parsed, list) and formats_parsed:
-                # Validate formats against creative agent registry
-                from src.core.creative_agent_registry import get_creative_agent_registry
+        if format_options_submitted:
+            try:
+                authored_format_options = _parse_authored_format_options(
+                    request.form.get("format_options"), PublisherCatalog.of(tenant)
+                )
+            except ValueError as e:
+                flash(str(e), "error")
+                return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
 
-                try:
-                    registry = get_creative_agent_registry()
-                    result = asyncio.run(registry.list_all_formats_with_errors(tenant_id=tenant_id))
-
-                    validated_formats = []
-
-                    if result.errors and not result.formats:
-                        # Agent unreachable — graceful degradation
-                        logger.warning(
-                            f"Creative agent errors ({len(result.errors)}), "
-                            f"saving formats without validation: {result.errors[0].message}"
-                        )
-                        validated_formats = _parse_format_entries(formats_parsed)
-                        flash(
-                            "Format validation unavailable (creative agent unreachable). "
-                            "Formats will be verified when creating media buys.",
-                            "warning",
-                        )
-                    else:
-                        # Agent reachable — validate format IDs
-                        valid_format_ids = {fmt.format_id.id for fmt in result.formats}
-
-                        all_entries = _parse_format_entries(formats_parsed)
-                        invalid_formats = [e["id"] for e in all_entries if e["id"] not in valid_format_ids]
-                        validated_formats.extend(e for e in all_entries if e["id"] in valid_format_ids)
-
-                        if invalid_formats:
-                            flash(
-                                f"Invalid format IDs: {', '.join(invalid_formats)}. "
-                                f"These formats do not exist in the creative agent.",
-                                "error",
-                            )
-                            return redirect(
-                                url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id)
-                            )
-
-                    logger.info(f"Validated {len(validated_formats)} formats for product {product_id}")
-
-                except Exception as e:
-                    # Unexpected error - fail hard
-                    logger.error(f"Failed to validate formats: {e}")
-                    flash("Unable to validate formats. Please try again.", "error")
-                    return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
-
-        except json.JSONDecodeError as e:
-            logger.error(f"Invalid JSON in formats field: {e}")
-            flash("Invalid format data submitted. Please try again.", "error")
-            return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
-
-        if validated_formats is not None and not validated_formats:
-            flash("No valid formats selected", "error")
-            return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
+        # The "No valid formats selected" refusal that used to stand here was a per-arm
+        # check: an empty legacy arm is only an error when the canonical arm is empty too,
+        # which is what _refuse_a_product_with_no_format_arm says. It cannot be decided
+        # here -- an edit that submits one arm leaves the other at its stored value -- so
+        # the anyOf is checked below, once both arms carry their post-edit values.
 
     try:
         with get_db_session() as db_session:
@@ -1449,22 +1503,44 @@ def edit_product(tenant_id, product_id):
                             return redirect(
                                 url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id)
                             )
+                        # The relationship too, so ``Product.format_contract`` reads the new link
+                        # before the row is flushed.
                         product.inventory_profile_id = profile_id
+                        product.inventory_profile = profile
                     except (ValueError, TypeError):
                         flash("Invalid inventory profile ID", "error")
                         return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
                 else:
                     # No profile selected - clear inventory profile association
                     product.inventory_profile_id = None
+                    product.inventory_profile = None
 
-                # Apply validated formats (already validated above, outside session)
-                if validated_formats is not None:
-                    product.format_ids = validated_formats
-                    logger.info(f"[DEBUG] Updated product.format_ids to: {validated_formats}")
-                    # Flag JSONB column as modified so SQLAlchemy generates UPDATE
+                # Apply the canonical arm (validated above, outside the session).
+                #
+                # format_ids is not authored here. A legacy-only product keeps it as stored, so
+                # an edit cannot drop its only format declaration; once the product authors
+                # canonical declarations the stored column is retired, because its legacy arm
+                # is then derived from them (`Product.format_contract`) and a column kept
+                # beside them would be the "second authored catalog" canonical-formats.mdx's
+                # producer rules forbid.
+                if format_options_submitted:
+                    product.format_options = authored_format_options
+                    if authored_format_options:
+                        product.format_ids = None
                     from sqlalchemy.orm import attributes
 
-                    attributes.flag_modified(product, "format_ids")
+                    attributes.flag_modified(product, "format_options")
+
+                # The anyOf, and the served contract's own-namespace options, now that both arms
+                # and the profile link carry their post-edit values: the contract the product
+                # will be served, so a linked profile's declarations count.
+                try:
+                    contract = product.format_contract
+                    _refuse_a_product_with_no_format_arm(list(contract.format_ids), contract.format_options)
+                    PublisherCatalog.of(tenant).refuse_unresolved(contract.format_options)
+                except ValueError as e:
+                    flash(str(e), "error")
+                    return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
 
                 # Parse countries - from multi-select
                 countries_list = request.form.getlist("countries")
@@ -1479,7 +1555,7 @@ def edit_product(tenant_id, product_id):
 
                     attributes.flag_modified(product, "countries")
 
-                # Handle channels field (AdCP 2.5 - advertising channels)
+                # Handle channels field (advertising channels)
                 from sqlalchemy.orm import attributes
 
                 channels = request.form.getlist("channels")
@@ -1603,31 +1679,19 @@ def edit_product(tenant_id, product_id):
                             product.property_ids = None
                             attributes.flag_modified(product, "properties")
 
-                # Get pricing based on line item type (GAM form) or delivery type (other adapters)
-                line_item_type = form_data.get("line_item_type")
-
-                if line_item_type:
-                    # GAM form: map line item type to delivery type
-                    if line_item_type in ["STANDARD", "SPONSORSHIP"]:
-                        product.delivery_type = "guaranteed"
-                    elif line_item_type in ["PRICE_PRIORITY", "HOUSE"]:
-                        product.delivery_type = "non_guaranteed"
-
-                # Update implementation_config with GAM-specific fields
-                # Note: This must run even if line_item_type is not present (automatic mode)
+                # No ``line_item_type`` is read here. The GAM form does not submit one -- no
+                # template in this repository declares a field by that name -- so the branches
+                # that used to hang off it could not execute, and one of them had carried a
+                # NameError for its whole life behind that unsatisfiable guard.
+                #
+                # Two gaps the deletion makes visible are tracked rather than papered over, and
+                # both predate it: this path never recomputes ``product.delivery_type`` from the
+                # pricing options it replaces below, and an edit that changes the product's
+                # format declarations leaves the seeded ``creative_placeholders`` stale. A
+                # reseed must key on the declarations having changed, never on a GAM form field.
                 if adapter_type == "google_ad_manager":
-                    from src.services.gam_product_config_service import GAMProductConfigService
-
                     # Start with existing config to preserve fields not in the form
                     base_config = product.implementation_config.copy() if product.implementation_config else {}
-
-                    # Only regenerate default config if we have line_item_type (explicit mode)
-                    # Otherwise, preserve existing config structure
-                    if line_item_type:
-                        gam_config_service = GAMProductConfigService()
-                        default_config = gam_config_service.generate_default_config(product.delivery_type, formats)
-                        # Merge default config into base_config (preserving other fields)
-                        base_config.update(default_config)
 
                     # Add ad unit/placement targeting if provided
                     ad_unit_ids = form_data.get("targeted_ad_unit_ids", "").strip()
@@ -1658,11 +1722,12 @@ def edit_product(tenant_id, product_id):
 
                     base_config["include_descendants"] = form_data.get("include_descendants") == "on"
 
-                    # Add GAM settings
-                    if form_data.get("line_item_type"):
-                        base_config["line_item_type"] = form_data["line_item_type"]
-                    if form_data.get("priority"):
-                        base_config["priority"] = int(form_data["priority"])
+                    # ``line_item_type`` and ``priority`` were written here from the form. They
+                    # were the only fields this handler read that no template submits, so
+                    # neither could ever be set. No other surface sets them either: the form
+                    # parser that reads both, ``GAMProductConfigService.parse_form_config``, has
+                    # no callers at all. An operator who needs to change them edits the stored
+                    # config directly.
 
                     # Parse targeting template from form (includes custom targeting key-value pairs)
                     targeting_template_json = form_data.get("targeting_template", "{}")
@@ -1866,6 +1931,14 @@ def edit_product(tenant_id, product_id):
                     else:
                         logger.info("[DEBUG] format_ids attribute NOT modified (flag_modified may be needed)")
 
+                # Asked here, not with the anyOf above: the publisher properties it reads are
+                # written after that check.
+                try:
+                    refuse_outside_common_intersection(product)
+                except ValueError as e:
+                    flash(str(e), "error")
+                    return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
+
                 db_session.commit()
 
                 # Debug: Verify formats after commit by re-querying
@@ -1944,6 +2017,9 @@ def edit_product(tenant_id, product_id):
                     if product.format_ids
                     else []
                 ),
+                # The canonical arm, read back as the stored document so the editor shows
+                # what the row actually declares rather than a rendering of it.
+                "format_options": product.format_options,
                 "countries": (
                     product.countries
                     if isinstance(product.countries, list)
@@ -1959,7 +2035,7 @@ def edit_product(tenant_id, product_id):
                 "product_card_detailed": product.product_card_detailed,
                 "placements": product.placements,
                 "reporting_capabilities": product.reporting_capabilities,
-                # AdCP 2.5 fields
+                # Advertising channels
                 "channels": product.channels or [],
                 # Principal access control
                 "allowed_principal_ids": product.allowed_principal_ids or [],
@@ -2001,36 +2077,6 @@ def edit_product(tenant_id, product_id):
                 )
                 inventory_synced = inventory_count > 0
 
-                # Build set of selected format IDs for template checking
-                # Use composite key (agent_url, format_id) tuples per AdCP spec (same as main.py)
-                selected_format_ids = set()
-                logger.info(
-                    f"[DEBUG] Building selected_format_ids from product_dict['formats']: {product_dict['formats']}"
-                )
-                for fmt in product_dict["formats"]:
-                    agent_url = None
-                    format_id = None
-
-                    if isinstance(fmt, dict):
-                        # Database JSONB: uses "id" per AdCP spec
-                        agent_url = fmt.get("agent_url")
-                        format_id = fmt.get("id") or fmt.get("format_id")  # "id" is AdCP spec, "format_id" is legacy
-                        logger.info(f"[DEBUG] Dict format: agent_url={agent_url}, format_id={format_id}")
-                    elif isinstance(fmt, BaseModel):
-                        # Pydantic object: uses "format_id" attribute (serializes to "id" in JSON)
-                        agent_url = getattr(fmt, "agent_url", None)
-                        format_id = getattr(fmt, "format_id", None) or getattr(fmt, "id", None)
-                        logger.info(f"[DEBUG] Pydantic format: agent_url={agent_url}, format_id={format_id}")
-                    elif isinstance(fmt, str):
-                        # Legacy: plain string format ID (no agent_url) - should be deprecated
-                        format_id = fmt
-                        logger.warning(f"Product {product_dict['product_id']} has legacy string format: {fmt}")
-
-                    if format_id:
-                        selected_format_ids.add((agent_url, format_id))
-
-                logger.info(f"[DEBUG] Final selected_format_ids set: {selected_format_ids}")
-
                 # Fetch assigned inventory for this product
                 from src.core.database.models import ProductInventoryMapping
 
@@ -2070,7 +2116,6 @@ def edit_product(tenant_id, product_id):
                     "add_product_gam.html",
                     tenant_id=tenant_id,
                     product=product_dict,
-                    selected_format_ids=selected_format_ids,
                     inventory_synced=inventory_synced,
                     formats=get_creative_formats(tenant_id=tenant_id),
                     currencies=currencies,
@@ -2094,12 +2139,33 @@ def edit_product(tenant_id, product_id):
                     principals=principals_list,
                     authorized_properties=authorized_properties_list,
                     selected_publisher_properties=selected_publisher_properties,
+                    **_legacy_format_facts(product),
                 )
 
-    except Exception as e:
-        logger.error(f"Error editing product: {e}", exc_info=True)
-        flash(f"Error editing product: {str(e)}", "error")
-        return redirect(url_for("products.list_products", tenant_id=tenant_id))
+    except HTTPException:
+        # Werkzeug's own control flow, not a failure to report. An ``abort()`` reached from
+        # inside this handler used to be caught below and rendered as
+        # "Error editing product: 404 Not Found" behind a 302, losing both its status and its
+        # meaning. ``src/admin/utils/helpers.py`` guards the same way for 403/404.
+        raise
+    except Exception:
+        # NOTHING HERE IS SAID TO THE OPERATOR, and that is the point. This handler reaches
+        # here only for a failure it did not anticipate -- every failure it CAN act on is
+        # caught by one of the seven typed handlers above, which flash the operator a message
+        # about their input and redirect. So an exception arriving here is a defect in this
+        # code or an outage beneath it, and the previous answer -- flashing ``str(e)`` and
+        # redirecting -- made it look like neither: it asserted that the operator's input
+        # caused a NameError, discarded their edit, and returned a 302 that monitoring counts
+        # as a success. That is how the NameError behind the deleted ``line_item_type`` guard
+        # survived unnoticed for the life of that branch.
+        #
+        # The traceback goes to the log, where a diagnostic belongs, and the response is a 500,
+        # which is both honest to the operator and visible to whatever watches status codes.
+        logger.error(
+            f"Unhandled error editing product {product_id} for tenant {tenant_id}",
+            exc_info=True,
+        )
+        abort(500)
 
 
 @products_bp.route("/<product_id>/delete", methods=["DELETE"])

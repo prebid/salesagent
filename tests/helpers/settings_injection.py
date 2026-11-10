@@ -51,6 +51,10 @@ def inject_limits(monkeypatch: pytest.MonkeyPatch, **overrides: Any) -> LimitSet
         The injected ``LimitSettings``, for a caller that wants to read a shipped default
         off it without a second import.
     """
+    # Compose the app first. src.app calls load_settings() when it is imported, which
+    # replaces the settings object, so an injection made before a later first import of it (an
+    # env entered after this call, say) would be discarded.
+    import src.app  # noqa: F401
     import src.core.config as config_module
     from src.core.config import LimitSettings, get_settings
 

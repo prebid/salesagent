@@ -21,9 +21,15 @@ from tests.harness import (
     Transport,
     assert_envelope,
 )
-from tests.helpers.creative_test_helpers import sync_creatives_request
+from tests.helpers.creative_test_helpers import DEFAULT_FORMAT_REFERENCE, sync_creatives_request
 
-DEFAULT_AGENT_URL = "https://creative.test.example.com"
+#: The committed capture's own reference -- the only ``(agent_url, id)`` pair that
+#: resolves through production's two routes (``find_format``'s pair match and
+#: ``is_operator_agent``'s no-dial branch). It replaces a local
+#: ``"https://creative.test.example.com"`` / ``"display_300x250"`` pair, which named a
+#: format no agent serves at an agent no capture carries and only ever worked because
+#: the registry was a stand-in (salesagent-6xtxb).
+DEFAULT_AGENT_URL = DEFAULT_FORMAT_REFERENCE["agent_url"]
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -112,13 +118,13 @@ class TestCreativeIdsScopeFiltering:
                     {
                         "creative_id": "c_included",
                         "name": "Should Be Included",
-                        "format_id": {"id": "display_300x250", "agent_url": DEFAULT_AGENT_URL},
+                        "format_id": dict(DEFAULT_FORMAT_REFERENCE),
                         "assets": build_assets(image_spec("banner")),
                     },
                     {
                         "creative_id": "c_excluded",
                         "name": "Should Be Excluded",
-                        "format_id": {"id": "display_300x250", "agent_url": DEFAULT_AGENT_URL},
+                        "format_id": dict(DEFAULT_FORMAT_REFERENCE),
                         "assets": build_assets(image_spec("banner")),
                     },
                 ],
@@ -212,7 +218,7 @@ class TestSyncCreativesRESTRoute:
                     {
                         "creative_id": "c_rest_sync_test",
                         "name": "REST Sync Test Creative",
-                        "format_id": {"id": "display_300x250", "agent_url": DEFAULT_AGENT_URL},
+                        "format_id": dict(DEFAULT_FORMAT_REFERENCE),
                         # `assets` is the AdCP 3.1.1 spelling; `media_url` is not a Creative
                         # field in the pinned schema and never was one this route implemented.
                         # It reached _impl only because the hand-written REST body typed

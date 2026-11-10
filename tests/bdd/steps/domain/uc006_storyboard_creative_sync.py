@@ -28,30 +28,45 @@ Reuses the private helpers already established in uc006_sync_creatives.py
 (``_ensure_tenant_principal``, ``_build_creative_payload``,
 ``_setup_product_with_creative_policy``, ``_action_str``,
 ``when_sync_creative``) rather than re-deriving creative-payload/dispatch
-logic — the same cross-file private-import precedent
-``uc005_format_id_roundtrip.py`` uses against ``uc005_format_id_shape.py``.
+logic.
 """
 
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import pytest
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import is_e2e, payload_or_none, wire_dict
+from tests.bdd.steps._outcome_helpers import (
+    assert_listed_on_canonical_kind,
+    assert_sync_entry_refused_and_not_stored,
+    is_e2e,
+    payload_or_none,
+    stored_creative_column,
+    wire_dict,
+)
 from tests.bdd.steps.domain.uc006_sync_creatives import (
     _action_str,
     _build_creative_payload,
     _creative_format_id_entry,
+    _e2e_unique_id,
     _product_format_entry,
     _setup_product_with_creative_policy,
+    latest_creative_id,
     when_sync_creative,
 )
 from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal
-from tests.bdd.steps.generic._dispatch import gate_and_record
-from tests.factories.creative_asset import build_assets, image_spec, text_spec, url_spec, video_spec
-from tests.factories.request import CreativeAssetRequestFactory
+from tests.bdd.steps.generic._dispatch import dispatch_via_client
+from tests.factories.creative import format_option_ref_for_scope
+from tests.factories.creative_asset import (
+    build_assets,
+    canonical_assets,
+    named_format_assets,
+    url_spec,
+)
+from tests.factories.request import OMIT, CreativeAssetRequestFactory
 
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — provenance structural-rejection scenarios
@@ -94,7 +109,7 @@ def given_creative_provenance_omits_digital_source_type(ctx: dict) -> None:
     """Provenance dict present but missing digital_source_type.
 
     ``digital_source_type`` is optional on the wire-level Provenance model
-    (``adcp.types.generated_poc.core.provenance.Provenance`` — the type
+    (``adcp.types.domains.core.provenance.Provenance`` — the type
     actually bound to ``CreativeAsset.provenance``), so this dict is
     otherwise fully valid: sent as a raw dict rather than a constructed
     ``Provenance`` model so the wire payload genuinely represents "the buyer
@@ -137,7 +152,7 @@ def given_creative_submission_previously_failed(ctx: dict) -> None:
 def given_creative_resubmits_corrected(ctx: dict) -> None:
     """Build a creative payload with a complete, valid provenance object.
 
-    Shape matches ``adcp.types.generated_poc.core.provenance.Provenance``
+    Shape matches ``adcp.types.domains.core.provenance.Provenance``
     (the type bound to ``CreativeAsset.provenance``): ``disclosure`` is a
     ``Disclosure`` object (``{"required": bool}``), ``human_oversight`` is
     one of the ``HumanOversight`` enum values, and ``verification`` is a
@@ -175,55 +190,61 @@ def given_three_creatives_three_formats(ctx: dict) -> None:
     """Build three creative payloads (display/video/native) for one sync_creatives call.
 
     CreativeSyncEnv's mocked registry (``get_format``) returns a fixed truthy
-    format spec regardless of the requested format_id/agent_url, so distinct
-    format_ids resolve without per-format mock wiring — the scenario exercises
+    format spec regardless of the requested format_id/agent_url, so the EXISTENCE
+    check passes without per-format mock wiring — the scenario exercises
     "one call, three creatives, three per-creative results", not per-format
     catalog behavior (that is UC-005's concern).
+
+    THE PROJECTION IS A SECOND QUESTION and ``get_format`` is not on its path. The
+    canonical kind comes from ``find_format(all_formats, ...)``, which this env once
+    answered with ``[]`` -- so ``native_content``, which the reference agent SERVES and
+    no registry glob matches, had no canonical projection and was refused. The env now
+    serves the capture in process by default, which is what the e2e server does, so the
+    four transports resolve these three ids the same way with nothing to arrange here.
     """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
     display = _creative_format_id_entry(ctx, env)
-    agent_url = display["agent_url"]
     # The video and native formats must be ones the transport's agent SERVES: on
     # e2e_rest the real reference agent (v3.1.1 catalog, mirrored by the SDK's
     # v1-reference-formats.json) answers, and an unserved id is a failed entry with no
     # status -- which would grade the catalog, not the per-creative status. Their asset
     # slots are the catalog's required ones for the same reason.
-    if is_e2e(ctx):
-        video_id, native_id = "video_standard_30s", "native_standard"
-        video_assets = build_assets(video_spec("video_file", url="https://example.com/video.mp4"))
-        native_assets = build_assets(
-            text_spec("title", content="Discover something new"),
-            text_spec("description", content="A native placement"),
-            image_spec("main_image", url="https://example.com/native.png"),
-            text_spec("cta_text", content="Learn more"),
-            text_spec("sponsored_by", content="Acme"),
-        )
-    else:
-        video_id, native_id = "video_30s", "native_content"
-        video_assets = build_assets(video_spec("video", url="https://example.com/video.mp4"))
-        native_assets = build_assets(
-            text_spec("headline", content="Discover something new"),
-            image_spec("main_image", url="https://example.com/native.png"),
-        )
+    # VIDEO IS NOT FORKED. The env serves the in-process transports the same
+    # committed capture the e2e server reads, so the rule this
+    # docstring states -- name a format the agent SERVES -- now has one answer for all
+    # four. The in-process half named ``video_30s``, which the capture does
+    # not carry, so production refused it with AdCPFormatNotFoundError and the entry came
+    # back action="failed" with no status: 3 regressed nodeids [a2a, mcp, rest] in box run
+    # innet_181026_0202. ``video_file`` is the capture's one required slot for this format.
+    # Every creative carries the assets its named format requires (``named_format_assets``):
+    # the seller holds a legacy manifest to them, so a missing one fails the entry and the
+    # scenario would grade the manifest, not the per-creative status.
+    video_id = "video_standard_30s"
+    video_assets = named_format_assets(video_id, media_url="https://example.com/video.mp4")
+    native_id = "native_standard" if is_e2e(ctx) else "native_content"
+    native_assets = named_format_assets(native_id, media_url="https://example.com/native.png")
 
+    # Each format is named at the agent the env says publishes it, the display one included
+    # (``_creative_format_id_entry`` asks the same question): on e2e that is the tenant's
+    # hosted agent, which publishes only the formats it is asked for.
     creatives = [
         CreativeAssetRequestFactory.payload(
             creative_id="creative-bulk-display-001",
             name="Bulk Display Creative",
             format_id=display,
-            assets=build_assets(image_spec("banner_image", url="https://example.com/banner.png")),
+            assets=named_format_assets(display["id"], media_url="https://example.com/banner.png"),
         ),
         CreativeAssetRequestFactory.payload(
             creative_id="creative-bulk-video-001",
             name="Bulk Video Creative",
-            format_id={"id": video_id, "agent_url": agent_url},
+            format_id={"id": video_id, "agent_url": env.catalog_agent_url(video_id)},
             assets=video_assets,
         ),
         CreativeAssetRequestFactory.payload(
             creative_id="creative-bulk-native-001",
             name="Bulk Native Creative",
-            format_id={"id": native_id, "agent_url": agent_url},
+            format_id={"id": native_id, "agent_url": env.catalog_agent_url(native_id)},
             assets=native_assets,
         ),
     ]
@@ -239,10 +260,8 @@ def given_three_creatives_three_formats(ctx: dict) -> None:
 def given_captured_format_id_from_get_products_for_sync(ctx: dict) -> None:
     """Call get_products in-process to capture a real format_id, then send it to sync_creatives.
 
-    Mirrors ``uc005_format_id_roundtrip.given_captured_format_id_from_get_products``
-    (same capture mechanism), but seeds a Product on CreativeSyncEnv's tenant
-    instead of CreativeFormatsEnv's — the two envs are unrelated harnesses so
-    the capture must run against whichever DB/session this scenario's env owns.
+    Seeds the Product on CreativeSyncEnv's tenant, so the capture runs against the
+    DB/session this scenario's env owns.
 
     On e2e_rest, sync_creatives runs against the real Docker creative-agent
     container (no format-registry mock), so the captured format_id must be one
@@ -291,13 +310,9 @@ def when_sync_creative_with_captured_format_id(ctx: dict) -> None:
     ``uc006_sync_creatives._format_payload``'s e2e asset set.
     """
     captured = ctx["captured_format_id"]
-    if is_e2e(ctx):
-        assets = build_assets(
-            image_spec("banner_image", url="https://example.com/banner.png"),
-            url_spec("click_url", url="https://example.com/landing"),
-        )
-    else:
-        assets = build_assets(image_spec("banner_image", url="https://example.com/banner.png"))
+    # What the captured format requires, on every transport: the seller holds a legacy
+    # manifest to its named format's required assets.
+    assets = named_format_assets(captured["id"], media_url="https://example.com/banner.png")
     creative_payload = CreativeAssetRequestFactory.payload(
         creative_id="creative-format-roundtrip-001",
         name="Format ID Roundtrip Creative",
@@ -421,27 +436,19 @@ def then_per_creative_result_reports_action(ctx: dict, action: str) -> None:
     )
 
 
-@then('the per-creative result should report action "created" or "updated"')
+@then('the per-creative result\'s action should be "created" or "updated"')
 def then_per_creative_result_created_or_updated(ctx: dict) -> None:
     """Assert the first per-creative result's action is created or updated.
 
-    A well-formed, spec-compliant resubmission is expected to be accepted.
-    If production instead rejects it, that is a genuine gap worth
-    surfacing rather than masking: xfail with the observed errors instead
-    of a bare assertion failure.
+    The pin's provenance_enforcement accept_with_disclosure step grades exactly this set
+    (``allowed_values: ["created", "updated"]``): a resubmission of a creative_id the
+    seller already recorded is conformantly answered either way.
     """
     first = _first_creative_result(ctx, 'a per-creative result with action="created" or "updated"')
     actual = _action_str(first.action)
-    if actual not in ("created", "updated"):
-        raise AssertionError(
-            f"SPEC-PRODUCTION GAP: expected per-creative action 'created' or 'updated' for a "
-            f"well-formed corrected resubmission, production returned {actual!r} "
-            f"(errors={first.errors!r}) — production's internal Creative.provenance model "
-            "(src/core/schemas/creative.py) is structurally incompatible with the wire-level "
-            "adcp.types Provenance shape it is converted from (disclosure: str vs. a Disclosure "
-            "object, human_oversight: bool vs. an enum, verification: dict vs. a list), so a "
-            "spec-compliant provenance object is unconditionally rejected on internal re-validation."
-        )
+    assert actual in ("created", "updated"), (
+        f"expected per-creative action 'created' or 'updated', production returned {actual!r} (errors={first.errors!r})"
+    )
 
 
 @then('the per-creative result should NOT report action "failed"')
@@ -509,6 +516,25 @@ def then_every_result_exposes_status(ctx: dict) -> None:
     assert not missing, f"per-creative results {missing!r} carry no status"
 
 
+@then("every per-creative result should carry a status exactly when its action is neither failed nor deleted")
+def then_status_present_exactly_when_not_failed_or_deleted(ctx: dict) -> None:
+    """Assert the pin's two-sided status rule on every per-creative result.
+
+    sync-creatives-response.json: status "MUST be omitted when action is failed or
+    deleted". This seller has a review lifecycle, so every other entry carries one. Both
+    directions are checked, so a seller stamping a status on a failed entry fails as surely
+    as one dropping it from a created entry.
+    """
+    resp = _require_response(ctx, "a status on exactly the entries that are neither failed nor deleted")
+    assert resp.creatives, "Expected at least one per-creative result"
+    wrong = [
+        (r.creative_id, _action_str(r.action), r.status)
+        for r in resp.creatives
+        if (r.status is None) != (_action_str(r.action) in ("failed", "deleted"))
+    ]
+    assert not wrong, f"(creative_id, action, status) entries violating the status rule: {wrong!r}"
+
+
 @then(parsers.parse('every action value should be "{a1}", "{a2}", or "{a3}"'))
 def then_every_action_value_in_set(ctx: dict, a1: str, a2: str, a3: str) -> None:
     """Assert every per-creative action is one of the three listed values."""
@@ -525,7 +551,7 @@ def then_every_status_in_creative_status_enum(ctx: dict) -> None:
     sync-creatives-response.json: "Values come from CreativeStatus only (processing,
     pending_review, approved, suspended, rejected, archived) -- never from CreativeAction."
     """
-    from adcp.types.generated_poc.enums.creative_status import CreativeStatus
+    from adcp.types.domains.enums.creative_status import CreativeStatus
 
     resp = _require_response(ctx, "every status drawn from the creative-status enum")
     statuses = [result.status for result in resp.creatives]
@@ -541,6 +567,41 @@ def then_every_status_in_creative_status_enum(ctx: dict) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
+def _listed_back(ctx: dict, creative_id: str) -> dict:
+    """The library entry for *creative_id* exactly as ``list_creatives`` puts it on the wire.
+
+    sync-creatives-response.json carries no format identity per creative, so what a sync
+    STORED is observable to the buyer only through a following ``list_creatives``; this is
+    that read, on the scenario's own transport.
+
+    ``CreativeSyncEnv`` exposes no ``list_creatives`` primitive (its MCP_TOOL /
+    REST_ENDPOINT are sync-only), but ``AdCPTestClient.call`` resolves any tool off the
+    address table on the SAME env, so no second env and no raw repository read is needed.
+
+    A READ-BACK still reaches a transport, so it owes the same two obligations as any other
+    dispatch, and it gets them from ``dispatch_via_client`` like every other one. That entry
+    writes the dispatch-result contract into the ctx it is handed, so the read-back hands it
+    a ctx of its own: the scenario's ``ctx["result"]`` is the one being graded and must not
+    be overwritten by the read.
+    """
+    from tests.harness.client import AdCPTestClient
+
+    read_back: dict = {"client": ctx.get("client") or AdCPTestClient(ctx["env"]), "transport": ctx["transport"]}
+    dispatch_via_client(read_back, "list_creatives", {})
+    listed = read_back["result"]
+    wire = listed.wire_response
+    assert isinstance(wire, dict), (
+        f"list_creatives returned no wire body to read the synced creative back from "
+        f"(error={listed.error!r}); the readback cannot be graded on this transport"
+    )
+    matches = [c for c in (wire.get("creatives") or []) if c.get("creative_id") == creative_id]
+    assert len(matches) == 1, (
+        f"expected creative {creative_id!r} exactly once on the list_creatives wire, found {len(matches)}; "
+        f"wire listed {sorted(c.get('creative_id') or '' for c in wire.get('creatives') or [])!r}"
+    )
+    return matches[0]
+
+
 @then("the seller's own format_id object should roundtrip through sync_creatives without modification")
 def then_format_id_roundtrips_verbatim(ctx: dict) -> None:
     """Assert the creative's format_id roundtrips verbatim — ON THE WIRE first.
@@ -550,19 +611,15 @@ def then_format_id_roundtrips_verbatim(ctx: dict) -> None:
     ``list_creatives`` and compares the wire's ``format_id`` to the captured
     ``{agent_url, id}``. Grading only the DB row (as this step used to) cannot
     detect a seller that persists the format_id correctly and then serializes it
-    wrong on the wire — which is exactly the roundtrip being graded.
-
-    ``CreativeSyncEnv`` exposes no ``list_creatives`` primitive (its MCP_TOOL /
-    REST_ENDPOINT are sync-only), but ``AdCPTestClient.call`` resolves any tool
-    off the address table on the SAME env, so no second env and no raw repository
-    read is introduced as the primary check.
+    wrong on the wire — which is exactly the roundtrip being graded. The read is
+    :func:`_listed_back`.
 
     The ``CreativeRepository`` read is KEPT, after the wire assertion, as a
     redundant in-process check: if the two ever disagree, the wire is the
     buyer-facing contract and the DB read localizes the fault.
     """
     from src.core.database.repositories.creative import CreativeRepository
-    from tests.harness.client import AdCPTestClient
+    from src.core.schemas import CreativeFormatIdentity
 
     first = _first_creative_result(ctx, "a persisted creative whose format_id roundtrips verbatim")
     captured = ctx["captured_format_id"]
@@ -570,24 +627,7 @@ def then_format_id_roundtrips_verbatim(ctx: dict) -> None:
     env = ctx["env"]
 
     # ── PRIMARY: read the creative back over the wire ──────────────────────
-    client = ctx.get("client") or AdCPTestClient(env)
-    # A READ-BACK still reaches a transport, so it owes the same two obligations as
-    # any other dispatch. It does NOT go through ``dispatch_via_client``: that entry
-    # is the single writer of the ctx dispatch-result contract, and this read-back
-    # must not clobber the result the scenario is actually grading.
-    gate_and_record({})
-    listed = client.call("list_creatives", {}, ctx["transport"])
-    wire = listed.wire_response
-    assert isinstance(wire, dict), (
-        f"list_creatives returned no wire body to verify the roundtrip against "
-        f"(error={listed.error!r}); the roundtrip cannot be graded on this transport"
-    )
-    listed_ids = {c.get("creative_id") for c in (wire.get("creatives") or [])}
-    assert first.creative_id in listed_ids, (
-        f"creative {first.creative_id!r} did not come back on the list_creatives wire; "
-        f"wire listed {sorted(i for i in listed_ids if i)!r}"
-    )
-    entry = next(c for c in wire["creatives"] if c.get("creative_id") == first.creative_id)
+    entry = _listed_back(ctx, first.creative_id)
     # Both halves of the v3.1 federation pair are asserted UNCONDITIONALLY. The
     # agent_url half used to be gated on `if wire_agent_url is not None`, so a wire
     # that dropped agent_url — or flattened format_id back to a bare string —
@@ -612,9 +652,312 @@ def then_format_id_roundtrips_verbatim(ctx: dict) -> None:
     repo = CreativeRepository(session, env._tenant_id)
     db_creative = repo.get_by_id(first.creative_id, env._principal_id)
     assert db_creative is not None, f"Creative {first.creative_id!r} not found in DB after sync"
-    assert db_creative.format == captured["id"], (
-        f"format_id.id did not roundtrip: expected {captured['id']!r}, stored {db_creative.format!r}"
+    # The row keeps the buyer's reference VERBATIM in ``legacy_format_id``; ``assertion`` is
+    # that reference, which is the half this step grades. The canonical comparison key beside
+    # it would answer a different question.
+    stored = CreativeFormatIdentity.from_row(db_creative).assertion
+    assert stored is not None, (
+        f"the synced creative retained no legacy format_id at all: expected {captured!r}, stored nothing"
     )
-    assert db_creative.agent_url == captured["agent_url"], (
-        f"format_id.agent_url did not roundtrip: expected {captured['agent_url']!r}, stored {db_creative.agent_url!r}"
+    assert str(stored.id) == captured["id"], (
+        f"format_id.id did not roundtrip: expected {captured['id']!r}, stored {str(stored.id)!r}"
+    )
+    assert str(stored.agent_url) == captured["agent_url"], (
+        f"format_id.agent_url did not roundtrip: expected {captured['agent_url']!r}, stored {str(stored.agent_url)!r}"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# GIVEN / THEN steps — canonical format identity survives sync
+# (canonical-formats-migration.mdx § Completion checklist: sync and library
+# paths preserve format_kind and format_option_ref)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given(
+    parsers.parse(
+        'the buyer syncs a creative identified by canonical kind "{kind}" with a {scope}-scope format_option_ref'
+    )
+)
+def given_sync_canonical_creative_with_option_ref(ctx: dict, kind: str, scope: str) -> None:
+    """The creative payload the sync will carry: canonical kind, narrowed to one option.
+
+    ``format_id=OMIT`` is what makes it canonical: core/creative-asset.json is a oneOf on
+    the identifier, so the legacy arm has to be ABSENT rather than null. The reference the
+    buyer sends is recorded in ``ctx`` so the readback compares against what was SENT,
+    never against a value recomputed in the Then.
+
+    The assets fill the kind's required slots: a sync that assigns the creative to nothing
+    holds its manifest to the canonical format its kind names (creative-manifests.mdx
+    § Validation), so the factory's default ``image``-keyed asset would be refused for the
+    missing ``image_main`` before the identity this scenario reads back was stored.
+    """
+    _sync_canonical_creative(ctx, kind, scope, assets=canonical_assets(kind))
+
+
+@given(
+    parsers.parse(
+        'the buyer syncs a creative carrying only a tag_url, identified by canonical kind "{kind}" '
+        "with a {scope}-scope format_option_ref"
+    )
+)
+def given_sync_canonical_tag_creative_with_option_ref(ctx: dict, kind: str, scope: str) -> None:
+    """The same canonical claim, whose one asset is the slot ``display_tag`` requires.
+
+    formats/canonical/display_tag.json (v3.2.7) declares one required slot, ``tag_url`` of
+    asset type ``url``. The default payload's image asset satisfies no slot of that kind,
+    and the pinned reference agent refuses a manifest missing a required slot, so the
+    scenario that sends this creative to the agent sends the asset the kind asks for.
+    """
+    _sync_canonical_creative(ctx, kind, scope, assets=build_assets(url_spec("tag_url", url=_TAG_URL)))
+
+
+#: The tag a display_tag creative serves. HTTPS and credential-free, which is what the
+#: reference agent requires of a url-typed slot.
+_TAG_URL = "https://ads.example.com/tag.js"
+
+
+def _sync_canonical_creative(ctx: dict, kind: str, scope: str, **members: Any) -> None:
+    """ONE canonical sync payload: ``format_kind`` plus a *scope* option ref, no format_id key.
+
+    The reference is recorded in ``ctx`` so a readback compares against what was SENT.
+    """
+    reference = format_option_ref_for_scope(scope)
+    ctx["creatives"] = [
+        CreativeAssetRequestFactory.payload(
+            creative_id=_e2e_unique_id("creative_canonical"),
+            format_id=OMIT,
+            format_kind=kind,
+            format_option_ref=reference,
+            **members,
+        )
+    ]
+    ctx["sent_format_option_ref"] = reference
+
+
+@given("the operator's creative agent previews that creative's canonical identity")
+def given_operator_agent_previews_canonical_identity(ctx: dict) -> None:
+    """The creative the scenario will sync is one the operator's creative agent can preview.
+
+    The kind and the option ref are read off the payload a prior Given built, so the
+    agent is configured for exactly the identity that goes on the wire. The env checks
+    the precondition both legs need and, in process, answers only a request that routes
+    that identity canonically (``operator_agent_previews_canonical_identity``).
+    """
+    sent = ctx["creatives"][-1]
+    ctx["env"].operator_agent_previews_canonical_identity(sent["format_kind"], sent.get("format_option_ref"))
+
+
+@given(parsers.parse("the resync narrows the same creative to a {scope}-scope format_option_ref"))
+def given_resync_narrows_option_ref(ctx: dict, scope: str) -> None:
+    """Change only the option the NEXT sync names, on the creative a prior Given synced.
+
+    The kind and every other member stay as stored, so the one difference the resync
+    carries is the format_option_ref -- a different option on the same kind, which is a
+    real identity change and not a respelling.
+    """
+    reference = format_option_ref_for_scope(scope)
+    assert ctx["creatives"][-1].get("format_option_ref") != reference, (
+        "the resync must name a DIFFERENT option than the stored one, or it grades nothing"
+    )
+    ctx["creatives"][-1] = {**ctx["creatives"][-1], "format_option_ref": reference}
+    ctx["sent_format_option_ref"] = reference
+
+
+@then(
+    parsers.parse(
+        'listing the library returns the creative on format_kind "{kind}" with the format_option_ref '
+        "the buyer last sent, scope included"
+    )
+)
+def then_listed_back_with_canonical_identity(ctx: dict, kind: str) -> None:
+    """What the sync STORED, read back over the scenario's own transport.
+
+    sync-creatives-response.json carries no format identity per creative, so the listing is
+    the only place the buyer can observe that the sync preserved it. Three values are
+    compared: the kind, the absence of the legacy arm (the item oneOf makes the two
+    exclusive and this creative was synced on the canonical one), and the whole option
+    reference -- an equality, because ``scope`` is the discriminator a subset check over
+    the members the seller did emit would miss.
+    """
+    entry = _listed_back(ctx, latest_creative_id(ctx))
+    assert_listed_on_canonical_kind(entry, kind, option_ref=ctx["sent_format_option_ref"])
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# GIVEN / THEN steps — representation_selection lineage on sync
+# (creative-manifests.mdx § Libraries and trafficking; representation-sets.mdx
+# § Sync, review, and readback; sync_creatives.mdx, all v3.2.7)
+# ═══════════════════════════════════════════════════════════════════════
+
+#: The pin's own list of what the seller-bound manifest projection drops, quoted from
+#: core/representation-selection.json ``selected_output_digest`` rather than imported from
+#: production: an oracle built from the code it grades agrees with it by construction.
+_PROJECTION_DROPS = frozenset(
+    "$schema, representation_selection, creative_id, revision_id, name, tags, status, weight, "
+    "placement_refs, placement_ids, inputs".split(", ")
+)
+
+#: The pin's worked example (representation-sets.mdx § Seller-bound resolution, v3.2.7): the
+#: paired-redirect manifest and the ``selected_output_digest`` the pin publishes for it. The
+#: oracle below must reproduce it before any scenario trusts a digest it computes.
+_PIN_EXAMPLE_MANIFEST = {
+    "$schema": "https://adcontextprotocol.org/schemas/v3/core/creative-manifest.json",
+    "format_kind": "display_tag",
+    "format_option_ref": {"scope": "product", "format_option_id": "acme_internal_redirect_300x250"},
+    "assets": {
+        "serving_tag": {
+            "asset_type": "display_tag",
+            "delivery_type": "paired_redirect",
+            "ad_request_url": "https://ads.acme-example.com/ad?slot=42",
+            "clickthrough_url": "https://click.acme-example.com/redirect",
+        }
+    },
+}
+_PIN_EXAMPLE_DIGEST = "sha256:02735eb8341dc1c2c25b63d20a0a675577407f7500084a67a6ad71ac1bd0e4c3"
+
+
+def _output_digest(item: dict[str, Any]) -> str:
+    """``selected_output_digest`` of the wire item *item*: SHA-256 over RFC 8785 JCS of its projection."""
+    import hashlib
+
+    import rfc8785
+
+    projection = {key: value for key, value in item.items() if key not in _PROJECTION_DROPS}
+    return f"sha256:{hashlib.sha256(rfc8785.dumps(projection)).hexdigest()}"
+
+
+def _source_digest(revision_id: str) -> str:
+    """A ``revision_content_digest`` for the source set named *revision_id*.
+
+    The complete set never reaches this seller -- "A downstream seller that receives only
+    the selected manifest ... cannot claim it independently inspected hidden source
+    representations" -- so any well-formed value distinct per revision stands in for it.
+    """
+    import hashlib
+
+    return f"sha256:{hashlib.sha256(revision_id.encode()).hexdigest()}"
+
+
+def _send_selection(ctx: dict, *, revision_id: str, representation_id: str) -> None:
+    """Put the lineage on the pending item: its ``revision_id`` and a selection describing it."""
+    item = ctx["creatives"][-1]
+    item["revision_id"] = revision_id
+    item["representation_selection"] = {
+        "creative_id": item["creative_id"],
+        "revision_id": revision_id,
+        "revision_content_digest": _source_digest(revision_id),
+        "selected_representation_id": representation_id,
+        "strategy": "representation_order",
+        "selected_output_digest": _output_digest(item),
+        "resolved_by": "buyer",
+    }
+    ctx["sent_representation_selection"] = item["representation_selection"]
+
+
+@given(
+    parsers.parse('the buyer syncs a creative identified by canonical kind "{kind}" selected from a representation set')
+)
+def given_sync_selected_creative(ctx: dict, kind: str) -> None:
+    """A canonical creative the buyer resolved from a representation set, carrying its lineage.
+
+    The output is an ordinary manifest (the kind's required slots, a product-scope option
+    ref); what makes it a selected output is ``representation_selection`` naming this
+    ``creative_id`` and ``revision_id`` and the digest of exactly these bytes. The digest
+    comes from :func:`_output_digest`, which is first held to the pin's published example.
+    """
+    assert _output_digest(_PIN_EXAMPLE_MANIFEST) == _PIN_EXAMPLE_DIGEST, (
+        "the test's digest oracle does not reproduce the pin's worked example, so no digest it computes can grade"
+    )
+    _sync_canonical_creative(ctx, kind, "product", assets=canonical_assets(kind))
+    _send_selection(ctx, revision_id="rev_launch_1", representation_id="source-hosted")
+
+
+@given(parsers.parse("the creative's representation_selection disagrees with the item on {member}"))
+def given_selection_disagrees(ctx: dict, member: str) -> None:
+    """Make ONE lineage member describe something other than the item that carries it.
+
+    ``creative_id`` and ``revision_id`` must equal the item's (sync_creatives.mdx); the
+    ``selected_output_digest`` must be the digest of the item's own projection, so the
+    disagreeing one is the digest of different output bytes -- the same manifest without
+    its ``format_option_ref``.
+    """
+    item = ctx["creatives"][-1]
+    selection = item["representation_selection"]
+    if member == "creative_id":
+        selection["creative_id"] = f"{item['creative_id']}_other"
+    elif member == "revision_id":
+        selection["revision_id"] = "rev_other"
+    elif member == "selected_output_digest":
+        other_bytes = {key: value for key, value in item.items() if key != "format_option_ref"}
+        selection["selected_output_digest"] = _output_digest(other_bytes)
+    else:
+        raise AssertionError(f"no disagreement is defined for lineage member {member!r}")
+
+
+@given("the resync selects another representation of the same source revision")
+def given_resync_selects_another_representation(ctx: dict) -> None:
+    """A different selected execution, with the source revision and the output bytes unchanged.
+
+    Only ``selected_representation_id`` moves, so the one thing that differs from the stored
+    creative is the execution review fingerprint (representation-sets.mdx § Sync, review,
+    and readback).
+    """
+    stored = ctx["sent_representation_selection"]
+    _send_selection(ctx, revision_id=str(stored["revision_id"]), representation_id="source-alternate")
+    assert ctx["sent_representation_selection"]["selected_output_digest"] == stored["selected_output_digest"]
+
+
+@given("the resync carries a new source revision that selects the same output")
+def given_resync_new_revision_same_output(ctx: dict) -> None:
+    """A new buyer revision of the source set that pins the same execution.
+
+    The ``revision_id`` and its digest move; the selected representation and the output
+    bytes do not, so the execution fingerprint is the stored one.
+    """
+    stored = ctx["sent_representation_selection"]
+    _send_selection(ctx, revision_id="rev_launch_2", representation_id=str(stored["selected_representation_id"]))
+    assert ctx["sent_representation_selection"]["selected_output_digest"] == stored["selected_output_digest"]
+
+
+@then("listing the library returns the creative carrying the representation_selection the buyer last sent")
+def then_listed_with_selection(ctx: dict) -> None:
+    """The lineage read back over the scenario's own transport, as a whole document.
+
+    list-creatives-response.json ``representation_lineage_readback``: "must_equal":
+    "last_accepted_current_representation_selection". Equality, not a subset, because every
+    member is lineage: a seller that kept the first revision, or dropped the strategy,
+    lists a different selection.
+    """
+    entry = _listed_back(ctx, latest_creative_id(ctx))
+    listed = entry.get("representation_selection")
+    assert listed == ctx["sent_representation_selection"], (
+        f"the listed representation_selection is not the one the buyer last sent: "
+        f"{listed!r} != {ctx['sent_representation_selection']!r}"
+    )
+
+
+@then(parsers.parse('the creative is reported failed with {code:w} at "{field}" and nothing is stored'))
+def then_selected_creative_refused(ctx: dict, code: str, field: str) -> None:
+    """The batch entry refused with *code* naming *field*, and the creative not stored."""
+    assert_sync_entry_refused_and_not_stored(ctx, latest_creative_id(ctx), code, field=field)
+
+
+@then("the stored creative carries the preview the operator's creative agent returned")
+def then_stored_with_operator_agent_preview(ctx: dict) -> None:
+    """The seller asked the operator's agent for a preview and kept what it answered.
+
+    Read off the stored row because the preview is not on the wire:
+    sync-creatives-response.json carries ``preview_url`` only for generative formats, and
+    list-creatives-response.json has no preview member. What is graded is that a preview
+    with at least one render was requested AND stored -- not what the render looks like,
+    which is the agent's business. A seller that never previews a creative identified by
+    ``format_kind`` (the gate this scenario exists for) stores no preview at all; one that
+    sends the request without the canonical identity is answered with no previews.
+    """
+    data = stored_creative_column(ctx, latest_creative_id(ctx), "data") or {}
+    previews = (data.get("preview_response") or {}).get("previews") or []
+    assert previews and previews[0].get("renders"), (
+        "the seller stored no preview from the operator's creative agent for a creative identified by "
+        f"format_kind; stored preview_response={data.get('preview_response')!r}"
     )

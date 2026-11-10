@@ -16,6 +16,8 @@ from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import AuthorizedProperty, PropertyTag, Tenant
+from src.core.database.repositories.uow import ProductUoW, TenantConfigUoW
+from src.core.publisher_format_catalog import PublisherCatalog, validated_catalog
 from src.core.schemas import (
     PROPERTY_ERROR_MESSAGES,
     PROPERTY_REQUIRED_FIELDS,
@@ -241,12 +243,6 @@ def _construct_agent_url(tenant_id: str) -> str:
         return tenant.agent_url
 
 
-def _admin_entry_url() -> str:
-    """Use the mounted root or the direct admin entry, both registered views."""
-    endpoint = "core.index" if request.script_root == "/admin" else "core.admin_index"
-    return url_for(endpoint)
-
-
 @authorized_properties_bp.route("/<tenant_id>/authorized-properties")
 @require_tenant_access()
 def list_authorized_properties(tenant_id: str) -> str | Response:
@@ -264,7 +260,7 @@ def list_authorized_properties(tenant_id: str) -> str | Response:
             if not tenant:
                 logger.error(f"Tenant not found: {tenant_id}")
                 flash(PROPERTY_ERROR_MESSAGES["tenant_not_found"], "error")
-                return redirect(_admin_entry_url())
+                return redirect(url_for("core.index"))
 
             logger.info(f"Found tenant: {tenant.name}")
 
@@ -321,7 +317,7 @@ def upload_authorized_properties(tenant_id: str) -> str | Response:
                 tenant = db_session.scalars(stmt).first()
                 if not tenant:
                     flash(PROPERTY_ERROR_MESSAGES["tenant_not_found"], "error")
-                    return redirect(_admin_entry_url())
+                    return redirect(url_for("core.index"))
 
                 # Get existing tags for this tenant
                 tags_stmt = select(PropertyTag).where(PropertyTag.tenant_id == tenant_id)
@@ -378,6 +374,54 @@ def upload_authorized_properties(tenant_id: str) -> str | Response:
 # Manual verification route removed for security - all verification must go through adagents.json checking
 
 
+@authorized_properties_bp.route("/<tenant_id>/authorized-properties/format-catalog", methods=["POST"])
+@log_admin_action("update_publisher_format_catalog")
+@require_tenant_access()
+def update_publisher_format_catalog(tenant_id: str) -> Response:
+    """Author the reusable publisher format options this tenant's adagents.json publishes.
+
+    RFC S3 (src/core/publisher_format_catalog.py). The catalog is published as the
+    ``formats[]`` of the adagents.json served at the tenant's host. A blank editor clears it.
+    A catalog that would withdraw an option a product still names under this seller's own
+    publisher domain is refused, so a stored product never announces a publisher option its
+    own publisher file does not declare.
+    """
+    back = redirect(url_for("authorized_properties.list_authorized_properties", tenant_id=tenant_id))
+    raw = (request.form.get("publisher_format_options") or "").strip()
+    try:
+        # json.JSONDecodeError and pydantic's ValidationError are both ValueErrors.
+        options = validated_catalog(json.loads(raw) if raw else None)
+    except ValueError as e:
+        flash(f"The publisher format catalog was not saved: {e}", "error")
+        return back
+
+    with ProductUoW(tenant_id) as product_uow:
+        assert product_uow.products is not None
+        declarations = [
+            declaration
+            for product in product_uow.products.list_all_with_inventory()
+            for declaration in product.format_contract.format_options or ()
+        ]
+
+    with TenantConfigUoW(tenant_id) as uow:
+        assert uow.tenant_config is not None
+        tenant = uow.tenant_config.get_tenant()
+        if tenant is None:
+            flash(PROPERTY_ERROR_MESSAGES["tenant_not_found"], "error")
+            return redirect(url_for("core.index"))
+        try:
+            PublisherCatalog(publisher_domain=tenant.primary_domain, options=tuple(options or ())).refuse_unresolved(
+                declarations
+            )
+        except ValueError as e:
+            flash(f"The publisher format catalog was not saved: products still reference it. {e}", "error")
+            return back
+        uow.tenant_config.update_tenant(publisher_format_options=options)
+
+    flash("Publisher format catalog saved", "success")
+    return back
+
+
 @authorized_properties_bp.route("/<tenant_id>/authorized-properties/<property_id>/delete", methods=["POST"])
 @log_admin_action("delete_property")
 @require_tenant_access()
@@ -418,7 +462,7 @@ def list_property_tags(tenant_id: str) -> str | Response:
             tenant = db_session.scalars(stmt).first()
             if not tenant:
                 flash("Tenant not found", "error")
-                return redirect(_admin_entry_url())
+                return redirect(url_for("core.index"))
 
             # Ensure 'all_inventory' tag exists (default tag for all properties)
             tag_stmt = select(PropertyTag).where(
@@ -793,7 +837,7 @@ def create_property(tenant_id: str) -> str | Response:
                 tenant = db_session.scalars(stmt).first()
                 if not tenant:
                     flash(PROPERTY_ERROR_MESSAGES["tenant_not_found"], "error")
-                    return redirect(_admin_entry_url())
+                    return redirect(url_for("core.index"))
 
                 # Get existing tags for this tenant
                 tags_stmt = select(PropertyTag).where(PropertyTag.tenant_id == tenant_id)
@@ -866,7 +910,7 @@ def edit_property(tenant_id: str, property_id: str) -> str | Response:
                 tenant = db_session.scalars(stmt).first()
                 if not tenant:
                     flash(PROPERTY_ERROR_MESSAGES["tenant_not_found"], "error")
-                    return redirect(_admin_entry_url())
+                    return redirect(url_for("core.index"))
 
                 # Get the property to edit
                 prop_stmt = select(AuthorizedProperty).where(

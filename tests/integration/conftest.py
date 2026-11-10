@@ -162,7 +162,7 @@ def admin_client(integration_db):
 
 
 @pytest.fixture
-def gam_oauth_configured(admin_client, monkeypatch):
+def gam_oauth_configured(admin_client, monkeypatch, request):
     """GAM OAuth is set up, and no authorization bypass is available.
 
     ``require_tenant_access`` waves a ``test_user`` session through on the composed
@@ -180,7 +180,9 @@ def gam_oauth_configured(admin_client, monkeypatch):
     monkeypatch.setattr(auth, "gam_oauth_client_secret", "GOCSPX-gam-oauth-client-secret")
     # ``gam_authorize`` only tests ``current_app.oauth`` for presence; whether the
     # module-level app registered a provider depends on the shell's GOOGLE_CLIENT_ID.
-    monkeypatch.setattr(admin_client.application, "oauth", object(), raising=False)
+    monkeypatch.setattr(
+        admin_client.application, "oauth", object() if getattr(request, "param", True) else None, raising=False
+    )
 
 
 @pytest.fixture
@@ -536,7 +538,7 @@ def sample_products(integration_db, sample_tenant):
     """Create sample products that comply with AdCP protocol."""
     from src.core.database.database_session import get_db_session
     from src.core.database.models import Product
-    from tests.factories import PricingOptionFactory
+    from tests.factories import PricingOptionFactory, StoredPlacementFactory
 
     with get_db_session() as session:
         products = [
@@ -561,30 +563,30 @@ def sample_products(integration_db, sample_tenant):
                 properties=None,
                 # Placements for placement-targeting validation (adcp#208)
                 placements=[
-                    {
-                        "placement_id": "homepage_atf",
-                        "name": "Homepage Above the Fold",
-                        "description": "Premium above-the-fold placement on homepage",
-                        "format_ids": [
+                    StoredPlacementFactory(
+                        placement_id="homepage_atf",
+                        name="Homepage Above the Fold",
+                        description="Premium above-the-fold placement on homepage",
+                        format_ids=[
                             {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
                         ],
-                    },
-                    {
-                        "placement_id": "sidebar",
-                        "name": "Sidebar",
-                        "description": "Standard sidebar placement",
-                        "format_ids": [
+                    ),
+                    StoredPlacementFactory(
+                        placement_id="sidebar",
+                        name="Sidebar",
+                        description="Standard sidebar placement",
+                        format_ids=[
                             {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
                         ],
-                    },
-                    {
-                        "placement_id": "article_inline",
-                        "name": "Article Inline",
-                        "description": "Inline placement within article content",
-                        "format_ids": [
+                    ),
+                    StoredPlacementFactory(
+                        placement_id="article_inline",
+                        name="Article Inline",
+                        description="Inline placement within article content",
+                        format_ids=[
                             {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_728x90"},
                         ],
-                    },
+                    ),
                 ],
             ),
             Product(

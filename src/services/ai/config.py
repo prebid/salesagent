@@ -53,6 +53,25 @@ class TenantAIConfig(BaseModel):
     settings: ModelSettings = Field(default_factory=ModelSettings)
 
 
+def tenant_google_api_key(tenant_ai_config: dict | None) -> str | None:
+    """The tenant's own Google (Gemini) API key, read from its AI configuration, or ``None``.
+
+    ``ai_config`` is the one place a tenant's AI key lives: the admin AI settings form
+    (``settings.update_ai``) writes it, and the creative AI review and the generative
+    creative build both read it. The key is a Google key only when the provider it is
+    configured with canonicalizes to Google; a configuration that names no provider runs
+    on the platform provider, as ``AIServiceFactory.create_model`` resolves it.
+
+    Only the tenant's own configuration is read. The platform default key
+    (``GEMINI_API_KEY``) is not consulted here.
+    """
+    config = TenantAIConfig.model_validate(tenant_ai_config or {})
+    provider = config.provider or get_settings().integrations.pydantic_ai_provider
+    if canonicalize_google_provider(provider) != CANONICAL_GOOGLE_PROVIDER:
+        return None
+    return config.api_key or None
+
+
 def get_platform_defaults() -> dict:
     """Get platform-level AI configuration from the startup settings.
 
