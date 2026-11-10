@@ -58,6 +58,21 @@ def given_publisher_lists_tagged_property(ctx: dict, publisher: str, property_id
     _publishers(ctx).list_property(publisher, property_id, tags=[tag])
 
 
+@given(
+    parsers.parse('the publisher "{publisher}" lists property "{property_id}" without identifiers in its adagents.json')
+)
+def given_publisher_lists_property_without_identifiers(ctx: dict, publisher: str, property_id: str) -> None:
+    """A property core/property.json refuses: ``identifiers`` is required."""
+    _publishers(ctx).list_property(publisher, property_id)
+    del _publishers(ctx).adagents_document(publisher)["properties"][-1]["identifiers"]
+
+
+@given(parsers.parse('the publisher "{publisher}" serves an adagents.json without authorized_agents'))
+def given_publisher_serves_no_authorized_agents(ctx: dict, publisher: str) -> None:
+    """A file-level failure: the required top-level ``authorized_agents`` is absent."""
+    del _publishers(ctx).adagents_document(publisher)["authorized_agents"]
+
+
 @given(parsers.parse('the publisher "{publisher}" authorizes "{entry}" for property "{property_id}"'))
 def given_publisher_authorizes(ctx: dict, publisher: str, entry: str, property_id: str) -> None:
     _publishers(ctx).authorize(

@@ -220,7 +220,38 @@ Feature: A product names the publishers whose inventory it sells
     When the buyer requests products
     Then the buyer receives exactly the products "premium"
 
+  # adagents.mdx §5: "Per-property validation failures MUST NOT prevent processing of
+  # remaining properties in the same file. Treat a non-conforming property as absent from
+  # the array" (core/property.json requires identifiers). The seller skips it, logs it, and
+  # the properties beside it still authorize.
+  @T-UC-GET-PRODUCTS-publisher-malformed-property @publisher_domain_resolution @requires_db
+  Scenario: a property the file lists without identifiers is skipped and the others still authorize
+    Given the publisher "radio-psatest.com" lists property "radio_home" tagged "audio" in its adagents.json
+    And the publisher "radio-psatest.com" lists property "radio_broken" without identifiers in its adagents.json
+    And the publisher "radio-psatest.com" authorizes this agent for properties "radio_home", "radio_broken"
+    And the seller ingested the adagents.json of "radio-psatest.com"
+    And the seller offers product "radio" naming publisher_properties [{"publisher_domain": "radio-psatest.com", "property_ids": ["radio_home", "radio_broken"], "selection_type": "by_id"}]
+    When the buyer requests products
+    Then product "radio" announces publisher_properties [{"publisher_domain": "radio-psatest.com", "property_ids": ["radio_home"], "selection_type": "by_id"}]
+    And the seller holds properties "radio_home" from "radio-psatest.com"
+
   # ── The file changes, and the seller refreshes it ─────────────────────────
+
+  # adagents.mdx §5: "File-level failures (unparseable JSON, missing required top-level
+  # authorized_agents) MUST abort processing for that domain". A refreshed file without
+  # authorized_agents is an invalid response: the stored file is kept under the 24-hour
+  # rule (managed-networks.mdx :623-626) and the attempt is recorded "invalid".
+  @T-UC-GET-PRODUCTS-publisher-no-authorized-agents @publisher_domain_resolution @requires_db
+  Scenario: a refreshed file without authorized_agents is refused and the stored one kept
+    Given the publisher "radio-psatest.com" lists property "radio_home" tagged "audio" in its adagents.json
+    And the publisher "radio-psatest.com" authorizes this agent for properties "radio_home"
+    And the seller ingested the adagents.json of "radio-psatest.com"
+    And the seller offers product "radio" naming publisher_properties [{"publisher_domain": "radio-psatest.com", "selection_type": "all"}]
+    And the publisher "radio-psatest.com" serves an adagents.json without authorized_agents
+    When the seller refreshes the adagents.json of "radio-psatest.com"
+    And the buyer requests products
+    Then product "radio" announces publisher_properties [{"publisher_domain": "radio-psatest.com", "selection_type": "all"}]
+    And the seller kept the adagents.json of "radio-psatest.com" it stored before, recording "invalid"
 
   @T-UC-GET-PRODUCTS-publisher-drops-property @publisher_domain_resolution @requires_db
   Scenario: a property the publisher stops listing leaves the selection on refresh

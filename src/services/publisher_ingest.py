@@ -63,6 +63,16 @@ class StaleDocumentError(AdagentsValidationError):
     """
 
 
+class MissingAuthorizedAgentsError(AdagentsValidationError):
+    """A document with no top-level ``authorized_agents`` array.
+
+    adagents.mdx: a file-level failure such as a "missing required top-level
+    authorized_agents" "MUST abort processing for that domain". The SDK's fetch refuses
+    such a file before it reaches here; :func:`apply_document` refuses it too, so no path
+    stores one.
+    """
+
+
 @dataclass(frozen=True)
 class IngestOutcome:
     """What one ingest did: ``fetch_status`` as stored, and the non-disclosing error of a failure."""
@@ -96,15 +106,27 @@ def _belongs_to(prop: Mapping[str, Any], domain: str, revoked: set[str]) -> bool
     return own == domain and own not in revoked
 
 
-def _property_values(prop: Mapping[str, Any], entry: Mapping[str, Any]) -> dict[str, Any] | None:
+def _property_values(
+    prop: Mapping[str, Any], entry: Mapping[str, Any], *, domain: str, entry_index: int, position: int
+) -> dict[str, Any] | None:
     """The ``PublisherProperty`` columns for *prop* authorized by *entry*, or ``None`` for a malformed one.
 
     adagents.mdx: a per-property failure "MUST NOT prevent processing of remaining
-    properties", so a property missing what ``core/property.json`` requires is logged and
-    skipped.
+    properties" (skip, log, continue), so a property missing what ``core/property.json``
+    requires is logged with the publisher's domain, the index of the authorizing entry, the
+    property's position and the fields it lacks, and skipped.
     """
-    if not prop.get("property_type") or not prop.get("name") or not isinstance(prop.get("identifiers"), list):
-        logger.warning("Skipping a malformed authorized property: %r", prop)
+    missing = [field for field in ("property_type", "name") if not prop.get(field)]
+    if not isinstance(prop.get("identifiers"), list):
+        missing.append("identifiers")
+    if missing:
+        logger.warning(
+            "adagents.json of %s: skipping property %d authorized by authorized_agents[%d]: it lacks %s",
+            domain,
+            position,
+            entry_index,
+            ", ".join(missing),
+        )
         return None
     return {
         "property_id": prop.get("property_id"),
@@ -144,14 +166,14 @@ def authorized_property_values(document: Mapping[str, Any], domain: str, agent_u
         if isinstance(item, Mapping) and item.get("publisher_domain")
     }
     values: list[dict[str, Any]] = []
-    for entry in document.get("authorized_agents") or ():
+    for entry_index, entry in enumerate(document.get("authorized_agents") or ()):
         if not isinstance(entry, Mapping) or not identifies_agent(entry.get("url"), agent_url):
             continue
         scoped = {**document, "authorized_agents": [{**entry, "url": agent_url}]}
-        for prop in get_properties_by_agent(scoped, agent_url):
+        for position, prop in enumerate(get_properties_by_agent(scoped, agent_url)):
             if not _belongs_to(prop, domain, revoked):
                 continue
-            row = _property_values(prop, entry)
+            row = _property_values(prop, entry, domain=domain, entry_index=entry_index, position=position)
             if row is not None and row not in values:
                 values.append(row)
     return values
@@ -189,9 +211,12 @@ def apply_document(
 ) -> None:
     """Store a validated *document* as *publisher*'s, and replace its derived properties and format options.
 
-    Raises :class:`StaleDocumentError` when the document's ``last_updated`` is older than the
-    stored one's, before anything is written.
+    Raises :class:`MissingAuthorizedAgentsError` for a document with no ``authorized_agents``
+    array and :class:`StaleDocumentError` when its ``last_updated`` is older than the stored
+    one's, before anything is written.
     """
+    if not isinstance(document.get("authorized_agents"), list):
+        raise MissingAuthorizedAgentsError("adagents.json has no authorized_agents array")
     last_updated = _timestamp(document.get("last_updated"))
     if publisher.last_updated is not None and last_updated is not None and last_updated < publisher.last_updated:
         raise StaleDocumentError(
@@ -294,7 +319,7 @@ async def ingest(tenant_id: str, domain: str) -> IngestOutcome:
         if document is not None:
             try:
                 apply_document(uow.publishers, publisher, document, agent_url=tenant.agent_url, fetched_at=now)
-            except StaleDocumentError as exc:
+            except AdagentsValidationError as exc:
                 logger.warning("adagents.json of %s for tenant %s refused: %s", domain, tenant_id, exc)
                 failure = ("invalid", describe_adagents_error(exc))
         if failure is not None:
