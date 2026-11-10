@@ -14,6 +14,7 @@ route answered, never a value a Given set.
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
@@ -207,6 +208,16 @@ def when_sync(ctx: dict) -> None:
     ctx["admin_page"] = _env(ctx).sync_publisher_partners()
 
 
+@when("the operator opens the publishers page")
+def when_open_publishers(ctx: dict) -> None:
+    ctx["admin_page"] = _env(ctx).open_publishers()
+
+
+@when("the operator opens the authorized properties page")
+def when_open_authorized_properties(ctx: dict) -> None:
+    ctx["admin_page"] = _env(ctx).open_authorized_properties()
+
+
 @when(parsers.parse('the operator opens the properties of the partnership with "{publisher}"'))
 def when_open_properties(ctx: dict, publisher: str) -> None:
     ctx["admin_page"] = _env(ctx).open_partner_properties(publisher)
@@ -279,3 +290,52 @@ def then_view_not_authorized(ctx: dict) -> None:
     assert body == {"error": f"Agent {_agent_url(ctx)} is not authorized by this publisher", "is_authorized": False}, (
         body
     )
+
+
+def _listed_publisher(ctx: dict, publisher: str) -> dict:
+    """The publishers page's row for *publisher*."""
+    domain = _publishers(ctx).publisher_address(publisher)
+    rows = [row for row in _admin_body(ctx)["partners"] if row["publisher_domain"] == domain]
+    assert len(rows) == 1, f"the publishers page lists {domain!r} {len(rows)} times"
+    return rows[0]
+
+
+@then(
+    parsers.re(
+        r'the publishers page shows "(?P<publisher>[^"]+)" last fetched "(?P<status>[a-z_]+)" with '
+        r"(?P<properties>\d+) authorized propert(?:y|ies) and (?P<options>\d+) format options?"
+    )
+)
+def then_publishers_page_shows_fetched(ctx: dict, publisher: str, status: str, properties: str, options: str) -> None:
+    row = _listed_publisher(ctx, publisher)
+    shown = (row["fetch_status"], row["fetched_at"] is not None, row["property_count"], row["format_option_count"])
+    assert shown == (status, True, int(properties), int(options)), f"the publishers page shows {row}"
+
+
+@then(
+    parsers.re(
+        r'the publishers page shows "(?P<publisher>[^"]+)" never fetched, recording "(?P<status>[a-z_]+)", with '
+        r"(?P<properties>\d+) authorized propert(?:y|ies) and (?P<options>\d+) format options?"
+    )
+)
+def then_publishers_page_shows_never_fetched(
+    ctx: dict, publisher: str, status: str, properties: str, options: str
+) -> None:
+    row = _listed_publisher(ctx, publisher)
+    shown = (row["fetch_status"], row["fetched_at"], row["property_count"], row["format_option_count"])
+    assert shown == (status, None, int(properties), int(options)), f"the publishers page shows {row}"
+
+
+@then("the page offers no way to add a property by hand")
+def then_page_offers_no_property_authoring(ctx: dict) -> None:
+    """No link to, and no form posting to, an authored-property route."""
+    page = _require_admin_page(ctx)
+    assert page.status_code == 200, f"the page answered {page.status_code}"
+    html = page.data.decode()
+    authoring = [
+        marker
+        for marker in ("authorized-properties/create", "authorized-properties/add", "authorized-properties/upload")
+        if marker in html
+    ]
+    posting = re.findall(r'<form[^>]*method="post"[^>]*action="[^"]*authorized-properties[^"]*"', html, re.IGNORECASE)
+    assert authoring == [] and posting == [], f"the page offers property authoring: {authoring + posting}"

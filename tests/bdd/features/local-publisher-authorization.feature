@@ -125,3 +125,27 @@ Feature: A publisher's adagents.json authorizes this agent by its origin or an e
       | {origin}/mcp/                        | not authorized              |
       | http://{host}/mcp                    | not authorized              |
       | https://other-seller.example.com/mcp | not authorized              |
+
+  # The operator reads what the seller holds for each publisher: the outcome of the last
+  # fetch, when the file was last fetched successfully, and what the stored file authorizes
+  # this agent for and declares in formats[]. Nothing here is typed by the operator.
+  @T-ADMIN-PUBAUTH-list
+  Scenario: The publishers page shows each publisher's fetch status, last successful fetch, properties and format options
+    Given the publisher "pub-psatest.com" authorizes "{origin}" for property "front_page"
+    And the publisher "pub-psatest.com" declares format option {"format_option_id": "pub_mrec", "format_kind": "image", "params": {"width": 300, "height": 250}} in its adagents.json
+    And the operator added the publisher "pub-psatest.com"
+    And the publisher "news-psatest.com" now answers 404
+    And the operator added the publisher "news-psatest.com"
+    When the operator opens the publishers page
+    Then the publishers page shows "pub-psatest.com" last fetched "ok" with 1 authorized property and 1 format option
+    And the publishers page shows "news-psatest.com" never fetched, recording "not_found", with 0 authorized properties and 0 format options
+
+  # Properties come only from publishers' files: the authorized-properties page lists what
+  # the stored files authorize and offers no way to type a property in by hand.
+  @T-ADMIN-PUBAUTH-properties-page
+  Scenario: The authorized-properties page lists the properties publishers' files authorize and offers no way to add one by hand
+    Given the publisher "pub-psatest.com" authorizes "{origin}" for property "front_page"
+    And the operator added the publisher "pub-psatest.com"
+    When the operator opens the authorized properties page
+    Then the page contains "Front page"
+    And the page offers no way to add a property by hand

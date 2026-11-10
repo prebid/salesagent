@@ -187,9 +187,11 @@ A tenant is a seller: one sales agent, served at one URL. The URL's host is the 
 
 A tenant is not a publisher. One tenant sells for many publisher sites, hundreds in
 production. Each site authorizes the tenant by serving `/.well-known/adagents.json` on its
-own domain, with an `authorized_agents` entry whose `url` is the tenant's URL. The tenant
-holds the site as an authorized property (Admin UI, **Authorized Properties**) and verifies
-it against that file.
+own domain, with an `authorized_agents` entry whose `url` is the tenant's URL. The operator
+adds the site as a publisher (Admin UI, **Inventory → Publishers**); the tenant fetches and
+stores that file, and the properties it authorizes the tenant for are read from it. The
+tenant refreshes every publisher's file every six hours, and a stored file counts for 24
+hours after its last successful fetch.
 
 The recommended tenant host is on the seller's own domain, for example `sales.acme.com`. A
 subdomain of `<domain>`, such as `acme.<domain>`, also works.

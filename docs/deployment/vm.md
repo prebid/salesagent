@@ -21,7 +21,7 @@ The example files are in [`deploy/vm/`](../../deploy/vm/):
 > - #2315: a creative agent configured by its base URL answers in under a second instead of
 >   hanging or retrying.
 > - #2305: pins the reference creative agent to AdCP v3.1.25.
-> - #2311 and #2312 fix the sample format ids and the Admin UI "Verify all" button.
+> - #2311 fixes the sample format ids.
 
 ## Contents
 
@@ -238,8 +238,8 @@ host, which the Admin UI calls **Custom Domain** and the setup script takes as `
 
 A tenant is not a publisher. One tenant sells for many publisher sites, hundreds in production.
 Each site authorizes the tenant by serving `/.well-known/adagents.json` on its own domain, with an
-entry that names the tenant's URL (step 11). The tenant holds the site as an authorized property
-and verifies it against that file.
+entry that names the tenant's URL (step 11). The operator adds the site as a publisher, and the
+tenant fetches and stores that file; the properties it authorizes the tenant for are read from it.
 
 Put the tenant's host on the seller's own domain, for example `sales.acme.com`. A host under the
 apex, such as `acme.<apex>`, also works.
@@ -277,7 +277,8 @@ docker compose exec app python scripts/ops/provision_signing_key.py --tenant-id 
 ```
 
 Then finish the tenant in the Admin UI: the setup checklist on its dashboard lists what is missing
-(currencies, the `all_inventory` property tag, products, authorized properties, an ad server).
+(currencies, the `all_inventory` property tag, products, a publisher whose file authorizes the
+tenant, an ad server).
 The mock adapter is for trying the agent out: with `ADCP_TESTING` unset it does not count as a
 configured ad server, so the tenant does not accept media buys. A real tenant connects Google Ad
 Manager (see [GAM service account setup](../adapters/gam/service-account-setup.md)).
@@ -346,9 +347,13 @@ which is its origin (`https://sales.acme.com`), and the properties it sells:
 To pin the tenant's webhook signing key as well, add a `signing_keys` array to the entry holding
 the keys from `https://sales.acme.com/.well-known/jwks.json`, and update it after every key rotation.
 
-Then, in the Admin UI, add the publisher's properties (**Authorized Properties**) and verify them.
-Verification fetches the publisher's `adagents.json` and looks for the tenant's agent URL. Repeat
-both for every publisher site the tenant sells.
+Then, in the Admin UI, add the publisher (**Inventory → Publishers**, by its domain). Adding it
+fetches the publisher's `adagents.json` and stores it, and the properties whose entry names the
+tenant's agent URL become the tenant's authorized properties; **Authorized Properties** lists them.
+Repeat for every publisher site the tenant sells. **Sync All** fetches every publisher's file again,
+and the scheduled refresh does the same every six hours. A stored file counts for 24 hours after
+its last successful fetch: a publisher whose file cannot be fetched for longer stops authorizing
+the tenant until a fetch succeeds.
 
 A product selecting `all_inventory` announces each publisher with `selection_type: "all"`, which
 claims every property the publisher lists. If the publisher authorizes this agent for a tag or for
@@ -415,7 +420,7 @@ schema in a way the old version cannot read; check `docker compose logs app` fir
 | `list_creative_formats` returns no formats | The app cannot read the creative agent's catalog. With `CREATIVE_AGENT_URL` unset it asks the public agent, whose AdCP 3.2 catalog is rejected (#2274); run the reference agent (step 6). With it set, check `curl https://<apex>/api/creative-agent/health` from the VM, which also proves the VM reaches its own public address. |
 | Admin login fails after the provider redirects back | The redirect URI registered with the provider differs from `GOOGLE_OAUTH_REDIRECT_URI` in `.env`, or the ID token has no `email`. |
 | A tenant answers `CONFIGURATION_ERROR` | The `Host` the request named is not a tenant's host. Check the tenant's **Custom Domain** in the Admin UI. |
-| "Verify all" in Authorized Properties verifies only the first property | Fixed by #2312. Until then, verify each property on its own. |
+| A publisher authorizes nothing although its file names the tenant | Open the publisher under **Inventory → Publishers**: its last fetch status says whether the file was not found, unreachable or invalid. A file is fetched at `https://<publisher>/.well-known/adagents.json`, and its entry `url` must name the tenant's agent URL. Fix the file, then **Sync All**. |
 | Seeded sample products show formats no buyer can build | Fixed by #2311 (the seed scripts used format ids the creative agent does not publish). |
 
 See also the [environment variables reference](environment-variables.md), the

@@ -177,6 +177,14 @@ class PublisherAdagentsMixin:
         """The operator removes *publisher*: its derived rows and every selection of it go with it."""
         return self._publisher_route("delete", f"publisher-partners/{self.publisher_address(publisher)}")
 
+    def open_publishers(self) -> AdminResponse:
+        """The operator's publishers list: each publisher with what its stored file authorizes."""
+        return self._publisher_route("get", "publisher-partners")
+
+    def open_authorized_properties(self) -> AdminResponse:
+        """The operator's authorized-properties page."""
+        return self._publisher_route("get", "authorized-properties")
+
     def open_partner_properties(self, publisher: str) -> AdminResponse:
         return self._publisher_route("get", f"publisher-partners/{self.publisher_address(publisher)}/properties")
 
