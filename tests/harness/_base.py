@@ -1030,8 +1030,8 @@ class BaseTestEnv:
         - ``src.core.auth_utils.get_principal_from_token`` answers the env principal for the
           env principal's token, scoped to the env's tenant (or unscoped), and nothing for
           anything else. Read by ``_resolve_identity``.
-        - ``src.core.config_loader.get_tenant_by_id`` serves ``TenantFactory.make_tenant``
-          with this env's overrides, so ``TenantContext.load`` builds the same tenant the
+        - ``src.core.config_loader.get_tenant_context`` serves ``TenantFactory.make_tenant``
+          with this env's overrides, so ``TenantContext.load`` returns the same tenant the
           env used to hand over pre-built. Read by the resolver.
         - ``src.core.resolved_identity._load_account`` answers an active schema Account
           named by the request's reference (``tests.helpers.capture_wrapper_req.stub_account_for``),
@@ -1047,7 +1047,7 @@ class BaseTestEnv:
         from tests.factories import TenantFactory
         from tests.helpers.capture_wrapper_req import stub_account_for
 
-        def _tenant_by_id(tenant_id: str) -> dict[str, Any]:
+        def _tenant_context(tenant_id: str) -> Any:
             return TenantFactory.make_tenant(tenant_id=tenant_id, **self._tenant_overrides)
 
         def _principal_from_token(token: str, tenant_id: str) -> Any:
@@ -1063,7 +1063,7 @@ class BaseTestEnv:
         for name, target, substitute in (
             ("tenant_id_for", "src.core.config_loader.tenant_id_for", lambda **_kw: None),
             ("get_principal_from_token", "src.core.auth_utils.get_principal_from_token", _principal_from_token),
-            ("get_tenant_by_id", "src.core.config_loader.get_tenant_by_id", _tenant_by_id),
+            ("get_tenant_context", "src.core.config_loader.get_tenant_context", _tenant_context),
             ("_load_account", "src.core.resolved_identity._load_account", stub_account_for),
         ):
             patcher = patch(target, side_effect=substitute)
@@ -3498,7 +3498,7 @@ class IntegrationEnv(BaseTestEnv):
         """Write a tenant-level config field for both caller paths.
 
         Updates the in-memory tenant overrides (the ``identity`` a ``call_impl`` hands
-        over, and the unit-mode ``get_tenant_by_id`` substitute) AND the DB Tenant row
+        over, and the unit-mode ``get_tenant_context`` substitute) AND the DB Tenant row
         when the column exists (the wire legs' resolver reads the DB via config_loader).
         """
         self._tenant_overrides[field] = value

@@ -63,6 +63,7 @@ class TestGAMOrderLifecycleIntegration:
                 advertiser_id=test_principals["regular"].platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=gam_config["trafficker_id"],
                 tenant_id="test",
+                tenant_ai_config=None,
             )
             assert regular_adapter._is_admin_principal() is False
 
@@ -74,6 +75,7 @@ class TestGAMOrderLifecycleIntegration:
                 advertiser_id=test_principals["gam_admin"].platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=gam_config["trafficker_id"],
                 tenant_id="test",
+                tenant_ai_config=None,
             )
             assert gam_admin_adapter._is_admin_principal() is True
 
@@ -85,6 +87,7 @@ class TestGAMOrderLifecycleIntegration:
                 advertiser_id=test_principals["is_admin"].platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=gam_config["trafficker_id"],
                 tenant_id="test",
+                tenant_ai_config=None,
             )
             assert is_admin_adapter._is_admin_principal() is True
 
@@ -105,6 +108,7 @@ class TestGAMOrderLifecycleIntegration:
                 advertiser_id=test_principals["regular"].platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=gam_config["trafficker_id"],
                 tenant_id="test",
+                tenant_ai_config=None,
             )
 
             # submit_for_approval and archive_order are NOT supported by GAM.
@@ -140,6 +144,7 @@ class TestGAMOrderLifecycleIntegration:
                 advertiser_id=test_principals["gam_admin"].platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=gam_config["trafficker_id"],
                 tenant_id="test",
+                tenant_ai_config=None,
             )
             with pytest.raises(AdCPCapabilityNotSupportedError):
                 admin_adapter.update_media_buy(
@@ -194,6 +199,7 @@ class TestGAMOrderLifecycleIntegration:
                 advertiser_id=test_principals["regular"].platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=gam_config["trafficker_id"],
                 tenant_id="test",
+                tenant_ai_config=None,
             )
 
             # Test activation with non-guaranteed items — no special handling, raises.

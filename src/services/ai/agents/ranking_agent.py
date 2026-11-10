@@ -157,7 +157,9 @@ async def rank_products_async(
     Returns:
         ProductRankingResult with rankings for each product
     """
+    from src.services.ai.factory import run_agent
+
     prompt = build_ranking_prompt(custom_prompt, brief, products)
-    result = await agent.run(prompt)
+    result = await run_agent(agent, prompt)
     # pydantic-ai 1.x uses .output for structured data
     return result.output
