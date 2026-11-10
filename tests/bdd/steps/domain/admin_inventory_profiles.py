@@ -180,15 +180,15 @@ def when_save_open_product_form_declaring_agent_host_option(ctx: dict, product_i
 
 
 @when(
-    parsers.parse(
-        'the operator saves the open edit form of product "{product_id}", declaring format option "{option_id}" '
-        'of "{publisher}"'
+    parsers.re(
+        r'the operator saves the open edit form of (?P<kind>product|inventory profile) "(?P<subject>[^"]+)", '
+        r'declaring format option "(?P<option_id>[^"]+)" of "(?P<publisher>[^"]+)"'
     )
 )
-def when_save_open_product_form_declaring_publisher_option(
-    ctx: dict, product_id: str, option_id: str, publisher: str
+def when_save_open_form_declaring_publisher_option(
+    ctx: dict, kind: str, subject: str, option_id: str, publisher: str
 ) -> None:
-    """Save the open page with one publisher-backed option, as its key alone."""
+    """Save the open product or profile page with one publisher-backed option, as its key alone."""
     option = [{"publisher_domain": publisher, "format_option_id": option_id}]
     ctx["admin_page"] = _env(ctx).save_open_form_with(format_options=json.dumps(option))
 
@@ -319,20 +319,32 @@ def then_product_stores_no_agent_host_option(ctx: dict, product_id: str) -> None
     assert named == [], f"product {product_id!r} stores format options under the seller's own host: {named}"
 
 
-@then(parsers.parse('product "{product_id}" stores no format option of "{publisher}"'))
-def then_product_stores_no_option_of(ctx: dict, product_id: str, publisher: str) -> None:
-    stored = _env(ctx).stored_product(product_id)
-    assert stored is not None, f"product {product_id!r} is not stored"
-    named = [d for d in stored.format_options or [] if d.get("publisher_domain") == publisher]
-    assert named == [], f"product {product_id!r} stores format options of {publisher!r}: {named}"
+def _stored_row(ctx: dict, kind: str, subject: str) -> Any:
+    """The stored product or inventory profile *subject*, which must exist."""
+    env = _env(ctx)
+    stored = env.stored_product(subject) if kind == "product" else env.stored_inventory_profile(subject)
+    assert stored is not None, (
+        f"{kind} {subject!r} is not stored; the form answered {_require_admin_page(ctx).status_code}"
+    )
+    return stored
 
 
-@then(parsers.parse('product "{product_id}" stores format options {expected}'))
-def then_product_stores_format_options(ctx: dict, product_id: str, expected: str) -> None:
-    page = _require_admin_page(ctx)
-    stored = _env(ctx).stored_product(product_id)
-    assert stored is not None, f"product {product_id!r} is not stored; the form answered {page.status_code}"
-    assert stored.format_options == json.loads(expected), f"product {product_id!r} stores {stored.format_options!r}"
+@then(
+    parsers.re(
+        r'(?P<kind>product|inventory profile) "(?P<subject>[^"]+)" stores no format option of "(?P<publisher>[^"]+)"'
+    )
+)
+def then_stores_no_option_of(ctx: dict, kind: str, subject: str, publisher: str) -> None:
+    named = [d for d in _stored_row(ctx, kind, subject).format_options or [] if d.get("publisher_domain") == publisher]
+    assert named == [], f"{kind} {subject!r} stores format options of {publisher!r}: {named}"
+
+
+@then(
+    parsers.re(r'(?P<kind>product|inventory profile) "(?P<subject>[^"]+)" stores format options (?P<expected>\[.*\])')
+)
+def then_stores_format_options(ctx: dict, kind: str, subject: str, expected: str) -> None:
+    stored = _stored_row(ctx, kind, subject).format_options
+    assert stored == json.loads(expected), f"{kind} {subject!r} stores {stored!r}"
 
 
 @then("the page does not name the seller's own host")

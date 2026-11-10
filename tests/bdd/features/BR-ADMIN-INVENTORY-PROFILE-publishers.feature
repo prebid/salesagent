@@ -322,3 +322,36 @@ Feature: BR-ADMIN-INVENTORY-PROFILE-publishers Which publishers the operator's s
     Then the page contains ""publisher_domain": "news-psatest.com", "format_option_id": "news_mrec""
     When the operator saves the open edit form of product "news", declaring format option "news_mrec" of "news-psatest.com"
     Then product "news" stores format options [{"publisher_domain": "news-psatest.com", "format_option_id": "news_mrec"}]
+
+  # adagents.json formats[] (:164, :170): an entry with scope "applies only to the named
+  # subset" of the file's properties. An option scoped to a property the product does not
+  # sell applies to none of it, so it does not resolve for the product (core/product.json
+  # format_options: fail closed) and the form refuses it.
+  @T-ADMIN-INVPROFILE-037 @admin_inventory_profile @requires_db
+  Scenario: the product edit form refuses a publisher option whose scope excludes the product's properties
+    Given the seller is authorized for property "news_live" of publisher "news-psatest.com" tagged "live"
+    And the publisher "news-psatest.com" declares format option {"format_option_id": "live_banner", "format_kind": "image", "params": {"width": 728, "height": 90}, "applies_to_property_ids": ["news_live"]} in its adagents.json
+    And the seller ingested the adagents.json of "news-psatest.com"
+    And the seller offers product "news" naming publisher_properties [{"publisher_domain": "news-psatest.com", "property_ids": ["news_home"], "selection_type": "by_id"}]
+    When the operator opens the edit form of product "news"
+    And the operator saves the open edit form of product "news", declaring format option "live_banner" of "news-psatest.com"
+    Then the page contains "of news-psatest.com applies to none of the properties this product sells"
+    And product "news" stores no format option of "news-psatest.com"
+
+  @T-ADMIN-INVPROFILE-038 @admin_inventory_profile @requires_db
+  Scenario: the inventory profile edit form offers the publisher's catalog and stores a chosen option as its key
+    Given the publisher "news-psatest.com" declares format option {"format_option_id": "news_mrec", "format_kind": "image", "params": {"width": 300, "height": 250}} in its adagents.json
+    And the seller ingested the adagents.json of "news-psatest.com"
+    And an inventory profile "home" storing publisher_properties [{"publisher_domain": "news-psatest.com", "property_ids": ["news_home"], "selection_type": "by_id"}]
+    When the operator opens the edit form of inventory profile "home"
+    Then the page contains ""publisher_domain": "news-psatest.com", "format_option_id": "news_mrec""
+    When the operator saves the open edit form of inventory profile "home", declaring format option "news_mrec" of "news-psatest.com"
+    Then inventory profile "home" stores format options [{"publisher_domain": "news-psatest.com", "format_option_id": "news_mrec"}]
+
+  @T-ADMIN-INVPROFILE-039 @admin_inventory_profile @requires_db
+  Scenario: the inventory profile edit form refuses a format option its publisher's catalog does not declare
+    Given an inventory profile "home" storing publisher_properties [{"publisher_domain": "news-psatest.com", "property_ids": ["news_home"], "selection_type": "by_id"}]
+    When the operator opens the edit form of inventory profile "home"
+    And the operator saves the open edit form of inventory profile "home", declaring format option "missing_mrec" of "news-psatest.com"
+    Then the page contains "of news-psatest.com is not in the format catalog of a publisher"
+    And inventory profile "home" stores no format option of "news-psatest.com"

@@ -371,6 +371,17 @@ Feature: A product names the publishers whose inventory it sells
     And the buyer requests products
     Then product "news" announces format_options [{"format_kind": "image", "format_option_id": "news_mrec", "publisher_domain": "news-psatest.com", "params": {"width": 320, "height": 50}}]
 
+  # The operator picks the publisher's option on the product form, which stores its key; the
+  # buyer is served the publisher's declaration under that key on every transport.
+  @T-UC-GET-PRODUCTS-format-option-picked-on-form @publisher_domain_resolution @requires_db
+  Scenario: a publisher option the operator picks on the product form is served from the publisher's catalog
+    Given the publisher "news-psatest.com" declares format option {"format_option_id": "news_mrec", "format_kind": "image", "params": {"width": 300, "height": 250}} in its adagents.json
+    And the seller ingested the adagents.json of "news-psatest.com"
+    And the seller offers product "news" naming publisher_properties [{"publisher_domain": "news-psatest.com", "selection_type": "all"}]
+    And the operator saved the edit form of product "news" with format option "news_mrec" of "news-psatest.com"
+    When the buyer requests products
+    Then product "news" announces format_options [{"format_kind": "image", "format_option_id": "news_mrec", "publisher_domain": "news-psatest.com", "params": {"width": 300, "height": 250}}]
+
   @T-UC-GET-PRODUCTS-format-option-missing @publisher_domain_resolution @requires_db
   Scenario: a product referencing an option missing from the publisher's formats is not offered
     Given the seller offers product "premium" migrated from legacy property tags "premium"

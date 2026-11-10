@@ -188,6 +188,24 @@ def given_operator_saved_product(ctx: dict, product_id: str, property_ids: str) 
     )
 
 
+@given(
+    parsers.parse(
+        'the operator saved the edit form of product "{product_id}" with format option "{option_id}" of "{publisher}"'
+    )
+)
+def given_operator_picked_publisher_option(ctx: dict, product_id: str, option_id: str, publisher: str) -> None:
+    """Open the product's edit form and save it with one publisher option, picked by its key."""
+    env = ctx["env"]
+    env.open_product_edit_form(product_id)
+    page = env.save_open_form_with(
+        format_options=json.dumps([{"publisher_domain": publisher, "format_option_id": option_id}])
+    )
+    stored = env.stored_product(product_id)
+    assert stored is not None and stored.format_options == [
+        {"publisher_domain": publisher, "format_option_id": option_id}
+    ], f"the form did not store the option; it answered {page.status_code}"
+
+
 @given(parsers.parse('the operator saves inventory profile "{profile_id}" selecting properties "{property_ids}"'))
 def given_operator_saved_profile(ctx: dict, profile_id: str, property_ids: str) -> None:
     """Save the profile through the real admin form, and hold the row it stored."""
