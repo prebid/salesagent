@@ -158,7 +158,7 @@ class WireError(Exception):
 
 
 def _mcp_wire_envelope(exc: Exception) -> dict | None:
-    """The two-layer envelope inside a FastMCP ``ToolError``, or ``None``.
+    """The two-layer envelope inside an MCP tool or HTTP error, or ``None``.
 
     The MCP boundary translator raises ``AdCPToolError`` (single-arg JSON envelope)
     so FastMCP serializes ``str(exc)`` as the JSON-encoded envelope. This parses that
@@ -172,12 +172,22 @@ def _mcp_wire_envelope(exc: Exception) -> dict | None:
     import ast as _ast
     import json
 
+    import httpx
+    import httpx2
     from fastmcp.exceptions import ToolError
 
-    if not isinstance(exc, ToolError):
+    if isinstance(exc, httpx.HTTPStatusError | httpx2.HTTPStatusError):
+        try:
+            _mcp_jsonrpc_result(exc.response)
+        except WireError as error:
+            return error.envelope
+        except (WireRefusal, httpx.ResponseNotRead, httpx2.ResponseNotRead):
+            pass
         return None
-
-    error_str = str(exc)
+    elif isinstance(exc, ToolError):
+        error_str = str(exc)
+    else:
+        return None
 
     try:
         parsed = json.loads(error_str)
@@ -187,6 +197,9 @@ def _mcp_wire_envelope(exc: Exception) -> dict | None:
                 return envelope
     except (json.JSONDecodeError, TypeError):
         pass
+
+    if isinstance(exc, httpx.HTTPStatusError | httpx2.HTTPStatusError):
+        return None
 
     # Legacy shape (test fixtures that mock ToolError directly):
     # tuple-stringified `('CODE', 'message', 'recovery', '{"details": ...}')`.
@@ -471,16 +484,52 @@ def _mcp_error_to_exception(payload: dict[str, Any]) -> Exception:
 
     :func:`_mcp_wire_envelope` reads the two-layer envelope out of the JSON FastMCP
     puts in ``str(ToolError)``. Over HTTP that envelope arrives as the ``isError``
-    result's text content (or as a JSON-RPC ``error.message``), so it is re-wrapped in
-    a ``ToolError`` here and handed to the SAME reader the in-memory leg uses — one
-    parse, not two.
+    result's text content, or as a JSON-RPC ``error.data`` object. ``error.message``
+    is the SDK's own protocol string and is not an AdCP envelope. One reader for
+    the in-memory leg and the HTTP leg.
     """
+    import json
+
     from fastmcp.exceptions import ToolError
 
+    data = payload.get("data")
+    if isinstance(data, dict):
+        return ToolError(json.dumps(data))
     for item in payload.get("content") or []:
         if isinstance(item, dict) and isinstance(item.get("text"), str):
             return ToolError(item["text"])
     return ToolError(str(payload.get("message") or payload))
+
+
+def _mcp_jsonrpc_result(response: Any) -> dict[str, Any]:
+    """Read the same MCP frame on in-process and live HTTP paths."""
+    import json
+
+    frame = _jsonrpc_body(response, surface="/mcp")
+    if not isinstance(frame, dict):
+        raise WireRefusal(f"/mcp returned a non-object frame: {frame!r}", response)
+    result = frame.get("result") or {}
+    payload = (
+        frame.get("error")
+        if "error" in frame
+        else result
+        if isinstance(result, dict) and result.get("isError")
+        else None
+    )
+    if payload is not None:
+        if isinstance(payload, dict):
+            error = _mcp_error_to_exception(payload)
+            try:
+                wire = _wire_envelope(json.loads(str(error)))
+            except (ValueError, TypeError):
+                wire = None
+            if wire is not None:
+                raise WireError(wire, response)
+            payload = str(error)
+        raise WireRefusal(f"/mcp answered JSON-RPC error: {payload!r}", response)
+    if not isinstance(result, dict):
+        raise WireRefusal(f"/mcp returned a non-object result: {result!r}", response)
+    return result
 
 
 class WireRefusal(AssertionError):
@@ -789,14 +838,19 @@ class BaseTestEnv:
 
     def __init__(
         self,
-        principal_id: str = "test_principal",
-        tenant_id: str = "test_tenant",
+        principal_id: str | None = None,
+        tenant_id: str | None = None,
         database_url: str | None = None,
         e2e_config: E2EConfig | None = None,
         **tenant_overrides: Any,
     ) -> None:
-        self._principal_id = principal_id
-        self._tenant_id = tenant_id
+        from uuid import uuid4
+
+        suffix = uuid4().hex if e2e_config else None
+        self._principal_id = (
+            principal_id if principal_id is not None else f"principal_{suffix}" if suffix else "test_principal"
+        )
+        self._tenant_id = tenant_id if tenant_id is not None else f"tenant_{suffix}" if suffix else "test_tenant"
         # E2E mode: bind factories to the live server's DB so the HTTP-reached
         # server sees Given-step data. Explicit database_url wins; else the
         # e2e_config's postgres_url. None => normal cached/integration engine.
@@ -2312,11 +2366,7 @@ class BaseTestEnv:
         # Both arms hand the RESPONSE to the error they raise. They used to raise the
         # reconstructed envelope alone, which strands the refusal's headers — and the
         # signature challenge lives there.
-        if "error" in envelope:
-            raise _mcp_wire_error(_mcp_error_to_exception(envelope["error"]), response)
-        result = envelope.get("result") or {}
-        if result.get("isError"):
-            raise _mcp_wire_error(_mcp_error_to_exception(result), response)
+        result = _mcp_jsonrpc_result(response)
         structured = result.get("structuredContent")
         if structured is None:
             raise AssertionError(f"MCP tools/call for {tool_name!r} returned no structuredContent: {result!r}")
@@ -3310,6 +3360,10 @@ class IntegrationEnv(BaseTestEnv):
 
         tenant = self._session.scalars(select(Tenant).filter_by(tenant_id=self._tenant_id)).first()
         if tenant is None:
+            if self.is_e2e:
+                from uuid import uuid4
+
+                tenant_kwargs.setdefault("virtual_host", f"seller-{uuid4().hex}.test")
             return TenantFactory(tenant_id=self._tenant_id, **tenant_kwargs)
         if tenant_kwargs:
             for column, value in tenant_kwargs.items():

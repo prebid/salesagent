@@ -95,20 +95,13 @@ def _connect_error_wrapping_ssl() -> httpx.ConnectError:
         pytest.param(httpx.ReadTimeout("timed out"), id="read-timeout"),
     ],
 )
-def test_a_genuine_connection_failure_still_reports_the_stack_as_absent(monkeypatch, failure):
-    """Unchanged behaviour: nothing is listening, so the e2e transports stand down.
-
-    This half must keep working, or every non-e2e BDD run on a developer machine
-    with no Docker stack turns into an error instead of running the in-process
-    transports.
-    """
+def test_a_configured_connection_failure_stops_the_run(monkeypatch, failure):
+    """An explicitly configured stack must run; an unreachable one is a failure."""
     _configured_env(monkeypatch)
     monkeypatch.setattr(httpx, "get", _raiser(failure))
 
-    assert probe_stack() is None, (
-        f"{type(failure).__name__} with no SSL cause means the stack is not up; the probe must "
-        f"report absence so the in-process transports still run"
-    )
+    with pytest.raises(RuntimeError, match="configured.*unreachable"):
+        probe_stack()
 
 
 @pytest.mark.parametrize(
@@ -175,5 +168,6 @@ def test_an_unset_base_url_still_reports_the_stack_as_absent(monkeypatch):
     """The one honest ``None``: no address was configured, so there is nothing to probe."""
     monkeypatch.delenv("E2E_BASE_URL", raising=False)
     monkeypatch.delenv("E2E_PER_WORKER", raising=False)
+    monkeypatch.delenv("ADCP_SALES_PORT", raising=False)
 
     assert probe_stack() is None
