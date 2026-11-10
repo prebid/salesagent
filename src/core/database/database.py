@@ -16,6 +16,32 @@ from src.core.database.models import (
 )
 from src.core.database.repositories.principal import PrincipalRepository
 
+#: The demo publisher, which the sample products sell whole.
+_SAMPLE_PUBLISHER = "psatest.com"
+
+
+def _hold_sample_publisher(db_session, agent_url: str) -> None:
+    """Hold the demo publisher for the default tenant, unless it already does.
+
+    A stored adagents.json authorizing the tenant at *agent_url* for one website, stored
+    without a fetch: properties come only from a publisher's file, and a product's
+    selection references its publisher by foreign key.
+    """
+    from src.services.publisher_ingest import seed_document, website_document
+
+    seed_document(
+        db_session,
+        "default",
+        _SAMPLE_PUBLISHER,
+        website_document(
+            agent_url,
+            domain=_SAMPLE_PUBLISHER,
+            property_id="default_property",
+            name="Default Property",
+            tags=["default"],
+        ),
+    )
+
 
 def init_db(exit_on_error=False):
     """Initialize database with multi-tenant support.
@@ -128,23 +154,7 @@ def init_db(exit_on_error=False):
                     )
                     db_session.add(currency_limit)
 
-                # The demo publisher: a stored adagents.json authorizing the demo tenant for one
-                # website, stored without a fetch (properties come only from a publisher's file).
-                from src.services.publisher_ingest import seed_document, website_document
-
-                db_session.flush()
-                seed_document(
-                    db_session,
-                    "default",
-                    "example.com",
-                    website_document(
-                        new_tenant.agent_url,
-                        domain="example.com",
-                        property_id="default_property",
-                        name="Default Property",
-                        tags=["default"],
-                    ),
-                )
+                _hold_sample_publisher(db_session, new_tenant.agent_url)
 
                 # Add SSO configuration for demo (simulates configured SSO)
                 auth_config = TenantAuthConfig(
@@ -255,6 +265,11 @@ def init_db(exit_on_error=False):
                 print("Creating sample products for testing...")
                 from src.core.database.models import PricingOption as PricingOptionModel
 
+                # The products' publisher, held first: the default tenant may predate it.
+                default_tenant = db_session.get(Tenant, "default")
+                assert default_tenant is not None, "sample products need the default tenant"
+                _hold_sample_publisher(db_session, default_tenant.agent_url)
+
                 products_data = [
                     {
                         "product_id": "prod_1",
@@ -328,7 +343,7 @@ def init_db(exit_on_error=False):
                         implementation_config=p.get("implementation_config"),
                         # Every publisher of the demo tenant whole: its one publisher above.
                         publisher_selections=ProductPublisherSelection.from_selectors(
-                            "default", [{"publisher_domain": "example.com", "selection_type": "all"}]
+                            "default", [{"publisher_domain": _SAMPLE_PUBLISHER, "selection_type": "all"}]
                         ),
                         delivery_type="guaranteed" if is_fixed else "non_guaranteed",
                     )
