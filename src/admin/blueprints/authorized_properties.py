@@ -260,7 +260,7 @@ def list_authorized_properties(tenant_id: str) -> str | Response:
             if not tenant:
                 logger.error(f"Tenant not found: {tenant_id}")
                 flash(PROPERTY_ERROR_MESSAGES["tenant_not_found"], "error")
-                return redirect(url_for("core.admin_dashboard"))
+                return redirect(url_for("core.index"))
 
             logger.info(f"Found tenant: {tenant.name}")
 
@@ -317,7 +317,7 @@ def upload_authorized_properties(tenant_id: str) -> str | Response:
                 tenant = db_session.scalars(stmt).first()
                 if not tenant:
                     flash(PROPERTY_ERROR_MESSAGES["tenant_not_found"], "error")
-                    return redirect(url_for("core.admin_dashboard"))
+                    return redirect(url_for("core.index"))
 
                 # Get existing tags for this tenant
                 tags_stmt = select(PropertyTag).where(PropertyTag.tenant_id == tenant_id)
@@ -408,7 +408,7 @@ def update_publisher_format_catalog(tenant_id: str) -> Response:
         tenant = uow.tenant_config.get_tenant()
         if tenant is None:
             flash(PROPERTY_ERROR_MESSAGES["tenant_not_found"], "error")
-            return redirect(url_for("core.admin_dashboard"))
+            return redirect(url_for("core.index"))
         try:
             PublisherCatalog(publisher_domain=tenant.primary_domain, options=tuple(options or ())).refuse_unresolved(
                 declarations
@@ -462,7 +462,7 @@ def list_property_tags(tenant_id: str) -> str | Response:
             tenant = db_session.scalars(stmt).first()
             if not tenant:
                 flash("Tenant not found", "error")
-                return redirect(url_for("core.admin_dashboard"))
+                return redirect(url_for("core.index"))
 
             # Ensure 'all_inventory' tag exists (default tag for all properties)
             tag_stmt = select(PropertyTag).where(
@@ -837,7 +837,7 @@ def create_property(tenant_id: str) -> str | Response:
                 tenant = db_session.scalars(stmt).first()
                 if not tenant:
                     flash(PROPERTY_ERROR_MESSAGES["tenant_not_found"], "error")
-                    return redirect(url_for("core.admin_dashboard"))
+                    return redirect(url_for("core.index"))
 
                 # Get existing tags for this tenant
                 tags_stmt = select(PropertyTag).where(PropertyTag.tenant_id == tenant_id)
@@ -910,7 +910,7 @@ def edit_property(tenant_id: str, property_id: str) -> str | Response:
                 tenant = db_session.scalars(stmt).first()
                 if not tenant:
                     flash(PROPERTY_ERROR_MESSAGES["tenant_not_found"], "error")
-                    return redirect(url_for("core.admin_dashboard"))
+                    return redirect(url_for("core.index"))
 
                 # Get the property to edit
                 prop_stmt = select(AuthorizedProperty).where(

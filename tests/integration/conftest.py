@@ -162,7 +162,7 @@ def admin_client(integration_db):
 
 
 @pytest.fixture
-def gam_oauth_configured(admin_client, monkeypatch):
+def gam_oauth_configured(admin_client, monkeypatch, request):
     """GAM OAuth is set up, and no authorization bypass is available.
 
     ``require_tenant_access`` waves a ``test_user`` session through on the composed
@@ -180,7 +180,9 @@ def gam_oauth_configured(admin_client, monkeypatch):
     monkeypatch.setattr(auth, "gam_oauth_client_secret", "GOCSPX-gam-oauth-client-secret")
     # ``gam_authorize`` only tests ``current_app.oauth`` for presence; whether the
     # module-level app registered a provider depends on the shell's GOOGLE_CLIENT_ID.
-    monkeypatch.setattr(admin_client.application, "oauth", object(), raising=False)
+    monkeypatch.setattr(
+        admin_client.application, "oauth", object() if getattr(request, "param", True) else None, raising=False
+    )
 
 
 @pytest.fixture

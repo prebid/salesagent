@@ -24,18 +24,43 @@ def log_in(client, user) -> None:
         sess["user"] = {"email": user.email}
 
 
-def authorize(client, tenant_id: str):
-    return client.get(f"/auth/gam/authorize/{tenant_id}")
+def authorize(client, tenant_id: str, *, script_root: str = ""):
+    return client.get(f"/auth/gam/authorize/{tenant_id}", environ_overrides={"SCRIPT_NAME": script_root})
 
 
-def start_flow(client, tenant_id: str) -> str:
+def start_flow(client, tenant_id: str, *, script_root: str = "") -> str:
     """Authorize for *tenant_id* and return the ``state`` that step sent to Google."""
-    response = authorize(client, tenant_id)
+    response = authorize(client, tenant_id, script_root=script_root)
     assert response.status_code == 302, response.status
     location = urlsplit(response.headers["Location"])
     assert location.netloc == "accounts.google.com", location.geturl()
     return parse_qs(location.query)["state"][0]
 
 
-def callback(client, state: str):
-    return client.get("/auth/gam/callback", query_string={"code": AUTH_CODE, "state": state})
+def callback(client, state: str, *, script_root: str = ""):
+    return client.get(
+        "/auth/gam/callback",
+        query_string={"code": AUTH_CODE, "state": state},
+        environ_overrides={"SCRIPT_NAME": script_root},
+    )
+
+
+def point_google_token_url_at(origin, monkeypatch) -> None:
+    """Substitute the external Google token origin at its shared injection point."""
+    from src.core.security.egress.destination import VendorConstant
+    from src.services import google_oauth_client
+
+    monkeypatch.setattr(google_oauth_client, "GOOGLE_TOKEN_URL", VendorConstant(url=f"{origin.base_url}/token"))
+
+
+def persisted(session, tenant_id: str) -> tuple[str, bool, str | None]:
+    """The persisted adapter type, row existence and refresh token for one tenant."""
+    from src.core.database.models import AdapterConfig, Tenant
+
+    session.expire_all()
+    adapter_config = session.get(AdapterConfig, tenant_id)
+    return (
+        session.get(Tenant, tenant_id).ad_server,
+        adapter_config is not None,
+        adapter_config.gam_refresh_token if adapter_config else None,
+    )
