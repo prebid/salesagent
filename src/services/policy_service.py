@@ -16,6 +16,7 @@ from sqlalchemy.orm import attributes
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import CurrencyLimit, Tenant
+from src.core.utils.naming import DEFAULT_ORDER_NAME_TEMPLATE
 
 
 class ValidationError(Exception):
@@ -67,7 +68,7 @@ class PolicySettings:
     default_measurement_provider: str | None = None
 
     # Naming conventions
-    order_name_template: str = "{campaign_name|brand_name} - {media_buy_id} - {date_range}"
+    order_name_template: str = DEFAULT_ORDER_NAME_TEMPLATE
     line_item_name_template: str = "{order_name} - {product_name}"
 
     # Approval workflow

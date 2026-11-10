@@ -84,14 +84,12 @@ from __future__ import annotations
 
 import base64
 import binascii
-import contextlib
 import json
-import os
 import re
 import ssl
 import threading
 import time
-from collections.abc import Iterator
+from contextlib import AbstractContextManager
 from http.server import ThreadingHTTPServer
 from urllib.parse import parse_qs
 
@@ -99,7 +97,9 @@ from tests.e2e._stdlib_json_http import (
     JsonRequestHandler,
     compose_project_name,
     mcp_capabilities_post,
+    run_origin,
     serve_forever_in_thread,
+    serve_until_killed,
 )
 
 _WEBHOOK_PATH_RE = re.compile(r"^/webhook/(?P<key>[^/]+)/?$")
@@ -331,9 +331,6 @@ class _CaptureRequestHandler(JsonRequestHandler):
         raw = self._read_raw_body()
         return json.loads(raw) if raw else {}
 
-    def _handle_health(self) -> None:
-        self._write_json(200, {"compose_project_name": self.server.compose_project_name})  # type: ignore[attr-defined]
-
     def _route(self, method: str) -> None:
         """Split the query off ONCE, then dispatch on the bare path.
 
@@ -346,7 +343,7 @@ class _CaptureRequestHandler(JsonRequestHandler):
         in the store as a delivery and corrupted the very count the
         circuit-breaker Then steps read.
         """
-        path, _, query = self.path.partition("?")
+        path, query = self._bare_path, self.path.partition("?")[2]
 
         if method == "POST":
             control = _CONTROL_PATH_RE.match(path)
@@ -486,10 +483,9 @@ class _CaptureRequestHandler(JsonRequestHandler):
         self._write_json(status, snapshot)
 
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler name
-        if self.path == "/health":
-            self._handle_health()
-        else:
-            self._route("GET")
+        if self._answer_health():
+            return
+        self._route("GET")
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib handler name
         self._route("POST")
@@ -557,8 +553,7 @@ def start_capture_service(*, host: str, port: int, ssl_context: ssl.SSLContext |
     )
 
 
-@contextlib.contextmanager
-def run_capture_service(*, host: str = "0.0.0.0", port: int = 8080) -> Iterator[str]:  # noqa: S104
+def run_capture_service(*, host: str = "0.0.0.0", port: int = 8080) -> AbstractContextManager[str]:  # noqa: S104
     """Run the webhook-capture service, yielding its base URL (``http://host:port``).
 
     The ``0.0.0.0`` default is the CONTAINER's network namespace, not the host's:
@@ -573,19 +568,12 @@ def run_capture_service(*, host: str = "0.0.0.0", port: int = 8080) -> Iterator[
     Reads ``COMPOSE_PROJECT_NAME`` once at start so ``GET /health`` can report
     which compose stack this instance belongs to.
     """
-    server = start_capture_service(host=host, port=port)
-    try:
-        yield f"http://{host}:{server.server_address[1]}"
-    finally:
-        server.shutdown()
-        server.server_close()
+    return run_origin(_CaptureRequestHandler, host=host, port=port, server_attrs={"store": _CaptureStore()})
 
 
 def main() -> None:
     """Entry point for ``python -m tests.e2e.webhook_capture_service`` inside the compose service."""
-    port = int(os.environ.get("PORT", "8080"))
-    with run_capture_service(host="0.0.0.0", port=port):  # noqa: S104 - container namespace; see run_capture_service
-        threading.Event().wait()
+    serve_until_killed(run_capture_service)
 
 
 if __name__ == "__main__":
