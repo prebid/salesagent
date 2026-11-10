@@ -21,14 +21,14 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any, NamedTuple
 
-from adcp.types.generated_poc.core.media_buy_features import MediaBuyFeatures
-from adcp.types.generated_poc.core.postal_area_support import (
-    PostalAreaSupport,  # adcp 6.6: standalone GeoPostalAreas removed; capabilities use PostalAreaSupport
+from adcp.types.domains.core.media_buy_features import MediaBuyFeatures
+from adcp.types.domains.core.postal_area_support import (
+    PostalAreaSupport,  # the pinned SDK: standalone GeoPostalAreas removed; capabilities use PostalAreaSupport
 )
-from adcp.types.generated_poc.enums.channels import MediaChannel
-from adcp.types.generated_poc.enums.pricing_model import PricingModel
-from adcp.types.generated_poc.protocol.get_adcp_capabilities_request import Protocol as RequestProtocol
-from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
+from adcp.types.domains.enums.channels import MediaChannel
+from adcp.types.domains.enums.pricing_model import PricingModel
+from adcp.types.domains.protocol.get_adcp_capabilities_request import Protocol as RequestProtocol
+from adcp.types.domains.protocol.get_adcp_capabilities_response import (
     # Aliased: three distinct types in src/ are named Account -- the ORM row
     # (imported as DBAccount in accounts.py), the domain schema
     # (src/core/schemas/account.py, imported BARE by accounts.py), and this
@@ -39,7 +39,7 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     # this tools-module alias does not carry.
     Account as AccountCapabilities,
 )
-from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
+from adcp.types.domains.protocol.get_adcp_capabilities_response import (
     Adcp,
     CreativeApprovalMode,
     Execution,
@@ -83,7 +83,8 @@ from src.core.signing.posture import (
     webhook_signing_posture,
 )
 from src.core.tenant_context import TenantContext
-from src.services.targeting_capabilities import supports_property_list_filtering
+from src.core.tools.accounts import resolve_account_currency_modes
+from src.services.targeting_capabilities import CATALOG_MANAGEMENT_SUPPORTED, supports_property_list_filtering
 
 logger = logging.getLogger(__name__)
 
@@ -312,10 +313,15 @@ def _build_account_block(tenant: TenantContext) -> AccountCapabilities | None:
     -- the two can never diverge. require_operator_auth is a true architectural constant
     (no per-tenant operator-auth config or enforcement exists yet). sandbox reflects the
     tenant's account_sandbox column via resolve_account_sandbox (default FALSE --
-    support is opted into, never assumed from an unset column). authorization_endpoint/
-    required_for_products/account_financials stay omitted -- declaring them would be an
-    aspirational capability the platform doesn't back yet, not an honest one
-    (#1592 Core Invariant).
+    support is opted into, never assumed from an unset column).
+    supported_account_currency_modes is the same claim-and-enforcement pairing one level
+    deeper: resolve_account_currency_modes (src/core/tools/accounts.py) reads the
+    disposition the sync_accounts entry policy gives ``currency``, so this seller cannot
+    advertise a mode its provisioning walk does not implement. It takes no tenant because
+    the binding is architectural, not configuration -- the accounts table has no currency
+    column. authorization_endpoint/required_for_products/account_financials stay omitted --
+    declaring them would be an aspirational capability the platform doesn't back yet, not
+    an honest one (#1592 Core Invariant).
     """
     supported_billing = resolve_supported_billing(tenant)
     if not supported_billing:
@@ -323,6 +329,7 @@ def _build_account_block(tenant: TenantContext) -> AccountCapabilities | None:
 
     return AccountCapabilities(
         supported_billing=[BillingParty(v) for v in supported_billing],
+        supported_account_currency_modes=resolve_account_currency_modes(),
         require_operator_auth=False,
         sandbox=resolve_account_sandbox(tenant),
         # SDK field defaults are False, not None -- pass None explicitly or these
@@ -473,7 +480,7 @@ def describe_seller(identity: PublicIdentity) -> SellerCapabilities:
 
     # Get adapter CLASS to determine channels and capabilities. Tenant-only,
     # principal-free: capabilities describe the SELLER (tenant), not the
-    # caller — INV-4 (AdCP v3.1.1). Resolved via get_adcp_capabilities.mdx
+    # caller — INV-4 (AdCP). Resolved via get_adcp_capabilities.mdx
     # L23 + get_adapter_class_for_tenant (adapter_helpers.py), which bypasses
     # Adapter.__init__ entirely — Kevel/TritonDigital would crash __init__
     # for a synthetic/tenant-only Principal (salesagent-dn2s).
@@ -494,9 +501,10 @@ def describe_seller(identity: PublicIdentity) -> SellerCapabilities:
     )
 
     def _map_portfolio_channels() -> None:
-        # portfolio.primary_channels is "Primary advertising channels in this
-        # PORTFOLIO" (get-adcp-capabilities-response.json), and the portfolio is the
-        # tenant's product catalog -- the same thing its sibling publisher_domains
+        # portfolio.primary_channels is the "Complete list of AdCP media channels for which
+        # this sales agent accepts and can meaningfully answer product-discovery briefs"
+        # (get-adcp-capabilities-response.json), and what this seller answers briefs from is
+        # the tenant's product catalog -- the same thing its sibling publisher_domains
         # already summarizes from a real per-tenant table. So the channels are the
         # union of what each product effectively offers, under the ONE rule
         # get_products applies per product (channel_helpers). The adapter CLASS's
@@ -525,11 +533,13 @@ def describe_seller(identity: PublicIdentity) -> SellerCapabilities:
         mapped = {CHANNEL_MAPPING[name] for name in names if name in CHANNEL_MAPPING}
         primary_channels.extend(channel for channel in MediaChannel if channel in mapped)
 
+    # No channel evidence (no catalog channel and no adapter default inside the channels enum,
+    # or the lookup failed) leaves primary_channels EMPTY, and the portfolio then omits it.
+    # Omission is the pin's spelling of unknown scope: "When present, this is an exhaustive
+    # brief-routing allowlist ... Omission means channel scope is unknown"
+    # (get-adcp-capabilities-response.json, portfolio.primary_channels). A guessed default
+    # would be a display-only allowlist that sends buyers away for every other channel.
     _resolve_or_degrade(advisories, "portfolio channels", _map_portfolio_channels, default=None)
-
-    # Default to display if we couldn't determine from adapter
-    if not primary_channels:
-        primary_channels = [MediaChannel.display]
 
     # supported_pricing_models: pre-flight buyer signal, sorted+deterministic.
     # Same source as the per-product "supported" annotation (products.py:721) --
@@ -624,7 +634,12 @@ def describe_seller(identity: PublicIdentity) -> SellerCapabilities:
     # Build features - be honest about what we actually support
     # These should be adapter-dependent in the future
     features = MediaBuyFeatures(
-        # inline_creative_management: We have sync_creatives/list_creatives tools
+        # inline_creative_management: package-scoped creative bodies are accepted on
+        # create_media_buy and update_media_buy (process_and_upload_package_creatives).
+        # That is the flag's whole meaning at the pin. It says nothing about a reusable
+        # library: sync_creatives/list_creatives are creative.has_creative_library, which
+        # lives in the creative block and is not declared here
+        # (docs/creative/sales-agent-creative-capabilities.mdx § Creative management modes).
         inline_creative_management=True,
         # property_list_filtering: True iff the bound adapter actually compiles
         # `targeting_overlay.property_list` into native ad-server targeting.
@@ -641,7 +656,8 @@ def describe_seller(identity: PublicIdentity) -> SellerCapabilities:
         # without the tool would let buyers reach the boundary and get
         # UNSUPPORTED_FEATURE there instead of being warned at capability
         # discovery. Mirrors the property_list_filtering=False rationale above.
-        catalog_management=False,
+        # The same fact refuses targeting_overlay.store_catchments at create/update.
+        catalog_management=CATALOG_MANAGEMENT_SUPPORTED,
         # committed_metrics_supported: declared False until a committed-metrics
         # surface exists (no product/media-buy data model backs a delivery
         # commitment today). Mirrors the catalog_management=False rationale above.
@@ -697,19 +713,19 @@ def describe_seller(identity: PublicIdentity) -> SellerCapabilities:
         trusted_match=declarations.trusted_match,
     )
 
-    # creative_approval_mode: require_human when this tenant's configuration
-    # genuinely requires manual review (resolve_manual_approval_signal, the
-    # same signal _create_media_buy_impl enforces); omit entirely otherwise --
-    # NEVER claim auto_approve without an explicit tenant-level affirmation
-    # that no product/account requires review (no such config surface exists
-    # yet, salesagent-y9ld plan Q2 -- declaring it would be a false
-    # conformance claim, not a "legacy-unspecified" honest omission).
-    from src.core.helpers.adapter_helpers import resolve_manual_approval_signal
-
-    manual_approval_signal = _resolve_or_degrade(
-        advisories, "manual approval signal", lambda: resolve_manual_approval_signal(tenant), default=False
+    # creative_approval_mode is the tenant-wide CREATIVE-review posture
+    # (protocol/get-adcp-capabilities-response.json, v3.2.7: "auto_approve means human
+    # review does not block serving eligibility after creatives are assigned and automated
+    # validation passes"; the pending_creatives_to_start storyboard: "Sellers with manual
+    # creative review declare ... require_human"). It derives from the one predicate
+    # sync_creatives' routing applies (_apply_approval_mode), so auto_approve is claimed
+    # exactly when synced creatives ARE approved at sync. Media-buy approval
+    # (human_review_required, the adapter's manual-approval columns) is a different
+    # decision and does not enter here. Always present: Tenant.approval_mode is NOT NULL,
+    # so this seller never has the legacy-unspecified posture omission describes.
+    creative_approval_mode = (
+        CreativeApprovalMode.auto_approve if tenant.auto_approves_creatives else CreativeApprovalMode.require_human
     )
-    creative_approval_mode = CreativeApprovalMode.require_human if manual_approval_signal else None
 
     # Build media_buy capabilities.
     # reporting_delivery_methods reaches the wire from the declaration store, which is

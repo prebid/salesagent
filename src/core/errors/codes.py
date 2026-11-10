@@ -30,7 +30,7 @@ that was drifting. Message was the last field that still disagreed on which of
 the two wins, so it now answers the same way the other three do.
 
 The platform codes in :class:`AppErrorCode` are this seller's own. The spec's
-vocabulary is open by design -- ``core/error.json`` (AdCP 3.1.1): ``error.code``
+vocabulary is open by design -- ``core/error.json`` (AdCP): ``error.code``
 is a wire-typed string rather than a closed enum, the published codes are
 documentary, senders MAY emit codes outside that set, and receivers MUST decode
 unknown ones by reading ``error.recovery``. So a code outside the 92 is legal,
@@ -61,7 +61,7 @@ from adcp.types import ErrorCode
 from adcp.validation.version import resolve_bundle_key
 
 from src.core.errors._entry import CodeEntry, CodeGroup, Recovery
-from src.core.errors.signature_codes import SIGNATURE_CODE_TABLE, SignatureErrorCode
+from src.core.errors.signature_codes import SIGNATURE_MESSAGES, SIGNATURE_STATUS, SignatureErrorCode
 
 __all__ = [
     "CODE_BY_VALUE",
@@ -143,6 +143,18 @@ class AppErrorCode(StrEnum):
             recovery=Recovery.TRANSIENT,
             suggestion="Retry to pick up the missing formats; the formats that were returned are complete and usable",
             message="A configured creative agent is unreachable; its formats were not included",
+            status=502,
+        ),
+    )
+    AGENT_FORMATS_DISCARDED = (
+        "AGENT_FORMATS_DISCARDED",
+        CodeEntry(
+            recovery=Recovery.TERMINAL,
+            suggestion=(
+                "Use the formats that were returned; the omitted ones stay unavailable until the "
+                "creative agent publishes them in a valid form"
+            ),
+            message="A configured creative agent published formats that do not validate; those formats were not included",
             status=502,
         ),
     )
@@ -247,23 +259,25 @@ def _load_published_codes() -> Mapping[str, _PublishedCode]:
     between SDK releases would take the application down with it.
     """
     bundle_key = resolve_bundle_key(get_adcp_spec_version())
-    schema = files("adcp") / "_schemas" / bundle_key / "enums" / "error-code.json"
-    document = json.loads(schema.read_text(encoding="utf-8"))
-    metadata = document["enumMetadata"]
-    descriptions = document["enumDescriptions"]
-
+    enums = files("adcp") / "_schemas" / bundle_key / "enums"
     published: dict[str, _PublishedCode] = {}
-    for code in document["enum"]:
-        if code not in metadata or code not in descriptions:
-            raise RuntimeError(
-                f"The pinned AdCP schema lists {code} in its enum but describes it in neither "
-                f"enumMetadata nor enumDescriptions. The installed adcp wheel is inconsistent."
+    # Two files, because the pin publishes the request-signature family apart from the rest.
+    for filename in ("error-code.json", "request-signing-error-code.json"):
+        document = json.loads((enums / filename).read_text(encoding="utf-8"))
+        metadata = document["enumMetadata"]
+        descriptions = document["enumDescriptions"]
+
+        for code in document["enum"]:
+            if code not in metadata or code not in descriptions:
+                raise RuntimeError(
+                    f"The pinned AdCP schema lists {code} in its enum but describes it in neither "
+                    f"enumMetadata nor enumDescriptions. The installed adcp wheel is inconsistent."
+                )
+            published[code] = _PublishedCode(
+                recovery=Recovery(metadata[code]["recovery"]),
+                suggestion=metadata[code]["suggestion"],
+                description=descriptions[code],
             )
-        published[code] = _PublishedCode(
-            recovery=Recovery(metadata[code]["recovery"]),
-            suggestion=metadata[code]["suggestion"],
-            description=descriptions[code],
-        )
     return MappingProxyType(published)
 
 
@@ -287,7 +301,7 @@ def _message_from_prose(description: str) -> str:
 #: suggestion for these come from the pinned schema, which is authoritative for
 #: them.
 #:
-#: These nine are the published codes that resolve to no buyer-shippable text on
+#: These are the published codes that resolve to no buyer-shippable text on
 #: their own: the pinned schema's prose for them is normative implementer text
 #: rather than a sentence for a buyer. Seven of them say nothing about the
 #: failure without also saying MUST/SHOULD about other codes and
@@ -297,8 +311,14 @@ def _message_from_prose(description: str) -> str:
 #: backward-compatible alias"), and ``AUTHORIZATION_REQUIRED``'s states the
 #: failure in its first clause and then spends 700 more characters on "Typical
 #: use", "Distinct from", and which ``error-details`` document a seller SHOULD
-#: populate. So all nine are authored here, and each one deletes itself the
-#: moment the pin ships prose that reduces to a buyer sentence on its own.
+#: populate. ``CREATIVE_SIZE_MISMATCH``, ``CREATIVE_MISSING_CLICK_URL``,
+#: ``CREATIVE_VALIDATION_FAILED_GENERIC`` and ``CREATIVE_VALUE_NOT_ALLOWED`` state the failure
+#: in one sentence and then tell the seller what it SHOULD and MUST put in ``error.field`` and
+#: ``error.details`` or keep out of the message. ``BILLING_NOT_PERMITTED_FOR_AGENT``
+#: joined them when the per-buyer-agent billing gate started emitting it: its prose
+#: names the failure and then spends the rest on the identity rule and the details
+#: clamp the seller MUST honour. So these are authored here, and each one deletes
+#: itself the moment the pin ships prose that reduces to a buyer sentence on its own.
 #:
 #: There were eight until ``CREATIVE_NOT_FOUND`` was removed: the pinned prose
 #: resolves it to one clean sentence unaided, which is strictly better than a
@@ -313,8 +333,15 @@ _AUTHORED_SPEC_MESSAGES: Final[Mapping[ErrorCode, str]] = MappingProxyType(
         ErrorCode.AUTH_INVALID: "Credentials were presented but rejected",
         ErrorCode.AUTH_MISSING: "No credentials were presented",
         ErrorCode.AUTH_REQUIRED: "Authentication is required",
+        ErrorCode.BILLING_NOT_PERMITTED_FOR_AGENT: (
+            "Billing model is not permitted by this buyer agent's commercial relationship with the seller"
+        ),
         ErrorCode.BILLING_NOT_SUPPORTED: "Billing model is not supported by this seller",
         ErrorCode.CONFIGURATION_ERROR: "Configuration error",
+        ErrorCode.CREATIVE_MISSING_CLICK_URL: "The creative does not provide the destination URL its format requires",
+        ErrorCode.CREATIVE_SIZE_MISMATCH: "The creative's dimensions match no size the selected format accepts",
+        ErrorCode.CREATIVE_VALIDATION_FAILED_GENERIC: "The creative does not satisfy the selected format",
+        ErrorCode.CREATIVE_VALUE_NOT_ALLOWED: "A creative asset value is not one the selected format allows",
         ErrorCode.PERMISSION_DENIED: "Not authorized for this action",
         ErrorCode.UNSUPPORTED_PROVISIONING: "Settings-update entry matched no existing account",
         ErrorCode.VERSION_UNSUPPORTED: "Requested AdCP version is not supported",
@@ -364,6 +391,8 @@ _HTTP_STATUS: Final[Mapping[ErrorCode, int]] = MappingProxyType(
         ErrorCode.MEDIA_BUY_NOT_FOUND: 404,
         ErrorCode.PACKAGE_NOT_FOUND: 404,
         ErrorCode.PRODUCT_NOT_FOUND: 404,
+        ErrorCode.PROPOSAL_NOT_FOUND: 404,
+        ErrorCode.INVALID_PRICING_OPTION: 404,
         ErrorCode.REFERENCE_NOT_FOUND: 404,
         ErrorCode.SESSION_NOT_FOUND: 404,
         # 409 — the request collides with state that already exists.
@@ -371,6 +400,7 @@ _HTTP_STATUS: Final[Mapping[ErrorCode, int]] = MappingProxyType(
         ErrorCode.CONFLICT: 409,
         ErrorCode.IDEMPOTENCY_CONFLICT: 409,
         ErrorCode.IDEMPOTENCY_EXPIRED: 409,
+        ErrorCode.IDEMPOTENCY_IN_FLIGHT: 409,
         # 410 — the resource's own status forbids the operation.
         ErrorCode.INVALID_STATE: 410,
         # Same band, same sentence: "The media buy or package cannot be canceled in its
@@ -386,12 +416,34 @@ _HTTP_STATUS: Final[Mapping[ErrorCode, int]] = MappingProxyType(
         ErrorCode.BUDGET_EXHAUSTED: 422,
         ErrorCode.BUDGET_TOO_LOW: 422,
         ErrorCode.CREATIVE_REJECTED: 422,
+        ErrorCode.CREATIVE_MISSING_CLICK_URL: 422,
+        ErrorCode.CREATIVE_SIZE_MISMATCH: 422,
+        ErrorCode.CREATIVE_VALIDATION_FAILED_GENERIC: 422,
+        ErrorCode.CREATIVE_VALUE_NOT_ALLOWED: 422,
         ErrorCode.PROVENANCE_REQUIRED: 422,
         ErrorCode.PROVENANCE_DIGITAL_SOURCE_TYPE_MISSING: 422,
         ErrorCode.PROVENANCE_DISCLOSURE_MISSING: 422,
         ErrorCode.PROVENANCE_EMBEDDED_MISSING: 422,
         ErrorCode.PRODUCT_UNAVAILABLE: 422,
         ErrorCode.UNSUPPORTED_FEATURE: 422,
+        # Correctable per the pin ("adjust the proposed terms and retry"): the proposal is
+        # well-formed and refused on its merits -- against what the product offers, or as a
+        # combination (create_media_buy.mdx, the one-currency rule).
+        ErrorCode.TERMS_REJECTED: 422,
+        # Same band and the same reasoning as NOT_CANCELLABLE above: absent from this map
+        # it fell to the 500 default, which the 5xx band below defines as "the buyer cannot
+        # fix it" -- and the pin classifies this one correctable, with a suggestion the
+        # buyer can act on ("emit one canonical format selector route, or make every
+        # required legacy 3.x compatibility projection select the same product format
+        # contract"). The payload is well-formed and refused on its merits, which is what
+        # this band means and what every CONFLICTING_SELECTORS step in
+        # canonical_formats.yaml says in its own words (negative_path:
+        # payload_well_formed).
+        ErrorCode.CONFLICTING_SELECTORS: 422,
+        # Correctable per the pin ("emit only the 3.2 bidding block or only one legacy
+        # representation"), and refused on its merits, not malformed: both members are
+        # declared properties of the package.
+        ErrorCode.AMBIGUOUS_BIDDING_POLICY: 422,
         # 429 — correct, but too often.
         ErrorCode.RATE_LIMITED: 429,
         # 5xx — the buyer cannot fix it. CONFIGURATION_ERROR and
@@ -411,23 +463,14 @@ _HTTP_STATUS: Final[Mapping[ErrorCode, int]] = MappingProxyType(
 def _build_code_table() -> dict[ErrorCodeT, CodeEntry]:
     """Assemble the SDK's codes and this platform's own into one table.
 
-    TWO SOURCES, not three. A code is either the SDK's or this application's, and the
-    signature family is the SDK's: :class:`SignatureErrorCode` is generated from
-    ``adcp.signing.errors.REQUEST_TO_WEBHOOK_CODE``, not authored here.
-
-    What the signature family lacks is METADATA. ``enums/error-code.json`` carries
-    ``enumMetadata`` for the codes it publishes, and at AdCP 3.1.1 it publishes none of
-    the 28 (adcontextprotocol/adcp#7642), so their recovery/suggestion/message are
-    transcribed in :mod:`src.core.errors.signature_codes` from the spec's own prose.
-    That is a different SOURCE OF METADATA, not a different source of codes — so it is
-    a fallback inside this loop rather than a third pass after it.
-
-    Why that matters at the next pin bump: adcontextprotocol/adcp#7647 publishes the
-    vocabulary upstream. When a version carrying it is pinned, ``published`` starts
-    answering for these codes and the transcription stops being consulted — one
-    conditional flips, and ``_SIGNATURE_METADATA`` becomes deletable. Under the old
-    three-pass build the same bump produced two entries for one code and let write
-    order decide, silently.
+    TWO SOURCES. A code is either the SDK's or this application's, and the signature family is
+    the SDK's: :class:`SignatureErrorCode` is generated from
+    ``adcp.signing.errors.REQUEST_TO_WEBHOOK_CODE``, and the pin publishes its recovery and
+    suggestion in ``enums/request-signing-error-code.json``. A code in neither file is a
+    KeyError here, which is the right failure: it means the SDK grew a code nothing describes.
+    That family keeps its 401, its group, and a class-level message, because the pin's
+    descriptions of it name which verification step refused
+    (:data:`~src.core.errors.signature_codes.SIGNATURE_MESSAGES`).
 
     A message comes from the first source that has one: authored here, then the pinned
     schema's own prose. Every code resolves to text, so no code can reach a buyer with
@@ -437,20 +480,25 @@ def _build_code_table() -> dict[ErrorCodeT, CodeEntry]:
     published = _load_published_codes()
     table: dict[ErrorCodeT, CodeEntry] = {}
 
-    for code in (*ErrorCode, *SignatureErrorCode):
-        spec = published.get(code.value)
-        if spec is None:
-            # The pin publishes no metadata for this code, so the transcription answers.
-            # A code in neither is a KeyError here, which is the right failure: it means
-            # the SDK grew a code nothing describes.
-            table[code] = SIGNATURE_CODE_TABLE[code]
-            continue
+    for code in ErrorCode:
+        spec = published[code.value]
         table[code] = CodeEntry(
             recovery=spec.recovery,
             suggestion=spec.suggestion,
             message=(_AUTHORED_SPEC_MESSAGES.get(code) or _message_from_prose(spec.description)),
             status=_HTTP_STATUS.get(code, _UNCLASSIFIED_STATUS),
-            group=SIGNATURE_CODE_TABLE[code].group if code in SIGNATURE_CODE_TABLE else CodeGroup.GENERAL,
+        )
+    for signature_code in SignatureErrorCode:
+        spec = published[signature_code.value]
+        table[signature_code] = CodeEntry(
+            recovery=spec.recovery,
+            suggestion=spec.suggestion,
+            message=SIGNATURE_MESSAGES[spec.recovery],
+            status=SIGNATURE_STATUS,
+            # What makes these different from every other code, declared once, here.
+            # ``AuthChallengeResponder`` asks the table rather than holding its own list:
+            # see CodeGroup for why the fact lives on the code and not on the renderer.
+            group=CodeGroup.SIGNATURE,
         )
 
     # Each member carries its own entry, so there is nothing to reconcile: a code

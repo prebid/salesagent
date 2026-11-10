@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Constraint Compiler Design</title>
+<style>
+  :root {
+    --ink: #1a1d21; --muted: #5b6470; --bg: #ffffff; --panel: #f6f8fa;
+    --line: #d8dee4; --accent: #0b5fff; --bad: #b42318; --good: #067647;
+    --code-bg: #f2f4f7;
+  }
+  body { margin: 0; font: 16px/1.55 -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+         color: var(--ink); background: var(--bg); }
+  main { max-width: 61rem; margin: 0 auto; padding: 2.5rem 1.5rem 5rem; }
+  h1 { font-size: 1.7rem; margin: 0 0 .25rem; }
+  h2 { font-size: 1.25rem; margin: 2.6rem 0 .6rem; border-bottom: 2px solid var(--line); padding-bottom: .3rem; }
+  h3 { font-size: 1.05rem; margin: 1.8rem 0 .4rem; }
+  .meta { color: var(--muted); font-size: .9rem; margin-bottom: 1.6rem; }
+  p { margin: .6rem 0; }
+  code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .86em; }
+  code { background: var(--code-bg); padding: .1em .35em; border-radius: 4px; }
+  pre { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+        padding: .9rem 1rem; overflow-x: auto; line-height: 1.45; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: .8rem 0; font-size: .9rem; }
+  th, td { border: 1px solid var(--line); padding: .4rem .6rem; text-align: left; vertical-align: top; }
+  th { background: var(--panel); }
+  .verdict { font-weight: 600; }
+  .impossible { color: var(--good); }
+  .detected { color: var(--bad); }
+  .box { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--accent);
+         border-radius: 6px; padding: .8rem 1rem; margin: 1rem 0; }
+  .box.warn { border-left-color: var(--bad); }
+  .small { font-size: .85rem; color: var(--muted); }
+  ul, ol { margin: .5rem 0 .8rem; padding-left: 1.4rem; }
+  li { margin: .25rem 0; }
+  .kbd { white-space: nowrap; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Constraint compiler for the adcp type generator</h1>
+<p class="meta">
+Solution design &middot; adcp-client-python at 9.0.0b2 &middot; schema pin ADCP_VERSION 3.2.1 (bundle <code>schemas/cache/3.2</code>, 1509 non-bundled files)
+&middot; generator <code>datamodel-code-generator==0.64.0</code>, pinned indefinitely &middot; measured against upstream main <code>0c7e8b86d</code>
+</p>
+
+<div class="box">
+<p><strong>The defect class:</strong> the generation pipeline reads a schema root's constraint content partially,
+and drops the rest without a trace. Each dropped keyword is a document the published model accepts and the
+canonical schema refuses. <strong>The fix:</strong> one reader for that content, with a closed grammar; every
+keyword kind it knows compiles into the model as ordinary Python; any keyword it does not know aborts generation,
+naming the file, the JSON pointer and the keyword. After this design, a dropped keyword has no spelling: a schema
+either generates a model that enforces all of its root constraints, or it does not generate at all.</p>
+</div>
+
+<h2>1&nbsp;&middot;&nbsp;What exists today: three partial readers of one kind of node</h2>
+
+<p>A schema root's constraint content &mdash; a root <code>anyOf</code>/<code>oneOf</code> whose arms are overlay
+constraints, a root <code>if</code>/<code>then</code>/<code>else</code>, root <code>dependencies</code>, a root
+<code>not</code> &mdash; is dropped by datamodel-code-generator 0.64.0, which renders the merged
+<code>properties</code> and nothing else. The repo's own repair layer reads that content in three places, each
+taking what it can carry:</p>
+
+<table>
+<tr><th>Reader</th><th>Where</th><th>Reads</th><th>Drops silently</th></tr>
+<tr>
+<td><code>_root_required_groups</code> + <code>enforce_root_required_groups</code></td>
+<td><code>scripts/post_generate_fixes.py:7029</code>, <code>:7217</code></td>
+<td>Only <code>arm["required"]</code>. Emits a validator over field-presence tuples into 42 flat-root modules today.</td>
+<td>Every other arm keyword: <code>not</code> (all three forms), property <code>const</code>/<code>enum</code>,
+nested <code>allOf</code> over array items, arm-level <code>if/then</code>, nested <code>anyOf</code>/<code>oneOf</code>.
+The extractor's docstring declares the omission; the emitter's docstring claims &ldquo;that is the whole constraint
+for <code>anyOf</code>&rdquo; &mdash; false for <code>create-media-buy-request.json</code>, whose three arms carry all of the above.</td>
+</tr>
+<tr>
+<td><code>restore_response_variant_aliases</code> (the Emitter)</td>
+<td><code>scripts/post_generate_fixes.py:4939</code></td>
+<td><code>title</code> (for docs only), <code>properties</code>, <code>required</code> &mdash; re-emits 22 response
+modules as per-arm classes. Field-level types, consts, bounds are rendered.</td>
+<td>Arm-level <code>not</code> (44 occurrences across the 22), <code>if/then/else</code>, nested
+<code>anyOf</code> conditions, <code>dependencies</code>, <code>contains</code>, <code>propertyNames</code>.
+And it names arms by position: <code>class_names&nbsp;=&nbsp;[f"{self.base}{index}"&nbsp;...]</code>
+(<code>:5483</code>), with a hardcoded permutation for <code>BuildCreativeResponse</code> (<code>:5478</code>)
+&mdash; an arm's identity collapsed to an ordinal while the node carries a <code>title</code>.</td>
+</tr>
+<tr>
+<td><em>(nobody)</em></td>
+<td>&mdash;</td>
+<td>&mdash;</td>
+<td>Root-level <code>if/then/else</code> and <code>dependencies</code> outside a combinator. The three entries in
+<code>tests/fixtures/validation-model-divergences.json</code> are exactly these, all on
+<code>get-signals-request.json</code>. That file is the residue ledger this design deletes.</td>
+</tr>
+</table>
+
+<p>A refusal lane exists &mdash; <code>enforce_root_required_groups</code> prints a <code>skipped</code> reason for
+97 schemas it declines wholesale &mdash; but there is no refusal for a keyword dropped <em>inside</em> an arm it
+does emit for. That asymmetry is the hole: the pass succeeds, the module ships, and the model is weaker than its
+schema with nothing anywhere saying so.</p>
+
+<h3>What the hand-patch proved</h3>
+<p>Experiment commit <code>0537063a2</code> (branch <code>experiment/handpatch-arm-conditions</code>) hand-expanded
+all three <code>create_media_buy</code> arms &mdash; each arm's <code>not</code>, its
+<code>budget_allocation.mode</code> const, and arm&nbsp;0's per-package <code>budget</code>-required and
+<code>min_spend_target</code>-forbidden item conditions &mdash; as ordinary Python over
+<code>model_fields_set</code> and attribute reads. All nine differential parity cases pass. On cost, the
+before/after delta from the experiment is contaminated (its baseline leg raced another measurement over the same
+file) and is not cited here; what is solid, measured twice and under load, is the absolute: <strong>the patched
+model validates in 4.1&ndash;6.9&micro;s total</strong>, while the schema-delegation alternative was measured at
+<strong>+64&micro;s on top of</strong> a 9&ndash;102&micro;s baseline &mdash; the entire patched validation costs
+roughly a tenth of what the alternative merely adds.
+<strong>&ldquo;Inexpressible in pydantic&rdquo; is false.</strong> The emission target is cheap, readable Python;
+what is missing is only the machine that writes it.</p>
+
+<h2>2&nbsp;&middot;&nbsp;The keyword-kind census (the coverage claim's denominator)</h2>
+
+<p>Measured over the pinned bundle <code>schemas/cache/3.2</code>, excluding <code>bundled/</code>. 250 files carry a
+root <code>anyOf</code> (58) or <code>oneOf</code> (192); 224 of those have pure overlay arms; 217 have
+<code>required</code> on every arm (the current extractor's trigger); 42 generated modules carry the emitted
+validator today. Root-level non-combinator constraints: <code>if</code>/<code>then</code> 23 files,
+<code>else</code> 6, <code>dependencies</code> 19, <code>dependentRequired</code> 8, root <code>not</code> 51.</p>
+
+<p>Keyword kinds appearing anywhere inside root constraint content, by consumer population
+(annotation keys &mdash; <code>title</code>, <code>description</code>, <code>deprecated</code>, <code>x-entity</code>,
+<code>x-status</code>, &hellip; &mdash; excluded):</p>
+
+<table>
+<tr><th>Position</th><th>Population A &mdash; 42 flat-root validator schemas</th><th>Population B &mdash; 22 Emitter response schemas (adds)</th></tr>
+<tr><td>Arm level</td>
+<td><code>required</code>&nbsp;122, <code>properties</code>&nbsp;13, <code>not</code>&nbsp;19,
+nested <code>oneOf</code>&nbsp;2, <code>additionalProperties</code>&nbsp;6 (value <code>true</code>)</td>
+<td><code>not</code>&nbsp;44, <code>allOf</code>&nbsp;5, <code>if</code>/<code>then</code>&nbsp;1,
+<code>type</code>&nbsp;47 (restatement), <code>x-adcp-validation</code>&nbsp;1</td></tr>
+<tr><td>Inside logic (<code>not</code>/<code>if</code>/nested combinators)</td>
+<td><code>required</code>&nbsp;51, <code>anyOf</code>&nbsp;8, <code>not</code>&nbsp;5, <code>properties</code>&nbsp;23,
+<code>if</code>/<code>then</code>&nbsp;1, <code>$ref</code>&nbsp;1 (restatement), <code>type</code>&nbsp;2</td>
+<td><code>anyOf</code>&nbsp;28, <code>if</code>&nbsp;11/<code>then</code>&nbsp;11/<code>else</code>&nbsp;4,
+<code>items</code>&nbsp;6, <code>minItems</code>&nbsp;6, <code>pattern</code>&nbsp;5,
+<code>propertyNames</code>&nbsp;1, <code>required</code>&nbsp;145</td></tr>
+<tr><td>Property overlays</td>
+<td><code>const</code>&nbsp;23, <code>enum</code>&nbsp;3, <code>type</code>&nbsp;55 (restatement),
+<code>required</code>&nbsp;12, <code>properties</code>&nbsp;9, <code>items</code>&nbsp;6, <code>allOf</code>&nbsp;1,
+<code>minItems</code>&nbsp;4, <code>maxItems</code>&nbsp;1, <code>pattern</code>&nbsp;1,
+<code>minLength</code>&nbsp;2/<code>maxLength</code>&nbsp;6, <code>format</code>&nbsp;6, <code>$ref</code>&nbsp;12</td>
+<td><code>dependencies</code>&nbsp;2, <code>contains</code>&nbsp;1, <code>uniqueItems</code>&nbsp;5,
+<code>minimum</code>&nbsp;56/<code>maximum</code>&nbsp;8, <code>minProperties</code>/<code>maxProperties</code>&nbsp;2 each,
+<code>not</code>&nbsp;5, <code>oneOf</code>&nbsp;7/<code>anyOf</code>&nbsp;2 (render as union types),
+<code>patternProperties</code>&nbsp;1</td></tr>
+</table>
+
+<div class="box">
+<p><strong>The census's most important finding:</strong> six keyword kinds the hand-patch never met appear at the pin
+and are inside this design's scope: <code>not</code> in its <code>{properties, required}</code> form (12 arms &mdash;
+<code>creative/preview-creative-response.json</code>: &ldquo;status must not be <code>submitted</code>&rdquo;),
+a <strong>nested <code>oneOf</code> inside an arm</strong>
+(<code>media-buy/get-reporting-status-response.json</code>, both arms &mdash; unread by any current pass even though
+that module carries the required-group validator), arm-level <code>if/then</code>
+(<code>media-buy/build-creative-response.json</code> oneOf[2]:
+&ldquo;if <code>vendor_cost</code> is supplied then <code>currency</code> is required and every variant carries four
+fields&rdquo;), root <code>dependencies</code>/<code>dependentRequired</code> (27 files, including the
+get-signals ledger entry), <code>contains</code> (1), and <code>propertyNames</code> (1). All six are expressible
+in the same vocabulary the hand-patch used. A design covering only the hand-patch's four kinds would have shipped
+with holes in its first release; this one's grammar is sized by the census, and its closure rule (&sect;3.3) is what
+keeps the <em>next</em> bundle's new kind from becoming a hole.</p>
+<p class="small">Reconciliation with the file-level histogram measured independently on the same 42-module
+population (12 of 42 modules have arms with discarded constraining keywords; by top-level arm keyword:
+<code>not</code> 8 files, <code>properties</code> 6, <code>oneOf</code> 1): consistent with the occurrence counts
+above &mdash; that histogram reads each arm's top-level keys only and leaves the layer nested under
+<code>properties</code> open, while the counts in this section come from a recursive walk of every arm, so the
+nested layer is measured, not assumed. Going forward the guarantee rests on neither measurement: the bundle-closure test
+(&sect;4, commit 1) re-derives the full accounting on every run.</p>
+</div>
+
+<p>Deliberately outside the defect class (already rendered correctly by existing machinery): root
+<code>allOf</code> as inheritance (519 files), unions whose arms are standalone types (the generator renders per-arm
+classes or scalar <code>Annotated</code> types &mdash; <code>core/macro-bearing-url.json</code>'s pattern arms are
+already constrained scalar classes), and field-level annotations the Emitter already expresses
+(<code>type</code>, <code>format</code>, bounds, <code>minItems</code> on a field's own declaration).</p>
+
+<h2>3&nbsp;&middot;&nbsp;The design</h2>
+
+<h3>3.1&nbsp;&middot;&nbsp;One reading of a schema node</h3>
+
+<p>New module <code>scripts/schema_constraints.py</code>. It is the only code that reads root constraint content;
+the two partial extractors are deleted in the commits that wire it (&sect;4). It produces one structured record per
+schema root:</p>
+
+<pre><code>@dataclass(frozen=True)
+class Arm:
+    pointer: str                              # "anyOf/0" — provenance, never identity
+    title: str | None                         # identity source 1
+    discriminator: tuple[str, str] | None     # identity source 2: (property, const)
+    required: tuple[str, ...]                 # identity source 3, and a constraint
+    declares_fields: bool                     # properties introducing new fields → class-creating arm
+    condition: Cond                           # the WHOLE arm as one constraint tree
+
+@dataclass(frozen=True)
+class RootConstraints:
+    combinator: Literal["anyOf", "oneOf"] | None
+    arms: tuple[Arm, ...]
+    conjuncts: tuple[Cond, ...]   # root if/then/else, dependencies, dependentRequired,
+                                  # root not, and constraint arms of a root allOf
+
+def read_root_constraints(schema: dict, declared: DeclaredShape) -> RootConstraints: ...</code></pre>
+
+<p>Three consumers, all taking the same record and nothing else from the node:</p>
+<ul>
+<li>the <strong>validator pass</strong> (replacing <code>enforce_root_required_groups</code>) compiles
+<code>arms[*].condition</code> and <code>conjuncts</code> into the root class's model validator;</li>
+<li>the <strong>Emitter</strong> takes field shapes from <code>properties</code> as today, arm identity from the
+record, and compiles each arm's constraint <em>residue</em> (what its class structure does not already carry) into
+that arm class's own validator;</li>
+<li>the <strong>naming rule</strong> (<code>scripts/union_arm_names.py</code>, designed and measured under #1409)
+takes <code>title</code> / <code>discriminator</code> / <code>required</code> and the class-creating classification
+from the same record.</li>
+</ul>
+
+<p><code>Cond</code> is a closed grammar of about fifteen node kinds, sized by the census:</p>
+
+<pre><code>Supplied(name)                      # required: the caller sent the field (model_fields_set)
+Not(c) · AllOf(cs) · AnyOf(cs) · OneOf(cs) · IfThen(if_, then, else_)
+PropSatisfies(name, c)              # descend into a supplied value; vacuously true when absent
+ValueConst(v) · ValueEnum(vs) · ValueType(t) · ValuePattern(p)
+ValueLen(min, max) · ValueBounds(ge, le, gt, lt) · ValueItems(min, max) · ValueUnique()
+EveryItem(c) · SomeItem(c)          # items / contains
+KeysSatisfy(c) · PropCount(min, max)   # propertyNames / minProperties, maxProperties
+DependentRequired(name, names)      # dependencies, dependentRequired
+Restated()                          # a keyword proven identical to the declaration (§3.3)</code></pre>
+
+<h3>3.2&nbsp;&middot;&nbsp;Emission: every keyword kind it knows, as the hand-patch wrote it</h3>
+
+<p>A small hand-written vocabulary module, <code>src/adcp/types/_conditions.py</code> (&asymp;10 primitives, a few
+lines each, unit-tested once: <code>supplied</code>, <code>const_is</code>, <code>every_item</code>,
+<code>none_of</code>, &hellip;). The generator emits <em>compositions</em> of those primitives &mdash; one
+<code>@model_validator(mode='after')</code> per flat root, one per arm class &mdash; so the emitted code reads like
+the experiment commit, which is the explicit target shape:</p>
+
+<pre><code># compiled from media-buy/create-media-buy-request.json anyOf — titles from the arms themselves
+explicit_packages_with_fixed_allocation = (
+    'packages' in supplied
+    and 'proposal_id' not in supplied
+    and _c.const_is(self, 'budget_allocation', 'mode', 'fixed', vacuous=True)
+    and all(
+        'budget' in p.model_fields_set and 'min_spend_target' not in p.model_fields_set
+        for p in self.packages or ()
+    )
+)</code></pre>
+
+<ul>
+<li><strong><code>required</code></strong> &rarr; <code>model_fields_set</code> membership. The hand-patch's
+documented convention is kept: an explicit null is supplied (on a mutation input it is the command to clear); a
+default the caller never sent is not. <strong>The presence guard is membership, never <code>is None</code></strong>
+&mdash; measured: an <code>is&nbsp;None</code> guard is only correct when the field's default happens to be None; a
+non-None default makes it false for an absent field and the check over-refuses, while unguarded attribute access
+raises on absence and explicit null alike.</li>
+<li><strong><code>not</code></strong>, all three measured forms: <code>{required:&nbsp;[...]}</code> &rarr; absence;
+<code>{anyOf:&nbsp;[...]}</code> &rarr; <code>not any(...)</code>; <code>{properties, required}</code> &rarr;
+negated conjunction of presence and the property predicate
+(&ldquo;not (status supplied and status&nbsp;==&nbsp;'submitted')&rdquo;).</li>
+<li><strong>Property <code>const</code>/<code>enum</code></strong>, including through nested
+<code>properties</code>/<code>required</code> chains &rarr; attribute comparison, vacuous when the carrying object
+was not supplied <em>or is an explicit null</em> (JSON Schema <code>properties</code> grades present object members
+only). The descent short-circuits on the nested instance's own <code>model_fields_set</code>
+(<code>'mode'&nbsp;in&nbsp;self.budget_allocation.model_fields_set</code>), which is what keeps the
+<code>const</code> case mechanical: the emitter never needs to statically resolve a nested annotation like
+<code>budget_allocation</code>'s discriminated union alias at runtime.</li>
+<li><strong>Nested <code>allOf</code> over array items</strong> &rarr; <code>all(...)</code> over the list, with a
+<code>$ref</code> arm admitted only as a proven restatement (&sect;3.3).</li>
+<li><strong><code>if/then/else</code></strong> &rarr; implication; <strong><code>dependencies</code> /
+<code>dependentRequired</code></strong> &rarr; implication over presence; <strong><code>contains</code> /
+<code>propertyNames</code> / <code>min</code>/<code>maxProperties</code> / <code>uniqueItems</code> /
+value bounds / patterns</strong> &rarr; the obvious one-line predicates.</li>
+</ul>
+
+<p><strong>Wire aliases.</strong> <code>model_fields_set</code> holds <em>field</em> names, not wire names
+(measured: a field aliased <code>schema</code> appears as <code>schema_</code>), so every schema-named property in a
+compiled predicate passes through a wire&rarr;field map before emission. The map comes from the imported staged
+class's <code>model_fields</code> &mdash; <code>FieldInfo.alias</code> carries it &mdash; which is the second
+reason &sect;3.2 resolves classes by import rather than by AST. Where a nested annotation is a union alias, the map
+is taken from the union's members, and members that disagree on a constrained name refuse; nothing is skipped and
+nothing guessed. (No field in the arms measured at the pin is aliased, so this path is a precondition proof, not a
+live rewrite.)</p>
+
+<p><strong>Why a recursive compiler and not a flat rule table.</strong> The <code>contains</code> case
+(<code>control-media-buy-request</code>'s root <code>allOf</code>, under <code>if&nbsp;{required:[bidding]}</code>)
+needs a per-element predicate over a path two hops deep (<code>goal.target.kind</code>), and each hop needs its own
+vacuity decision &mdash; the second hop is past where the runtime <code>model_fields_set</code> short-circuit alone
+can carry it, because emitting the hop requires the first hop's type. Import-based resolution supplies that type at
+generation time, and the <code>Cond</code> tree composes the per-hop guards the same way at every depth. A flat
+table of arm-shape rules bottoms out exactly here; the recursive grammar does not.</p>
+
+<p><strong>Combinator semantics.</strong> <code>anyOf</code> &rarr; at least one arm's full predicate holds.
+<code>oneOf</code> on a flat root &rarr; <em>exactly one</em> &mdash; derivable now, because predicates are
+complete; the old pass's docstring was right that cardinality is not derivable from <code>required</code> alone,
+and that reason dissolves with the partial reading. The parser refuses to compile exactly-one for a
+<code>oneOf</code> whose arm carries a declared-behavioral key (&sect;3.3) &mdash; measured zero such arms in
+population A at the pin &mdash; so cardinality is never silently approximated. For union-rendered responses, arm
+membership is pydantic's union validation; each arm class enforces its own residue, and cross-arm exclusivity
+stays with wire validation (&sect;6).</p>
+
+<p><strong>Where a validator lands.</strong> The pass resolves the class and its field set by importing the staged
+module and reading <code>model_fields</code> &mdash; the same way <code>consolidate_exports.py</code> already
+imports the staging tree &mdash; replacing the AST base-walker whose unresolved-base failures are two of today's
+skip reasons. It runs after <code>rewrite_scalar_rootmodels</code> (last substantive fix, so classes are final) and
+before the import-hygiene passes (it adds imports), honoring the ordering contract documented in
+<code>docs/design/type-generation.md</code>. A constraint naming a field that exists on no class for that schema is
+a refusal, not a skip &mdash; that is a generator field-drop surfacing loudly.</p>
+
+<p><strong>Error messages are a contract surface.</strong> Two tests match on the emitted wording
+(<code>tests/test_codegen_contract_compatibility.py:297</code> and <code>:322</code>, both
+<code>match="at least one of these field groups"</code>), so a generator that changes the text breaks tests
+regardless of behavior &mdash; the experiment already tripped this. The emitted message therefore keeps the
+<code>"at least one of these field groups"</code> prefix and names the arms by their schema <code>title</code>s
+(&ldquo;&hellip; field groups: Explicit packages with fixed allocation | &hellip;&rdquo;) &mdash; schema-derived
+text, not authored, and more readable than synthesized field lists. This is the one place the series could break
+tests for a non-behavioral reason, and this sentence is what prevents it.</p>
+
+<p><strong>Cost.</strong> Compiled Python, no runtime schema walking: the hand-patch measured the whole approach at
+noise level (&sect;1). The vocabulary module adds no import weight beyond what generated modules already carry.</p>
+
+<h3>3.3&nbsp;&middot;&nbsp;Refusal: the closure rule</h3>
+
+<p>Parsing is key-consuming. For every node it visits, the parser must account for every key as exactly one of:</p>
+
+<ol>
+<li><strong>Compiled</strong> &mdash; consumed by a grammar production above.</li>
+<li><strong>Annotation</strong> &mdash; a named frozen set: <code>title</code>, <code>description</code>,
+<code>deprecated</code>, <code>examples</code>, <code>$comment</code>, <code>default</code>, <code>x-entity</code>,
+<code>x-status</code>, <code>x-deprecated-in</code>, <code>x-removed-in</code>. These carry no validation
+semantics by JSON Schema's own definition.</li>
+<li><strong>Declared behavioral</strong> &mdash; exactly <code>{x-adcp-validation}</code>. <code>docs/validation-contract.md</code>
+already states these rules are outside the structural models' promise and are carried by canonical wire validation
+plus targeted hand-written validators (e.g. <code>MediaBuyChangeTerm</code>). The parser records the classification
+on the record (so <code>oneOf</code> cardinality can refuse, above); it is a contract citation, not a tolerance
+entry &mdash; there is no per-schema list.</li>
+<li><strong>Proven restatement</strong> &mdash; <code>type</code>, <code>$ref</code>, <code>format</code>, or a
+property re-declaration inside constraint content compiles to <code>Restated()</code> <em>only</em> when it
+resolves equal to what the generated class already declares for that position (same resolved <code>$ref</code>
+target, same type). <code>create-media-buy-request</code>'s <code>packages.items.allOf[0].$ref</code> to
+<code>package-request.json</code> is the worked case. A narrowing compiles as a value predicate when the grammar
+expresses it; equality is checked, never assumed.</li>
+</ol>
+
+<p>Any other key raises <code>UnexpressibleKeywordError(schema_file, json_pointer, keyword)</code> and generation
+aborts before install &mdash; <code>generate_types.py</code>'s staging-and-rollback semantics already guarantee the
+checkout stays clean. <strong>There is no list of known-dropped keywords anywhere in the design.</strong> A keyword
+is compiled, classified by a named rule, or fatal. That is what makes the defect unconstructible rather than
+detected: a schema whose constraint content the SDK cannot express cannot produce a shipped model, so the state
+&ldquo;model weaker than its schema, silently&rdquo; has no code path that reaches a release. Growing the grammar
+when a future bundle introduces a new kind is one <code>Cond</code> node, one compiler case, one constructed-node
+test &mdash; and until that lands, regeneration is red, not quiet.</p>
+
+<p>The old pass's <code>skipped</code> print lane is deleted with the pass. Its three reasons dissolve:
+&ldquo;inherits an unresolved base&rdquo; (import-based field resolution), &ldquo;no single root model class&rdquo;
+(the per-arm lane carries those), &ldquo;not one flat model over the groups&rdquo; (the constraint lands on the arm
+class that declares the fields). What cannot be placed refuses.</p>
+
+<h3>3.4&nbsp;&middot;&nbsp;Identity derived from the node</h3>
+
+<p>The naming defect is the same node read by its position instead of its content.
+<code>scripts/union_arm_names.py</code> already exists, designed and measured under
+<a href="https://github.com/adcontextprotocol/adcp-client-python/issues/1409">#1409</a>
+(branch <code>claude/issue-1409-union-arm-naming</code>): classify first (an arm adding no new property is a
+validation constraint and creates no class; bare <code>$ref</code> and scalar arms create none either), then name a
+class-creating arm by the first unique source among its <strong>title</strong>, the parent name plus its
+<strong>discriminator const</strong>, or the parent name plus its <strong>full sorted required set</strong> &mdash;
+and otherwise refuse (<code>UnnameableArmError</code>), never number. Measured on the pinned bundle: 557 root-level
+non-null arms &mdash; 169 named by title, 82 by const, 27 by required set, 278 creating no class, 1 refused.
+This design wires it: the <code>class_names</code> comprehension at
+<code>post_generate_fixes.py:5483</code> and the <code>BuildCreativeResponse</code> permutation at
+<code>:5478</code> are deleted, and the Emitter takes names from the shared <code>Arm</code> record
+(&sect;3.1) &mdash; the identity and the constraint now come from one reading.</p>
+
+<p><strong>The arm with no title</strong> (<code>content-standards/get-content-standards-response.json</code>
+oneOf[0]; no title, no discriminator const, no required set &mdash; upstream title filed as
+adcontextprotocol/adcp#7913): the rule stays total instead of gaining a fallback. The repo's refusal list already
+draws the line &mdash; <em>&ldquo;numbered classes may remain as module-internal helpers reached only through a
+field annotation, where the name is cosmetic; a public binding is the contract&rdquo;</em>. So: a nameable arm gets
+its public binding; an unnameable class-creating arm is emitted <em>module-internal</em> (underscore-prefixed,
+excluded from <code>__all__</code>, the domain namespace and the flat surface), reachable through the union alias
+that is how unions are consumed anyway. No ledger records this: it is the rule's total mapping, and the day the
+upstream title reaches the pin, the public binding appears with no repo change. Positional, invented-semantic, and
+cache-edited names are all refused.</p>
+
+<p><strong>Helper names do not reintroduce positional naming one level down.</strong> The hand-patch named two
+helpers by hand; the mechanical emitter names none. Per-arm predicates are expressions inside the one validator
+(an <code>anyOf</code> needs no named parts), locals are named by the field they test (node-derived), and
+everything reusable lives in the hand-written vocabulary module with fixed names. The only names the generator
+mints are class names, and those come from the identity rule above.</p>
+
+<p><strong>The 40 digit-suffixed public names</strong> (count: distinct <code>\w+\d</code> strings quoted in
+<code>src/adcp/types/__init__.py</code>; <code>docs/design/type-generation.md</code> counts 38 on the flat surface)
+become renames. 9.0.0 is in beta (<code>9.0.0b2</code>) &mdash; the breaking window is open now, which is the whole
+reason to land this series inside it. The rename table goes in <code>MIGRATION_v8_to_v9.md</code>; semantic aliases
+in <code>src/adcp/types/aliases.py</code> re-point as they did under PR&nbsp;#1374's renumbering measurement; no
+deprecation shim, because a shim for a name that was an ordinal pins the ordinal's meaning one release longer.</p>
+
+<h3>3.5&nbsp;&middot;&nbsp;Precedent</h3>
+<p>The shape of this fix matches the one already accepted as structural for the redeclaration defect
+(<code>CanonicalBoundaryModel.__pydantic_init_subclass__</code>, branch
+<code>fix/canonical-redeclaration-keeps-its-constraints</code> at <code>99b7e327c</code>): derive the correct
+artifact from the one source at construction time, so the wrong artifact is never built &mdash; instead of checking
+the built artifact afterwards. Here the source is the schema node, the construction is generation, and the
+derivation either completes or refuses.</p>
+
+<h2>4&nbsp;&middot;&nbsp;How it lands: six commits, each leaving the SDK coherent</h2>
+
+<table>
+<tr><th>#</th><th>Commit</th><th>Contents</th><th>What proves it</th></tr>
+<tr><td class="num">1</td>
+<td><code>feat(codegen): one reader for a schema root's constraint content</code></td>
+<td><code>scripts/schema_constraints.py</code>: the <code>Cond</code> grammar, <code>read_root_constraints</code>,
+the closure rule, <code>UnexpressibleKeywordError</code>. Nothing wired; generated tree untouched.</td>
+<td>Constructed-node unit tests per grammar production, and the <strong>bundle-closure test</strong>: every root
+constraint node in the pinned bundle parses with zero unaccounted keys &mdash; the census of &sect;2 turned into a
+guard. <code>generate_types.py --check</code> stays clean.</td></tr>
+<tr><td class="num">2</td>
+<td><code>feat(types): the condition vocabulary</code></td>
+<td><code>src/adcp/types/_conditions.py</code>: &asymp;10 hand-written primitives.</td>
+<td>One unit test per primitive, including the suppliedness convention (explicit null vs default) and vacuous
+descent.</td></tr>
+<tr><td class="num">3</td>
+<td><code>feat(codegen): compile the whole root constraint, not its required names</code></td>
+<td>The validator pass consumes <code>RootConstraints</code>; <code>_root_required_groups</code> and
+<code>enforce_root_required_groups</code> are deleted; flat-root <code>oneOf</code> gains exactly-one; roots with
+non-combinator constraints (get-signals and 26 peers) gain validators for the first time. Regenerate.</td>
+<td>The experiment branch's nine <code>create_media_buy</code> parity cases land as fixtures and pass un-silenced;
+the three <code>validation-model-divergences.json</code> entries flip to <code>pydantic_valid: false</code> and are
+deleted; one break-it-on-purpose run (remove a grammar production, watch the closure test and a parity fixture go
+red, restore by editing back).</td></tr>
+<tr><td class="num">4</td>
+<td><code>feat(codegen): emit each response arm's constraint residue</code></td>
+<td>The Emitter consumes <code>Arm</code> records; the 22 response modules' arm classes gain residue validators
+(<code>not</code>, <code>if/then/else</code>, nested <code>anyOf</code>, <code>dependencies</code>,
+<code>contains</code>, <code>propertyNames</code>).</td>
+<td>New parity fixtures for the two census shapes the hand-patch never met:
+<code>preview-creative-response</code> (the <code>not+properties</code> form) and
+<code>build-creative-response</code> oneOf[2] (the <code>if/then</code> arm).</td></tr>
+<tr><td class="num">5</td>
+<td><code>feat(codegen): name union arms from their node</code></td>
+<td>Wire <code>scripts/union_arm_names.py</code>; delete the positional comprehension and the BuildCreative
+permutation; module-internal handling for the one unnameable arm; rename table in
+<code>MIGRATION_v8_to_v9.md</code>; <code>aliases.py</code> re-pointed.</td>
+<td><code>test_no_derived_name_is_positional</code> now also reads the <em>generated</em> classes (the gap #1409's
+notes name); the public-surface snapshot diff is exactly the migration table; adopter-path test
+(<code>test_adopter_public_paths.py</code>) green.</td></tr>
+<tr><td class="num">6</td>
+<td><code>chore(tests): the divergence ledger is empty and stays empty</code></td>
+<td>Delete <code>tests/fixtures/validation-model-divergences.json</code>; the parity test asserts the divergence
+set equals the empty set, with no allowlist parameter left to grow.</td>
+<td>The test itself: any future canonical-negative that passes Pydantic fails the suite with no file to append
+to.</td></tr>
+</table>
+
+<p class="small">Every commit's gate: <code>pytest tests/</code> and <code>python scripts/generate_types.py --check</code>
+(&ldquo;Generated types are up to date&rdquo; from the committed state). Commits 3&ndash;5 regenerate the tree and
+include the regeneration in the same commit, per the pipeline's idempotence contract.</p>
+
+<h2>5&nbsp;&middot;&nbsp;What becomes impossible, what remains detected</h2>
+
+<table>
+<tr><th>Defect</th><th>After this design</th><th>By what mechanism</th></tr>
+<tr><td>A constraint keyword inside root constraint content dropped silently</td>
+<td class="verdict impossible">Impossible</td>
+<td>The closure rule: every key is compiled, named annotation, declared behavioral, or proven restatement &mdash;
+or generation aborts naming file, pointer, keyword. There is no shipped-but-weaker state to reach.</td></tr>
+<tr><td>Two call sites reading one node divergently (validator vs Emitter vs naming)</td>
+<td class="verdict impossible">Impossible</td>
+<td>One reader produces one record; the partial extractors are deleted, so a second divergent reading has nothing
+to call.</td></tr>
+<tr><td>A validator checking less than its arm states</td>
+<td class="verdict impossible">Impossible</td>
+<td>The validator is compiled from the same <code>Cond</code> tree the closure rule accounted for; the
+required-names-only extraction path no longer exists.</td></tr>
+<tr><td>A positional name on the public surface; an arm's public name moving when upstream reorders arms</td>
+<td class="verdict impossible">Impossible</td>
+<td>Public bindings derive from node identity (title / const / required set) and the numbering path plus the
+hand-reorder are deleted; an unnameable arm yields no public binding rather than a number.</td></tr>
+<tr><td>A new keyword kind in a future bundle quietly widening the models</td>
+<td class="verdict impossible">Impossible</td>
+<td>Regeneration refuses until the grammar grows by a reviewed node + test. (The cost is a red regeneration; see
+&sect;6.)</td></tr>
+<tr><td><code>x-adcp-validation</code> behavioral rules</td>
+<td class="verdict detected">Remains detected</td>
+<td>Declared outside the structural models' promise by <code>docs/validation-contract.md</code>; carried by
+canonical wire validation and targeted hand validators; the parity suite detects regressions. This is a scope
+contract, cited by the parser &mdash; not a per-schema tolerance list.</td></tr>
+<tr><td><code>oneOf</code> exclusivity across union-rendered response arms</td>
+<td class="verdict detected">Remains detected</td>
+<td>Pydantic union validation picks an arm; each arm enforces its own residue; cross-arm exactly-one stays with
+canonical wire validation. Flat-root <code>oneOf</code>, by contrast, becomes enforced exactly-one.</td></tr>
+<tr><td>Field-level format semantics pydantic lacks (e.g. <code>uri-template</code> &rarr; <code>str</code>)</td>
+<td class="verdict detected">Remains detected</td>
+<td>A pre-existing type-level looseness outside this defect class; wire validation carries it. Named here so the
+coverage claim is not read as total.</td></tr>
+<tr><td>The differential parity corpus itself</td>
+<td class="verdict detected">Remains detected (by design)</td>
+<td>Finite hand-added fixtures stay as detection in depth. The structural guarantee is the parser's refusal; the
+corpus is the independent witness that it holds on real documents.</td></tr>
+</table>
+
+<h2>6&nbsp;&middot;&nbsp;The strongest argument against this design</h2>
+
+<div class="box warn">
+<p><strong>It makes generated request models stricter, and it makes regeneration brittle on purpose.</strong>
+Every adopter who constructs a <code>CreateMediaBuyRequest</code> that names a <code>proposal_id</code> alongside
+<code>packages</code>, or a package without a budget under fixed allocation, parses fine on 8.x and raises on 9.0
+&mdash; including test fixtures and incremental builders that fill fields after construction. And the closure rule
+means any future bundle sync that introduces one new keyword anywhere in root constraint content turns regeneration
+red until someone grows the grammar: the SDK's refresh cadence is now coupled to upstream schema authors' keyword
+choices.</p>
+</div>
+
+<p>The answer, in both halves. The strictness is the protocol's: every document these validators refuse is a
+document canonical wire validation already refuses, so the adopters who break were shipping requests sellers
+reject &mdash; 9.0.0 is in beta precisely so this class of correction lands inside an already-breaking major, and
+the repo's own validation contract already points adopters who need laxity at <code>model_construct</code> and the
+<code>ValidationHookConfig</code> escape hatches. The brittleness is the design: the previous behavior &mdash;
+regeneration always green, models quietly weaker &mdash; is the defect this document exists to end, and the red
+state is cheap to exit (one grammar node, one compiler case, one test) and impossible to ignore. What would
+genuinely weigh against shipping is a mismatch between a compiled predicate's semantics and JSON Schema's on some
+corner (e.g. <code>properties</code> grading only present members, nulls under <code>required</code>); the
+suppliedness conventions in &sect;3.2 pin those corners, the vocabulary tests grade them one by one, and the parity
+corpus checks the composition against the canonical validator on real documents &mdash; the one place a semantic
+slip would land first.</p>
+
+<p class="small" style="margin-top:2.5rem">Sources read for this design: <code>scripts/post_generate_fixes.py</code>
+(7,522 lines; <code>_root_required_groups:7029</code>, <code>enforce_root_required_groups:7217</code>,
+<code>restore_response_variant_aliases:4939</code>, positional naming <code>:5483</code>, permutation
+<code>:5478</code>), <code>docs/design/type-generation.md</code>, <code>docs/validation-contract.md</code>,
+<code>tests/test_validation_parity.py</code> + fixtures, generated
+<code>src/adcp/types/domains/media_buy/create_media_buy_request.py</code>, experiment branch
+<code>experiment/handpatch-arm-conditions</code> (<code>0537063a2</code>, <code>4ad62cdaf</code>,
+<code>00720022b</code>), issue #1409 and its measured <code>union_arm_names.py</code>. Census scripts were run
+against the pinned bundle <code>schemas/cache/3.2</code>; all counts in &sect;2 are from that run.</p>
+
+</main>
+</body>
+</html>

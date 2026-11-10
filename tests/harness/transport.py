@@ -197,6 +197,49 @@ class E2EConfig:
     tls_base_url: str | None = None
     ca_bundle: str | None = None
 
+    @classmethod
+    def from_environment(cls) -> E2EConfig | None:
+        """Read one stack configuration, refusing a configured stack that fails health."""
+        import os
+        import re
+        import ssl
+        from pathlib import Path
+
+        import httpx
+
+        base_url = os.environ.get("E2E_BASE_URL")
+        postgres_url = os.environ.get("E2E_POSTGRES_URL")
+        sales_port = os.environ.get("ADCP_SALES_PORT")
+        pg_port = os.environ.get("POSTGRES_PORT")
+        if not base_url and not sales_port:
+            return None
+        base_url = base_url or f"http://localhost:{sales_port}"
+        postgres_url = (
+            postgres_url or f"postgresql://adcp_user:secure_password_change_me@localhost:{pg_port or '5435'}/adcp"
+        )
+        ca_bundle = os.environ.get("E2E_CA_BUNDLE")
+        tls_base_url = os.environ.get("E2E_TLS_BASE_URL")
+        worker = os.environ.get("PYTEST_XDIST_WORKER", "")
+        if os.environ.get("E2E_PER_WORKER") == "1" and worker.startswith("gw"):
+            project = os.environ.get("COMPOSE_PROJECT_NAME", "")
+            prefix = f"{project}-" if project else ""
+            base_url = f"http://{prefix}server-{worker}:8080"
+            postgres_url = re.sub(r"/[^/?]+(\?|$)", rf"/adcp_{worker}\1", postgres_url, count=1)
+            if tls_base_url:
+                tls_base_url = f"https://{prefix}tls-{worker}.adcp.test:8443"
+        verify = {}
+        if base_url.startswith("https://") and ca_bundle and Path(ca_bundle).is_file():
+            verify["verify"] = ssl.create_default_context(cafile=ca_bundle)
+        try:
+            httpx.get(f"{base_url}/health", timeout=5, **verify).raise_for_status()
+        except (httpx.TransportError, ssl.SSLError) as exc:
+            raise RuntimeError(
+                f"The configured E2E stack is unreachable at {base_url}/health (E2E_CA_BUNDLE={ca_bundle!r})"
+            ) from exc
+        except httpx.HTTPStatusError as exc:
+            raise RuntimeError(f"The configured E2E stack failed health at {base_url}/health") from exc
+        return cls(base_url, postgres_url, tls_base_url, ca_bundle)
+
 
 # The two values TransportResult.envelope["status"] may take. A DERIVED enum,
 # never a synthesized HTTP status_code: fabricating an integer for MCP/A2A would
@@ -630,6 +673,24 @@ class TransportResult:
                     f"{layer} carries no buyer-facing suggestion for {code}; the spec places the "
                     f"hint at the top level of the error object: {envelope}"
                 )
+
+    def assert_auth_challenge(self, code: str) -> None:
+        """Grade the real HTTP bearer refusal, including its supported scheme.
+
+        AdCP security storyboard probe_unauth requires a challenge on 401.
+        This seller uses Bearer and distinguishes an invalid token per RFC 6750.
+        """
+        expected = {"AUTH_MISSING": "Bearer", "AUTH_INVALID": 'Bearer error="invalid_token"'}
+        assert code in expected, f"Unsupported bearer refusal code: {code!r}"
+        assert self.is_error, f"Expected {code}, but the request succeeded"
+        response = self.raw_response
+        assert response is not None and hasattr(response, "status_code"), (
+            "No raw HTTP response carries the auth challenge"
+        )
+        assert response.status_code == 401, f"Expected HTTP 401 for {code}, got {response.status_code}"
+        assert response.headers.get("WWW-Authenticate") == expected[code], (
+            f"Expected {expected[code]!r}, got {response.headers.get('WWW-Authenticate')!r}"
+        )
 
     def assert_signature_challenge(self, code: str, *, recovery: str) -> None:
         """Assert the VERIFIER refused this dispatch with ``WWW-Authenticate: Signature error="<code>"``.

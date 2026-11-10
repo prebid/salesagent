@@ -32,8 +32,8 @@ step body and not a `docs/test-obligations/` bootstrap artifact. Spec-cite
 before writing code:
 
 ```bash
-uv run python -c "import adcp; print(adcp.get_adcp_spec_version())"   # confirm the pin, docs/adcp-spec-version.md
-git -C ~/projects/adcp show v3.1.1:dist/schemas/3.1.1/core/<schema>.json
+SPEC=$(uv run python -c 'import adcp; print(adcp.get_adcp_spec_version())')   # docs/adcp-spec-version.md
+git -C ~/projects/adcp show "v$SPEC:dist/schemas/$SPEC/core/<schema>.json"
 ```
 
 If the scenario's wording diverges from what the schema actually requires,

@@ -45,6 +45,9 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
     token_hash = LazyAttribute(lambda o: hash_token(plaintext_token_for(o.principal_id)))
     token_prefix = LazyAttribute(lambda o: token_prefix(plaintext_token_for(o.principal_id)))
     platform_mappings = factory.LazyFunction(lambda: {"mock": {"advertiser_id": "test_adv"}})
+    # The column default, stated: a BUILT row (unit mode) is never flushed, so the
+    # server default never fills it and ``SchemaPrincipal.from_row`` would read None.
+    billing_passthrough_only = False
 
     @staticmethod
     def _tenant_for(tenant: object, tenant_id: str, tenant_overrides: dict[str, object]) -> object:

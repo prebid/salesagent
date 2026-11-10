@@ -58,6 +58,17 @@ from tests.bdd.steps.generic.when_request import _call_via
 from tests.harness import CreativeFormatsEnv
 from tests.harness.transport import Transport, TransportResult
 
+#: The formats the seller's product declares in the wire-fidelity tests. The list projects
+#: the seller's product declarations, so without them every body would carry an empty
+#: ``formats`` array and a transport that dropped or reshaped a nested ``Format`` field
+#: would go undetected.
+DECLARED_FORMAT_IDS = ("display_300x250_image", "video_vast")
+
+
+def _assert_lists_the_declared_formats(wire: dict, transport: object) -> None:
+    listed = sorted(entry["format_id"]["id"] for entry in wire["formats"])
+    assert listed == sorted(DECLARED_FORMAT_IDS), f"{transport}: wire lists {listed}, not the declared formats"
+
 
 @pytest.mark.requires_db
 class TestWireResponseIsRealWire:
@@ -89,9 +100,10 @@ class TestWireResponseIsRealWire:
             # The request has to NAME a seller this deployment serves: one naming none is
             # refused (TENANT_UNDEFINED). This test creates no tenant of its own.
             env.setup_default_data()
+            env.declare_reference_formats(*DECLARED_FORMAT_IDS)
             result = env.call_via(Transport.REST)
             assert result.wire_response == result.raw_response.json()
-            assert "formats" in result.wire_response
+            _assert_lists_the_declared_formats(result.wire_response, Transport.REST)
             assert result.payload is not None, "REST: no typed payload captured"
             assert result.wire_response["message"] == result.payload.message, (
                 "REST body's message diverged from the response model's — "
@@ -120,13 +132,14 @@ class TestWireResponseIsRealWire:
             # The request has to NAME a seller this deployment serves: one naming none is
             # refused (TENANT_UNDEFINED). This test creates no tenant of its own.
             env.setup_default_data()
+            env.declare_reference_formats(*DECLARED_FORMAT_IDS)
             bodies = {
                 transport: env.call_via(transport) for transport in (Transport.A2A, Transport.REST, Transport.MCP)
             }
 
         for transport, result in bodies.items():
             assert isinstance(result.wire_response, dict), f"{transport}: wire_response not a dict"
-            assert "formats" in result.wire_response, f"{transport}: wire_response missing formats"
+            _assert_lists_the_declared_formats(result.wire_response, transport)
             assert result.payload is not None, f"{transport}: no typed payload captured"
             assert result.wire_response["message"] == result.payload.message, (
                 f"{transport}: body's message diverged from the response model's — "
@@ -160,8 +173,10 @@ class TestWireResponseIsRealWire:
             # The request has to NAME a seller this deployment serves: one naming none is
             # refused (TENANT_UNDEFINED). This test creates no tenant of its own.
             env.setup_default_data()
+            env.declare_reference_formats(*DECLARED_FORMAT_IDS)
             result = env.call_via(Transport.MCP)
             assert isinstance(result.wire_response, dict), "MCP: wire_response not a dict"
+            _assert_lists_the_declared_formats(result.wire_response, Transport.MCP)
             assert result.payload is not None, "MCP: no typed payload captured"
             assert result.wire_response == result.payload.model_dump(mode="json"), (
                 "MCP wire_response diverged from payload.model_dump(mode='json') — "
@@ -182,9 +197,10 @@ class TestWireResponseIsRealWire:
             # The request has to NAME a seller this deployment serves: one naming none is
             # refused (TENANT_UNDEFINED). This test creates no tenant of its own.
             env.setup_default_data()
+            env.declare_reference_formats(*DECLARED_FORMAT_IDS)
             result = env.call_via(Transport.MCP)
         assert isinstance(result.wire_response, dict), "MCP: wire_response not a dict"
-        assert "formats" in result.wire_response, "MCP: wire_response missing formats"
+        _assert_lists_the_declared_formats(result.wire_response, Transport.MCP)
         reparsed = ListCreativeFormatsResponse(**result.wire_response)
         assert reparsed.model_dump(mode="json") == result.wire_response, (
             "MCP wire_response does not round-trip through ListCreativeFormatsResponse — "

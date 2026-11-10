@@ -9,6 +9,7 @@ These tests verify the creative-level placement targeting implementation:
 
 from unittest.mock import MagicMock
 
+from tests.factories.creative import stamp_format_identity
 from tests.factories.principal import PrincipalFactory
 
 
@@ -175,7 +176,13 @@ class TestPlacementIdsValidation:
 
             # Creative validation: c1 exists, approved, no format restriction so
             # the placement check is the one that rejects.
-            mock_creative = MagicMock(creative_id="c1", status="approved", agent_url=None, format="display_300x250")
+            mock_creative = MagicMock(creative_id="c1", status="approved")
+            # The FOUR stored identity columns, through the production mapping.
+            # ``agent_url=`` and ``format=`` were loose names the Creative model does
+            # not carry; CreativeFormatIdentity.from_row reads legacy_format_id /
+            # format_kind / format_option_ref, and an unstubbed MagicMock answers each
+            # with a Mock, which is not a state those columns can hold.
+            stamp_format_identity(mock_creative, format_id="display_300x250")
             mock_uow.creatives.get_by_ids.return_value = [mock_creative]
             mock_uow.products.get_by_id.return_value = MagicMock(format_ids=[])
 
@@ -282,7 +289,13 @@ class TestPlacementIdsValidation:
 
             # Creative validation: c1 exists, approved, no format restriction so
             # the placement-support check is the one that rejects.
-            mock_creative = MagicMock(creative_id="c1", status="approved", agent_url=None, format="display_300x250")
+            mock_creative = MagicMock(creative_id="c1", status="approved")
+            # The FOUR stored identity columns, through the production mapping.
+            # ``agent_url=`` and ``format=`` were loose names the Creative model does
+            # not carry; CreativeFormatIdentity.from_row reads legacy_format_id /
+            # format_kind / format_option_ref, and an unstubbed MagicMock answers each
+            # with a Mock, which is not a state those columns can hold.
+            stamp_format_identity(mock_creative, format_id="display_300x250")
             mock_uow.creatives.get_by_ids.return_value = [mock_creative]
             mock_uow.products.get_by_id.return_value = MagicMock(format_ids=[])
 

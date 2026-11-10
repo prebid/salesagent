@@ -54,7 +54,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     # POST-S1: Per-catalog action report (created)
     # POST-S3: Platform-assigned ID and item counts
     # POST-S7: Application context echoed unchanged
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-catalogs-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
     Examples:
       | transport |
@@ -72,7 +72,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the catalog result for "feed-001" has changes including "name"
     # POST-S1: Per-catalog action report (updated)
     # POST-S4: Changes list shows what was modified
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-catalogs-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-main-mixed @main-flow @post-s1 @post-s3
   Scenario: Sync catalogs -- mixed upsert (create and update in one request)
@@ -86,7 +86,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the catalog result for "existing-feed" has action "updated" or "unchanged"
     And the catalog result for "new-feed" has action "created"
     # POST-S1: Per-catalog action reports for both catalogs
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-catalogs-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-main-item-review @main-flow @post-s3 @post-s4
   Scenario: Sync catalogs -- platform performs item-level review
@@ -114,7 +114,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the catalog result for "bad-feed" includes per-catalog errors
     # POST-S1: Per-catalog action results
     # POST-F4: Individual failure does not prevent other catalogs from processing
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-catalogs-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-main-scoped @main-flow @post-s1
   Scenario: Sync catalogs -- catalog_ids filter limits sync scope
@@ -168,7 +168,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     # POST-S5: Buyer previews changes without applying
     # POST-F1: System state unchanged (dry-run)
     # POST-S7: Application context echoed
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-catalogs-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-ext-b-validation @extension @ext-b @happy-path @post-s5
   Scenario: Dry run mode -- validation errors reported without state change
@@ -194,7 +194,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     # POST-S1: Per-catalog action reports include deleted catalogs
     # POST-S6: Buyer-managed catalogs not in request are purged
     # POST-S7: Context echoed
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-catalogs-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-ext-c-seller-safe @extension @ext-c @invariant @BR-RULE-174
   Scenario: Delete missing -- seller-managed catalogs are never deleted
@@ -206,7 +206,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     Then the catalog result for "new-catalog" has action "created"
     And seller-managed catalogs "seller-A" and "seller-B" remain unchanged
     # BR-RULE-174 INV-3: Seller-managed catalogs are never deleted
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-catalogs-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-ext-c-false @extension @ext-c @invariant @BR-RULE-174
   Scenario: Delete missing false -- no catalogs deleted
@@ -288,7 +288,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the suggestion should contain "url" or "items"
     # POST-F2: URL/items mutual exclusivity violated
     # BR-RULE-173 INV-3
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-catalogs-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-ext-e-invalid-type @extension @ext-e @error @post-f2
   Scenario: Invalid request -- catalog type not in enum
@@ -301,7 +301,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the suggestion should contain "type"
     # POST-F2: Catalog type not in 13-value enum
     # BR-RULE-173 INV-2
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-catalogs-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-ext-e-mapping-xor @extension @ext-e @error @post-f2
   Scenario: Invalid request -- feed field mapping has both feed_field and value
@@ -314,7 +314,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the suggestion should contain "feed_field" or "value"
     # POST-F2: Mapping feed_field XOR value constraint violated
     # BR-RULE-175 INV-2
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-catalogs-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-ext-e-target-xor @extension @ext-e @error @post-f2
   Scenario: Invalid request -- feed field mapping has both catalog_field and asset_group_id
@@ -327,7 +327,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the suggestion should contain "catalog_field" or "asset_group_id"
     # POST-F2: Mapping catalog_field XOR asset_group_id constraint violated
     # BR-RULE-175 INV-3
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-catalogs-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-ext-e-gtin @extension @ext-e @error @post-f2
   Scenario: Invalid request -- GTIN with invalid format
@@ -340,7 +340,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the suggestion should contain "GTIN" or "numeric"
     # POST-F2: GTIN pattern violated (must be 8-14 numeric digits)
     # BR-RULE-176 INV-3
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-catalogs-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-ext-e-strict @extension @ext-e @error @post-f2
   Scenario: Invalid request -- strict validation mode fails entire sync on any error
@@ -354,7 +354,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the suggestion should contain "validation"
     # POST-F2: Strict mode -- single catalog error fails entire operation
     # BR-RULE-172 INV-5
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-catalogs-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-ext-e-idempotency-missing @extension @ext-e @error @post-f1 @post-f2
   Scenario: Invalid request -- idempotency_key is missing
@@ -366,7 +366,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the suggestion should contain "idempotency_key"
     # POST-F1: system state unchanged (idempotency_key is a required top-level field in v3.1)
     # POST-F2: idempotency_key missing -> INVALID_REQUEST
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-catalogs-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-ext-e-idempotency-too-short @extension @ext-e @error @post-f2
   Scenario: Invalid request -- idempotency_key shorter than minimum length
@@ -460,7 +460,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the submitted response includes a task_id
     # POST-S8: Buyer receives submitted acknowledgment
     # BR-RULE-178 INV-1: sync operation queued -> status submitted + required task_id
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-catalogs-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-ext-j-working @extension @ext-j @async @post-s8
   Scenario: Async lifecycle -- working progress with catalog and item counts
@@ -522,7 +522,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     # POST-S10: at-most-once -- retry does not double-apply or re-fire side effects
     # POST-S1: replayed response reports the same per-catalog actions as the original
     # BR-RULE-211 INV-2: matching key + identical payload -> original response, no new state
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-catalogs-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-ext-l-different-account @extension @ext-l @idempotency @happy-path @post-s1
   Scenario: Idempotent replay -- same idempotency_key on a different account is a new execution
@@ -1134,7 +1134,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the catalog result for "app-feed-001" includes item_count
     # POST-S1: typed app catalog upsert returns created action
     # POST-S3: platform_id and item_count present on typed catalog
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-catalogs-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-type-app-invalid-platform @typed-catalog @app-item @error
   Scenario: App item with platform outside enum is rejected
@@ -1144,7 +1144,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the error should include "suggestion" field
     And the suggestion should contain "platform"
     # BR-RULE-173: typed item field-enum validation (app platform: ios|android)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-catalogs-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-type-destination @typed-catalog @destination-item @post-s1
   Scenario: Sync destination-type catalog with inline destinations
@@ -1154,7 +1154,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the catalog result for "dest-feed-001" has action "created"
     And the catalog result for "dest-feed-001" includes item_count
     # POST-S1: typed destination catalog upsert returns created action
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-catalogs-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-type-destination-invalid-country @typed-catalog @destination-item @error
   Scenario: Destination item with non ISO-3166-1 alpha-2 country is rejected
@@ -1164,7 +1164,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the error should include "suggestion" field
     And the suggestion should contain "country"
     # BR-RULE-173: destination country must match ^[A-Z]{2}$
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-catalogs-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-type-education @typed-catalog @education-item @post-s1
   Scenario: Sync education-type catalog with inline programs
@@ -1174,7 +1174,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the catalog result for "edu-feed-001" has action "created"
     And the catalog result for "edu-feed-001" includes item_count
     # POST-S1: typed education catalog upsert returns created action
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-catalogs-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-type-education-invalid-degree @typed-catalog @education-item @error
   Scenario: Education item with degree_type outside enum is rejected
@@ -1184,7 +1184,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the error should include "suggestion" field
     And the suggestion should contain "degree_type"
     # BR-RULE-173: education degree_type enum (certificate|associate|bachelor|master|doctorate|professional|bootcamp)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-catalogs-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-type-flight @typed-catalog @flight-item @post-s1
   Scenario: Sync flight-type catalog with inline routes
@@ -1194,7 +1194,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the catalog result for "flight-feed-001" has action "created"
     And the catalog result for "flight-feed-001" includes item_count
     # POST-S1: typed flight catalog upsert returns created action
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-catalogs-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-type-flight-invalid-airport @typed-catalog @flight-item @error
   Scenario: Flight item with non-IATA airport_code is rejected
@@ -1204,7 +1204,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the error should include "suggestion" field
     And the suggestion should contain "airport_code"
     # BR-RULE-173: flight airport_code must match IATA pattern ^[A-Z]{3}$
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-catalogs-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-type-hotel @typed-catalog @hotel-item @post-s1
   Scenario: Sync hotel-type catalog with inline properties
@@ -1214,7 +1214,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the catalog result for "hotel-feed-001" has action "created"
     And the catalog result for "hotel-feed-001" includes item_count
     # POST-S1: typed hotel catalog upsert returns created action
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-catalogs-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-type-hotel-invalid-star-rating @typed-catalog @hotel-item @error
   Scenario: Hotel item with star_rating outside 1-5 range is rejected
@@ -1224,7 +1224,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the error should include "suggestion" field
     And the suggestion should contain "star_rating"
     # BR-RULE-173: hotel star_rating bounded integer 1-5
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-catalogs-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-type-job @typed-catalog @job-item @post-s1
   Scenario: Sync job-type catalog with inline postings
@@ -1234,7 +1234,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the catalog result for "job-feed-001" has action "created"
     And the catalog result for "job-feed-001" includes item_count
     # POST-S1: typed job catalog upsert returns created action
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-catalogs-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-type-job-invalid-employment-type @typed-catalog @job-item @error
   Scenario: Job item with employment_type outside enum is rejected
@@ -1244,7 +1244,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the error should include "suggestion" field
     And the suggestion should contain "employment_type"
     # BR-RULE-173: job employment_type enum (full_time|part_time|contract|temporary|internship|freelance)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-catalogs-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-type-real-estate @typed-catalog @real-estate-item @post-s1
   Scenario: Sync real-estate-type catalog with inline listings
@@ -1254,7 +1254,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the catalog result for "re-feed-001" has action "created"
     And the catalog result for "re-feed-001" includes item_count
     # POST-S1: typed real-estate catalog upsert returns created action
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-catalogs-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-type-real-estate-invalid-listing-type @typed-catalog @real-estate-item @error
   Scenario: Real estate item with listing_type outside enum is rejected
@@ -1264,7 +1264,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the error should include "suggestion" field
     And the suggestion should contain "listing_type"
     # BR-RULE-173: real_estate listing_type enum (for_sale|for_rent)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-catalogs-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-type-store @typed-catalog @store-item @post-s1
   Scenario: Sync store-type catalog with inline locations and catchments
@@ -1274,7 +1274,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the catalog result for "store-feed-001" has action "created"
     And the catalog result for "store-feed-001" includes item_count
     # POST-S1: typed store catalog upsert returns created action
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-catalogs-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-type-store-radius-catchment @typed-catalog @store-item @post-s1
   Scenario: Sync store catalog with radius-based catchment
@@ -1283,7 +1283,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     Then the response is a SyncCatalogsSuccess with a catalogs array
     And the catalog result for "store-feed-radius" has action "created"
     # Catchment radius mode (catchment.json oneOf branch 2)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-catalogs-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-type-store-geojson-catchment @typed-catalog @store-item @post-s1
   Scenario: Sync store catalog with pre-computed GeoJSON catchment
@@ -1292,7 +1292,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     Then the response is a SyncCatalogsSuccess with a catalogs array
     And the catalog result for "store-feed-geojson" has action "created"
     # Catchment GeoJSON mode (catchment.json oneOf branch 3)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-catalogs-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-type-store-catchment-conflict @typed-catalog @store-item @error
   Scenario: Store catchment with both radius and travel_time is rejected
@@ -1302,7 +1302,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the error should include "suggestion" field
     And the suggestion should contain "catchment"
     # BR-RULE-173: catchment.json oneOf -- exactly one of travel_time+transport_mode, radius, geometry
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-catalogs-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-type-vehicle @typed-catalog @vehicle-item @post-s1
   Scenario: Sync vehicle-type catalog with inline inventory
@@ -1312,7 +1312,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the catalog result for "vehicle-feed-001" has action "created"
     And the catalog result for "vehicle-feed-001" includes item_count
     # POST-S1: typed vehicle catalog upsert returns created action
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-catalogs-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-type-vehicle-invalid-condition @typed-catalog @vehicle-item @error
   Scenario: Vehicle item with condition outside enum is rejected
@@ -1322,7 +1322,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the error should include "suggestion" field
     And the suggestion should contain "condition"
     # BR-RULE-173: vehicle condition enum (new|used|certified_pre_owned)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-catalogs-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-type-price-invalid-currency @typed-catalog @price @error
   Scenario: Typed item with non ISO-4217 currency on price is rejected
@@ -1332,7 +1332,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the error should include "suggestion" field
     And the suggestion should contain "currency"
     # BR-RULE-173: price.currency must match ^[A-Z]{3}$ across all typed items (S36)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-catalogs-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-type-price-negative-amount @typed-catalog @price @error
   Scenario: Typed item with negative price amount is rejected
@@ -1342,7 +1342,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the error should include "suggestion" field
     And the suggestion should contain "amount"
     # BR-RULE-173: price.amount minimum 0 (S36)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-catalogs-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-type-mixed-verticals @typed-catalog @post-s1
   Scenario: Sync multiple typed catalogs of different verticals in one request

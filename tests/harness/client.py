@@ -61,6 +61,7 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Callable
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from tests.harness.address_table import ADDRESS_TABLE, ToolAddress
@@ -244,13 +245,15 @@ def _deliver_e2e_rest(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str,
         return getattr(client, method)(wrapped["url"], json=wrapped["body"], headers=headers)
 
 
-def _mcp_http_client(**kwargs: Any):
+def _mcp_http_client(*, refusals: list[Any] | None = None, **kwargs: Any):
     """Keep JSON refusal bodies readable after the SDK closes its HTTP stream."""
     from mcp.shared._httpx_utils import create_mcp_http_client
 
     async def _read_error_body(response):
-        if response.is_error and response.headers.get("content-type", "").startswith("application/json"):
+        if response.is_error and response.request.method == "POST":
             await response.aread()
+            if refusals is not None:
+                refusals.append(response)
 
     # fastmcp calls create_mcp_http_client(headers, timeout, auth). Drop
     # follow_redirects so this factory stays that call plus the body hook.
@@ -297,8 +300,14 @@ def _deliver_e2e_mcp(
     headers = _presented(env, credential)
     url = f"{env.e2e_config.base_url}/mcp/"
 
+    from functools import partial
+
+    refusals: list[Any] = []
+
     async def _call() -> DeliverResult:
-        mcp_transport = StreamableHttpTransport(url=url, headers=headers, httpx_client_factory=_mcp_http_client)
+        mcp_transport = StreamableHttpTransport(
+            url=url, headers=headers, httpx_client_factory=partial(_mcp_http_client, refusals=refusals)
+        )
         async with Client(transport=mcp_transport) as mcp_client:
             result = await mcp_client.call_tool(address.name, wrapped)
             return DeliverResult(payload=result.structured_content, wire_response=result.structured_content)
@@ -309,10 +318,16 @@ def _deliver_e2e_mcp(
         # Preserve the received envelope and HTTP challenge through one reader.
         # Unrecognized bodies remain transport failures with no invented code.
         import httpx
+        import httpx2
 
-        from tests.harness._base import WireRefusal
+        from tests.harness._base import WireRefusal, _mcp_jsonrpc_result
 
-        response = exc.response if isinstance(exc, httpx.HTTPStatusError) else None
+        if refusals:
+            response = refusals[-1]
+            _mcp_jsonrpc_result(response)
+            raise WireRefusal(f"MCP HTTP {response.status_code} without an AdCP error envelope", response) from exc
+
+        response = exc.response if isinstance(exc, httpx.HTTPStatusError | httpx2.HTTPStatusError) else None
         wire_error = _mcp_wire_error(exc, response)
         if wire_error is not exc:
             raise wire_error from exc
@@ -402,7 +417,7 @@ def _deliver_e2e_a2a(
     import httpx
     from a2a.utils import constants as a2a_constants
 
-    from tests.harness._base import WireError, _wire_envelope
+    from tests.harness._base import WireError, _a2a_jsonrpc_result, _wire_envelope
 
     if not env.e2e_config:
         raise RuntimeError("E2E dispatch requires env.e2e_config (pass e2e_config= to env)")
@@ -417,42 +432,7 @@ def _deliver_e2e_a2a(
     with httpx.Client(base_url=env.e2e_config.base_url, timeout=30) as http_client:
         response = http_client.post("/a2a", json=rpc_body, headers=headers)
 
-    # PARSE BEFORE raise_for_status, matching the REST
-    # sibling's >=400 handling. raise_for_status() first threw away the response
-    # BODY on any 4xx/5xx — and that body is where the AdCP two-layer error
-    # envelope lives, so every error-path Then that asserts on
-    # wire_error_envelope saw None. There is no longer any fallback to reconstruct
-    # it from: the envelope either comes off these bytes or the result honestly
-    # carries none. A transport-level failure with no JSON body still raises, but
-    # only after the body has had its chance to speak.
-    try:
-        body = response.json()
-    except ValueError:
-        if response.status_code >= 400:
-            from tests.harness._base import WireRefusal
-
-            raise WireRefusal(f"A2A HTTP {response.status_code} with no JSON body", response)
-        response.raise_for_status()
-        raise
-
-    if "error" in body:
-        rpc_error = body["error"]
-        error_data = rpc_error.get("data")
-        fallback_message = rpc_error.get("message") or "A2A JSON-RPC request failed"
-        # ``data`` is where the A2A JSON-RPC layer puts the AdCP envelope — the HTTP
-        # sibling of the in-process ``A2AError.data`` read (``_a2a_wire_envelope``).
-        # Carried through as bytes; nothing is rebuilt from it.
-        envelope = _wire_envelope(error_data) if isinstance(error_data, dict) else None
-        if envelope is not None:
-            raise WireError(envelope, response)
-        from tests.harness._base import WireRefusal
-
-        raise WireRefusal(
-            f"A2A JSON-RPC error {rpc_error.get('code')}: {fallback_message}",
-            response,
-        )
-
-    result = body.get("result") or {}
+    result = _a2a_jsonrpc_result(response)
     task = result.get("task")
     if task is None:
         raise TypeError(f"Expected a Task in the A2A JSON-RPC result, got: {result!r}")
@@ -525,7 +505,7 @@ def _parse_pinned_response(tool_name: str, raw: dict[str, Any]) -> Any | None:
     if model is None:
         return None
     # Through ``revive`` when the model has one: a SERVED document carries the context
-    # ``_boundary._served`` stamped, and ``AdcpResponse`` refuses that field on construction
+    # ``_boundary._served`` stamped, and ``SalesAgentAdcpResponse`` refuses that field on construction
     # so that the boundary is the only thing which can put one there. ``model(**raw)`` made
     # every REST success of a context-carrying request raise in the TEST process, which the
     # scenario then reported as "no response arrived" for a request the seller answered.
@@ -781,9 +761,7 @@ def _dispatch_core(
         # one error-unwrap implementation per transport family, not two.
         # The HTTP response rides the carrier (WireError or WireRefusal), and
         # one helper re-attaches it for MCP and A2A.
-        from tests.harness.dispatchers import _carrying_refusal_response
-
-        return _carrying_refusal_response(UNWRAP_ERROR[transport](exc, transport), exc)
+        return unwrap_error(exc, transport)
     return UNWRAP_SUCCESS[transport](env, raw, transport, tool_name)
 
 
@@ -943,3 +921,13 @@ UNWRAP_ERROR: dict[Transport, Callable[[Exception, Transport], TransportResult]]
     Transport.REST: unwrap_rest_error,
     Transport.E2E_REST: unwrap_rest_error,
 }
+
+
+def unwrap_error(exc: Exception, transport: Transport) -> TransportResult:
+    """Unwrap one transport failure and retain its observed HTTP response."""
+    from tests.harness._base import WireError, WireRefusal
+
+    result = UNWRAP_ERROR[transport](exc, transport)
+    if isinstance(exc, WireError | WireRefusal) and exc.response is not None:
+        return replace(result, raw_response=exc.response)
+    return result
