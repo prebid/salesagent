@@ -40,15 +40,15 @@ The remaining 8 belong to this platform. `AppErrorCode` declares them with their
 `CodeEntry` inline, so declaring a code and declaring what it means are one act — a
 member with no entry raises `TypeError` at class creation.
 
-The signature family lacks one thing the other published codes have: metadata. The
-pinned `enums/error-code.json` carries `enumMetadata` for the codes it publishes and
-publishes none of the 28, so `src/core/errors/signature_codes.py` transcribes their
-recovery, suggestion, and message from the specification's own tables. That transcription
-is a fallback inside the published loop rather than a pass written over the top, so a
-future pin that publishes the family answers for it and the transcription stops being
-consulted.
+The pin publishes the signature family in a file of its own,
+`enums/request-signing-error-code.json`, whose `enumMetadata` carries each code's recovery and
+suggestion ("SDKs MUST consume enumMetadata for recovery classification"). `_load_published_codes`
+reads both files. The family keeps its 401, its `CodeGroup.SIGNATURE`, and a message per recovery
+class (`SIGNATURE_MESSAGES` in `src/core/errors/signature_codes.py`): the pin's descriptions of
+these codes name which verification step refused, and `transport-errors.mdx` forbids that detail
+in a client-facing field.
 
-`recovery`, `suggestion` and `message` come from the pinned file and nowhere else. A
+`recovery` and `suggestion` come from the pinned files and nowhere else, and so does `message` outside the signature family. A
 message resolves from the first of two sources that has one: an authored override for
 the nine published codes whose pinned text is implementer-facing
 (`_AUTHORED_SPEC_MESSAGES` in `src/core/errors/codes.py`), then the pinned
@@ -222,7 +222,7 @@ envelope that already carries it.
 `CodeEntry.group` records which family a code belongs to. `CodeGroup` has two members:
 
 - `GENERAL`, the default, for a code that needs no special transport. The 92 published
-  codes and the 8 platform codes declare nothing and take it.
+  codes and the 9 platform codes declare nothing and take it.
 - `SIGNATURE`, which the 28 request-signature rows declare.
 
 The fact lives on the code rather than on the reader that needs it.
@@ -311,6 +311,7 @@ AdCP obligations: the pin permits the array and does not mandate it for this con
 | FD-ERR-03 | A registry that cannot be created raises `AdCPServiceUnavailableError`, so the failure takes the raised lane and the buyer gets `status: "failed"` | `src/core/tools/creative_formats.py:168` |
 | FD-ERR-04 | Each entry is a spec `error.json` object with at least a code and a message | structural: `Error` derives the message from the code and `CodeEntry` refuses an empty one |
 | FD-ERR-05 | All agents succeeding leaves `errors` absent | `src/core/tools/creative_formats.py:521` (`errors=agent_errors if agent_errors else None`) |
+| FD-ERR-06 | An agent whose catalog has entries the pinned schema cannot validate yields its conforming formats plus one `AGENT_FORMATS_DISCARDED` entry with `field="formats"`; a wholly discarded catalog is reported the same way, never as an empty success | `CreativeAgentRegistry.list_all_formats_with_errors`; the entries are validated one by one through `PeerFormat` |
 
 Two further facts about this case matter more than the obligations.
 
@@ -325,6 +326,10 @@ with `field="formats"`, naming the response section it degrades. AdCP 3.1.1 is e
 about the first half — "Requested `format_id` doesn't exist, or referenced creative
 agent is unavailable / not accessible. `error.field` MUST identify which typed parameter
 failed to resolve" (`v3.1.1:docs/creative/task-reference/list_creative_formats.mdx:654`).
+
+Only `AGENT_UNREACHABLE` is split this way. `AGENT_FORMATS_DISCARDED` names an agent
+that answered, so the referenced format may be among the ones it returned, and the entry
+stays as it is.
 
 The split is buyer-visible in `recovery`, which is the point: `AGENT_UNREACHABLE` is
 `transient`, so retrying the same request may work, and `REFERENCE_NOT_FOUND` is

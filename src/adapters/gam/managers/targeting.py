@@ -10,7 +10,7 @@ import logging
 import os
 from typing import Any
 
-from adcp.types.generated_poc.enums.metro_system import MetroAreaSystem
+from adcp.types.domains.enums.metro_system import MetroAreaSystem
 
 from src.core.errors.details import CapabilityRefusalDetails
 from src.core.exceptions import (

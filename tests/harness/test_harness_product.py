@@ -67,7 +67,7 @@ class TestProductEnvContract:
             assert "resolve_property_list" in env.mock
 
     async def test_dynamic_variants_configurable(self):
-        """set_dynamic_variants injects variants into the response."""
+        """Generation return values cannot override the persisted catalogue."""
         from tests.harness.product_unit import _make_product
 
         with ProductEnv() as env:
@@ -80,7 +80,7 @@ class TestProductEnvContract:
 
             product_ids = [p.product_id for p in response.products]
             assert product_ids == ["variant_001"]
-            assert response.products[0].name == "Dynamic Variant"
+            assert response.products[0].name == "Stored Variant"
 
     async def test_custom_identity(self):
         """Constructor kwargs override identity fields."""

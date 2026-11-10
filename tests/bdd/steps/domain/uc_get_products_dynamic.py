@@ -43,7 +43,7 @@ def when_discover(ctx):
 
 @when("the seller restricts the template to another buyer")
 def when_restrict_template(ctx):
-    ctx["env"].restrict_template()
+    ctx["env"].set_template_access(["another-buyer"])
 
 
 @when("the buyer discovers the signal driven catalogue twice")
@@ -89,3 +89,18 @@ def then_only_static(ctx):
 def then_variant_name(ctx, name):
     variant = next(p for p in wire_field(ctx, "products") if p["product_id"] == ctx["env"].variant_id)
     assert variant["name"] == name
+
+
+@given("a signal driven catalogue with an unavailable signals service")
+def given_failed_signals(ctx):
+    ctx["env"].seed_catalog(signals_fail=True)
+
+
+@when("the seller opens the template to all buyers")
+def when_open_template(ctx):
+    ctx["env"].set_template_access(None)
+
+
+@then("the catalogue contains static inventory and its template")
+def then_static_and_template(ctx):
+    assert sorted(p["product_id"] for p in wire_field(ctx, "products")) == ["static", "template"]

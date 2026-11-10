@@ -79,7 +79,7 @@ locals {
   app_url              = "https://${var.domain}"
   admin_host           = "admin.${var.domain}"
   creative_agent_host  = "creative.${var.domain}"
-  creative_agent_url   = "https://${local.creative_agent_host}/api/creative-agent"
+  creative_agent_url   = "https://${local.creative_agent_host}/api/creative-agent/mcp"
   creative_agent_image = "${aws_ecr_repository.this["creative-agent"].repository_url}:${var.creative_agent_image_tag}"
   app_image            = "${aws_ecr_repository.this["app"].repository_url}:${var.app_image_tag}"
 
@@ -94,7 +94,12 @@ locals {
     SUPPORT_EMAIL      = var.support_email
     SUPER_ADMIN_EMAILS = var.super_admin_emails
     # Formats come from the self-hosted reference agent below, not the public one.
-    CREATIVE_AGENT_URL = local.creative_agent_url
+    # CREATIVE_AGENT_URL is the MCP endpoint the app dials (the agent serves MCP only at
+    # /api/creative-agent/mcp). CREATIVE_AGENT_ORIGIN is the agent's identity, an origin:
+    # the format references the agent publishes carry its own host, and the app
+    # recognizes them as its operator agent by that origin.
+    CREATIVE_AGENT_URL    = local.creative_agent_url
+    CREATIVE_AGENT_ORIGIN = "https://${local.creative_agent_host}"
     # The name of the variable holding the KEK that encrypts tenants' signing keys.
     ADCP_SIGNING_KEY_PASSPHRASE_ENV = "SALESAGENT_SIGNING_KEK"
   }, var.app_environment)

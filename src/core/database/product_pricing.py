@@ -4,10 +4,12 @@ Handles transition from legacy pricing fields to pricing_options table.
 """
 
 import logging
+from copy import deepcopy
 from typing import Any
 
 from sqlalchemy import inspect
 
+from src.core.database.models import PricingOption
 from src.core.database.models import Product as ProductModel
 
 logger = logging.getLogger(__name__)
@@ -70,3 +72,14 @@ def get_primary_pricing_option(product: ProductModel) -> dict[str, Any] | None:
     """
     options = get_product_pricing_options(product)
     return options[0] if options else None
+
+
+PRICING_IDENTITY_COLUMNS = frozenset({"id", "tenant_id", "product_id", "pricing_option_id"})
+PRICING_TERM_COLUMNS = tuple(
+    attr.key for attr in inspect(PricingOption).column_attrs if attr.key not in PRICING_IDENTITY_COLUMNS
+)
+
+
+def pricing_option_terms(option: PricingOption) -> dict[str, Any]:
+    """Copy the model's pricing terms without sharing nested mutable values."""
+    return {column: deepcopy(getattr(option, column)) for column in PRICING_TERM_COLUMNS}

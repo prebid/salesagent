@@ -13,129 +13,71 @@ Architecture:
 
 import hashlib
 import logging
+from copy import deepcopy
 from datetime import UTC, datetime, timedelta
+from functools import partial
 
-from sqlalchemy import select
+from sqlalchemy import inspect, select
 from sqlalchemy.orm import attributes
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Product
 from src.core.database.repositories.product import ProductRepository
-from src.core.database.repositories.uow import ProductUoW
-from src.core.product_conversion import convert_product_model_to_schema
-from src.core.schemas import Product as ProductSchema
 from src.core.signals_agent_registry import get_signals_agent_registry
 
 logger = logging.getLogger(__name__)
 
 
-async def generate_variants_for_brief(
-    tenant_id: str, brief: str, our_agent_url: str | None = None, *, adapter_type: str | None = None
-) -> list[ProductSchema]:
-    """Generate product variants from signals agents based on buyer's brief.
+async def generate_variants_for_brief(tenant_id: str, brief: str, our_agent_url: str | None = None) -> None:
+    """Persist variants before the caller reads and converts the complete catalogue."""
+    from src.core.database.repositories.uow import ProductUoW
 
-    Uses the singleton SignalsAgentRegistry which handles:
-    - Multi-agent queries (all configured agents for tenant)
-    - MCP client management and connection pooling
-    - Auth handling per agent
+    try:
+        with ProductUoW(tenant_id) as uow:
+            assert uow.products is not None
+            template_ids = {
+                template.product_id
+                for template in uow.products.list_dynamic_templates()
+                if template.signals_agent_ids is None or template.signals_agent_ids
+            }
+        if not template_ids:
+            return
 
-    Args:
-        tenant_id: Tenant ID
-        brief: Buyer's brief text
-        our_agent_url: Our sales agent URL for deployment specification (optional)
+        # No database transaction spans the external MCP request.
+        signals = await get_signals_agent_registry().get_signals(brief=brief, tenant_id=tenant_id)
 
-    Returns:
-        Complete product schemas, converted before the transaction closes.
-    """
-    variants = []
-
-    with ProductUoW(tenant_id) as uow:
-        assert uow.products is not None
-        # Get all dynamic product templates for this tenant
-        templates = uow.products.list_dynamic_templates()
-
-        if not templates:
-            logger.debug(f"No dynamic product templates found for tenant {tenant_id}")
-            return []
-
-        # Check if any templates have signals agents configured
-        # Note: signals_agent_ids=None means "use all agents", which counts as configured
-        has_signals_agents = any(
-            template.signals_agent_ids is None or template.signals_agent_ids for template in templates
-        )
-        if not has_signals_agents:
-            logger.debug(f"No dynamic product templates with signals agents for tenant {tenant_id}")
-            return []
-
-        # Query ALL signals agents for this tenant in one call (registry handles multi-agent)
-        # This is more efficient than per-agent queries
-        try:
-            registry = get_signals_agent_registry()
-
-            # Collect unique countries from all dynamic templates
-            # Note: signals_agent_ids=None means "use all agents"
-            all_countries = set()
-            for template in templates:
-                if (template.signals_agent_ids is None or template.signals_agent_ids) and template.countries:
-                    all_countries.update(template.countries)
-
-            # Call async registry function
-            import time
-
-            query_start = time.time()
-
-            countries_info = f" for countries {sorted(all_countries)}" if all_countries else ""
-            logger.info(f"[TIMING] Querying signals agents with brief: {brief[:100]}...{countries_info}")
-
-            # No deliver_to is sent: the registry's get_signals never forwarded the
-            # deployment specification this used to build, so building it claimed a
-            # scoping the query did not have.
-            all_signals = await registry.get_signals(
-                brief=brief,  # Note: Registry uses 'brief', not 'signal_spec' (TODO: update to match AdCP spec)
-                tenant_id=tenant_id,
-            )
-
-            query_duration = time.time() - query_start
-            logger.info(f"[TIMING] Received {len(all_signals)} total signals in {query_duration:.2f}s")
-
-        except Exception as e:
-            logger.error(f"Error querying signals agents for tenant {tenant_id}: {e}", exc_info=True)
-            return []
-
-        # Generate variants for each template using the signals
-        # Serialize creation and pricing repair for each template after the remote
-        # query completes. Concurrent requests then reuse the committed variant.
-        for template in uow.products.list_dynamic_templates(for_update=True):
-            if not template.signals_agent_ids:
-                continue
-
-            try:
-                # Filter signals to only those we want for this template
-                # (up to max_signals limit)
-                template_signals = all_signals[: template.max_signals]
-
-                # Generate variants from signals
-                template_variants = generate_variants_from_signals(
-                    uow.products, template, template_signals, brief, our_agent_url
+        with ProductUoW(tenant_id) as uow:
+            assert uow.products is not None
+            for template in uow.products.list_dynamic_templates():
+                if template.product_id not in template_ids or template.signals_agent_ids == []:
+                    continue
+                generate_variants_from_signals(
+                    uow.products, template, signals[: template.max_signals], brief, our_agent_url
                 )
-                variants.extend(template_variants)
-
-            except Exception as e:
-                logger.error(f"Error generating variants for template {template.product_id}: {e}", exc_info=True)
-                continue
-
-        # Return values survive the UoW's commit and session expiry. A conversion
-        # failure rolls back the same transaction that created the variant.
-        return [convert_product_model_to_schema(variant, adapter_type=adapter_type) for variant in variants]
+    except Exception:
+        logger.exception("Dynamic generation failed for tenant %s; serving the persisted catalogue", tenant_id)
 
 
 def generate_variants_from_signals(
-    repository: ProductRepository, template: Product, signals: list[dict], brief: str, our_agent_url: str | None = None
+    products: ProductRepository,
+    template: Product,
+    signals: list[dict],
+    brief: str,
+    our_agent_url: str | None = None,
 ) -> list[Product]:
     """Generate product variants from template and signals.
 
+    Takes the REPOSITORY, not a session. A session parameter is what made this
+    module reach a real database out of a unit test: the module-level
+    ``from ... import get_db_session`` binds the function object, so patching the
+    attribute on ``database_session`` could not reach it, and whether the patch
+    landed depended on whether anything earlier in the process had imported this
+    module (salesagent-uvca5). A repository has no such seam -- the caller's UoW
+    owns the session -- and ``uow.session`` is deprecated precisely so a session
+    cannot be handed down from one.
+
     Args:
-        repository: Tenant-scoped product repository
+        products: Tenant-scoped ProductRepository from the caller's ProductUoW
         template: Dynamic product template
         signals: List of signal dicts from signals agent
         brief: Buyer's brief (for variant customization)
@@ -160,24 +102,17 @@ def generate_variants_from_signals(
             # Generate variant ID (deterministic)
             variant_id = generate_variant_id(template.product_id, activation_key)
 
-            with repository.variant_write():
-                existing = repository.get_by_id_with_pricing(variant_id)
-                if existing:
-                    variant = existing
-                    variant.last_synced_at = datetime.now(UTC)
-                    ttl_days = template.variant_ttl_days or 30
-                    new_expiration = datetime.now(UTC) + timedelta(days=ttl_days)
-                    if not variant.expires_at or variant.expires_at < new_expiration:
-                        variant.expires_at = new_expiration
-                    repository.inherit_missing_variant_pricing(variant, template)
-                else:
-                    variant = create_variant_from_template(template, signal, activation_key, variant_id, brief)
-                    repository.inherit_missing_variant_pricing(variant, template)
-                    repository.create(variant)
-
-            # Append only after the savepoint flush succeeds.
+            variant = products.get_or_create_variant(
+                template,
+                variant_id,
+                partial(create_variant_from_template, template, signal, activation_key, variant_id, brief),
+            )
             variants.append(variant)
-            logger.debug(f"Generated dynamic variant {variant_id} from template {template.product_id}")
+
+            logger.info(
+                f"Created dynamic variant {variant_id} from template {template.product_id} "
+                f"for signal {signal.get('signal_agent_segment_id')}"
+            )
 
         except Exception as e:
             logger.error(f"Error generating variant from signal: {e}", exc_info=True)
@@ -260,6 +195,35 @@ def generate_variant_id(template_id: str, activation_key: dict) -> str:
     return f"{template_id}__variant_{hash_suffix}"
 
 
+_VARIANT_OWNED_COLUMNS = frozenset(
+    {
+        "tenant_id",
+        "product_id",
+        "name",
+        "description",
+        "format_ids",
+        "format_options",
+        "allowed_principal_ids",
+        "is_custom",
+        "is_dynamic",
+        "is_dynamic_variant",
+        "parent_product_id",
+        "activation_key",
+        "signal_metadata",
+        "last_synced_at",
+        "expires_at",
+        "archived_at",
+        "created_at",
+        "updated_at",
+        "signals_agent_ids",
+        "max_signals",
+        "variant_ttl_days",
+        "variant_name_template",
+        "variant_description_template",
+    }
+)
+
+
 def create_variant_from_template(
     template: Product, signal: dict, activation_key: dict, variant_id: str, brief: str
 ) -> Product:
@@ -275,50 +239,35 @@ def create_variant_from_template(
     Returns:
         New Product variant
     """
-    # Copy ALL fields from template
+    # Inherit mapped data by default. Variant identity, lifecycle and access have explicit owners.
+    contract = template.format_contract
     variant_data = {
-        "tenant_id": template.tenant_id,
-        "product_id": variant_id,
-        "name": customize_name(template.name, signal, activation_key, template.variant_name_template),
-        "description": customize_description(
+        column.key: deepcopy(getattr(template, column.key))
+        for column in inspect(Product).column_attrs
+        if column.key not in _VARIANT_OWNED_COLUMNS
+    }
+    variant_data.update(
+        tenant_id=template.tenant_id,
+        product_id=variant_id,
+        name=customize_name(template.name, signal, activation_key, template.variant_name_template),
+        description=customize_description(
             template.description, signal, activation_key, brief, template.variant_description_template
         ),
-        "format_ids": template.format_ids,
-        "targeting_template": template.targeting_template,
-        "delivery_type": template.delivery_type,
-        "measurement": template.measurement,
-        "creative_policy": template.creative_policy,
-        "price_guidance": template.price_guidance,
-        "is_custom": False,  # Variants are generated, not custom
-        "countries": template.countries,
-        "implementation_config": template.implementation_config,
-        "properties": template.properties,
-        "property_ids": template.property_ids,
-        "property_tags": template.property_tags,
-        "inventory_profile_id": template.inventory_profile_id,
-        "channels": template.channels,
-        "allowed_principal_ids": template.allowed_principal_ids,
-        "delivery_measurement": template.delivery_measurement,
-        "product_card": template.product_card,
-        "product_card_detailed": template.product_card_detailed,
-        "placements": template.placements,
-        "reporting_capabilities": template.reporting_capabilities,
-        # Variant-specific fields
-        "is_dynamic": False,  # Variant is not a template
-        "is_dynamic_variant": True,
-        "parent_product_id": template.product_id,
-        "activation_key": activation_key,
-        "signal_metadata": {
-            "signal_agent_segment_id": signal.get("signal_agent_segment_id"),
-            "name": signal.get("name"),
-            "description": signal.get("description"),
-            "data_provider": signal.get("data_provider"),
-            "coverage_percentage": signal.get("coverage_percentage"),
+        format_ids=None if contract.format_options else deepcopy(list(contract.format_ids) or None),
+        format_options=deepcopy(list(contract.format_options)) if contract.format_options else None,
+        allowed_principal_ids=None,
+        is_custom=False,
+        is_dynamic=False,
+        is_dynamic_variant=True,
+        parent_product_id=template.product_id,
+        activation_key=deepcopy(activation_key),
+        signal_metadata={
+            key: deepcopy(signal.get(key))
+            for key in ("signal_agent_segment_id", "name", "description", "data_provider", "coverage_percentage")
         },
-        "last_synced_at": datetime.now(UTC),
-        # Expiration
-        "expires_at": datetime.now(UTC) + timedelta(days=template.variant_ttl_days or 30),
-    }
+        last_synced_at=datetime.now(UTC),
+        expires_at=datetime.now(UTC) + timedelta(days=template.variant_ttl_days or 30),
+    )
 
     return Product(**variant_data)
 

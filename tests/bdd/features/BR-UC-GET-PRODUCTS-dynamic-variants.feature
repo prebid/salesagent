@@ -1,4 +1,4 @@
-# Local regression for #2291. AdCP 3.1.1 core/product.json requires nonempty
+# Local regression for #2291. AdCP 3.2.7 core/product.json requires nonempty
 # pricing_options. Dynamic generation has no graded storyboard binding.
 Feature: Signal driven variants reach buyers with their stored pricing
 
@@ -58,3 +58,18 @@ Feature: Signal driven variants reach buyers with their stored pricing
     When the buyer discovers the signal driven catalogue
     Then the catalogue includes static inventory and one priced variant
     And the stored variant has exactly its two template pricing options
+
+  @T-UC-GET-PRODUCTS-dynamic-open-access @dynamic-catalog @requires_db
+  Scenario: Opening a template also opens a variant with a stale copied restriction
+    Given a signal driven catalogue with a legacy variant restricted to another buyer
+    When the buyer discovers the signal driven catalogue
+    Then the catalogue contains only static inventory
+    When the seller opens the template to all buyers
+    And the buyer discovers the signal driven catalogue
+    Then the catalogue includes static inventory and one priced variant
+
+  @T-UC-GET-PRODUCTS-dynamic-unavailable @dynamic-catalog @requires_db
+  Scenario: An unavailable signals service still serves the persisted catalogue
+    Given a signal driven catalogue with an unavailable signals service
+    When the buyer discovers the signal driven catalogue
+    Then the catalogue contains static inventory and its template

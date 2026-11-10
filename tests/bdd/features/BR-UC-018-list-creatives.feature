@@ -49,7 +49,7 @@ Feature: BR-UC-018 List Creatives
     # POST-S2: Buyer knows total count and page position
     # POST-S3: Buyer knows core attributes
     # POST-S7: Buyer knows applied filters and sort
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/list-creatives-request.json
 
   @T-UC-018-main-enriched @main-flow
   Scenario: List creatives with assignments included by default
@@ -60,7 +60,7 @@ Feature: BR-UC-018 List Creatives
     And each creative includes assignment data
     # BR-RULE-149 INV-3: include_assignments defaults to true
     # POST-S4: Buyer knows package assignments (default included)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/list-creatives-request.json
 
   @T-UC-018-main-performance @main-flow
   Scenario: List creatives with explicit delivery snapshot request
@@ -70,7 +70,7 @@ Feature: BR-UC-018 List Creatives
     And each creative includes a snapshot_unavailable_reason of "SNAPSHOT_UNSUPPORTED"
     # BR-RULE-149 INV-4: include_snapshot defaults to false, must explicitly request
     # POST-S5: Buyer knows the lightweight delivery snapshot, OR a machine-readable reason
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/list-creatives-request.json
     #
     # Was "each creative includes a delivery snapshot", over a Given that promised
     # "creatives with delivery snapshot data". This seller has no such data to seed: no
@@ -89,7 +89,7 @@ Feature: BR-UC-018 List Creatives
     And the creative includes items data
     # BR-RULE-149 INV-5: include_items defaults to false, must explicitly request
     # POST-S6: Buyer knows the items for multi-asset creatives (when requested)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/list-creatives-request.json
 
   @T-UC-018-main-variables @main-flow
   Scenario: List creatives with explicit variables request
@@ -367,7 +367,7 @@ Feature: BR-UC-018 List Creatives
       | omitted                      | no fields parameter                                                                                 | all fields included in each creative object                     |
       | single_field                 | fields ["creative_id"]                                                                              | only the selected and required fields in each creative object   |
       | minimal_set                  | fields ["creative_id", "name", "status"]                                                            | only the selected and required fields in each creative object   |
-      | all_fields                   | fields with all 13 enum values                                                                      | all fields included in each creative object                     |
+      | all_fields                   | fields with all 20 enum values                                                                      | all fields included in each creative object                     |
       | enrichment_fields            | fields ["creative_id", "assignments", "snapshot"] and include_snapshot true                         | only the selected and required fields in each creative object   |
       | assignments_disabled         | include_assignments false                                                                           | assignment data excluded from creatives                          |
 
@@ -391,7 +391,7 @@ Feature: BR-UC-018 List Creatives
     Examples: Boundary values
       | boundary_point                                            | request_params                                  | outcome                                                  |
       | ['creative_id'] (single field, minItems boundary)         | fields ["creative_id"]                          | only the selected and required fields in response         |
-      | All 13 enum values (max enum coverage)                    | fields with all 13 enum values                  | all fields included in response                           |
+      | All 20 enum values (max enum coverage)                    | fields with all 20 enum values                  | all fields included in response                           |
       | [] (empty array, violates minItems: 1)                    | fields as empty array                           | error "INVALID_REQUEST" with suggestion                  |
       | ['creative_id', 'thumbnail'] (unknown enum value)         | fields ["creative_id", "thumbnail"]             | error "INVALID_REQUEST" with suggestion                  |
       | fields omitted entirely (all fields returned)             | no fields parameter                             | all fields included in response                            |
@@ -546,7 +546,7 @@ Feature: BR-UC-018 List Creatives
     And the error code should be "INVALID_REQUEST"
     And the error should include a "suggestion" field
     # POST-F3: Suggestion for recovery
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/list-creatives-request.json
 
   @T-UC-018-inv-148-6-violated @invariant @BR-RULE-148
   Scenario: BR-RULE-148 INV-6 counter -- valid ISO 8601 date accepted
@@ -592,7 +592,7 @@ Feature: BR-UC-018 List Creatives
     When the Buyer Agent sends a list_creatives request without specifying include_snapshot
     Then the response is compliant with the list_creatives spec
     And the creative in the response does not include a delivery snapshot
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/list-creatives-request.json
 
   @T-UC-018-inv-149-5-holds @invariant @BR-RULE-149
   Scenario: BR-RULE-149 INV-5 holds -- include_items defaults to false
@@ -600,7 +600,7 @@ Feature: BR-UC-018 List Creatives
     When the Buyer Agent sends a list_creatives request without specifying include_items
     Then the response is compliant with the list_creatives spec
     And the creative in the response does not include items data
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/list-creatives-request.json
 
   @T-UC-018-inv-149-7-holds @invariant @BR-RULE-149
   Scenario: BR-RULE-149 INV-7 holds -- include_variables defaults to false
@@ -608,7 +608,7 @@ Feature: BR-UC-018 List Creatives
     When the Buyer Agent sends a list_creatives request without specifying include_variables
     Then the response is compliant with the list_creatives spec
     And the creative in the response does not include variables data
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/list-creatives-request.json
 
   @T-UC-018-inv-149-6-holds @invariant @BR-RULE-149
   Scenario: BR-RULE-149 INV-6 holds -- unrecognized DB status reported as processing
@@ -617,14 +617,28 @@ Feature: BR-UC-018 List Creatives
     Then the response is compliant with the list_creatives spec
     And the creative is returned with status "processing"
     And no error is raised
+    And exactly one entry in errors[] names that creative with code "CONFIGURATION_ERROR"
     # Was "mapped to pending_review". The pin does not choose a placeholder — status is
     # REQUIRED and $refs a closed enum with no "unknown" member — so the choice is the
     # seller's, and this seller's is `processing`: the only member that asserts no
     # completed evaluation and no seller obligation. pending_review is the one member that
     # would be a second untruth, claiming processing succeeded and a decision is owed.
-    # The row that reads the stored value is unchanged, and the buyer is additionally told
-    # in errors[] that the record is unreadable
-    # (src/core/tools/creatives/listing.py; tests/integration/test_list_creatives_unrecognized_status.py).
+    #
+    # The substitution alone is not the whole obligation. list-creatives-response.json
+    # carries errors[] on the SUCCESS path for exactly this case — the read succeeded and
+    # one record is not fully representable — so the buyer is told WHICH creative could not
+    # be described. CONFIGURATION_ERROR because the pin gives that code recovery "terminal"
+    # and "surface to a human at the seller": a seller-side data defect is not something a
+    # buyer can retry, and a code outside the wire-standard set collapses to
+    # SERVICE_UNAVAILABLE, which tells the buyer to poll forever for a row only the seller
+    # can repair.
+    #
+    # Exactly one entry, not merely one present: a per-row advisory emitted twice would
+    # read as two defective records.
+    #
+    # The recovery value is deliberately not asserted. It is a read-only property over the
+    # code table, so it is right whenever the code is right.
+    # (src/core/tools/creatives/listing.py)
 
   @T-UC-018-inv-034-1-holds @invariant @BR-RULE-034
   Scenario: BR-RULE-034 INV-1 holds -- query always scoped by principal
@@ -654,7 +668,7 @@ Feature: BR-UC-018 List Creatives
     And the response is not an error
     # POST-S1: Buyer knows no creatives match (empty result)
     # POST-S2: Buyer knows total is 0
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/list-creatives-request.json
 
   @T-UC-018-edge-pagination-next @main-flow @edge-case
   Scenario: Pagination cursor traversal across pages
@@ -667,7 +681,7 @@ Feature: BR-UC-018 List Creatives
     When the Buyer Agent sends a list_creatives request with the cursor from the previous response
     Then the response contains 50 creatives from the second page
     And the creatives do not overlap with the first page results
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/list-creatives-request.json
 
   @T-UC-018-edge-duplicate-dedup @invariant @BR-RULE-148 @edge-case
   Scenario: A media_buy_id repeated inside media_buy_ids is deduplicated
@@ -700,7 +714,7 @@ Feature: BR-UC-018 List Creatives
     Examples: Valid partitions
       | partition          | request_params                                         | outcome                                         |
       | minimal_fields     | fields ["creative_id", "name", "status"]               | only the selected and required fields in response |
-      | all_enum_values    | fields with all 13 enum values                         | all fields included in response                  |
+      | all_enum_values    | fields with all 20 enum values                         | all fields included in response                  |
 
   @T-UC-018-partition-sort-field @partition @creative-sort-field
   # sort is an OBJECT of field + direction (list-creatives-request.json); the flat sort_by
@@ -732,7 +746,7 @@ Feature: BR-UC-018 List Creatives
     Examples: Boundary values
       | boundary_point                                                                                                                          | request_params                                | outcome                                   |
       | ["creative_id"] (single field, minimum valid)                                                                                           | fields ["creative_id"]                        | only the selected and required fields in response |
-      | ["creative_id", "name", "format_id", "status", "created_date", "updated_date", "tags", "assignments", "snapshot", "items", "variables", "concept", "pricing_options"] (all 13 fields) | fields with all 13 enum values                | all fields included in response           |
+      | ["creative_id", "name", "format_id", "format_kind", "format_option_ref", "assets", "status", "created_date", "updated_date", "tags", "rights", "rights_attestation_evaluations", "localization", "localization_unavailable", "assignments", "snapshot", "items", "variables", "concept", "pricing_options"] (all 20 fields) | fields with all 20 enum values                | all fields included in response           |
       | Not provided (all fields returned)                                                                                                      | no fields parameter                           | all fields returned                        |
       | ["creative_id", "thumbnail"] (unknown field in array)                                                                                   | fields ["creative_id", "thumbnail"]           | error "INVALID_REQUEST" with suggestion   |
       | [] (empty array, violates minItems)                                                                                                     | fields as empty array                         | error "INVALID_REQUEST" with suggestion   |
@@ -809,7 +823,7 @@ Feature: BR-UC-018 List Creatives
     # then required: [account]), so the request violates a schema constraint — which
     # pinned 3.1.1 assigns to INVALID_REQUEST, not to VALIDATION_ERROR.
     # POST-F1, POST-F2, POST-F3
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/list-creatives-request.json
 
   @T-UC-018-inv-225-2-holds @invariant @BR-RULE-225
   Scenario: BR-RULE-225 INV-2 holds -- include_pricing with an account is answered, and prices nothing
@@ -821,7 +835,7 @@ Feature: BR-UC-018 List Creatives
     And no pricing_options in any creative
     # POST-S9: Buyer knows the pricing options for using a creative -- of which this seller
     # has none to state.
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/list-creatives-request.json
     #
     # Was "each creative ... carries a pricing_options array with at least one option",
     # over a Given promising "an account reference resolvable to a rate card". What
@@ -842,7 +856,7 @@ Feature: BR-UC-018 List Creatives
     When the Buyer Agent sends a list_creatives request without specifying include_pricing
     Then the response is compliant with the list_creatives spec
     And no creative in the response includes a pricing_options field
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/list-creatives-request.json
 
   @T-UC-018-partition-pricing-include @partition @pricing-include
   Scenario Outline: Pricing disclosure gate -- <partition>
@@ -850,7 +864,7 @@ Feature: BR-UC-018 List Creatives
     When the Buyer Agent sends a list_creatives request with <request_params>
     Then the response is compliant with the list_creatives spec
     And <outcome>
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/list-creatives-request.json
 
     # The two account-carrying rows asked for pricing_options to be PRESENT. This seller
     # hosts no creative-serving pricing to put there (see the BR-RULE-225 INV-2 note), and
@@ -902,7 +916,7 @@ Feature: BR-UC-018 List Creatives
     Then the response is compliant with the list_creatives spec
     And the creative in the response omits the snapshot
     And the creative includes a snapshot_unavailable_reason of "<reason>"
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/list-creatives-request.json
     #
     # One row, not three. The enum's other two members name conditions this seller cannot
     # be in, and the enum says so itself: SNAPSHOT_TEMPORARILY_UNAVAILABLE is "Snapshot data
@@ -923,7 +937,7 @@ Feature: BR-UC-018 List Creatives
     When the Buyer Agent sends a list_creatives request without specifying include_snapshot
     Then the response is compliant with the list_creatives spec
     And the creative in the response includes neither a snapshot nor a snapshot_unavailable_reason
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/list-creatives-request.json
 
   @T-UC-018-partition-snapshot-unavailable @partition @snapshot-unavailable
   Scenario Outline: Snapshot unavailability disclosure -- <partition>
@@ -931,7 +945,7 @@ Feature: BR-UC-018 List Creatives
     When the Buyer Agent sends a list_creatives request with <request_params>
     Then the response is compliant with the list_creatives spec
     And <outcome>
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/list-creatives-request.json
 
     # The three rows this outline lost are the two unreachable enum members (see the
     # BR-RULE-226 INV-2 note) and reason_not_in_enum, whose request_params cell named a
@@ -978,21 +992,26 @@ Feature: BR-UC-018 List Creatives
 
   @T-UC-018-storyboard-list-all-creatives-after-sync @schema-v3.1 @v3-1 @list-after-sync
   Scenario: List creatives with no filters returns the library including recently synced creatives
-    Given the buyer recently synced three creatives in three different formats via sync_creatives
+    Given the buyer recently synced three creatives identified by canonical format kinds via sync_creatives
     When the Buyer Agent sends list_creatives with no filters for the same account
     Then the response is compliant with the list_creatives spec
     And the creatives array should include each of the synced creatives
-    And each creative entry should expose creative_id, name, format_id, and status
+    And each creative entry should expose creative_id, name, format_kind, and status, and no format_id
     # creative_lifecycle list_and_filter / list_all: after sync_creatives,
     # list_creatives without filters returns the library for the account
-    # including the synced items. Each entry exposes creative_id, name,
-    # format_id, status. The graded step lives inside the `creative` protocol
-    # baseline storyboard; capabilities.py declares supported_protocols=[media_buy]
-    # only, so this behavior is schema-grounded for us, not storyboard-graded
-    # (matches the sibling scenarios in this file already tagged @schema-v3.1
-    # for the same undeclared-protocol reason).
-    # creative_lifecycle: list_creatives reflects recent sync_creatives state
-    # @source repo=adcp ref=v3.1.1 path=static/compliance/source/protocols/creative/index.yaml phase=list_and_filter step=list_all
+    # including the synced items. "Each creative includes: creative_id, name,
+    # format_kind, status". The creative that step lists was synced by format_kind
+    # (sync_multiple sends format_kind: image), and list-creatives-response.json makes the
+    # two identifiers a oneOf -- format_kind is "Canonical 3.2 path ... Mutually exclusive
+    # with deprecated format_id", and format_id is "DEPRECATED in 3.2. Legacy named-format
+    # path. New listed creatives use format_kind" -- so a canonically-synced creative is
+    # listed by its kind and carries no format_id. The graded step lives inside the
+    # `creative` protocol baseline storyboard; capabilities.py declares
+    # supported_protocols=[media_buy] only, so this behavior is schema-grounded for us,
+    # not storyboard-graded (matches the sibling scenarios in this file already tagged
+    # @schema-v3.1 for the same undeclared-protocol reason).
+    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/creative/index.yaml phase=list_and_filter step=list_all
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/list-creatives-response.json pointer=/properties/creatives/items/oneOf
 
   @T-UC-018-storyboard-filter-by-format-id-object @schema-v3.1 @v3-1 @list-filter @format-id-object
   Scenario: List creatives filtered by a format_id object returns only creatives matching that {agent_url, id}
@@ -1001,12 +1020,246 @@ Feature: BR-UC-018 List Creatives
     Then the response is compliant with the list_creatives spec
     And the creatives array should only include creatives whose format_id matches both agent_url and id
     And the creatives array should NOT include creatives whose format_id has a different id even on the same agent_url
-    # creative_lifecycle list_filtered: the buyer filters by a format_id object
-    # (agent_url + id). Only creatives whose format_id matches both fields are
-    # returned. A filter shaped as a bare string id (not an object) is not part
-    # of the v3.1 contract; format_ids are objects, period.
-    # creative_lifecycle: format_id object filter exact-matches both (agent_url, id)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/compliance/source/protocols/creative/index.yaml
+    # core/creative-filters.json format_ids: an array of core/format-id.json objects
+    # (agent_url + id), "Filter legacy named-format creatives. Use format_kinds for
+    # canonical libraries." -- `deprecated: true`, so this is the LEGACY filter, kept for
+    # 3.x buyers; T-UC-018-filter-by-format-kinds grades the canonical one. Only creatives
+    # whose format_id matches both fields are returned, and a filter shaped as a bare
+    # string id is not an object and so not this filter. The storyboard's list_filtered
+    # step filters by format_kinds and grades nothing here.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/creative-filters.json pointer=/properties/format_ids
+
+  @T-UC-018-format-id-filter-canonicalizes-stored-agent-url @schema-v3.2 @v3-1 @list-filter @format-id-object
+  Scenario: A creative stored under a respelled agent_url is still returned by a format_id filter naming the canonical form
+    Given the buyer synced a creative whose format_id agent_url differs from the canonical form only in host case and a default port
+    When the Buyer Agent sends list_creatives with filters.format_ids carrying that format_id in canonical form
+    Then the response is compliant with the list_creatives spec
+    And the creatives array should include the creative stored under the respelled agent_url
+    And the creatives array should NOT include the creative stored under a genuinely different agent_url
+    # core/format-id.json, on agent_url: "Callers comparing two `format-id` values MUST
+    # canonicalize `agent_url` per the AdCP URL canonicalization rules before treating two
+    # formats as the same." The filter IS such a caller, and the two sides of the comparison
+    # routinely disagree byte-for-byte while naming one agent: what is STORED is the buyer's
+    # own spelling, because sync_creatives owes that spelling back verbatim on readback.
+    #
+    # Falsifiable in both directions by construction: one creative is stored under the
+    # respelled spelling (host case + an explicit default port, both of which the
+    # canonicalization normalizes away) and must come back, and one is stored under a
+    # genuinely different agent that no canonicalization makes equal and must not.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format-id.json property=agent_url
+
+  @T-UC-018-format-id-filter-matches-the-canonical-shape @schema-v3.2 @list-filter @format-id-object
+  Scenario Outline: A format_id filter returns the creative whose legacy reference normalizes to the filtered one - <filter>
+    Given the buyer's library holds creatives on legacy format_ids "<matching>" and "<other>"
+    When the Buyer Agent sends list_creatives with filters.format_ids naming "<filter>" at the standard creative agent
+    Then the response is compliant with the list_creatives spec
+    And the creatives array should contain exactly the creative synced on "<matching>"
+
+    Examples:
+      | filter          | matching              | other                |
+      | display_300x250 | display_300x250_image | display_728x90_image |
+      | video_30s       | video_pre_roll_30s    | video_15s            |
+
+    # docs/creative/template-format-ids.mdx (3.2.7) § Compatibility: legacy ids are normalized
+    # "to canonical declarations immediately and do all matching on the canonical shape", and
+    # canonical-formats.mdx § Format matching vs product satisfaction: a legacy format_id
+    # "resolves through ... the canonical mapping registry to a canonical declaration ... After
+    # that projection, implementations compare the canonical shape and parameters, not the raw
+    # (agent_url, id) pair". No stored creative spells the filter's id, so a filter comparing
+    # the raw key returns neither creative and fails the exact set; the other creative is the
+    # same canonical kind at other parameters, so a filter comparing the kind alone returns
+    # both and fails it too.
+    #
+    #   * display_300x250: the SDK's size upgrade projects it and display_300x250_image to an
+    #     image at 300x250, and display_728x90_image to an image at 728x90.
+    #   * video_30s: the SDK upgrades none of the three ids. Only the registry's projection
+    #     states their durations (video_hosted at duration_ms_exact 30000, 30000 and 15000), so
+    #     a filter reading the SDK's equivalence, which compares ids after the size upgrade,
+    #     returns nothing.
+    #
+    # The relation is EQUIVALENCE, which is the seller's choice for this filter: the pin's
+    # creative-filters.json says only "Filter legacy named-format creatives", and a creative
+    # is a format, not a product accepting one. Equivalence leaves a parameter one side does
+    # not state open, so a filter naming the display_image template returns every display
+    # image creative. Only the reference agent's ids are projected through the registry, whose
+    # namespace the registry is written in; another agent's id is compared by its canonical
+    # (agent_url, id) pair and the parameters it states.
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/template-format-ids.mdx
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/canonical-formats.mdx
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/creative-filters.json pointer=/properties/format_ids
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/registries/v1-canonical-mapping.json
+
+  @T-UC-018-filter-by-format-kinds @schema-v3.2 @list-filter @format-kind
+  Scenario Outline: List creatives filtered by filters.format_kinds "<wanted>" returns only the creatives of that canonical kind
+    Given the buyer synced creatives on canonical format_kinds "video_hosted" and "image"
+    When the Buyer Agent sends list_creatives with filters.format_kinds ["<wanted>"]
+    Then the response is compliant with the list_creatives spec
+    And the creatives array should contain exactly the "<wanted>" creative, carrying that format_kind
+    And the creatives array should NOT include the "<other>" creative
+    And query_summary.filters_applied should report format_kinds "<wanted>"
+
+    Examples: each kind in the library is the filtered one in turn
+      | wanted       | other        |
+      | video_hosted | image        |
+      | image        | video_hosted |
+
+    # core/creative-filters.json declares format_kinds as an array of
+    # core/canonical-format-kind.json (minItems 1, uniqueItems true): "Filter by canonical
+    # format kinds. Returns creatives matching any supplied kind." The sibling format_ids
+    # is `deprecated: true` in the same file and points HERE -- "Use `format_kinds` for
+    # canonical libraries" -- so this is the filter a 3.2 buyer is told to send, and the
+    # one the seller accepted and silently ignored: an unfiltered whole-library answer,
+    # with filters_applied not even naming the filter it dropped. That file grants an
+    # explicit "SHOULD ignore" licence to three sales-agent-specific filters
+    # (assigned_to_packages, media_buy_ids, unassigned) and to this one it grants none.
+    #
+    # BOTH rows, swapped, because one row is satisfied by a seller that hardcoded the
+    # kind it happened to be developed against -- and by a seller that returns the whole
+    # library whenever the library has one creative per kind. Swapping which kind is
+    # filtered makes a constant answer wrong in one direction or the other.
+    #
+    # The outcome names three things because any one of them passes vacuously alone. The
+    # exact-set assertion alone would pass on an empty array; the absence assertion alone
+    # would pass on a broken query returning nothing; and filters_applied is the half
+    # that makes the behaviour OBSERVABLE to the buyer (POST-S7) rather than merely
+    # correct by coincidence.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/creative-filters.json pointer=/properties/format_kinds property=format_kinds
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/canonical-format-kind.json
+
+  @T-UC-018-format-kinds-filter-is-a-union @schema-v3.2 @list-filter @format-kind
+  Scenario: A format_kinds filter naming two kinds returns the creatives of both
+    Given the buyer synced creatives on canonical format_kinds "video_hosted" and "image"
+    When the Buyer Agent sends list_creatives with filters.format_kinds ["video_hosted", "image"]
+    Then the response is compliant with the list_creatives spec
+    And the creatives array should contain both the "video_hosted" and the "image" creative
+    And query_summary.filters_applied should report format_kinds "video_hosted,image"
+
+    # The word is ANY: core/creative-filters.json says format_kinds "Returns creatives
+    # matching any supplied kind", so a multi-kind filter is a UNION and not an
+    # intersection. Graded separately from the single-kind rows above because they cannot
+    # see the difference -- a seller that conjoined the kinds (one condition per kind,
+    # ANDed) answers every single-kind request correctly and answers this one with an
+    # empty array, since no creative carries two kinds. minItems is 1, so a multi-kind
+    # array is in-contract traffic rather than an edge case.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/creative-filters.json pointer=/properties/format_kinds property=format_kinds
+
+  @T-UC-018-format-kinds-filter-matches-the-projected-kind @schema-v3.2 @list-filter @format-kind
+  Scenario: A creative synced by a legacy format_id is returned by a format_kinds filter naming the kind that reference projects to
+    Given the buyer synced a creative on legacy format_id "display_300x250" and was refused a creative on "audio_60s", which no registry pattern projects
+    When the Buyer Agent sends list_creatives with filters.format_kinds ["image"]
+    Then the response is compliant with the list_creatives spec
+    And the creatives array should contain exactly the creative synced on "display_300x250"
+    And that creative should be listed by format_id, carrying no format_kind
+    And the library holds no creative for the reference that projects to no canonical kind
+
+    # The both-arms rule, and it is the one a reasonable reading gets backwards.
+    # registries/v1-canonical-mapping.json is "authoritative for v1 -> v2 projection
+    # only", and this seller runs that order on the way IN: a creative synced by
+    # `display_300x250` stores the kind the reference PROJECTS to (`image`), so it matches
+    # a format_kinds filter naming `image` -- even though its wire entry carries
+    # `format_id` and no `format_kind`, because list-creatives-response.json's item schema
+    # declares the two as a oneOf whose arms forbid each other and the state mirrors the
+    # INPUT. The identity is what a filter keys on; the arm is a wire concern. A seller
+    # that returned only canonically-synced rows here would be treating `format_kind` as
+    # an arm marker instead of as the identity.
+    #
+    # The second reference is the fail-closed half, and the OUTCOME IT NAMES MOVED. It
+    # used to be a seeded ROW carrying `format_kind` NULL, and the claim was that a
+    # creative "not KNOWN to be any kind matches no kind". That row is now unrepresentable:
+    # `creatives.format_kind` is NOT NULL and `creative_identity_of` refuses a reference
+    # with no canonical projection, so the write is REFUSED instead of stored unresolved
+    # (salesagent-jzhea). Asserting the old absence-from-a-filter would mean seeding a
+    # state this seller cannot reach, which grades a seller no deployment runs.
+    #
+    # So the sixth normative step is graded where it now fires -- at the WRITE -- and the
+    # read-side claim becomes the consequence: the reference never enters the library, so
+    # no kind filter can return it. That is strictly more than the old pair said. It names
+    # the refusal AND the absence, and a seller that quietly stored kind=NULL again would
+    # fail the first half rather than passing the second by accident.
+    # The refused reference is `audio_60s` at the reference agent, which passes no step of
+    # the registry's resolution order: the reference agent does not serve it (so there is no
+    # declaration whose `canonical` step 2 could read, nor a shape for step 4) and the
+    # registry's only audio glob is `audio_15s`. It used to be `audio_30s`, which stopped
+    # being unprojectable when the reference agent at the pinned release began serving it
+    # with `canonical: {kind: audio_hosted}` -- step 2 now projects it, and the write accepts.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/registries/v1-canonical-mapping.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/creative-filters.json pointer=/properties/format_kinds property=format_kinds
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/list-creatives-response.json pointer=/properties/creatives/items property=format_kind
+
+  @T-UC-018-parameterized-format-id-roundtrip @schema-v3.2 @v3-1 @format-id-object
+  Scenario: A creative synced with a parameterized format_id is listed with every declared parameter intact
+    Given the buyer synced a creative on a format_id parameterized by width, height and pixel_ratio
+    When the Buyer Agent sends list_creatives with no filters for the same account
+    Then the response is compliant with the list_creatives spec
+    And the listed creative's format_id should carry every parameter the buyer sent, pixel_ratio included
+    # core/format-id.json declares width, height, duration_ms and pixel_ratio on the
+    # reference object itself, and creative/list-creatives-response.json requires format_id
+    # on every listed creative — so a listed format_id that dropped a parameter the buyer
+    # sent names a DIFFERENT format than the one synced.
+    #
+    # pixel_ratio is named in the outcome on purpose rather than left to "every parameter":
+    # it is the one a by-name readback dropped, because the reference was reassembled from
+    # partial columns and only three of the four were copied. An outcome that said only
+    # "parameters are preserved" passed throughout that defect.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format-id.json
+
+  @T-UC-018-canonical-format-option-ref-roundtrip @schema-v3.2 @format-option-ref
+  Scenario Outline: A creative synced by format_kind with a <scope>-scope format_option_ref is listed with that reference intact
+    Given the buyer synced a creative on format_kind "image" with a <scope>-scope format_option_ref
+    When the Buyer Agent sends list_creatives with no filters for the same account
+    Then the response is compliant with the list_creatives spec
+    And the listed creative's format_option_ref should equal the reference the buyer sent, scope included
+    And the listed creative's format_option_ref should be valid against core/format-option-ref.json
+
+    Examples: the two scopes the reference discriminates between
+      | scope     |
+      | product   |
+      | publisher |
+
+    # creative/list-creatives-response.json declares format_option_ref on every listed
+    # creative as a $ref to core/format-option-ref.json — "the concrete canonical format
+    # option this creative targets". That file is a oneOf with
+    # `discriminator: {propertyName: "scope"}`, and BOTH arms name `scope` in `required`; the
+    # product arm additionally declares `"publisher_domain": false`, so a product-scope
+    # reference may not carry the member at all, not even as null. A reference that reaches
+    # the buyer without its discriminator names no arm of the union, which is to say it
+    # names no option.
+    #
+    # Both scopes are rows because the discriminator is the whole point: a seller that
+    # stored only `{publisher_domain, format_option_id}` loses product-vs-publisher scope,
+    # and the two are DIFFERENT options even when they share a format_option_id (a
+    # publisher-catalog option and a product-local one are namespaced differently). A
+    # single-row scenario on either scope would pass on a seller that hard-coded the other.
+    #
+    # The second outcome is what stops the first from being satisfiable by an echo: a
+    # seller that round-tripped its own malformed document byte-for-byte would satisfy
+    # "equals what the buyer sent" while serving a reference the buyer's own schema check
+    # refuses. Graded against the pinned file, so the pin is the authority and not this text.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format-option-ref.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/list-creatives-response.json pointer=/properties/creatives/items property=format_option_ref
+
+  @T-UC-018-fields-projection-keeps-canonical-identity @schema-v3.2 @list-creatives-fields @format-kind
+  Scenario: A fields selection naming no format identity still lists a canonical creative by its format_kind
+    Given the buyer synced a creative on format_kind "image" with a product-scope format_option_ref
+    When the Buyer Agent sends a list_creatives request with fields ["creative_id"]
+    Then the response is compliant with the list_creatives spec
+    And only the selected and required fields in response
+    And the listed creative should carry format_kind "image" and no format_id
+
+    # creative/list-creatives-response.json requires five members on every listed creative
+    # (creative_id, name, status, created_date, updated_date) and a oneOf over the format
+    # identity: the named-format arm requires format_id, the canonical arm requires
+    # format_kind, and each forbids the other. A `fields` selection cannot drop either
+    # arm's member, because the item would then match neither. The fields boundary rows
+    # above seed legacy creatives only, so they cannot see a projection that keeps
+    # format_id and drops format_kind -- which leaves a canonical creative with no format
+    # identity at all. canonical-formats-migration.mdx's completion checklist names the
+    # library path as one that must preserve format_kind and format_option_ref, and the
+    # request schema's `fields` description says the same of localization, which
+    # "automatically includes ... the selected format identity".
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/list-creatives-response.json pointer=/properties/creatives/items
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/list-creatives-request.json pointer=/properties/fields
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/canonical-formats-migration.mdx section="Completion checklist"
 
   @T-UC-018-storyboard-filter-by-concept-id @schema-v3.1 @v3-1 @list-filter @concept-id
   Scenario: List creatives filtered by concept_ids returns only creatives in that concept carrying concept_id and concept_name
@@ -1021,7 +1274,7 @@ Feature: BR-UC-018 List Creatives
     # INT-001 "concept" filter dimension. Each returned creative exposes concept_id
     # and concept_name (list-creatives-response.json creatives[].concept_id/concept_name).
     # creative_lifecycle: concept_ids filter scopes results to one concept; concept_id/concept_name exposed
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/list-creatives-request.json
 
   @T-UC-018-filter-boolean-flags @list-filter @boolean-filter @v3-1
   Scenario Outline: v3.1 boolean filter <flag> partitions the library

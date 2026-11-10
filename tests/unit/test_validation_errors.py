@@ -5,7 +5,9 @@ from pydantic import BaseModel, ValidationError
 
 from src.core.schemas import CreateMediaBuyRequest
 from src.core.validation_helpers import first_validation_error_field, format_validation_error
+from tests.factories.request import PackageRequestFactory
 from tests.helpers import assert_construction_rejects
+from tests.helpers.adcp_pin import EXPECTED_SPEC_VERSION
 
 
 def test_first_validation_error_field_uses_bracket_notation():
@@ -63,11 +65,17 @@ def test_create_media_buy_boundary_validation_names_the_offending_field():
 
 def test_brand_target_audience_must_be_string():
     """Test Brand target_audience field accepts strings (adcp 3.12: Brand replaced BrandManifest)."""
-    from adcp.types.generated_poc.brand import Brand, LocalizedName  # TODO: no stable alias in adcp.types
+    from adcp.types.domains.brand_discovery import Brand, LocalizedName  # TODO: no stable alias in adcp.types
 
     brand = Brand(
         id="test_brand",
-        names=[LocalizedName(name="Test Brand", language="en")],
+        # A LOCALE-KEYED map, which is what ``LocalizedName`` is: a RootModel over
+        # ``dict[str, str]`` holding exactly one locale -> name entry (the spec's own
+        # examples are ``{"en_US": "Tide"}``). The two-key ``name=``/``language=`` form
+        # here read as if it had those FIELDS and never did; adcp 6.6.0 constrained the
+        # dict with ``MinLen(1)`` alone so the wrong shape validated, and 3.2.1 adds
+        # ``MaxLen(1)``, which refuses it.
+        names=[LocalizedName({"en": "Test Brand"})],
         target_audience="spiritual seekers interested in unexplained phenomena",
     )
     assert brand.target_audience == "spiritual seekers interested in unexplained phenomena"
@@ -75,11 +83,17 @@ def test_brand_target_audience_must_be_string():
 
 def test_brand_accepts_extra_fields():
     """Test that Brand accepts arbitrary extra fields (extra=allow)."""
-    from adcp.types.generated_poc.brand import Brand, LocalizedName  # TODO: no stable alias in adcp.types
+    from adcp.types.domains.brand_discovery import Brand, LocalizedName  # TODO: no stable alias in adcp.types
 
     brand = Brand(
         id="test_brand",
-        names=[LocalizedName(name="Test Brand", language="en")],
+        # A LOCALE-KEYED map, which is what ``LocalizedName`` is: a RootModel over
+        # ``dict[str, str]`` holding exactly one locale -> name entry (the spec's own
+        # examples are ``{"en_US": "Tide"}``). The two-key ``name=``/``language=`` form
+        # here read as if it had those FIELDS and never did; adcp 6.6.0 constrained the
+        # dict with ``MinLen(1)`` alone so the wrong shape validated, and 3.2.1 adds
+        # ``MaxLen(1)``, which refuses it.
+        names=[LocalizedName({"en": "Test Brand"})],
         custom_field="custom_value",
     )
     # Brand accepts extra fields with extra="allow"
@@ -96,6 +110,16 @@ def test_create_media_buy_request_invalid_brand_manifest():
         end_time="2026-02-01T00:00:00Z",
         start_time="2026-01-01T00:00:00Z",
         idempotency_key="unit-test-key-invalid-brand-mfst",
+        # ``packages`` is here because create-media-buy-request.json's ROOT requires one of
+        # ``packages`` | ``packages+total_budget+budget_allocation`` | ``proposal_id+total_budget``,
+        # and adcp 9 enforces that group (``enforce_root_required_groups``) where 6.6.0
+        # generated the fields and ignored the root anyOf. A request with neither packages
+        # nor a proposal was never an accepted shape. This test is about ``brand``, so the
+        # packages come from the factory bound to the accepted model rather than hand-rolled.
+        # PackageRequestFactory, NOT ``default_request_packages``: the latter builds the
+        # ``MediaBuy.raw_request`` shape, which carries a ``package_id`` the REQUEST model
+        # does not declare, so strict mode rejects it at ``/packages/0/package_id``.
+        packages=[PackageRequestFactory.payload()],
     )
     assert req.brand is not None
 
@@ -124,7 +148,15 @@ def test_validation_error_formatting():
         assert "brand_manifest.BrandManifest.target_audience" in error_msg
         assert "Expected string, got object" in error_msg
         assert "AdCP spec requires this field to be a simple string" in error_msg
-        assert "https://adcontextprotocol.org/schemas/v1/" in error_msg
+        # Asserted against EXPECTED_SPEC_VERSION, not a literal and not
+        # get_adcp_spec_version(). Production derives the segment from the SDK at
+        # runtime; this constant is hand-authored in tests/helpers/adcp_pin.py with its
+        # own drift guard, so the two reach the same string by independent paths and
+        # must agree. A literal here would go stale at the next bump -- which is the
+        # defect this assertion previously carried: it pinned `/schemas/v1/`, a version
+        # this project has never used, and kept asserting it after production started
+        # deriving.
+        assert f"https://adcontextprotocol.org/schemas/{EXPECTED_SPEC_VERSION}/" in error_msg
 
 
 def test_validation_error_formatting_missing_field():

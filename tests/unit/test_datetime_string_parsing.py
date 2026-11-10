@@ -207,7 +207,9 @@ class TestDateTimeParsingEdgeCases:
         assert req.start_time is not None
         assert req.end_time is not None
         # start_time is the library StartTiming RootModel wrapping the datetime
-        assert req.start_time.root.tzinfo is not None
+        # No ``.root``: ``start_time`` is the plain ``datetime | Literal["asap"]`` the DTO
+        # declares, and adcp 9 ships no ``StartTiming`` RootModel to unwrap.
+        assert req.start_time.tzinfo is not None
         assert req.end_time.tzinfo is not None
 
 
@@ -216,7 +218,7 @@ class TestAdditionalDateTimeValidation:
 
     def test_list_creatives_with_timezone_aware_filters(self):
         """Test ListCreativesRequest with timezone-aware datetime filters."""
-        from adcp.types import CreativeFilters as LibraryCreativeFilters
+        from adcp.types import LegacyCreativeFilters as LibraryCreativeFilters
 
         from src.core.schemas import ListCreativesRequest
 
@@ -235,7 +237,7 @@ class TestAdditionalDateTimeValidation:
 
     def test_list_creatives_rejects_naive_created_after(self):
         """Test CreativeFilters rejects naive datetime for created_after."""
-        from adcp.types import CreativeFilters as LibraryCreativeFilters
+        from adcp.types import LegacyCreativeFilters as LibraryCreativeFilters
         from pydantic import ValidationError
 
         # The library's CreativeFilters enforces AwareDatetime
@@ -247,7 +249,7 @@ class TestAdditionalDateTimeValidation:
 
     def test_list_creatives_rejects_naive_created_before(self):
         """Test CreativeFilters rejects naive datetime for created_before."""
-        from adcp.types import CreativeFilters as LibraryCreativeFilters
+        from adcp.types import LegacyCreativeFilters as LibraryCreativeFilters
         from pydantic import ValidationError
 
         # The library's CreativeFilters enforces AwareDatetime

@@ -19,17 +19,19 @@ pytestmark = pytest.mark.requires_db
 def test_inherited_pricing_owns_new_rows_and_json(integration_db, is_fixed):
     with BareIntegrationEnv() as env:
         tenant, _ = env.setup_default_data()
-        template = ProductFactory(tenant=tenant, product_id="template", is_dynamic=True)
-        source = PricingOptionFactory(
-            product=template,
-            pricing_option_id="publisher-option",
-            currency="EUR",
-            is_fixed=is_fixed,
-            rate=Decimal("7.25") if is_fixed else None,
-            price_guidance={"floor": 2.5},
-            parameters={"publisher_data": {"label": "original"}},
-            min_spend_per_package=Decimal("250.00"),
+        template = ProductFactory(
+            tenant=tenant,
+            product_id="template",
+            dynamic_template=True,
+            template_pricing__pricing_option_id="publisher-option",
+            template_pricing__currency="EUR",
+            template_pricing__is_fixed=is_fixed,
+            template_pricing__rate=Decimal("7.25") if is_fixed else None,
+            template_pricing__price_guidance={"floor": 2.5},
+            template_pricing__parameters={"publisher_data": {"label": "original"}},
+            template_pricing__min_spend_per_package=Decimal("250.00"),
         )
+        source = template.pricing_options[0]
         variant = ProductFactory(tenant=tenant, product_id="variant", parent_product_id="template")
         session = env.get_session()
         repository = ProductRepository(session, tenant.tenant_id)
@@ -69,8 +71,13 @@ def test_concurrent_variant_writes_keep_one_complete_product(integration_db, leg
     with BareIntegrationEnv() as env:
         tenant, _ = env.setup_default_data()
         tenant_id = tenant.tenant_id
-        template = ProductFactory(tenant=tenant, product_id="template", is_dynamic=True)
-        PricingOptionFactory(product=template, pricing_option_id="publisher-cpm", rate=Decimal("7.25"))
+        template = ProductFactory(
+            tenant=tenant,
+            product_id="template",
+            dynamic_template=True,
+            template_pricing__pricing_option_id="publisher-cpm",
+            template_pricing__rate=Decimal("7.25"),
+        )
         PricingOptionFactory(product=template, pricing_option_id="publisher-cpc", pricing_model="cpc")
         if legacy:
             ProductFactory(tenant=tenant, product_id=variant_id, parent_product_id="template", is_dynamic_variant=True)
@@ -81,7 +88,7 @@ def test_concurrent_variant_writes_keep_one_complete_product(integration_db, leg
             ready.wait(timeout=10)
             with ProductUoW(tenant_id) as uow:
                 assert uow.products is not None
-                templates = uow.products.list_dynamic_templates(for_update=True)
+                templates = uow.products.list_dynamic_templates()
                 variants = generate_variants_from_signals(uow.products, templates[0], [signal], "premium")
                 return [(variant.product_id, len(variant.pricing_options)) for variant in variants]
 
@@ -97,3 +104,25 @@ def test_concurrent_variant_writes_keep_one_complete_product(integration_db, leg
             "publisher-cpm",
         ]
         assert sorted(product.product_id for product in repository.list_all()) == ["template", variant_id]
+
+
+def test_failed_variant_discards_only_its_queued_effects(integration_db):
+    fired = []
+    with BareIntegrationEnv() as env:
+        tenant, _ = env.setup_default_data()
+        template = ProductFactory(tenant=tenant, dynamic_template=True)
+        tenant_id, template_id = tenant.tenant_id, template.product_id
+        env.get_session()
+        with ProductUoW(tenant_id) as uow:
+            repository = uow.products
+            template = repository.get_by_id_with_pricing(template_id)
+            repository.after_commit(lambda: fired.append("unrelated"))
+
+            def failed_build():
+                repository.after_commit(lambda: fired.append("failed-variant"))
+                raise RuntimeError("variant cannot be built")
+
+            with pytest.raises(RuntimeError, match="variant cannot be built"):
+                repository.get_or_create_variant(template, "invalid", failed_build)
+            assert repository.get_by_id("invalid") is None
+        assert fired == ["unrelated"]

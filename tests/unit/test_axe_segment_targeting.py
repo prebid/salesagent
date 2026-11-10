@@ -7,7 +7,7 @@ for create_media_buy and update_media_buy operations.
 
 from datetime import UTC
 
-from src.core.schemas import CreateMediaBuyRequest, PackageRequest, Targeting, UpdateMediaBuyRequest
+from src.core.schemas import CreateMediaBuyRequest, PackageRequest, Targeting, TargetingInput, UpdateMediaBuyRequest
 
 
 def test_targeting_has_axe_segment_fields():
@@ -110,7 +110,10 @@ def test_update_media_buy_request_with_axe_segments():
         packages=[
             AdCPPackageUpdate(
                 package_id="pkg_123",
-                targeting_overlay=Targeting(
+                # TargetingInput, not Targeting: AdCP 3.2 splits the overlay into
+                # core/targeting.json (readback) and core/targeting_input.json (request),
+                # and a package UPDATE carries the input one.
+                targeting_overlay=TargetingInput(
                     geo_countries=["US", "CA"],
                     axe_include_segment="x8dj3k",
                 ),
