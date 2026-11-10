@@ -14,9 +14,10 @@ compile and mypy sees every field a reader names.
 import logging
 from typing import Any
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from src.core.config_loader import safe_json_loads
+from src.services.ai.config import SellerAIConfig, TenantAIConfig
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,13 @@ class TenantContext(BaseModel):
     account_sandbox: bool = False  # #1592 C2/A2: account.sandbox + sync_accounts provisioning gate
     approval_mode: str = "require-human"  # BR-RULE-037: creative approval mode
     account_approval_mode: str | None = None  # BR-RULE-060: account approval mode (auto|credit_review|legal_review)
-    gemini_api_key: str | None = None
+    # What AI the seller configured, resolved once from the row by TenantAIConfig.from_tenant
+    # (ai_config first, the legacy gemini_api_key column second): the seller's own config,
+    # None for nothing, or UNUSABLE_AI_CONFIG. Every AI consumer reads it here. It carries a
+    # credential, so it is kept out of repr and of every dump; the legacy column itself is
+    # not carried at all.
+    ai_config: SellerAIConfig = Field(default=None, repr=False, exclude=True)
+    order_name_template: str | None = None
     creative_review_criteria: str | None = None
     brand_manifest_policy: str = "require_auth"
     advertising_policy: dict[str, Any] | None = None
@@ -104,6 +111,24 @@ class TenantContext(BaseModel):
 
         return hostname_of(self.virtual_host)
 
+    @property
+    def auto_approves_creatives(self) -> bool:
+        """Whether a synced creative is approved at sync, with no review before it can serve.
+
+        The ONE predicate over ``approval_mode`` that both readers ask: sync_creatives'
+        routing (``_apply_approval_mode``) approves the row when it holds and leaves it
+        ``pending_review`` otherwise, and ``get_adcp_capabilities`` advertises
+        ``media_buy.creative_approval_mode`` from it. Two readers comparing the string
+        separately could advertise ``auto_approve`` for a mode that holds creatives for review.
+
+        Only ``auto-approve`` holds. ``ai-powered`` does not: the AI reviewer leaves a creative
+        ``pending_review`` for a human on low confidence, a sensitive category or a review
+        failure, which is ``require_human``'s "may require manual review" ceiling
+        (protocol/get-adcp-capabilities-response.json, v3.2.7,
+        ``media_buy.creative_approval_mode``).
+        """
+        return self.approval_mode == "auto-approve"
+
     # --- Construction helpers ---
 
     @classmethod
@@ -114,10 +139,9 @@ class TenantContext(BaseModel):
         request names; a background path that starts from a stored row's ``tenant_id``
         (delivery reporting for a media buy) calls it for the same reason.
         """
-        from src.core.config_loader import get_tenant_by_id
+        from src.core.config_loader import get_tenant_context
 
-        row = get_tenant_by_id(tenant_id)
-        return cls.from_dict(row) if row else None
+        return get_tenant_context(tenant_id)
 
     @classmethod
     def from_orm_model(cls, tenant: Any) -> "TenantContext":
@@ -145,7 +169,8 @@ class TenantContext(BaseModel):
             account_sandbox=tenant.account_sandbox,
             approval_mode=tenant.approval_mode or "require-human",
             account_approval_mode=tenant.account_approval_mode,
-            gemini_api_key=tenant.gemini_api_key,
+            ai_config=TenantAIConfig.from_tenant(tenant),
+            order_name_template=tenant.order_name_template,
             creative_review_criteria=tenant.creative_review_criteria,
             brand_manifest_policy=tenant.brand_manifest_policy or "require_auth",
             advertising_policy=safe_json_loads(tenant.advertising_policy, None),

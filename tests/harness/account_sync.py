@@ -196,6 +196,28 @@ class AccountSyncEnv(AccountListDispatchMixin, IntegrationEnv):
             self._require_tenant_row("set_billing_policy")
         self.configure_tenant_field("supported_billing", supported)
 
+    def register_agent_as_passthrough_only(self) -> None:
+        """Record the env's buyer agent as passthrough-only in the seller's onboarding record.
+
+        Writes ``principals.billing_passthrough_only`` on the env principal's REAL row --
+        the column the per-buyer-agent billing gate reads off the resolved identity -- so
+        every transport, the live server over e2e included, resolves the same agent.
+
+        No-Quiet-Failures: a principal that does not exist yet raises rather than leaving
+        the scenario to grade an agent with no recorded relationship.
+        """
+        from src.core.database.models import Principal
+
+        session = self.get_session()
+        principal = session.get(Principal, (self._tenant_id, self._principal_id))
+        if principal is None:
+            raise RuntimeError(
+                f"register_agent_as_passthrough_only() found no principal {self._principal_id!r} in tenant "
+                f"{self._tenant_id!r}. Authenticate the Buyer (create the principal) first."
+            )
+        principal.billing_passthrough_only = True
+        session.commit()
+
     def clear_account_brand(self, account_id: str) -> None:
         """Null out a persisted account's ``brand``, leaving the row otherwise intact.
 
@@ -332,7 +354,7 @@ class AccountSyncEnv(AccountListDispatchMixin, IntegrationEnv):
 
         Account approval mode is a distinct field from creative approval_mode
         (BR-RULE-037) — ``configure_tenant_field`` writes the correct column so
-        the MCP real-auth chain (config_loader.get_tenant_by_id) sees it, and
+        the MCP real-auth chain (config_loader.get_tenant_context) sees it, and
         also updates the in-memory tenant overrides for the mock identity path.
         The tenant row must already exist — No-Quiet-Failures (PR #1430).
         """

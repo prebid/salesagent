@@ -79,7 +79,6 @@ _COMPLY_TEST_CONTROLLER_DIVERGENCE: dict[str, str] = {
     "reach_buy_flow": "DETERMINISTIC INJECTION",
     "vendor_metric_catalog_precondition": "DETERMINISTIC INJECTION",
     "vendor_metric_optimization_flow": "PRIOR STATE ONLY",
-    "canonical-format-validate-input": "PRIOR STATE ONLY",
     "comply-controller-mode-gate": "DETERMINISTIC INJECTION",
     "deterministic-testing": "DETERMINISTIC INJECTION",
 }

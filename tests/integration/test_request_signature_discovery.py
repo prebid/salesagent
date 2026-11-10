@@ -45,15 +45,16 @@ authorized to act FOR THIS BRAND", ``request_signature_agent_not_in_brand_json``
 object to configure and no decision to grade. They are removed rather than rewritten
 against a stand-in, because a Tier-3 test that seeds a cache nothing reads passes
 unconditionally while reading as though it proved a brand binding — worse than the
-absence it would be hiding. The one arm still reachable is
-:func:`~src.core.signing.verifier._map_brand_json_resolver_error`, which maps the SDK's
+absence it would be hiding. The one arm still reachable is the SDK's own brand.json table
+(``adcp/signing/agent_resolver.py``'s ``_BRAND_JSON_SPEC_CODES``, reached through
+:func:`~src.core.signing.verifier._map_agent_resolver_error`), which maps the SDK's
 ``agent_not_found`` onto ``request_signature_agent_not_in_brand_json`` as part of the
 DISCOVERY chain; that is a different obligation (the walk found no entry) from the Tier-3
 one (the entry exists and the brand did not delegate to it), and it is ungraded today.
 
 Spec grounding
 --------------
-AdCP 3.1.1 via ``adcp==6.6.0``. Codes: ``adcp/signing/errors.py`` — the
+AdCP 3.2.1 via ``adcp==9.0.0b1+prs1435.1415``. Codes: ``adcp/signing/errors.py`` — the
 ``# brand.json discovery chain (ADCP #3690)`` block. The step numbering is ``security.mdx``
 @ v3.1.1 "Verifier checklist (requests)", whose step 6 is where this seller's one key
 location comes from (``docs/design/request-signing-subset.md``).
@@ -74,6 +75,7 @@ from adcp.signing.agent_resolver import AgentResolution
 from adcp.signing.errors import (
     REQUEST_SIGNATURE_CAPABILITIES_UNREACHABLE,
     REQUEST_SIGNATURE_HEADER_MALFORMED,
+    REQUEST_SIGNATURE_JWKS_UNTRUSTED,
 )
 
 from src.core.signing import verifier
@@ -187,11 +189,30 @@ class TestDiscoveryFailureDefersToTheChecklist:
     def test_a_malformed_signature_outranks_an_unresolvable_counterparty(self, integration_db, counterparty_keypair):
         """Malformed headers -> step 1; a well-formed signature -> the discovery code.
 
-        The walk fails for real, with no network and no patched resolver: the SDK
-        resolves and validates the authority synchronously before opening a socket
-        (``adcp/signing/ip_pinned_transport.py``), so :data:`UNRESOLVABLE_AGENT_URL`'s
-        loopback authority is refused as a reserved range and ``resolve_agent`` raises
-        ``AgentResolverError("capabilities_unreachable")`` in microseconds.
+        The walk fails for real, with no patched resolver: ``resolve_agent`` resolves
+        the authority before it opens a socket, and :data:`UNRESOLVABLE_AGENT_URL`'s
+        RFC 2606 ``.invalid`` host cannot resolve, so ``AgentResolverError
+        ("capabilities_unreachable")`` is raised off one NXDOMAIN in single-digit
+        milliseconds.
+
+        THE FIXTURE IS UNREACHABLE AND NOT REFUSED, which is what makes
+        ``capabilities_unreachable`` the right expectation rather than an accident. A
+        DNS miss is the hop's own transient row — "Capabilities fetch failed (DNS, TCP,
+        TLS, timeout, non-2xx)" in the 3.2.1 discovery-chain table (``security.mdx``
+        § "Discovering an agent's signing keys via ``brand_json_url``", step 1, :1358)
+        — so the resolver attaches no ``signature_code`` and the hop's table row is the
+        answer. A BANNED destination would instead be a terminal trust-boundary
+        rejection carrying ``signature_code=request_signature_jwks_untrusted``, and
+        :data:`UNRESOLVABLE_AGENT_URL`'s own comment records both banned URLs this
+        constant used to hold and why each answered the wrong code.
+
+        That distinction is only stable because ``_map_agent_resolver_error`` reads
+        ``signature_code``. On a verifier that drops it, a banned destination ALSO reads
+        ``capabilities_unreachable`` and this assertion passes for the wrong reason.
+
+        Distinct from ``TestKeysAwayFromTheWellKnownLocationAreRefused`` below: there
+        the walk SUCCEEDS and this seller's one-key-location gate refuses the result,
+        which is why that test expects a trust-boundary code and this one does not.
 
         Both halves are asserted in one test on purpose. The ordering claim alone is
         vacuously TRUE on a tree that emits no discovery code at all, so a canary that
@@ -235,8 +256,9 @@ class TestDiscoveryFailureDefersToTheChecklist:
             "a well-formed signature from a counterparty whose capabilities hop cannot be "
             "reached must be refused with the discovery code the pinned spec gives that "
             "failure, not folded into request_signature_key_unknown — the counterparty's key "
-            "is not what is wrong, and key_unknown is the wrong retry advice. Got "
-            f"{well_formed_code!r}"
+            "is not what is wrong, and key_unknown is the wrong retry advice. Nor "
+            "jwks_untrusted: this host is unresolvable, not banned, and conflating the two "
+            f"turns a transient outage into a terminal trust refusal. Got {well_formed_code!r}"
         )
         assert malformed_code != well_formed_code, (
             "the two requests differ only in whether the signature headers parse, so a single "
@@ -280,8 +302,6 @@ class TestKeysAwayFromTheWellKnownLocationAreRefused:
         Everything downstream of it — the gate, the failure cooldown, the deferred step-7
         resolver, the wire rendering — is production.
         """
-        from adcp.signing.errors import REQUEST_SIGNATURE_JWKS_UNTRUSTED
-
         private_key, jwks = counterparty_keypair
         with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
             token = seed_principal(env, agent_url=COUNTERPARTY_AGENT_URL)

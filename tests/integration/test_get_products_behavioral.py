@@ -12,11 +12,15 @@ Tests are ordered by migration risk: HIGH_RISK first, then MEDIUM_RISK.
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic_ai.exceptions import ModelHTTPError
 
 from src.core.exceptions import AdCPAuthorizationError, AdCPSalesAgentError, AdCPValidationError
+from src.core.format_resolver import NamedFormats
 from src.core.resolved_identity import PublicIdentity, ResolvedIdentity
 from src.core.tenant_context import TenantContext
+from src.services.ai.factory import AIProviderError
 from src.services.policy_check_service import PolicyCheckResult, PolicyStatus
+from tests.e2e._scripted_llm import MODEL_UNAVAILABLE, ScriptedFailure
 from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
 from tests.harness._identity import make_identity
 from tests.harness.product import ProductEnv
@@ -93,8 +97,7 @@ class TestRankingThresholdBehavior:
                 patch("src.services.ai.factory.get_factory") as mock_factory,
             ):
                 factory_inst = MagicMock()
-                factory_inst.is_ai_enabled.return_value = True
-                factory_inst.create_model.return_value = MagicMock()
+                factory_inst.build.return_value = MagicMock()
                 mock_factory.return_value = factory_inst
                 mock_rank.return_value = ranking_result
 
@@ -138,8 +141,7 @@ class TestRankingThresholdBehavior:
                 patch("src.services.ai.factory.get_factory") as mock_factory,
             ):
                 factory_inst = MagicMock()
-                factory_inst.is_ai_enabled.return_value = True
-                factory_inst.create_model.return_value = MagicMock()
+                factory_inst.build.return_value = MagicMock()
                 mock_factory.return_value = factory_inst
                 mock_rank.return_value = ranking_result
 
@@ -180,8 +182,7 @@ class TestRankingThresholdBehavior:
                 patch("src.services.ai.factory.get_factory") as mock_factory,
             ):
                 factory_inst = MagicMock()
-                factory_inst.is_ai_enabled.return_value = True
-                factory_inst.create_model.return_value = MagicMock()
+                factory_inst.build.return_value = MagicMock()
                 mock_factory.return_value = factory_inst
                 mock_rank.return_value = ranking_result
 
@@ -221,8 +222,7 @@ class TestRankingThresholdBehavior:
                 patch("src.services.ai.factory.get_factory") as mock_factory,
             ):
                 factory_inst = MagicMock()
-                factory_inst.is_ai_enabled.return_value = True
-                factory_inst.create_model.return_value = MagicMock()
+                factory_inst.build.return_value = MagicMock()
                 mock_factory.return_value = factory_inst
                 mock_rank.return_value = ranking_result
 
@@ -261,8 +261,8 @@ class TestRankingFailureFailopen:
 
             with patch("src.services.ai.factory.get_factory") as mock_factory:
                 factory_inst = MagicMock()
-                factory_inst.is_ai_enabled.return_value = True
-                factory_inst.create_model.side_effect = RuntimeError("AI service unavailable")
+                # The provider fails the call: a model that answers like an unavailable one.
+                factory_inst.build.return_value = MODEL_UNAVAILABLE.model()
                 mock_factory.return_value = factory_inst
 
                 env.mock["ranking_factory"].stop()
@@ -272,6 +272,33 @@ class TestRankingFailureFailopen:
         assert len(response.products) == 2
         assert response.products[0].product_id == "p_first"
         assert response.products[1].product_id == "p_second"
+
+    @pytest.mark.asyncio
+    async def test_provider_exception_text_cannot_forge_a_log_line(self, integration_db, caplog):
+        """The ranking failure is logged in one line, whatever the provider's error text says.
+
+        A provider exception carries the remote response body verbatim, so its text is
+        written by a party outside the process. Logs are not on the wire, so no BDD
+        scenario can see this.
+        """
+        with ProductEnv(tenant_id="rank-forge", principal_id="p1") as env:
+            tenant = TenantFactory(tenant_id="rank-forge")
+            env.configure_tenant_field("product_ranking_prompt", "Rank products")
+            PrincipalFactory(tenant=tenant, principal_id="p1")
+            PricingOptionFactory(product=ProductFactory(tenant=tenant, product_id="p_first"))
+
+            factory = env.mock["ranking_factory"].return_value
+            factory.build.return_value = ScriptedFailure(
+                {}, lambda: ModelHTTPError(status_code=503, model_name="m", body="503 upstream\nWARNING forged entry")
+            ).model()
+
+            with caplog.at_level("WARNING", logger="src.core.tools.products"):
+                await env.call_impl(brief="campaign")
+
+        ranking_lines = [r.getMessage() for r in caplog.records if "AI product ranking" in r.getMessage()]
+        assert len(ranking_lines) == 1, f"expected one ranking-failure log record, got {ranking_lines}"
+        assert ranking_lines[0].splitlines() == [ranking_lines[0]], f"the record spans lines: {ranking_lines[0]!r}"
+        assert "503 upstream\\nWARNING forged entry" in ranking_lines[0]
 
 
 # ---- Policy: tests 3, 4, 5 (S9, S8, S10) ----
@@ -375,7 +402,8 @@ class TestPolicyServiceFailopenPipeline:
             env._identity = _lazy_identity("pol-failopen", "p1")
 
             mock_policy_inst = MagicMock()
-            mock_policy_inst.check_brief_compliance = AsyncMock(side_effect=RuntimeError("Gemini API timeout"))
+            # What the real service raises when the provider fails the check (run_agent).
+            mock_policy_inst.check_brief_compliance = AsyncMock(side_effect=AIProviderError("Gemini API timeout"))
             env.mock["policy_service"].return_value = mock_policy_inst
 
             response = await env.call_impl(brief="Normal campaign")
@@ -492,8 +520,7 @@ class TestEmptyResultsPipelineStages:
                 patch("src.services.ai.factory.get_factory") as mock_factory,
             ):
                 factory_inst = MagicMock()
-                factory_inst.is_ai_enabled.return_value = True
-                factory_inst.create_model.return_value = MagicMock()
+                factory_inst.build.return_value = MagicMock()
                 mock_factory.return_value = factory_inst
                 mock_rank.return_value = ranking_result
 
@@ -529,7 +556,7 @@ class TestBriefPolicyComplianceMatrix:
             (True, True, None, PolicyStatus.ALLOWED, False, False, None),
             (False, True, None, None, False, False, None),
             (True, False, None, None, False, False, None),
-            (True, True, RuntimeError("Down"), None, False, False, None),
+            (True, True, AIProviderError("Down"), None, False, False, None),
         ],
         ids=[
             "BLOCKED",
@@ -765,27 +792,21 @@ class TestPricingOptionXorNegativeCases:
 
 
 class TestProductConversionNegativeCardinality:
-    """Test product_conversion rejects products with 0 format_ids, properties, or pricing.
+    """Test product_conversion rejects products with 0 properties or pricing.
 
     BDD scenarios: T-UC-001-rule-007, T-UC-001-partition-product-arrays,
     T-UC-001-boundary-product-arrays (S21, S32, S39)
 
     Note: These test convert_product_model_to_schema directly with mock models.
+
+    A ``test_zero_format_ids_raises_value_error`` used to sit here and is deleted rather
+    than re-grounded, because it asserted the behaviour this seller deliberately removed:
+    an absent ``format_ids`` is now LEGAL on its own, since core/product.json's root anyOf
+    accepts a canonical-format product and marks ``format_ids`` deprecated. The refusal that
+    replaced it fires on NEITHER arm, and it is graded on the wire on all four transports by
+    BR-UC-GET-PRODUCTS-format-options' "a product declaring neither format arm is refused"
+    (salesagent-ntwib). Deleting a red test removes no coverage.
     """
-
-    def test_zero_format_ids_raises_value_error(self):
-        """product_conversion with 0 format_ids -> ValueError."""
-        from src.core.product_conversion import convert_product_model_to_schema
-
-        mock_model = MagicMock()
-        mock_model.product_id = "bad_product"
-        mock_model.name = "Bad Product"
-        mock_model.description = "No formats"
-        mock_model.delivery_type = "guaranteed"
-        mock_model.effective_format_ids = []
-
-        with pytest.raises(ValueError, match="no format_ids"):
-            convert_product_model_to_schema(mock_model)
 
     def test_zero_properties_raises_value_error(self):
         """product_conversion with 0 properties -> ValueError."""
@@ -796,7 +817,9 @@ class TestProductConversionNegativeCardinality:
         mock_model.name = "Bad Product"
         mock_model.description = "No properties"
         mock_model.delivery_type = "guaranteed"
-        mock_model.effective_format_ids = [{"agent_url": "https://example.com", "id": "display_300x250"}]
+        mock_model.format_contract = NamedFormats(
+            format_ids=({"agent_url": "https://example.com", "id": "display_300x250"},)
+        )
         mock_model.effective_properties = []
 
         with pytest.raises(ValueError, match="no publisher_properties"):
@@ -811,7 +834,9 @@ class TestProductConversionNegativeCardinality:
         mock_model.name = "Bad Product"
         mock_model.description = "No pricing"
         mock_model.delivery_type = "guaranteed"
-        mock_model.effective_format_ids = [{"agent_url": "https://example.com", "id": "display_300x250"}]
+        mock_model.format_contract = NamedFormats(
+            format_ids=({"agent_url": "https://example.com", "id": "display_300x250"},)
+        )
         mock_model.effective_properties = [
             {"publisher_domain": "test.com", "selection_type": "by_tag", "property_tags": ["all"]}
         ]

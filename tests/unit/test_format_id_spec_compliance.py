@@ -10,7 +10,7 @@ Audit: 2026-04-30 — found via full codebase audit of format_id usage patterns.
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from adcp.types import FormatId as LibraryFormatId
+from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 
 from src.core.schemas._base import FormatId
 

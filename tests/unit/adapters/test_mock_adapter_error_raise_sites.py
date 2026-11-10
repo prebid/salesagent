@@ -80,7 +80,9 @@ class TestMockMediaBuyRejectedRaiseSites:
                 }
             },
         )
-        adapter = MockAdServer(config={}, principal=principal, tenant_id="tenant_test")
+        adapter = MockAdServer(
+            config={}, principal=principal, tenant_id="tenant_test", order_name_template=None, tenant_ai_config=None
+        )
 
         request = _make_request()
         start_time = datetime.now(UTC)

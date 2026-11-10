@@ -196,7 +196,7 @@ class CapabilitiesEnv(IntegrationEnv):
         monkeypatch. ``configure_tenant_field`` (tests/harness/_base.py) updates
         both the in-memory tenant overrides (mock identity path) and the DB
         ``tenants`` row, which the real MCP/A2A/e2e auth chain reads back via
-        ``config_loader.get_tenant_by_id`` — the same shape as the undecorated
+        ``config_loader.get_tenant_context`` — the same shape as the undecorated
         ``set_billing_policy`` / ``set_approval_mode`` precedents
         (tests/harness/account_sync.py). Because it needs no test-only injection
         seam it declares no ``E2EUnsupportedSetup``, so the e2e escape-hatch pin

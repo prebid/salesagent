@@ -69,21 +69,44 @@ def _count_r0801_messages(stdout: str) -> int:
     return len(_R0801_MESSAGE.findall(stdout))
 
 
+def _module_files_in_a_fixed_order(directory: str, root: Path) -> list[str]:
+    """The files pylint checks for *directory*, sorted, relative to *root*.
+
+    pylint walks a directory with ``os.walk``, so it visits files in the order the
+    filesystem lists them, and R0801's message count depends on that order: its grouping
+    puts a pair into the first group that already holds either member and never adds the
+    other member, so the same set of duplicate pairs is reported as a different number of
+    messages in a different order. Measured when this landed: one tree's duplicate pairs
+    under tests/ came out as anything from 38 to 43 messages across file orders, so a box
+    mirror and a laptop disagreed about one commit. Handing pylint the files sorted makes the
+    count a function of the tree alone. The set is pylint's own expansion with its default
+    ignore lists, which is the set the directory argument produced.
+    """
+    from pylint.constants import DEFAULT_IGNORE_LIST
+    from pylint.lint.expand_modules import expand_modules
+
+    modules, errors = expand_modules([str(root / directory)], [], list(DEFAULT_IGNORE_LIST), [re.compile(r"^\.#")], [])
+    if errors:
+        sys.exit(f"pylint could not expand {directory}: {errors}")
+    return sorted(str(Path(module["path"]).relative_to(root)) for module in modules.values() if not module["isignored"])
+
+
 def count_duplications(directory: str) -> int:
     """Count pylint R0801 violations in a directory, or refuse to return a number."""
     # Similarity tuning (min-similarity-lines, ignore-imports, etc.) lives in
     # pyproject.toml [tool.pylint.similarities] — single source of truth.
+    root = Path(__file__).resolve().parent.parent
     cmd = [
         sys.executable,
         "-m",
         "pylint",
         "--disable=all",
         "--enable=R0801",
-        directory,
+        *_module_files_in_a_fixed_order(directory, root),
     ]
     result = run_counting_tool(
         cmd,
-        cwd=Path(__file__).parent.parent,
+        cwd=root,
         label=f"pylint R0801 {directory}",
         accepts_returncode=COMPLETE_RETURNCODES.__contains__,
         completion_marker=_pylint_finished,

@@ -1,0 +1,544 @@
+<title>Creative xfail flip candidates — UC-002 / UC-003</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #16181d; --muted: #5c6370; --rule: #e2e5ea;
+    --panel: #f7f8fa; --accent: #1f4e8c; --code-bg: #f2f3f6;
+    --c1: #1b6b3a; --c2: #8a5a00; --c3: #6b4ea8; --c4: #a62f2f; --c5: #44505f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14161a; --fg: #e6e8ec; --muted: #9aa3b0; --rule: #2b3038;
+      --panel: #1b1e24; --accent: #7fb0ea; --code-bg: #1f232a;
+      --c1: #62c48c; --c2: #e0ab4a; --c3: #b39ae0; --c4: #e98585; --c5: #9aa3b0;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14161a; --fg: #e6e8ec; --muted: #9aa3b0; --rule: #2b3038;
+    --panel: #1b1e24; --accent: #7fb0ea; --code-bg: #1f232a;
+    --c1: #62c48c; --c2: #e0ab4a; --c3: #b39ae0; --c4: #e98585; --c5: #9aa3b0;
+  }
+  body { background: var(--bg); color: var(--fg); margin: 0;
+         font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 32px 20px 96px; }
+  h1 { font-size: 26px; line-height: 1.25; margin: 0 0 6px; }
+  h2 { font-size: 19px; margin: 40px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--rule); }
+  h3 { font-size: 16px; margin: 26px 0 8px; }
+  p, li { margin: 8px 0; }
+  code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.88em; }
+  code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+  .sub { color: var(--muted); }
+  .panel { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 14px 16px; margin: 14px 0; }
+  .scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+  th, td { border: 1px solid var(--rule); padding: 7px 9px; text-align: left; vertical-align: top; }
+  th { background: var(--panel); font-weight: 600; }
+  td.num, th.num { text-align: right; white-space: nowrap; }
+  .tag { font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; white-space: nowrap; }
+  .ev { font-size: 11px; font-weight: 700; letter-spacing: .04em; padding: 1px 5px; border-radius: 3px;
+        border: 1px solid var(--rule); background: var(--panel); white-space: nowrap; }
+  .cat { font-weight: 700; white-space: nowrap; }
+  .cat1 { color: var(--c1); } .cat2 { color: var(--c2); } .cat3 { color: var(--c3); }
+  .cat4 { color: var(--c4); } .cat5 { color: var(--c5); }
+  ul { padding-left: 22px; }
+  .lede { font-size: 16px; }
+  .kv { display: grid; grid-template-columns: max-content 1fr; gap: 2px 14px; font-size: 14px; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; }
+</style>
+
+<div class="wrap">
+
+<h1>Creative-related xfails in UC-002 / UC-003: flip candidates</h1>
+<p class="sub">Assessment only — no production or routing code was changed.
+Worktree <code>sa-xf-mb</code>, branch <code>assess/xfail-mediabuy</code>, HEAD <code>ccd3fe7ca</code>.
+<code>git diff --stat</code> empty at finish (the measurement probe described below was reverted).
+Pin: AdCP 3.2.1 via the <code>adcp</code> SDK; pinned schemas read from
+<code>.venv/lib/python3.12/site-packages/adcp/_schemas/3.2/</code>.</p>
+
+<div class="panel">
+<p><strong>Evidence marking.</strong> Every claim carries <span class="ev">EXEC</span> (it was run in this
+worktree — the BDD probe below, a venv read through code, a parse of the run log) or
+<span class="ev">READ</span> (source or a pinned schema was read). A flip prediction with no probe behind it
+is marked READ however obvious it looks.</p>
+<dl class="kv">
+  <dt>Probe</dt><dd>Both <code>not-wired</code> catch-all rows had <code>xfail_reason</code> removed and were
+  given their wired sibling's seed (<code>_seed_media_buy_chain_create_dispatch</code> for UC-002,
+  <code>_seed_update_with_existing_buy</code> for UC-003). Nothing else was touched.</dd>
+  <dt>Command</dt><dd><code>cassini test bdd tests/bdd/test_uc002_create_media_buy.py
+  tests/bdd/test_uc003_update_media_buy.py -k &lt;44 creative scenario names&gt;</code> on <code>noetis-b-vm</code></dd>
+  <dt>Result</dt><dd>345 selected (115 Examples rows × 3 in-process transports a2a/mcp/rest);
+  <strong>181 passed, 150 failed, 15 xfailed</strong> in 450.8 s.
+  Per-node outcomes were recovered from the verbose log and the complete
+  <code>short test summary info</code> block; they reconcile to 345 with one XFAIL line lost to terminal
+  rewriting, which the per-tag table localises to the third transport of
+  <code>T-UC-003-alt-creatives-inline</code>.</dd>
+  <dt>Transports</dt><dd>The probe graded 3 (<code>e2e_rest</code> needs the full stack). The 1680 / 1660
+  item counts in the brief are 4-transport numbers; item counts below are given at both.</dd>
+</dl>
+</div>
+
+<h2>1. How many routing entries govern the creative-related set</h2>
+
+<p><strong>Four entries hold the entire creative-related xfail population, and two of them hold 82 of its
+84 Examples rows.</strong> Seven further entries are <em>second</em> markers on scenarios the two catch-alls
+already hold — which is load-bearing, not trivia: removing either marker alone leaves the scenario exactly
+as ungraded as before, the lesson the daily-spend-cap note at <code>tests/bdd/conftest.py:2442</code>
+already records. <span class="ev">EXEC</span> (routes resolved through the production resolver,
+<code>storyboard_spec.resolve_env_route(marker_names, ENV_ROUTES)</code>, the same call
+<code>_harness_env</code> makes at <code>tests/bdd/conftest.py:6858</code>).</p>
+
+<div class="scroll">
+<table>
+<thead><tr><th>Routing entry</th><th>Location (HEAD <code>ccd3fe7ca</code>)</th><th class="num">Scenarios</th><th class="num">Rows</th><th class="num">Items @3</th><th class="num">Items @4</th></tr></thead>
+<tbody>
+<tr><td><code>uc002-not-wired</code> catch-all</td><td class="mono">tests/bdd/conftest.py:6553</td><td class="num">14</td><td class="num">42</td><td class="num">126</td><td class="num">168</td></tr>
+<tr><td><code>uc003-not-wired</code> catch-all</td><td class="mono">tests/bdd/conftest.py:6581</td><td class="num">13</td><td class="num">40</td><td class="num">120</td><td class="num">160</td></tr>
+<tr><td><code>uc002-inv-015-6</code> one-tag route</td><td class="mono">tests/bdd/conftest.py:6547</td><td class="num">1</td><td class="num">1</td><td class="num">3</td><td class="num">4</td></tr>
+<tr><td><code>_XFAIL_TAGS["T-UC-002-ext-h-agent"]</code></td><td class="mono">tests/bdd/conftest.py:626</td><td class="num">1</td><td class="num">1</td><td class="num">3</td><td class="num">4</td></tr>
+<tr><th colspan="6">Second markers on scenarios already held by a catch-all (zero additional items)</th></tr>
+<tr><td><code>_XFAIL_TAGS["T-UC-002-alt-creatives"]</code></td><td class="mono">tests/bdd/conftest.py:695</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td></tr>
+<tr><td><code>_XFAIL_TAGS["T-UC-002-inv-026-2"]</code></td><td class="mono">tests/bdd/conftest.py:634</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td></tr>
+<tr><td><code>_XFAIL_TAGS["T-UC-002-inv-026-4"]</code></td><td class="mono">tests/bdd/conftest.py:635</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td></tr>
+<tr><td><code>_UC002_VALIDATION_XFAIL</code> × 4 row-keyed entries</td><td class="mono">tests/bdd/conftest.py:2451, 2456, 2461, 2466</td><td class="num">—</td><td class="num">7 rows</td><td class="num">—</td><td class="num">—</td></tr>
+<tr><th>Total creative-related, currently xfailed</th><th></th><th class="num">29</th><th class="num">84</th><th class="num">252</th><th class="num">336</th></tr>
+</tbody>
+</table>
+</div>
+
+<p><strong>The ratio: 84 Examples rows = 336 of the ~3,340 measured xfailed items (≈10%), governed by 4
+entries — and 2 entries carry 98% of those rows.</strong> The two catch-alls are not placeholders for a
+missing harness: each builds exactly the env its wired sibling builds
+(<code>MediaBuyCreateEnv</code> / <code>MediaBuyDualEnv</code>), so "wiring" here means naming the scenarios
+the existing harness already serves, plus supplying the sibling's seed. That is why the probe above is
+cheap and why its verdict is trustworthy. <span class="ev">READ</span></p>
+
+<h3>What I excluded, and why</h3>
+<p>A keyword sweep over both feature files returned 55 scenarios; 26 were false positives whose only hit
+came from a trailing section comment or a Background line. Excluded as not turning on creative identity or
+creative handling: <code>T-UC-002-partition/boundary-catalog-distinct-type</code> (product/offering
+<em>catalogs</em>; the <code>format_id</code> hit is the adjacent
+<code>#&nbsp;---&nbsp;format_id_structure&nbsp;---</code> comment), <code>-partition/boundary-adcp-domain</code>,
+<code>-partition-task-type</code>, <code>-partition/boundary-targeting-overlay</code>,
+<code>T-UC-002-ext-f-geo</code>, <code>-ext-n-min-spend</code>, <code>T-UC-002-alt-asap</code>,
+<code>T-UC-002-inv-020-3</code> / <code>-020-5</code>, and the UC-003 idempotency-key outlines.
+<code>T-UC-002-inv-020-1</code> and <code>-020-4</code> are kept: the first asserts creative-assignment
+persistence, the second names creative completeness in its Given. <span class="ev">READ</span></p>
+
+<h2>2. Ranked flip candidates</h2>
+
+<p>Categories follow the brief: <span class="cat cat1">1</span> blocked on a design we now have ·
+<span class="cat cat2">2</span> production gap with a known fix · <span class="cat cat3">3</span>
+over-specified · <span class="cat cat4">4</span> vacuous (a trap) · <span class="cat cat5">5</span>
+genuinely blocked.</p>
+
+<div class="scroll">
+<table>
+<thead><tr>
+<th class="num">#</th><th>Scenario(s)</th><th>Routing entry</th><th class="num">Items @3/@4</th>
+<th>Cat</th><th>What blocks it (measured)</th><th>Smallest change that flips it</th><th>Confidence</th>
+</tr></thead>
+<tbody>
+
+<tr>
+<td class="num">1</td>
+<td class="tag">T-UC-002-partition-creative-asset (3 rows)<br>T-UC-002-boundary-creative-asset (2 rows)<br>+ the 2 max-creatives rows</td>
+<td class="mono">uc002-not-wired :6553<br><strong>and</strong> _UC002_VALIDATION_XFAIL ×4 :2451/2456/2461/2466</td>
+<td class="num">21 / 28</td>
+<td class="cat cat1">1 + 3</td>
+<td><strong>All 7 rows measured XPASS(strict)</strong> — they pass production and are reported as failures
+only because a strict marker says they must not. Rows:
+<code>creative_not_found</code>, <code>format_mismatch</code>, <code>missing_required_assets</code>,
+<code>exceeds_max_creatives</code>, <code>cr-bad</code>, <code>wrong format</code>, <code>101 uploads</code>.
+Two markers hold them: the catch-all (nothing dispatches) and four
+<code>_UC002_VALIDATION_XFAIL</code> entries whose reasons are false (§3.1, §3.2).
+<span class="ev">EXEC</span></td>
+<td>Claim both outlines on a route carrying <code>_seed_media_buy_chain_create_dispatch</code>,
+<em>and in the same change</em> delete the four <code>_UC002_VALIDATION_XFAIL</code> entries. Either
+alone changes nothing.</td>
+<td>HIGH <span class="ev">EXEC</span></td>
+</tr>
+
+<tr>
+<td class="num">2</td>
+<td class="tag">T-UC-003-partition-creative-state (3 rows)<br>T-UC-003-boundary-creative-state (3 rows)</td>
+<td class="mono">uc003-not-wired :6581</td>
+<td class="num">18 / 24</td>
+<td class="cat cat1">1</td>
+<td><strong>18 of 18 PASSED.</strong> Nothing but the catch-all held them. The scenarios name exact codes
+(<code>INVALID_STATE</code> for a creative in error state, <code>VALIDATION_ERROR</code> for a format the
+product does not accept) and reach them through <code>_assert_error_outcome</code>'s
+<code>result.assert_wire_error(...)</code> path, so the pass is on the wire envelope, not a truthiness
+check. Production raises exactly those: <code>src/core/tools/media_buy_update.py:321</code>
+(<code>AdCPGoneError</code> → INVALID_STATE, <code>src/core/exceptions.py:1069</code>) and
+<code>:373</code> (<code>AdCPValidationError</code> → VALIDATION_ERROR), both keyed on the legacy identity
+pair via <code>product_format_identities</code> at <code>:342</code>.
+<span class="ev">EXEC</span> + <span class="ev">READ</span></td>
+<td>Add the two tags to a UC-003 route with <code>_seed_update_with_existing_buy</code> — one predicate,
+no production change.</td>
+<td>HIGH <span class="ev">EXEC</span></td>
+</tr>
+
+<tr>
+<td class="num">3</td>
+<td class="tag">T-UC-003-partition-placement-id (4)<br>T-UC-003-boundary-placement-id (3)<br>T-UC-003-alt-creative-assignments (1)</td>
+<td class="mono">uc003-not-wired :6581</td>
+<td class="num">6 of 24 pass<br>→ 24 / 32</td>
+<td class="cat cat2">2</td>
+<td>The 6 <code>no_placement_ids</code> / unsupported-product items pass. Every other item fails with
+<code>UNSUPPORTED_FEATURE</code>, including the rows that ask for success and the
+<code>invalid_placement_id</code> row that asks for <code>VALIDATION_ERROR</code>
+(<code>AssertionError: adcp_error.code='UNSUPPORTED_FEATURE', expected 'VALIDATION_ERROR'</code>).
+Cause is the seeded product, not production: with <code>product.placements</code> empty,
+<code>src/core/tools/media_buy_update.py:1156</code> raises
+<code>AdCPCapabilityNotSupportedError</code> before the invalid-id branch at <code>:1153</code> can run.
+<span class="ev">EXEC</span></td>
+<td>Seed <code>placements</code> (<code>plc_a</code>, <code>plc_b</code>) on the product the UC-003 chain
+creates, then claim the tags. Production is already correct on both arms.</td>
+<td>MED-HIGH <span class="ev">EXEC</span> for the cause, <span class="ev">READ</span> for the fix</td>
+</tr>
+
+<tr>
+<td class="num">4</td>
+<td class="tag">T-UC-002-partition-format-id-structure (6)<br>T-UC-002-boundary-format-id-structure (5)</td>
+<td class="mono">uc002-not-wired :6553</td>
+<td class="num">33 / 44</td>
+<td class="cat cat4">4 — TRAP</td>
+<td><strong>33 of 33 PASSED, and they grade almost nothing.</strong> See §4.1: every invalid row's outcome
+is the bare string <code>error with suggestion</code>, which
+<code>tests/bdd/steps/domain/uc002_create_media_buy.py:1267</code> satisfies with any non-empty top-level
+suggestion — and all 158 entries in <code>CODE_TABLE</code> carry one. The
+<code>unregistered_agent</code> and <code>unknown_format</code> rows pass on the product-subset gate at
+<code>src/core/tools/media_buy_create.py:3219-3243</code>, not on the registration or format-existence
+checks their own step docstring says are missing
+(<code>tests/bdd/steps/generic/given_media_buy.py:3228-3236</code>).
+<span class="ev">EXEC</span> + <span class="ev">READ</span></td>
+<td>Do not flip as-is. First name the code each row expects, per the pin: an unnormalizable legacy
+<code>format_ids</code> entry is <code>UNSUPPORTED_FEATURE</code>
+(<code>media-buy/package-request.json</code>, <code>format_ids</code> description).</td>
+<td>HIGH that it passes; HIGH that it is a trap <span class="ev">EXEC</span></td>
+</tr>
+
+<tr>
+<td class="num">5</td>
+<td class="tag">T-UC-003-partition-creative-replacement (4)<br>T-UC-003-boundary-creative-replacement (4)<br>T-UC-003-creative-replace (1)</td>
+<td class="mono">uc003-not-wired :6581</td>
+<td class="num">27 / 36</td>
+<td class="cat cat4">4 — TRAP</td>
+<td><strong>27 of 27 PASSED, grading no replacement.</strong> See §4.2: every row's outcome is bare
+<code>success</code>, and <code>then_result_should_be</code>
+(<code>uc002_create_media_buy.py:787</code>) answers that with "no error in ctx and a payload exists".
+The Given sets up existing assignments <code>[cr_old_1, cr_old_2]</code> and no Then ever reads the
+resulting set, so the deletion of assignments absent from the new list
+(<code>media_buy_update.py:1163-1173</code>) is unobserved. The two outlines are also row-for-row
+duplicates of each other. <span class="ev">EXEC</span> + <span class="ev">READ</span></td>
+<td>Do not flip as-is. Add a Then that reads the package's assignment set after the update, and collapse
+the duplicate outline.</td>
+<td>HIGH that it passes; HIGH that it is a trap <span class="ev">EXEC</span></td>
+</tr>
+
+<tr>
+<td class="num">6</td>
+<td class="tag">T-UC-003-partition-immutable-package-field (5)<br>T-UC-003-bva-immutable-field-guard (5)<br>T-UC-003-bva-package-immutable-fields (5)</td>
+<td class="mono">uc003-not-wired :6581</td>
+<td class="num">45 / 60</td>
+<td class="cat cat5">5</td>
+<td>All 45 items fail on missing test wiring, not production. The two <code>bva-*</code> outlines trip the
+dormancy guard — <code>T-UC-003-bva-package-immutable-fields has no step definition for 'given a valid
+update_media_buy request for "&lt;&gt;"', so this scenario grades NOTHING</code> — and the
+<code>partition</code> outline dies in its When builder with
+<code>ValueError: Unknown update_fields pattern: 1 package update containing format_ids</code>.
+Production would answer: <code>AdCPPackageUpdate</code>
+(<code>src/core/schemas/_base.py:3045</code>) declares none of <code>format_ids</code> /
+<code>product_id</code> / <code>pricing_option_id</code> and sets <code>extra="forbid"</code> in dev, so
+all three are rejected as <code>INVALID_REQUEST</code>. <span class="ev">EXEC</span> for the failures,
+<span class="ev">EXEC</span> for the model fields (read off the live class).</td>
+<td>Author one Given (<code>a valid update_media_buy request for "&lt;id&gt;"</code>) and five
+<code>update_fields</code> branches — then collapse three outlines grading one obligation into one.
+Note before doing so: in production <code>extra="ignore"</code> drops these keys silently, so the pin's
+package-update root <code>not</code> constraint is only honoured in dev (critical pattern #7).</td>
+<td>MED-HIGH <span class="ev">EXEC</span></td>
+</tr>
+
+<tr>
+<td class="num">7</td>
+<td class="tag">T-UC-002-v31-success-status-values (3 rows)</td>
+<td class="mono">uc002-not-wired :6553</td>
+<td class="num">9 / 12</td>
+<td class="cat cat5">5</td>
+<td>Dormant: <code>no step definition for 'given a valid create_media_buy request producing the
+"&lt;&gt;" condition'</code>. Worth the step work — it is the only scenario grading status-by-creative-presence
+(<code>pending_creatives</code> / <code>pending_start</code> / <code>active</code>), and production
+implements it at <code>src/core/tools/media_buy_create.py:267-279</code>.
+<span class="ev">EXEC</span> + <span class="ev">READ</span></td>
+<td>One Given mapping the three conditions onto request defaults (creatives present/absent × flight
+window). No production change expected.</td>
+<td>MED <span class="ev">EXEC</span> for dormancy, <span class="ev">READ</span> for the flip</td>
+</tr>
+
+<tr>
+<td class="num">8</td>
+<td class="tag">T-UC-002-inv-026-1 (1)<br>T-UC-002-inv-026-2 (1)<br>T-UC-002-inv-026-4 (1)</td>
+<td class="mono">uc002-not-wired :6553<br>+ _XFAIL_TAGS :634, :635</td>
+<td class="num">9 / 12</td>
+<td class="cat cat5">5</td>
+<td>Dormant. <code>-026-1</code> fails with <code>no step definition for 'given all referenced creatives
+exist in valid state with compatible formats'</code>; <code>-026-2</code> and <code>-026-4</code> report
+XFAIL on their own missing steps. Both obligations ARE implemented — terminal-state creatives rejected at
+<code>media_buy_create.py:379</code> → <code>AdCPGoneError</code> at <code>:444</code>, and format-vs-product
+at <code>:3702</code> → <code>VALIDATION_ERROR</code>. Their xfail reasons are false on three counts (§3.3).
+<span class="ev">EXEC</span> + <span class="ev">READ</span></td>
+<td>Author three Givens. The scenarios are weak as written (fail + suggestion, no code), so name the codes
+production already emits while wiring them.</td>
+<td>MED <span class="ev">EXEC</span></td>
+</tr>
+
+<tr>
+<td class="num">9</td>
+<td class="tag">The inline-creative rows:<br>partition <code>uploads_only</code>, <code>both_paths</code>;<br>boundary <code>valid inline upload</code></td>
+<td class="mono">uc002-not-wired :6553</td>
+<td class="num">12 / 16</td>
+<td class="cat cat2">2</td>
+<td>Every item fails with <code>CREATIVE_REJECTED</code> whose <code>details.reasons[0]</code> is
+<code>"inline-cr-001: Generic fallback for a referenced identifier…"</code> — the CODE_TABLE
+<em>description sentence for REFERENCE_NOT_FOUND</em>, carried to the buyer as a rejection reason. Built at
+<code>src/core/helpers/creative_helpers.py:320-325</code>. Two defects in one site (§5.1), plus a harness
+question: the inline creative asserts the reference agent's <code>display_300x250</code>
+(<code>given_media_buy.py:2077-2096</code>) and the nested sync cannot resolve it under
+<code>MediaBuyCreateEnv</code>. <span class="ev">EXEC</span></td>
+<td>Not a routing change. Fix the code mapping and stop composing <code>reasons</code> from code text; then
+re-measure whether the registry resolution under <code>MediaBuyCreateEnv</code> is a second blocker.</td>
+<td>MED <span class="ev">EXEC</span> for the symptom, <span class="ev">READ</span> for the fix</td>
+</tr>
+
+<tr>
+<td class="num">10</td>
+<td class="tag">T-UC-002-ext-h-agent (1)</td>
+<td class="mono">_XFAIL_TAGS :626 (route <code>uc002-ext</code> already dispatches)</td>
+<td class="num">3 / 4</td>
+<td class="cat cat3">3</td>
+<td>Measured XFAIL under a strict marker, so it genuinely fails: production does not answer
+<code>REFERENCE_NOT_FOUND</code> for an unregistered creative agent. The cited cause is true —
+<code>_validate_and_convert_format_ids</code> is defined at
+<code>src/core/tools/media_buy_create.py:1775</code> and its only callers are in
+<code>tests/integration/test_create_media_buy_behavioral.py</code> — but incomplete: that function answers
+an unregistered agent with <code>AdCPAuthorizationError</code> → <code>PERMISSION_DENIED</code>
+(<code>src/core/exceptions.py:942</code>), so wiring it would still fail the scenario. And the pin points a
+third way: an entry that cannot be normalized is rejected with <code>UNSUPPORTED_FEATURE</code>
+(<code>media-buy/package-request.json</code>, <code>format_ids</code> description).
+<span class="ev">EXEC</span> + <span class="ev">READ</span></td>
+<td>Reground the scenario's code against 3.2.1 before touching production. Nothing in the pin mandates
+<code>REFERENCE_NOT_FOUND</code> for this condition.</td>
+<td>MED-HIGH <span class="ev">EXEC</span> that it fails; HIGH <span class="ev">READ</span> that the code is
+unjustified</td>
+</tr>
+
+<tr>
+<td class="num">11</td>
+<td class="tag">T-UC-002-alt-creatives (1)</td>
+<td class="mono">uc002-not-wired :6553 + _XFAIL_TAGS :695</td>
+<td class="num">3 / 4</td>
+<td class="cat cat5">5</td>
+<td>The conftest's own classifier answered this one at run time:
+<code>MISCLASSIFIED strict-xfail: … is cited as a production/spec gap but the underlying failure is a
+Given-side setup error on 'the request includes packages with inline "creatives" array' … this is DORMANCY
+(test-wiring), not a graded production gap.</code> The bound step reaches
+<code>_ensure_update_defaults</code>, a UC-003-shaped helper that requires an existing media buy, and four
+further lines of the scenario have no binding at all (<code>the system should upload the creatives to the
+creative library</code> is matched nowhere under <code>tests/bdd/</code>). Its xfail reason is false (§3.4).
+<span class="ev">EXEC</span></td>
+<td>Rebind the Given to a create-shaped default builder and author the three missing Thens. Production
+already uploads and assigns inline creatives.</td>
+<td>MED <span class="ev">EXEC</span></td>
+</tr>
+
+<tr>
+<td class="num">12</td>
+<td class="tag">T-UC-002-boundary-creative-asset-discriminator (2)<br>T-UC-002-inv-020-1 (1), -020-4 (1)<br>T-UC-002-v31-offering-…-catalog (1)<br>T-UC-002-storyboard-pending-creatives… (1)<br>T-UC-002-inv-015-6 (1)<br>T-UC-003-alt-creatives-inline (1)<br>T-UC-003-storyboard-creative-fate… (1)</td>
+<td class="mono">uc002-not-wired :6553<br>uc003-not-wired :6581<br>uc002-inv-015-6 :6547</td>
+<td class="num">27 / 36</td>
+<td class="cat cat5">5</td>
+<td>Dormant, one missing step each, named verbatim by the guard:
+<code>given a create_media_buy request with an inline creative matching "&lt;&gt;"</code>;
+<code>then the media buy record should be persisted in the database</code>;
+<code>given pre-adapter validation fails on creative completeness or adapter pricing/budget
+constraints</code>; <code>given a package targets a catalog whose items are brand offerings</code>;
+<code>given the buyer sends create_media_buy without inline creatives</code>;
+<code>given a media buy has been canceled</code>. <code>inv-015-6</code> and
+<code>alt-creatives-inline</code> report XFAIL. <span class="ev">EXEC</span></td>
+<td>Step authoring, one Given/Then at a time. No routing change helps until the steps exist.</td>
+<td>HIGH that they are dormant <span class="ev">EXEC</span>; unknown whether production satisfies them</td>
+</tr>
+
+</tbody>
+</table>
+</div>
+
+<h2>3. Xfail reasons that are factually wrong</h2>
+
+<p>Six. Five of them describe production behaviour that does not exist; the sixth cites a mechanism that
+does not exist.</p>
+
+<h3>3.1 "spec expects CREATIVE_REJECTED" — the scenario was corrected away from it years ago</h3>
+<p><code>tests/bdd/conftest.py:2453</code> and <code>:2463</code>:
+<em>"creative error code mismatch: production uses NOT_FOUND/VALIDATION_ERROR/INVALID_CREATIVES, spec
+expects CREATIVE_REJECTED — spec-production gap"</em>. The feature file says the opposite in its own words
+at <code>tests/bdd/features/BR-UC-002-create-media-buy.feature:1306</code>: <em>"Three conditions, three
+codes. They read CREATIVE_REJECTED for all three and passed for years because production emitted that one
+code for all three too — a test that encodes production's bug is not coverage."</em> The rows now ask for
+<code>CREATIVE_NOT_FOUND</code> / <code>VALIDATION_ERROR</code> / <code>VALIDATION_ERROR</code>, and all five
+rows covered by these two entries measured <strong>XPASS(strict)</strong>. <span class="ev">EXEC</span></p>
+
+<h3>3.2 "max_creatives limit not enforced in production"</h3>
+<p><code>tests/bdd/conftest.py:2458</code> and <code>:2468</code>. It is enforced: the pin sets
+<code>maxItems: 100</code> on <code>packages[].creatives</code>
+(<code>media-buy/package-request.json:370</code>), pydantic refuses 101 with <code>too_long</code>, and the
+boundary emits <code>INVALID_REQUEST</code>. Both rows measured <strong>XPASS(strict)</strong>.
+<span class="ev">EXEC</span></p>
+
+<h3>3.3 "INVALID_CREATIVES error lacks suggestion field" — neither half is true</h3>
+<p><code>tests/bdd/conftest.py:634</code> and <code>:635</code>, on
+<code>T-UC-002-inv-026-2</code> / <code>-026-4</code>. Three errors:</p>
+<ul>
+<li><code>INVALID_CREATIVES</code> is not a code. <code>CODE_TABLE</code> holds 158 entries and that is not
+one of them. <span class="ev">EXEC</span></li>
+<li>No error can lack a suggestion. All 158 entries carry a non-empty <code>suggestion</code>; post-ADR-010
+it is a read-only property over the table, so "lacks suggestion" is unreachable.
+<span class="ev">EXEC</span></li>
+<li>Neither scenario names a code at all — each asks only for failure plus a suggestion
+(<code>BR-UC-002-create-media-buy.feature:1006-1024</code>). <span class="ev">READ</span></li>
+</ul>
+<p>The real cause is dormancy, and both obligations are implemented
+(<code>media_buy_create.py:379</code>, <code>:3702</code>).</p>
+
+<h3>3.4 "inline creative upload not persisted in create_media_buy"</h3>
+<p><code>tests/bdd/conftest.py:695</code>, on <code>T-UC-002-alt-creatives</code>. Production uploads inline
+creatives to the library and assigns them, for both the auto and manual-approval flows:
+<code>src/core/tools/media_buy_create.py:2666</code> calls
+<code>process_and_upload_package_creatives</code> (<code>src/core/helpers/creative_helpers.py:213</code>)
+and writes the resulting ids back onto <code>req.packages</code>. The conftest's companion comment at
+<code>:692</code> describes a Then step body that no longer exists anywhere under
+<code>tests/bdd/</code>. The run's own dormancy classifier reported the true cause verbatim (row 11
+above). <span class="ev">EXEC</span> + <span class="ev">READ</span></p>
+
+<h3>3.5 Two stale comments on the same mechanism</h3>
+<ul>
+<li><code>tests/bdd/conftest.py:650</code> cites <em>"_assert_error_outcome
+_SPEC_PRODUCTION_CODE_MAP"</em>. No such name exists anywhere in the tree; the only other mention is that
+comment. <span class="ev">EXEC</span></li>
+<li><code>tests/bdd/conftest.py:617</code> cites <em>"ext-g:
+_validate_creatives_before_adapter_call raises INVALID_CREATIVES without suggestion"</em>. The code does
+not exist, and <code>T-UC-002-ext-g</code> passes 3/3. <span class="ev">EXEC</span></li>
+</ul>
+
+<p class="sub">For completeness: <code>_XFAIL_TAGS["T-UC-002-ext-h-agent"]</code> (<code>:626</code>) is the
+one creative reason whose cited cause is <strong>accurate</strong> —
+<code>_validate_and_convert_format_ids</code> really is dead code. It is incomplete rather than wrong; see
+row 10.</p>
+
+<h2>4. The traps — scenarios that would pass while grading nothing</h2>
+
+<h3>4.1 <code>error with suggestion</code> is satisfied by every code in the table</h3>
+<p>Both <code>format-id-structure</code> outlines write their five invalid outcomes as the bare string
+<code>error with suggestion</code>. <code>_assert_error_outcome</code> routes that to the suggestion-only
+branch at <code>tests/bdd/steps/domain/uc002_create_media_buy.py:1267</code>, which asserts one thing: a
+non-empty top-level <code>suggestion</code> on the wire envelope. Since every one of the 158 codes carries
+one, the assertion reduces to "some error happened". Three of the five rows
+(<code>plain_string</code>, <code>missing_agent_url</code>, <code>missing_id</code>) are refused by pydantic
+regardless of any creative logic; the two that name the actual subject
+(<code>unregistered_agent</code>, <code>unknown_format</code>) are refused by the product-subset gate at
+<code>media_buy_create.py:3219-3243</code> because the step points them at a different agent or a
+nonexistent id, which also puts them outside the product's declared set. The step's own docstring
+(<code>given_media_buy.py:3230-3236</code>) states the gap: <em>"unregistered agent and unknown format pass
+Pydantic validation and are only caught later (or not at all) by format compatibility checks."</em>
+Flipping these two outlines buys 33 green items and zero coverage of agent registration or format
+existence. <span class="ev">EXEC</span> (that they pass) + <span class="ev">READ</span> (why).</p>
+
+<h3>4.2 <code>success</code> means "no error", so replacement semantics goes unread</h3>
+<p>All nine creative-replacement rows end in <code>the result should be success</code>.
+<code>then_result_should_be</code> at <code>uc002_create_media_buy.py:787</code> answers that branch with
+two assertions: <code>"error" not in ctx</code> and a non-None payload. The scenario titles promise
+replacement semantics and the Givens construct the precondition for it
+(<code>the package "pkg_001" has existing creative assignments [cr_old_1, cr_old_2]</code>), but no Then
+reads the assignment set afterwards — so production's replacement behaviour
+(<code>media_buy_update.py:1163-1173</code> deletes assignments absent from the request) is never observed.
+<code>T-UC-003-partition-creative-replacement</code> and
+<code>T-UC-003-boundary-creative-replacement</code> are additionally row-for-row duplicates: the same four
+modes, the same four outcomes, different column headings. <span class="ev">EXEC</span> +
+<span class="ev">READ</span></p>
+
+<h3>4.3 A note on the response-compliance Then</h3>
+<p>Every outline in both files also carries <code>the response is compliant with the &lt;tool&gt; spec</code>
+(<code>tests/bdd/steps/generic/then_schema.py:257</code>), which grades the whole response
+<code>oneOf</code>. That is weaker than naming a branch but is not vacuous — the step's docstring records
+the measurement showing it rejects an empty object, a junk object, and success documents missing
+<code>confirmed_at</code> / <code>revision</code>. It does not rescue §4.1 or §4.2, because in both cases
+the response IS one of the legal shapes. <span class="ev">READ</span></p>
+
+<h2>5. Separate findings — defects, not flip candidates</h2>
+
+<h3>5.1 A per-creative REFERENCE_NOT_FOUND is reported as CREATIVE_REJECTED, carrying code-table text</h3>
+<p><code>src/core/helpers/creative_helpers.py:318-325</code> composes
+<code>detail_msgs = [f"{r.creative_id}: {err.message}"]</code> from the nested sync's per-creative errors
+and raises <code>AdCPCreativeRejectedError(details=CreativeRejectionDetails(reasons=detail_msgs))</code>.
+Measured consequence on the wire:</p>
+<div class="panel"><code>"code": "CREATIVE_REJECTED", "details": {"reasons": ["inline-cr-001: Generic
+fallback for a referenced identifier, grant, session, or other resource that does not exist or is not
+accessible by the caller. Use when no resource-specific not-found code applies …"]}</code></div>
+<p>Two defects in one site. The code is wrong — <code>CREATIVE_REJECTED</code> reads "Creative failed
+content-policy, brand-safety, or accessibility review", which is the exact misreading
+<code>BR-UC-002-create-media-buy.feature:1306</code> and
+<code>media_buy_update.py:366-372</code> both already reject for this condition. And
+<code>reasons</code> carries derived buyer-facing text lifted from the code table, which ADR-010 puts off
+the wire; the field becomes unusable to a buyer. <span class="ev">EXEC</span> (the envelope) +
+<span class="ev">READ</span> (the site).</p>
+
+<h3>5.2 create skips the creative-format check that update refuses on</h3>
+<p>For a creative carrying only the canonical arm (<code>format_kind</code>, no legacy assertion), the two
+tools answer the same condition oppositely:</p>
+<ul>
+<li><strong>create</strong> skips it. <code>src/core/tools/media_buy_create.py:459</code>: <em>"a creative
+identified by its canonical kind is unconstrained here until products carry
+<code>format_options[]</code>."</em></li>
+<li><strong>update</strong> refuses it. <code>src/core/tools/media_buy_update.py:353</code>:
+<code>if creative_identity is None or creative_identity not in supported_formats:</code> — a
+<code>None</code> identity lands in <code>incompatible</code> and the package is rejected with
+<code>VALIDATION_ERROR</code>.</li>
+</ul>
+<p>This is the skip-vs-refuse divergence named as risk 4 in
+<code>docs/audits/format-kind-canonical-analysis.html</code> §8, confirmed live at this HEAD. No scenario
+in either feature file sends a canonical-only creative into either tool, so nothing grades it.
+<span class="ev">READ</span></p>
+
+<h3>5.3 The immutable-package-field obligation holds only in dev</h3>
+<p><code>AdCPPackageUpdate</code> (<code>src/core/schemas/_base.py:3045</code>) declares none of
+<code>format_ids</code>, <code>product_id</code>, <code>pricing_option_id</code>, so the pin's
+package-update root <code>not</code> constraint is enforced by <code>extra="forbid"</code> — which is the
+dev/CI setting. Under production's <code>extra="ignore"</code> the three keys are silently dropped instead
+of rejected. That is critical pattern #7 working as designed for forward compatibility, but it means the
+three outlines in row 6 will grade an obligation the deployed seller does not meet. Worth a decision before
+the step work, not a code change. <span class="ev">EXEC</span> (model fields) +
+<span class="ev">READ</span> (the split).</p>
+
+<h2>6. Deliberately not claimed</h2>
+<ul>
+<li><strong>No 4-transport measurement.</strong> The probe graded a2a / mcp / rest.
+<code>e2e_rest</code> needs the full stack, and
+<code>tests/bdd/e2e_rest_known_failures.txt</code> was neither consulted per-row nor exercised. Any
+graduation touching that ledger needs a bdd-in-network run.</li>
+<li><strong>No claim that a passing row is correct beyond its own assertions.</strong> Rows 1, 2 and 3 are
+graded on named codes through the wire envelope; rows 4 and 5 pass and are called traps for exactly that
+reason.</li>
+<li><strong>The probe gave each catch-all its sibling's seed.</strong> A real wiring change might choose a
+different seed, which would move the UC-003 numbers. The seed choice is the one way this measurement could
+be optimistic.</li>
+<li><strong>Storyboard is out of scope</strong> per the brief, including the unwired upstream
+<code>media_buy_seller/canonical_formats</code> storyboard that would grade package selectors,
+<code>CONFLICTING_SELECTORS</code> and canonical satisfaction.</li>
+<li><strong>No canonical-selector scenario exists to flip.</strong> Grepping both feature files for
+<code>format_kind</code> / <code>format_option_refs</code> on a package returns nothing, which matches the
+format-kind analysis §6: package selectors are ungraded in BDD. The format-identity design therefore
+unblocks nothing in these two modules today — its payoff here is §5.2, which needs a new scenario rather
+than a graduation.</li>
+</ul>
+
+</div>

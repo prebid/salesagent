@@ -298,7 +298,10 @@ def get_targeting_values(tenant_id, key_id):
                     }
                 )
 
-            return jsonify({"values": values, "count": len(values)})
+            # Values are read from GAM live; a cached copy would hide values added since.
+            response = jsonify({"values": values, "count": len(values)})
+            response.headers["Cache-Control"] = "no-store"
+            return response
 
     except Exception as e:
         logger.error(f"Error fetching targeting values for key {key_id}: {e}", exc_info=True)
