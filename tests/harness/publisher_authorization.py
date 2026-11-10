@@ -23,6 +23,7 @@ Both admin transports run every scenario:
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
@@ -50,7 +51,8 @@ _FETCH_ADAGENTS_SITES = (
 #: Where the live server reaches a publisher origin this runner serves: the ``tests``
 #: service's network alias in docker-compose.e2e.yml, which ``run_all_tests.sh`` applies
 #: with ``dc run --use-aliases``. Change the two together.
-PUBLISHER_ORIGIN_HOST = "publisher.adcp-e2e.dev"
+# A native test server can reach the runner over loopback instead of compose DNS.
+PUBLISHER_ORIGIN_HOST = os.getenv("E2E_ORIGIN_HOST", "publisher.adcp-e2e.dev")
 
 
 def _empty_adagents() -> dict[str, Any]:

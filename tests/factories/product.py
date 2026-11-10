@@ -19,6 +19,15 @@ class ProductFactory(factory.alchemy.SQLAlchemyModelFactory):
         sqlalchemy_session = None
         sqlalchemy_session_persistence = "commit"
 
+    class Params:
+        dynamic_template = factory.Trait(
+            is_dynamic=True,
+            signals_agent_ids=factory.LazyFunction(lambda: ["agent_1"]),
+            max_signals=10,
+            variant_ttl_days=30,
+            template_pricing=factory.RelatedFactory("tests.factories.product.PricingOptionFactory", "product"),
+        )
+
     tenant = SubFactory(TenantFactory)
     tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
     product_id = Sequence(lambda n: f"prod_{n:04d}")
@@ -49,6 +58,13 @@ class ProductFactory(factory.alchemy.SQLAlchemyModelFactory):
     delivery_type = "guaranteed"
     property_tags = factory.LazyFunction(lambda: ["all_inventory"])
     delivery_measurement = factory.LazyFunction(lambda: {"provider": "publisher"})
+
+    @classmethod
+    def _adjust_kwargs(cls, **kwargs):
+        # An explicit tenant_id can name an existing tenant without attaching a relationship.
+        if kwargs.get("tenant") is None and kwargs.get("tenant_id") is not None:
+            kwargs.pop("tenant", None)
+        return kwargs
 
 
 class StoredPlacementFactory(factory.DictFactory):

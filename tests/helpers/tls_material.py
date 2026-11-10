@@ -12,10 +12,10 @@ from __future__ import annotations
 import importlib.util
 import os
 import ssl
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from types import ModuleType
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
 
 from tests.helpers.local_http_origin import run_local_origin
@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from http.server import ThreadingHTTPServer
 
     from tests.helpers.local_http_origin import LocalOrigin
+    from tests.helpers.local_mcp_origin import MCPOrigin
 
 Guard = Callable[[str, Callable[[], None]], None]
 
@@ -80,14 +81,34 @@ def start_tls_capture_service() -> ThreadingHTTPServer:
     return start_capture_service(host="127.0.0.1", port=0, ssl_context=_ready_server_context())
 
 
-def start_tls_origin(guard: Guard, label: str, *, listen_host: str = "127.0.0.1") -> LocalOrigin:
+def start_tls_origin(
+    guard: Guard,
+    label: str,
+    *,
+    listen_host: str = "127.0.0.1",
+    tools: Mapping[str, Callable[..., Any]] | None = None,
+    public_host: str = "127.0.0.1",
+) -> LocalOrigin | MCPOrigin:
     """Start a local origin serving the shared test leaf over TLS, released through *guard*.
 
     *guard* is a harness env's ``_guard``: the origin is registered on the line it starts,
     so whichever path releases the env -- a clean exit or a failed enter -- closes it.
     Bind ``0.0.0.0`` when the client dialing the origin is another container.
     """
-    context = run_local_origin(listen_host=listen_host, ssl_context=_ready_server_context())
+    if tools is None:
+        context = run_local_origin(listen_host=listen_host, ssl_context=_ready_server_context())
+    else:
+        from tests.helpers.local_mcp_origin import run_mcp_origin
+
+        tls = load_gen_test_tls()
+        tls.ensure_test_tls()
+        context = run_mcp_origin(
+            tools=tools,
+            certfile=tls.SERVER_CERT,
+            keyfile=tls.SERVER_KEY,
+            listen_host=listen_host,
+            public_host=public_host,
+        )
     origin = context.__enter__()
 
     def close() -> None:

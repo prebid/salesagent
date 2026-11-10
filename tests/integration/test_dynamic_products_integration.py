@@ -290,7 +290,7 @@ def _make_template(tenant, product_id: str = "template_1"):
         name="Dynamic Template",
         description="Template for variants",
         delivery_measurement={"provider": "publisher", "notes": "Test"},
-        is_dynamic=True,
+        dynamic_template=True,
         signals_agent_ids=["agent_1"],
         max_signals=10,
         variant_ttl_days=30,
@@ -398,13 +398,13 @@ class TestGenerateVariantsForBrief:
     """generate_variants_for_brief is the top-level pipeline entry point."""
 
     @pytest.mark.asyncio
-    async def test_no_templates_returns_empty(self, factory_env):
-        """Returns empty list when no dynamic templates exist."""
+    async def test_no_templates_persists_nothing(self, factory_env):
+        """Persists nothing when no dynamic templates exist."""
         TenantFactory(tenant_id="test-gvfb-none", subdomain="gvfb-none")
         factory_env._commit_factory_data()
 
         result = await generate_variants_for_brief("test-gvfb-none", "test brief")
-        assert result == []
+        assert result is None
 
     @pytest.mark.asyncio
     async def test_templates_with_signals_creates_variants(self, factory_env):
@@ -415,8 +415,17 @@ class TestGenerateVariantsForBrief:
 
         mock_signals = [_make_signal(name="Auto Intenders")]
 
+        from src.core.database.database_session import get_engine
+
+        pool = get_engine().pool
+        before = pool.checkedout()
+
+        async def external_signals(**kwargs):
+            assert pool.checkedout() == before, "generation held a DB connection during remote I/O"
+            return mock_signals
+
         mock_registry = AsyncMock()
-        mock_registry.get_signals = AsyncMock(return_value=mock_signals)
+        mock_registry.get_signals = AsyncMock(side_effect=external_signals)
 
         with patch(
             "src.services.dynamic_products.get_signals_agent_registry",
@@ -426,8 +435,9 @@ class TestGenerateVariantsForBrief:
                 "test-gvfb-full", "automotive ads", "https://our.example.com/mcp"
             )
 
-        assert len(result) >= 1
-        # Variants are detached from session -- verify via DB read-back
+        mock_registry.get_signals.assert_awaited_once()
+        assert result is None
+        # Generation writes only. Read back persisted variants.
         from sqlalchemy import select
 
         from src.core.database.database_session import get_db_session
@@ -440,8 +450,8 @@ class TestGenerateVariantsForBrief:
             assert any("Auto Intenders" in v.name for v in variants)
 
     @pytest.mark.asyncio
-    async def test_registry_error_returns_empty(self, factory_env):
-        """Pipeline catches registry errors and returns empty list."""
+    async def test_registry_error_persists_nothing(self, factory_env):
+        """Pipeline catches registry errors without persisting variants."""
         tenant = TenantFactory(tenant_id="test-gvfb-err", subdomain="gvfb-err")
         _make_template(tenant)
         factory_env._commit_factory_data()
@@ -455,11 +465,11 @@ class TestGenerateVariantsForBrief:
         ):
             result = await generate_variants_for_brief("test-gvfb-err", "brief")
 
-        assert result == []
+        assert result is None
 
     @pytest.mark.asyncio
-    async def test_empty_signals_returns_empty(self, factory_env):
-        """Pipeline returns empty list when signals agent returns no signals."""
+    async def test_empty_signals_persists_nothing(self, factory_env):
+        """Pipeline persists nothing when the signals agent returns no signals."""
         tenant = TenantFactory(tenant_id="test-gvfb-empty", subdomain="gvfb-empty")
         _make_template(tenant)
         factory_env._commit_factory_data()
@@ -473,7 +483,7 @@ class TestGenerateVariantsForBrief:
         ):
             result = await generate_variants_for_brief("test-gvfb-empty", "brief")
 
-        assert result == []
+        assert result is None
 
 
 class TestArchiveExpiredVariants:
