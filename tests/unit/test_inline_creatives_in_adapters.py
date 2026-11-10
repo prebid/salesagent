@@ -138,6 +138,8 @@ class TestInlineCreativesInAdapters:
             config={},
             principal=principal,
             tenant_id="tenant_123",
+            order_name_template=None,
+            tenant_ai_config=None,
         )
 
         start_time = datetime.now(UTC)

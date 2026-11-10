@@ -32,6 +32,8 @@ def _adapter() -> MockAdServer:
         config={},
         principal=Principal(principal_id="principal_test", name="Test Principal", platform_mappings={}),
         tenant_id="tenant_test",
+        order_name_template=None,
+        tenant_ai_config=None,
     )
     # Shadow the CLASS-level registry with an instance dict: _media_buys is declared on
     # MockAdServer itself, so mutating the inherited object would leak into every other test

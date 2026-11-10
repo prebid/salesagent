@@ -1920,6 +1920,62 @@ class CircuitBreakerMixin(LocalOriginMixin):
         )
 
 
+def _e2e_set_policy_blocked(env: Any, reason: str = "Policy violation") -> None:
+    """E2E realization of :meth:`ProductMixin.set_policy_blocked`.
+
+    The live server's policy check is a real ``PolicyCheckService`` on the seller's own AI
+    configuration, whose model calls the scripted origin with the seller's API key
+    (``scripted_model_key``). Scripting a BLOCKED ``PolicyAnalysis`` for that key is the
+    same verdict the in-process mock returns. The verdict is served only if the check runs:
+    a seller with no usable configuration never calls the origin, as in-process the mocked
+    service is never constructed.
+    """
+    _e2e_script_policy(env, {"output": {"status": "blocked", "reason": reason}})
+
+
+def _e2e_script_policy(env: Any, entry: dict[str, Any]) -> None:
+    """Script the policy verdict for the seller's key, and for the platform's if the env declared one.
+
+    The platform's key answers the same verdict, so a check that ran on it instead of the
+    seller's credential shows on the wire (a BLOCKED brief is refused). Every entry answers
+    only a prompt carrying this env's nonce, which the brief carries (``scripted_brief``),
+    so a verdict another scenario scripted for the shared platform key never answers this one.
+    """
+    from tests.e2e._scripted_llm import install_script
+
+    for api_key in env.scripted_api_keys():
+        install_script(api_key, policy={**entry, "require_text": env.scripted_nonce})
+
+
+def _e2e_set_policy_approved(env: Any) -> None:
+    """E2E realization of :meth:`ProductMixin.set_policy_approved`: an ALLOWED verdict, scripted."""
+    _e2e_script_policy(env, {"output": {"status": "allowed"}})
+
+
+def _e2e_set_policy_unavailable(env: Any) -> None:
+    """E2E realization of :meth:`ProductMixin.set_policy_unavailable`: the origin answers 503."""
+    from tests.e2e._scripted_llm import MODEL_UNAVAILABLE
+
+    _e2e_script_policy(env, MODEL_UNAVAILABLE.entry)
+
+
+def _policy_service_answering(check: Any) -> MagicMock:
+    """A stand-in ``PolicyCheckService`` whose model answers ``check``; the rest is production's.
+
+    Only the model call (``check_brief_compliance``) is scripted. ``check_product_eligibility``
+    is the real service's, a pure rule with no model in it, so the products that survive a
+    verdict are decided by production, not by a MagicMock that answers anything.
+    """
+    from unittest.mock import AsyncMock
+
+    from src.services.policy_check_service import PolicyCheckService
+
+    instance = MagicMock()
+    instance.check_brief_compliance = AsyncMock(**check)
+    instance.check_product_eligibility = PolicyCheckService().check_product_eligibility
+    return instance
+
+
 class ProductMixin:
     """Shared fluent API for _get_products_impl testing.
 
@@ -1931,39 +1987,94 @@ class ProductMixin:
         {"dynamic_variants", "resolve_property_list"}
 
     Fluent API:
-        set_policy_approved()            -- policy check returns approved
+        set_policy_approved()            -- policy check returns allowed
         set_policy_blocked(reason)       -- policy check returns blocked
+        set_policy_unavailable()         -- policy model fails
         set_dynamic_variants(variants)   -- configure dynamic variant generation
         set_property_list(ids)           -- configure property list resolver
         set_ranking_disabled()           -- disable AI ranking
         call_impl(brief, **kw)           -- call _get_products_impl
     """
 
+    @realize_e2e(_e2e_set_policy_approved)
     def set_policy_approved(self) -> None:
         """Configure PolicyCheckService to approve the brief.
 
-        Note: Policy checks are only invoked when the tenant dict has
-        ``advertising_policy.enabled = True`` AND ``gemini_api_key`` set.
+        Note: Policy checks are only invoked when the tenant has
+        ``advertising_policy.enabled = True`` AND an AI configuration of its own
+        (``TenantAIConfig.from_tenant`` resolves one).
         By default the harness identity has neither, so this is a no-op
         unless the test explicitly configures the tenant.
         """
-        from unittest.mock import AsyncMock
+        from src.services.policy_check_service import PolicyCheckResult, PolicyStatus
 
-        mock_result = MagicMock(status="approved", reason=None, restrictions=[])
-        mock_instance = MagicMock()
-        mock_instance.check_brief_compliance = AsyncMock(return_value=mock_result)
-        self.mock["policy_service"].return_value = mock_instance  # type: ignore[attr-defined]
+        verdict = PolicyCheckResult(status=PolicyStatus.ALLOWED)
+        self.mock["policy_service"].return_value = _policy_service_answering({"return_value": verdict})  # type: ignore[attr-defined]
 
+    @realize_e2e(_e2e_set_policy_unavailable)
+    def set_policy_unavailable(self) -> None:
+        """The policy model is down: the provider answers HTTP 503.
+
+        On both legs the real ``PolicyCheckService`` meets the failure (in-process from a
+        model that raises it, over e2e from the scripted origin), ``run_agent`` raises
+        ``AIProviderError``, and ``_get_products_impl`` fails open on it.
+        """
+        from src.services.policy_check_service import PolicyCheckService
+        from tests.e2e._scripted_llm import MODEL_UNAVAILABLE
+
+        # The real service on a model that fails: production's run_agent classifies the
+        # failure and get_products fails open on it, the path the e2e leg takes too.
+        self.mock["policy_service"].return_value = PolicyCheckService(model=MODEL_UNAVAILABLE.model())  # type: ignore[attr-defined]
+
+    #: The platform's own AI key, once a scenario declares one (``ProductEnv.set_platform_ai_credential``).
+    _platform_ai_key: str | None = None
+
+    def scripted_api_keys(self) -> list[str]:
+        """The keys a scripted answer is installed for: the seller's, and the platform's if declared."""
+        return [self.scripted_model_key, *([self._platform_ai_key] if self._platform_ai_key else [])]
+
+    @property
+    def scripted_model_key(self) -> str:
+        """The API key a scenario puts in the seller's own AI configuration.
+
+        Minted once per env, so scenarios sharing the e2e stack's one scripted origin cannot
+        read each other's scripts. In-process nothing authenticates with it; over e2e the
+        scripted origin (``tests/e2e/scripted_llm_origin_service.py``) answers a call
+        carrying it, and refuses every other key as the real API refuses an invalid one.
+        """
+        if self.__dict__.get("_scripted_model_key") is None:
+            self.__dict__["_scripted_model_key"] = f"seller-ai-key-{uuid4().hex}"
+        return str(self.__dict__["_scripted_model_key"])
+
+    @property
+    def scripted_nonce(self) -> str:
+        """A text minted once per env, which tags this scenario's prompts.
+
+        Over e2e every scenario shares one scripted origin and one platform key, and an
+        installed script is never removed. A script entry answers only a prompt carrying
+        its ``require_text``, so each scenario puts this nonce in what it sends the model
+        (the seller's ranking prompt, the buyer's brief) and in its entries' ``require_text``.
+        A script from another scenario then answers nothing here, whatever the test order.
+        """
+        if self.__dict__.get("_scripted_nonce") is None:
+            self.__dict__["_scripted_nonce"] = f"scenario-{uuid4().hex[:12]}"
+        return str(self.__dict__["_scripted_nonce"])
+
+    def scripted_brief(self, brief: str) -> str:
+        """``brief`` tagged with :attr:`scripted_nonce`, for a request whose policy check is scripted."""
+        return f"{brief} [{self.scripted_nonce}]"
+
+    @realize_e2e(_e2e_set_policy_blocked)
     def set_policy_blocked(self, reason: str = "Policy violation") -> None:
-        """Configure PolicyCheckService to block the brief."""
-        from unittest.mock import AsyncMock
+        """Configure PolicyCheckService to block the brief.
 
-        from src.services.policy_check_service import PolicyStatus
+        Over e2e the live server builds the real service on the seller's own AI
+        configuration, so the verdict is scripted on the origin that model calls.
+        """
+        from src.services.policy_check_service import PolicyCheckResult, PolicyStatus
 
-        mock_result = MagicMock(status=PolicyStatus.BLOCKED, reason=reason, restrictions=[])
-        mock_instance = MagicMock()
-        mock_instance.check_brief_compliance = AsyncMock(return_value=mock_result)
-        self.mock["policy_service"].return_value = mock_instance  # type: ignore[attr-defined]
+        verdict = PolicyCheckResult(status=PolicyStatus.BLOCKED, reason=reason)
+        self.mock["policy_service"].return_value = _policy_service_answering({"return_value": verdict})  # type: ignore[attr-defined]
 
     def set_dynamic_variants(self, variants: list[Any] | None = None) -> None:
         """Configure generate_variants_for_brief to return specific variants.
@@ -1982,9 +2093,9 @@ class ProductMixin:
         self.mock["resolve_property_list"].return_value = property_ids or []  # type: ignore[attr-defined]
 
     def set_ranking_disabled(self) -> None:
-        """Disable AI ranking by making the factory report AI as not enabled."""
+        """Disable AI ranking by making the factory build no model."""
         mock_factory = MagicMock()
-        mock_factory.is_ai_enabled.return_value = False
+        mock_factory.build.return_value = None
         self.mock["ranking_factory"].return_value = mock_factory  # type: ignore[attr-defined]
 
     def _configure_product_mocks(self) -> None:
@@ -1993,7 +2104,7 @@ class ProductMixin:
         Call from _configure_mocks() in concrete classes.
 
         Defaults:
-        - PolicyCheckService: not invoked (no gemini_api_key in tenant dict)
+        - PolicyCheckService: not invoked (no AI configuration of the seller's own)
         - Dynamic variants: returns [] (already AsyncMock via ASYNC_PATCHES)
         - DynamicPricingService: pass-through in unit mode, real in integration mode
         - Property list resolver: returns [] (already AsyncMock via ASYNC_PATCHES)

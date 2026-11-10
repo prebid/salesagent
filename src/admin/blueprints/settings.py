@@ -26,7 +26,7 @@ from src.core.database.models import Tenant
 from src.core.database.repositories import TenantLookupRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.core.security.outbound_http import OutboundError
-from src.services.ai.config import uses_legacy_gemini_api_key
+from src.services.ai.config import DEFAULT_GOOGLE_MODEL, TenantAIConfig, uses_legacy_gemini_api_key
 from src.services.approximated_client import (
     DomainNotOwned,
     OwnedDomain,
@@ -629,7 +629,7 @@ def test_ai_connection(tenant_id):
     try:
         data = request.get_json() or {}
         provider = data.get("provider", "gemini")
-        model = data.get("model", "gemini-2.0-flash")
+        model = data.get("model", DEFAULT_GOOGLE_MODEL)
         api_key = data.get("api_key", "").strip()
 
         # Build config for testing
@@ -651,9 +651,9 @@ def test_ai_connection(tenant_id):
         if not test_config.get("api_key"):
             return jsonify({"success": False, "error": "No API key provided"}), 400
 
-        # Create factory and set up credentials
-        factory = AIServiceFactory()
-        model_string = factory.create_model(test_config)
+        model_string = AIServiceFactory().build(TenantAIConfig.model_validate(test_config))
+        if model_string is None:
+            return jsonify({"success": False, "error": f"Cannot build a model for provider {provider!r}"}), 400
 
         # Simple test: ask the model to respond with a single word
         class TestResponse(BaseModel):
