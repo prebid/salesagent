@@ -44,7 +44,7 @@ from tests.helpers.signing import keypair_for
 #: The PUBLISHED ``agents[].url`` a real caller derives from the tenant. Only that it
 #: reaches the wire matters here; what a receiver does with it is the integration
 #: grader's business.
-_SELLER_AGENT_URL = "https://seller.adcp-partner.com/mcp/"
+_SELLER_AGENT_URL = "https://seller.adcp-partner.com/mcp"
 
 #: An IP LITERAL, for two reasons that both have to hold at once. It is not under a
 #: reserved TLD, which the service refuses deterministically BEFORE it dials, so a
@@ -55,7 +55,14 @@ _CHALLENGE_URL = f"{UNDIALLED_PUBLIC_HTTPS_ORIGIN}/proof"
 
 
 def _config(url: str = _CHALLENGE_URL) -> NotificationConfig:
-    return NotificationConfig(url=url, subscriber_id="sub-1", event_types=["final"])
+    # ``creative.status_changed``, not ``final``: ``core/notification_config.json``'s
+    # ``event_types`` is the SUBSCRIBABLE event vocabulary, and AdCP 3.2 separated it from
+    # the delivery-notification vocabulary that still carries ``scheduled`` / ``final`` /
+    # ``delayed``. adcp 6.6.0 typed both with one enum, so this fixture named a delivery
+    # kind where a subscription event belongs; the pin now refuses it. Nothing in this
+    # module is about the event type -- it grades that the challenge goes through the
+    # egress seam -- so any admitted value does.
+    return NotificationConfig(url=url, subscriber_id="sub-1", event_types=["creative.status_changed"])
 
 
 def _signing() -> ChallengeSigning:

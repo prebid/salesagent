@@ -49,3 +49,11 @@ def resolve_adapter_id(platform_mappings: dict, adapter_name: str) -> str | None
         return str(platform_mappings[old_field]) if platform_mappings[old_field] else None
 
     return None
+
+
+MOCK_ADVERTISER_PREFIX = "mock_"
+
+
+def mock_platform_mapping(owner_id: str) -> dict[str, object]:
+    """The mock adapter mapping for a principal."""
+    return {"advertiser_id": f"{MOCK_ADVERTISER_PREFIX}{owner_id}", "enabled": True}

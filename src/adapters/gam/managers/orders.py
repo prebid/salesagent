@@ -23,6 +23,7 @@ from src.core.exceptions import (
     AdCPSalesAgentError,
     AdCPValidationError,
 )
+from src.core.utils.frequency_cap import suppress_cooldown_minutes
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +32,84 @@ GUARANTEED_LINE_ITEM_TYPES = {"STANDARD", "SPONSORSHIP"}
 NON_GUARANTEED_LINE_ITEM_TYPES = {"NETWORK", "BULK", "PRICE_PRIORITY", "HOUSE"}
 
 
+def _gam_placeholder(slot: dict[str, Any]) -> dict[str, Any]:
+    """One GAM ``creativePlaceholder`` from a slot in this seller's own vocabulary.
+
+    The slot shape -- ``{width, height, expected_creative_count, is_native}`` -- is what
+    ``gam_product_config_service`` produces, both when it SEEDS a product's
+    ``implementation_config["creative_placeholders"]`` and when it reads a format
+    declaration's params. One translation serves both, which is what keeps a seeded slot and
+    a declared slot from reaching GAM in two different shapes: the conversion used to be
+    inline in the ``implementation_config`` fallback only, so the declaration path had no
+    way to reuse it.
+
+    ``creativeSizeType`` is GAM's, and the native row of
+    ``gam_product_config_service._GAM_FAMILY_BY_KIND`` is where ``is_native`` is decided --
+    a native line item takes a 1x1 slot and lets its creative template size the render.
+    """
+    return {
+        "size": {"width": slot["width"], "height": slot["height"]},
+        "expectedCreativeCount": slot.get("expected_creative_count", 1),
+        "creativeSizeType": "NATIVE" if slot.get("is_native") else "PIXEL",
+    }
+
+
 class GAMOrdersManager:
     """Manages Google Ad Manager order operations."""
+
+    @staticmethod
+    def _refuse_unsupported_declared_families(package, impl_config: dict[str, Any], log: Callable) -> None:
+        """Refuse a package whose RECORDED declarations name a family GAM will not traffic.
+
+        The same gate the deprecated arm has always applied, reached through the canonical
+        identifier instead of a guess at one. Two refusals, both already raised on the legacy
+        path for the same two facts:
+
+        * AUDIO. GAM has no standalone audio line item -- audio is only a companion to video
+          -- so a package declaring an audio kind cannot be placed at all.
+        * A FAMILY THE OPERATOR EXCLUDED. ``implementation_config["supported_format_types"]``
+          is the product's own statement of what it traffics, and a declaration outside it is
+          a configuration disagreement to surface rather than silently place.
+
+        A kind the family table does not classify is NOT refused, and the table says why: GAM
+        makes no claim it cannot place a composition contract or a seller-defined ``custom``
+        shape, so a refusal would have nothing to cite. Such a declaration simply contributes
+        no slot, and the deprecated arm or the product's seeded config answers.
+
+        Raised rather than logged, per ``.claude/rules/patterns/code-patterns.md`` § No Quiet
+        Failures: the alternative is a line item whose slot contradicts the creative the
+        buyer is about to send.
+        """
+        from src.services.gam_product_config_service import gam_format_family
+
+        supported = impl_config.get("supported_format_types", ["display", "video", "native"])
+        for declaration in package.formats_to_provide or ():
+            kind = str(declaration.format_kind)
+            family = gam_format_family(kind)
+            if family is None:
+                continue
+
+            if family == "audio":
+                log(
+                    f"[red]Error: declared format kind '{kind}' is audio. GAM does not support "
+                    f"standalone audio line items; audio can only be a companion to video.[/red]"
+                )
+                raise AdCPCapabilityNotSupportedError(
+                    details=CapabilityRefusalDetails(capability="format", rejected_value=kind)
+                )
+
+            if family not in supported:
+                log(
+                    f"[red]Error: declared format kind '{kind}' is a {family} format, which product "
+                    f"{package.package_id} does not support.[/red]"
+                )
+                raise AdCPCapabilityNotSupportedError(
+                    details=CapabilityRefusalDetails(
+                        capability="format",
+                        rejected_value=kind,
+                        accepted_values=sorted(supported),
+                    )
+                )
 
     def __init__(self, client_manager, advertiser_id: str | None = None, trafficker_id: str | None = None):
         """Initialize orders manager.
@@ -117,7 +194,7 @@ class GAMOrdersManager:
         except Exception as fault:
             # The ad server refused. Classify the SOAP fault into the code the
             # buyer should act on -- a quota is not a permission problem is not
-            # a missing ad unit. AdCP 3.1.1 transport-errors.mdx Rule 1:
+            # a missing ad unit. The spec's transport-errors.mdx Rule 1:
             # "Translate upstream errors into AdCP error codes. Do not pass
             # through raw upstream errors."
             #
@@ -454,12 +531,53 @@ class GAMOrdersManager:
                             f"[yellow]Product config custom targeting key '{key}' conflicts with buyer targeting, keeping buyer value[/yellow]"
                         )
 
-            # Build creative placeholders from format_ids
-            # First try to get from package.format_ids (buyer-specified)
-            creative_placeholders: list[dict[str, Any]] = []
+            # --- Creative placeholders, canonical arm first ----------------------------
+            #
+            # THE PACKAGE'S OWN RECORDED CONTRACT ANSWERS BEFORE THE DEPRECATED ARM.
+            # ``core/package.json`` calls ``formats_to_provide`` the package's "immutable
+            # canonical creative contracts" and says "the live Product is never substituted
+            # for the package snapshot", and each snapshot states its slot in ``params``,
+            # where width and height are first-class. So this needs no format lookup, no
+            # type inference from an id substring, and no regex: it reads what the seller
+            # selected when the request was graded.
+            #
+            # WHY THE PRECEDENCE MATTERS RATHER THAN BEING TIDIER. A canonical-only
+            # declaration -- one asserting no ``v1_format_ref`` -- cannot be expressed in
+            # ``package.format_ids`` at all, so such a package used to arrive here with an
+            # empty legacy arm and fall through to ``impl_config["creative_placeholders"]``
+            # at the bottom of this block: the PRODUCT's seeded slot, trafficked for a
+            # package whose own declaration may state a different size. That is the one
+            # substitution the snapshot exists to prevent.
+            #
+            # ``declared_gam_slots`` is the same reader that seeds that config, so a
+            # declaration reaching GAM through a package and the same declaration reaching
+            # it through a seeded product cannot disagree (CLAUDE.md § DRY). A declaration
+            # stating only a RANGE, or one of the four kinds GAM has no creative family for,
+            # yields no slot -- and then the two branches below answer exactly as before.
+            from src.services.gam_product_config_service import declared_gam_slots
 
-            if package.format_ids:
-                from src.core.format_resolver import get_format
+            # The operator's gate runs on BOTH arms, which is the reason the kind -> family
+            # table exists rather than a bare native check. Letting the canonical arm answer
+            # ahead of the deprecated one would otherwise BYPASS this gate for a package
+            # carrying both: the check below used to be reachable only inside the
+            # ``package.format_ids`` branch, so a dual-armed package would have stopped being
+            # gated the moment the snapshot answered first. The gate reads the same way on
+            # either arm; what differs is the input, and on this arm it is the kind the seller
+            # recorded rather than a substring of a format's name.
+            self._refuse_unsupported_declared_families(package, impl_config, log)
+
+            creative_placeholders: list[dict[str, Any]] = [
+                _gam_placeholder(slot) for slot in declared_gam_slots(package.formats_to_provide or ())
+            ]
+            if creative_placeholders:
+                log(
+                    f"  [blue]{len(creative_placeholders)} placeholder(s) from the package's "
+                    f"recorded format declarations[/blue]"
+                )
+
+            if not creative_placeholders and package.format_ids:
+                from src.core.format_resolver import format_display as spell_format
+                from src.core.format_resolver import format_id_identity, get_format
 
                 # Validate format types against product supported types
                 supported_format_types = impl_config.get("supported_format_types", ["display", "video", "native"])
@@ -470,9 +588,16 @@ class GAMOrdersManager:
                     format_id_str = format_id_obj.id
                     agent_url = format_id_obj.agent_url
 
-                    # Use format resolver to support custom formats and product overrides
-                    # Include agent_url in format strings for clarity (different agents may have same format IDs)
-                    format_display = f"{agent_url}/{format_id_str}" if agent_url else format_id_str
+                    # How this format is spelled in every refusal below, asked of the ONE
+                    # renderer rather than rebuilt here. The local f-string this replaces
+                    # joined the RAW agent_url, so a canonical URL with an empty path --
+                    # which the canonicalization leaves ending in "/" -- rendered
+                    # "https://x.org//display_300x250" in the capability refusals at the
+                    # bottom of this loop, spelled differently from the identity the request
+                    # was actually compared on. ``format_display``'s docstring exists to make
+                    # one format spell the same way in every refusal; shadowing its name with
+                    # a different rule in this file defeated that (audit P3).
+                    format_display = spell_format(format_id_identity(format_id_obj))
 
                     try:
                         # Pass product_id (not package_id) to enable format_overrides lookup
@@ -490,7 +615,7 @@ class GAMOrdersManager:
                         raise
 
                     # Check if format type is supported by product
-                    # adcp 3.12: Format.type removed. Infer from format_id string.
+                    # the pinned SDK: Format.type removed. Infer from format_id string.
                     fid_str = (
                         format_obj.format_id.id if hasattr(format_obj.format_id, "id") else str(format_obj.format_id)
                     )
@@ -564,10 +689,10 @@ class GAMOrdersManager:
                             requirements = format_obj.requirements or {}
                             width = requirements.get("width")
                             height = requirements.get("height")
-                            # Infer creative size type from format_id name since Format.type was removed in adcp 3.12
+                            # Infer creative size type from format_id name since Format.type was removed in the pinned SDK
                             creative_size_type = "NATIVE" if "native" in format_id_str.lower() else "PIXEL"
 
-                        # Check FormatId parameters (AdCP 2.5 parameterized formats)
+                        # Check FormatId parameters (parameterized formats)
                         # The buyer can specify width/height directly in the FormatId object
                         if not (width and height):
                             # Handle both FormatId objects and dicts (from database JSONB)
@@ -620,16 +745,12 @@ class GAMOrdersManager:
 
                     creative_placeholders.append(placeholder)
 
-            # Fall back to product config only if no valid placeholders from format_ids
+            # Fall back to the PRODUCT's seeded slots only when the package declared none
+            # of its own on either arm. ``gam_product_config_service`` seeds them in the
+            # same vocabulary ``_gam_placeholder`` translates, which is why this is now one
+            # call rather than a second spelling of the same three keys.
             if not creative_placeholders and impl_config.get("creative_placeholders"):
-                for placeholder in impl_config["creative_placeholders"]:
-                    creative_placeholders.append(
-                        {
-                            "size": {"width": placeholder["width"], "height": placeholder["height"]},
-                            "expectedCreativeCount": placeholder.get("expected_creative_count", 1),
-                            "creativeSizeType": "NATIVE" if placeholder.get("is_native") else "PIXEL",
-                        }
-                    )
+                creative_placeholders.extend(_gam_placeholder(slot) for slot in impl_config["creative_placeholders"])
 
             # If package has creatives, filter placeholders to match actual creative sizes
             # This prevents "X out of Y expected" issues and ensures one placeholder per unique size
@@ -906,9 +1027,12 @@ class GAMOrdersManager:
                     "second": end_time.second,
                     "timeZoneId": impl_config.get("time_zone", "America/New_York"),
                 },
-                # Set status based on whether manual approval is required
-                # DRAFT = needs manual approval, READY = ready to serve (when creatives added)
-                "status": "READY",  # Always create as READY since creatives will be added
+                # READY = ready to serve once creatives are added; PAUSED = created held,
+                # which is what media-buy/package-request.json's create-time ``paused``
+                # means ("Paused packages do not deliver impressions"). Reporting the ask
+                # without setting this would have been worse than ignoring it: the buyer
+                # would read paused=true off a line item GAM was serving.
+                "status": "PAUSED" if package.paused else "READY",
             }
 
             # Add frequency caps - merge buyer's frequency cap with product config
@@ -932,30 +1056,38 @@ class GAMOrdersManager:
                 and package.targeting_overlay.frequency_cap
             ):
                 freq_cap = package.targeting_overlay.frequency_cap
-                # Convert AdCP FrequencyCap (suppress_minutes) to GAM format
-                # AdCP: suppress_minutes (e.g., 60 = 1 hour)
+                # Convert the cap's COOLDOWN to GAM's shape.
+                # AdCP: suppress (a duration) or the deprecated suppress_minutes
                 # GAM: maxImpressions=1, numTimeUnits=X, timeUnit="MINUTE"/"HOUR"/"DAY"
-
-                # Determine best GAM time unit (int() cast needed because
-                # suppress_minutes is float after library type inheritance, GAM API expects int)
-                if freq_cap.suppress_minutes < 60:
-                    time_unit = "MINUTE"
-                    num_time_units = int(freq_cap.suppress_minutes)
-                elif freq_cap.suppress_minutes < 1440:  # Less than 24 hours
-                    time_unit = "HOUR"
-                    num_time_units = int(freq_cap.suppress_minutes // 60)
+                #
+                # Read through the shared helper rather than off ``suppress_minutes``: the pin
+                # deprecates that field in favour of ``suppress``, and types it nullable, so a
+                # cap sent the preferred way was ignored here and a max_impressions-only cap
+                # (valid per the schema's anyOf) raised TypeError comparing None to an int.
+                cooldown_minutes = suppress_cooldown_minutes(freq_cap)
+                if cooldown_minutes is None:
+                    log("Buyer frequency cap carries no cooldown to translate; omitting GAM frequencyCap")
                 else:
-                    time_unit = "DAY"
-                    num_time_units = int(freq_cap.suppress_minutes // 1440)
+                    # Determine best GAM time unit (int() cast because the cooldown is a
+                    # float and the GAM API expects an int)
+                    if cooldown_minutes < 60:
+                        time_unit = "MINUTE"
+                        num_time_units = int(cooldown_minutes)
+                    elif cooldown_minutes < 1440:  # Less than 24 hours
+                        time_unit = "HOUR"
+                        num_time_units = int(cooldown_minutes // 60)
+                    else:
+                        time_unit = "DAY"
+                        num_time_units = int(cooldown_minutes // 1440)
 
-                frequency_caps.append(
-                    {
-                        "maxImpressions": 1,  # Suppress after 1 impression
-                        "numTimeUnits": num_time_units,
-                        "timeUnit": time_unit,
-                    }
-                )
-                log(f"Added buyer frequency cap: 1 impression per {num_time_units} {time_unit.lower()}(s)")
+                    frequency_caps.append(
+                        {
+                            "maxImpressions": 1,  # Suppress after 1 impression
+                            "numTimeUnits": num_time_units,
+                            "timeUnit": time_unit,
+                        }
+                    )
+                    log(f"Added buyer frequency cap: 1 impression per {num_time_units} {time_unit.lower()}(s)")
 
             if frequency_caps:
                 line_item["frequencyCaps"] = frequency_caps

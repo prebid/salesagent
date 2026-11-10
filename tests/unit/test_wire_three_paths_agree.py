@@ -9,10 +9,10 @@ models that used to carry such hooks with None-bearing inputs and assert the thr
 produce one document. Break it on purpose: add a ``def model_dump`` override to ``Product``
 and the Product case fails.
 
-``PricingOption`` is a RootModel over the local pricing members and reaches the buyer only
-nested inside a ``Product``, whose dump propagates ``exclude_none`` into it. Standalone, the
-SDK's RootModel base keeps a None-valued key on a bare ``model_dump()``, so its case asserts
-the two paths that carry ``exclude_none`` agree and that the nested wire carries no null.
+A pricing option reaches the buyer only nested inside a ``Product``, whose dump propagates
+``exclude_none`` into it. Standalone, a bare ``model_dump()`` keeps a None-valued key, so
+its case asserts the two paths that carry ``exclude_none`` agree and that the nested wire
+carries no null.
 """
 
 import json
@@ -20,7 +20,7 @@ import json
 import pydantic_core
 
 from src.core.schemas import Creative, GetProductsResponse, Product, SyncCreativeResult, SyncCreativesResponse
-from src.core.schemas.pricing import PricingOption
+from src.core.schemas.pricing import CpmPricingOption
 from src.core.tools._wire import to_wire
 from tests.helpers.adcp_factories import create_test_cpm_pricing_option, create_test_publisher_properties_by_tag
 
@@ -100,7 +100,7 @@ def test_creative_with_a_none_inside_assets_three_paths_agree() -> None:
 
 
 def test_pricing_option_paths_agree_and_the_nested_wire_carries_no_null() -> None:
-    option = PricingOption.model_validate(
+    option = CpmPricingOption.model_validate(
         {
             "pricing_option_id": "po",
             "pricing_model": "cpm",
@@ -113,7 +113,11 @@ def test_pricing_option_paths_agree_and_the_nested_wire_carries_no_null() -> Non
     assert dumped_json == core_json
     assert "min_spend_per_package" not in dumped_json
 
-    # The path the buyer sees: nested in a Product, inside the get_products envelope.
+    # The path the buyer sees: nested in a Product, inside the get_products envelope. The
+    # SAME object both times, because ``Product.pricing_options`` holds the typed MEMBERS —
+    # the member is the wire model. This used to build a local RootModel wrapper, grade the
+    # three paths on the wrapper, and then pass ``option.root`` to the Product, so the
+    # standalone check and the nested one did not grade the same class.
     response = GetProductsResponse(products=[_product(pricing_options=[option])])
     wire = _assert_three_paths_agree(response)
     (product,) = wire["products"]

@@ -127,18 +127,28 @@ class AdminClient:
             self._http = requests.Session()
 
     def request(
-        self, method: str, path: str, *, data: dict[str, str] | None = None, json: dict[str, Any] | None = None
+        self,
+        method: str,
+        path: str,
+        *,
+        data: dict[str, str] | None = None,
+        json: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> AdminResponse:
         """Send *method* to *path* (``/tenant/...``) with a form body or a JSON body."""
         if self._flask_client is not None:
             # Over https, because a production app marks its session cookie Secure.
             response = self._flask_client.open(
-                path, method=method.upper(), data=data, json=json, base_url="https://localhost"
+                path, method=method.upper(), data=data, json=json, headers=headers, base_url="https://localhost"
             )
             return AdminResponse.from_flask(response)
         response = self._http.request(
-            method, f"{self._base_url}{path}", data=data, json=json, allow_redirects=False, timeout=60
+            method, f"{self._base_url}{path}", data=data, json=json, headers=headers, allow_redirects=False, timeout=60
         )
+        if "session" in response.cookies:
+            from tests.helpers.admin_session import drop_stated_session_cookie
+
+            drop_stated_session_cookie(self._http)
         return AdminResponse.from_requests(response)
 
     def close(self) -> None:
@@ -148,3 +158,31 @@ class AdminClient:
         if self._http is not None:
             self._http.close()
             self._http = None
+
+
+class AdminOperatorMixin:
+    """The seller's operator, for an ``IntegrationEnv`` whose scenario includes an admin action.
+
+    One :class:`AdminClient` on the env's OWN transport: in this process when the env has no
+    ``e2e_config``, over HTTP to that live server when it has one. So an AdCP scenario whose
+    Given is an operator action (authoring a product, syncing a publisher) runs that action
+    against the same deployment its When then dispatches to, on every transport.
+
+    The client is opened on the first request, after every earlier Given: the in-process
+    app is composed under the settings those Givens chose. Factory rows are committed first,
+    because the admin request reads them in its own session.
+    """
+
+    _admin: AdminClient | None = None
+
+    def admin_request(
+        self, tenant_id: str, method: str, path: str, *, data: dict[str, str] | None = None
+    ) -> AdminResponse:
+        """One authenticated request to *tenant_id*'s admin route at *path*."""
+        self._commit_factory_data()  # type: ignore[attr-defined]
+        if self._admin is None:
+            e2e_config = self.e2e_config  # type: ignore[attr-defined]
+            self._admin = AdminClient(e2e_config.base_url if e2e_config is not None else None)
+            self._guard("admin_client", self._admin.close)  # type: ignore[attr-defined]
+            self._admin.authenticate(tenant_id)
+        return self._admin.request(method, f"/tenant/{tenant_id}/{path}", data=data)

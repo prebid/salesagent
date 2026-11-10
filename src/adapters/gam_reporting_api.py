@@ -21,6 +21,7 @@ from src.adapters.gam_reporting_service import GAMReportingService
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AdapterConfig, Tenant
 from src.core.database.repositories.principal import PrincipalRepository
+from src.core.principal_ids import PRINCIPAL_ID_CHARACTERS
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,7 @@ gam_reporting_api = Blueprint("gam_reporting_api", __name__)
 
 # Input validation patterns
 TENANT_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
-PRINCIPAL_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
+PRINCIPAL_ID_PATTERN = re.compile(rf"{PRINCIPAL_ID_CHARACTERS}+")
 ID_PATTERN = re.compile(r"^\d+$")  # For advertiser_id, order_id, line_item_id
 
 
@@ -40,7 +41,7 @@ def validate_tenant_id(tenant_id: str) -> bool:
 
 def validate_principal_id(principal_id: str) -> bool:
     """Validate principal ID format"""
-    return bool(PRINCIPAL_ID_PATTERN.match(principal_id)) and len(principal_id) <= 100
+    return bool(PRINCIPAL_ID_PATTERN.fullmatch(principal_id)) and len(principal_id) <= 100
 
 
 def validate_numeric_id(id_str: str) -> bool:

@@ -71,11 +71,36 @@ directories were wrong at once. That case is diagnosed by name before anything
 else, because an absent directory and a run that produced nothing leave
 identical evidence.
 
+NEITHER RUN MAY BE ANONYMOUS, and this is the axis the tool was missing while it
+had every other one. A per-nodeid delta is only as good as the identity of its
+two endpoints, and a run directory used to carry none -- so this tool once
+reported 36 REGRESSED / 15 FIXED between a subject and a baseline that graded
+neither tree in the claim. It did exactly what it was asked; the baseline lived
+in a worktree on a DIFFERENT BRANCH, and against a real base the same change was
+12 fixed, 0 new failures and 2 genuine regressions. All 36 dissolved
+(salesagent-dxb3j). So the same "refuse to summarise" posture applies to the
+endpoints themselves, via ``scripts/audit/run_identity.py``:
+
+NO IDENTITY (refused, waivable by name)
+    Either side carries no ``meta.json``, or one recording no commit. Waivable
+    ONLY because every run retained today predates the field: refusing all of
+    them leaves the tool useless on the only data there is, while accepting them
+    silently is the defect. ``--allow-unidentified`` proceeds and every verdict
+    is then labelled UNATTRIBUTED.
+
+DIVERGENT or DIRTY (refused, not waivable)
+    Two shas with no ancestry relationship in either direction -- the exact
+    shape that produced the false report -- or a tree that was dirty when it ran.
+    Not waivable because identity IS recorded here and says the comparison is
+    not one; the divergence refusal names the merge-base, so there is an action
+    rather than a flag to reach for.
+
 Exit status is 1 when any pre-existing test changed outcome, when any nodeid
 genuinely disappeared, or when any suite went NOT MEASURED; 2 when a run
-directory does not exist -- so this can gate.
+directory does not exist or the pair cannot be attributed to a tree -- so this
+can gate, and so a caller can tell "regressed" from "no claim possible".
 
-    python3 scripts/audit/compare_runs.py <baseline-dir> <new-dir> [suite.json ...]
+    python3 -m scripts.audit.compare_runs <baseline-dir> <new-dir> [suite.json ...]
 """
 
 from __future__ import annotations
@@ -85,6 +110,16 @@ import json
 import pathlib
 import sys
 from typing import NamedTuple
+
+# Importable whether this is run as ``-m scripts.audit.compare_runs`` (repo root
+# on sys.path) or as the path ``scripts/audit/compare_runs.py`` (only this
+# directory is). The second is what this tool's own usage line said for its whole
+# life, so it keeps working rather than being quietly broken by a shared import.
+_REPO = pathlib.Path(__file__).resolve().parents[2]
+if str(_REPO) not in sys.path:
+    sys.path.insert(0, str(_REPO))
+
+from scripts.audit.run_identity import IDENTITY_FILE, refusals, report_refusals  # noqa: E402
 
 #: Written by ``run_all_tests.sh`` next to the reports: the comma-separated list
 #: of suites THAT invocation ran. Its own comment says consumers cannot infer
@@ -107,6 +142,26 @@ class SuiteComparison(NamedTuple):
     regressed: bool
 
 
+def _without_xdist_group(nodeid: str) -> str:
+    """A nodeid with xdist's ``@<group>`` scheduling suffix removed.
+
+    Under ``--dist loadgroup`` xdist appends the ``xdist_group`` name to the
+    nodeid of every marked item (``xdist/remote.py``:244) and the scheduler
+    groups by splitting it back off. It is scheduling bookkeeping, not identity:
+    the same test marked into a group and out of one is the same test, and
+    comparing the two spellings as different nodeids reports a test that ran in
+    both runs as having disappeared from one.
+
+    The ``]`` guard is xdist's own
+    (``xdist/scheduler/loadgroup.py::_split_scope``) and is here for the same
+    reason -- a parametrized value may legitimately contain ``@`` -- so this
+    reads a nodeid exactly the way the tool that wrote it does.
+    """
+    if nodeid.rfind("@") > nodeid.rfind("]"):
+        return nodeid.rsplit("@", 1)[0]
+    return nodeid
+
+
 def outcomes(report: pathlib.Path) -> dict[str, tuple[str, str]]:
     """``nodeid -> (outcome, reason)`` for one suite's JSON report.
 
@@ -126,7 +181,7 @@ def outcomes(report: pathlib.Path) -> dict[str, tuple[str, str]]:
             if info.get("longrepr"):
                 reason = str(info["longrepr"])
                 break
-        result[test["nodeid"]] = (outcome, reason)
+        result[_without_xdist_group(test["nodeid"])] = (outcome, reason)
     return result
 
 
@@ -144,8 +199,15 @@ def declared_suites(run: pathlib.Path) -> set[str] | None:
 
 
 def present_suites(run: pathlib.Path) -> set[str]:
-    """Report filenames actually on disk for a run."""
-    return {path.name for path in run.glob("*.json")}
+    """Report filenames actually on disk for a run.
+
+    ``IDENTITY_FILE`` sits beside the reports and is not one: read as a suite it
+    would be an empty report on both sides and drag the verdict into NOT
+    MEASURED. Excluded by NAME rather than by a leading dot, because
+    ``pathlib.Path.glob("*.json")`` matches dotfiles while ``glob.glob`` does
+    not, and a run directory is enumerated through both.
+    """
+    return {path.name for path in run.glob("*.json")} - {IDENTITY_FILE}
 
 
 def _base_nodeid(nodeid: str) -> str:
@@ -316,22 +378,39 @@ def _unreadable(runs: dict[str, pathlib.Path]) -> list[str]:
     return [f"{label} directory does not exist: {path}" for label, path in runs.items() if not path.is_dir()]
 
 
+#: Opts past the waivable half of the identity gate. A flag and not an
+#: environment variable on purpose: it has to appear in the command somebody ran
+#: and in the scrollback above the verdict, which is the whole point of it being
+#: acknowledgeable rather than automatic.
+ALLOW_UNIDENTIFIED = "--allow-unidentified"
+
+
 def main() -> int:
-    if len(sys.argv) < 3:
+    argv = [arg for arg in sys.argv[1:] if arg != ALLOW_UNIDENTIFIED]
+    allow_unidentified = ALLOW_UNIDENTIFIED in sys.argv[1:]
+    if len(argv) < 2:
         print(__doc__)
         return 2
-    baseline, new = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+    baseline, new = pathlib.Path(argv[0]), pathlib.Path(argv[1])
     absent = _unreadable({"baseline": baseline, "new": new})
     if absent:
         print("NOT MEASURED: nothing could be read.")
         for problem in absent:
             print(f"    {problem}")
         return 2
+
+    # Before any suite is read: a delta between two trees nothing identifies is
+    # not a weaker claim than a real one, it is a different claim about nothing.
+    hard, waivable, identities = refusals(baseline, new, _REPO)
+    if not report_refusals(hard, waivable, identities, allow_unidentified):
+        return 2
+    unattributed = bool(waivable)
+
     sides = {
         "baseline": (declared_suites(baseline), present_suites(baseline)),
         "new": (declared_suites(new), present_suites(new)),
     }
-    suites = _resolve_suites(sys.argv[3:], sides)
+    suites = _resolve_suites(argv[2:], sides)
     _print_header(baseline, new, sides, suites)
 
     compared: list[SuiteComparison] = []
@@ -346,14 +425,14 @@ def main() -> int:
         )
         if verdict is None:
             compared.append(compare(baseline, new, suite))
-        elif verdict[1] or sys.argv[3:]:
+        elif verdict[1] or argv[2:]:
             # A suite named on the command line was asked for by a human. Not
             # being able to compare it is a refusal, whatever the shape.
             unmeasured.append((suite, verdict[0]))
         else:
             uncomparable.append((suite, verdict[0]))
 
-    return _report(compared, unmeasured, uncomparable, len(suites))
+    return _report(compared, unmeasured, uncomparable, len(suites), unattributed)
 
 
 def _report(
@@ -361,6 +440,7 @@ def _report(
     unmeasured: list[tuple[str, str]],
     uncomparable: list[tuple[str, str]],
     total: int,
+    unattributed: bool = False,
 ) -> int:
     """Print the scope, then a verdict that cannot be read apart from it."""
     shared = sum(c.shared for c in compared)
@@ -387,8 +467,12 @@ def _report(
     # suite: not measured reading as fine.
     nothing_graded = not compared or shared == 0
     regressed = [c.suite for c in compared if c.regressed]
+    # Appended to the verdict WORD, not printed near it. The word and the exit
+    # status are the two things a caller reads, and an endpoint nobody can name
+    # is a caveat on the verdict itself rather than a note beside it.
+    tree = " (UNATTRIBUTED)" if unattributed else ""
     if regressed:
-        print(f"\nREGRESSION over the {len(compared)} of {total} suites compared: {', '.join(regressed)}")
+        print(f"\nREGRESSION{tree} over the {len(compared)} of {total} suites compared: {', '.join(regressed)}")
     elif not compared:
         print(
             f"\nNOT MEASURED: no suite could be compared at all — 0 of {total} accounted for. "
@@ -401,11 +485,11 @@ def _report(
         )
     elif unmeasured:
         print(
-            f"\nNO REGRESSION in the {len(compared)} of {total} suites compared — and this says NOTHING about the other {len(unmeasured)}."
+            f"\nNO REGRESSION{tree} in the {len(compared)} of {total} suites compared — and this says NOTHING about the other {len(unmeasured)}."
         )
     else:
         print(
-            f"\nCLEAN over {len(compared)} of {total} suites, {shared} shared nodeids: no pre-existing test changed outcome."
+            f"\nCLEAN{tree} over {len(compared)} of {total} suites, {shared} shared nodeids: no pre-existing test changed outcome."
         )
 
     return 1 if (regressed or unmeasured or nothing_graded) else 0
