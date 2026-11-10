@@ -225,7 +225,7 @@ props = create_test_publisher_properties_by_tag()
 
 # Custom tags
 props = create_test_publisher_properties_by_tag(
-    publisher_domain="news.example.com",
+    publisher_domain="news.psatest.com",
     property_tags=["premium", "sports", "homepage"]
 )
 
@@ -244,7 +244,7 @@ from tests.helpers.adcp_factories import create_test_publisher_properties_by_id
 
 # Custom property IDs
 props = create_test_publisher_properties_by_id(
-    publisher_domain="news.example.com",
+    publisher_domain="news.psatest.com",
     property_ids=["homepage_slot_1", "article_sidebar"]
 )
 
@@ -373,7 +373,7 @@ def test_product_with_inventory_profile(integration_db):
             tenant_id="test_tenant",
             name="Premium Inventory",
             publisher_properties=[{
-                "publisher_domain": "news.example.com",
+                "publisher_domain": "news.psatest.com",
                 "property_tags": ["premium", "homepage"],
                 "selection_type": "by_tag",
             }],

@@ -366,7 +366,7 @@ def _modal_form(env: Any, profile_id: str, format_options: list[dict[str, Any]] 
         "targeted_ad_unit_ids": "[]",
         "targeted_placement_ids": "[]",
         "publisher_properties": json.dumps(
-            [{"publisher_domain": "pub.example", "property_tags": ["all_inventory"], "selection_type": "by_tag"}]
+            [{"publisher_domain": "pub-psatest.com", "property_tags": ["all_inventory"], "selection_type": "by_tag"}]
         ),
         "property_mode": "all",
     }
@@ -465,7 +465,7 @@ def when_modal_edits_agent_host_option(ctx: dict, profile_id: str, option_id: st
 def when_product_form_declares_agent_host_option(ctx: dict, product_id: str, option_id: str) -> None:
     env = ctx["env"]
     form = minimal_product_create_form(
-        "pub.example:all_inventory",
+        "pub-psatest.com:all_inventory",
         product_id=product_id,
         format_options=json.dumps(_agent_host_option(env, option_id)),
     )

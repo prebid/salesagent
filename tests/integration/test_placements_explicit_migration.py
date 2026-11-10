@@ -160,7 +160,10 @@ def test_the_upgrade_refuses_and_names_a_row_it_cannot_state(migration_db, place
     ("placement", "refused"),
     [
         ({"kind": "seller_inline", "placement_id": "p", "name": "P", "mode": "targetable"}, False),
-        ({"kind": "publisher_ref", "placement_id": "p", "publisher_domain": "pub.example", "mode": "included"}, False),
+        (
+            {"kind": "publisher_ref", "placement_id": "p", "publisher_domain": "pub-psatest.com", "mode": "included"},
+            False,
+        ),
         ({"placement_id": "p", "name": "P", "mode": "targetable"}, True),
         ({"kind": "seller_inline", "placement_id": "p", "name": "P"}, True),
         ({"kind": "seller_inline", "name": "P", "mode": "targetable"}, True),

@@ -275,7 +275,7 @@ def create_test_publisher_properties_by_tag(
 
     Example:
         props = create_test_publisher_properties_by_tag(
-            publisher_domain="news.example.com",
+            publisher_domain="news.psatest.com",
             property_tags=["premium", "sports"]
         )
     """
@@ -309,7 +309,7 @@ def create_test_publisher_properties_by_id(
 
     Example:
         props = create_test_publisher_properties_by_id(
-            publisher_domain="news.example.com",
+            publisher_domain="news.psatest.com",
             property_ids=["prop_001", "prop_002"]
         )
     """
@@ -351,7 +351,7 @@ def create_test_property_dict(
         Property dict suitable for Product.publisher_properties
 
     Example:
-        prop = create_test_property_dict(publisher_domain="news.example.com")
+        prop = create_test_property_dict(publisher_domain="news.psatest.com")
     """
     return {
         "publisher_domain": publisher_domain,

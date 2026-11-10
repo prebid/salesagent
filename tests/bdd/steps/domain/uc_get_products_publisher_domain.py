@@ -114,7 +114,7 @@ def given_product_migrated_from_nothing(ctx: dict, product_id: str) -> None:
 @given(parsers.parse('the tenant also holds product "{product_id}" that no authorized property backs'))
 def given_unoffered_product(ctx: dict, product_id: str) -> None:
     # A publisher whose file the seller never fetched, so it authorizes nothing.
-    _offer(ctx, product_id, [{"publisher_domain": "unbacked-publisher.example", "selection_type": "all"}])
+    _offer(ctx, product_id, [{"publisher_domain": "unbacked-publisher-psatest.com", "selection_type": "all"}])
 
 
 @given(

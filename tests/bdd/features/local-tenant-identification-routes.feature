@@ -46,21 +46,21 @@ Feature: A request identifies its seller by host or by header
   @T-TENANTID-host
   Scenario: The tenant is identified by the Host it is served at
     Given the tenant is reachable at its own virtual host
-    And the tenant has verified publisher partnerships with domains "news.example"
+    And the tenant has verified publisher partnerships with domains "news-psatest.com"
     When the buyer requests capabilities naming the seller by Host
     Then the response describes that tenant
 
   @T-TENANTID-host-with-port
   Scenario: A Host carrying a port identifies the same tenant
     Given the tenant is reachable at its own virtual host
-    And the tenant has verified publisher partnerships with domains "news.example"
+    And the tenant has verified publisher partnerships with domains "news-psatest.com"
     When the buyer requests capabilities naming the seller by Host with a port
     Then the response describes that tenant
 
   @T-TENANTID-header
   Scenario: The tenant is identified by the x-adcp-tenant header
     Given the tenant is reachable at its own virtual host
-    And the tenant has verified publisher partnerships with domains "news.example"
+    And the tenant has verified publisher partnerships with domains "news-psatest.com"
     When the buyer requests capabilities naming the seller by tenant header
     Then the response describes that tenant
 

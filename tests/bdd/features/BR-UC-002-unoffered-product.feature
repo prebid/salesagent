@@ -67,8 +67,8 @@ Feature: BR-UC-002 A catalog holding a product buyers are not offered
   Scenario: a buy selecting a publisher format option its publisher's catalog does not declare is refused
     Given a valid create_media_buy request
     And the account exists and is active
-    And the tenant also holds product "missing_option" referencing format option "news_mrec" of "news.example", which its publisher's catalog does not declare
-    But a package references product "missing_option" selecting format option "news_mrec" of "news.example"
+    And the tenant also holds product "missing_option" referencing format option "news_mrec" of "news-psatest.com", which its publisher's catalog does not declare
+    But a package references product "missing_option" selecting format option "news_mrec" of "news-psatest.com"
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy error spec
     And the operation should fail

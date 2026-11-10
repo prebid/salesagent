@@ -11,7 +11,7 @@ Feature: The inventory page's profile modal authors canonical format declaration
 
   Background:
     Given an admin user is authenticated for tenant "test-tenant"
-    And the seller holds a verified property of publisher "pub.example"
+    And the seller holds a verified property of publisher "pub-psatest.com"
 
   @T-ADMIN-INVPROF-001 @main-flow
   Scenario: The modal creates a profile with its format options

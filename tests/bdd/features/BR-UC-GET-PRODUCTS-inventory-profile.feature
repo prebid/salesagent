@@ -13,16 +13,16 @@ Feature: Product discovery with inventory profile publisher_properties
 
   # A profile's selectors are offered only for a publisher the seller holds a verified
   # property of (#1845; BR-UC-GET-PRODUCTS-publisher-domain.feature), so every profile
-  # here names example.com and the seller is authorized there.
+  # here names psatest.com and the seller is authorized there.
 
   Background:
     Given a tenant is configured for product discovery
-    And the seller is authorized for property "homepage" of publisher "example.com" tagged "premium"
+    And the seller is authorized for property "homepage" of publisher "psatest.com" tagged "premium"
 
 
   @inventory_profile @selection_type @requires_db
   Scenario: Profile with property_ids infers selection_type "by_id"
-    Given an inventory profile with property_ids "homepage" for domain "example.com"
+    Given an inventory profile with property_ids "homepage" for domain "psatest.com"
     And a product linked to that inventory profile with pricing
     When the buyer requests products
     Then the response is compliant with the get_products spec
@@ -32,7 +32,7 @@ Feature: Product discovery with inventory profile publisher_properties
 
   @inventory_profile @selection_type @requires_db
   Scenario: Profile with property_tags infers selection_type "by_tag"
-    Given an inventory profile with property_tags "premium" for domain "example.com"
+    Given an inventory profile with property_tags "premium" for domain "psatest.com"
     And a product linked to that inventory profile with pricing
     When the buyer requests products
     Then the response is compliant with the get_products spec
@@ -42,7 +42,7 @@ Feature: Product discovery with inventory profile publisher_properties
 
   @inventory_profile @selection_type @requires_db
   Scenario: Profile with only publisher_domain infers selection_type "all"
-    Given an inventory profile with only domain "example.com"
+    Given an inventory profile with only domain "psatest.com"
     And a product linked to that inventory profile with pricing
     When the buyer requests products
     Then the response is compliant with the get_products spec
@@ -51,7 +51,7 @@ Feature: Product discovery with inventory profile publisher_properties
 
   @inventory_profile @selection_type @requires_db
   Scenario: Profile with selection_type already present passes through
-    Given an inventory profile with property_tags "premium" for domain "example.com" and selection_type "by_tag"
+    Given an inventory profile with property_tags "premium" for domain "psatest.com" and selection_type "by_tag"
     And a product linked to that inventory profile with pricing
     When the buyer requests products
     Then the response is compliant with the get_products spec
@@ -61,7 +61,7 @@ Feature: Product discovery with inventory profile publisher_properties
 
   @inventory_profile @selection_type @requires_db
   Scenario: Profile with invalid property_ids falls back to selection_type "all"
-    Given an inventory profile with property_ids "weather.com" for domain "example.com"
+    Given an inventory profile with property_ids "weather.com" for domain "psatest.com"
     And a product linked to that inventory profile with pricing
     When the buyer requests products
     Then the response is compliant with the get_products spec
@@ -75,7 +75,7 @@ Feature: Product discovery with inventory profile publisher_properties
     # identifiers are NOT spec fields (the schema permits them only as
     # additionalProperties). salesagent does not surface non-spec fields on the
     # AdCP get_products response, so legacy inventory-profile metadata is dropped.
-    Given an inventory profile with property_ids "homepage" for domain "example.com" and legacy fields
+    Given an inventory profile with property_ids "homepage" for domain "psatest.com" and legacy fields
     And a product linked to that inventory profile with pricing
     When the buyer requests products
     Then the response is compliant with the get_products spec

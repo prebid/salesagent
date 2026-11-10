@@ -572,7 +572,7 @@ _DECLARATIONS["publisher_only_options"] = [
 ]
 
 #: The publisher no option is scoped to, beside ``_PUBLISHER_DOMAIN`` in a multi-publisher product.
-_OTHER_PUBLISHER_DOMAIN = "other.example"
+_OTHER_PUBLISHER_DOMAIN = "other-psatest.com"
 
 #: What the seller STORES in ``properties`` (served as ``publisher_properties``), per name, for
 #: the publisher-slice coverage scenarios. One ``core/publisher-property-selector.json``
@@ -1244,7 +1244,7 @@ _SELECTORS: dict[str, dict[str, Any]] = {
     # exact-publisher-claim rule.
     "wrong_publisher_domain": {
         "format_option_refs": [
-            {"scope": "publisher", "publisher_domain": "other.example", "format_option_id": _PRODUCT_OPTION_ID}
+            {"scope": "publisher", "publisher_domain": "other-psatest.com", "format_option_id": _PRODUCT_OPTION_ID}
         ]
     },
     # The other half: the RIGHT publisher domain with an option id it does not publish.

@@ -166,8 +166,8 @@ def canonical_publisher_domain(stored: str) -> str:
     ``verified``, because ``adcp.adagents.fetch_adagents`` normalizes the domain the same
     way before it dials. This gives a reader the host that fetch verified.
 
-    A port is kept. ``news.example.com:8443`` is a different origin from
-    ``news.example.com``, so dropping it would name a host nobody fetched; the pinned
+    A port is kept. ``news.psatest.com:8443`` is a different origin from
+    ``news.psatest.com``, so dropping it would name a host nobody fetched; the pinned
     ``publisher_domain`` pattern refuses the colon instead.
     """
     return stored.strip().lower().split("://", 1)[-1].split("/", 1)[0].rstrip(".")

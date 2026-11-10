@@ -38,8 +38,8 @@ _HOST = hostname_of(vhost_for(_TENANT))
 
 _LOCAL = {"format_kind": "image", "format_option_id": "homepage_mrec", "params": {"width": 300, "height": 250}}
 _UNDER_HOST = {**_LOCAL, "publisher_domain": _HOST}
-_UNDER_PUBLISHER = {**_LOCAL, "publisher_domain": "news.example"}
-_PROPERTIES = [{"publisher_domain": "news.example", "selection_type": "all"}]
+_UNDER_PUBLISHER = {**_LOCAL, "publisher_domain": "news-psatest.com"}
+_PROPERTIES = [{"publisher_domain": "news-psatest.com", "selection_type": "all"}]
 
 
 def _insert_product(engine, product_id: str, format_options: list[dict]) -> None:

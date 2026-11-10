@@ -485,15 +485,15 @@ Feature: BR-UC-010 Discover Seller Capabilities
   @T-UC-010-portfolio-verified-publishers @main-flow @post-s6 @partition @boundary
   Scenario: portfolio names each publisher that has verified the seller, once
     Given a tenant is resolvable from the request context
-    And the tenant holds an authorized property on "news.example" with verification status "verified"
-    And the tenant holds an authorized property on "sports.example" with verification status "verified"
-    And the tenant holds an authorized property on "pending.example" with verification status "pending"
-    And the tenant holds an authorized property on "failed.example" with verification status "failed"
-    And the tenant has verified publisher partnerships with domains "partner.example", "news.example"
-    And the tenant has unverified publisher partnerships with domains "unverified.example"
+    And the tenant holds an authorized property on "news-psatest.com" with verification status "verified"
+    And the tenant holds an authorized property on "sports-psatest.com" with verification status "verified"
+    And the tenant holds an authorized property on "pending-psatest.com" with verification status "pending"
+    And the tenant holds an authorized property on "failed-psatest.com" with verification status "failed"
+    And the tenant has verified publisher partnerships with domains "partner-psatest.com", "news-psatest.com"
+    And the tenant has unverified publisher partnerships with domains "unverified-psatest.com"
     When the Buyer Agent calls get_adcp_capabilities
     Then the response is compliant with the get_adcp_capabilities spec
-    And the response should include media_buy.portfolio with publisher_domains "news.example", "partner.example", "sports.example"
+    And the response should include media_buy.portfolio with publisher_domains "news-psatest.com", "partner-psatest.com", "sports-psatest.com"
     # publisher_domains are the publishers this seller is AUTHORIZED to represent, and a
     # buyer checks each one by fetching https://<domain>/.well-known/adagents.json. A domain
     # whose stored adagents.json does not authorize this seller now (never fetched, or its
@@ -509,8 +509,8 @@ Feature: BR-UC-010 Discover Seller Capabilities
   @T-UC-010-portfolio-no-verified-publisher @main-flow @post-s6 @partition @boundary
   Scenario: a seller no publisher has verified omits portfolio instead of naming its own host
     Given a tenant is resolvable from the request context
-    And the tenant holds an authorized property on "pending.example" with verification status "pending"
-    And the tenant has unverified publisher partnerships with domains "unverified.example"
+    And the tenant holds an authorized property on "pending-psatest.com" with verification status "pending"
+    And the tenant has unverified publisher partnerships with domains "unverified-psatest.com"
     When the Buyer Agent calls get_adcp_capabilities
     Then the response is compliant with the get_adcp_capabilities spec
     And media_buy.portfolio should be omitted
@@ -547,23 +547,23 @@ Feature: BR-UC-010 Discover Seller Capabilities
 
     Examples:
       | partition               | property                      | partner              | named                                 |
-      | property mixed case     | News.Example.com              | "partner.example"    | "news.example.com", "partner.example" |
-      | property trailing dot   | news.example.com.             | "partner.example"    | "news.example.com", "partner.example" |
-      | property scheme path    | https://news.example.com/path | "partner.example"    | "news.example.com", "partner.example" |
-      | partner mixed case      | partner.example               | "News.Example.com"   | "news.example.com", "partner.example" |
-      | partner trailing dot    | partner.example               | "news.example.com."  | "news.example.com", "partner.example" |
-      | partner edge spaces     | partner.example               | " news.example.com " | "news.example.com", "partner.example" |
-      | one host, two spellings | News.Example.com              | "news.example.com."  | "news.example.com"                    |
+      | property mixed case     | News.Psatest.com              | "partner-psatest.com"    | "news.psatest.com", "partner-psatest.com" |
+      | property trailing dot   | news.psatest.com.             | "partner-psatest.com"    | "news.psatest.com", "partner-psatest.com" |
+      | property scheme path    | https://news.psatest.com/path | "partner-psatest.com"    | "news.psatest.com", "partner-psatest.com" |
+      | partner mixed case      | partner-psatest.com               | "News.Psatest.com"   | "news.psatest.com", "partner-psatest.com" |
+      | partner trailing dot    | partner-psatest.com               | "news.psatest.com."  | "news.psatest.com", "partner-psatest.com" |
+      | partner edge spaces     | partner-psatest.com               | " news.psatest.com " | "news.psatest.com", "partner-psatest.com" |
+      | one host, two spellings | News.Psatest.com              | "news.psatest.com."  | "news.psatest.com"                    |
 
   @T-UC-010-portfolio-rejected-domain @extension @degradation @partition @boundary @post-s6
   Scenario Outline: a verified domain the pattern rejects is left out and reported, and the other publishers are still named
     Given a tenant is resolvable from the request context
-    And the tenant has verified publisher partnerships with domains "partner.example"
+    And the tenant has verified publisher partnerships with domains "partner-psatest.com"
     And <rejected_row>
     When the Buyer Agent calls get_adcp_capabilities
     Then the response is compliant with the get_adcp_capabilities spec
     And the response should pass schema validation for get-adcp-capabilities-response
-    And the response should include media_buy.portfolio with publisher_domains "partner.example"
+    And the response should include media_buy.portfolio with publisher_domains "partner-psatest.com"
     And the response should carry one SERVICE_UNAVAILABLE advisory for capability "publisher domains"
     # A port survives canonicalization and is not admitted by the pattern. It is a different
     # origin from the bare host the buyer would fetch, so the port is not dropped to make the
@@ -579,13 +579,13 @@ Feature: BR-UC-010 Discover Seller Capabilities
 
     Examples:
       | partition        | rejected_row                                                                                            |
-      | partner on port  | the tenant has verified publisher partnerships with domains "news.example.com:8443"                     |
-      | property on port | the tenant holds an authorized property on "news.example.com:8443" with verification status "verified"  |
+      | partner on port  | the tenant has verified publisher partnerships with domains "news.psatest.com:8443"                     |
+      | property on port | the tenant holds an authorized property on "news.psatest.com:8443" with verification status "verified"  |
 
   @T-UC-010-portfolio-only-rejected-domain @extension @degradation @partition @boundary @post-s6
   Scenario: a seller whose only verified domain the pattern rejects omits portfolio and reports the degradation
     Given a tenant is resolvable from the request context
-    And the tenant has verified publisher partnerships with domains "news.example.com:8443"
+    And the tenant has verified publisher partnerships with domains "news.psatest.com:8443"
     When the Buyer Agent calls get_adcp_capabilities
     Then the response is compliant with the get_adcp_capabilities spec
     And the response should pass schema validation for get-adcp-capabilities-response

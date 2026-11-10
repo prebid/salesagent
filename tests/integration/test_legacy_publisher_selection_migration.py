@@ -54,10 +54,10 @@ def at_previous(migration_db):
             {"tid": _TENANT, "vhost": vhost_for(_TENANT)},
         )
         for property_id, domain, tags, status in (
-            ("news_home", "news.example", ["premium"], "verified"),
-            ("sports_home", "Sports.Example", ["premium"], "verified"),
-            ("weather_home", "weather.example", ["standard"], "verified"),
-            ("podcast_home", "podcast.example", ["premium"], "pending"),
+            ("news_home", "news-psatest.com", ["premium"], "verified"),
+            ("sports_home", "Sports-Psatest.com", ["premium"], "verified"),
+            ("weather_home", "weather-psatest.com", ["standard"], "verified"),
+            ("podcast_home", "podcast-psatest.com", ["premium"], "pending"),
         ):
             conn.execute(
                 text(
@@ -110,23 +110,23 @@ def test_every_legacy_selection_becomes_explicit_selectors_and_the_columns_go(at
     _seed_product(engine, "by_tags", property_tags=["premium"])
     _seed_product(engine, "everything", property_tags=["all_inventory"])
     _seed_product(engine, "nothing_selected", property_tags=[])
-    explicit = [{"publisher_domain": "news.example", "selection_type": "all"}]
+    explicit = [{"publisher_domain": "news-psatest.com", "selection_type": "all"}]
     _seed_product(engine, "explicit", properties=explicit)
 
     run_alembic_upgrade(db_url, _REVISION)
 
     assert _properties(engine, "by_tags") == [
-        {"publisher_domain": "news.example", "property_tags": ["premium"], "selection_type": "by_tag"},
-        {"publisher_domain": "podcast.example", "property_tags": ["premium"], "selection_type": "by_tag"},
-        {"publisher_domain": "sports.example", "property_tags": ["premium"], "selection_type": "by_tag"},
+        {"publisher_domain": "news-psatest.com", "property_tags": ["premium"], "selection_type": "by_tag"},
+        {"publisher_domain": "podcast-psatest.com", "property_tags": ["premium"], "selection_type": "by_tag"},
+        {"publisher_domain": "sports-psatest.com", "property_tags": ["premium"], "selection_type": "by_tag"},
     ]
     assert _properties(engine, "everything") == [
         {"publisher_domain": domain, "property_tags": ["all_inventory"], "selection_type": "by_tag"}
-        for domain in ("news.example", "podcast.example", "sports.example", "weather.example")
+        for domain in ("news-psatest.com", "podcast-psatest.com", "sports-psatest.com", "weather-psatest.com")
     ]
     assert _properties(engine, "nothing_selected") == [
         {"publisher_domain": domain, "selection_type": "all"}
-        for domain in ("news.example", "podcast.example", "sports.example", "weather.example")
+        for domain in ("news-psatest.com", "podcast-psatest.com", "sports-psatest.com", "weather-psatest.com")
     ]
     assert _properties(engine, "explicit") == explicit
 
@@ -139,7 +139,7 @@ def test_every_legacy_selection_becomes_explicit_selectors_and_the_columns_go(at
     run_alembic_downgrade(db_url, _PREVIOUS)
     columns = {column["name"] for column in sa.inspect(engine).get_columns("products")}
     assert {"property_tags", "property_ids"} <= columns
-    assert _properties(engine, "by_tags")[0]["publisher_domain"] == "news.example"
+    assert _properties(engine, "by_tags")[0]["publisher_domain"] == "news-psatest.com"
 
 
 def test_a_legacy_selection_matching_no_authorized_property_stops_the_upgrade_named(at_previous):

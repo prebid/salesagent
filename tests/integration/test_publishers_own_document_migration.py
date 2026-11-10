@@ -54,7 +54,7 @@ def at_previous(migration_db):
         conn.execute(
             text(
                 "INSERT INTO publisher_partners (tenant_id, publisher_domain, display_name, is_verified, sync_status) "
-                "VALUES (:tid, 'News.Example', 'News', true, 'success')"
+                "VALUES (:tid, 'News-Psatest.com', 'News', true, 'success')"
             ),
             {"tid": _TENANT},
         )
@@ -76,8 +76,12 @@ def at_previous(migration_db):
                 "tid": _TENANT,
                 "props": json.dumps(
                     [
-                        {"publisher_domain": "news.example", "selection_type": "all"},
-                        {"publisher_domain": "sports.example", "property_ids": ["a", "b"], "selection_type": "by_id"},
+                        {"publisher_domain": "news-psatest.com", "selection_type": "all"},
+                        {
+                            "publisher_domain": "sports-psatest.com",
+                            "property_ids": ["a", "b"],
+                            "selection_type": "by_id",
+                        },
                     ]
                 ),
             },
@@ -89,7 +93,10 @@ def at_previous(migration_db):
                 "now(), now())"
             ),
             # A profile's JSON mode stored selectors without selection_type.
-            {"tid": _TENANT, "props": json.dumps([{"publisher_domain": "weather.example", "property_tags": ["x"]}])},
+            {
+                "tid": _TENANT,
+                "props": json.dumps([{"publisher_domain": "weather-psatest.com", "property_tags": ["x"]}]),
+            },
         )
     return engine, db_url
 
@@ -107,21 +114,21 @@ def test_partners_become_publishers_and_selectors_move_to_child_tables(at_previo
     assert _rows(
         engine, "SELECT domain, display_name, fetch_status, adagents, fetched_at FROM publishers ORDER BY domain"
     ) == [
-        ("news.example", "News", "never_fetched", None, None),
-        ("sports.example", "sports.example", "never_fetched", None, None),
+        ("news-psatest.com", "News", "never_fetched", None, None),
+        ("sports-psatest.com", "sports-psatest.com", "never_fetched", None, None),
         ("typed.example", "typed.example", "never_fetched", None, None),
-        ("weather.example", "weather.example", "never_fetched", None, None),
+        ("weather-psatest.com", "weather-psatest.com", "never_fetched", None, None),
     ]
     assert _rows(
         engine,
         "SELECT product_id, publisher_domain, selection_type, property_ids, property_tags "
         "FROM product_publisher_selections ORDER BY id",
-    ) == [("sells", "news.example", "all", None, None), ("sells", "sports.example", "by_id", ["a", "b"], None)]
+    ) == [("sells", "news-psatest.com", "all", None, None), ("sells", "sports-psatest.com", "by_id", ["a", "b"], None)]
     assert _rows(
         engine,
         "SELECT publisher_domain, selection_type, property_ids, property_tags "
         "FROM inventory_profile_publisher_selections ORDER BY id",
-    ) == [("weather.example", "by_tag", None, ["x"])]
+    ) == [("weather-psatest.com", "by_tag", None, ["x"])]
     # Properties come only from a publisher's file: none survive the upgrade.
     assert _rows(engine, "SELECT count(*) FROM publisher_properties") == [(0,)]
 

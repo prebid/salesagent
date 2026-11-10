@@ -32,7 +32,7 @@ Feature: adagents.json is published only by a host that owns a property
 
   @T-ADAGENTS-no-property-at-host
   Scenario: A host that owns no property publishes no adagents.json
-    Given the tenant holds an authorized property on "other-publisher.example" with verification status "verified"
+    Given the tenant holds an authorized property on "other-publisher-psatest.com" with verification status "verified"
     When the buyer fetches adagents.json naming the seller by Host
     Then no adagents.json is published
 
@@ -41,7 +41,7 @@ Feature: adagents.json is published only by a host that owns a property
     Given the tenant is served on port 8443 of its host
     And the tenant holds an authorized property on its own host with verification status "verified"
     And the stored adagents.json of the tenant's own host was last fetched 25 hours ago
-    And the tenant holds an authorized property on "other-publisher.example" with verification status "verified"
+    And the tenant holds an authorized property on "other-publisher-psatest.com" with verification status "verified"
     When the buyer fetches adagents.json naming the seller by Host
     Then the adagents.json validates against the pinned schema
     And the adagents.json claims only the property on the tenant's own host

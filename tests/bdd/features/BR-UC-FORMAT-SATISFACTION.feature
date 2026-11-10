@@ -785,7 +785,7 @@ Feature: A format selector must satisfy the canonical declaration the product pu
   #
   # local_and_publisher_options is two_image_options with the 728x90 option scoped to
   # shorts.streamhaus.example; the 300x250 stays product-local. streamhaus_and_other sells
-  # that publisher and other.example, streamhaus_only the first alone.
+  # that publisher and other-psatest.com, streamhaus_only the first alone.
   #
   # Seller choice, recorded: a slice no declaration applies to is an empty set and fails
   # closed for every selection, a package naming no selector included
@@ -839,15 +839,15 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     Given the seller declares canonical format options "publisher_only_options" across publishers "streamhaus_and_other"
     And the buyer's package selects "no_selector"
     When the Buyer Agent sends the create_media_buy request
-    Then the buyer is refused UNSUPPORTED_FEATURE naming the package's product for the uncovered publisher slice "other.example"
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the package's product for the uncovered publisher slice "other-psatest.com"
 
     # The recorded seller choice above, graded: publisher_only_options scopes both options to
-    # shorts.streamhaus.example, so other.example's slice is empty. The package names no
+    # shorts.streamhaus.example, so other-psatest.com's slice is empty. The package names no
     # selector and so "selects all formats supported by the product" (package-request.json),
-    # yet none of them applies to that slice; accepting it would buy other.example's
+    # yet none of them applies to that slice; accepting it would buy other-psatest.com's
     # inventory with no format that can serve it, which formats.mdx forbids ("it must not
     # silently remove inventory"). The accept control differs in one thing: streamhaus_only
-    # drops other.example. A seller treating a selector-less package as covered by
+    # drops other-psatest.com. A seller treating a selector-less package as covered by
     # construction accepts the refusal; one refusing every publisher-scoped product reddens
     # the control. The buyer selected nothing, so the refusal points at
     # packages[0].product_id and its rejected_value is the empty slice's publisher_domain.
@@ -872,11 +872,11 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     Given the seller declares canonical format options "local_and_publisher_options" across publishers "streamhaus_and_other"
     And the buyer assigns canonical "image" creatives carrying the "image_728x90" manifests naming product options "satisfaction_image_leaderboard"
     When the Buyer Agent sends the create_media_buy request
-    Then the creatives are refused CREATIVE_VALIDATION_FAILED_GENERIC at "packages" for leaving the publisher slice "other.example" uncovered
+    Then the creatives are refused CREATIVE_VALIDATION_FAILED_GENERIC at "packages" for leaving the publisher slice "other-psatest.com" uncovered
 
     # The 728x90 creative satisfies the product on its own (the scoped option), so a seller
     # grading creatives one at a time accepts it. The accept rows differ in one thing:
-    # streamhaus_only drops other.example, and image_300x250,image_728x90 adds the creative
+    # streamhaus_only drops other-psatest.com, and image_300x250,image_728x90 adds the creative
     # that fills its slice. The package names no selector, so the refusal is the creative
     # set's, and it names the slice by its publisher_domain. local_and_publisher_options
     # declares two image options, so each creative names its option: format_option_ref is
