@@ -178,6 +178,14 @@ def given_profile_naming_agent_host(ctx: dict) -> None:
     )
 
 
+@given("the tenant's catalog comes from the CI setup seed")
+def given_catalog_from_ci_seed(ctx: dict) -> None:
+    """Run the CI setup seed's catalogue step for this tenant, as init_database_ci runs it."""
+    from scripts.setup.init_database_ci import ci_products, seed_catalog
+
+    seed_catalog(ctx["env"].get_session(), ctx["tenant"].tenant_id, ci_products())
+
+
 @given(parsers.parse('the operator saves product "{product_id}" selecting properties "{property_ids}"'))
 def given_operator_saved_product(ctx: dict, product_id: str, property_ids: str) -> None:
     """Save the product through the real admin form (priced), and require that it was stored."""

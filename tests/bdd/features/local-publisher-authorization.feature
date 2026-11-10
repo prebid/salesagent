@@ -149,3 +149,14 @@ Feature: A publisher's adagents.json authorizes this agent by its origin or an e
     When the operator opens the authorized properties page
     Then the page contains "Front page"
     And the page offers no way to add a property by hand
+
+  # A stored file counts for 24 hours after its last successful fetch (managed-networks.mdx
+  # :623-626); past that its publisher authorizes nothing. The setup checklist tells the
+  # operator why a publisher stopped authorizing, seeded and fetched publishers alike.
+  @T-ADMIN-PUBAUTH-checklist-stale
+  Scenario: The setup checklist says a publisher stopped authorizing because its stored file is more than 24 hours old
+    Given the publisher "pub-psatest.com" authorizes "{origin}" for property "front_page"
+    And the operator added the publisher "pub-psatest.com"
+    And the seller's last successful fetch of "pub-psatest.com" was 25 hours ago
+    When the operator opens the setup checklist
+    Then the page contains "stopped authorizing this agent: their stored adagents.json is older than 24 hours"

@@ -164,6 +164,16 @@ Feature: A product names the publishers whose inventory it sells
     Then the buyer receives exactly the products "mixed"
     And product "mixed" announces publisher_properties [{"publisher_domain": "sports-psatest.com", "selection_type": "all"}]
 
+  # Seeds never fetch: the CI setup seed stores its publisher's adagents.json through the
+  # ingest service's apply step and sells every publisher the tenant holds, whole. A tenant
+  # it seeded offers its products from that stored document like any ingested one.
+  @T-UC-GET-PRODUCTS-publisher-setup-seed @publisher_domain_resolution @requires_db
+  Scenario: a tenant the CI setup seed seeded offers its products from the seeded publisher document
+    Given the tenant's catalog comes from the CI setup seed
+    When the buyer requests products
+    Then the buyer receives exactly the products "prod_display_premium, prod_video_premium"
+    And product "prod_video_premium" announces publisher_properties [{"publisher_domain": "news-psatest.com", "selection_type": "all"}, {"publisher_domain": "psatest.com", "selection_type": "all"}, {"publisher_domain": "sports-psatest.com", "selection_type": "all"}, {"publisher_domain": "weather-psatest.com", "selection_type": "all"}]
+
   @T-UC-GET-PRODUCTS-publisher-all-inventory-stored @publisher_domain_resolution @requires_db
   Scenario: a stored by_tag selector of the seller's all_inventory tag names its publisher whole
     Given the seller offers product "stored_whole" naming publisher_properties [{"publisher_domain": "news-psatest.com", "property_tags": ["all_inventory"], "selection_type": "by_tag"}]

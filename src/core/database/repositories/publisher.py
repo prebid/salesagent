@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
-from typing import Any
+from typing import Any, NamedTuple
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session, selectinload
@@ -31,10 +31,24 @@ def _with_derived_rows() -> tuple:
     return (selectinload(Publisher.properties), selectinload(Publisher.format_options))
 
 
+class AuthorizedCounts(NamedTuple):
+    """What a tenant's publishers' stored files authorize at a moment, for the setup checklist."""
+
+    publishers: int
+    """Publishers whose stored file authorizes this agent for at least one property."""
+    properties: int
+    """Properties those files authorize this agent for."""
+    stale: int
+    """Publishers holding a stored file past the 24-hour freshness window, which authorize nothing."""
+
+
+NO_PUBLISHERS = AuthorizedCounts(0, 0, 0)
+
+
 def count_authorized_by_tenant(
     session: Session, tenant_ids: Iterable[str], now: datetime
-) -> dict[str, tuple[int, int]]:
-    """``(authorizing publishers, authorized properties)`` at *now* for each of *tenant_ids*.
+) -> dict[str, AuthorizedCounts]:
+    """:class:`AuthorizedCounts` at *now* for each of *tenant_ids*.
 
     Cross-tenant by design: the bulk setup checklist grades many tenants in one read. A
     tenant with no publisher is absent from the result.
@@ -46,9 +60,14 @@ def count_authorized_by_tenant(
     return {tenant_id: _counts(publishers, now) for tenant_id, publishers in by_tenant.items()}
 
 
-def _counts(publishers: Iterable[Publisher], now: datetime) -> tuple[int, int]:
+def _counts(publishers: Iterable[Publisher], now: datetime) -> AuthorizedCounts:
+    publishers = list(publishers)
     authorized = [authorized_properties(publisher, now) for publisher in publishers]
-    return sum(1 for rows in authorized if rows), sum(len(rows) for rows in authorized)
+    return AuthorizedCounts(
+        publishers=sum(1 for rows in authorized if rows),
+        properties=sum(len(rows) for rows in authorized),
+        stale=sum(1 for publisher in publishers if publisher.adagents is not None and not publisher.is_fresh(now)),
+    )
 
 
 def every_publisher() -> list[tuple[str, str]]:
@@ -178,8 +197,8 @@ class PublisherRepository:
         """
         return [publisher.domain for publisher in self.list_all() if authorized_properties(publisher, now)]
 
-    def count_authorized(self, now: datetime) -> tuple[int, int]:
-        """``(authorizing publishers, authorized properties)`` of this tenant at *now*."""
+    def count_authorized(self, now: datetime) -> AuthorizedCounts:
+        """:class:`AuthorizedCounts` of this tenant at *now*."""
         return _counts(self.list_all(), now)
 
     def list_for_publisher_domain(self, publisher_domain: str) -> list[PublisherProperty]:

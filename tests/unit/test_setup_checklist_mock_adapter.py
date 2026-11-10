@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from src.core.database.repositories.publisher import AuthorizedCounts
 from tests.utils.database_helpers import vhost_for
 
 
@@ -342,7 +343,7 @@ class TestSetupChecklistMockAdapter:
                     patch("os.getenv") as mock_getenv,
                     patch(
                         "src.services.setup_checklist_service.PublisherRepository.count_authorized",
-                        return_value=(1, 2),
+                        return_value=AuthorizedCounts(publishers=1, properties=2, stale=0),
                     ),
                 ):
                     mock_getenv.return_value = "fake-api-key"

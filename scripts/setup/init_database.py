@@ -5,11 +5,14 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 from scripts.ops.migrate import run_migrations
-from scripts.setup.seed_products import canonical_declaration, whole_publisher_selections
+from scripts.setup.seed_products import canonical_declaration, seed_verified_website, whole_publisher_selections
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AdapterConfig, Product, Tenant, TenantManagementConfig
 from src.core.database.repositories.principal import PrincipalRepository
+
+#: The publisher the demo tenant's basic products sell, whole.
+DEMO_PUBLISHER = "psatest.com"
 
 
 def init_db(exit_on_error=False):
@@ -161,8 +164,12 @@ def init_db(exit_on_error=False):
                 platform_mappings={"mock": {"advertiser_id": "mock-default"}},
             )
 
-            # Always create basic products for demo/testing. Each names every publisher the
-            # tenant holds (#1845); none are seeded here, so `[]`.
+            # Always create basic products for demo/testing. Each sells every publisher the
+            # tenant holds, whole (#1845), so the demo publisher is held first: a stored
+            # adagents.json authorizing the tenant for one website, through the ingest service's
+            # apply step and without a fetch. Without it the products sell no publisher and are
+            # not offered.
+            seed_verified_website(session, "default", DEMO_PUBLISHER, name="PSA Test Website")
             basic_products = [
                 Product(
                     tenant_id="default",

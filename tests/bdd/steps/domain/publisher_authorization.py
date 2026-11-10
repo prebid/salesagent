@@ -213,6 +213,11 @@ def when_open_publishers(ctx: dict) -> None:
     ctx["admin_page"] = _env(ctx).open_publishers()
 
 
+@when("the operator opens the setup checklist")
+def when_open_setup_checklist(ctx: dict) -> None:
+    ctx["admin_page"] = _env(ctx).open_setup_checklist()
+
+
 @when("the operator opens the authorized properties page")
 def when_open_authorized_properties(ctx: dict) -> None:
     ctx["admin_page"] = _env(ctx).open_authorized_properties()

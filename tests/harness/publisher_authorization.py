@@ -185,6 +185,10 @@ class PublisherAdagentsMixin:
         """The operator's authorized-properties page."""
         return self._publisher_route("get", "authorized-properties")
 
+    def open_setup_checklist(self) -> AdminResponse:
+        """The operator's setup checklist page."""
+        return self._publisher_route("get", "setup-checklist")
+
     def open_partner_properties(self, publisher: str) -> AdminResponse:
         return self._publisher_route("get", f"publisher-partners/{self.publisher_address(publisher)}/properties")
 
