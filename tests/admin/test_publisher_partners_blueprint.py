@@ -30,7 +30,7 @@ app = create_app()
 
 pytestmark = [pytest.mark.admin, pytest.mark.requires_db]
 
-DUPLICATE_DOMAIN = "contested-publisher.example.com"
+DUPLICATE_DOMAIN = "contested-publisher.psatest.com"
 
 
 @pytest.fixture
@@ -130,7 +130,7 @@ class TestUnexpectedDbErrorDoesNotLeakDriverInternals:
         driver name, the SQL statement, or the bound parameters.
         """
         tenant = TenantFactory()
-        oversized = ("a" * 300) + ".example.com"
+        oversized = ("a" * 300) + ".psatest.com"
 
         response = client.post(
             f"/tenant/{tenant.tenant_id}/publisher-partners",

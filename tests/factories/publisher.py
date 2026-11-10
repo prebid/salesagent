@@ -37,7 +37,7 @@ class PublisherFactory(factory.alchemy.SQLAlchemyModelFactory):
 
     tenant = SubFactory(TenantFactory)
     tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
-    domain = FactorySequence(lambda n: f"publisher-{n:04d}.example.com")
+    domain = FactorySequence(lambda n: f"publisher-{n:04d}.psatest.com")
     display_name = LazyAttribute(lambda o: o.domain)
 
     @classmethod
