@@ -354,7 +354,7 @@ class AccountSyncEnv(AccountListDispatchMixin, IntegrationEnv):
 
         Account approval mode is a distinct field from creative approval_mode
         (BR-RULE-037) — ``configure_tenant_field`` writes the correct column so
-        the MCP real-auth chain (config_loader.get_tenant_by_id) sees it, and
+        the MCP real-auth chain (config_loader.get_tenant_context) sees it, and
         also updates the in-memory tenant overrides for the mock identity path.
         The tenant row must already exist — No-Quiet-Failures (PR #1430).
         """

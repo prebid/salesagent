@@ -93,7 +93,28 @@ services:
       PUBLISHER_AUTO_VERIFY: "false"
       SKIP_NGINX: "true"
       SKIP_CRON: "true"
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      # The platform's own Gemini key, fixed (tests/e2e/_scripted_llm.py
+      # E2E_PLATFORM_AI_KEY): every model call below reaches the scripted origin, never
+      # Google, so the value authenticates nothing, and a scenario that declares the
+      # platform's credential scripts it by this name.
+      GEMINI_API_KEY: e2e-platform-gemini-key
+      # Where this server's Gemini client sends model calls: the scripted-llm origin
+      # below, never Google. google-genai reads this variable when no base URL is passed,
+      # and AIServiceFactory passes none, so this is the setting an operator would use to
+      # point the client at a gateway, not a test hook in src/. It is what lets the
+      # get_products ranking and policy scenarios script the model on e2e_rest the way
+      # ProductEnv scripts it in-process. Plain http, by service name: the caller is the
+      # SDK's own HTTP client, not the egress seam, so the seam's https rule does not
+      # reach it. A call carrying a key nobody scripted (this server's own
+      # GEMINI_API_KEY, unless a scenario scripts it) is refused as the real API refuses an
+      # invalid key.
+      GOOGLE_GEMINI_BASE_URL: http://scripted-llm:8080
+      # The same origin for an Anthropic model (the Anthropic SDK reads this variable when
+      # no base URL is passed, and AIServiceFactory passes none). Production must refuse to
+      # build some Anthropic configurations; one it builds anyway calls the origin and is
+      # answered from the seller's script, so the scenario fails, instead of failing
+      # against api.anthropic.com and letting the consumer fail open.
+      ANTHROPIC_BASE_URL: http://scripted-llm:8080
       SUPER_ADMIN_EMAILS: ${SUPER_ADMIN_EMAILS:-}
       ADCP_TESTING: ${ADCP_TESTING:-true}
       FLASK_SECRET_KEY: "${FLASK_SECRET_KEY:-adcp-test-stack-session-signing-key}"
@@ -1005,6 +1026,26 @@ services:
       # mismatch here sends hop 2 or 3 somewhere unreachable and surfaces as an
       # unresolvable key three assertions later.
       COUNTERPARTY_PUBLIC_ORIGIN: https://counterparty.adcp-e2e.dev:8443
+      COMPOSE_PROJECT_NAME: ${COMPOSE_PROJECT_NAME:-adcp-e2e}
+    volumes:
+      - .:/app
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8080/health',timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Scripted LLM origin (tests/e2e/scripted_llm_origin_service.py): the model every
+  # server in this stack calls (GOOGLE_GEMINI_BASE_URL and ANTHROPIC_BASE_URL above).
+  # Answers a generateContent or Messages call from a script the test installs for the
+  # API key the call carries, and refuses every other key. The test programs it by service name over its control plane
+  # (tests/e2e/_scripted_llm.py).
+  scripted-llm:
+    image: python:3.12-slim
+    working_dir: /app
+    command: ["python", "-m", "tests.e2e.scripted_llm_origin_service"]
+    environment:
+      PORT: "8080"
       COMPOSE_PROJECT_NAME: ${COMPOSE_PROJECT_NAME:-adcp-e2e}
     volumes:
       - .:/app
