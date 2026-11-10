@@ -231,6 +231,11 @@ cleanup() {
             docker logs "$_name" >"$RESULTS_DIR/containers/${_name}.log" 2>&1 || true
         done
     fi
+    # The publisher origin's access log names every Host the live server fetched an
+    # adagents.json for -- the record that the e2e ingest dialed the publisher itself
+    # (config/nginx/publisher-origin.conf). Kept on every run, not only a failed one.
+    mkdir -p "$RESULTS_DIR/containers"
+    dc logs --no-color publisher-origin >"$RESULTS_DIR/containers/publisher-origin.log" 2>&1 || true
     # Per-worker e2e servers AND their TLS sidecars are `docker compose run`
     # containers (not `up`), so `dc down` won't remove them — do it explicitly.
     # The sidecars MUST be matched too: a leaked `-tls-gwN.adcp.test` container
@@ -421,7 +426,12 @@ fi
 # tests/unit/test_architecture_e2e_origin_services_start.py pins the pairing in
 # both directions: every SNI-routed upstream is started, and every name started
 # here exists in compose. It matches the FIRST `dc up -d` line in this file.
-dc up -d postgres adcp-server adcp-server-storyboard proxy tls-proxy creative-pg creative-agent webhook-capture counterparty-origin
+# The directory publisher-origin serves, which the runner writes. Created here so the bind
+# mount never materialises it, and emptied so no earlier run's document answers for a
+# publisher this run has not written (tests/harness/publisher_authorization.py).
+rm -rf .test-publishers 2>/dev/null || true
+mkdir -p .test-publishers
+dc up -d postgres adcp-server adcp-server-storyboard proxy tls-proxy creative-pg creative-agent webhook-capture counterparty-origin publisher-origin
 
 echo "Waiting for Postgres + server health (in-network)..."
 deadline=$(( $(date +%s) + 360 ))

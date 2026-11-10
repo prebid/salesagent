@@ -1,8 +1,8 @@
 """Steps for what publishers serve in their adagents.json, and what the seller made of it.
 
-Shared by local-publisher-authorization.feature (the operator's routes, on both admin
-transports) and the get_products / admin scenarios whose publishers are ingested in the
-runner (``PublisherAdagentsMixin.ingest_in_runner``).
+Shared by local-publisher-authorization.feature and the get_products / admin scenarios.
+Every ingest goes through the operator's admin routes on the env's own transport; on e2e
+the live server fetches the file itself (``PublisherAdagentsMixin``).
 
 WHAT MAKES THESE NON-VACUOUS. A publisher's entry is written from the tenant's own
 ``agent_url``, read off its row, so every accepted spelling names the agent the ingest

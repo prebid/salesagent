@@ -43,82 +43,82 @@ Feature: A product names the publishers whose inventory it sells
   # applies_to scope applies only to the named properties. An unresolved reference "MUST
   # fail closed" (core/product.json format_options): the product is not offered.
   #
-  # TRANSPORTS. The publisher's file is served through the harness seam and ingested in the
-  # test process on every transport; the buyer reads the result over the transport under
-  # test. On e2e_rest the network fetch cannot be used: the runner's publisher origin has
-  # a port, and a port-qualified publisher_domain is one core/product.json refuses. The
-  # fetch over the network is graded by local-publisher-authorization.feature.
+  # TRANSPORTS. The seller ingests a publisher's file through the operator's admin routes
+  # on the transport under test, and the buyer reads the result over it. On e2e_rest the
+  # live server fetches the file itself, on 443, from the stack's publisher-origin through
+  # tls-proxy; in process the harness serves it where the ingest service calls
+  # fetch_adagents (tests/harness/publisher_authorization.py).
   #
   # Ungraded by the storyboards: no compliance step compares publisher_domain against the
   # seller's authorized properties or a publisher's formats[].
 
   Background:
     Given a tenant is configured for product discovery
-    And the seller is authorized for property "news_home" of publisher "news.example" tagged "premium"
-    And the seller is authorized for property "sports_home" of publisher "sports.example" tagged "premium"
-    And the seller is authorized for property "weather_home" of publisher "weather.example" tagged "standard"
+    And the seller is authorized for property "news_home" of publisher "news-psatest.com" tagged "premium"
+    And the seller is authorized for property "sports_home" of publisher "sports-psatest.com" tagged "premium"
+    And the seller is authorized for property "weather_home" of publisher "weather-psatest.com" tagged "standard"
 
 
   @T-UC-GET-PRODUCTS-publisher-by-tag @publisher_domain_resolution @requires_db
   Scenario: a product selecting by tag names each publisher that carries the tag
     Given the seller offers product "premium" migrated from legacy property tags "premium"
     When the buyer requests products
-    Then product "premium" announces publisher_properties [{"publisher_domain": "news.example", "property_tags": ["premium"], "selection_type": "by_tag"}, {"publisher_domain": "sports.example", "property_tags": ["premium"], "selection_type": "by_tag"}]
+    Then product "premium" announces publisher_properties [{"publisher_domain": "news-psatest.com", "property_tags": ["premium"], "selection_type": "by_tag"}, {"publisher_domain": "sports-psatest.com", "property_tags": ["premium"], "selection_type": "by_tag"}]
 
   @T-UC-GET-PRODUCTS-publisher-all-inventory @publisher_domain_resolution @requires_db
   Scenario: the seller's all_inventory tag names every authorizing publisher
     Given the seller offers product "run_of_network" migrated from legacy property tags "all_inventory"
     When the buyer requests products
-    Then product "run_of_network" announces publisher_properties [{"publisher_domain": "news.example", "selection_type": "all"}, {"publisher_domain": "sports.example", "selection_type": "all"}, {"publisher_domain": "weather.example", "selection_type": "all"}]
+    Then product "run_of_network" announces publisher_properties [{"publisher_domain": "news-psatest.com", "selection_type": "all"}, {"publisher_domain": "sports-psatest.com", "selection_type": "all"}, {"publisher_domain": "weather-psatest.com", "selection_type": "all"}]
 
   @T-UC-GET-PRODUCTS-publisher-default-all @publisher_domain_resolution @requires_db
   Scenario: a product selecting nothing offers every authorizing publisher whole
     Given the seller offers product "everything" migrated from a legacy selection of no properties
     When the buyer requests products
-    Then product "everything" announces publisher_properties [{"publisher_domain": "news.example", "selection_type": "all"}, {"publisher_domain": "sports.example", "selection_type": "all"}, {"publisher_domain": "weather.example", "selection_type": "all"}]
+    Then product "everything" announces publisher_properties [{"publisher_domain": "news-psatest.com", "selection_type": "all"}, {"publisher_domain": "sports-psatest.com", "selection_type": "all"}, {"publisher_domain": "weather-psatest.com", "selection_type": "all"}]
 
   @T-UC-GET-PRODUCTS-publisher-unbacked @publisher_domain_resolution @requires_db
   Scenario: a product no authorized property backs is not offered
     Given the seller offers product "premium" migrated from legacy property tags "premium"
-    And the seller offers product "orphan" naming publisher_properties [{"publisher_domain": "podcast.example", "property_tags": ["podcast"], "selection_type": "by_tag"}]
+    And the seller offers product "orphan" naming publisher_properties [{"publisher_domain": "podcast-psatest.com", "property_tags": ["podcast"], "selection_type": "by_tag"}]
     When the buyer requests products
     Then the buyer receives exactly the products "premium"
 
   @T-UC-GET-PRODUCTS-publisher-listed-not-named @publisher_domain_resolution @requires_db
   Scenario: a publisher whose file lists a property without authorizing the seller is not named
-    Given the publisher "podcast.example" lists property "podcast_home" tagged "premium" without authorizing the seller for it
+    Given the publisher "podcast-psatest.com" lists property "podcast_home" tagged "premium" without authorizing the seller for it
     And the seller offers product "premium" migrated from legacy property tags "premium"
     When the buyer requests products
-    Then product "premium" announces publisher_properties [{"publisher_domain": "news.example", "property_tags": ["premium"], "selection_type": "by_tag"}, {"publisher_domain": "sports.example", "property_tags": ["premium"], "selection_type": "by_tag"}]
+    Then product "premium" announces publisher_properties [{"publisher_domain": "news-psatest.com", "property_tags": ["premium"], "selection_type": "by_tag"}, {"publisher_domain": "sports-psatest.com", "property_tags": ["premium"], "selection_type": "by_tag"}]
 
   @T-UC-GET-PRODUCTS-publisher-listed-only @publisher_domain_resolution @requires_db
   Scenario: a product only an unauthorized property backs is not offered
-    Given the publisher "podcast.example" lists property "podcast_home" tagged "podcast" without authorizing the seller for it
+    Given the publisher "podcast-psatest.com" lists property "podcast_home" tagged "podcast" without authorizing the seller for it
     And the seller offers product "premium" migrated from legacy property tags "premium"
-    And the seller offers product "podcast" naming publisher_properties [{"publisher_domain": "podcast.example", "property_tags": ["podcast"], "selection_type": "by_tag"}]
+    And the seller offers product "podcast" naming publisher_properties [{"publisher_domain": "podcast-psatest.com", "property_tags": ["podcast"], "selection_type": "by_tag"}]
     When the buyer requests products
     Then the buyer receives exactly the products "premium"
 
   @T-UC-GET-PRODUCTS-publisher-explicit-unauthorized @publisher_domain_resolution @requires_db
   Scenario: a stored selector naming a publisher that authorizes nothing is dropped
-    Given the seller offers product "mixed" naming publisher_properties [{"publisher_domain": "news.example", "selection_type": "all"}, {"publisher_domain": "stranger.example", "selection_type": "all"}]
-    And the seller offers product "stranger" naming publisher_properties [{"publisher_domain": "stranger.example", "selection_type": "all"}]
+    Given the seller offers product "mixed" naming publisher_properties [{"publisher_domain": "news-psatest.com", "selection_type": "all"}, {"publisher_domain": "stranger-psatest.com", "selection_type": "all"}]
+    And the seller offers product "stranger" naming publisher_properties [{"publisher_domain": "stranger-psatest.com", "selection_type": "all"}]
     When the buyer requests products
     Then the buyer receives exactly the products "mixed"
-    And product "mixed" announces publisher_properties [{"publisher_domain": "news.example", "selection_type": "all"}]
+    And product "mixed" announces publisher_properties [{"publisher_domain": "news-psatest.com", "selection_type": "all"}]
 
   @T-UC-GET-PRODUCTS-publisher-stored-ids-per-property @publisher_domain_resolution @requires_db
   Scenario: a stored by_id selector names only the properties its publisher authorizes
-    Given the publisher "news.example" lists property "news_live" tagged "live" without authorizing the seller for it
-    And the seller offers product "ids" naming publisher_properties [{"publisher_domain": "news.example", "property_ids": ["news_home", "news_live"], "selection_type": "by_id"}]
+    Given the publisher "news-psatest.com" lists property "news_live" tagged "live" without authorizing the seller for it
+    And the seller offers product "ids" naming publisher_properties [{"publisher_domain": "news-psatest.com", "property_ids": ["news_home", "news_live"], "selection_type": "by_id"}]
     When the buyer requests products
-    Then product "ids" announces publisher_properties [{"publisher_domain": "news.example", "property_ids": ["news_home"], "selection_type": "by_id"}]
+    Then product "ids" announces publisher_properties [{"publisher_domain": "news-psatest.com", "property_ids": ["news_home"], "selection_type": "by_id"}]
 
   @T-UC-GET-PRODUCTS-publisher-stored-tag-per-property @publisher_domain_resolution @requires_db
   Scenario: a stored by_tag selector whose tag only an unauthorized property carries is not offered
-    Given the publisher "news.example" lists property "news_live" tagged "live" without authorizing the seller for it
+    Given the publisher "news-psatest.com" lists property "news_live" tagged "live" without authorizing the seller for it
     And the seller offers product "premium" migrated from legacy property tags "premium"
-    And the seller offers product "live" naming publisher_properties [{"publisher_domain": "news.example", "property_tags": ["live"], "selection_type": "by_tag"}]
+    And the seller offers product "live" naming publisher_properties [{"publisher_domain": "news-psatest.com", "property_tags": ["live"], "selection_type": "by_tag"}]
     When the buyer requests products
     Then the buyer receives exactly the products "premium"
 
@@ -135,33 +135,33 @@ Feature: A product names the publishers whose inventory it sells
     Given the operator saves inventory profile "home_pages" selecting properties "news_home, weather_home"
     And product "home_package" linked to that inventory profile with pricing
     When the buyer requests products
-    Then product "home_package" announces publisher_properties [{"publisher_domain": "news.example", "property_ids": ["news_home"], "selection_type": "by_id"}, {"publisher_domain": "weather.example", "property_ids": ["weather_home"], "selection_type": "by_id"}]
+    Then product "home_package" announces publisher_properties [{"publisher_domain": "news-psatest.com", "property_ids": ["news_home"], "selection_type": "by_id"}, {"publisher_domain": "weather-psatest.com", "property_ids": ["weather_home"], "selection_type": "by_id"}]
 
   @T-UC-GET-PRODUCTS-publisher-all-inventory-stored @publisher_domain_resolution @requires_db
   Scenario: a stored by_tag selector of the seller's all_inventory tag names its publisher whole
-    Given the seller offers product "stored_whole" naming publisher_properties [{"publisher_domain": "news.example", "property_tags": ["all_inventory"], "selection_type": "by_tag"}]
+    Given the seller offers product "stored_whole" naming publisher_properties [{"publisher_domain": "news-psatest.com", "property_tags": ["all_inventory"], "selection_type": "by_tag"}]
     When the buyer requests products
-    Then product "stored_whole" announces publisher_properties [{"publisher_domain": "news.example", "selection_type": "all"}]
+    Then product "stored_whole" announces publisher_properties [{"publisher_domain": "news-psatest.com", "selection_type": "all"}]
 
   @T-UC-GET-PRODUCTS-publisher-canonical-domain @publisher_domain_resolution @requires_db
   Scenario: a publisher given in another spelling is held and named by its host
-    Given the seller is authorized for property "mixed_case_home" of publisher "Mixed.Example.com" tagged "cased"
-    And the seller is authorized for property "dotted_home" of publisher "https://Dotted.Example.com./" tagged "cased"
+    Given the seller is authorized for property "mixed_case_home" of publisher "Mixed.Psatest.com" tagged "cased"
+    And the seller is authorized for property "dotted_home" of publisher "https://Dotted.Psatest.com./" tagged "cased"
     And the seller offers product "cased" migrated from legacy property tags "cased"
-    And the seller offers product "stored_cased" naming publisher_properties [{"publisher_domain": "Mixed.Example.com", "selection_type": "all"}]
+    And the seller offers product "stored_cased" naming publisher_properties [{"publisher_domain": "Mixed.Psatest.com", "selection_type": "all"}]
     When the buyer requests products
-    Then product "cased" announces publisher_properties [{"publisher_domain": "dotted.example.com", "property_tags": ["cased"], "selection_type": "by_tag"}, {"publisher_domain": "mixed.example.com", "property_tags": ["cased"], "selection_type": "by_tag"}]
-    And product "stored_cased" announces publisher_properties [{"publisher_domain": "mixed.example.com", "selection_type": "all"}]
+    Then product "cased" announces publisher_properties [{"publisher_domain": "dotted.psatest.com", "property_tags": ["cased"], "selection_type": "by_tag"}, {"publisher_domain": "mixed.psatest.com", "property_tags": ["cased"], "selection_type": "by_tag"}]
+    And product "stored_cased" announces publisher_properties [{"publisher_domain": "mixed.psatest.com", "selection_type": "all"}]
 
   @T-UC-GET-PRODUCTS-publisher-rejected-domain @publisher_domain_resolution @requires_db
   Scenario: an authorizing publisher no canonical spelling can name costs that publisher, not the catalog
-    Given the seller is authorized for property "ported_home" of publisher "news.example:8443" tagged "premium"
-    And the seller is authorized for property "only_ported_home" of publisher "other.example:8443" tagged "ported"
+    Given the seller is authorized for property "ported_home" of publisher "news-psatest.com:8443" tagged "premium"
+    And the seller is authorized for property "only_ported_home" of publisher "other-psatest.com:8443" tagged "ported"
     And the seller offers product "premium" migrated from legacy property tags "premium"
     And the seller offers product "ported" migrated from legacy property tags "ported"
     When the buyer requests products
     Then the buyer receives exactly the products "premium"
-    And product "premium" announces publisher_properties [{"publisher_domain": "news.example", "property_tags": ["premium"], "selection_type": "by_tag"}, {"publisher_domain": "sports.example", "property_tags": ["premium"], "selection_type": "by_tag"}]
+    And product "premium" announces publisher_properties [{"publisher_domain": "news-psatest.com", "property_tags": ["premium"], "selection_type": "by_tag"}, {"publisher_domain": "sports-psatest.com", "property_tags": ["premium"], "selection_type": "by_tag"}]
 
   # ── Authorization by entry, read from the file ───────────────────────────
   #
@@ -172,26 +172,26 @@ Feature: A product names the publishers whose inventory it sells
 
   @T-UC-GET-PRODUCTS-publisher-file-authorizes @publisher_domain_resolution @requires_db
   Scenario Outline: the publisher's file authorizes this agent through each entry variant
-    Given the publisher "radio.example" lists property "radio_home" tagged "audio" in its adagents.json
+    Given the publisher "radio-psatest.com" lists property "radio_home" tagged "audio" in its adagents.json
     And <entry>
-    And the seller ingested the adagents.json of "radio.example"
-    And the seller offers product "radio" naming publisher_properties [{"publisher_domain": "radio.example", "selection_type": "all"}]
+    And the seller ingested the adagents.json of "radio-psatest.com"
+    And the seller offers product "radio" naming publisher_properties [{"publisher_domain": "radio-psatest.com", "selection_type": "all"}]
     When the buyer requests products
-    Then product "radio" announces publisher_properties [{"publisher_domain": "radio.example", "selection_type": "all"}]
+    Then product "radio" announces publisher_properties [{"publisher_domain": "radio-psatest.com", "selection_type": "all"}]
 
     Examples:
       | variant           | entry                                                                              |
-      | property_ids      | the publisher "radio.example" authorizes this agent for properties "radio_home"   |
-      | property_tags     | the publisher "radio.example" authorizes this agent for properties tagged "audio" |
-      | inline_properties | the publisher "radio.example" authorizes this agent for an inline property "radio_inline" |
+      | property_ids      | the publisher "radio-psatest.com" authorizes this agent for properties "radio_home"   |
+      | property_tags     | the publisher "radio-psatest.com" authorizes this agent for properties tagged "audio" |
+      | inline_properties | the publisher "radio-psatest.com" authorizes this agent for an inline property "radio_inline" |
 
   @T-UC-GET-PRODUCTS-publisher-other-agent @publisher_domain_resolution @requires_db
   Scenario: an entry naming another agent authorizes nothing for this one
-    Given the publisher "radio.example" lists property "radio_home" tagged "audio" in its adagents.json
-    And the publisher "radio.example" authorizes "https://other-seller.example.com/mcp" for property "radio_home"
-    And the seller ingested the adagents.json of "radio.example"
+    Given the publisher "radio-psatest.com" lists property "radio_home" tagged "audio" in its adagents.json
+    And the publisher "radio-psatest.com" authorizes "https://other-seller.example.com/mcp" for property "radio_home"
+    And the seller ingested the adagents.json of "radio-psatest.com"
     And the seller offers product "premium" migrated from legacy property tags "premium"
-    And the seller offers product "radio" naming publisher_properties [{"publisher_domain": "radio.example", "selection_type": "all"}]
+    And the seller offers product "radio" naming publisher_properties [{"publisher_domain": "radio-psatest.com", "selection_type": "all"}]
     When the buyer requests products
     Then the buyer receives exactly the products "premium"
 
@@ -199,12 +199,12 @@ Feature: A product names the publishers whose inventory it sells
   # product: the selection is narrowed to what the file authorizes.
   @T-UC-GET-PRODUCTS-publisher-entry-scope @publisher_domain_resolution @requires_db
   Scenario: an entry scoped to another property authorizes nothing for the product's selection
-    Given the publisher "radio.example" lists property "radio_home" tagged "audio" in its adagents.json
-    And the publisher "radio.example" lists property "radio_live" tagged "live" in its adagents.json
-    And the publisher "radio.example" authorizes this agent for properties "radio_home"
-    And the seller ingested the adagents.json of "radio.example"
+    Given the publisher "radio-psatest.com" lists property "radio_home" tagged "audio" in its adagents.json
+    And the publisher "radio-psatest.com" lists property "radio_live" tagged "live" in its adagents.json
+    And the publisher "radio-psatest.com" authorizes this agent for properties "radio_home"
+    And the seller ingested the adagents.json of "radio-psatest.com"
     And the seller offers product "premium" migrated from legacy property tags "premium"
-    And the seller offers product "live" naming publisher_properties [{"publisher_domain": "radio.example", "property_ids": ["radio_live"], "selection_type": "by_id"}]
+    And the seller offers product "live" naming publisher_properties [{"publisher_domain": "radio-psatest.com", "property_ids": ["radio_live"], "selection_type": "by_id"}]
     When the buyer requests products
     Then the buyer receives exactly the products "premium"
 
@@ -212,11 +212,11 @@ Feature: A product names the publishers whose inventory it sells
   # nothing (adagents.json authorized_agents[] effective_from / effective_until).
   @T-UC-GET-PRODUCTS-publisher-entry-expired @publisher_domain_resolution @requires_db
   Scenario: an entry whose effective_until has passed authorizes nothing
-    Given the publisher "radio.example" lists property "radio_home" tagged "audio" in its adagents.json
-    And the publisher "radio.example" authorized this agent for property "radio_home" until 2 hours ago
-    And the seller ingested the adagents.json of "radio.example"
+    Given the publisher "radio-psatest.com" lists property "radio_home" tagged "audio" in its adagents.json
+    And the publisher "radio-psatest.com" authorized this agent for property "radio_home" until 2 hours ago
+    And the seller ingested the adagents.json of "radio-psatest.com"
     And the seller offers product "premium" migrated from legacy property tags "premium"
-    And the seller offers product "radio" naming publisher_properties [{"publisher_domain": "radio.example", "selection_type": "all"}]
+    And the seller offers product "radio" naming publisher_properties [{"publisher_domain": "radio-psatest.com", "selection_type": "all"}]
     When the buyer requests products
     Then the buyer receives exactly the products "premium"
 
@@ -224,13 +224,13 @@ Feature: A product names the publishers whose inventory it sells
 
   @T-UC-GET-PRODUCTS-publisher-drops-property @publisher_domain_resolution @requires_db
   Scenario: a property the publisher stops listing leaves the selection on refresh
-    Given the seller is authorized for property "news_live" of publisher "news.example" tagged "live"
-    And the seller offers product "ids" naming publisher_properties [{"publisher_domain": "news.example", "property_ids": ["news_home", "news_live"], "selection_type": "by_id"}]
-    And the seller offers product "live" naming publisher_properties [{"publisher_domain": "news.example", "property_ids": ["news_live"], "selection_type": "by_id"}]
-    And the publisher "news.example" stops listing property "news_live"
-    When the seller refreshes the adagents.json of "news.example"
+    Given the seller is authorized for property "news_live" of publisher "news-psatest.com" tagged "live"
+    And the seller offers product "ids" naming publisher_properties [{"publisher_domain": "news-psatest.com", "property_ids": ["news_home", "news_live"], "selection_type": "by_id"}]
+    And the seller offers product "live" naming publisher_properties [{"publisher_domain": "news-psatest.com", "property_ids": ["news_live"], "selection_type": "by_id"}]
+    And the publisher "news-psatest.com" stops listing property "news_live"
+    When the seller refreshes the adagents.json of "news-psatest.com"
     And the buyer requests products
-    Then product "ids" announces publisher_properties [{"publisher_domain": "news.example", "property_ids": ["news_home"], "selection_type": "by_id"}]
+    Then product "ids" announces publisher_properties [{"publisher_domain": "news-psatest.com", "property_ids": ["news_home"], "selection_type": "by_id"}]
     And the buyer receives exactly the products "ids"
 
   # A failed fetch (404, 5xx) keeps the stored document and does not move the last
@@ -238,14 +238,14 @@ Feature: A product names the publishers whose inventory it sells
   # 24 hours pass it is not -- the failed fetch in between extended nothing.
   @T-UC-GET-PRODUCTS-publisher-fetch-fails @publisher_domain_resolution @requires_db
   Scenario Outline: a failed refresh keeps the stored file for 24 hours after the last successful fetch
-    Given the seller offers product "news" naming publisher_properties [{"publisher_domain": "news.example", "selection_type": "all"}]
-    And the seller's last successful fetch of "news.example" was 23 hours ago
-    And the publisher "news.example" now answers <status>
-    When the seller refreshes the adagents.json of "news.example"
+    Given the seller offers product "news" naming publisher_properties [{"publisher_domain": "news-psatest.com", "selection_type": "all"}]
+    And the seller's last successful fetch of "news-psatest.com" was 23 hours ago
+    And the publisher "news-psatest.com" now answers <status>
+    When the seller refreshes the adagents.json of "news-psatest.com"
     And the buyer requests products
-    Then product "news" announces publisher_properties [{"publisher_domain": "news.example", "selection_type": "all"}]
-    And the seller kept the adagents.json of "news.example" it stored before, recording "<recorded>"
-    Given the seller's last successful fetch of "news.example" was 25 hours ago
+    Then product "news" announces publisher_properties [{"publisher_domain": "news-psatest.com", "selection_type": "all"}]
+    And the seller kept the adagents.json of "news-psatest.com" it stored before, recording "<recorded>"
+    Given the seller's last successful fetch of "news-psatest.com" was 25 hours ago
     When the buyer requests products
     Then the buyer receives no products
 
@@ -256,26 +256,26 @@ Feature: A product names the publishers whose inventory it sells
 
   @T-UC-GET-PRODUCTS-publisher-stale-last-updated @publisher_domain_resolution @requires_db
   Scenario: a file dated before the stored one is refused and the stored one kept
-    Given the publisher "radio.example" lists property "radio_home" tagged "audio" in its adagents.json
-    And the publisher "radio.example" authorizes this agent for properties "radio_home"
-    And the publisher "radio.example" dates its adagents.json "2026-06-01T00:00:00Z"
-    And the seller ingested the adagents.json of "radio.example"
-    And the seller offers product "radio" naming publisher_properties [{"publisher_domain": "radio.example", "selection_type": "all"}]
-    And the publisher "radio.example" stops listing property "radio_home"
-    And the publisher "radio.example" dates its adagents.json "2026-05-01T00:00:00Z"
-    When the seller refreshes the adagents.json of "radio.example"
+    Given the publisher "radio-psatest.com" lists property "radio_home" tagged "audio" in its adagents.json
+    And the publisher "radio-psatest.com" authorizes this agent for properties "radio_home"
+    And the publisher "radio-psatest.com" dates its adagents.json "2026-06-01T00:00:00Z"
+    And the seller ingested the adagents.json of "radio-psatest.com"
+    And the seller offers product "radio" naming publisher_properties [{"publisher_domain": "radio-psatest.com", "selection_type": "all"}]
+    And the publisher "radio-psatest.com" stops listing property "radio_home"
+    And the publisher "radio-psatest.com" dates its adagents.json "2026-05-01T00:00:00Z"
+    When the seller refreshes the adagents.json of "radio-psatest.com"
     And the buyer requests products
-    Then product "radio" announces publisher_properties [{"publisher_domain": "radio.example", "selection_type": "all"}]
-    And the seller kept the adagents.json of "radio.example" it stored before, recording "invalid"
+    Then product "radio" announces publisher_properties [{"publisher_domain": "radio-psatest.com", "selection_type": "all"}]
+    And the seller kept the adagents.json of "radio-psatest.com" it stored before, recording "invalid"
 
   # revoked_publisher_domains: validators "MUST treat any publisher domain listed here as
   # no-longer-authorized" (adagents.json :106).
   @T-UC-GET-PRODUCTS-publisher-revoked @publisher_domain_resolution @requires_db
   Scenario: a publisher whose file revokes its own domain is not offered
-    Given the seller offers product "news" naming publisher_properties [{"publisher_domain": "news.example", "selection_type": "all"}]
-    And the seller offers product "sports" naming publisher_properties [{"publisher_domain": "sports.example", "selection_type": "all"}]
-    And the publisher "news.example" lists its own domain in revoked_publisher_domains
-    When the seller refreshes the adagents.json of "news.example"
+    Given the seller offers product "news" naming publisher_properties [{"publisher_domain": "news-psatest.com", "selection_type": "all"}]
+    And the seller offers product "sports" naming publisher_properties [{"publisher_domain": "sports-psatest.com", "selection_type": "all"}]
+    And the publisher "news-psatest.com" lists its own domain in revoked_publisher_domains
+    When the seller refreshes the adagents.json of "news-psatest.com"
     And the buyer requests products
     Then the buyer receives exactly the products "sports"
 
@@ -284,39 +284,39 @@ Feature: A product names the publishers whose inventory it sells
   # (adagents.json :245). So nothing is authorized, and the formats[] catalog is stored.
   @T-UC-GET-PRODUCTS-publisher-no-agents @publisher_domain_resolution @requires_db
   Scenario: a file authorizing no agent offers nothing and its format catalog is still stored
-    Given the seller offers product "news" naming publisher_properties [{"publisher_domain": "news.example", "selection_type": "all"}]
-    And the seller offers product "sports" naming publisher_properties [{"publisher_domain": "sports.example", "selection_type": "all"}]
-    And the publisher "news.example" authorizes no agent in its adagents.json
-    And the publisher "news.example" declares format option {"format_option_id": "news_mrec", "format_kind": "image", "params": {"width": 300, "height": 250}} in its adagents.json
-    When the seller refreshes the adagents.json of "news.example"
+    Given the seller offers product "news" naming publisher_properties [{"publisher_domain": "news-psatest.com", "selection_type": "all"}]
+    And the seller offers product "sports" naming publisher_properties [{"publisher_domain": "sports-psatest.com", "selection_type": "all"}]
+    And the publisher "news-psatest.com" authorizes no agent in its adagents.json
+    And the publisher "news-psatest.com" declares format option {"format_option_id": "news_mrec", "format_kind": "image", "params": {"width": 300, "height": 250}} in its adagents.json
+    When the seller refreshes the adagents.json of "news-psatest.com"
     And the buyer requests products
     Then the buyer receives exactly the products "sports"
-    And the seller stored format options "news_mrec" of "news.example"
+    And the seller stored format options "news_mrec" of "news-psatest.com"
 
   # ── Format options from the publisher's catalog ───────────────────────────
 
   @T-UC-GET-PRODUCTS-format-option-resolved @publisher_domain_resolution @requires_db
   Scenario: a product referencing a publisher's format option is served the publisher's declaration
-    Given the publisher "news.example" declares format option {"format_option_id": "news_mrec", "format_kind": "image", "params": {"width": 300, "height": 250}} in its adagents.json
-    And the seller ingested the adagents.json of "news.example"
-    And the seller offers product "news" selling publisher "news.example" whole with format option "news_mrec" of "news.example"
+    Given the publisher "news-psatest.com" declares format option {"format_option_id": "news_mrec", "format_kind": "image", "params": {"width": 300, "height": 250}} in its adagents.json
+    And the seller ingested the adagents.json of "news-psatest.com"
+    And the seller offers product "news" selling publisher "news-psatest.com" whole with format option "news_mrec" of "news-psatest.com"
     When the buyer requests products
-    Then product "news" announces format_options [{"format_kind": "image", "format_option_id": "news_mrec", "publisher_domain": "news.example", "params": {"width": 300, "height": 250}}]
+    Then product "news" announces format_options [{"format_kind": "image", "format_option_id": "news_mrec", "publisher_domain": "news-psatest.com", "params": {"width": 300, "height": 250}}]
 
   @T-UC-GET-PRODUCTS-format-option-changed @publisher_domain_resolution @requires_db
   Scenario: a publisher that changes its option's params is served the new params after a refresh
-    Given the publisher "news.example" declares format option {"format_option_id": "news_mrec", "format_kind": "image", "params": {"width": 300, "height": 250}} in its adagents.json
-    And the seller ingested the adagents.json of "news.example"
-    And the seller offers product "news" selling publisher "news.example" whole with format option "news_mrec" of "news.example"
-    And the publisher "news.example" declares format option {"format_option_id": "news_mrec", "format_kind": "image", "params": {"width": 320, "height": 50}} in its adagents.json
-    When the seller refreshes the adagents.json of "news.example"
+    Given the publisher "news-psatest.com" declares format option {"format_option_id": "news_mrec", "format_kind": "image", "params": {"width": 300, "height": 250}} in its adagents.json
+    And the seller ingested the adagents.json of "news-psatest.com"
+    And the seller offers product "news" selling publisher "news-psatest.com" whole with format option "news_mrec" of "news-psatest.com"
+    And the publisher "news-psatest.com" declares format option {"format_option_id": "news_mrec", "format_kind": "image", "params": {"width": 320, "height": 50}} in its adagents.json
+    When the seller refreshes the adagents.json of "news-psatest.com"
     And the buyer requests products
-    Then product "news" announces format_options [{"format_kind": "image", "format_option_id": "news_mrec", "publisher_domain": "news.example", "params": {"width": 320, "height": 50}}]
+    Then product "news" announces format_options [{"format_kind": "image", "format_option_id": "news_mrec", "publisher_domain": "news-psatest.com", "params": {"width": 320, "height": 50}}]
 
   @T-UC-GET-PRODUCTS-format-option-missing @publisher_domain_resolution @requires_db
   Scenario: a product referencing an option missing from the publisher's formats is not offered
     Given the seller offers product "premium" migrated from legacy property tags "premium"
-    And the seller offers product "news" selling publisher "news.example" whole with format option "news_mrec" of "news.example"
+    And the seller offers product "news" selling publisher "news-psatest.com" whole with format option "news_mrec" of "news-psatest.com"
     When the buyer requests products
     Then the buyer receives exactly the products "premium"
 
@@ -324,11 +324,11 @@ Feature: A product names the publishers whose inventory it sells
   # file's properties (adagents.json formats :164, :170); the product sells none of them.
   @T-UC-GET-PRODUCTS-format-option-out-of-scope @publisher_domain_resolution @requires_db
   Scenario: a product whose properties the option's scope excludes is not offered
-    Given the seller is authorized for property "news_live" of publisher "news.example" tagged "live"
-    And the publisher "news.example" declares format option {"format_option_id": "live_banner", "format_kind": "image", "params": {"width": 728, "height": 90}, "applies_to_property_ids": ["news_live"]} in its adagents.json
-    And the seller ingested the adagents.json of "news.example"
+    Given the seller is authorized for property "news_live" of publisher "news-psatest.com" tagged "live"
+    And the publisher "news-psatest.com" declares format option {"format_option_id": "live_banner", "format_kind": "image", "params": {"width": 728, "height": 90}, "applies_to_property_ids": ["news_live"]} in its adagents.json
+    And the seller ingested the adagents.json of "news-psatest.com"
     And the seller offers product "premium" migrated from legacy property tags "premium"
-    And the seller offers product "home" selling property "news_home" of publisher "news.example" with format option "live_banner" of "news.example"
+    And the seller offers product "home" selling property "news_home" of publisher "news-psatest.com" with format option "live_banner" of "news-psatest.com"
     When the buyer requests products
     Then the buyer receives exactly the products "premium"
 
@@ -337,7 +337,7 @@ Feature: A product names the publishers whose inventory it sells
   # so an option under it resolves nowhere and the product is not offered.
   @T-UC-GET-PRODUCTS-format-option-agent-host @publisher_domain_resolution @requires_db
   Scenario: a product whose format option names the seller's own host as publisher is not offered
-    Given the seller offers product "news" naming publisher_properties [{"publisher_domain": "news.example", "selection_type": "all"}]
+    Given the seller offers product "news" naming publisher_properties [{"publisher_domain": "news-psatest.com", "selection_type": "all"}]
     And the tenant also holds product "host_option" declaring format option "homepage_mrec" under the seller's own host
     When the buyer requests products
     Then no product announces the seller's own host as a format option's publisher_domain

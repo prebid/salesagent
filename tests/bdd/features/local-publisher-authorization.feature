@@ -43,8 +43,8 @@
 # BOTH ADMIN TRANSPORTS. admin_integration drives the routes in process, where the one
 # replaced piece is the publisher's origin (the SDK refuses to dial a private address,
 # and an in-process origin has nothing else). e2e_admin drives them on the live stack,
-# whose server dials a real TLS origin the runner serves on the stack's non-private
-# subnet.
+# whose server fetches the file itself, on 443, from the stack's publisher-origin through
+# tls-proxy (tests/harness/publisher_authorization.py).
 #
 # SPELLINGS. "{origin}" is the tenant's agent_url, "{ORIGIN}" the same string upper-cased,
 # "{host}" its host alone.
@@ -53,14 +53,14 @@
 Feature: A publisher's adagents.json authorizes this agent by its origin or an endpoint it serves
 
   Background:
-    Given the publisher "pub.example" lists property "front_page" named "Front page" in its adagents.json
+    Given the publisher "pub-psatest.com" lists property "front_page" named "Front page" in its adagents.json
 
   @T-ADMIN-PUBAUTH-add
   Scenario Outline: Adding a publisher ingests its entry for this agent
-    Given the publisher "pub.example" authorizes "<entry>" for property "front_page"
-    When the operator adds the publisher "pub.example"
-    Then the seller stored the adagents.json of "pub.example"
-    And the seller holds <properties> from "pub.example"
+    Given the publisher "pub-psatest.com" authorizes "<entry>" for property "front_page"
+    When the operator adds the publisher "pub-psatest.com"
+    Then the seller stored the adagents.json of "pub-psatest.com"
+    And the seller holds <properties> from "pub-psatest.com"
 
     # The origin and the two published endpoints, plus the three equivalences
     # core/authorized-agent-base.json names: empty path renders as "/" (step 5), host
@@ -93,11 +93,11 @@ Feature: A publisher's adagents.json authorizes this agent by its origin or an e
   @T-ADMIN-PUBAUTH-sync
   Scenario Outline: Syncing publishers ingests each publisher's entry for this agent
     Given the tenant runs the "google_ad_manager" ad server
-    And the tenant has unverified publisher partnerships with domains "pub.example"
-    And the publisher "pub.example" authorizes "<entry>" for property "front_page"
+    And the tenant has unverified publisher partnerships with domains "pub-psatest.com"
+    And the publisher "pub-psatest.com" authorizes "<entry>" for property "front_page"
     When the operator syncs publisher partners
-    Then the seller stored the adagents.json of "pub.example"
-    And the seller holds <properties> from "pub.example"
+    Then the seller stored the adagents.json of "pub-psatest.com"
+    And the seller holds <properties> from "pub-psatest.com"
 
     Examples:
       | entry                                | properties              |
@@ -111,10 +111,10 @@ Feature: A publisher's adagents.json authorizes this agent by its origin or an e
   # 404 by the time the operator opens it.
   @T-ADMIN-PUBAUTH-view
   Scenario Outline: The publisher's properties view reads the stored entry for this agent
-    Given the publisher "pub.example" authorizes "<entry>" for property "front_page"
-    And the operator added the publisher "pub.example"
-    And the publisher "pub.example" now answers 404
-    When the operator opens the properties of the partnership with "pub.example"
+    Given the publisher "pub-psatest.com" authorizes "<entry>" for property "front_page"
+    And the operator added the publisher "pub-psatest.com"
+    And the publisher "pub-psatest.com" now answers 404
+    When the operator opens the properties of the partnership with "pub-psatest.com"
     Then the view reports this agent <view>
 
     Examples:

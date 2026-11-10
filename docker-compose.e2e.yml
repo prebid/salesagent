@@ -436,6 +436,7 @@ services:
       - creative-agent
       - webhook-capture
       - counterparty-origin
+      - publisher-origin
     networks:
       default:
         # Dotted aliases are the whole mechanism for the SHARED stack — one per
@@ -498,6 +499,28 @@ services:
           # front that is not probed is a front whose failure arrives as someone else's
           # mystery.
           - storyboard.adcp.test
+          # The test publishers (salesagent-ts3gk.9): the domains the SERVER fetches a
+          # publisher's adagents.json at on e2e, spelled as the scenarios name them, each
+          # routed by the $ssl_server_name map to publisher-origin. A publisher domain
+          # carries no port, so the front answers on 443 as well as 8443.
+          - psatest.com
+          - news.psatest.com
+          - dotted.psatest.com
+          - mixed.psatest.com
+          - news-psatest.com
+          - radio-psatest.com
+          - podcast-psatest.com
+          - sports-psatest.com
+          - weather-psatest.com
+          - pub-psatest.com
+          - partner-psatest.com
+          - other-psatest.com
+          - stranger-psatest.com
+          - other-publisher-psatest.com
+          - unverified-psatest.com
+          - pending-psatest.com
+          - failed-psatest.com
+          - unbacked-publisher-psatest.com
     # One curl per alias the front carries: each proves the handshake succeeds
     # for that NAME (i.e. the leaf's SANs really cover it, the failure mode a
     # single-name check misses), and the creative-agent row additionally proves
@@ -517,12 +540,16 @@ services:
     # nothing about the upstream and everything about the NAME: that the leaf's
     # *.adcp-e2e.dev SAN covers it and the SNI map routes it. Without the row, a missing
     # alias or map line surfaces as one e2e test failing to connect.
+    #
+    # news-psatest.com stands for the test publishers: it proves the 443 listener and the
+    # publisher-origin route. The other publisher names share both, and the alias / map row /
+    # SAN guard (tests/unit/test_architecture_e2e_origin_services_start.py) holds each name.
 
     healthcheck:
       test:
         [
           "CMD-SHELL",
-          "curl -fsS --cacert /app/.test-tls/ca.pem https://proxy.adcp.test:8443/health && curl -fsS --cacert /app/.test-tls/ca.pem https://creative-agent.adcp.test:8443/api/creative-agent/health && curl -fsS --cacert /app/.test-tls/ca.pem https://webhooks.adcp.test:8443/health && curl -fsS --cacert /app/.test-tls/ca.pem https://webhooks.adcp-e2e.dev:8443/health && curl -fsS --cacert /app/.test-tls/ca.pem https://counterparty.adcp-e2e.dev:8443/health && curl -fsS --cacert /app/.test-tls/ca.pem https://storyboard.adcp.test:8443/health && curl -fsS --cacert /app/.test-tls/ca.pem https://seller.adcp-e2e.dev:8443/health",
+          "curl -fsS --cacert /app/.test-tls/ca.pem https://proxy.adcp.test:8443/health && curl -fsS --cacert /app/.test-tls/ca.pem https://creative-agent.adcp.test:8443/api/creative-agent/health && curl -fsS --cacert /app/.test-tls/ca.pem https://webhooks.adcp.test:8443/health && curl -fsS --cacert /app/.test-tls/ca.pem https://webhooks.adcp-e2e.dev:8443/health && curl -fsS --cacert /app/.test-tls/ca.pem https://counterparty.adcp-e2e.dev:8443/health && curl -fsS --cacert /app/.test-tls/ca.pem https://storyboard.adcp.test:8443/health && curl -fsS --cacert /app/.test-tls/ca.pem https://seller.adcp-e2e.dev:8443/health && curl -fsS --cacert /app/.test-tls/ca.pem https://news-psatest.com/health",
         ]
       interval: 10s
       timeout: 5s
@@ -675,6 +702,11 @@ services:
       BDD_E2E_ENABLED: "${BDD_E2E_ENABLED:-true}"
       E2E_BASE_URL: http://proxy:8000
       E2E_POSTGRES_URL: postgresql://adcp_user:secure_password_change_me@postgres:5432/adcp?sslmode=disable
+      # The container behind E2E_BASE_URL that serves the requests and dials outbound
+      # (proxy:8000 forwards to it). A test publisher's file is served for that server's
+      # address alone (tests/harness/publisher_authorization.py). Per-worker runs name
+      # <project>-server-gwN instead (tests/bdd/conftest.py e2e_stack).
+      E2E_SERVER_HOST: adcp-server
       # The TLS listener is ADDITIVE: E2E_BASE_URL above keeps its plaintext
       # value (487 bdd_e2e + 95 e2e tests target it), and these two name the
       # SECOND origin for the scenarios that need a real handshake. The CA path
@@ -825,20 +857,6 @@ services:
     # the race. (Host runs use localhost, so they never hit DNS at all.)
     dns_opt:
       - single-request-reopen
-    # This runner reaches every other service it needs (postgres, proxy,
-    # webhook-capture) by plain service name, same as postgres:5432 above. The
-    # one alias below is for the opposite direction: a publisher's adagents.json
-    # that a scenario serves from THIS container, which the live server fetches
-    # at publisher.adcp-e2e.dev:<the origin's own port>
-    # (tests/harness/publisher_authorization.py PUBLISHER_ORIGIN_HOST -- change
-    # the two together). The origin terminates TLS itself with the shared leaf,
-    # whose *.adcp-e2e.dev SAN covers the name, and this container's address is
-    # on the non-private subnet below, so the SDK's pinned dialer accepts it on
-    # its own terms. `dc run --use-aliases` (run_all_tests.sh) applies it.
-    networks:
-      default:
-        aliases:
-          - publisher.adcp-e2e.dev
     volumes:
       - .:/app
       # Restored with the removal of the `user:` pin above (Aug 2026), matching
@@ -960,6 +978,22 @@ services:
   # cannot stand in as the counterparty: /mcp is the seller's own tool surface,
   # /a2a is JSON-RPC with an agent card, and the listed/unlisted pair this origin
   # publishes needs an origin of its own to mean anything.
+  # The test publishers whose adagents.json the live server fetches. One stock nginx
+  # serving a directory the BDD runner writes, keyed by the dialing server's address and
+  # the Host it asked for (config/nginx/publisher-origin.conf). It is reached only through
+  # tls-proxy, whose $ssl_server_name map routes each test publisher's domain here; a
+  # publisher domain carries no port, so the SDK's fetch dials the front on 443.
+  publisher-origin:
+    image: nginx:stable
+    volumes:
+      - ./config/nginx/publisher-origin.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./.test-publishers:/srv/publishers:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   counterparty-origin:
     image: python:3.12-slim
     working_dir: /app

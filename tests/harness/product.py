@@ -60,8 +60,9 @@ class ProductEnv(PublisherAdagentsMixin, AdminOperatorMixin, DatabaseFaultMixin,
     """Integration test environment for _get_products_impl.
 
     A property is authorized only by a publisher's stored adagents.json: a scenario writes
-    what each publisher serves and the seller ingests it in this process on every transport
-    (``PublisherAdagentsMixin.ingest_in_runner``), into the database the buyer's transport reads.
+    what each publisher serves and the seller ingests it through the operator's admin routes
+    on the env's own transport -- on e2e the live server fetches the file itself
+    (``PublisherAdagentsMixin``).
 
     Only mocks external services (policy, dynamic variants,
     AI ranking, property list resolution). Everything else is real:
@@ -79,8 +80,6 @@ class ProductEnv(PublisherAdagentsMixin, AdminOperatorMixin, DatabaseFaultMixin,
         set_ranking_disabled()           -- disable AI ranking
         call_impl(brief, **kw)           -- call _get_products_impl
     """
-
-    ingest_in_runner = True
 
     # Dispatch declaration: the base owns call_mcp/call_a2a.
     MCP_TOOL = "get_products"
