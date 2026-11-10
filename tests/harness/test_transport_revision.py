@@ -6,7 +6,8 @@ import httpx
 import pytest
 
 from tests.harness import _base
-from tests.harness.transport import E2EConfig, TransportResult
+from tests.harness.transport import E2EConfig
+from tests.harness.wire_fixtures import wire_error_result
 
 
 @pytest.mark.parametrize("sse", [False, True])
@@ -86,19 +87,21 @@ def test_worker_stack_keeps_tls_and_uses_own_database(no_stack, monkeypatch):
 @pytest.mark.parametrize("status,header", [(200, "Bearer"), (401, None), (401, 'Signature error="wrong"')])
 def test_auth_challenge_rejects_missing_or_wrong_wire_evidence(status, header):
     response = httpx.Response(status, headers={} if header is None else {"WWW-Authenticate": header})
-    result = TransportResult(has_wire=True, error=RuntimeError("refused"), raw_response=response)
+    result = wire_error_result(
+        {"errors": [{"code": "AUTH_MISSING"}]}, error=RuntimeError("refused"), raw_response=response
+    )
     with pytest.raises(AssertionError):
         result.assert_auth_challenge("AUTH_MISSING")
 
 
 def test_auth_challenge_requires_an_http_response():
     with pytest.raises(AssertionError, match="HTTP response"):
-        TransportResult(has_wire=False, error=RuntimeError("no wire")).assert_auth_challenge("AUTH_MISSING")
+        wire_error_result(None, error=RuntimeError("no wire")).assert_auth_challenge("AUTH_MISSING")
 
 
 def test_auth_challenge_accepts_observed_bearer_refusal():
-    result = TransportResult(
-        has_wire=True,
+    result = wire_error_result(
+        {"errors": [{"code": "AUTH_MISSING"}]},
         error=RuntimeError("refused"),
         raw_response=httpx.Response(401, headers={"WWW-Authenticate": "Bearer"}),
     )

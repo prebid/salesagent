@@ -51,6 +51,7 @@ def wire_error_result(
     *,
     error: Exception | None = None,
     envelope: dict[str, Any] | None = None,
+    raw_response: Any = None,
 ) -> TransportResult:
     """A dispatch's error-path result, fabricated.
 
@@ -65,12 +66,15 @@ def wire_error_result(
         envelope: Transport-specific metadata. Defaults to ``{}``, which is what
             every caller but one wants; it is a parameter because a caller
             grading the envelope-level mirror needs the same dict in both places.
+        raw_response: Captured response metadata for assertions on HTTP status
+            and authentication challenges.
     """
     return TransportResult(
         payload=None,
         envelope={} if envelope is None else envelope,
         error=error,
         wire_error_envelope=wire_error_envelope,
+        raw_response=raw_response,
         # Derived, never passed in — see the module docstring.
         has_wire=wire_error_envelope is not None,
     )
