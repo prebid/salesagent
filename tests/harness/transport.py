@@ -190,12 +190,17 @@ class E2EConfig:
         ca_bundle: ABSOLUTE path to the CA that signed the stack's leaf. Absolute
             because pytest does not always run from the repo root. ``None`` when
             there is no TLS listener to verify.
+        server_host: The container that serves ``base_url``'s requests and dials
+            outbound, by its network name -- what a test publisher's origin keys the
+            files it serves by (tests/harness/publisher_authorization.py). ``None`` when
+            the stack does not say.
     """
 
     base_url: str
     postgres_url: str
     tls_base_url: str | None = None
     ca_bundle: str | None = None
+    server_host: str | None = None
 
 
 # The two values TransportResult.envelope["status"] may take. A DERIVED enum,

@@ -67,6 +67,7 @@ def render_super_admin_index():
     from sqlalchemy.orm import joinedload
 
     from src.core.database.models import MediaBuy
+    from src.core.database.repositories.tenant_counts import count_by_tenant
     from src.core.tenant_status import is_tenant_ad_server_configured
     from src.services.setup_checklist_service import SetupChecklistService
 
@@ -127,22 +128,10 @@ def render_super_admin_index():
         # Bulk fetch media buy counts (total and recent) for all tenants on this page
         thirty_days_ago = datetime.now(UTC) - timedelta(days=30)
 
-        # Total media buy counts per tenant
-        total_buys_stmt = (
-            select(MediaBuy.tenant_id, func.count())
-            .where(MediaBuy.tenant_id.in_(tenant_ids))
-            .group_by(MediaBuy.tenant_id)
+        total_buys_counts = count_by_tenant(db_session, MediaBuy.tenant_id, tenant_ids)
+        recent_buys_counts = count_by_tenant(
+            db_session, MediaBuy.tenant_id, tenant_ids, MediaBuy.created_at >= thirty_days_ago
         )
-        total_buys_counts = dict(db_session.execute(total_buys_stmt).all())
-
-        # Recent media buy counts per tenant (last 30 days)
-        recent_buys_stmt = (
-            select(MediaBuy.tenant_id, func.count())
-            .where(MediaBuy.tenant_id.in_(tenant_ids))
-            .where(MediaBuy.created_at >= thirty_days_ago)
-            .group_by(MediaBuy.tenant_id)
-        )
-        recent_buys_counts = dict(db_session.execute(recent_buys_stmt).all())
 
         tenant_list = []
         for tenant in tenants:

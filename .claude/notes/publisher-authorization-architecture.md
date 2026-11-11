@@ -151,25 +151,25 @@ the test/dev stack), so dev and prod run the identical code path. This is the sa
 
 ### 4.1 Tenant public identity — stop fabricating, make it explicit
 
-The tenant's public origin is the anchor for *everything* (brand.json URL, JWKS, adagents
-match string, T1 publisher domain). Today it's fabricated in three places when absent
-(`Product.publisher_properties` fallbacks at models.py:448, :458, :468) and hand-rolled in
-three more (`publisher_partners.py:259-262`, `:363-369`, `:528-534`). `Tenant.primary_domain`
-(models.py:249) already returns None rather than fabricating — the rest of the ladder has
-not followed it.
+Landed, in a different form from the one first designed here. The design gave the tenant
+a `primary_domain` that served as both the agent's origin and a publisher domain. That
+attribute is removed, because a tenant has no primary publisher.
 
-Target:
-- `src/core/agent_identity.py` is the **only** derivation module (it already exists and is
-  correct). The `publisher_partners` ladder migrates to `canonical_agent_url` — completing
-  the migration `authorized_properties.py:215` documents as its purpose.
-- `Tenant.primary_domain` returns `virtual_host`, else the routable
-  `{subdomain}.{SALES_AGENT_DOMAIN}` host when configured, else **None**. It already returns
-  `virtual_host`-or-None and refuses to fabricate; what it still lacks is the middle rung.
-  The `.example.com` literal is banned from `src/` by a structural guard.
-- A tenant with `primary_domain is None` has **no public identity**: it cannot advertise a
-  portfolio, cannot publish claims, and its setup checklist says exactly that. "Cannot claim"
-  replaces "claim a fake domain" everywhere (capabilities, Product.publisher_properties,
-  trust-root routing).
+- **The agent's origin** is `Tenant.virtual_host`, which every tenant declares (the column
+  refuses `NULL`). `src/core/agent_identity.py` is the one module that derives the agent's
+  URLs from it: `canonical_agent_url`, `brand_json_url`, `jwks_uri` and `adagents_json_url`.
+  The agent host is never a publisher domain.
+- **The publishers** a tenant sells for are the ones that authorized it: its verified
+  `AuthorizedProperty` rows and its verified publisher partners. Each publisher has its own
+  domain, and none of them is primary. A product names its publishers with explicit
+  selectors. The capabilities portfolio lists the verified publishers, or is omitted when
+  there are none. No path falls back to the agent host.
+- **A seller that sells its own site** fits the same model. With the agent at
+  `seller.publisher.com`, `publisher.com` is a publisher that publishes its own adagents.json.
+- **Format options** are identified by `format_kind` and `params`. A declaration carries a
+  `publisher_domain` only when it names an option from a real publisher's adagents.json
+  `formats[]`. The seller publishes no `formats[]` of its own, and refuses a declaration
+  that names the agent host (`src/core/publisher_format_catalog.py`).
 
 ### 4.2 `PublisherPartner` → attestation state machine
 

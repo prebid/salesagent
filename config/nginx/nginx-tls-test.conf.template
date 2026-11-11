@@ -116,10 +116,36 @@ map $ssl_server_name $tls_upstream_named {
     # runs for them and this alias stays valid. Costs nothing if compose stops
     # advertising it — an unrouted map key is inert.
     webhooks.adcp.test         webhook-capture:8080;
+
+    # ── Test publishers the SERVER dials for their adagents.json (salesagent-ts3gk.9) ──
+    # A publisher domain carries no port, so the SDK fetches on 443 (the `listen 443`
+    # below). publisher-origin answers per (dialing address, Host with port), from the
+    # files each BDD runner wrote for its own server (config/nginx/publisher-origin.conf);
+    # the location below forwards both. Each is also a tls-proxy alias and a leaf SAN.
+    psatest.com                    publisher-origin:8080;
+    news.psatest.com               publisher-origin:8080;
+    dotted.psatest.com             publisher-origin:8080;
+    mixed.psatest.com              publisher-origin:8080;
+    news-psatest.com               publisher-origin:8080;
+    radio-psatest.com              publisher-origin:8080;
+    podcast-psatest.com            publisher-origin:8080;
+    sports-psatest.com             publisher-origin:8080;
+    weather-psatest.com            publisher-origin:8080;
+    pub-psatest.com                publisher-origin:8080;
+    partner-psatest.com            publisher-origin:8080;
+    other-psatest.com              publisher-origin:8080;
+    stranger-psatest.com           publisher-origin:8080;
+    other-publisher-psatest.com    publisher-origin:8080;
+    unverified-psatest.com         publisher-origin:8080;
+    pending-psatest.com            publisher-origin:8080;
+    failed-psatest.com             publisher-origin:8080;
+    unbacked-publisher-psatest.com publisher-origin:8080;
 }
 
 server {
     listen 8443 ssl;
+    # 443 for the test publishers: a publisher domain carries no port (map above).
+    listen 443 ssl;
     server_name _;
 
     ssl_certificate     /app/.test-tls/server.pem;

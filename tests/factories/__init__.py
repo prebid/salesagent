@@ -19,12 +19,10 @@ from tests.factories.account import (
 )
 from tests.factories.core import (
     AdapterConfigFactory,
-    AuthorizedPropertyFactory,
     CreativeAgentFactory,
     CurrencyLimitFactory,
     GAMInventoryFactory,
     PropertyTagFactory,
-    PublisherPartnerFactory,
     SignalsAgentFactory,
     TenantFactory,
 )
@@ -47,6 +45,7 @@ from tests.factories.product import (
     ProductFactory,
     StoredPlacementFactory,
 )
+from tests.factories.publisher import PublisherFactory
 from tests.factories.request import (
     OMIT,
     CreateMediaBuyRequestFactory,
@@ -82,8 +81,7 @@ ALL_FACTORIES = [
     CurrencyLimitFactory,
     GAMInventoryFactory,
     PropertyTagFactory,
-    PublisherPartnerFactory,
-    AuthorizedPropertyFactory,
+    PublisherFactory,
     CreativeAgentFactory,
     SignalsAgentFactory,
     PrincipalFactory,
@@ -109,7 +107,6 @@ __all__ = [
     "OMIT",
     "AccountFactory",
     "AdapterConfigFactory",
-    "AuthorizedPropertyFactory",
     "AgentAccountAccessFactory",
     "BusinessEntityFactory",
     "CollectionListReferenceFactory",
@@ -142,7 +139,7 @@ __all__ = [
     "StoredPlacementFactory",
     "PropertyListReferenceFactory",
     "PropertyTagFactory",
-    "PublisherPartnerFactory",
+    "PublisherFactory",
     "PushNotificationConfigFactory",
     "SignalsAgentFactory",
     "SigningKeyFactory",
