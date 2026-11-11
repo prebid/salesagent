@@ -19,6 +19,7 @@ from unittest.mock import MagicMock, patch
 
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.tools.media_buy_create import ApprovalOutcome
+from tests.factories import TenantFactory
 
 _MODULE = "src.core.tools.media_buy_create"
 
@@ -65,7 +66,7 @@ class TestExecuteApprovedPendingReviewFilter:
 
         with (
             patch("src.core.database.repositories.MediaBuyUoW", return_value=uow1),
-            patch("src.core.config_loader.get_tenant_by_id", return_value={"tenant_id": "t1"}),
+            patch("src.core.config_loader.get_tenant_context", return_value=TenantFactory.make_tenant(tenant_id="t1")),
             patch(f"{_MODULE}.get_adapter", return_value=mock_adapter),
             patch(f"{_MODULE}._execute_adapter_media_buy_creation") as adapter_boundary,
             # The held write is a different obligation (the integration tests grade the

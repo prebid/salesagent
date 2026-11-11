@@ -505,6 +505,7 @@ class TestExecuteApprovedEnrichesSellerConcept:
                 advertiser_id="123",
                 trafficker_id=config["trafficker_id"],
                 tenant_id=tenant_id,
+                tenant_ai_config=None,
             )
         # The order's line item accepts the asset's 970x250 (read off its format), so the
         # producer's size-vs-placeholder check passes. This asset only drives the producer

@@ -53,6 +53,7 @@ class TestAdapterTenantIdValidation:
                 principal=_make_principal(),
                 network_code="12345",
                 tenant_id=None,
+                tenant_ai_config=None,
             )
 
     def test_gam_adapter_rejects_empty_tenant_id(self):
@@ -65,6 +66,7 @@ class TestAdapterTenantIdValidation:
                 principal=_make_principal(),
                 network_code="12345",
                 tenant_id="",
+                tenant_ai_config=None,
             )
 
     def test_mock_adapter_rejects_none_tenant_id(self):
@@ -76,6 +78,8 @@ class TestAdapterTenantIdValidation:
                 config={},
                 principal=_make_principal(),
                 tenant_id=None,
+                order_name_template=None,
+                tenant_ai_config=None,
             )
 
     def test_mock_adapter_rejects_empty_tenant_id(self):
@@ -87,6 +91,8 @@ class TestAdapterTenantIdValidation:
                 config={},
                 principal=_make_principal(),
                 tenant_id="",
+                order_name_template=None,
+                tenant_ai_config=None,
             )
 
     def test_gam_adapter_accepts_valid_tenant_id(self):
@@ -106,6 +112,7 @@ class TestAdapterTenantIdValidation:
             principal=_make_principal(),
             network_code="12345",
             tenant_id="valid_tenant",
+            tenant_ai_config=None,
         )
         assert adapter.tenant_id == "valid_tenant"
 
@@ -117,6 +124,8 @@ class TestAdapterTenantIdValidation:
             config={},
             principal=_make_principal(),
             tenant_id="valid_tenant",
+            order_name_template=None,
+            tenant_ai_config=None,
         )
         assert adapter.tenant_id == "valid_tenant"
 

@@ -268,6 +268,7 @@ class GAMAutomationTester:
             advertiser_id=self.advertiser_id,
             trafficker_id=self.trafficker_id,
             tenant_id=self.test_tenant_id,
+            tenant_ai_config=None,
         )
 
         package = MediaPackage(
@@ -330,6 +331,7 @@ class GAMAutomationTester:
             advertiser_id=self.advertiser_id,
             trafficker_id=self.trafficker_id,
             tenant_id=self.test_tenant_id,
+            tenant_ai_config=None,
         )
 
         package = MediaPackage(
@@ -389,6 +391,7 @@ class GAMAutomationTester:
             advertiser_id=self.advertiser_id,
             trafficker_id=self.trafficker_id,
             tenant_id=self.test_tenant_id,
+            tenant_ai_config=None,
         )
 
         package = MediaPackage(
@@ -447,6 +450,7 @@ class GAMAutomationTester:
             advertiser_id=self.advertiser_id,
             trafficker_id=self.trafficker_id,
             tenant_id=self.test_tenant_id,
+            tenant_ai_config=None,
         )
 
         package = MediaPackage(
@@ -509,6 +513,7 @@ class GAMAutomationTester:
             advertiser_id=self.advertiser_id,
             trafficker_id=self.trafficker_id,
             tenant_id=self.test_tenant_id,
+            tenant_ai_config=None,
         )
 
         # Create a non-guaranteed order first
@@ -578,6 +583,7 @@ class GAMAutomationTester:
             advertiser_id=self.advertiser_id,
             trafficker_id=self.trafficker_id,
             tenant_id=self.test_tenant_id,
+            tenant_ai_config=None,
         )
 
         # Create a guaranteed order
@@ -645,6 +651,7 @@ class GAMAutomationTester:
             advertiser_id=self.advertiser_id,
             trafficker_id=self.trafficker_id,
             tenant_id=self.test_tenant_id,
+            tenant_ai_config=None,
         )
 
         # Create a guaranteed order (should block activation)
@@ -716,6 +723,7 @@ class GAMAutomationTester:
             advertiser_id=self.advertiser_id,
             trafficker_id=self.trafficker_id,
             tenant_id=self.test_tenant_id,
+            tenant_ai_config=None,
         )
 
         # Create a simple order to archive
@@ -806,6 +814,7 @@ class GAMAutomationTester:
             advertiser_id=self.advertiser_id,
             trafficker_id=self.trafficker_id,
             tenant_id=self.test_tenant_id,
+            tenant_ai_config=None,
         )
 
         for order_id in self.created_orders:

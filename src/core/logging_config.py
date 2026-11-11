@@ -227,12 +227,23 @@ def setup_oauth_logging() -> None:
     oauth_logger.info("OAuth structured logging initialized")
 
 
-def log_safe(value: object) -> str:
-    """Neutralize CR/LF in request-provided values before logging.
+# Every character ``str.splitlines()`` treats as a line boundary. ``urlsplit`` strips
+# only \t \r \n, and the log readers that matter split on all ten, so neutralizing
+# only CR/LF leaves seven ways to forge a second log line.
+_LINE_BREAKING = "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029"
+_LOG_SAFE = str.maketrans({c: c.encode("unicode_escape").decode("ascii") for c in _LINE_BREAKING})
 
-    Buyer-supplied ids (creative_id, package_id) flow into log lines; a
-    newline embedded in one would forge log entries (CodeQL py/log-injection).
-    Response payloads and exception messages are NOT sanitized — buyers
-    correlate on exact ids.
+
+def log_safe(value: object) -> str:
+    """Return ``value`` as text that cannot span more than one log line.
+
+    Values from outside the process (buyer-supplied ids, a tenant identifier, a
+    provider exception whose text carries a remote response body) flow into log
+    lines; a line break embedded in one would forge a log entry (CodeQL
+    py/log-injection, CWE-117).
+
+    Escaped rather than deleted: a dropped character silently changes the value an
+    operator reads, and buyers correlate on exact ids. ``\\n`` in an id says
+    something was there.
     """
-    return str(value).replace("\r", "").replace("\n", "")
+    return str(value).translate(_LOG_SAFE)
