@@ -2547,22 +2547,6 @@ def then_creatives_matching_ids(ctx: dict) -> None:
     _assert_returned_exactly(ctx, expected, "the named creatives")
 
 
-@then(parsers.re(r'the operation should fail with error code "(?P<code>[A-Z_]+)"'))
-def then_operation_fails_with_code(ctx: dict, code: str) -> None:
-    """Assert the refusal the buyer received, through the harness's one envelope helper.
-
-    ``assert_wire_error`` defaults ``recovery`` from the pinned error-code table, so the
-    assertion also grades the retry semantics without the scenario repeating them.
-
-    Registered in this module because pytest-bdd resolves step definitions per MODULE: the
-    identical sentence exists in steps/domain/uc019_query_media_buys.py, which is not a
-    registered plugin, so it binds that module's scenarios and not these.
-    """
-    result = ctx.get("result")
-    assert result is not None, "no TransportResult on the context — the When step did not dispatch"
-    result.assert_wire_error(code)
-
-
 @then(parsers.re(r"(?:the operation succeeds|no error is returned|no error is raised|the response is not an error)"))
 def then_operation_succeeded(ctx: dict) -> None:
     """The dispatch was ANSWERED, not refused — read off the result, not off ctx bookkeeping."""

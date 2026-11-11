@@ -35,6 +35,9 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _PLAIN_SCENARIO = re.compile(r"^\s*Scenario:\s", re.MULTILINE)
 _SCENARIO_OUTLINE = re.compile(r"^\s*Scenario Outline:", re.MULTILINE)
 _SCENARIOS_CALL = re.compile(r"""scenarios\s*\(\s*["'](features/[^"']+)["']""")
+#: ``@scenario(FEATURE, "name")``: a module binding a feature one scenario at a time, because
+#: most of that feature has no steps yet. Each decorator is one bound scenario.
+_SCENARIO_DECORATOR = re.compile(r"^@scenario\s*\(", re.MULTILINE)
 
 # Keep in sync with strategy.matrix.shard in .github/workflows/ci.yml
 # (bdd-tests-shard). Pinned by test_ci_bdd_matrix_matches_shard_config.
@@ -72,7 +75,10 @@ def bdd_scenario_count(test_path: str, repo_root: Path | None = None) -> int:
     text = (root / test_path).read_text(encoding="utf-8")
     match = _SCENARIOS_CALL.search(text)
     if match is None:
-        raise ValueError(f"No scenarios() feature binding found in {test_path}")
+        bound_by_name = len(_SCENARIO_DECORATOR.findall(text))
+        if bound_by_name:
+            return bound_by_name
+        raise ValueError(f"No scenarios() or @scenario() feature binding found in {test_path}")
     feature_path = root / "tests/bdd" / match.group(1)
     if not feature_path.is_file():
         raise ValueError(f"Feature file not found for {test_path}: {feature_path}")

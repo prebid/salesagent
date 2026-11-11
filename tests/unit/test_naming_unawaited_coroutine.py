@@ -42,8 +42,7 @@ class TestNamingAsyncContext:
         end_time = datetime(2025, 6, 30)
 
         mock_factory = MagicMock()
-        mock_factory.is_ai_enabled.return_value = True
-        mock_factory.create_model.return_value = "google-gla:gemini-2.0-flash"
+        mock_factory.build.return_value = "google-gla:gemini-2.0-flash"
 
         with (
             patch("src.services.ai.AIServiceFactory", return_value=mock_factory),
@@ -84,8 +83,7 @@ class TestNamingAsyncContext:
         end_time = datetime(2025, 6, 30)
 
         mock_factory = MagicMock()
-        mock_factory.is_ai_enabled.return_value = True
-        mock_factory.create_model.return_value = "google-gla:gemini-2.0-flash"
+        mock_factory.build.return_value = "google-gla:gemini-2.0-flash"
 
         with (
             patch("src.services.ai.AIServiceFactory", return_value=mock_factory),

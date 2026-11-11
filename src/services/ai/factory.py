@@ -1,20 +1,59 @@
 """Factory for creating Pydantic AI models with tenant-aware configuration."""
 
 import logging
+import pkgutil
 from functools import lru_cache
-from typing import Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
-from src.core.errors.details import ConfigurationDetails
-from src.core.exceptions import AdCPConfigurationError
+from pydantic_ai.exceptions import AgentRunError, UserError
+
+from src.core.logging_config import log_safe
+from src.core.security.outbound_http import is_transport_failure
 from src.services.ai.config import (
-    CANONICAL_GOOGLE_PROVIDER,
+    UNUSABLE_AI_CONFIG,
+    SellerAIConfig,
     TenantAIConfig,
-    build_model_string,
     canonicalize_google_provider,
     get_platform_defaults,
 )
 
+if TYPE_CHECKING:
+    from pydantic_ai import Agent, AgentRunResult
+
+    from src.core.database.models import Tenant
+
 logger = logging.getLogger(__name__)
+
+
+class ResolvedAIConfig(NamedTuple):
+    """What one AI call runs on, after platform defaults are applied.
+
+    The three fields are resolved TOGETHER by `AIServiceFactory.resolve` because they
+    are not independent: a model name and an API key both belong to a specific vendor.
+    Resolving them from independent expressions is what sent the platform's Google
+    credential to api.anthropic.com and paired a "claude-*" model name with a Google
+    client. `provider` is canonical (`canonicalize_google_provider`).
+    """
+
+    provider: str
+    model: str
+    api_key: str
+
+
+#: The providers this factory builds, by canonical name: the pydantic-ai model class and
+#: the provider class that carries the API key, as `pkgutil.resolve_name` paths so each
+#: SDK is imported only when its provider is built. This table is the one statement of
+#: what can be built: `resolve` refuses every provider not in it, and `build` builds from
+#: it. A provider outside it has nowhere to put an explicit key; pydantic-ai would
+#: authenticate it with whatever else is in the environment.
+PROVIDER_MODELS: dict[str, tuple[str, str]] = {
+    "google": ("pydantic_ai.models.google:GoogleModel", "pydantic_ai.providers.google:GoogleProvider"),
+    "anthropic": ("pydantic_ai.models.anthropic:AnthropicModel", "pydantic_ai.providers.anthropic:AnthropicProvider"),
+    "openai": ("pydantic_ai.models.openai:OpenAIChatModel", "pydantic_ai.providers.openai:OpenAIProvider"),
+    "groq": ("pydantic_ai.models.groq:GroqModel", "pydantic_ai.providers.groq:GroqProvider"),
+    "mistral": ("pydantic_ai.models.mistral:MistralModel", "pydantic_ai.providers.mistral:MistralProvider"),
+    "cohere": ("pydantic_ai.models.cohere:CohereModel", "pydantic_ai.providers.cohere:CohereProvider"),
+}
 
 # Track if logfire has been configured
 _logfire_configured = False
@@ -61,208 +100,126 @@ def configure_logfire(token: str | None = None) -> bool:
 
 
 class AIServiceFactory:
-    """Factory for creating Pydantic AI models with tenant-aware configuration.
+    """Builds the Pydantic AI model a seller's AI configuration runs on.
 
     Usage:
-        factory = AIServiceFactory()
-
-        # Using platform defaults
-        model = factory.create_model()
-
-        # Using tenant configuration
-        model = factory.create_model(tenant_ai_config=tenant.ai_config)
+        model = AIServiceFactory().build(tenant.ai_config)
+        if model is None:
+            ...  # AI is not available for this seller: skip the AI step
     """
 
     def __init__(self):
         """Initialize the factory with platform defaults."""
         self._platform_defaults = get_platform_defaults()
+        self._platform_provider = canonicalize_google_provider(self._platform_defaults["provider"])
 
         # Try to configure logfire on factory creation
         configure_logfire(self._platform_defaults.get("logfire_token"))
 
-    def create_model(
-        self,
-        tenant_ai_config: dict | TenantAIConfig | None = None,
-        provider_override: str | None = None,
-        model_override: str | None = None,
-    ) -> Any:
-        """Create a Pydantic AI model with the appropriate configuration.
+    def resolve(self, seller_ai: SellerAIConfig = None, *, platform_fallback: bool = True) -> ResolvedAIConfig | None:
+        """Provider, model and key for `seller_ai`, or None when no model can be built.
 
-        Configuration priority:
-        1. Explicit overrides (provider_override, model_override)
-        2. Tenant-specific config (tenant_ai_config)
-        3. Platform defaults (environment variables)
+        `seller_ai` is what `TenantAIConfig.from_tenant` answered. `UNUSABLE_AI_CONFIG`
+        resolves to None: the seller configured AI that cannot run, and the platform's
+        credential is not a substitute for the seller's choice. `None` (configured
+        nothing) resolves on the platform defaults alone, unless `platform_fallback` is
+        False: the policy check runs only on the seller's own credential, because a
+        blocking verdict is a rejection the seller did not configure.
 
-        Args:
-            tenant_ai_config: Tenant's AI configuration (from database or dict)
-            provider_override: Override the provider (for testing)
-            model_override: Override the model (for testing)
+        The platform's model and API key belong to the PLATFORM's provider
+        (PYDANTIC_AI_PROVIDER, whose key `get_platform_defaults` reads from that
+        provider's own environment variable). They fill in only for a configuration that
+        resolves to that same provider. Filling them in regardless sent the operator's
+        Google secret to another vendor: a tenant naming "anthropic" got an
+        AnthropicModel whose client carried the platform's GEMINI_API_KEY.
 
-        Returns:
-            Pydantic AI Model instance with API key configured via Provider.
-            This can be passed directly to Agent(model=...).
-
-        Raises:
-            AdCPConfigurationError: If no API key is available for the configured provider
+        None also when the model or the key is missing, or the provider is not in
+        `PROVIDER_MODELS`; `build` builds exactly what this resolves, so a caller never
+        holds a resolution the build then refuses.
         """
-        # Parse tenant config if provided as dict
-        if isinstance(tenant_ai_config, dict):
-            config = TenantAIConfig.model_validate(tenant_ai_config)
-        elif tenant_ai_config:
-            config = tenant_ai_config
-        else:
-            config = TenantAIConfig()
+        if seller_ai is UNUSABLE_AI_CONFIG or (seller_ai is None and not platform_fallback):
+            return None
+        config = seller_ai or TenantAIConfig()
 
-        # Resolve configuration with priority
-        provider = provider_override or config.provider or self._platform_defaults["provider"]
-        model_name = model_override or config.model or self._platform_defaults["model"]
-        api_key = config.api_key or self._platform_defaults.get("api_key")
+        provider = canonicalize_google_provider(config.provider or self._platform_defaults["provider"])
+        platform_is_same_vendor = provider == self._platform_provider
+        model = config.model or (self._platform_defaults["model"] if platform_is_same_vendor else None)
+        api_key = config.api_key or (self._platform_defaults.get("api_key") if platform_is_same_vendor else None)
 
-        # Configure logfire with tenant token if provided
-        if config.logfire_token:
-            configure_logfire(config.logfire_token)
+        if not (model and api_key) or provider not in PROVIDER_MODELS:
+            return None
+        return ResolvedAIConfig(provider=provider, model=model, api_key=api_key)
 
-        provider = canonicalize_google_provider(provider)
+    def build(self, seller_ai: SellerAIConfig = None, *, platform_fallback: bool = True) -> Any | None:
+        """The model AI runs on for `seller_ai`, or None when AI is not available for it.
 
-        logger.debug(f"Creating Pydantic AI model: {provider}:{model_name}")
+        The one call every consumer makes: None means "skip the AI step", and a model
+        means it can run. `platform_fallback` is `resolve`'s. The API key goes to the
+        provider object, never to a global environment variable.
 
-        # Create model with Provider that has API key directly configured
-        # This avoids setting global environment variables
-        return self._create_provider_model(provider, model_name, api_key)
-
-    def _create_provider_model(self, provider: str, model_name: str, api_key: str | None) -> Any:
-        """Create a Pydantic AI model with explicit API key via Provider.
-
-        This passes the API key directly to the Provider constructor,
-        avoiding global environment variable mutation.
-
-        Args:
-            provider: Normalized provider name (e.g., "google", "anthropic")
-            model_name: Model name (e.g., "gemini-2.0-flash")
-            api_key: API key for the provider
-
-        Returns:
-            Configured Model instance
+        A model pydantic-ai refuses to construct (``UserError``, or ``ImportError`` for a
+        provider whose SDK is not installed) is also None: the configuration cannot run,
+        which is the same answer as one `resolve` refuses, and the caller skips the AI step.
+        Any other exception is a defect and propagates.
         """
-        # Import providers lazily to avoid import errors if not installed
-        if provider == CANONICAL_GOOGLE_PROVIDER:
-            from pydantic_ai.models.google import GoogleModel
-            from pydantic_ai.providers.google import GoogleProvider
+        resolved = self.resolve(seller_ai, platform_fallback=platform_fallback)
+        if resolved is None:
+            return None
+        if isinstance(seller_ai, TenantAIConfig) and seller_ai.logfire_token:
+            configure_logfire(seller_ai.logfire_token)
 
-            # Google requires explicit api_key via GoogleProvider; other providers may
-            # fall back to string-format and pydantic-ai env-var resolution.
-            if not api_key:
-                raise AdCPConfigurationError(details=ConfigurationDetails(provider=provider))
-            return GoogleModel(model_name, provider=GoogleProvider(api_key=api_key))
+        logger.debug("Creating Pydantic AI model: %s:%s", resolved.provider, resolved.model)
+        model_path, provider_path = PROVIDER_MODELS[resolved.provider]
+        try:
+            provider = pkgutil.resolve_name(provider_path)(api_key=resolved.api_key)
+            return pkgutil.resolve_name(model_path)(resolved.model, provider=provider)
+        except (UserError, ImportError) as e:
+            logger.warning("Cannot build the %s model; AI is unavailable: %s", resolved.provider, log_safe(e))
+            return None
 
-        elif provider == "anthropic":
-            from pydantic_ai.models.anthropic import AnthropicModel
-            from pydantic_ai.providers.anthropic import AnthropicProvider
 
-            if api_key:
-                return AnthropicModel(model_name, provider=AnthropicProvider(api_key=api_key))
-            return AnthropicModel(model_name, provider="anthropic")
+class AIProviderError(Exception):
+    """The AI provider failed the call: unreachable, refused it, or answered unusably.
 
-        elif provider == "openai":
-            from pydantic_ai.models.openai import OpenAIChatModel
-            from pydantic_ai.providers.openai import OpenAIProvider
+    Raised by :func:`run_agent` so a consumer that degrades when the model is unavailable
+    (ranking, the policy check, order naming) catches this one type, while a defect in its
+    own code still propagates.
+    """
 
-            if api_key:
-                return OpenAIChatModel(model_name, provider=OpenAIProvider(api_key=api_key))
-            return OpenAIChatModel(model_name, provider="openai")
 
-        elif provider == "groq":
-            from pydantic_ai.models.groq import GroqModel
-            from pydantic_ai.providers.groq import GroqProvider
+async def run_agent[OutputT](agent: "Agent[None, OutputT]", prompt: str) -> "AgentRunResult[OutputT]":
+    """Run *agent* on *prompt*, raising :class:`AIProviderError` when the provider fails.
 
-            if api_key:
-                return GroqModel(model_name, provider=GroqProvider(api_key=api_key))
-            return GroqModel(model_name, provider="groq")
+    The one place a provider failure is told apart from everything else. pydantic-ai wraps
+    most provider failures in ``AgentRunError`` (``ModelHTTPError``, ``ModelAPIError``,
+    ``UnexpectedModelBehavior``, ``UsageLimitExceeded``, ...) and reports a model it cannot
+    use as ``UserError``. It does not wrap every SDK's transport: google-genai raises
+    ``httpx.ConnectError`` unwrapped for an unreachable endpoint and
+    ``httpx.RemoteProtocolError`` for a dropped connection, which ``is_transport_failure``
+    recognises without importing httpx outside the egress seam. Anything else is not the
+    provider and propagates unchanged.
+    """
+    try:
+        return await agent.run(prompt)
+    except Exception as e:
+        if isinstance(e, AgentRunError | UserError) or is_transport_failure(e):
+            raise AIProviderError(f"{type(e).__name__}: {e}") from e
+        raise
 
-        elif provider == "mistral":
-            from pydantic_ai.models.mistral import MistralModel
-            from pydantic_ai.providers.mistral import MistralProvider
 
-            if api_key:
-                return MistralModel(model_name, provider=MistralProvider(api_key=api_key))
-            return MistralModel(model_name, provider="mistral")
+def tenant_ai_enabled(tenant: "Tenant", *, platform_fallback: bool = True) -> bool:
+    """Can an AI call run for this tenant row? The admin UI's one answer to that question.
 
-        elif provider == "cohere":
-            from pydantic_ai.models.cohere import CohereModel
-            from pydantic_ai.providers.cohere import CohereProvider
-
-            if api_key:
-                return CohereModel(model_name, provider=CohereProvider(api_key=api_key))
-            return CohereModel(model_name, provider="cohere")
-
-        else:
-            # Fallback: use model string and let Pydantic AI resolve it
-            # This handles gateway providers and any new providers
-            model_string = build_model_string(provider, model_name)
-            logger.warning(
-                f"Provider '{provider}' not explicitly supported, "
-                f"using model string '{model_string}' (API key must be in env var)"
-            )
-            return model_string
-
-    def is_ai_enabled(
-        self,
-        tenant_ai_config: dict | TenantAIConfig | None = None,
-    ) -> bool:
-        """Check if AI is enabled for the given configuration.
-
-        AI is enabled if there's an API key available (from tenant or platform).
-
-        Args:
-            tenant_ai_config: Tenant's AI configuration
-
-        Returns:
-            True if AI calls can be made, False otherwise
-        """
-        if isinstance(tenant_ai_config, dict):
-            config = TenantAIConfig.model_validate(tenant_ai_config)
-        elif tenant_ai_config:
-            config = tenant_ai_config
-        else:
-            config = TenantAIConfig()
-
-        # AI is enabled if we have an API key from either source
-        return bool(config.api_key or self._platform_defaults.get("api_key"))
-
-    def get_effective_config(
-        self,
-        tenant_ai_config: dict | TenantAIConfig | None = None,
-    ) -> dict:
-        """Get the effective configuration that would be used.
-
-        Useful for debugging and displaying configuration in admin UI.
-
-        Args:
-            tenant_ai_config: Tenant's AI configuration
-
-        Returns:
-            dict with effective provider, model, and whether API key is set
-        """
-        if isinstance(tenant_ai_config, dict):
-            config = TenantAIConfig.model_validate(tenant_ai_config)
-        elif tenant_ai_config:
-            config = tenant_ai_config
-        else:
-            config = TenantAIConfig()
-
-        provider = config.provider or self._platform_defaults["provider"]
-        model = config.model or self._platform_defaults["model"]
-        has_api_key = bool(config.api_key or self._platform_defaults.get("api_key"))
-        has_logfire = bool(config.logfire_token or self._platform_defaults.get("logfire_token"))
-
-        return {
-            "provider": provider,
-            "model": model,
-            "has_api_key": has_api_key,
-            "has_logfire": has_logfire,
-            "settings": config.settings,
-            "source": "tenant" if config.provider else "platform",
-        }
+    The same resolution every AI step acts on: what the seller configured
+    (`TenantAIConfig.from_tenant`), with the platform fallback for a seller who configured
+    nothing unless `platform_fallback` is False (the policy check's rule). Reading
+    `tenant.gemini_api_key` directly answered a different question: the settings page and
+    the creative-review page told a seller who had configured AI in the `ai_config` column
+    that it needed a Gemini key, while the AI steps ran for it.
+    """
+    return (
+        AIServiceFactory().resolve(TenantAIConfig.from_tenant(tenant), platform_fallback=platform_fallback) is not None
+    )
 
 
 @lru_cache(maxsize=1)

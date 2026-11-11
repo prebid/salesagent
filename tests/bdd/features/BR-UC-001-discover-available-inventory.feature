@@ -445,14 +445,22 @@ Feature: BR-UC-001 Discover Available Inventory
     # INV-3 holds: policy is public, request proceeds regardless
 
   @T-UC-001-inv-002 @invariant @BR-RULE-002 @analysis-2026-03-09 @schema-v3.1
-  Scenario: BR-RULE-002 INV-1 violated - policy enabled and brief BLOCKED
+  Scenario Outline: BR-RULE-002 INV-1 violated - policy enabled and brief BLOCKED
     Given the tenant has advertising_policy enabled
+    And the seller's AI is configured <where>
     And the LLM evaluates the brief as BLOCKED
     When the Buyer Agent sends a get_products request with a non-compliant brief
     Then the operation should fail with error code "POLICY_VIOLATION"
     And the error code should be "POLICY_VIOLATION"
     # INV-1 violated: policy enabled and brief content is BLOCKED
+    # The check runs on the seller's own AI configuration, wherever the seller stored it:
+    # ai_config is the column the Admin UI writes, gemini_api_key the legacy one.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
+
+    Examples:
+      | where                               |
+      | in ai_config                        |
+      | in the legacy gemini_api_key column |
 
   @T-UC-001-inv-002-2 @invariant @BR-RULE-002 @analysis-2026-03-09 @schema-v3.1
   Scenario: BR-RULE-002 INV-2 violated - RESTRICTED with manual review required
@@ -465,25 +473,48 @@ Feature: BR-UC-001 Discover Available Inventory
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-inv-002-3 @invariant @BR-RULE-002 @analysis-2026-03-09 @schema-v3.1
-  Scenario: BR-RULE-002 INV-3 holds - policy disabled, check skipped
-    Given the tenant has advertising_policy disabled
+  Scenario Outline: BR-RULE-002 INV-3 holds - policy disabled or no usable seller AI, check skipped
+    Given the tenant has advertising_policy <policy>
+    And the platform has an AI credential of its own
+    And the seller's AI is configured <where>
+    And the LLM evaluates the brief as BLOCKED
     When the Buyer Agent sends a get_products request with any brief content
     Then the request should proceed to product discovery without policy check
     # INV-3 holds: policy disabled, check skipped
+    # The BLOCKED verdict is what makes "without policy check" observable: had the check
+    # run, the request would fail with POLICY_VIOLATION.
+    # With policy enabled, a seller whose own AI configuration cannot run the check (no
+    # API key, or one the model factory refuses to build) is skipped the same way, not
+    # refused with CONFIGURATION_ERROR: get_products is discovery, and the gap is the
+    # seller's configuration, not the buyer's request.
+    # The platform's own credential is declared because the check runs on the seller's
+    # credential only: a seller who configured nothing is skipped too, and a check run on
+    # the platform's key would block the brief here.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
+
+    Examples:
+      | policy   | where                                              |
+      | disabled | in ai_config                                       |
+      | enabled  | nowhere                                            |
+      | enabled  | in an ai_config row without an API key             |
+      | enabled  | in an ai_config the model factory refuses to build |
 
   @T-UC-001-inv-002-4 @invariant @BR-RULE-002 @analysis-2026-03-09 @schema-v3.1
   Scenario: BR-RULE-002 INV-4 holds - policy service unavailable, fail-open
     Given the tenant has advertising_policy enabled
+    And the seller's AI is configured in ai_config
     And the LLM policy service is unavailable
-    When the Buyer Agent sends a get_products request
+    When the Buyer Agent sends a get_products request with a brief
     Then the request should proceed (fail-open behavior)
     # INV-4 holds: policy service unavailable, fail-open
+    # The check runs only on the seller's own AI configuration, so the seller has one: with
+    # none, the check is skipped (INV-3) and "unavailable" is never reached.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-inv-002-5 @invariant @BR-RULE-002 @analysis-2026-03-09 @schema-v3.1
   Scenario: BR-RULE-002 INV-5 holds - policy evaluation returns ALLOWED
     Given the tenant has advertising_policy enabled
+    And the seller's AI is configured in ai_config
     And the LLM evaluates the brief as ALLOWED
     When the Buyer Agent sends a get_products request with a compliant brief
     Then the request should proceed with full product catalog
@@ -541,24 +572,38 @@ Feature: BR-UC-001 Discover Available Inventory
     # INV-2 holds: authenticated request, full pricing
 
   @T-UC-001-inv-005 @invariant @BR-RULE-005 @analysis-2026-03-09 @schema-v3.1
-  Scenario: BR-RULE-005 INV-1 violated - product below 0.1 threshold excluded
+  Scenario Outline: BR-RULE-005 INV-1 violated - product below 0.1 threshold excluded
     Given the Buyer is authenticated with a valid principal_id
-    And ranking is applied (brief provided, ranking prompt configured)
+    And ranking is applied (brief provided, ranking prompt configured) with the seller's AI configured <where>
     And a product has relevance_score 0.05
     When the system applies AI ranking
     Then the product should be excluded from results
     # INV-1 violated: ranking applied and product scores < 0.1
+    # Ranking runs on the seller's own AI configuration, wherever the seller stored it.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
+    Examples:
+      | where                               |
+      | in ai_config                        |
+      | in the legacy gemini_api_key column |
+
   @T-UC-001-inv-005-2 @invariant @BR-RULE-005 @analysis-2026-03-09 @schema-v3.1
-  Scenario: BR-RULE-005 INV-2 holds - product at or above 0.1 threshold included
+  Scenario Outline: BR-RULE-005 INV-2 holds - product at or above 0.1 threshold included
     Given the Buyer is authenticated with a valid principal_id
-    And ranking is applied (brief provided, ranking prompt configured)
+    And ranking is applied (brief provided, ranking prompt configured) with the seller's AI configured <where>
     And a product has relevance_score 0.15
+    And a second product, after it in catalog order, has relevance_score 0.90
     When the system applies AI ranking
     Then the product should be included in results sorted by score descending
     # INV-2 holds: ranking applied and product scores >= 0.1
+    # The second product makes "sorted by score descending" differ from catalog order. With
+    # one product the scenario passed whether or not ranking ran at all.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
+
+    Examples:
+      | where                               |
+      | in ai_config                        |
+      | in the legacy gemini_api_key column |
 
   @T-UC-001-inv-005-3 @invariant @BR-RULE-005 @analysis-2026-03-09 @schema-v3.1
   Scenario: BR-RULE-005 INV-3 holds - no brief provided, no threshold applied
@@ -570,12 +615,30 @@ Feature: BR-UC-001 Discover Available Inventory
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-inv-005-4 @invariant @BR-RULE-005 @analysis-2026-03-09 @schema-v3.1
-  Scenario: BR-RULE-005 INV-4 holds - ranking service fails, products returned unranked
+  Scenario Outline: BR-RULE-005 INV-4 holds - ranking cannot run, products returned unranked
     Given the Buyer is authenticated with a valid principal_id
-    And ranking is configured but the AI ranking service fails
+    And the platform has an AI credential of its own
+    And ranking is configured but <failure>
+    And a product has relevance_score 0.05
+    And a second product, after it in catalog order, has relevance_score 0.90
     When the Buyer Agent sends a get_products request with a brief
     Then products should be returned unranked with no threshold applied
     # INV-4 holds: ranking service fails, products returned unranked
+    # Reading the seller's own AI configuration adds more ways ranking cannot run: a
+    # configuration the model factory refuses to build, a stored row that does not parse,
+    # a row naming a provider with no key, and a provider endpoint that drops the connection.
+    # The scores are what a model WOULD answer, so ranking that ran on any credential would
+    # drop the first product (below 0.1) and the catalog order would not hold. The platform's
+    # own credential is declared because a seller who configured AI that cannot run gets no
+    # AI: falling back to the platform's key would still rank.
+
+    Examples:
+      | failure                                                          |
+      | the AI ranking service fails                                     |
+      | the seller's AI provider drops the connection                    |
+      | the seller's ai_config is one the model factory refuses to build |
+      | the seller's stored ai_config does not parse                     |
+      | the seller's ai_config names a provider with no API key          |
 
   @T-UC-001-inv-006 @invariant @BR-RULE-006 @analysis-2026-03-09 @schema-v3.1
   Scenario: BR-RULE-006 INV-1 holds - fixed_price set, floor_price null (fixed pricing)

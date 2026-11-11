@@ -118,7 +118,9 @@ class TestAdapterReadsSeededRow:
         bound_factory_session.commit()
 
         principal = Principal(principal_id="p_int", name="Int Principal", platform_mappings={})
-        adapter = MockAdServer(config={}, principal=principal, tenant_id=tenant.tenant_id)
+        adapter = MockAdServer(
+            config={}, principal=principal, tenant_id=tenant.tenant_id, order_name_template=None, tenant_ai_config=None
+        )
         # No in-memory entry: if the DB read failed, this would hit the random fallback.
         adapter._media_buys = {}
 
@@ -142,7 +144,9 @@ class TestAdapterReadsSeededRow:
         bound_factory_session.commit()
 
         principal = Principal(principal_id="p_int2", name="Int Principal 2", platform_mappings={})
-        adapter = MockAdServer(config={}, principal=principal, tenant_id=tenant.tenant_id)
+        adapter = MockAdServer(
+            config={}, principal=principal, tenant_id=tenant.tenant_id, order_name_template=None, tenant_ai_config=None
+        )
         adapter._media_buys = {}
 
         today = datetime(2026, 1, 5, tzinfo=UTC)

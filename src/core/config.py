@@ -305,6 +305,13 @@ class AuthSettings(BaseSettings):
         return self.tenant_management_domains or self.super_admin_domains
 
 
+# The model that pairs with the Google provider, and so the deployment's default model.
+# Named once because a provider and a model must travel together: a model name is only
+# meaningful to the vendor it belongs to, so a Google client handed a "claude-*" name
+# 404s on every call. src/services/ai/config.py pairs it with the Google provider.
+DEFAULT_GOOGLE_MODEL = "gemini-2.0-flash"
+
+
 class IntegrationSettings(BaseSettings):
     """Other services this seller talks to."""
 
@@ -321,7 +328,7 @@ class IntegrationSettings(BaseSettings):
     approximated_backend_url: str = "adcp-sales-agent.fly.dev"
     approximated_proxy_ip: str = "37.16.24.200"
     pydantic_ai_provider: str = "gemini"
-    pydantic_ai_model: str = "gemini-2.0-flash"
+    pydantic_ai_model: str = DEFAULT_GOOGLE_MODEL
     logfire_token: str | None = None
     gemini_api_key: str | None = None
     openai_api_key: str | None = None
