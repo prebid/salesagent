@@ -25,10 +25,11 @@ Canonical conftest tag parsing lives here as ``parse_conftest_xfail_tags``
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 import sys
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Literal, NamedTuple, TypedDict
 
@@ -442,6 +443,78 @@ def grade_base(
     )
 
 
+_XFAIL_SET_NAME = re.compile(r"_UC\d+_XFAIL_TAGS")
+_PARTITION_SET_NAME = re.compile(r"_UC\d+_(?:PARTITION|BOUNDARY)_TAGS")
+_PARTIAL_SET_NAME = re.compile(r"_UC\d+_PARTIAL_TAGS")
+
+
+def _tag_value(node: ast.AST | None) -> str | None:
+    """The tag a ``"T-..."`` string literal holds, or None for any other node."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value.startswith("T-"):
+        return node.value
+    return None
+
+
+def _module_str_constants(tree: ast.Module) -> dict[str, str]:
+    """Module-level ``NAME = "text"`` (or annotated) assignments, so a shared reason resolves."""
+    constants: dict[str, str] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target, value = node.targets[0], node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            target, value = node.target, node.value
+        else:
+            continue
+        if isinstance(target, ast.Name) and isinstance(value, ast.Constant) and isinstance(value.value, str):
+            constants[target.id] = value.value
+    return constants
+
+
+def _tag_reason_dict_entries(tree: ast.Module) -> list[tuple[str, str]]:
+    """Every ``"T-...": reason`` dict entry, in source order.
+
+    The reason is a string literal or the name of a module-level string constant.
+    """
+    constants = _module_str_constants(tree)
+    entries: list[tuple[int, int, str, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Dict):
+            continue
+        for key, value in zip(node.keys, node.values, strict=True):
+            tag = _tag_value(key)
+            if tag is None or key is None:
+                continue
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                reason = value.value
+            elif isinstance(value, ast.Name) and value.id in constants:
+                reason = constants[value.id]
+            else:
+                continue
+            entries.append((key.lineno, key.col_offset, tag, reason))
+    return [(tag, reason) for _line, _col, tag, reason in sorted(entries)]
+
+
+def _named_tag_sets(tree: ast.AST, name: re.Pattern[str]) -> Iterator[tuple[str, list[str]]]:
+    """Each assignment whose target matches ``name`` with the tags it holds, in source order.
+
+    Covers module-level and function-local assignments, annotated or not.
+    """
+    found: list[tuple[int, str, list[str]]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target, value = node.targets[0], node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            target, value = node.target, node.value
+        else:
+            continue
+        if not (isinstance(target, ast.Name) and name.fullmatch(target.id)):
+            continue
+        tags = [tag for sub in ast.walk(value) if (tag := _tag_value(sub)) is not None]
+        found.append((node.lineno, target.id, tags))
+    for _line, set_name, tags in sorted(found, key=lambda item: item[0]):
+        yield set_name, tags
+
+
 def parse_conftest_xfail_tags(conftest_path: Path) -> dict[str, TagReason]:
     """Parse conftest.py to extract tag → TagReason mappings.
 
@@ -454,48 +527,34 @@ def parse_conftest_xfail_tags(conftest_path: Path) -> dict[str, TagReason]:
     partial), MCP selective reason= kwargs, and validation tuple forms.
     """
     text = conftest_path.read_text(encoding="utf-8", errors="replace")
+    tree = ast.parse(text)
     tag_map: dict[str, TagReason] = {}
 
-    # _XFAIL_TAGS dict: tag → reason (production gaps)
-    for match in re.finditer(r'"(T-[^"]+)":\s*"([^"]+)"', text):
-        tag, reason = match.group(1), match.group(2)
+    # _XFAIL_TAGS dict: tag → reason (production gaps). Read from the AST so a
+    # reason split over several lines inside parentheses is still one string.
+    for tag, reason in _tag_reason_dict_entries(tree):
         tag_map[tag] = TagReason(reason, "production_gap")
 
-    # _UC026_XFAIL_TAGS, _UC019_XFAIL_TAGS, etc. — sets with production/harness gaps
-    for set_match in re.finditer(
-        r"(_UC\d+_XFAIL_TAGS)\s*(?::\s*set\[str\])?\s*=\s*\{([^}]+)\}",
-        text,
-        re.DOTALL,
-    ):
-        set_name = set_match.group(1)
-        block = set_match.group(2)
+    # _UC026_XFAIL_TAGS, _UC019_XFAIL_TAGS, etc. — sets with production/harness gaps.
+    # Set literals are read from the AST too: these sets carry long comments,
+    # and a ``{`` or ``}`` inside a comment would end a regex block early.
+    for set_name, tags in _named_tag_sets(tree, _XFAIL_SET_NAME):
         mechanism = "production_gap"
         if "harness" in set_name.lower() or "env" in set_name.lower():
             mechanism = "harness_gap"
-
-        for tag_m in re.finditer(r'"(T-[^"]+)"', block):
-            tag = tag_m.group(1)
+        for tag in tags:
             if tag not in tag_map:
                 tag_map[tag] = TagReason(f"from {set_name}", mechanism)
 
     # _UC004_PARTITION_TAGS, _UC004_BOUNDARY_TAGS — partial impl
-    for set_match in re.finditer(
-        r"(_UC\d+_(?:PARTITION|BOUNDARY)_TAGS)\s*(?::\s*set\[str\])?\s*=\s*\{([^}]+)\}",
-        text,
-        re.DOTALL,
-    ):
-        set_name = set_match.group(1)
-        block = set_match.group(2)
-        for tag_m in re.finditer(r'"(T-[^"]+)"', block):
-            tag = tag_m.group(1)
+    for set_name, tags in _named_tag_sets(tree, _PARTITION_SET_NAME):
+        for tag in tags:
             if tag not in tag_map:
                 tag_map[tag] = TagReason(f"partition/boundary from {set_name}", "partial_impl")
 
     # _UC005_PARTIAL_TAGS
-    for set_match in re.finditer(r"(_UC\d+_PARTIAL_TAGS)\s*=\s*\{([^}]+)\}", text, re.DOTALL):
-        block = set_match.group(2)
-        for tag_m in re.finditer(r'"(T-[^"]+)"', block):
-            tag = tag_m.group(1)
+    for _set_name, tags in _named_tag_sets(tree, _PARTIAL_SET_NAME):
+        for tag in tags:
             if tag not in tag_map:
                 tag_map[tag] = TagReason("partial implementation", "partial_impl")
 

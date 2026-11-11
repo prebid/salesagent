@@ -583,14 +583,68 @@ class TestParseTestResultsCallSites:
 class TestConftestTagParser:
     """Canonical parse_conftest_xfail_tags + tag_reasons (S8)."""
 
-    def test_real_conftest_floor_count(self, bdd_audit_common) -> None:
+    def test_real_conftest_reads_every_uc_xfail_set_member(self, bdd_audit_common) -> None:
+        # A fixed floor went red when #2474 graduated ~50 xfails, and stayed silent
+        # while a comment truncated _UC026_XFAIL_TAGS. Derive the expectation from
+        # the conftest itself instead, so graduations don't move it and a lost
+        # set member does.
         if not CONFTEST.exists():
             pytest.fail(f"missing conftest: {CONFTEST}")
         tag_map = bdd_audit_common.parse_conftest_xfail_tags(CONFTEST)
+        declared: set[str] = set()
+        for node in ast.walk(ast.parse(CONFTEST.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.AnnAssign | ast.Assign):
+                target = node.target if isinstance(node, ast.AnnAssign) else node.targets[0]
+                if isinstance(target, ast.Name) and target.id.startswith("_UC") and target.id.endswith("_XFAIL_TAGS"):
+                    declared |= {
+                        c.value
+                        for c in ast.walk(node.value or ast.Constant(None))
+                        if isinstance(c, ast.Constant) and isinstance(c.value, str) and c.value.startswith("T-")
+                    }
+        assert declared, "no _UC*_XFAIL_TAGS set found in the real conftest"
+        assert declared - set(tag_map) == set()
         reasons = bdd_audit_common.tag_reasons(CONFTEST)
-        assert len(tag_map) >= 100
-        assert len(reasons) == len(tag_map)
-        assert all(reasons[k] == tag_map[k].reason for k in tag_map)
+        assert reasons == {k: v.reason for k, v in tag_map.items()}
+
+    def test_brace_in_comment_does_not_end_a_tag_set(self, bdd_audit_common, tmp_path: Path) -> None:
+        conftest = tmp_path / "conftest.py"
+        conftest.write_text(
+            textwrap.dedent(
+                """
+                def pytest_collection_modifyitems(items):
+                    _UC026_XFAIL_TAGS: set[str] = {
+                        "T-UC-026-before",
+                        # refuses a create package of ``{budget: 7000}`` -- no product_id
+                        "T-UC-026-after",
+                    }
+                """
+            ),
+            encoding="utf-8",
+        )
+        tag_map = bdd_audit_common.parse_conftest_xfail_tags(conftest)
+        assert set(tag_map) == {"T-UC-026-before", "T-UC-026-after"}
+        assert tag_map["T-UC-026-after"].reason == "from _UC026_XFAIL_TAGS"
+
+    def test_dict_reason_split_over_lines_or_named(self, bdd_audit_common, tmp_path: Path) -> None:
+        conftest = tmp_path / "conftest.py"
+        conftest.write_text(
+            textwrap.dedent(
+                """
+                _SHARED_REASON = "tenant review diverges from update"
+                _XFAIL_TAGS: dict[str, str] = {
+                    "T-UC-002-alt-proposal": (
+                        "proposal feature not implemented "
+                        "in production"
+                    ),
+                    "T-UC-003-approval-tenant": _SHARED_REASON,
+                }
+                """
+            ),
+            encoding="utf-8",
+        )
+        tag_map = bdd_audit_common.parse_conftest_xfail_tags(conftest)
+        assert tag_map["T-UC-002-alt-proposal"].reason == "proposal feature not implemented in production"
+        assert tag_map["T-UC-003-approval-tenant"].reason == "tenant review diverges from update"
 
     def test_audit_xfails_uses_shared_parser(self, audit_xfails, bdd_audit_common) -> None:
         assert audit_xfails.parse_conftest_xfail_tags is bdd_audit_common.parse_conftest_xfail_tags
