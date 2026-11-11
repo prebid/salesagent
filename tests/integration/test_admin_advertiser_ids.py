@@ -59,6 +59,8 @@ def test_longest_id_fits_the_real_mock_adapter_audit(creation_env):
         config={},
         principal=Principal(principal_id=row.principal_id, name=row.name, platform_mappings=row.platform_mappings),
         tenant_id=env.tenant_id,
+        order_name_template=None,
+        tenant_ai_config=None,
     )
     buy_id = create_mock_media_buy(adapter, package_id="id_width_package")
     adapter.add_creative_assets(buy_id, [], datetime.now(UTC))
