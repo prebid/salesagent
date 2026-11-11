@@ -58,8 +58,8 @@ def given_tenant_resolvable(ctx: dict) -> None:
     ``env.credential()`` addresses — rather than the ctx string, which is what makes the
     request resolve.
     """
-    ctx.setdefault("tenant_id", "test_tenant")
-    ctx["env"].setup_default_data()
+    tenant, _principal = ctx["env"].setup_default_data()
+    ctx.setdefault("tenant_id", tenant.tenant_id)
 
 
 @given("a tenant exists with completed setup checklist")
