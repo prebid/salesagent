@@ -10,6 +10,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import WebhookDeliveryLog
 from src.core.schemas import GetMediaBuyDeliveryResponse
 from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
+from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID
 from tests.integration.test_delivery_webhooks_integration import (
     _create_basic_media_buy_with_webhook,
     _create_test_tenant_and_principal,
@@ -213,6 +214,7 @@ async def test_trigger_report_fails_gracefully_no_webhook(integration_db):
         from src.core.database.models import MediaBuy
 
         media_buy = MediaBuy(
+            account_id=DEFAULT_TEST_ACCOUNT_ID,
             media_buy_id="mb_no_webhook",
             tenant_id=tenant_id,
             principal_id=principal_id,

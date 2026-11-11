@@ -16,6 +16,7 @@ app = create_app()
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, Product, TenantManagementConfig
 from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
+from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID, AccountFactory
 from tests.harness._base import IntegrationEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -38,6 +39,7 @@ def test_tenant_and_products(integration_db):
     """Create a test tenant with products for deletion tests."""
     with IntegrationEnv() as _env:
         tenant = TenantFactory(tenant_id="test_delete", subdomain="test-delete")
+        AccountFactory(tenant=tenant, account_id=DEFAULT_TEST_ACCOUNT_ID)
         PrincipalFactory(tenant=tenant, principal_id="test_principal")
 
         p1 = ProductFactory(
@@ -148,6 +150,7 @@ class TestProductDeletion:
         # Create an active media buy that references this product
         with get_db_session() as session:
             media_buy = MediaBuy(
+                account_id=DEFAULT_TEST_ACCOUNT_ID,
                 tenant_id=tenant_id,
                 media_buy_id="test_buy_1",
                 principal_id="test_principal",
@@ -185,6 +188,7 @@ class TestProductDeletion:
         # Create a pending media buy that references this product
         with get_db_session() as session:
             media_buy = MediaBuy(
+                account_id=DEFAULT_TEST_ACCOUNT_ID,
                 tenant_id=tenant_id,
                 media_buy_id="test_buy_pending",
                 principal_id="test_principal",
@@ -216,6 +220,7 @@ class TestProductDeletion:
         # Create a completed media buy that references this product
         with get_db_session() as session:
             media_buy = MediaBuy(
+                account_id=DEFAULT_TEST_ACCOUNT_ID,
                 tenant_id=tenant_id,
                 media_buy_id="test_buy_completed",
                 principal_id="test_principal",
@@ -328,6 +333,7 @@ class TestProductDeletion:
             # Product 1: No media buys (should delete)
             # Product 2: Active media buy (should not delete)
             active_buy = MediaBuy(
+                account_id=DEFAULT_TEST_ACCOUNT_ID,
                 tenant_id=tenant_id,
                 media_buy_id="active_buy",
                 principal_id="test_principal",

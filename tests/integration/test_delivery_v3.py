@@ -30,6 +30,7 @@ from src.core.schemas import (
 )
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from tests.factories import PricingOptionFactory
+from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID, AccountFactory
 from tests.factories.media_buy import request_package
 from tests.factories.principal import PrincipalFactory, plaintext_token_for
 from tests.utils.database_helpers import add_product_prerequisites, create_tenant_with_timestamps
@@ -111,6 +112,7 @@ def _setup_base_state(session) -> dict:
         policy_settings={},
         authorized_emails=["test@example.com"],
     )
+    tenant.accounts.append(AccountFactory.build(tenant=tenant, account_id=DEFAULT_TEST_ACCOUNT_ID))
     session.add(tenant)
     session.flush()
 
@@ -189,6 +191,7 @@ def _create_media_buy(
         raw_request = {"packages": [request_package(package_id=f"pkg_{media_buy_id}", product_id="prod_display")]}
 
     buy = MediaBuy(
+        account_id=DEFAULT_TEST_ACCOUNT_ID,
         media_buy_id=media_buy_id,
         tenant_id=tenant_id,
         principal_id=principal_id,

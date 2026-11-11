@@ -28,6 +28,7 @@ from src.core.database.models import (
 from src.core.database.repositories import MediaBuyRepository
 from src.services.media_buy_status_scheduler import MediaBuyStatusScheduler
 from tests.factories import stamp_format_identity
+from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID, AccountFactory
 from tests.factories.principal import plaintext_token_for
 from tests.helpers.media_buy_write_seam import (
     assert_status_move_carried_bookkeeping,
@@ -47,6 +48,7 @@ def _create_test_tenant(tenant_id: str = "test_tenant") -> str:
             ad_server="mock",
             is_active=True,
         )
+        tenant.accounts.append(AccountFactory.build(tenant=tenant, account_id=DEFAULT_TEST_ACCOUNT_ID))
         session.add(tenant)
 
         # Required: the USD CurrencyLimit and the "all_inventory" PropertyTag.
@@ -103,6 +105,7 @@ def _create_media_buy(
 
     with get_db_session() as session:
         media_buy = MediaBuy(
+            account_id=DEFAULT_TEST_ACCOUNT_ID,
             tenant_id=tenant_id,
             principal_id=principal_id,
             media_buy_id=media_buy_id,

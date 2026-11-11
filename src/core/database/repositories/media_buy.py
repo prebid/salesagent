@@ -362,7 +362,7 @@ class MediaBuyRepository:
         package_id_map: dict[int, str] | None = None,
         by_alias: bool = False,
         created_at: datetime.datetime | None = None,
-        account_id: str | None = None,
+        account_id: str,
         creative_deadline: datetime.datetime | None = None,
     ) -> MediaBuy:
         """Create a MediaBuy from a request model, serializing raw_request at the DB boundary.
@@ -404,6 +404,7 @@ class MediaBuyRepository:
             "media_buy_id": media_buy_id,
             "tenant_id": self._tenant_id,
             "principal_id": principal_id,
+            "account_id": account_id,
             "idempotency_key": getattr(req, "idempotency_key", None),
             "order_name": order_name or getattr(req, "po_number", None) or f"Order-{media_buy_id}",
             "name": getattr(req, "name", None),
@@ -435,9 +436,6 @@ class MediaBuyRepository:
             kwargs["kpi_goal"] = kpi_goal
         if created_at is not None:
             kwargs["created_at"] = created_at
-        if account_id is not None:
-            kwargs["account_id"] = account_id
-
         media_buy = MediaBuy(**kwargs)
         self._stamp_confirmation_if_needed(media_buy, seller_committed=seller_committed)
         self._session.add(media_buy)

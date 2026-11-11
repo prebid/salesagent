@@ -25,6 +25,7 @@ from src.core.resolved_identity import AccountIdentity
 from src.core.schemas import UpdateMediaBuyRequest, UpdateMediaBuyResponse, UpdateMediaBuyResult
 from src.core.schemas.account import Account
 from src.core.tools.media_buy_update import _update_media_buy_impl
+from tests.factories import AccountFactory
 from tests.factories.principal import PrincipalFactory, plaintext_token_for
 from tests.utils.database_helpers import vhost_for
 
@@ -67,6 +68,7 @@ def test_tenant_setup(integration_db):
             auto_approve_format_ids=[],
             policy_settings={},
         )
+        tenant.accounts.append(AccountFactory.build(tenant=tenant, account_id=_ACCOUNT_ID))
         session.add(tenant)
 
         # Create principal
@@ -120,6 +122,7 @@ def test_update_media_buy_with_database_persisted_buy(test_tenant_setup):
 
     with get_db_session() as session:
         media_buy = MediaBuy(
+            account_id=_ACCOUNT_ID,
             tenant_id=tenant_id,
             principal_id=principal_id,
             media_buy_id=media_buy_id,

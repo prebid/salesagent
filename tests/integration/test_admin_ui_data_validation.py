@@ -9,6 +9,7 @@ Data tests: "Does it show the right data?" (content validation)
 
 import pytest
 
+from tests.factories.account import seed_default_account
 from tests.factories.principal import plaintext_token_for
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -430,7 +431,7 @@ class TestDashboardDataValidation:
     """Validate that dashboard shows correct metrics."""
 
     def test_dashboard_media_buy_count_accurate(
-        self, authenticated_admin_session, test_tenant_with_data, integration_db
+        self, authenticated_admin_session, test_tenant_with_data, integration_db, bound_factory_session
     ):
         """Test that dashboard shows correct count of media buys."""
         from datetime import date, timedelta
@@ -440,6 +441,7 @@ class TestDashboardDataValidation:
         from src.core.database.models import MediaBuy, Principal
 
         tenant_id = test_tenant_with_data["tenant_id"]
+        account_id = seed_default_account(tenant_id)
 
         # Create principal first
         with get_db_session() as db_session:
@@ -455,6 +457,7 @@ class TestDashboardDataValidation:
             # Create 5 media buys
             for i in range(5):
                 media_buy = MediaBuy(
+                    account_id=account_id,
                     tenant_id=tenant_id,
                     media_buy_id=f"test_mb_dashboard_{i}",
                     principal_id=principal.principal_id,
@@ -485,7 +488,7 @@ class TestMediaBuysDataValidation:
     """Validate that media buys list shows correct data."""
 
     def test_media_buys_list_no_duplicates_with_packages(
-        self, authenticated_admin_session, test_tenant_with_data, integration_db
+        self, authenticated_admin_session, test_tenant_with_data, integration_db, bound_factory_session
     ):
         """Test that media buys with packages/creatives aren't duplicated.
 
@@ -499,6 +502,7 @@ class TestMediaBuysDataValidation:
         from src.core.database.models import MediaBuy, Principal
 
         tenant_id = test_tenant_with_data["tenant_id"]
+        account_id = seed_default_account(tenant_id)
 
         # Create principal first
         with get_db_session() as db_session:
@@ -513,6 +517,7 @@ class TestMediaBuysDataValidation:
 
             # Create media buy with complex raw_request (packages, creatives)
             media_buy = MediaBuy(
+                account_id=account_id,
                 tenant_id=tenant_id,
                 media_buy_id="test_mb_duplicate_check",
                 principal_id="test_principal_mb",
@@ -547,7 +552,7 @@ class TestMediaBuysDataValidation:
         )
 
     def test_media_buys_list_shows_all_statuses(
-        self, authenticated_admin_session, test_tenant_with_data, integration_db
+        self, authenticated_admin_session, test_tenant_with_data, integration_db, bound_factory_session
     ):
         """Test that media buys with different statuses are all shown."""
         from datetime import date, timedelta
@@ -557,6 +562,7 @@ class TestMediaBuysDataValidation:
         from src.core.database.models import MediaBuy, Principal
 
         tenant_id = test_tenant_with_data["tenant_id"]
+        account_id = seed_default_account(tenant_id)
 
         # Create principal
         with get_db_session() as db_session:
@@ -573,6 +579,7 @@ class TestMediaBuysDataValidation:
             statuses = ["draft", "live", "paused", "completed", "cancelled"]
             for status in statuses:
                 media_buy = MediaBuy(
+                    account_id=account_id,
                     tenant_id=tenant_id,
                     media_buy_id=f"test_mb_{status}",
                     principal_id="test_principal_status",

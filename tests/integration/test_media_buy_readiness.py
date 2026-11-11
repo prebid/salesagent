@@ -11,7 +11,8 @@ from sqlalchemy import delete
 from src.admin.services.media_buy_readiness_service import MediaBuyReadinessService
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative, CreativeAssignment, MediaBuy, Principal, Tenant
-from tests.factories import stamp_format_identity
+from tests.factories import AccountFactory, stamp_format_identity
+from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID
 from tests.factories.principal import plaintext_token_for
 from tests.utils.database_helpers import vhost_for
 
@@ -32,6 +33,7 @@ def test_tenant(integration_db, request):
             is_active=True,
             ad_server="mock",
         )
+        tenant.accounts.append(AccountFactory.build(tenant=tenant, account_id=DEFAULT_TEST_ACCOUNT_ID))
         session.add(tenant)
         session.commit()
 
@@ -86,6 +88,7 @@ class TestMediaBuyReadinessService:
         with get_db_session() as session:
             # Create media buy with no packages
             media_buy = MediaBuy(
+                account_id=DEFAULT_TEST_ACCOUNT_ID,
                 media_buy_id=media_buy_id,
                 tenant_id=test_tenant,
                 principal_id=test_principal,
@@ -121,6 +124,7 @@ class TestMediaBuyReadinessService:
         with get_db_session() as session:
             # Create media buy with packages but no creative assignments
             media_buy = MediaBuy(
+                account_id=DEFAULT_TEST_ACCOUNT_ID,
                 media_buy_id=media_buy_id,
                 tenant_id=test_tenant,
                 principal_id=test_principal,
@@ -158,6 +162,7 @@ class TestMediaBuyReadinessService:
         with get_db_session() as session:
             # Create media buy with pending_approval status
             media_buy = MediaBuy(
+                account_id=DEFAULT_TEST_ACCOUNT_ID,
                 media_buy_id=media_buy_id,
                 tenant_id=test_tenant,
                 principal_id=test_principal,
@@ -193,6 +198,7 @@ class TestMediaBuyReadinessService:
         with get_db_session() as session:
             # Create media buy starting in future
             media_buy = MediaBuy(
+                account_id=DEFAULT_TEST_ACCOUNT_ID,
                 media_buy_id=media_buy_id,
                 tenant_id=test_tenant,
                 principal_id=test_principal,
@@ -256,6 +262,7 @@ class TestMediaBuyReadinessService:
         with get_db_session() as session:
             # Create media buy currently in flight
             media_buy = MediaBuy(
+                account_id=DEFAULT_TEST_ACCOUNT_ID,
                 media_buy_id=media_buy_id,
                 tenant_id=test_tenant,
                 principal_id=test_principal,
@@ -316,6 +323,7 @@ class TestMediaBuyReadinessService:
         with get_db_session() as session:
             # Create media buy that ended yesterday
             media_buy = MediaBuy(
+                account_id=DEFAULT_TEST_ACCOUNT_ID,
                 media_buy_id=media_buy_id,
                 tenant_id=test_tenant,
                 principal_id=test_principal,
@@ -349,6 +357,7 @@ class TestMediaBuyReadinessService:
             # Create multiple media buys in different states
             media_buys = [
                 MediaBuy(
+                    account_id=DEFAULT_TEST_ACCOUNT_ID,
                     media_buy_id="mb_live_1",
                     tenant_id=test_tenant,
                     principal_id=test_principal,
@@ -363,6 +372,7 @@ class TestMediaBuyReadinessService:
                     raw_request={"packages": []},
                 ),
                 MediaBuy(
+                    account_id=DEFAULT_TEST_ACCOUNT_ID,
                     media_buy_id="mb_completed_1",
                     tenant_id=test_tenant,
                     principal_id=test_principal,

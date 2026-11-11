@@ -24,6 +24,7 @@ from src.core.database.models import (
 )
 from src.core.database.repositories.delivery import DeliveryRepository
 from src.core.webhooks.delivery import WebhookDeliveryOutcome, WebhookTaskContext
+from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID, AccountFactory
 from tests.factories.principal import plaintext_token_for
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -58,6 +59,7 @@ def tenant_a(integration_db):
             is_active=True,
             ad_server="mock",
         )
+        tenant.accounts.append(AccountFactory.build(tenant=tenant, account_id=DEFAULT_TEST_ACCOUNT_ID))
         session.add(tenant)
         session.commit()
     yield tenant_id
@@ -77,6 +79,7 @@ def tenant_b(integration_db):
             is_active=True,
             ad_server="mock",
         )
+        tenant.accounts.append(AccountFactory.build(tenant=tenant, account_id=DEFAULT_TEST_ACCOUNT_ID))
         session.add(tenant)
         session.commit()
     yield tenant_id
@@ -123,6 +126,7 @@ def media_buy_a(tenant_a, principal_a):
     media_buy_id = "del_mb_a"
     with get_db_session() as session:
         mb = MediaBuy(
+            account_id=DEFAULT_TEST_ACCOUNT_ID,
             media_buy_id=media_buy_id,
             tenant_id=tenant_a,
             principal_id=principal_a,
@@ -144,6 +148,7 @@ def media_buy_b(tenant_b, principal_b):
     media_buy_id = "del_mb_b"
     with get_db_session() as session:
         mb = MediaBuy(
+            account_id=DEFAULT_TEST_ACCOUNT_ID,
             media_buy_id=media_buy_id,
             tenant_id=tenant_b,
             principal_id=principal_b,

@@ -46,6 +46,7 @@ class TestMediaBuyRepositoryCreateFromRequest:
 
         result = repo.create_from_request(
             media_buy_id="mb_test_001",
+            account_id="acct_test",
             req=req,
             principal_id="principal_1",
             advertiser_name="Test Advertiser",
@@ -68,6 +69,7 @@ class TestMediaBuyRepositoryCreateFromRequest:
 
         result = repo.create_from_request(
             media_buy_id="mb_test_002",
+            account_id="acct_test",
             req=req,
             principal_id="principal_1",
             advertiser_name="Test Advertiser",
@@ -92,6 +94,7 @@ class TestMediaBuyRepositoryCreateFromRequest:
 
         result = repo.create_from_request(
             media_buy_id="mb_test_003",
+            account_id="acct_test",
             req=req,
             principal_id="principal_1",
             advertiser_name="Test Advertiser",
@@ -116,6 +119,7 @@ class TestMediaBuyRepositoryCreateFromRequest:
 
         repo.create_from_request(
             media_buy_id="mb_test_004",
+            account_id="acct_test",
             req=req,
             principal_id="principal_1",
             advertiser_name="Test Advertiser",

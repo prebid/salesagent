@@ -10,7 +10,8 @@ from src.core.database.models import Creative as DBCreative
 from src.core.database.models import CreativeAssignment as DBAssignment
 from src.core.schemas import UpdateMediaBuyRequest, UpdateMediaBuyResponse, UpdateMediaBuyResult
 from src.core.tools.media_buy_update import _update_media_buy_impl
-from tests.factories import stamp_format_identity
+from tests.factories import AccountFactory, stamp_format_identity
+from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID
 from tests.factories.principal import PrincipalFactory, plaintext_token_for
 from tests.helpers.media_buy_write_seam import (
     assert_status_move_carried_bookkeeping,
@@ -42,6 +43,7 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
             subdomain="test",
             virtual_host="test-tenant.adcp.test",
         )
+        tenant.accounts.append(AccountFactory.build(tenant=tenant, account_id=DEFAULT_TEST_ACCOUNT_ID))
         session.add(tenant)
 
         # Create property tag (required for products)
@@ -79,6 +81,7 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
 
         # Create media buy
         media_buy = MediaBuy(
+            account_id=DEFAULT_TEST_ACCOUNT_ID,
             media_buy_id="test_buy_123",
             tenant_id="test_tenant",
             principal_id="test_principal",
@@ -199,6 +202,7 @@ def test_creative_assignments_with_weights(integration_db):
             subdomain="test",
             virtual_host="test-tenant.adcp.test",
         )
+        tenant.accounts.append(AccountFactory.build(tenant=tenant, account_id=DEFAULT_TEST_ACCOUNT_ID))
         session.add(tenant)
 
         # Create property tag (required for products)
@@ -236,6 +240,7 @@ def test_creative_assignments_with_weights(integration_db):
 
         # Create media buy
         media_buy = MediaBuy(
+            account_id=DEFAULT_TEST_ACCOUNT_ID,
             media_buy_id="test_buy_weights",
             tenant_id="test_tenant",
             principal_id="test_principal",
@@ -357,6 +362,7 @@ def test_creative_assignments_replaces_all(integration_db):
             subdomain="test",
             virtual_host="test-tenant.adcp.test",
         )
+        tenant.accounts.append(AccountFactory.build(tenant=tenant, account_id=DEFAULT_TEST_ACCOUNT_ID))
         session.add(tenant)
 
         property_tag = PropertyTag(
@@ -390,6 +396,7 @@ def test_creative_assignments_replaces_all(integration_db):
         session.add(product)
 
         media_buy = MediaBuy(
+            account_id=DEFAULT_TEST_ACCOUNT_ID,
             media_buy_id="test_buy_replace",
             tenant_id="test_tenant",
             principal_id="test_principal",

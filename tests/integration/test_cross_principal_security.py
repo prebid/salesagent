@@ -20,7 +20,8 @@ from src.core.database.models import MediaBuy, Principal
 from src.core.exceptions import AdCPMediaBuyNotFoundError
 from src.core.schemas import ListCreativesResponse, UpdateMediaBuyRequest
 from src.core.schemas.creative import ListCreativesRequest
-from tests.factories import stamp_format_identity
+from tests.factories import AccountFactory, stamp_format_identity
+from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID
 from tests.factories.principal import PrincipalFactory, plaintext_token_for
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
@@ -47,6 +48,7 @@ class TestCrossPrincipalSecurity:
                 auto_approve_format_ids=["display_300x250"],
                 human_review_required=False,
             )
+            tenant.accounts.append(AccountFactory.build(tenant=tenant, account_id=DEFAULT_TEST_ACCOUNT_ID))
             session.add(tenant)
 
             # Create two different principals (advertisers)
@@ -89,6 +91,7 @@ class TestCrossPrincipalSecurity:
 
             # Create media buy owned by Advertiser A
             media_buy_a = MediaBuy(
+                account_id=DEFAULT_TEST_ACCOUNT_ID,
                 tenant_id="security_test_tenant",
                 media_buy_id="media_buy_a",
                 principal_id="advertiser_a",

@@ -11,6 +11,7 @@ from sqlalchemy import select
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, Principal, PushNotificationConfig, Tenant
 from src.services.delivery_simulator import delivery_simulator
+from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID, AccountFactory
 from tests.factories.principal import plaintext_token_for
 
 pytestmark = [pytest.mark.integration]
@@ -31,6 +32,7 @@ class TestDeliverySimulatorRestart:
                 virtual_host="test-tenant-restart.adcp.test",
                 ad_server="mock",  # Required for delivery simulator
             )
+            tenant.accounts.append(AccountFactory.build(tenant=tenant, account_id=DEFAULT_TEST_ACCOUNT_ID))
             session.add(tenant)
             session.commit()
             yield tenant.tenant_id
@@ -125,6 +127,7 @@ class TestDeliverySimulatorRestart:
         with get_db_session() as session:
             for i in range(3):
                 media_buy = MediaBuy(
+                    account_id=DEFAULT_TEST_ACCOUNT_ID,
                     tenant_id=test_tenant,
                     media_buy_id=f"buy_restart_test_{i}",
                     principal_id=test_principal,
@@ -190,6 +193,7 @@ class TestDeliverySimulatorRestart:
             session.add(principal_no_webhook)
 
             media_buy = MediaBuy(
+                account_id=DEFAULT_TEST_ACCOUNT_ID,
                 tenant_id=test_tenant,
                 media_buy_id=media_buy_id,
                 principal_id="principal_no_webhook",
@@ -237,6 +241,7 @@ class TestDeliverySimulatorRestart:
             # Create 5 media buys for same principal (should all use same webhook config)
             for i in range(5):
                 media_buy = MediaBuy(
+                    account_id=DEFAULT_TEST_ACCOUNT_ID,
                     tenant_id=test_tenant,
                     media_buy_id=f"buy_cardinality_{i}",
                     principal_id=test_principal,

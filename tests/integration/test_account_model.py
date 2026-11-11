@@ -7,6 +7,7 @@ and maintains tenant isolation against real PostgreSQL.
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from tests.harness._base import IntegrationEnv
 
@@ -169,24 +170,17 @@ class TestAgentAccountAccess:
 class TestMediaBuyAccountId:
     """MediaBuy.account_id FK tests."""
 
-    def test_media_buy_account_id_nullable(self, integration_db):
-        """MediaBuy can be created without account_id (backward compatible)."""
-        from src.core.database.models import MediaBuy
+    def test_media_buy_requires_account_id(self, integration_db):
+        """A persisted buy must identify its account."""
         from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
 
-        with _AccountEnv() as env:
+        with pytest.raises(IntegrityError) as failure, _AccountEnv():
             tenant = TenantFactory(tenant_id="mb_acc_test")
             principal = PrincipalFactory(tenant=tenant, principal_id="agent_mb")
-            # account_id=None EXPLICITLY, against the factory's default: this test grades
-            # that the COLUMN is nullable, so it has to write a NULL. The factory now
-            # defaults an account because a buy created by a conformant request carries one.
             MediaBuyFactory(tenant=tenant, principal=principal, account_id=None)
-            session = env.get_session()
 
-            result = session.scalars(select(MediaBuy).filter_by(tenant_id="mb_acc_test")).first()
-
-        assert result is not None
-        assert result.account_id is None
+        assert failure.value.orig.pgcode == "23502"
+        assert failure.value.orig.diag.column_name == "account_id"
 
     def test_media_buy_with_account_id(self, integration_db):
         """MediaBuy can reference an account via account_id FK."""

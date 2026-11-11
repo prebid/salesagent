@@ -15,6 +15,7 @@ from sqlalchemy import delete
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, PersistedMediaBuyStatus, Principal, Tenant
+from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID, seed_default_account
 from tests.factories.principal import plaintext_token_for
 from tests.integration.conftest import cleanup_tenant, make_media_buy, make_package
 from tests.utils.database_helpers import vhost_for
@@ -67,7 +68,7 @@ def tenant_b(integration_db):
 
 
 @pytest.fixture
-def principal_a(tenant_a):
+def principal_a(tenant_a, bound_factory_session):
     """Create a principal in tenant A."""
     principal_id = "principal_a"
     with get_db_session() as session:
@@ -80,11 +81,13 @@ def principal_a(tenant_a):
         )
         session.add(principal)
         session.commit()
+    seed_default_account(tenant_a, principal_id)
+    bound_factory_session.commit()
     yield principal_id
 
 
 @pytest.fixture
-def principal_b(tenant_b):
+def principal_b(tenant_b, bound_factory_session):
     """Create a principal in tenant B."""
     principal_id = "principal_b"
     with get_db_session() as session:
@@ -97,6 +100,8 @@ def principal_b(tenant_b):
         )
         session.add(principal)
         session.commit()
+    seed_default_account(tenant_b, principal_id)
+    bound_factory_session.commit()
     yield principal_id
 
 
@@ -109,8 +114,8 @@ def seed_data(tenant_a, tenant_b, principal_a, principal_b):
     """
     with get_db_session() as session:
         # Tenant A media buys
-        mb_a1 = make_media_buy(tenant_a, principal_a, "mb_a1", status="draft")
-        mb_a2 = make_media_buy(tenant_a, principal_a, "mb_a2", status="active")
+        mb_a1 = make_media_buy(tenant_a, principal_a, "mb_a1", status="draft", account_id=DEFAULT_TEST_ACCOUNT_ID)
+        mb_a2 = make_media_buy(tenant_a, principal_a, "mb_a2", status="active", account_id=DEFAULT_TEST_ACCOUNT_ID)
         session.add_all([mb_a1, mb_a2])
         session.flush()
 
@@ -120,7 +125,7 @@ def seed_data(tenant_a, tenant_b, principal_a, principal_b):
         session.add_all([pkg_a1_1, pkg_a1_2])
 
         # Tenant B media buys
-        mb_b1 = make_media_buy(tenant_b, principal_b, "mb_b1", status="draft")
+        mb_b1 = make_media_buy(tenant_b, principal_b, "mb_b1", status="draft", account_id=DEFAULT_TEST_ACCOUNT_ID)
         session.add(mb_b1)
         session.flush()
 
@@ -338,7 +343,7 @@ class TestMediaBuyUoW:
 
         # Create a media buy inside UoW via repository
         with MediaBuyUoW(tenant_a) as uow:
-            mb = make_media_buy(tenant_a, principal_a, "mb_uow_test")
+            mb = make_media_buy(tenant_a, principal_a, "mb_uow_test", account_id=DEFAULT_TEST_ACCOUNT_ID)
             uow.media_buys.create(mb)
 
         # Verify it persisted (outside the UoW)
@@ -356,7 +361,7 @@ class TestMediaBuyUoW:
 
         with pytest.raises(ValueError, match="intentional"):
             with MediaBuyUoW(tenant_a) as uow:
-                mb = make_media_buy(tenant_a, principal_a, "mb_uow_rollback")
+                mb = make_media_buy(tenant_a, principal_a, "mb_uow_rollback", account_id=DEFAULT_TEST_ACCOUNT_ID)
                 uow.media_buys.create(mb)
                 raise ValueError("intentional")
 
@@ -384,13 +389,15 @@ class TestIdempotencyKeyLookup:
 
         idem_key = "test-uuid-1234567890abcdef"
         with get_db_session() as session:
-            buy = make_media_buy(tenant_a, principal_a, "mb_idem_1", idempotency_key=idem_key)
+            buy = make_media_buy(
+                tenant_a, principal_a, "mb_idem_1", idempotency_key=idem_key, account_id=DEFAULT_TEST_ACCOUNT_ID
+            )
             session.add(buy)
             session.commit()
 
         with get_db_session() as session:
             repo = MediaBuyRepository(session, tenant_a)
-            found = repo.find_by_idempotency_key(idem_key, principal_a)
+            found = repo.find_by_idempotency_key(idem_key, principal_a, account_id=DEFAULT_TEST_ACCOUNT_ID)
             assert found is not None
             assert found.media_buy_id == "mb_idem_1"
 
@@ -409,20 +416,24 @@ class TestIdempotencyKeyLookup:
 
         idem_key = "shared-uuid-1234567890ab"
         with get_db_session() as session:
-            buy_a = make_media_buy(tenant_a, principal_a, "mb_idem_a", idempotency_key=idem_key)
-            buy_b = make_media_buy(tenant_b, principal_b, "mb_idem_b", idempotency_key=idem_key)
+            buy_a = make_media_buy(
+                tenant_a, principal_a, "mb_idem_a", idempotency_key=idem_key, account_id=DEFAULT_TEST_ACCOUNT_ID
+            )
+            buy_b = make_media_buy(
+                tenant_b, principal_b, "mb_idem_b", idempotency_key=idem_key, account_id=DEFAULT_TEST_ACCOUNT_ID
+            )
             session.add(buy_a)
             session.add(buy_b)
             session.commit()
 
         with get_db_session() as session:
             repo_a = MediaBuyRepository(session, tenant_a)
-            found_a = repo_a.find_by_idempotency_key(idem_key, principal_a)
+            found_a = repo_a.find_by_idempotency_key(idem_key, principal_a, account_id=DEFAULT_TEST_ACCOUNT_ID)
             assert found_a is not None
             assert found_a.media_buy_id == "mb_idem_a"
 
             repo_b = MediaBuyRepository(session, tenant_b)
-            found_b = repo_b.find_by_idempotency_key(idem_key, principal_b)
+            found_b = repo_b.find_by_idempotency_key(idem_key, principal_b, account_id=DEFAULT_TEST_ACCOUNT_ID)
             assert found_b is not None
             assert found_b.media_buy_id == "mb_idem_b"
 
@@ -433,6 +444,7 @@ class TestIdempotencyKeyLookup:
         from src.core.database.repositories.media_buy import MediaBuyRepository
 
         idem_key = "create-test-uuid-123456"
+        account_id = DEFAULT_TEST_ACCOUNT_ID
         mock_req = MagicMock()
         mock_req.model_dump.return_value = {"test": True}
         mock_req.po_number = None
@@ -445,6 +457,7 @@ class TestIdempotencyKeyLookup:
             repo = MediaBuyRepository(session, tenant_a)
             buy = repo.create_from_request(
                 media_buy_id="mb_idem_create",
+                account_id=account_id,
                 req=mock_req,
                 principal_id=principal_a,
                 advertiser_name="Test",
@@ -459,7 +472,7 @@ class TestIdempotencyKeyLookup:
         # Verify persisted
         with get_db_session() as session:
             repo = MediaBuyRepository(session, tenant_a)
-            found = repo.find_by_idempotency_key(idem_key, principal_a)
+            found = repo.find_by_idempotency_key(idem_key, principal_a, account_id=account_id)
             assert found is not None
             assert found.media_buy_id == "mb_idem_create"
 
