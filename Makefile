@@ -60,7 +60,6 @@ quality-ci:
 	uv run python .pre-commit-hooks/check_docs_links.py
 	uv run python .pre-commit-hooks/check_hardcoded_urls.py $$(find templates static -type f \( -name '*.html' -o -name '*.js' \) 2>/dev/null)
 
-
 # tests/harness/ is NOT optional here: tox's `unit` env runs
 # `pytest tests/unit/ tests/harness/`, so anything under tests/harness/ was
 # graded ONLY by a full-suite run and was invisible to the per-change gate.
