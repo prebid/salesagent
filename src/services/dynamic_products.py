@@ -309,8 +309,8 @@ def create_variant_from_template(
     # eleven further omissions, and ONE OF THEM WIDENS AUTHORIZATION rather than merely losing
     # data: dropping ``allowed_principal_ids`` turns a principal restriction into visibility
     # for every principal of the tenant (measured on this function, salesagent-tq42j; a second
-    # one, ``property_ids``, went with that column in revision 3c38b1ee241f, since every
-    # product's publishers now live in the copied ``properties``).
+    # one, ``property_ids``, went with that column in revision e2af0c242a7f, since every
+    # product's publishers now live in the copied ``publisher_selections``).
     #
     # The right shape is to DERIVE the copied set from the table and pin an exception set
     # naming each column a variant must not inherit, so a new column is inherited by default

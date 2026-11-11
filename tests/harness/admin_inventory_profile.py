@@ -135,7 +135,7 @@ def _legacy_selection_migration() -> Any:
 
 
 #: The revision file whose ``legacy_selectors`` a migrated product is built with.
-_LEGACY_SELECTION_REVISION = "3c38b1ee241f_legacy_publisher_selections_to_selectors.py"
+_LEGACY_SELECTION_REVISION = "e2af0c242a7f_publishers_own_their_adagents_document.py"
 
 
 class AdminInventoryProfileEnv(ProductEnv):
@@ -205,7 +205,7 @@ class AdminInventoryProfileEnv(ProductEnv):
     def migrated_selection(
         self, *, property_tags: list[str] | None = None, property_ids: list[str] | None = None
     ) -> list[dict]:
-        """The selectors revision 3c38b1ee241f converts a legacy selection to, over this tenant's properties.
+        """The selectors revision e2af0c242a7f converts a legacy selection to, over this tenant's properties.
 
         The migration's own conversion, run on the properties the scenario's publishers'
         files authorize, so a scenario grades the product the upgrade leaves behind. A
