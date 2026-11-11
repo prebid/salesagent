@@ -915,7 +915,7 @@ class TestSalvageDedupe:
         store = tmp_path / "store.jsonl"
         salvage_audit.write_to_store(self._parsed(), store, None)
         salvage_audit.write_to_store(self._parsed(), store, None)
-        records = [json.loads(line) for line in store.read_text().splitlines() if line.strip()]
+        records = _store_records(store)
         deep = [r for r in records if r["kind"] == "deep"]
         triage = [r for r in records if r["kind"] == "triage"]
         assert len(deep) == 1
@@ -924,7 +924,7 @@ class TestSalvageDedupe:
     def test_triage_and_deep_same_name_line_both_survive(self, salvage_audit, tmp_path: Path) -> None:
         store = tmp_path / "store.jsonl"
         salvage_audit.write_to_store(self._parsed(), store, None)
-        records = [json.loads(line) for line in store.read_text().splitlines() if line.strip()]
+        records = _store_records(store)
         kinds = sorted(r["kind"] for r in records)
         assert kinds == ["deep", "triage"]
 
@@ -941,7 +941,7 @@ class TestSalvageDedupe:
             "pass2_crashed_at": None,
         }
         salvage_audit.write_to_store(parsed, store, None)
-        records = [json.loads(line) for line in store.read_text().splitlines() if line.strip()]
+        records = _store_records(store)
         triage = [r for r in records if r["kind"] == "triage"]
         assert len(triage) == 2
         assert sorted(r["step"]["occurrence"] for r in triage) == [1, 2]
@@ -975,7 +975,7 @@ class TestSalvageDedupe:
         salvage_audit.main()
         monkeypatch.setattr(sys, "argv", ["salvage", str(raw), "--store", str(store)])
         salvage_audit.main()
-        records = [json.loads(line) for line in store.read_text().splitlines() if line.strip()]
+        records = _store_records(store)
         deep = [r for r in records if r["kind"] == "deep"]
         assert [(r["severity"], r["step"]["occurrence"]) for r in deep] == [("COSMETIC", 1), ("MISSING", 2)]
 
@@ -1025,7 +1025,7 @@ class TestSalvageDedupe:
             "pass2_crashed_at": 0,
         }
         salvage_audit.write_to_store(parsed, store, step_index)
-        records = [json.loads(line) for line in store.read_text().splitlines() if line.strip()]
+        records = _store_records(store)
         triage = [r for r in records if r["kind"] == "triage"]
         assert len(triage) == 3
         then_a = [r["step"] for r in triage if r["step"]["function_name"] == "then_a"]
@@ -1072,7 +1072,7 @@ class TestSalvageDedupe:
         }
         # Must not raise ValueError — this is the exact degraded input salvage exists to rescue.
         salvage_audit.write_to_store(parsed, store, step_index)
-        records = [json.loads(line) for line in store.read_text().splitlines() if line.strip()]
+        records = _store_records(store)
         assert records[0]["step"]["line_number"] == 0
 
     def test_parse_raw_output_strips_ansi(self, salvage_audit, tmp_path: Path) -> None:
@@ -1253,6 +1253,41 @@ def _write_artifact(path: Path, tests: list[dict], root: str = "/app") -> None:
     path.write_text(json.dumps({"root": root, "tests": tests}))
 
 
+def _store_records(store: Path) -> list[dict]:
+    """Read every non-blank JSONL record the salvage writer appended."""
+    return [json.loads(line) for line in store.read_text().splitlines() if line.strip()]
+
+
+def _run_inspect_parallel(tmp_path: Path, env_overrides: dict[str, str], *, drop: tuple[str, ...] = ()) -> list[str]:
+    """Run inspect_parallel.sh with a stubbed inspector; return each launch's argv.
+
+    The stub writes its argv to ``$ARGV_DIR/<pid>``. Every slice must launch with
+    ``--steps-dir`` and ``--timeout 600``.
+    """
+    argv_dir = tmp_path / "argv"
+    argv_dir.mkdir()
+    env = os.environ.copy()
+    for key in drop:
+        env.pop(key, None)
+    env.update(env_overrides)
+    env["ARGV_DIR"] = str(argv_dir)
+    result = subprocess.run(
+        ["/bin/bash", str(SCRIPTS / "inspect_parallel.sh"), str(tmp_path / "out")],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+    chunks = [path.read_text() for path in argv_dir.iterdir()]
+    assert len(chunks) == 8
+    for chunk in chunks:
+        assert "--steps-dir" in chunk
+        assert "--timeout\n600" in chunk
+    return chunks
+
+
 def _row(nodeid: str, outcome: str, *, longrepr: str = "") -> dict:
     row: dict = {"nodeid": nodeid, "outcome": outcome, "keywords": []}
     if longrepr:
@@ -1290,7 +1325,7 @@ class TestBddFullAuditMain:
         e2e = tmp_path / "e2e.json"
         _write_artifact(
             half,
-            [_row(f"{base}[{transport}]", "xpassed") for transport in ("a2a", "mcp", "rest")],
+            _xpassed(base),
         )
         _write_artifact(e2e, [_row("tests/bdd/test_other.py::test_e[e2e_rest]", "passed")])
         ledger = tmp_path / "ledger.txt"
@@ -1306,8 +1341,7 @@ class TestBddFullAuditMain:
         report = tmp_path / "bdd.json"
         _write_artifact(
             report,
-            [_row(f"{base}[{transport}]", "xpassed") for transport in ("a2a", "mcp", "rest")]
-            + [_row("tests/bdd/test_other.py::test_e[e2e_rest]", "passed")],
+            _xpassed(base) + [_row("tests/bdd/test_other.py::test_e[e2e_rest]", "passed")],
         )
         ledger = tmp_path / "ledger.txt"
         ledger.write_text(base + "\n")
@@ -1320,8 +1354,7 @@ class TestBddFullAuditMain:
         report = tmp_path / "bdd.json"
         _write_artifact(
             report,
-            [_row(f"{base}[{transport}]", "xpassed") for transport in ("a2a", "mcp", "rest")]
-            + [_row("tests/bdd/test_other.py::test_e[e2e_rest]", "passed")],
+            _xpassed(base) + [_row("tests/bdd/test_other.py::test_e[e2e_rest]", "passed")],
         )
         ledger = tmp_path / "ledger.txt"
         ledger.write_text("")
@@ -1365,65 +1398,26 @@ class TestInspectParallel:
     """The wrapper must launch every slice. Reading the script cannot see a glued assignment."""
 
     def test_every_slice_launches_with_steps_dir_and_timeout(self, tmp_path: Path) -> None:
-        argv_dir = tmp_path / "argv"
-        argv_dir.mkdir()
         stub = tmp_path / "inspect_stub.py"
         stub.write_text(
             "import os, sys\n"
             "from pathlib import Path\n"
             "Path(os.environ['ARGV_DIR'], str(os.getpid())).write_text('\\n'.join(sys.argv))\n"
         )
-        out = tmp_path / "out"
-        env = os.environ.copy()
-        env["INSPECT_BDD_STEPS"] = str(stub)
-        env["ARGV_DIR"] = str(argv_dir)
-        script = REPO_ROOT / ".claude" / "scripts" / "inspect_parallel.sh"
-        result = subprocess.run(
-            ["/bin/bash", str(script), str(out)],
-            cwd=REPO_ROOT,
-            env=env,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        assert result.returncode == 0, result.stderr + result.stdout
-        chunks = [path.read_text() for path in argv_dir.iterdir()]
-        assert len(chunks) == 8
-        for chunk in chunks:
-            assert "--steps-dir" in chunk
-            assert "--timeout\n600" in chunk
+        _run_inspect_parallel(tmp_path, {"INSPECT_BDD_STEPS": str(stub)})
 
     def test_default_inspector_path_runs_without_override(self, tmp_path: Path) -> None:
         """#1664 defect 3: the wrapper's default inspector path must actually run."""
-        argv_dir = tmp_path / "argv"
-        argv_dir.mkdir()
         bindir = tmp_path / "bin"
         bindir.mkdir()
         stub = bindir / "python3"
         stub.write_text('#!/bin/sh\nprintf \'%s\\n\' "$@" > "$ARGV_DIR/$$"\n')
         stub.chmod(0o755)
-        out = tmp_path / "out"
-        env = os.environ.copy()
-        env.pop("INSPECT_BDD_STEPS", None)
-        env["PATH"] = str(bindir) + os.pathsep + env.get("PATH", "")
-        env["ARGV_DIR"] = str(argv_dir)
-        script = REPO_ROOT / ".claude" / "scripts" / "inspect_parallel.sh"
-        result = subprocess.run(
-            ["/bin/bash", str(script), str(out)],
-            cwd=REPO_ROOT,
-            env=env,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        assert result.returncode == 0, result.stderr + result.stdout
-        inspector = str(REPO_ROOT / ".claude" / "scripts" / "inspect_bdd_steps.py")
-        chunks = [path.read_text() for path in argv_dir.iterdir()]
-        assert len(chunks) == 8
+        path = str(bindir) + os.pathsep + os.environ.get("PATH", "")
+        chunks = _run_inspect_parallel(tmp_path, {"PATH": path}, drop=("INSPECT_BDD_STEPS",))
+        inspector = str(SCRIPTS / "inspect_bdd_steps.py")
         for chunk in chunks:
             assert chunk.startswith(inspector + "\n")
-            assert "--steps-dir" in chunk
-            assert "--timeout\n600" in chunk
 
 
 class TestGradeResultNamedFields:
