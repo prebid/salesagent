@@ -59,13 +59,13 @@ from bdd_audit_common import (  # noqa: E402
     E2E_LEDGER_PATH,
     REPO_ROOT,
     STEPS_DIR,
+    LoadedArtifact,
     TagReason,
     cli_load_or_exit,
     extract_scenario_base,
     extract_transport,
     extract_uc,
     grade_base,
-    graded_outcome,
     load_bdd_artifact,
     load_e2e_rest_known_failure_bases,
     parse_conftest_xfail_tags,
@@ -346,10 +346,14 @@ def parse_test_results(json_path: Path) -> ParsedTestResults:
     Empty-artifact refusal + census live in ``load_bdd_artifact`` (same path
     ``main`` uses).
     """
-    loaded = load_bdd_artifact(json_path)
-    all_tests: list[TestReportEntry] = cast(list[TestReportEntry], loaded.tests)
-    xfailed = [t for t in all_tests if graded_outcome(t) == "xfailed"]
-    xpassed = [t for t in all_tests if graded_outcome(t) == "xpassed"]
+    return _split_by_outcome(load_bdd_artifact(json_path))
+
+
+def _split_by_outcome(loaded: LoadedArtifact) -> ParsedTestResults:
+    """Split the loader's graded rows into xfailed and xpassed."""
+    all_tests = cast(list[TestReportEntry], loaded.tests)
+    xfailed = [t for t in all_tests if t["outcome"] == "xfailed"]
+    xpassed = [t for t in all_tests if t["outcome"] == "xpassed"]
     return ParsedTestResults(
         xfailed=xfailed,
         xpassed=xpassed,
@@ -828,10 +832,7 @@ def main() -> None:
     # Step 3: Parse test results (shared empty guard + census; CLI exit edge)
     print(f"Parsing {', '.join(str(path) for path in json_paths)}...", file=sys.stderr)
     loaded = cli_load_or_exit(json_paths)
-    all_tests = cast(list[TestReportEntry], loaded.tests)
-    graded = loaded.nodeid_outcomes
-    xfailed_tests = [t for t, (_, outcome) in zip(all_tests, graded, strict=True) if outcome == "xfailed"]
-    xpassed_tests = [t for t, (_, outcome) in zip(all_tests, graded, strict=True) if outcome == "xpassed"]
+    xfailed_tests, xpassed_tests, all_tests, _root = _split_by_outcome(loaded)
     print(
         f"  Parsed {len(all_tests)} tests ({len(xfailed_tests)} xfailed, {len(xpassed_tests)} xpassed)",
         file=sys.stderr,

@@ -113,7 +113,11 @@ class ArtifactCensus(NamedTuple):
 
 
 class LoadedArtifact(NamedTuple):
-    """Shared bdd.json load: tests, outcomes, and census-driven force_confirm."""
+    """Shared bdd.json load: graded tests, outcomes, and census-driven force_confirm.
+
+    Each row in ``tests`` carries its graded ``outcome`` (see ``graded_outcome``),
+    so a strict xpass reads ``xpassed`` everywhere.
+    """
 
     tests: list[dict[str, Any]]
     nodeid_outcomes: list[tuple[str, str]]
@@ -341,8 +345,9 @@ def load_bdd_artifact(paths: Path | Sequence[Path]) -> LoadedArtifact:
     Tests are concatenated and the transport census is taken over the union,
     so a split ``bdd_inprocess`` + ``bdd_e2e`` pair grades together. Files
     whose ``root`` differs are refused (two runs can both say ``/app``).
-    Empty input raises ``EmptyArtifactError``. ``nodeid_outcomes`` uses
-    ``graded_outcome``. When ``e2e_rest`` is absent from the union,
+    Empty input raises ``EmptyArtifactError``. Each row's ``outcome`` is
+    replaced by ``graded_outcome``, and ``nodeid_outcomes`` is read from those
+    rows. When ``e2e_rest`` is absent from the union,
     ``force_confirm`` is True; the stderr warning is CLI-only.
     """
     path_list = _artifact_paths(paths)
@@ -358,13 +363,14 @@ def load_bdd_artifact(paths: Path | Sequence[Path]) -> LoadedArtifact:
     if len(set(roots)) > 1:
         raise ArtifactRootMismatchError()
 
-    tests: list[Any] = []
+    raw_tests: list[Any] = []
     for data in blobs:
-        tests.extend(list(data.get("tests") or []))
-    if not tests:
+        raw_tests.extend(list(data.get("tests") or []))
+    if not raw_tests:
         raise EmptyArtifactError()
 
-    nodeid_outcomes = [(t["nodeid"], graded_outcome(t)) for t in tests]
+    tests = [{**t, "outcome": graded_outcome(t)} for t in raw_tests]
+    nodeid_outcomes = [(t["nodeid"], t["outcome"]) for t in tests]
     census = artifact_transport_census(nodeid_outcomes)
     return LoadedArtifact(
         tests=tests,

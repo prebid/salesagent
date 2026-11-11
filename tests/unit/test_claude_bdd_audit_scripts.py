@@ -570,6 +570,18 @@ class TestParseTestResultsCallSites:
         outcomes = cross_reference_audit.parse_test_results(path)
         assert [o.outcome for o in outcomes] == ["xpassed"]
 
+    def test_loader_writes_the_graded_outcome_onto_the_row(self, bdd_audit_common, tmp_path: Path) -> None:
+        # Consumers read t["outcome"]; if the loader kept the raw "failed", a
+        # strict xpass would be a failure in every report that reads the row.
+        path = tmp_path / "bdd.json"
+        _write_artifact(
+            path,
+            [_row("t::s[a2a]", "failed", longrepr="[gw0] linux -- Python 3.12.0\n[XPASS(strict)] unexpected pass")],
+        )
+        loaded = bdd_audit_common.load_bdd_artifact(path)
+        assert [t["outcome"] for t in loaded.tests] == ["xpassed"]
+        assert loaded.nodeid_outcomes == [("t::s[a2a]", "xpassed")]
+
     def test_audit_xfails_parse_round_trip(self, audit_xfails, captured_bdd_slice) -> None:
         xfailed, xpassed, all_tests, artifact_root = audit_xfails.parse_test_results(CAPTURED_SLICE)
         assert artifact_root == captured_bdd_slice["root"] == "/app"

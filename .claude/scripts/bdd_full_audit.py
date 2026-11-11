@@ -114,15 +114,15 @@ class InspectorFlag:
 # ── Parsing ──────────────────────────────────────────────────────────
 
 
-def _test_entry_from_raw(t: dict, *, outcome: str) -> TestEntry:
-    """Build a TestEntry from one bdd.json test dict (null-safe longrepr).
+def _test_entry_from_raw(t: dict) -> TestEntry:
+    """Build a TestEntry from one loaded test row (null-safe longrepr).
 
-    ``outcome`` is the value from ``LoadedArtifact.nodeid_outcomes``.
+    ``outcome`` is the graded value ``load_bdd_artifact`` wrote onto the row.
     """
     longrepr = phase_dict(t, "call").get("longrepr") or ""
     return TestEntry(
         nodeid=t["nodeid"],
-        outcome=outcome,
+        outcome=t["outcome"],
         keywords=t.get("keywords", []),
         error=extract_longrepr_e_line(longrepr),
         longrepr=longrepr[:1000],
@@ -131,10 +131,7 @@ def _test_entry_from_raw(t: dict, *, outcome: str) -> TestEntry:
 
 def entries_from_loaded(loaded: LoadedArtifact) -> list[TestEntry]:
     """Build entries from the loader's tests and graded outcomes."""
-    return [
-        _test_entry_from_raw(t, outcome=outcome)
-        for t, (_, outcome) in zip(loaded.tests, loaded.nodeid_outcomes, strict=True)
-    ]
+    return [_test_entry_from_raw(t) for t in loaded.tests]
 
 
 def parse_test_results(json_path: Path) -> list[TestEntry]:
