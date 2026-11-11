@@ -18,6 +18,7 @@ from datetime import UTC, datetime, timedelta
 from functools import partial
 
 from sqlalchemy import inspect, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import attributes
 
 from src.core.database.database_session import get_db_session
@@ -54,6 +55,8 @@ async def generate_variants_for_brief(tenant_id: str, brief: str, our_agent_url:
                 generate_variants_from_signals(
                     uow.products, template, signals[: template.max_signals], brief, our_agent_url
                 )
+    except SQLAlchemyError:
+        raise
     except Exception:
         logger.exception("Dynamic generation failed for tenant %s; serving the persisted catalogue", tenant_id)
 
@@ -114,6 +117,8 @@ def generate_variants_from_signals(
                 f"for signal {signal.get('signal_agent_segment_id')}"
             )
 
+        except SQLAlchemyError:
+            raise
         except Exception as e:
             logger.error(f"Error generating variant from signal: {e}", exc_info=True)
             continue
