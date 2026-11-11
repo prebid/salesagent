@@ -43,5 +43,6 @@ Feature: Native A2A receipts finish with the invocation
     When "owner" calls "CancelTask" for the "existing" task
     Then the task is not found
     When the owner polls the durable AdCP task
-    Then the receipt contains the AdCP "input-required" result
+    Then the native receipt state is "completed"
+    And the receipt contains the AdCP "input-required" result
     And the durable AdCP task still has the submitted handle

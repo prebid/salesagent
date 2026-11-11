@@ -384,8 +384,7 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         branches inherit (``_BRANCH_ADAPTERS``, src/core/schemas/_base.py), so the
         wrapper has no ``response`` field to fill and the ladder has nothing left to
         decide. This serves the REST wire and the A2A submitted payload alike — the
-        latter read off ``status.message.parts``, which is where A2A puts an interim
-        status's data and where production writes it.
+        latter read from the completed native Task's artifact DataPart.
         """
         from src.core.schemas._base import UpdateMediaBuyResult
 

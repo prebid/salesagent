@@ -18,7 +18,6 @@ from adcp import get_adcp_spec_version
 # Add parent directories to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from scripts.setup.init_database_ci import CI_TEST_TENANT_ID  # noqa: E402
 from src.app import _AGENT_CARD_PATHS  # noqa: E402  (after the sys.path bootstrap above)
 from src.core.tools.registry import TOOLS  # noqa: E402  (after the sys.path bootstrap above)
 from tests.e2e.conftest import e2e_ca_bundle  # noqa: E402  (after the sys.path bootstrap)
@@ -52,8 +51,7 @@ class TestA2AEndpointsActual:
     and no multiplicity, and its ``"8080"`` default silently aimed these tests at
     whatever happened to be listening there. Taking ``live_server`` also means the
     stack is guaranteed up, so a connection failure is a real failure instead of a
-    skip — same rule as ``test_unknown_task_id_returns_task_not_found_code_on_the_wire``
-    below.
+    skip.
 
     The front is declared here for the same reason the discovery-path class declares it: a
     card fetch is discovery, so the tenant has to be resolvable from the Host alone, and a
@@ -356,45 +354,6 @@ class TestA2AServerIntegration:
         """
         with declare_tenant_front(live_server, card_origin(live_server)):
             yield
-
-    @pytest.mark.integration
-    @pytest.mark.parametrize("method", ["GetTask", "CancelTask"])
-    def test_unknown_task_id_returns_task_not_found_code_on_the_wire(self, method, live_server, test_auth_token):
-        """The deliverable of the TaskNotFoundError change is what an A2A client
-        SEES: JSON-RPC error code -32001. That code is not carried by the
-        exception — it is synthesized downstream. This POSTs an authenticated request to the
-        running /a2a endpoint and grades the code on the wire.
-
-        Uses the ``live_server`` fixture so the transport is guaranteed up: the
-        base URL comes from ``live_server['a2a']`` and the assertion runs
-        deterministically instead of skipping when nothing happens to be listening
-        on the ad-hoc port — a skip under strict xfail is neither XFAIL nor XPASS,
-        so the sole on-the-wire grade must never be allowed to no-op.
-
-        Parametrized over both methods. `CancelTask` of an unknown id went from a silent
-        None to an error, so it needs the same wire tripwire as `GetTask` — otherwise
-        only half the contract is locked in.
-
-        GRADUATED from a strict xfail against #1670. The code WAS -32603, because the
-        v0.3 compat adapter ended in a bare `except Exception -> CoreInternalError` with
-        no `A2AError -> code` mapping, flattening every raised error. With that adapter
-        removed, requests dispatch through the SDK's own dispatcher, which performs the
-        mapping: both methods now answer the spec's -32001. Measured before the xfail was
-        deleted, not assumed from the marker going green.
-        """
-        response = requests.post(
-            f"{live_server['a2a']}/a2a",
-            json={"jsonrpc": "2.0", "id": 1, "method": method, "params": {"id": "task_does_not_exist"}},
-            headers={**credential_headers(token=test_auth_token, tenant=CI_TEST_TENANT_ID), "A2A-Version": "1.0"},
-            timeout=5,
-        )
-
-        assert response.status_code == 200, f"JSON-RPC errors ride a 200 envelope: {response.status_code}"
-        data = response.json()
-        assert "error" in data, f"unknown task id must produce a JSON-RPC error: {data}"
-        assert data["error"]["code"] == -32001, (
-            f"A2A spec defines -32001 (TaskNotFoundError) for an unknown task id, got {data['error']['code']}"
-        )
 
     @pytest.mark.integration
     def test_server_discovery_flow(self, live_server):

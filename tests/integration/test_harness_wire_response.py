@@ -358,9 +358,9 @@ class TestHasWireIsDeclaredAtEveryConstructionSite:
             "REST DELIVER exception — no HTTP body existed at all, so nothing crossed the wire",
         ),
         # ── tests/harness/raw_wire.py — a document sent as written (REST goes through client.py) ──
-        ("raw_wire.py", "unwrap_a2a_native_response", 0): (
+        ("client.py", "jsonrpc_http_result", 0): (
             True,
-            "native A2A task success — the task body was received in a real HTTP response",
+            "A2A HTTP response received — success, AdCP refusal, protocol refusal or malformed body",
         ),
         ("raw_wire.py", "_protocol_refusal", 0): (
             False,

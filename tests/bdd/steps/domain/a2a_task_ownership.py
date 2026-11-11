@@ -2,7 +2,6 @@
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import wire_field
 from tests.bdd.steps.generic._dispatch import dispatch_request
 
 
@@ -28,7 +27,7 @@ def when_poll_adcp_task(ctx: dict) -> None:
 
 @then(parsers.parse('the native receipt state is "{state}"'))
 def then_task_state(ctx: dict, state: str) -> None:
-    assert wire_field(ctx, "task")["status"]["state"] == f"TASK_STATE_{state.upper()}"
+    assert ctx["result"].envelope["task"]["status"]["state"] == f"TASK_STATE_{state.upper()}"
 
 
 @then(parsers.parse('the receipt contains the AdCP "{status}" result'))
@@ -40,7 +39,7 @@ def then_adcp_result(ctx: dict, status: str) -> None:
 def then_distinct_handles(ctx: dict) -> None:
     task_id = ctx["env"].adcp_result(ctx["result"])["task_id"]
     assert isinstance(task_id, str) and task_id
-    assert task_id != wire_field(ctx, "task")["id"]
+    assert task_id != ctx["result"].envelope["task"]["id"]
     assert ctx["env"].adcp_result(ctx["result"])["context"] == {"trace": "native-receipt"}
 
 

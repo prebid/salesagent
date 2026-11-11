@@ -25,9 +25,8 @@ does, rather than becoming a result a scenario could mistake for the seller's an
 from __future__ import annotations
 
 import asyncio
-import copy
 import json
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
@@ -38,11 +37,6 @@ from tests.harness.transport import (
     TransportResult,
     derive_error_status,
 )
-
-#: The A2A JSON-RPC route and the version header it requires, the same two the harness's
-#: wire dispatcher sends (``tests/harness/client.py::_deliver_e2e_a2a``).
-_A2A_RPC_PATH = "/a2a"
-_A2A_VERSION_HEADER = {"A2A-Version": "1.0"}
 
 
 @dataclass(frozen=True)
@@ -126,32 +120,6 @@ def _e2e_rest(env: Any, document: RawDocument, credential: dict[str, str]) -> Tr
 # ── A2A ──────────────────────────────────────────────────────────────
 
 
-def unwrap_a2a_native_response(response: Any) -> TransportResult:
-    """Read a native task operation's real HTTP response, rather than an AdCP artifact."""
-    from pydantic import RootModel
-
-    from tests.harness._base import WireError, WireRefusal, _a2a_jsonrpc_result
-    from tests.harness.client import unwrap_a2a_error
-
-    try:
-        wire = _a2a_jsonrpc_result(response)
-    except (WireError, WireRefusal) as exc:
-        result = unwrap_a2a_error(exc)
-        return replace(
-            result,
-            has_wire=True,
-            raw_response=response,
-            envelope={
-                **result.envelope,
-                "jsonrpc_error": response.json()["error"],
-                "status_code": response.status_code,
-            },
-        )
-    return TransportResult(
-        payload=RootModel(copy.deepcopy(wire)), wire_response=wire, raw_response=response, has_wire=True
-    )
-
-
 def _a2a_message(document: RawDocument) -> Any:
     from a2a.types import Message, Part, Role
 
@@ -199,8 +167,7 @@ def _a2a(env: Any, document: RawDocument, credential: dict[str, str]) -> Transpo
     from a2a.utils.errors import JSON_RPC_ERROR_CODE_MAP, A2AError
 
     from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-    from tests.harness._base import _a2a_call_context
-    from tests.utils.a2a_helpers import extract_data_from_artifact
+    from tests.harness._base import _a2a_call_context, _a2a_protobuf_data
 
     env._commit_factory_data()
     context = _a2a_call_context(credential)
@@ -214,43 +181,19 @@ def _a2a(env: Any, document: RawDocument, credential: dict[str, str]) -> Transpo
         # table rather than restated here.
         return _protocol_refusal(Transport.A2A, exc, jsonrpc_error_code=JSON_RPC_ERROR_CODE_MAP[type(exc)])
     failed = task.status.state == TaskState.TASK_STATE_FAILED
-    return _a2a_task_result(Transport.A2A, failed, [extract_data_from_artifact(a) for a in task.artifacts])
+    return _a2a_task_result(Transport.A2A, failed, [_a2a_protobuf_data(task)])
 
 
 def _e2e_a2a(env: Any, document: RawDocument, credential: dict[str, str]) -> TransportResult:
-    import httpx
     from a2a.types.a2a_pb2 import SendMessageRequest
-    from google.protobuf import json_format
 
-    from tests.harness._base import _wire_envelope
+    from tests.harness._base import _a2a_jsonrpc_body
+    from tests.harness.client import jsonrpc_http_result
 
     if not env.e2e_config:
         raise RuntimeError("E2E dispatch requires env.e2e_config (pass e2e_config= to env)")
-    rpc_body = {
-        "jsonrpc": "2.0",
-        "id": str(uuid4()),
-        "method": "SendMessage",
-        "params": json_format.MessageToDict(SendMessageRequest(message=_a2a_message(document))),
-    }
-    headers = {"Content-Type": "application/json", **_A2A_VERSION_HEADER, **credential}
-    with httpx.Client(base_url=env.e2e_config.base_url, timeout=30) as client:
-        response = client.post(_A2A_RPC_PATH, json=rpc_body, headers=headers)
-    rpc = response.json()
-    if "error" in rpc:
-        error = rpc["error"]
-        wire = _wire_envelope(error.get("data")) if isinstance(error.get("data"), dict) else None
-        if wire is not None:
-            return _a2a_task_result(Transport.E2E_A2A, True, [wire])
-        return _protocol_refusal(
-            Transport.E2E_A2A, RuntimeError(error.get("message", "")), jsonrpc_error_code=error.get("code")
-        )
-    result = rpc.get("result") or {}
-    task = result.get("task") or result
-    failed = (task.get("status") or {}).get("state") == "TASK_STATE_FAILED"
-    bodies = [
-        part["data"] for artifact in task.get("artifacts", []) for part in artifact.get("parts", []) if "data" in part
-    ]
-    return _a2a_task_result(Transport.E2E_A2A, failed, bodies)
+    body = _a2a_jsonrpc_body("SendMessage", SendMessageRequest(message=_a2a_message(document)))
+    return jsonrpc_http_result(Transport.E2E_A2A, env.post_a2a(body, credential))
 
 
 # ── MCP ──────────────────────────────────────────────────────────────

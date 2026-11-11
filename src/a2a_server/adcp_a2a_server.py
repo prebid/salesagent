@@ -47,15 +47,6 @@ from a2a.types import (
 )
 from a2a.utils.errors import A2AError
 from adcp.server.mcp_tools import ADCP_TOOL_DEFINITIONS
-
-# The spec's nine-value task status, off the PUBLIC surface. Until the pinned SDK,
-# ``adcp.types.TaskStatus`` resolved to a hand-written five-value enum and the real one was
-# reachable only through the private generated tree, which is why this import used to go
-# there. the pinned SDK deletes the hand-written enum outright and ``GeneratedTaskStatus`` is the
-# public name for the generated one (identity-checked: it IS
-# ``adcp.types.domains.enums.task_status.TaskStatus``). The local ALIAS stays, because
-# ``TaskStatus`` above is a2a's protobuf message of the same name.
-from adcp.types import GeneratedTaskStatus as LibraryTaskStatus
 from google.protobuf import json_format, struct_pb2
 
 from src.a2a_server.context_builder import EXCHANGE_STATE_KEY
@@ -151,22 +142,6 @@ A2A_WIRE_INTEGER_FIELDS = frozenset(
         "impressions",
     }
 )
-
-
-#: AdCP 3.2.7 A2A profile: a submitted AdCP operation is the completed result
-#: of this invocation. Its durable task_id remains in the artifact payload.
-#: The remaining envelope statuses retain their existing A2A mapping.
-_TASK_STATE_BY_ADCP_STATUS: dict[LibraryTaskStatus, TaskState] = {
-    LibraryTaskStatus.submitted: TaskState.TASK_STATE_COMPLETED,
-    LibraryTaskStatus.working: TaskState.TASK_STATE_WORKING,
-    LibraryTaskStatus.input_required: TaskState.TASK_STATE_INPUT_REQUIRED,
-    LibraryTaskStatus.completed: TaskState.TASK_STATE_COMPLETED,
-    LibraryTaskStatus.canceled: TaskState.TASK_STATE_CANCELED,
-    LibraryTaskStatus.failed: TaskState.TASK_STATE_FAILED,
-    LibraryTaskStatus.rejected: TaskState.TASK_STATE_REJECTED,
-    LibraryTaskStatus.auth_required: TaskState.TASK_STATE_AUTH_REQUIRED,
-    LibraryTaskStatus.unknown: TaskState.TASK_STATE_UNSPECIFIED,
-}
 
 
 def restore_a2a_integer_types(data: Any, integer_field_names: frozenset[str] = A2A_WIRE_INTEGER_FIELDS) -> Any:
@@ -299,21 +274,21 @@ class AdCPRequestHandler(RequestHandler):
 
             # No ``except`` around this. A refused credential, a malformed payload and a failing
             # tool all leave ``serve`` as ``AdcpFailure``, which ``_dispatch_skill`` serializes
-            # into the answer like any other response; the Task state below is read off that
-            # answer's own ``status``. An unknown skill is an ``A2AError`` and propagates to the
-            # JSON-RPC layer. AuthChallengeResponder reads a refused credential off the artifact
+            # into the answer and marks as a failed invocation. A successful invocation is
+            # completed even when its AdCP operation is still pending. An unknown skill is
+            # an ``A2AError`` and propagates to JSON-RPC. AuthChallengeResponder reads a refused
+            # credential off the artifact
             # (``adcp_error_code_in``, shape 4), so the 401 handshake needs no branch here keyed
             # on an error class.
-            result = await self._dispatch_skill(skill, parameters, headers, exchange)
+            result, state = await self._dispatch_skill(skill, parameters, headers, exchange)
 
             # The direct AdCP payload is the invocation's result, including a submitted
             # operation's durable task_id and buyer context (AdCP 3.2.7 A2A profile,
             # "Submitted AdCP work"). Native A2A task IDs never identify that operation.
-            status = LibraryTaskStatus(result["status"])
             task.artifacts.append(
                 Artifact(artifact_id="skill_result_1", name=f"{skill}_result", parts=_result_parts(result))
             )
-            task.status.CopyFrom(TaskStatus(state=_TASK_STATE_BY_ADCP_STATUS[status]))
+            task.status.CopyFrom(TaskStatus(state=state))
 
         except A2AError:
             raise
@@ -468,8 +443,8 @@ class AdCPRequestHandler(RequestHandler):
         parameters: Any,
         headers: Mapping[str, str],
         exchange: HttpExchange | None = None,
-    ) -> dict[str, Any]:
-        """Run one skill through ``serve`` and return the body the artifact DataPart carries.
+    ) -> tuple[dict[str, Any], TaskState]:
+        """Return the direct AdCP body and the state of this native invocation.
 
         The whole of A2A's request path. A row with ``a2a=True`` IS dispatchable: the registry
         says which tools this transport serves and the card is derived from the same rows, so
@@ -487,10 +462,10 @@ class AdCPRequestHandler(RequestHandler):
         try:
             response = await serve(skill_name, parameters, headers, TransportProtocol.A2A, exchange)
         except AdcpFailure as failure:
-            # A2A's wire failure marker is the Task STATE, set by the caller from the
-            # response's own ``status``. This transport adds nothing to the BODY.
-            return to_wire(failure.response)
-        return to_wire(response)
+            return to_wire(failure.response), TaskState.TASK_STATE_FAILED
+        # AdCP 3.2.7 A2A profile, Response mapping: every successful invocation,
+        # including get_task_status polls, completes independently of business status.
+        return to_wire(response), TaskState.TASK_STATE_COMPLETED
 
 
 def _derived_skills() -> list[AgentSkill]:

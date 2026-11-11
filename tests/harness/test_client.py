@@ -490,6 +490,209 @@ class TestClientE2eMcpDelivery:
         result.assert_wire_error("AUTH_REQUIRED")
 
 
+class TestA2AHttpResultContract:
+    """The client reads actual HTTP frames without accepting the old native lifecycle."""
+
+    @staticmethod
+    def _dispatch(frame, status=200, entrypoint="client", local_parser=False):
+        from tests.harness.transport import E2EConfig
+        from tests.helpers.local_http_origin import run_local_origin
+
+        with run_local_origin() as origin:
+            origin.respond_with(status, body=json.dumps(frame).encode())
+            env = BaseTestEnv(e2e_config=E2EConfig(base_url=origin.base_url, postgres_url="postgresql://unused/db"))
+            env.A2A_OVER_HTTP = True
+            env.A2A_SKILL = "get_products"
+            env._signed_dispatch = False
+            if local_parser:
+                from adcp.types import GetAdcpCapabilitiesResponse
+
+                # A mismatched env parser must remain a harness error even though
+                # the received get_products frame passes the core's pinned parser.
+                env.RESPONSE_MODEL = GetAdcpCapabilitiesResponse
+            if entrypoint == "dispatcher":
+                return env.call_via(Transport.A2A, credential={})
+            if entrypoint != "client":
+                return getattr(env, entrypoint)(credential={})
+            return AdCPTestClient(env).call("get_products", {}, Transport.E2E_A2A, credential={})
+
+    @staticmethod
+    def _frame(state="TASK_STATE_COMPLETED"):
+        return {
+            "jsonrpc": "2.0",
+            "id": "reader-contract",
+            "result": {
+                "task": {
+                    "id": "native-receipt",
+                    "status": {"state": state},
+                    "artifacts": [{"parts": [{"data": {"products": []}}]}],
+                }
+            },
+        }
+
+    def test_completed_result_retains_http_response_and_native_frame(self):
+        frame = self._frame()
+        result = self._dispatch(frame)
+
+        assert result.is_success, result.error
+        assert result.has_wire
+        assert result.raw_response.status_code == 200
+        assert result.envelope["task"] == frame["result"]["task"]
+        assert result.wire_response == {"products": []}
+
+    def test_failed_result_retains_http_response_and_native_frame(self):
+        frame = self._frame("TASK_STATE_FAILED")
+        entry = {"code": "PRODUCT_NOT_FOUND", "message": "missing", "recovery": "retry"}
+        envelope = {"adcp_error": entry, "errors": [entry]}
+        frame["result"]["task"]["artifacts"][0]["parts"][0]["data"] = envelope
+        result = self._dispatch(frame)
+
+        assert result.is_error
+        assert result.has_wire
+        assert result.raw_response.status_code == 200
+        assert result.envelope["task"] == frame["result"]["task"]
+        assert result.error_envelope() == envelope
+
+    @classmethod
+    def _delivery_failure(cls, kind):
+        frame = cls._frame("TASK_STATE_FAILED" if kind == "native" else "TASK_STATE_COMPLETED")
+        if kind == "native":
+            entry = {"code": "PRODUCT_NOT_FOUND", "message": "missing", "recovery": "retry"}
+            body = {"adcp_error": entry, "errors": [entry]}
+        elif kind == "typed_parse":
+            body = {"products": "invalid-list"}
+        else:
+            body = {"products": []}
+        frame["result"]["task"]["artifacts"][0]["parts"][0]["data"] = body
+        if kind == "malformed":
+            frame["result"]["task"]["status"] = "invalid-status-object"
+        return frame, body
+
+    @pytest.mark.parametrize("kind", ["native", "typed_parse", "local_parse", "malformed"])
+    @pytest.mark.parametrize("entrypoint", ["call_a2a", "deliver_a2a"])
+    def test_legacy_http_delivery_raises_instead_of_returning_an_error_payload(self, kind, entrypoint):
+        from tests.harness._base import WireError, WireRefusal
+
+        frame, _body = self._delivery_failure(kind)
+        error_type = WireError if kind == "native" else WireRefusal
+        with pytest.raises(error_type) as caught:
+            self._dispatch(frame, entrypoint=entrypoint, local_parser=kind == "local_parse")
+
+        assert caught.value.response.status_code == 200
+        if kind != "native":
+            assert caught.value.__cause__ is not None
+
+    @pytest.mark.parametrize("kind", ["native", "typed_parse", "local_parse", "malformed"])
+    def test_http_dispatcher_keeps_error_and_native_evidence(self, kind):
+        frame, body = self._delivery_failure(kind)
+        result = self._dispatch(frame, entrypoint="dispatcher", local_parser=kind == "local_parse")
+
+        assert result.is_error
+        assert result.has_wire
+        assert result.raw_response.status_code == 200
+        assert result.envelope["task"] == frame["result"]["task"]
+        if kind == "native":
+            assert result.error_envelope() == body
+        else:
+            assert result.wire_response == (None if kind == "malformed" else body)
+            assert result.payload is None
+            assert result.error.__cause__ is not None
+
+    @pytest.mark.parametrize("field, value", [("status", "completed"), ("artifacts", [None])])
+    def test_malformed_native_task_retains_the_http_evidence(self, field, value):
+        frame = self._frame()
+        frame["result"]["task"][field] = value
+        result = self._dispatch(frame)
+
+        assert result.is_error
+        assert result.has_wire
+        assert result.raw_response.status_code == 200
+
+    def test_http_numeric_fields_are_not_repaired_by_the_reader(self):
+        frame = self._frame()
+        frame["result"]["task"]["artifacts"][0]["parts"][0]["data"]["returned_count"] = 2.0
+        result = self._dispatch(frame)
+
+        assert type(result.wire_response["returned_count"]) is float
+
+    def test_protobuf_capture_restores_wire_integer_fields(self):
+        from a2a.types import Task
+        from google.protobuf.json_format import ParseDict
+
+        from tests.harness._base import _a2a_protobuf_data
+
+        frame = self._frame()["result"]["task"]
+        frame["artifacts"][0]["parts"][0]["data"]["returned_count"] = 2
+        task = ParseDict(frame, Task())
+
+        data = _a2a_protobuf_data(task)
+
+        assert type(data["returned_count"]) is int
+        assert data["returned_count"] == 2
+
+    @pytest.mark.parametrize("signed", [False, True])
+    @pytest.mark.parametrize(
+        "credential",
+        [
+            credential_headers(token="invalid-token", tenant="foreign-tenant"),
+            credential_headers(token="foreign-token", host="foreign-tenant.example"),
+        ],
+    )
+    def test_signable_http_route_preserves_presented_credentials(self, signed, credential):
+        from tests.harness.signing_capability import SigningCapability
+        from tests.harness.transport import E2EConfig
+        from tests.helpers.local_http_origin import run_local_origin
+        from tests.helpers.signing import keypair_for
+
+        private_key, jwks = keypair_for("a2a-reader")
+        with run_local_origin() as origin:
+            origin.respond_with(200, body=json.dumps(self._frame()).encode())
+            env = BaseTestEnv(e2e_config=E2EConfig(base_url=origin.base_url, postgres_url="postgresql://unused/db"))
+            env._signing = SigningCapability(private_key, jwks, "capability-token", "a2a-reader", origin.base_url)
+            env.post_a2a({"method": "SendMessage"}, credential, signed=signed)
+            headers = {key.lower(): value for key, value in origin.requests[0].headers.items()}
+
+        for header in ("Authorization", "x-adcp-auth"):
+            assert headers.get(header.lower()) == credential.get(header)
+        for header in ("x-adcp-tenant", "Host"):
+            if header in credential:
+                assert headers[header.lower()] == credential[header]
+        assert ("signature" in headers) is signed
+
+    @pytest.mark.parametrize("state", ["TASK_STATE_SUBMITTED", "TASK_STATE_WORKING", "TASK_STATE_INPUT_REQUIRED", ""])
+    def test_nonterminal_native_state_is_rejected_even_with_an_artifact(self, state):
+        result = self._dispatch(self._frame(state))
+
+        assert result.is_error
+        assert result.has_wire
+        assert result.raw_response.status_code == 200
+        assert result.wire_response is None
+
+    @pytest.mark.parametrize("artifacts, parts", [(0, 1), (2, 1), (1, 0), (1, 2)])
+    def test_task_requires_exactly_one_artifact_and_one_data_part(self, artifacts, parts):
+        frame = self._frame()
+        frame["result"]["task"]["artifacts"] = [
+            {"parts": [{"data": {"products": []}} for _ in range(parts)]} for _ in range(artifacts)
+        ]
+        result = self._dispatch(frame)
+
+        assert result.is_error
+        assert result.has_wire
+        assert result.wire_response is None
+
+    @pytest.mark.parametrize("status", [200, 401])
+    def test_jsonrpc_refusal_retains_the_response_and_standard_code(self, status):
+        frame = {"jsonrpc": "2.0", "id": "reader-contract", "error": {"code": -32001, "message": "purged"}}
+        result = self._dispatch(frame, status)
+
+        assert result.is_error
+        assert result.has_wire
+        assert result.raw_response.status_code == status
+        assert result.envelope["transport"] == "e2e_a2a"
+        assert result.envelope["jsonrpc_error_code"] == -32001
+        assert result.wire_error_envelope is None
+
+
 class TestClientE2eA2aDelivery:
     """``_deliver_e2e_a2a`` (the wire-grading work) — real JSON-RPC
     ``message/send`` HTTP delivery, HTTP layer mocked (unit-level; genuine
@@ -528,7 +731,9 @@ class TestClientE2eA2aDelivery:
         }
 
     def test_success_posts_jsonrpc_and_returns_stripped_artifact_data(self):
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import patch
+
+        import httpx
 
         from tests.harness.transport import E2EConfig
 
@@ -541,9 +746,7 @@ class TestClientE2eA2aDelivery:
         with _UnitEnv(e2e_config=E2EConfig(base_url="http://e2e-stack:8080", postgres_url="postgresql://x")) as env:
             client = AdCPTestClient(env)
             with patch("httpx.Client") as mock_client_cls:
-                mock_response = MagicMock()
-                mock_response.json.side_effect = lambda: json.loads(json.dumps(rpc_response))
-                mock_response.raise_for_status.return_value = None
+                mock_response = httpx.Response(200, json=rpc_response)
                 mock_post = mock_client_cls.return_value.__enter__.return_value.post
                 mock_post.return_value = mock_response
 
@@ -558,7 +761,7 @@ class TestClientE2eA2aDelivery:
         # POST went to the real A2A JSON-RPC endpoint with a well-formed envelope.
         call_args = mock_post.call_args
         assert call_args.args[0] == "/a2a"
-        rpc_body = call_args.kwargs["json"]
+        rpc_body = json.loads(call_args.kwargs["content"])
         assert rpc_body["jsonrpc"] == "2.0"
         assert rpc_body["method"] == "SendMessage"
         skill_part = rpc_body["params"]["message"]["parts"][0]["data"]
@@ -566,7 +769,9 @@ class TestClientE2eA2aDelivery:
         assert skill_part["parameters"] == {"brief": "video ads"}
 
     def test_credential_is_sent_as_auth_and_tenant_headers(self):
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import patch
+
+        import httpx
 
         from tests.harness.transport import E2EConfig
 
@@ -579,9 +784,7 @@ class TestClientE2eA2aDelivery:
         with _UnitEnv(e2e_config=E2EConfig(base_url="http://e2e-stack:8080", postgres_url="postgresql://x")) as env:
             client = AdCPTestClient(env)
             with patch("httpx.Client") as mock_client_cls:
-                mock_response = MagicMock()
-                mock_response.json.side_effect = lambda: json.loads(json.dumps(rpc_response))
-                mock_response.raise_for_status.return_value = None
+                mock_response = httpx.Response(200, json=rpc_response)
                 mock_post = mock_client_cls.return_value.__enter__.return_value.post
                 mock_post.return_value = mock_response
 
@@ -593,7 +796,9 @@ class TestClientE2eA2aDelivery:
         assert headers["x-adcp-tenant"] == "t1"
 
     def test_unauthenticated_dispatch_sends_no_auth_header(self):
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import patch
+
+        import httpx
 
         from tests.harness.transport import E2EConfig
 
@@ -605,9 +810,7 @@ class TestClientE2eA2aDelivery:
         with _UnitEnv(e2e_config=E2EConfig(base_url="http://e2e-stack:8080", postgres_url="postgresql://x")) as env:
             client = AdCPTestClient(env)
             with patch("httpx.Client") as mock_client_cls:
-                mock_response = MagicMock()
-                mock_response.json.side_effect = lambda: json.loads(json.dumps(rpc_response))
-                mock_response.raise_for_status.return_value = None
+                mock_response = httpx.Response(200, json=rpc_response)
                 mock_post = mock_client_cls.return_value.__enter__.return_value.post
                 mock_post.return_value = mock_response
 
@@ -628,7 +831,9 @@ class TestClientE2eA2aDelivery:
         and reshapes no body, so this equality grades what the buyer received rather than a
         harness repair of it.
         """
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import patch
+
+        import httpx
 
         from tests.harness.transport import E2EConfig
 
@@ -652,9 +857,7 @@ class TestClientE2eA2aDelivery:
         with _UnitEnv(e2e_config=E2EConfig(base_url="http://e2e-stack:8080", postgres_url="postgresql://x")) as env:
             client = AdCPTestClient(env)
             with patch("httpx.Client") as mock_client_cls:
-                mock_response = MagicMock()
-                mock_response.json.side_effect = lambda: json.loads(json.dumps(rpc_response))
-                mock_response.raise_for_status.return_value = None
+                mock_response = httpx.Response(200, json=rpc_response)
                 mock_post = mock_client_cls.return_value.__enter__.return_value.post
                 mock_post.return_value = mock_response
 
@@ -663,24 +866,11 @@ class TestClientE2eA2aDelivery:
         assert result.is_error
         assert result.wire_error_envelope == envelope
 
-    def test_task_state_submitted_reads_the_wire_off_status_message_parts(self):
-        """A submitted Task's payload is READ from ``status.message.parts``, not invented.
+    def test_task_state_submitted_is_rejected(self):
+        """The retired status-message frame must fail instead of hiding a writer regression."""
+        from unittest.mock import patch
 
-        Pinned L0/a2a-response-format.mdx gives an interim status its data there and
-        reserves ``artifacts`` for the final deliverable, so this leg reads the DataPart
-        out of the status message. Every field the server sent reaches the caller,
-        including the envelope ``context`` the buyer is owed on every outcome — the arranged
-        payload below carries one, and a synthesized ``{status, task_id}`` wire would drop it.
-
-        ``create_media_buy`` is the named no-pinned-response-model case: its SDK response
-        type is a ``Union`` of outcome variants (``spec_response_model`` returns ``None``
-        for it, see that function's docstring), so UNWRAP cannot pick a single class to
-        parse the wire into. ``payload`` stays explicitly ``None`` — ``result.error is
-        None`` (not ``is_success``, which requires a non-``None`` payload) is the correct
-        success check here — and ``wire_response`` carries the raw dict, exactly as
-        production callers that only read the wire body already expect.
-        """
-        from unittest.mock import MagicMock, patch
+        import httpx
 
         from tests.harness.transport import E2EConfig
 
@@ -714,17 +904,14 @@ class TestClientE2eA2aDelivery:
         with _UnitEnv(e2e_config=E2EConfig(base_url="http://e2e-stack:8080", postgres_url="postgresql://x")) as env:
             client = AdCPTestClient(env)
             with patch("httpx.Client") as mock_client_cls:
-                mock_response = MagicMock()
-                mock_response.json.side_effect = lambda: json.loads(json.dumps(rpc_response))
-                mock_response.raise_for_status.return_value = None
+                mock_response = httpx.Response(200, json=rpc_response)
                 mock_post = mock_client_cls.return_value.__enter__.return_value.post
                 mock_post.return_value = mock_response
 
                 result = client.call("create_media_buy", {"buyer_ref": "x"}, Transport.E2E_A2A)
 
-        assert result.error is None, result.error
-        assert result.payload is None
-        assert result.wire_response == submitted_payload
+        assert result.is_error
+        assert result.wire_response is None
 
     def test_http_error_status_still_surfaces_the_wire_error_envelope(self):
         """An A2A response with an HTTP error status must NOT discard its body.
@@ -755,7 +942,7 @@ class TestClientE2eA2aDelivery:
         ``tests/integration/test_harness_client_transport_parity.py``
         ``TestEnvVsClientEquivalenceE2E::test_e2e_a2a_success_and_error_equivalence``.
         """
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import patch
 
         import httpx
 
@@ -787,14 +974,7 @@ class TestClientE2eA2aDelivery:
         with _UnitEnv(e2e_config=E2EConfig(base_url="http://e2e-stack:8080", postgres_url="postgresql://x")) as env:
             client = AdCPTestClient(env)
             with patch("httpx.Client") as mock_client_cls:
-                mock_response = MagicMock()
-                mock_response.status_code = 401
-                mock_response.json.side_effect = lambda: json.loads(json.dumps(rpc_error_body))
-                mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
-                    "Client error '401 Unauthorized'",
-                    request=httpx.Request("POST", "http://e2e-stack:8080/a2a"),
-                    response=httpx.Response(401),
-                )
+                mock_response = httpx.Response(401, json=rpc_error_body)
                 mock_post = mock_client_cls.return_value.__enter__.return_value.post
                 mock_post.return_value = mock_response
 
@@ -842,7 +1022,9 @@ class TestA2AE2EDispatcher:
                 A2AE2EDispatcher().dispatch(env, brief="video ads")
 
     def test_dispatch_with_tool_name_delegates_to_client(self):
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import patch
+
+        import httpx
 
         from tests.harness.dispatchers import A2AE2EDispatcher
         from tests.harness.transport import E2EConfig
@@ -856,16 +1038,14 @@ class TestA2AE2EDispatcher:
 
         with _UnitEnv(e2e_config=E2EConfig(base_url="http://e2e-stack:8080", postgres_url="postgresql://x")) as env:
             with patch("httpx.Client") as mock_client_cls:
-                mock_response = MagicMock()
-                mock_response.json.side_effect = lambda: json.loads(json.dumps(rpc_response))
-                mock_response.raise_for_status.return_value = None
+                mock_response = httpx.Response(200, json=rpc_response)
                 mock_post = mock_client_cls.return_value.__enter__.return_value.post
                 mock_post.return_value = mock_response
 
                 result = A2AE2EDispatcher().dispatch(env, tool_name="get_products", brief="video ads")
 
         assert result.is_success, result.error
-        skill_part = mock_post.call_args.kwargs["json"]["params"]["message"]["parts"][0]["data"]
+        skill_part = json.loads(mock_post.call_args.kwargs["content"])["params"]["message"]["parts"][0]["data"]
         assert skill_part["skill"] == "get_products"
         assert skill_part["parameters"] == {"brief": "video ads"}
 

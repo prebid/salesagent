@@ -6,24 +6,24 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-import httpx
+from pydantic import RootModel
 
 from src.core.credentials import hash_token
 from tests.factories import AdapterConfigFactory, MediaBuyFactory, PrincipalFactory, TenantFactory
 from tests.factories.principal import plaintext_token_for
-from tests.harness._base import (
-    _A2A_PATH,
-    _A2A_VERSION_HEADER,
-    BareIntegrationEnv,
-    _a2a_message_send_body,
-)
-from tests.harness.raw_wire import unwrap_a2a_native_response
+from tests.harness._base import BareIntegrationEnv
+from tests.harness.client import jsonrpc_http_result
 from tests.harness.transport import Transport, TransportResult
 from tests.helpers.credentials import credential_headers
 
 
 class A2ATaskOwnershipEnv(BareIntegrationEnv):
     """Seed callers through factories and retain task IDs received on the wire."""
+
+    A2A_OVER_HTTP = True
+
+    def response_parser(self, tool: str) -> Any:
+        return lambda **data: RootModel(data)
 
     def prepare_task(self, state: str) -> None:
         tenant, principal = self.setup_default_data()
@@ -68,25 +68,22 @@ class A2ATaskOwnershipEnv(BareIntegrationEnv):
             return self.credential(token="invalid-ownership-token")
         raise ValueError(f"Unknown caller {caller}")
 
-    def _post(self, body: dict, caller: str) -> Any:
-        headers = {**self._caller(caller), **_A2A_VERSION_HEADER}
-        if self.e2e_config is not None:
-            return httpx.post(f"{self.e2e_config.base_url}{_A2A_PATH}", headers=headers, json=body, timeout=30)
-        return self.get_rest_client().post(_A2A_PATH, headers=headers, json=body)
-
     def call_via(self, transport: Transport, **kwargs: Any) -> TransportResult:
         assert transport in (Transport.A2A, Transport.E2E_A2A)
         action = kwargs.get("action")
-        if action == "invoke":
-            body = _a2a_message_send_body(self.skill, self.parameters)
-        elif action == "poll":
-            body = _a2a_message_send_body("get_task_status", {"task_id": self.adcp_task_id})
+        credential = self._caller(kwargs["caller"])
+        if action in ("invoke", "poll"):
+            self.A2A_SKILL = self.skill if action == "invoke" else "get_task_status"
+            parameters = self.parameters if action == "invoke" else {"task_id": self.adcp_task_id}
+            result = super().call_via(
+                transport, credential=credential, signed=kwargs.get("signed", False), **parameters
+            )
         else:
             task_id = self.task_id if kwargs.get("target", "existing") == "existing" else "missing-task"
             body = {"jsonrpc": "2.0", "id": "task-call", "method": kwargs["operation"], "params": {"id": task_id}}
-        result = unwrap_a2a_native_response(self._post(body, kwargs["caller"]))
+            result = jsonrpc_http_result(transport, self.post_a2a(body, credential))
         if action == "invoke":
-            self.task_id = result.wire_response["task"]["id"]
+            self.task_id = result.envelope["task"]["id"]
             # Preserve the actual submitted handle for a later, independent poll.
             if self.skill == "update_media_buy" and self.parameters["media_buy_id"] != "missing-buy":
                 self.adcp_task_id = self.adcp_result(result)["task_id"]
@@ -95,22 +92,22 @@ class A2ATaskOwnershipEnv(BareIntegrationEnv):
     @staticmethod
     def adcp_result(result: TransportResult) -> dict[str, Any]:
         assert result.has_wire
-        task = result.wire_response["task"]
-        artifacts = task["artifacts"]
-        assert len(artifacts) == 1, task
-        parts = [part["data"] for part in artifacts[0]["parts"] if "data" in part]
-        assert len(parts) == 1, artifacts
-        assert "adcp_task_id" not in artifacts[0].get("metadata", {})
-        return parts[0]
+        assert "adcp_task_id" not in result.envelope["task"]["artifacts"][0].get("metadata", {})
+        if result.is_error:
+            return result.error_envelope()
+        assert result.wire_response is not None
+        return result.wire_response
 
     @staticmethod
     def assert_not_found(result: TransportResult) -> None:
         assert result.is_error
         assert result.has_wire
-        assert result.envelope["jsonrpc_error"]["code"] == -32001
+        assert result.raw_response.status_code == 200
+        assert result.envelope["jsonrpc_error_code"] == -32001
         requested_id = json.loads(result.raw_response.request.content)["params"]["id"]
-        assert requested_id in result.envelope["jsonrpc_error"]["message"]
-        assert result.envelope["jsonrpc_error"]["data"] == {"task_id": requested_id}
+        refusal = result.raw_response.json()["error"]
+        assert requested_id in refusal["message"]
+        assert refusal["data"] == {"task_id": requested_id}
 
     def assert_same_refusal(self, first: TransportResult, second: TransportResult) -> None:
         # IDs are caller-supplied. Everything else, including message and data,
