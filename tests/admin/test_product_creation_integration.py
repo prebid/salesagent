@@ -127,7 +127,7 @@ def test_add_product_json_encoding(client, test_tenant, integration_db):
             # The property the fixture publisher's stored adagents.json authorizes
             # (add_required_setup_data): every product names its publishers.
             ("property_mode", "property_ids"),
-            ("selected_property_ids", "fixture_default_example_com"),
+            ("selected_property_ids", "fixture_default_psatest_com"),
             # A format arm, because core/product.json's root anyOf requires one and the
             # form now refuses a product that declares neither. This payload used to
             # declare no format at all, which stored a row that
