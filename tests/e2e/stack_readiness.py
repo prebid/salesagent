@@ -72,6 +72,9 @@ class E2EDatabase(NamedTuple):
     url: str
     host: str
     port: int
+    user: str
+    password: str
+    dbname: str
 
 
 def e2e_db_url_build(*, host: str = "localhost", port: int = 5432) -> str:
@@ -81,11 +84,20 @@ def e2e_db_url_build(*, host: str = "localhost", port: int = 5432) -> str:
 
 def resolve_e2e_db(*, fallback_host: str = "localhost", fallback_port: int = 5432) -> E2EDatabase:
     """Resolve the environment chain once, preserving the configured DSN verbatim."""
-    url = os.getenv("E2E_DATABASE_URL") or os.getenv("DATABASE_URL")
-    if url:
-        parsed = urlparse(url)
-        return E2EDatabase(url, parsed.hostname or fallback_host, parsed.port or fallback_port)
-    return E2EDatabase(e2e_db_url_build(host=fallback_host, port=fallback_port), fallback_host, fallback_port)
+    url = (
+        os.getenv("E2E_DATABASE_URL")
+        or os.getenv("DATABASE_URL")
+        or e2e_db_url_build(host=fallback_host, port=fallback_port)
+    )
+    parsed = urlparse(url)
+    return E2EDatabase(
+        url=url,
+        host=parsed.hostname or fallback_host,
+        port=parsed.port or fallback_port,
+        user=parsed.username or "adcp_user",
+        password=parsed.password or "secure_password_change_me",
+        dbname=parsed.path.lstrip("/") or "adcp",
+    )
 
 
 def e2e_db_url_default(*, fallback_host: str = "localhost", fallback_port: int = 5432) -> str:

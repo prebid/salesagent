@@ -6,6 +6,7 @@ probe reaches a real endpoint.
 """
 
 import importlib
+import os
 import shutil
 import socket
 import subprocess
@@ -130,17 +131,22 @@ def test_missing_port_cannot_report_ready(readiness, local_origin, tcp_port, cre
     assert local_origin.hits == 0
 
 
-def test_db_url_fallback_reads_each_setting_once(readiness, monkeypatch):
-    monkeypatch.delenv("E2E_DATABASE_URL", raising=False)
-    monkeypatch.delenv("DATABASE_URL", raising=False)
-    real_getenv = readiness.os.getenv
+def _count_env_reads(monkeypatch):
+    real_getenv = os.getenv
     reads = Counter()
 
     def getenv(key, default=None):
         reads[key] += 1
         return real_getenv(key, default)
 
-    monkeypatch.setattr(readiness.os, "getenv", getenv)
+    monkeypatch.setattr(os, "getenv", getenv)
+    return reads
+
+
+def test_db_url_fallback_reads_each_setting_once(readiness, monkeypatch):
+    monkeypatch.delenv("E2E_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    reads = _count_env_reads(monkeypatch)
     assert readiness.e2e_db_url_default(fallback_host="::1", fallback_port=5456) == (
         "postgresql://adcp_user:secure_password_change_me@[::1]:5456/adcp"
     )
@@ -150,13 +156,62 @@ def test_db_url_fallback_reads_each_setting_once(readiness, monkeypatch):
 def test_db_url_precedence_and_fallback_match(readiness, monkeypatch):
     monkeypatch.setenv("E2E_DATABASE_URL", "postgresql://u:p@e2e-db:5433/adcp")
     monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@suite-db:5434/test")
-    assert readiness.resolve_e2e_db()[1:] == ("e2e-db", 5433)
+    assert readiness.resolve_e2e_db()[1:] == ("e2e-db", 5433, "u", "p", "adcp")
     assert readiness.e2e_db_url_default() == "postgresql://u:p@e2e-db:5433/adcp"
     monkeypatch.delenv("E2E_DATABASE_URL")
-    assert readiness.resolve_e2e_db()[1:] == ("suite-db", 5434)
+    assert readiness.resolve_e2e_db()[1:] == ("suite-db", 5434, "u", "p", "test")
     monkeypatch.delenv("DATABASE_URL")
-    assert readiness.resolve_e2e_db(fallback_port=5456)[1:] == ("localhost", 5456)
+    assert readiness.resolve_e2e_db(fallback_port=5456)[1:] == (
+        "localhost",
+        5456,
+        "adcp_user",
+        "secure_password_change_me",
+        "adcp",
+    )
     assert readiness.e2e_db_url_default(fallback_port=5456).endswith("@localhost:5456/adcp")
+
+
+def test_db_record_fills_missing_url_fields_without_rewriting_dsn(readiness, monkeypatch):
+    url = "postgresql:///?sslmode=require"
+    monkeypatch.setenv("E2E_DATABASE_URL", url)
+    assert readiness.resolve_e2e_db(fallback_host="::1", fallback_port=5456) == (
+        url,
+        "::1",
+        5456,
+        "adcp_user",
+        "secure_password_change_me",
+        "adcp",
+    )
+
+
+@pytest.mark.parametrize("configured", [None, "", "42123"])
+def test_env_port_is_read_once_and_published_for_compose(monkeypatch, configured):
+    from tests.e2e import conftest
+
+    name = "E2E_CREATIVE_AGENT_PORT"
+    # Register restoration even when the original variable is absent.
+    monkeypatch.setenv(name, configured or "")
+    if configured is None:
+        monkeypatch.delenv(name)
+    reads = _count_env_reads(monkeypatch)
+    port = conftest.resolve_env_port(name, 50000, 60000)
+    assert reads == {name: 1}
+    assert os.environ[name] == str(port)
+    if configured:
+        assert port == int(configured)
+    else:
+        assert 50000 <= port < 60000
+        with socket.socket() as listener:
+            listener.bind(("", port))
+    assert conftest.resolve_env_port(name, 50000, 60000) == port
+
+
+def test_env_port_rejects_invalid_configuration(monkeypatch):
+    from tests.e2e import conftest
+
+    monkeypatch.setenv("POSTGRES_PORT", "invalid")
+    with pytest.raises(ValueError, match="invalid"):
+        conftest.resolve_env_port("POSTGRES_PORT", 25000, 30000)
 
 
 @pytest.mark.parametrize("agent_status", [200, 503])

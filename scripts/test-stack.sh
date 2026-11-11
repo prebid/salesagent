@@ -192,19 +192,16 @@ cmd_up() {
     # wrong port and integration cascaded DB connection errors / "invalid
     # response to SSL negotiation". Reading `docker compose port` makes the env
     # file always match reality.
-    _real_pg=$(dc port postgres 5432 2>/dev/null | sed -E 's/.*:([0-9]+)$/\1/')
-    _real_srv=$(dc port proxy 8000 2>/dev/null | sed -E 's/.*:([0-9]+)$/\1/')
-    _real_tls=$(dc port tls-proxy 8443 2>/dev/null | sed -E 's/.*:([0-9]+)$/\1/')
-    _real_webhook_capture=$(dc port webhook-capture 8080 2>/dev/null | sed -E 's/.*:([0-9]+)$/\1/')
-    _real_creative_agent=$(dc port creative-agent 8080 2>/dev/null | sed -E 's/.*:([0-9]+)$/\1/')
-    if [ -n "$_real_pg" ] && [ "$_real_pg" != "$POSTGRES_PORT" ]; then
-        echo -e "${BLUE}Corrected POSTGRES_PORT $POSTGRES_PORT -> $_real_pg (actual Docker binding)${NC}"
-        POSTGRES_PORT="$_real_pg"
-    fi
-    [ -n "$_real_srv" ] && MCP_PORT="$_real_srv"
-    [ -n "$_real_tls" ] && TLS_PORT="$_real_tls"
-    [ -n "$_real_webhook_capture" ] && WEBHOOK_CAPTURE_PORT="$_real_webhook_capture"
-    [ -n "$_real_creative_agent" ] && E2E_CREATIVE_AGENT_PORT="$_real_creative_agent"
+    local binding variable service container_port real_port
+    for binding in POSTGRES_PORT:postgres:5432 MCP_PORT:proxy:8000 TLS_PORT:tls-proxy:8443 \
+        WEBHOOK_CAPTURE_PORT:webhook-capture:8080 E2E_CREATIVE_AGENT_PORT:creative-agent:8080; do
+        IFS=: read -r variable service container_port <<< "$binding"
+        real_port=$(dc port "$service" "$container_port" 2>/dev/null | sed -E 's/.*:([0-9]+)$/\1/')
+        if [ -n "$real_port" ] && [ "$real_port" != "${!variable}" ]; then
+            echo -e "${BLUE}Corrected $variable ${!variable} -> $real_port (actual Docker binding)${NC}"
+            printf -v "$variable" '%s' "$real_port"
+        fi
+    done
     export POSTGRES_PORT ADCP_SALES_PORT=$MCP_PORT ADCP_TLS_PORT=$TLS_PORT WEBHOOK_CAPTURE_PORT E2E_CREATIVE_AGENT_PORT
     export DATABASE_URL="postgresql://adcp_user:secure_password_change_me@127.0.0.1:${POSTGRES_PORT}/adcp_test"
 

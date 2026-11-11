@@ -12,7 +12,6 @@ import sys
 import time
 import uuid
 from pathlib import Path
-from urllib.parse import urlparse
 
 import pytest
 import requests
@@ -34,10 +33,10 @@ from tests.e2e.stack_readiness import (
     compose_down_argv,
     compose_exec_argv,
     e2e_db_url_build,
-    e2e_db_url_default,
     e2e_host_default,
     e2e_ports,
     in_network,
+    resolve_e2e_db,
     use_container_exec,
     wait_for_e2e_stack,
 )
@@ -136,24 +135,6 @@ def ensure_test_tls() -> None:
     )
 
 
-def e2e_db_url(fallback_port: int) -> str:
-    """Server-side Postgres URL for direct-DB e2e helpers — the DB counterpart of
-    :func:`e2e_host`.
-
-    Single source for the host/port/dbname the e2e stack's database lives at, so
-    every direct-DB helper resolves it the same way. Preference order::
-
-        E2E_DATABASE_URL  — in-network DB by compose service name (postgres:5432/adcp)
-        DATABASE_URL      — host path: the e2e stack's localhost:<published>/adcp
-        localhost:<fallback_port>/adcp — last-resort fallback
-
-    Replaces the ad-hoc ``ADCP_TEST_DB_HOST``/``ADCP_TEST_DB_PORT`` split, which
-    ignored ``E2E_DATABASE_URL`` and so pointed the post-reset diagnostic at
-    localhost in-network instead of the compose service.
-    """
-    return e2e_db_url_default(fallback_port=fallback_port)
-
-
 def port_scan_start(start_port: int, end_port: int, pid: int | None = None) -> int:
     """Deterministic per-process scan origin inside [start_port, end_port).
 
@@ -217,6 +198,14 @@ def find_free_port(start_port: int = 10000, end_port: int = 60000) -> int:
             except OSError:
                 continue
     raise RuntimeError(f"No free ports found in range {start_port}-{end_port}")
+
+
+def resolve_env_port(name: str, start_port: int, end_port: int) -> int:
+    """Reuse or allocate a port, publishing it for the Compose subprocess."""
+    configured = os.getenv(name)
+    port = int(configured) if configured else find_free_port(start_port, end_port)
+    os.environ[name] = str(port)
+    return port
 
 
 def pytest_addoption(parser):
@@ -300,39 +289,30 @@ def docker_services_e2e(request):
 
         # Use environment variable ports if set, otherwise allocate dynamic ports
         # All services run on a single port (unified FastAPI process)
-        mcp_port = int(os.getenv("ADCP_SALES_PORT")) if os.getenv("ADCP_SALES_PORT") else find_free_port(20000, 25000)
+        mcp_port = resolve_env_port("ADCP_SALES_PORT", 20000, 25000)
         a2a_port = mcp_port  # A2A is on same port as MCP (unified FastAPI process)
         admin_port = mcp_port  # Admin is on same port as MCP (unified FastAPI process)
-        postgres_port = int(os.getenv("POSTGRES_PORT")) if os.getenv("POSTGRES_PORT") else find_free_port(25000, 30000)
+        postgres_port = resolve_env_port("POSTGRES_PORT", 25000, 30000)
         # The TLS listener gets a DYNAMIC port like the other two, never a
         # hardcoded 8443: several stacks run concurrently on one box and a fixed
         # port would reintroduce exactly the cross-stack collision the ports
         # overlay exists to avoid. Its own range sits BELOW the two above and
         # clear of the Linux ephemeral range (32768+), which the 20000-30000
         # choice for those two was already picked to avoid.
-        tls_port = int(os.getenv("ADCP_TLS_PORT")) if os.getenv("ADCP_TLS_PORT") else find_free_port(15000, 20000)
+        tls_port = resolve_env_port("ADCP_TLS_PORT", 15000, 20000)
         # webhook-capture's plain-HTTP READBACK control-plane (salesagent-amht.3)
         # — same dynamic-allocation reasoning as tls_port above (a fixed default
         # would let two concurrent stacks cross-wire onto the same host port).
         # DELIVERY never uses this port; it goes through tls_port above.
-        webhook_capture_port = (
-            int(os.getenv("WEBHOOK_CAPTURE_PORT"))
-            if os.getenv("WEBHOOK_CAPTURE_PORT")
-            else find_free_port(30000, 32000)
-        )
-
-        creative_agent_port = (
-            int(os.getenv("E2E_CREATIVE_AGENT_PORT"))
-            if os.getenv("E2E_CREATIVE_AGENT_PORT")
-            else find_free_port(10000, 15000)
-        )
+        webhook_capture_port = resolve_env_port("WEBHOOK_CAPTURE_PORT", 30000, 32000)
+        creative_agent_port = resolve_env_port("E2E_CREATIVE_AGENT_PORT", 10000, 15000)
 
         print(
             f"Using ports: Server={mcp_port} (MCP+A2A+Admin), Postgres={postgres_port}, "
             f"TLS={tls_port}, WebhookCapture={webhook_capture_port}, CreativeAgent={creative_agent_port}"
         )
 
-        # Set port env vars in os.environ for ONE consumer: the docker-compose
+        # resolve_env_port publishes ports for ONE consumer: the docker-compose
         # subprocess, which inherits them via os.environ.copy() at the call below.
         # Exporting to a child process is what environment variables are for.
         #
@@ -343,12 +323,6 @@ def docker_services_e2e(request):
         # ADCP_SALES_PORT), no lifetime (a stale value outlives the fixture instead of
         # failing) and no multiplicity (one variable cannot hold a port per xdist
         # worker). Env at the edge, data on the inside.
-        os.environ["ADCP_SALES_PORT"] = str(mcp_port)
-        os.environ["POSTGRES_PORT"] = str(postgres_port)
-        os.environ["ADCP_TLS_PORT"] = str(tls_port)
-        os.environ["WEBHOOK_CAPTURE_PORT"] = str(webhook_capture_port)
-        os.environ["E2E_CREATIVE_AGENT_PORT"] = str(creative_agent_port)
-
         env = os.environ.copy()
         # Set 5 seconds interval for delivery webhooks in E2E tests
         env["DELIVERY_WEBHOOK_INTERVAL"] = "5"
@@ -409,12 +383,12 @@ def docker_services_e2e(request):
     print("📦 Initializing CI test data (products, principals, etc.)...")
 
     # CRITICAL: when neither E2E_DATABASE_URL nor a genuinely-e2e DATABASE_URL
-    # is set, e2e_db_url() falls back to localhost:<postgres_port>/adcp — the
+    # is set, resolve_e2e_db() falls back to localhost:<postgres_port>/adcp — the
     # exact host-published address of THIS stack's own postgres (postgres_port
     # resolved above by either branch). But a test runner that already has an
     # unrelated DATABASE_URL set (e.g. a suite DB provisioned by the CI
     # offload harness for unit/integration/bdd) leaks it into this process's
-    # os.environ, and e2e_db_url() prefers that stale value over the e2e
+    # os.environ, and resolve_e2e_db() prefers that stale value over the e2e
     # stack's own DB — so init_database_ci.py silently seeds a database
     # nothing else reads while the running adcp-server (DATABASE_URL fixed to
     # its own postgres inside the container) stays empty. setdefault() only
@@ -422,12 +396,13 @@ def docker_services_e2e(request):
     # case) — a real in-network run that already sets it (compose service
     # name, not a published port) is left untouched (#1838 review).
     os.environ.setdefault("E2E_DATABASE_URL", e2e_db_url_build(port=postgres_port))
+    database = resolve_e2e_db(fallback_port=postgres_port)
 
     # Setup environment for init script - reuse existing env if available, else create minimal
     init_env = os.environ.copy()
     init_env["ADCP_SALES_PORT"] = str(mcp_port)
     init_env["POSTGRES_PORT"] = str(postgres_port)
-    init_env["DATABASE_URL"] = e2e_db_url(postgres_port)
+    init_env["DATABASE_URL"] = database.url
 
     # The host reaches the container DB through Compose; in-network the
     # runner connects directly. CLI availability does not decide topology.
@@ -498,13 +473,12 @@ def docker_services_e2e(request):
         # Resolve the same server-side DB as live_server (honors E2E_DATABASE_URL
         # in-network; was hard-split on ADCP_TEST_DB_HOST/PORT which ignored it and
         # hit localhost behind the compose network).
-        _db = urlparse(e2e_db_url(postgres_port))
         conn = psycopg2.connect(
-            host=_db.hostname or "localhost",
-            port=_db.port or 5432,
-            database=(_db.path.lstrip("/") or "adcp"),
-            user=_db.username or "adcp_user",
-            password=_db.password or "secure_password_change_me",
+            host=database.host,
+            port=database.port,
+            database=database.dbname,
+            user=database.user,
+            password=database.password,
         )
         cursor = conn.cursor()
 
@@ -588,23 +562,19 @@ def live_server(docker_services_e2e):
     ports = docker_services_e2e
 
     host = e2e_host()
-    # Resolve ONE effective DB URL (via the shared e2e_db_url helper) and PARSE
-    # postgres_params from it, so the URL string (live_server["postgres"]) and the
-    # param dict can never diverge on host/port/dbname — the divergence that made
-    # direct-DB e2e helpers hit localhost:5435 in-network.
-    pg_url = e2e_db_url(ports["postgres_port"])
-    parsed = urlparse(pg_url)
+    # The URL and direct-connection parameters share the readiness resolver.
+    database = resolve_e2e_db(fallback_port=ports["postgres_port"])
     urls = {
         "mcp": f"http://{host}:{ports['mcp_port']}",
         "a2a": f"http://{host}:{ports['a2a_port']}",
         "admin": f"http://{host}:{ports['admin_port']}",
-        "postgres": pg_url,
+        "postgres": database.url,
         "postgres_params": {
-            "host": parsed.hostname or "localhost",
-            "port": parsed.port or 5432,
-            "user": parsed.username or "adcp_user",
-            "password": parsed.password or "secure_password_change_me",
-            "dbname": (parsed.path.lstrip("/") or "adcp"),
+            "host": database.host,
+            "port": database.port,
+            "user": database.user,
+            "password": database.password,
+            "dbname": database.dbname,
         },
     }
     # ADDITIVE: every key above keeps its http value, because 95 e2e tests target
