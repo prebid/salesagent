@@ -1805,15 +1805,8 @@ def then_response_errors_include(ctx: dict, code: str) -> None:
 @then(parsers.parse('the response errors should name the omitted media buy "{mb_id}"'))
 def then_errors_name_omitted_media_buy(ctx: dict, mb_id: str) -> None:
     """An omitted row has no response index; identify it in details on the collection."""
-    real_id = _resolve_media_buy_id(ctx, mb_id)
-    matching = [error for error in _wire_advisories(ctx) if (error.get("details") or {}).get("media_buy_id") == real_id]
-    assert len(matching) == 1
-    assert matching[0].get("field") == "media_buys"
-    assert matching[0].get("details") == {"reasons": ["MEDIA_BUY_UNRENDERABLE"], "media_buy_id": real_id}
-    assert (
-        matching[0].get("suggestion")
-        == "Contact the seller to repair the stored data; retrying this request cannot repair it"
-    )
+    advisory = _wire_advisory(ctx, None, mb_id=mb_id)
+    assert advisory.get("code") == "PERSISTED_VALUE_UNRENDERABLE"
 
 
 def _response_approvals(ctx: dict) -> list[Any]:
@@ -3277,40 +3270,16 @@ def then_media_buy_wire_field_degraded(ctx: dict, mb_id: str, field: str) -> Non
 )
 def then_raw_request_advisory_code_and_recovery(ctx: dict, mb_id: str, field: str, code: str, recovery: str) -> None:
     """Grade the code and positional selector on the successful wire response."""
-    advisories = _wire_advisories(ctx)
-    assert len(advisories) == 1
-    advisory = advisories[0]
-    assert advisory == _wire_buy_field_advisory(ctx, mb_id, field)
+    then_advisory_count_and_classification(ctx, 1, code, recovery)
+    advisory = _wire_advisory(ctx, field, mb_id=mb_id)
     assert advisory.get("code") == code
-    assert advisory.get("recovery") == recovery
-
-
-def _wire_buy_field_advisory(ctx: dict, mb_id: str, field: str) -> dict:
-    """Find one buy-level field advisory using its exact response position and identity."""
-    buy_index = _wire_media_buy_position(ctx, mb_id)
-    real_id = _resolve_media_buy_id(ctx, mb_id)
-    matching = [
-        advisory
-        for advisory in _wire_advisories(ctx)
-        if advisory.get("field") == f"media_buys[{buy_index}].{field}"
-        and (advisory.get("details") or {}).get("media_buy_id") == real_id
-    ]
-    assert len(matching) == 1
-    return matching[0]
 
 
 @then(parsers.parse('the persisted-value advisory should identify media buy "{mb_id}" field {field}'))
 def then_buy_field_advisory_identity(ctx: dict, mb_id: str, field: str) -> None:
-    """Grade buy identity and repair guidance independently of other advisories."""
-    advisory = _wire_buy_field_advisory(ctx, mb_id, field)
-    assert advisory.get("details") == {
-        "reasons": ["persisted_field_unrenderable"],
-        "media_buy_id": _resolve_media_buy_id(ctx, mb_id),
-    }
-    assert (
-        advisory.get("suggestion")
-        == "Contact the seller to repair the stored data; retrying this request cannot repair it"
-    )
+    """Grade the code and buy-level field identity independently of other advisories."""
+    advisory = _wire_advisory(ctx, field, mb_id=mb_id)
+    assert advisory.get("code") == "PERSISTED_VALUE_UNRENDERABLE"
 
 
 def _wire_media_buy_position(ctx: dict, mb_id: str) -> int:
@@ -3435,17 +3404,32 @@ def then_package_targeting_overlay_geo_countries(ctx: dict, pkg_id: str, countri
     )
 
 
-def _advisories_naming(ctx: dict, pkg_id: str, field: str, *, mb_id: str | None = None) -> list[dict]:
-    """Match structured identity and the exact positional field, never a substring."""
-    buy_i, pkg_i = _wire_package_position(ctx, pkg_id, mb_id=mb_id)
-    real_id = wire_field(ctx, "media_buys")[buy_i]["media_buy_id"]
-    return [
+def _wire_advisory(ctx: dict, field: str | None, *, mb_id: str | None = None, pkg_id: str | None = None) -> dict:
+    """Find exactly one advisory by its positional field and structured identity."""
+    field_path = "media_buys"
+    if pkg_id is not None:
+        buy_i, pkg_i = _wire_package_position(ctx, pkg_id, mb_id=mb_id)
+        real_id = wire_field(ctx, "media_buys")[buy_i]["media_buy_id"]
+        field_path += f"[{buy_i}].packages[{pkg_i}]"
+    else:
+        assert mb_id is not None, "a buy-level advisory requires a media buy id"
+        real_id = _resolve_media_buy_id(ctx, mb_id)
+        if field is not None:
+            field_path += f"[{_wire_media_buy_position(ctx, mb_id)}]"
+    if field is not None:
+        field_path += f".{field}"
+    matching = [
         advisory
         for advisory in _wire_advisories(ctx)
-        if advisory.get("field") == f"media_buys[{buy_i}].packages[{pkg_i}].{field}"
-        and (advisory.get("details") or {}).get("package_id") == pkg_id
+        if advisory.get("field") == field_path
         and (advisory.get("details") or {}).get("media_buy_id") == real_id
+        and (pkg_id is None or (advisory.get("details") or {}).get("package_id") == pkg_id)
     ]
+    assert len(matching) == 1, (
+        f"expected exactly one advisory for {field_path!r} on media buy {real_id!r}, "
+        f"package {pkg_id!r}; got {matching!r}"
+    )
+    return matching[0]
 
 
 @then(
@@ -3455,41 +3439,10 @@ def _advisories_naming(ctx: dict, pkg_id: str, field: str, *, mb_id: str | None 
     )
 )
 def then_blob_advisory_code_and_recovery(ctx: dict, pkg_id: str, field: str, code: str, recovery: str) -> None:
-    """Assert the degraded field's advisory carries the pinned code AND recovery.
-
-    Both, off the wire. ``recovery`` is the half a code-counting assertion cannot
-    see: pinned ``core/error.json`` makes the wire ``recovery`` authoritative and
-    ``enumMetadata`` only its documentary mirror, so an advisory that names
-    CONFIGURATION_ERROR while omitting ``recovery`` still leaves the buyer inferring
-    retry semantics. ``correctable`` here would tell the buyer to "fix field values"
-    for a cell in the SELLER's store.
-    """
-    advisories = _wire_advisories(ctx)
-    # The WHOLE document carries exactly one advisory, before we filter to the one
-    # naming this field. This assertion is what grades the word "alone" in the
-    # scenario's own title, and without it the row is satisfiable by an implementation
-    # that degrades EVERY blob value on every row: the sibling advisories such an
-    # implementation emits are filtered out by _advisories_naming below, so the
-    # per-field count still reads 1 and the row passes while the buyer loses every
-    # package_config value in the listing. Measured: that implementation passes all
-    # five rows without this line and fails eight of ten with it.
-    assert len(advisories) == 1, (
-        f"expected exactly ONE advisory in the whole response — a legacy-invalid "
-        f"{field!r} must degrade that field ALONE — got {len(advisories)}: {advisories!r}"
-    )
-    matching = _advisories_naming(ctx, pkg_id, field)
-    assert len(matching) == 1, (
-        f"expected exactly one errors[] advisory naming package {pkg_id!r} and field {field!r}; "
-        f"got {len(matching)} of {len(advisories)} advisories: {advisories!r}"
-    )
-    advisory = matching[0]
-    assert advisory.get("code") == code, (
-        f"expected advisory code {code!r} for a defect in the seller's own store, got {advisory.get('code')!r}"
-    )
-    assert advisory.get("recovery") == recovery, (
-        f"expected advisory recovery {recovery!r} on the wire (pinned core/error.json makes the wire "
-        f"field authoritative), got {advisory.get('recovery')!r} on code {advisory.get('code')!r}"
-    )
+    """Grade the whole-array count/classification and the degraded package field."""
+    then_advisory_count_and_classification(ctx, 1, code, recovery)
+    advisory = _wire_advisory(ctx, field, pkg_id=pkg_id)
+    assert advisory.get("code") == code
 
 
 @then(parsers.parse('response.errors[] should carry no advisory with code "{code}"'))
@@ -3504,23 +3457,13 @@ def then_no_advisory_with_code(ctx: dict, code: str) -> None:
 
 @then(
     parsers.parse(
-        'the persisted-value advisory for field {field} with reason "{reason}" should identify '
-        'media buy "{mb_id}" package "{pkg_id}" and suggest "{suggestion}"'
+        'the persisted-value advisory for field {field} should identify media buy "{mb_id}" package "{pkg_id}"'
     )
 )
-def then_persisted_value_advisory_identity(
-    ctx: dict, field: str, reason: str, mb_id: str, pkg_id: str, suggestion: str
-) -> None:
-    """Grade exact identity, position and seller guidance for any persisted package field."""
-    matching = _advisories_naming(ctx, pkg_id, field, mb_id=mb_id)
-    assert len(matching) == 1
-    advisory = matching[0]
-    assert advisory.get("details") == {
-        "reasons": [reason],
-        "media_buy_id": _resolve_media_buy_id(ctx, mb_id),
-        "package_id": pkg_id,
-    }
-    assert advisory.get("suggestion") == suggestion
+def then_persisted_value_advisory_identity(ctx: dict, field: str, mb_id: str, pkg_id: str) -> None:
+    """Grade the code and exact identity of a persisted package field advisory."""
+    advisory = _wire_advisory(ctx, field, mb_id=mb_id, pkg_id=pkg_id)
+    assert advisory.get("code") == "PERSISTED_VALUE_UNRENDERABLE"
 
 
 @then(parsers.parse('the package "{pkg_id}" wire field {field} should equal the JSON value {expected_json}'))

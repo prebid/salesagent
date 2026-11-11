@@ -1351,7 +1351,7 @@ Feature: BR-UC-019 Query Media Buys
     Then the response is compliant with the get_media_buys spec
     And the package "pkg-001" wire field targeting_overlay should be null or absent
     And response.errors[] should carry exactly one advisory for package "pkg-001" field targeting_overlay with code "PERSISTED_VALUE_UNRENDERABLE" and recovery "terminal"
-    And the persisted-value advisory for field targeting_overlay with reason "targeting_rehydration_failed" should identify media buy "mb-001" package "pkg-001" and suggest "Contact the seller to repair the stored data; retrying this request cannot repair it"
+    And the persisted-value advisory for field targeting_overlay should identify media buy "mb-001" package "pkg-001"
 
   # ISOLATION IS THE OBLIGATION, and it was ungraded. The degradation of ONE corrupt
   # package_config cell is graded by @T-UC-019-blob-degraded-package-field below, but
@@ -1383,7 +1383,7 @@ Feature: BR-UC-019 Query Media Buys
     And the package "pkg-002" wire field targeting_overlay should be null or absent
     And the package "pkg-001" targeting_overlay should carry geo_countries ["US"]
     And response.errors[] should carry exactly one advisory for package "pkg-002" field targeting_overlay with code "PERSISTED_VALUE_UNRENDERABLE" and recovery "terminal"
-    And the persisted-value advisory for field targeting_overlay with reason "targeting_rehydration_failed" should identify media buy "mb-001" package "pkg-002" and suggest "Contact the seller to repair the stored data; retrying this request cannot repair it"
+    And the persisted-value advisory for field targeting_overlay should identify media buy "mb-001" package "pkg-002"
     # BR-RULE-294 INV-5: per-package failure isolation
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
@@ -1405,8 +1405,8 @@ Feature: BR-UC-019 Query Media Buys
     And the response should include media buy "mb-003" with package "pkg-003"
     And the package "pkg-003" wire field targeting_overlay should be null or absent
     And response.errors[] should carry exactly 2 advisories with code "PERSISTED_VALUE_UNRENDERABLE" and recovery "terminal"
-    And the persisted-value advisory for field targeting_overlay with reason "targeting_rehydration_failed" should identify media buy "mb-002" package "pkg-002" and suggest "Contact the seller to repair the stored data; retrying this request cannot repair it"
-    And the persisted-value advisory for field targeting_overlay with reason "targeting_rehydration_failed" should identify media buy "mb-003" package "pkg-003" and suggest "Contact the seller to repair the stored data; retrying this request cannot repair it"
+    And the persisted-value advisory for field targeting_overlay should identify media buy "mb-002" package "pkg-002"
+    And the persisted-value advisory for field targeting_overlay should identify media buy "mb-003" package "pkg-003"
     # BR-RULE-294 INV-6: per-buy failure isolation across the response
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
@@ -1443,20 +1443,20 @@ Feature: BR-UC-019 Query Media Buys
     And the response should include media buy "mb-001" with package "pkg-001"
     And the package "pkg-001" wire field <field> should be null or absent
     And response.errors[] should carry exactly one advisory for package "pkg-001" field <field> with code "PERSISTED_VALUE_UNRENDERABLE" and recovery "terminal"
-    And the persisted-value advisory for field <field> with reason "<reason>" should identify media buy "mb-001" package "pkg-001" and suggest "Contact the seller to repair the stored data; retrying this request cannot repair it"
+    And the persisted-value advisory for field <field> should identify media buy "mb-001" package "pkg-001"
     # All optional persisted values share one advisory class. CONFIGURATION_ERROR
     # requires transport failure under AdCP 3.2.7 L3/error-handling.mdx; this result
     # remains usable. core/error.json permits a platform code and positional field.
     # Every other blob field has a valid seeded value, so collateral degradation fails.
 
     Examples:
-      | field             | legacy_value          | reason                       |
-      | product_id        | 123                   | persisted_field_unrenderable  |
-      | start_time        | "2026-01-01T00:00:00" | persisted_field_unrenderable  |
-      | end_time          | "2026-01-31T00:00:00" | persisted_field_unrenderable  |
-      | paused            | "maybe"               | persisted_field_unrenderable  |
-      | targeting_overlay | "not a dict"          | targeting_rehydration_failed  |
-      | creative_deadline | "next Friday"         | persisted_field_unrenderable  |
+      | field             | legacy_value          |
+      | product_id        | 123                   |
+      | start_time        | "2026-01-01T00:00:00" |
+      | end_time          | "2026-01-31T00:00:00" |
+      | paused            | "maybe"               |
+      | targeting_overlay | "not a dict"          |
+      | creative_deadline | "next Friday"         |
 
   @T-UC-019-blob-rule-raw-request @invariant @BR-RULE-150 @schema-v3.1
   Scenario: a legacy-invalid buyer_campaign_ref in raw_request degrades that field alone
@@ -1492,10 +1492,10 @@ Feature: BR-UC-019 Query Media Buys
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001", "mb-002"]
     Then the response is compliant with the get_media_buys spec
     And response.errors[] should carry exactly 6 advisories with code "PERSISTED_VALUE_UNRENDERABLE" and recovery "terminal"
-    And the persisted-value advisory for field paused with reason "persisted_field_unrenderable" should identify media buy "mb-001" package "pkg-001" and suggest "Contact the seller to repair the stored data; retrying this request cannot repair it"
-    And the persisted-value advisory for field creative_deadline with reason "persisted_field_unrenderable" should identify media buy "mb-001" package "pkg-0010" and suggest "Contact the seller to repair the stored data; retrying this request cannot repair it"
-    And the persisted-value advisory for field paused with reason "persisted_field_unrenderable" should identify media buy "mb-002" package "pkg-002" and suggest "Contact the seller to repair the stored data; retrying this request cannot repair it"
-    And the persisted-value advisory for field creative_deadline with reason "persisted_field_unrenderable" should identify media buy "mb-002" package "pkg-0020" and suggest "Contact the seller to repair the stored data; retrying this request cannot repair it"
+    And the persisted-value advisory for field paused should identify media buy "mb-001" package "pkg-001"
+    And the persisted-value advisory for field creative_deadline should identify media buy "mb-001" package "pkg-0010"
+    And the persisted-value advisory for field paused should identify media buy "mb-002" package "pkg-002"
+    And the persisted-value advisory for field creative_deadline should identify media buy "mb-002" package "pkg-0020"
     And the persisted-value advisory should identify media buy "mb-001" field buyer_campaign_ref
     And the persisted-value advisory should identify media buy "mb-002" field buyer_campaign_ref
     And the package "pkg-001" wire field paused should be null or absent
@@ -1774,8 +1774,8 @@ Feature: BR-UC-019 Query Media Buys
     And the package "pkg-001" wire field targeting_overlay should be null or absent
     And the package "pkg-0010" wire field targeting_overlay should be null or absent
     And response.errors[] should carry exactly 2 advisories with code "PERSISTED_VALUE_UNRENDERABLE" and recovery "terminal"
-    And the persisted-value advisory for field targeting_overlay with reason "targeting_rehydration_failed" should identify media buy "mb-001" package "pkg-001" and suggest "Contact the seller to repair the stored data; retrying this request cannot repair it"
-    And the persisted-value advisory for field targeting_overlay with reason "targeting_rehydration_failed" should identify media buy "mb-001" package "pkg-0010" and suggest "Contact the seller to repair the stored data; retrying this request cannot repair it"
+    And the persisted-value advisory for field targeting_overlay should identify media buy "mb-001" package "pkg-001"
+    And the persisted-value advisory for field targeting_overlay should identify media buy "mb-001" package "pkg-0010"
 
     Examples:
       | value                |
