@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from src.core.schemas import Snapshot
 
 from flask import Flask
+from pydantic import ValidationError
 
 from src.adapters.base import (
     AdapterCapabilities,
@@ -49,6 +50,7 @@ from src.adapters.gam.managers.orders import (
 )
 from src.adapters.gam.pricing_compatibility import PricingCompatibility
 from src.adapters.gam_data_freshness import validate_and_log_freshness
+from src.adapters.gam_implementation_config_schema import CustomTargeting
 from src.core.audit_logger import AuditLogger
 from src.core.errors.codes import AppErrorCode
 from src.core.errors.details import (
@@ -245,9 +247,9 @@ class GoogleAdManager(AdServerAdapter):
         """Validate targeting and return unsupported features (delegated to targeting manager)."""
         return self.targeting_manager.validate_targeting(targeting_overlay)
 
-    def _build_targeting(self, targeting_overlay):
+    def _build_targeting(self, targeting_overlay, product_custom_targeting: CustomTargeting | None = None):
         """Build GAM targeting criteria from AdCP targeting (delegated to targeting manager)."""
-        return self.targeting_manager.build_targeting(targeting_overlay)
+        return self.targeting_manager.build_targeting(targeting_overlay, product_custom_targeting)
 
     # HITL (Human-in-the-Loop) support methods
     def _requires_manual_approval(self, operation: str) -> bool:
@@ -503,6 +505,7 @@ class GoogleAdManager(AdServerAdapter):
 
         # Validate products have required inventory targeting BEFORE creating order
         # This prevents the "hidden failure" where order is created but line items fail
+        product_custom_targeting: dict[str, CustomTargeting] = {}
         for package in packages:
             product_config = products_map.get(package.package_id)
             if not product_config:
@@ -533,6 +536,16 @@ class GoogleAdManager(AdServerAdapter):
                 )
                 self.log(f"[red]Error: {error_msg}[/red]")
                 raise AdCPProductUnavailableError()
+
+            # A product's custom targeting is the seller's configuration: one GAM cannot take
+            # is CONFIGURATION_ERROR, which the buyer cannot fix (enums/error-code.json at the
+            # pinned spec), refused here so it precedes the approval branch and every GAM write
+            try:
+                product_custom_targeting[package.package_id] = CustomTargeting.from_stored(
+                    product_impl_config.get("custom_targeting_keys") or {}
+                )
+            except ValidationError as exc:
+                raise AdCPConfigurationError(internal_detail=exc) from exc
 
         # Validate targeting from MediaPackage objects (targeting_overlay is populated from request)
         unsupported_features = []
@@ -612,6 +625,15 @@ class GoogleAdManager(AdServerAdapter):
         # Calculate total budget from package budgets (AdCP v2.2.0)
         total_budget_amount = request.total_budget
 
+        # Build targeting for each package (per AdCP spec, targeting is at package level):
+        # the buyer's overlay, ANDed with the product's own custom targeting. Built before
+        # the order, so targeting GAM refuses leaves no order behind.
+        package_targeting = {}
+        for package in packages:
+            targeting = self._build_targeting(package.targeting_overlay, product_custom_targeting[package.package_id])
+            if targeting:
+                package_targeting[package.package_id] = targeting
+
         order_id = self.orders_manager.create_order(
             order_name=order_name,
             total_budget=total_budget_amount,
@@ -621,12 +643,6 @@ class GoogleAdManager(AdServerAdapter):
         )
 
         self.log(f"✓ Created GAM Order ID: {order_id}")
-
-        # Build targeting for each package (per AdCP spec, targeting is at package level)
-        package_targeting = {}
-        for package in packages:
-            if package.targeting_overlay:
-                package_targeting[package.package_id] = self._build_targeting(package.targeting_overlay)
 
         # Build placement_targeting_map from all products' impl_configs (adcp#208)
         # This maps placement_id → targeting_name for creative-level targeting
