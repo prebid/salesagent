@@ -286,21 +286,24 @@ def test_every_precheck_handles_the_index_verdict():
 # ── Inventory non-vacuity ───────────────────────────────────────────
 
 #: Measured against models.py. Counts, not just presence: a silently emptied
-#: inventory makes every scan below vacuously green. Three of the 21 declared
+#: inventory makes every scan below vacuously green. Four of the 21 declared
 #: tuples postdate the guard: ``PricingOption.uq_pricing_options_option_id`` and
 #: ``Principal.uq_principals_tenant_agent_url`` from the rewritten request
 #: boundary, and ``SigningKey.uq_signing_keys_tenant_kid`` on ``(tenant_id, kid)``
 #: — a real UNIQUE constraint (``e7a2c40b91d5_add_signing_keys_table``), not a PK
 #: subset: ``signing_keys`` keys on a surrogate ``id``, so the natural key is
-#: separately declared and separately enforced.
-EXPECTED_DECLARED_TUPLES = 20
-EXPECTED_DECLARED_MODELS = 17
-EXPECTED_FORM_COUNTS = {"unique-constraint": 12, "unique-index": 5, "column-unique": 3}
+#: separately declared and separately enforced. The fourth is the scheduler-only
+#: ``WebhookDeliveryLog.uq_webhook_log_scheduler_sequence`` partial unique index;
+#: its columns are not globally unique across the legacy delivery-report stream.
+EXPECTED_DECLARED_TUPLES = 21
+EXPECTED_DECLARED_MODELS = 18
+EXPECTED_FORM_COUNTS = {"unique-constraint": 12, "unique-index": 6, "column-unique": 3}
 
 #: Excluded, never truncated — the column subset these name is NOT unique in the DB.
 EXPECTED_UNUSABLE = {
     ("Account", "uq_accounts_natural_key"),
     ("MediaBuy", "idx_media_buys_idempotency_key"),
+    ("WebhookDeliveryLog", "uq_webhook_log_scheduler_sequence"),
 }
 
 #: Composite primary keys are unique indexes too, and for these models the ONLY one.

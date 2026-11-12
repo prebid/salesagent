@@ -3019,7 +3019,7 @@ class WebhookDeliveryLog(Base):
 
     # Retry tracking
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
-    status: Mapped[str] = mapped_column(String, nullable=False)  # "success", "failed", "retrying"
+    status: Mapped[str] = mapped_column(String, nullable=False)  # reserved, success, failed, retrying, refused
     http_status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -3046,6 +3046,15 @@ class WebhookDeliveryLog(Base):
         Index("idx_webhook_log_tenant", "tenant_id"),
         Index("idx_webhook_log_status", "status"),
         Index("idx_webhook_log_created_at", "created_at"),
+        Index(
+            "uq_webhook_log_scheduler_sequence",
+            "tenant_id",
+            "media_buy_id",
+            "task_type",
+            "sequence_number",
+            unique=True,
+            postgresql_where=text("task_type = 'media_buy_delivery'"),
+        ),
     )
 
 

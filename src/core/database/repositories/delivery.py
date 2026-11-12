@@ -14,6 +14,8 @@ handles commit/rollback at the boundary.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -21,13 +23,14 @@ from uuid import uuid4
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from src.core.database.models import WebhookDeliveryLog, WebhookDeliveryRecord
+from src.core.database.models import MediaBuy, WebhookDeliveryLog, WebhookDeliveryRecord
 from src.core.webhooks.delivery import WebhookDeliveryOutcome, WebhookTaskContext
 
 # The ``task_type`` that marks a row as the delivery-poll sequence counter rather
 # than a delivery. Named here because the repository owns what the row means; a
 # caller spelling it is how it started looking like an outcome.
 POLL_SEQUENCE_TASK_TYPE = "delivery_poll"
+SCHEDULER_SEQUENCE_TASK_TYPE = "media_buy_delivery"
 
 # ``webhook_delivery_log.webhook_url`` is NOT NULL and a sequence-counter row has
 # no destination. The scheme is deliberately not http(s): nothing may ever mistake
@@ -43,6 +46,22 @@ _OUTCOME_STATUS: dict[str, str] = {
     "client_error": "failed",
     "exhausted": "failed",
 }
+
+
+def _outcome_fields(outcome: WebhookDeliveryOutcome, response_time_ms: int | None) -> dict[str, Any] | None:
+    """The one projection from a delivery conclusion to persisted columns."""
+    status = _OUTCOME_STATUS.get(outcome.kind)
+    if status is None:
+        return None
+    return {
+        "status": status,
+        "attempt_count": outcome.attempts,
+        "http_status_code": outcome.http_status,
+        "error_message": outcome.detail,
+        "payload_size_bytes": outcome.payload_size_bytes,
+        "response_time_ms": response_time_ms,
+        "completed_at": datetime.now(UTC),
+    }
 
 
 class DeliveryRepository:
@@ -248,6 +267,87 @@ class DeliveryRepository:
     # WebhookDeliveryLog writes
     # ------------------------------------------------------------------
 
+    def reserve_next_sequence(
+        self,
+        *,
+        principal_id: str,
+        media_buy_id: str,
+        webhook_url: str,
+        notification_type: str | None = None,
+    ) -> WebhookDeliveryLog:
+        """Reserve one scheduler event; the caller must commit before delivery.
+
+        The transaction lock covers the tenant/buy/task stream, including an
+        empty stream. Every status consumes a sequence. This does not reclaim
+        outstanding reservations or coordinate HTTP delivery (#1638).
+        """
+        owned_buy = self._session.scalar(
+            select(MediaBuy.media_buy_id).where(
+                MediaBuy.tenant_id == self._tenant_id,
+                MediaBuy.principal_id == principal_id,
+                MediaBuy.media_buy_id == media_buy_id,
+            )
+        )
+        if owned_buy is None:
+            raise ValueError(f"Media buy {media_buy_id!r} is outside the reservation's tenant/principal scope")
+        stream = json.dumps([self._tenant_id, media_buy_id, SCHEDULER_SEQUENCE_TASK_TYPE])
+        lock_key = int.from_bytes(hashlib.sha256(stream.encode()).digest()[:8], byteorder="big", signed=True)
+        self._session.execute(select(func.pg_advisory_xact_lock(lock_key)))
+        sequence = self.get_max_sequence_number(media_buy_id, task_type=SCHEDULER_SEQUENCE_TASK_TYPE) + 1
+        return self._create_log(
+            log_id=str(uuid4()),
+            principal_id=principal_id,
+            media_buy_id=media_buy_id,
+            webhook_url=webhook_url,
+            task_type=SCHEDULER_SEQUENCE_TASK_TYPE,
+            sequence_number=sequence,
+            notification_type=notification_type,
+            status="reserved",
+            attempt_count=0,
+            insert_only=True,
+        )
+
+    def mark_delivery_result(
+        self,
+        log_id: str,
+        *,
+        outcome: WebhookDeliveryOutcome,
+        response_time_ms: int | None = None,
+        next_retry_at: datetime | None = None,
+    ) -> WebhookDeliveryLog:
+        """Acknowledge an exact scheduler reservation without allocating again.
+
+        ``outcome.attempts`` is cumulative for this event, not an increment.
+        Success is terminal; lower attempt totals and refused_auth are no-ops.
+        The retry date records caller intent only, without choosing a policy.
+        Refresh under the row lock so a stale identity map cannot undo success.
+        Flush only: the caller owns commit, rollback and persistence failures.
+        """
+        row = self._session.scalars(
+            select(WebhookDeliveryLog)
+            .where(
+                WebhookDeliveryLog.tenant_id == self._tenant_id,
+                WebhookDeliveryLog.id == log_id,
+                WebhookDeliveryLog.task_type == SCHEDULER_SEQUENCE_TASK_TYPE,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).one_or_none()
+        if row is None:
+            raise ValueError(f"Scheduler reservation {log_id!r} not found for tenant {self._tenant_id!r}")
+        fields = _outcome_fields(outcome, response_time_ms)
+        if row.status == "success" or outcome.attempts < row.attempt_count or fields is None:
+            return row
+        if next_retry_at is not None:
+            if fields["status"] != "failed":
+                raise ValueError("Only a failed delivery outcome can carry retry intent")
+            fields.update(status="retrying", completed_at=None)
+        for name, value in fields.items():
+            setattr(row, name, value)
+        row.next_retry_at = next_retry_at
+        self._session.flush()
+        return row
+
     def record_outcome(
         self,
         *,
@@ -257,7 +357,7 @@ class DeliveryRepository:
         outcome: WebhookDeliveryOutcome,
         response_time_ms: int | None = None,
     ) -> None:
-        """Write down what became of one webhook delivery. The ONLY outcome writer.
+        """Record an unreserved delivery through the shared outcome projection.
 
         Both senders conclude here. Before this existed, the only persisted
         recorder was a private fourteen-parameter method on ONE sender, reachable
@@ -303,8 +403,8 @@ class DeliveryRepository:
         Does NOT commit, and does NOT open a session — the caller owns the
         transaction boundary, exactly one per conclusion.
         """
-        status = _OUTCOME_STATUS.get(outcome.kind)
-        if status is None or not ctx.records_delivery_log:
+        fields = _outcome_fields(outcome, response_time_ms)
+        if fields is None or not ctx.records_delivery_log:
             return
 
         # records_delivery_log already requires all three of these truthy; the
@@ -318,15 +418,9 @@ class DeliveryRepository:
             media_buy_id=ctx.media_buy_id,
             webhook_url=webhook_url,
             task_type=ctx.task_type,
-            status=status,
-            attempt_count=outcome.attempts,
             sequence_number=ctx.sequence_number,
             notification_type=ctx.notification_type,
-            http_status_code=outcome.http_status,
-            error_message=outcome.detail,
-            payload_size_bytes=outcome.payload_size_bytes,
-            response_time_ms=response_time_ms,
-            completed_at=datetime.now(UTC),
+            **fields,
         )
 
     def record_poll_sequence(
@@ -388,6 +482,7 @@ class DeliveryRepository:
         response_time_ms: int | None = None,
         completed_at: datetime | None = None,
         next_retry_at: datetime | None = None,
+        insert_only: bool = False,
     ) -> WebhookDeliveryLog:
         """Create or update a webhook delivery log entry.
 
@@ -396,12 +491,16 @@ class DeliveryRepository:
 
         Does NOT commit — the caller handles that.
 
+        Reservations use ``insert_only`` and return the persistent inserted row;
+        they must never inherit the legacy upsert semantics.
+
         PRIVATE. It is the single construction site for ``WebhookDeliveryLog``,
         and it is private so that it stays that way: a public writer taking
         fifteen loose keyword arguments is what let a *sequence counter* and a
         *delivery outcome* be written as the same kind of thing by callers that
         each decided for themselves what ``status`` and ``task_type`` meant.
-        Callers use :meth:`record_outcome` or :meth:`record_poll_sequence`,
+        Callers use :meth:`record_outcome`, :meth:`record_poll_sequence`, or
+        :meth:`reserve_next_sequence`,
         which name what the row IS.
         """
         log_entry = WebhookDeliveryLog(
@@ -422,6 +521,9 @@ class DeliveryRepository:
             completed_at=completed_at,
             next_retry_at=next_retry_at,
         )
-        self._session.merge(log_entry)
+        if insert_only:
+            self._session.add(log_entry)
+        else:
+            self._session.merge(log_entry)
         self._session.flush()
         return log_entry
