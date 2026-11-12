@@ -4,5 +4,8 @@
 # Sync all GAM tenants every 6 hours
 0 */6 * * * python /app/scripts/ops/sync_all_tenants.py
 
+# Refresh every publisher's adagents.json every 6 hours (src/services/publisher_ingest.py)
+0 */6 * * * python /app/scripts/ops/refresh_publishers.py
+
 # Daily sync at 2 AM EST (7 AM UTC)
 0 7 * * * python /app/scripts/ops/sync_all_tenants.py

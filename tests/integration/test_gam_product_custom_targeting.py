@@ -17,7 +17,7 @@ import pytest
 
 from src.adapters.base import AdapterCreateRequest
 from src.core.exceptions import AdCPAdapterError, AdCPValidationError
-from src.core.schemas import MediaPackage, Principal, Targeting
+from src.core.schemas import MediaPackage, Targeting
 from tests.factories import ProductFactory, TenantFactory
 from tests.factories.request import CreateMediaBuyRequestFactory, PackageRequestFactory
 from tests.helpers.gam_client import (
@@ -79,16 +79,7 @@ def _create_media_buy(client_manager, custom_targeting_keys: dict, targeting_ove
         targeting_overlay=targeting_overlay,
     )
 
-    adapter = build_gam_adapter(
-        client_manager,
-        principal=Principal(
-            principal_id="test_principal",
-            name="Test Principal",
-            platform_mappings={"google_ad_manager": {"advertiser_id": "789"}},
-        ),
-        config={"network_code": "123456", "trafficker_id": "456", "refresh_token": "test_token"},
-        tenant_id=tenant.tenant_id,
-    )
+    adapter = build_gam_adapter(client_manager, tenant_id=tenant.tenant_id)
     pricing = {"pricing_model": "cpm", "rate": 5.0, "currency": "USD", "is_fixed": True, "bid_price": None}
     adapter.create_media_buy(request, [package], start_time, end_time, package_pricing_info={"pkg_001": pricing})
 

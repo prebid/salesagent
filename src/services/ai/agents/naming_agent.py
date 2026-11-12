@@ -128,6 +128,8 @@ async def generate_name_async(
     Returns:
         Generated order name
     """
+    from src.services.ai.factory import run_agent
+
     prompt = build_naming_prompt(
         campaign_name=campaign_name,
         brand_name=brand_name,
@@ -139,7 +141,7 @@ async def generate_name_async(
     )
 
     try:
-        result = await agent.run(prompt)
+        result = await run_agent(agent, prompt)
         # pydantic-ai 1.x uses .output for structured data
         generated_name = result.output.name.strip().strip('"').strip("'")
 

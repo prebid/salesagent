@@ -476,26 +476,10 @@ class TestExecuteApprovedEnrichesSellerConcept:
     def _produce_gam_status(self, gam_order_id: str, creative_id: str, tenant_id: str):
         """Emit the AssetStatus the REAL dry-run GAM producer returns for a pushed
         creative — so a change to the GAM concept keys/values reddens this test too."""
-        from src.core.schemas import Principal
-
-        # The SCHEMA Principal, which carries no token at all — ``with_token`` is a
-        # classmethod on the ORM ``Principal`` row, not on this model.
-        gam_principal = Principal(
-            principal_id="test_principal",
-            name="Test Principal",
-            platform_mappings={"google_ad_manager": {"advertiser_id": "123"}},
-        )
-        config = {
-            "network_code": "123456",
-            "service_account_key_file": "/path/to/key.json",
-            "trafficker_id": "trafficker_123",
-        }
         # The adapter reaches GAM on construction, so the client manager is a stand-in
         # serving the one line item this order has.
         gam = build_gam_adapter(
             stub_gam_client_manager(line_items=[gam_line_item("test_package", sizes=((970, 250),))]),
-            principal=gam_principal,
-            config=config,
             tenant_id=tenant_id,
         )
         # The order's line item accepts the asset's 970x250 (read off its format), so the

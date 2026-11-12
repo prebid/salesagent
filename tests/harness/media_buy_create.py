@@ -22,7 +22,9 @@ from src.core.schemas._base import CreateMediaBuyResult
 from tests.factories.mint import mint
 from tests.harness._base import IntegrationEnv, json_safe
 from tests.harness._realize import realize_e2e
+from tests.harness.admin_client import AdminOperatorMixin
 from tests.harness.peer_agent import PeerCreativeAgentMixin
+from tests.harness.publisher_authorization import PublisherAdagentsMixin
 from tests.harness.transport import DeliverResult
 
 # Sentinel for missing-key tests: pass idempotency_key=OMIT_IDEMPOTENCY_KEY to send a
@@ -175,7 +177,7 @@ def _restore_creative_ids(req: CreateMediaBuyRequest, flat: dict[str, Any]) -> N
             flat_pkgs[i]["creative_ids"] = cids
 
 
-class MediaBuyCreateEnv(PeerCreativeAgentMixin, IntegrationEnv):
+class MediaBuyCreateEnv(PublisherAdagentsMixin, AdminOperatorMixin, PeerCreativeAgentMixin, IntegrationEnv):
     """Integration test environment for _create_media_buy_impl.
 
     Mocks external services (adapter, audit, slack, context manager).
@@ -184,7 +186,9 @@ class MediaBuyCreateEnv(PeerCreativeAgentMixin, IntegrationEnv):
     the env carries ``set_egress_hatches`` (the @egress ingest-twin scenarios
     pin the hatch posture the refusal is graded under), and the dial to a
     tenant-configured creative agent when a package's format_id names one, which
-    is why it carries ``serve_peer_catalog``.
+    is why it carries ``serve_peer_catalog``. A publisher's adagents.json is served and
+    ingested through the operator's routes (``PublisherAdagentsMixin``), so a buy can be
+    graded against what a publisher's file says.
     """
 
     EXTERNAL_PATCHES = {
@@ -198,9 +202,7 @@ class MediaBuyCreateEnv(PeerCreativeAgentMixin, IntegrationEnv):
     def __init__(self, **kwargs: Any) -> None:
         # Unique, hyphen-safe tenant/principal IDs per instance: avoids
         # cross-test collisions under xdist, and keeps the derived
-        # subdomain ("pub-<tenant_id>") a valid publisher domain — an
-        # underscore in the id (e.g. the "test_tenant" default) fails the
-        # AdCP publisher_domain pattern when products resolve property_tags.
+        # subdomain ("pub-<tenant_id>") a valid DNS label.
         suffix = uuid.uuid4().hex[:10]
         kwargs.setdefault("tenant_id", mint(f"mbcreate{suffix}"))
         kwargs.setdefault("principal_id", mint(f"agent{suffix}"))
@@ -215,7 +217,7 @@ class MediaBuyCreateEnv(PeerCreativeAgentMixin, IntegrationEnv):
 
         Creates: tenant (with auto CurrencyLimit USD), principal,
         PropertyTag ("all_inventory"), Product with PricingOption, and one
-        verified AuthorizedProperty.
+        publisher whose stored adagents.json authorizes the tenant.
 
         Returns (tenant, principal, product, pricing_option).
         """
@@ -250,7 +252,7 @@ class MediaBuyCreateEnv(PeerCreativeAgentMixin, IntegrationEnv):
         share: BDD reaches this env through it, the integration suite calls
         ``setup_default_data`` and ``setup_product_chain`` directly. Here rather than in the
         base, because ``validate_setup_complete`` has one production caller -- seeding an
-        AuthorizedProperty for every tenant would break UC-013's property counts the way
+        authorizing publisher for every tenant would break UC-013's property counts the way
         seeding an account for every tenant broke UC-011's.
 
         Everything is CREATE-ONLY. ``call_impl`` re-enters this method (through
@@ -261,14 +263,15 @@ class MediaBuyCreateEnv(PeerCreativeAgentMixin, IntegrationEnv):
         """
         from sqlalchemy import select
 
-        from src.core.database.models import AuthorizedProperty, Tenant, TenantAuthConfig
-        from tests.factories import AuthorizedPropertyFactory, TenantAuthConfigFactory
+        from src.core.database.models import Publisher, Tenant, TenantAuthConfig
+        from tests.factories import TenantAuthConfigFactory
+        from tests.factories.publisher import authorize_publishers
 
         creating = self._session.scalars(select(Tenant).filter_by(tenant_id=self._tenant_id)).first() is None
         tenant, principal = super().setup_default_data(**tenant_kwargs)
 
-        if self._session.scalars(select(AuthorizedProperty).filter_by(tenant_id=tenant.tenant_id)).first() is None:
-            AuthorizedPropertyFactory(tenant=tenant)
+        if self._session.scalars(select(Publisher).filter_by(tenant_id=tenant.tenant_id)).first() is None:
+            authorize_publishers(tenant, "setup-publisher.psatest.com")
         if self._session.scalars(select(TenantAuthConfig).filter_by(tenant_id=tenant.tenant_id)).first() is None:
             TenantAuthConfigFactory(tenant=tenant, oidc_enabled=True)
         if creating:
@@ -318,7 +321,6 @@ class MediaBuyCreateEnv(PeerCreativeAgentMixin, IntegrationEnv):
             product_id=product_id,
             delivery_type="non_guaranteed",
             format_ids=format_ids,
-            property_tags=["all_inventory"],
         )
         pricing_option = None
         if with_pricing:
@@ -476,6 +478,8 @@ class MediaBuyCreateEnv(PeerCreativeAgentMixin, IntegrationEnv):
             config={},
             principal=Principal(principal_id=self._principal_id, name=self._principal_id, platform_mappings={}),
             tenant_id=self._tenant_id,
+            order_name_template=None,
+            tenant_ai_config=None,
         ).validate_media_buy_request
         mock_adapter.add_creative_assets.return_value = None
         mock_adapter.associate_creatives.return_value = None

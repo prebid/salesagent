@@ -32,10 +32,8 @@ so the next reader can tell a sanctioned dialer from an unnoticed bypass
 without archaeology through a PR description:
 
 * ``adcp.adagents.fetch_adagents`` (called from
-  ``src/admin/blueprints/publisher_partners.py``,
-  ``src/services/property_discovery_service.py``,
-  ``src/services/property_verification_service.py`` — all dialing a
-  tenant-admin-configured ``publisher_domain``). Its ``_owned_pinned_client``
+  ``src/services/publisher_ingest.py`` alone, dialing a tenant-admin-configured
+  publisher domain). Its ``_owned_pinned_client``
   builds an ``AsyncIpPinnedTransport`` on the validated IP with
   ``trust_env=False`` and mints a FRESH pinned client per redirect hop — this
   is *stronger* than injecting this seam's client would be: our client
@@ -402,6 +400,19 @@ def wrapped_failure(exc: BaseException) -> WrappedFailure | None:
         return None
     status = found.response.status_code
     return WrappedFailure(status=status, retry_after=retry_after_seconds(status, found.response.headers))
+
+
+def is_transport_failure(exc: BaseException) -> bool:
+    """True when *exc* is an ``_httpx.HTTPError`` raised by a vendor SDK's own httpx stack.
+
+    For the fixed-destination SDKs that dial outside this seam (the pydantic-ai providers,
+    see docs/security/outbound-egress.md). google-genai raises ``httpx.ConnectError``
+    unwrapped for an unreachable endpoint and ``httpx.RemoteProtocolError`` for a dropped
+    connection, so a caller that degrades on a provider failure has to recognise both. Like
+    :func:`wrapped_failure`, this answers the question without handing the httpx type across
+    the import ban.
+    """
+    return isinstance(exc, _httpx.HTTPError)
 
 
 def find_wrapped[Wrapped: BaseException](exc: BaseException, exc_type: type[Wrapped]) -> Wrapped | None:

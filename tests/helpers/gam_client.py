@@ -122,12 +122,28 @@ def stub_gam_client_manager(
 
 
 def build_gam_adapter(
-    client_manager: MagicMock, *, principal: Principal, config: dict[str, Any], tenant_id: str
+    client_manager: MagicMock,
+    *,
+    principal: Principal | None = None,
+    config: dict[str, Any] | None = None,
+    tenant_id: str = "test_tenant",
 ) -> GoogleAdManager:
     """The real GAM adapter, built over ``client_manager`` in place of the GAM client.
 
+    By default the principal is mapped to GAM advertiser 123 and the config names network
+    123456 and trafficker ``trafficker_123``; a test passes only what it needs to differ.
     The advertiser is the principal's ``google_ad_manager`` mapping, as production reads it.
     """
+    principal = principal or Principal(
+        principal_id="test_principal",
+        name="Test Principal",
+        platform_mappings={"google_ad_manager": {"advertiser_id": "123"}},
+    )
+    config = config or {
+        "network_code": "123456",
+        "service_account_key_file": "/path/to/key.json",
+        "trafficker_id": "trafficker_123",
+    }
     with patch("src.adapters.google_ad_manager.GAMClientManager", return_value=client_manager):
         return GoogleAdManager(
             config=config,
@@ -136,4 +152,5 @@ def build_gam_adapter(
             advertiser_id=principal.platform_mappings["google_ad_manager"]["advertiser_id"],
             trafficker_id=config["trafficker_id"],
             tenant_id=tenant_id,
+            tenant_ai_config=None,
         )
