@@ -7,6 +7,7 @@ Based on analysis of Prebid Line Item Manager patterns.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr, TypeAdapter, field_validator
@@ -72,7 +73,8 @@ class CustomTargeting(BaseModel):
     OR set of AND sets of ``CustomCriteria``. No branches means no custom targeting.
 
     A product's ``custom_targeting_keys`` is stored in one of three formats, all read by
-    ``from_stored``. Buyer key-values and AXE segments are the legacy one, ``from_key_values``.
+    ``from_stored``; ``to_stored`` writes the groups one, which the targeting widget edits.
+    Buyer key-values and AXE segments are the legacy one, ``from_key_values``.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -102,8 +104,10 @@ class CustomTargeting(BaseModel):
         - legacy key-values, as ``from_key_values`` reads them.
 
         In the first two, a value of digits is a GAM value ID and anything else a value name.
-        A criterion with no values, and a group with no criteria, is left out: the widget
-        saves those while a row is still being filled in. Anything else malformed raises
+        In groups, ``{"name": ...}`` is a value name whatever it is spelled with; that is how
+        ``to_stored`` keeps a name of digits a name. A criterion with no values, and a group
+        with no criteria, is left out: the widget saves those while a row is still being
+        filled in. Anything else malformed, an unknown key included, raises
         ``pydantic.ValidationError``.
         """
         if "groups" in stored:
@@ -132,41 +136,78 @@ class CustomTargeting(BaseModel):
         """
         names = _LEGACY_KEY_VALUES.validate_python(key_values)
         criteria = tuple(
-            CustomCriterion(key_id=_key_id(key.removeprefix("NOT_")), values=(name,), exclude=key.startswith("NOT_"))
+            CustomCriterion(key_id=_gam_id(key.removeprefix("NOT_")), values=(name,), exclude=key.startswith("NOT_"))
             for key, name in names.items()
         )
         return cls(branches=(criteria,) if criteria else ())
 
+    def to_stored(self) -> dict[str, Any]:
+        """This targeting in the groups format, which ``from_stored`` reads back unchanged.
 
-def _key_id(key_id: str | int) -> int | str:
-    """A key ID of digits as the int GAM takes; anything else is left for ``CustomCriterion`` to refuse."""
-    return int(key_id) if isinstance(key_id, str) and key_id.isascii() and key_id.isdecimal() else key_id
+        Key and value IDs are written as strings of digits, the way the widget writes the IDs
+        it is given; a value name is written ``{"name": ...}``, so a name of digits stays a name.
+        """
+        return {
+            "groups": [
+                {
+                    "criteria": [
+                        {
+                            "keyId": str(criterion.key_id),
+                            "values": [str(v) if isinstance(v, int) else {"name": v} for v in criterion.values],
+                            "exclude": criterion.exclude,
+                        }
+                        for criterion in branch
+                    ]
+                }
+                for branch in self.branches
+            ]
+        }
 
 
-def _criterion(key_id: str | int, values: list[int | str], exclude: bool) -> CustomCriterion:
+def _gam_id(id_or_name: str | int) -> int | str:
+    """A string of digits as the int GAM ID it spells; anything else unchanged."""
+    if isinstance(id_or_name, str) and id_or_name.isascii() and id_or_name.isdecimal():
+        return int(id_or_name)
+    return id_or_name
+
+
+def _criterion(key_id: str | int, values: Sequence[_StoredValue], exclude: bool) -> CustomCriterion:
     """A criterion from the groups or include/exclude format, where a value of digits is a GAM value ID."""
     return CustomCriterion(
-        key_id=_key_id(key_id),
-        values=tuple(int(v) if isinstance(v, str) and v.isascii() and v.isdecimal() else v for v in values),
+        key_id=_gam_id(key_id),
+        values=tuple(v.name if isinstance(v, _StoredName) else _gam_id(v) for v in values),
         exclude=exclude,
     )
 
 
-class _StoredCriterion(BaseModel):
+class _Stored(BaseModel):
+    """A stored format refuses a key it does not know, rather than serve without it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class _StoredName(_Stored):
+    name: Annotated[StrictStr, Field(min_length=1)]
+
+
+_StoredValue = StrictInt | StrictStr | _StoredName
+
+
+class _StoredCriterion(_Stored):
     key_id: StrictStr | StrictInt = Field(alias="keyId")
-    values: list[CustomTargetingValue] = Field(default_factory=list)
+    values: list[_StoredValue] = Field(default_factory=list)
     exclude: StrictBool = False
 
 
-class _StoredGroup(BaseModel):
+class _StoredGroup(_Stored):
     criteria: list[_StoredCriterion] = Field(default_factory=list)
 
 
-class _StoredGroups(BaseModel):
+class _StoredGroups(_Stored):
     groups: list[_StoredGroup]
 
 
-class _StoredIncludeExclude(BaseModel):
+class _StoredIncludeExclude(_Stored):
     include: dict[str, list[CustomTargetingValue]] = Field(default_factory=dict)
     exclude: dict[str, list[CustomTargetingValue]] = Field(default_factory=dict)
     operator: Literal["AND", "OR"] = "AND"

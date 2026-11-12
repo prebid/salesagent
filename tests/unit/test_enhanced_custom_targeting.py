@@ -10,6 +10,7 @@ import pytest
 from pydantic import ValidationError
 
 from src.adapters.gam_implementation_config_schema import CustomCriterion, CustomTargeting, GAMImplementationConfig
+from src.admin.blueprints.products import custom_key_inventory_ids
 from src.services.gam_product_config_service import GAMProductConfigService
 
 
@@ -91,6 +92,7 @@ class TestIncludeExclude:
             pytest.param({"include": {"11111": "sports"}}, id="values-not-a-list"),
             pytest.param({"include": {"sport": ["football"]}}, id="key-is-not-a-key-id"),
             pytest.param({"include": {"11111": ["sports"]}, "operator": "XOR"}, id="unknown-operator"),
+            pytest.param({"include": {"11111": ["sports"]}, "22222": "premium"}, id="legacy-key-alongside"),
         ],
     )
     def test_malformed_is_refused(self, stored):
@@ -124,6 +126,12 @@ class TestGroups:
 
         assert CustomTargeting.from_stored(stored) == _targeting((_criterion(11001, 448512, "sports"),))
 
+    def test_a_name_object_is_a_value_name_even_of_digits(self):
+        """How ``to_stored`` writes a name, so a name of digits survives the widget."""
+        stored = {"groups": [{"criteria": [{"keyId": "11001", "values": [{"name": "448512"}, "448513"]}]}]}
+
+        assert CustomTargeting.from_stored(stored) == _targeting((_criterion(11001, "448512", 448513),))
+
     def test_empty_groups_and_criteria_with_no_values_are_left_out(self):
         """The widget saves both while a row is still being filled in."""
         stored = {
@@ -147,11 +155,51 @@ class TestGroups:
             pytest.param({"groups": [{"criteria": [{"keyId": "sport", "values": ["1"]}]}]}, id="key-is-not-a-key-id"),
             pytest.param({"groups": [{"criteria": [{"keyId": "11111", "values": "1"}]}]}, id="values-not-a-list"),
             pytest.param({"groups": "11111"}, id="groups-not-a-list"),
+            pytest.param(
+                {"groups": [{"criteria": [{"keyId": "11111", "values": ["1"]}]}], "22222": "premium"},
+                id="legacy-key-alongside",
+            ),
+            pytest.param({"groups": [{"criteria": [{"keyId": "11111", "value": ["1"]}]}]}, id="value-not-values"),
+            pytest.param({"groups": [{"criteria": [], "operator": "AND"}]}, id="unknown-group-key"),
+            pytest.param(
+                {"groups": [{"criteria": [{"keyId": "11111", "values": [{"name": "a", "id": 1}]}]}]},
+                id="unknown-name-key",
+            ),
+            pytest.param({"groups": [{"criteria": [{"keyId": "11111", "values": [{"name": ""}]}]}]}, id="empty-name"),
         ],
     )
     def test_malformed_is_refused(self, stored):
         with pytest.raises(ValidationError):
             CustomTargeting.from_stored(stored)
+
+
+class TestToStored:
+    """What the edit page hands the widget: the groups format, read back unchanged."""
+
+    def test_ids_are_strings_and_names_are_name_objects(self):
+        targeting = CustomTargeting.from_stored({"11001": "448512", "NOT_11002": "sports"})
+
+        assert targeting.to_stored() == {
+            "groups": [
+                {
+                    "criteria": [
+                        {"keyId": "11001", "values": [{"name": "448512"}], "exclude": False},
+                        {"keyId": "11002", "values": [{"name": "sports"}], "exclude": True},
+                    ]
+                }
+            ]
+        }
+
+    def test_reads_back_unchanged(self):
+        targeting = _targeting(
+            (_criterion(11001, 448512, "448513"), _criterion(11002, "sports", exclude=True)),
+            (_criterion(11003, 448701),),
+        )
+
+        assert CustomTargeting.from_stored(targeting.to_stored()) == targeting
+
+    def test_no_targeting_is_no_groups(self):
+        assert CustomTargeting().to_stored() == {"groups": []}
 
 
 def test_no_custom_targeting_is_no_branches():
@@ -179,6 +227,27 @@ class TestAnd:
         assert combined == _targeting(
             (self.A, self.C, self.D), (self.A, self.E), (self.B, self.C, self.D), (self.B, self.E)
         )
+
+
+def test_inventory_mappings_list_each_targeted_key_and_value_once():
+    """The product's ``custom_key`` mappings come from the model, whatever format was stored."""
+    stored = {
+        "groups": [
+            {"criteria": [{"keyId": "11001", "values": ["448512", {"name": "sports"}]}]},
+            {
+                "criteria": [
+                    {"keyId": "11001", "values": ["448512"]},
+                    {"keyId": "11002", "values": ["9"], "exclude": True},
+                ]
+            },
+        ]
+    }
+
+    assert custom_key_inventory_ids(CustomTargeting.from_stored(stored)) == [
+        "11001=448512",
+        "11001=sports",
+        "NOT_11002=9",
+    ]
 
 
 def test_implementation_config_reads_the_stored_format():

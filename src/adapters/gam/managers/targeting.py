@@ -402,7 +402,8 @@ class GAMTargetingManager:
     def _render_custom_targeting(self, custom_targeting: CustomTargeting) -> dict[str, Any]:
         """The GAM tree for ``custom_targeting``: an OR set of AND sets of ``CustomCriteria``.
 
-        The one place a value name becomes a GAM value ID.
+        The one place a value name becomes a GAM value ID. A name and the ID it resolves to
+        can both be listed for one key, so each ID is sent once.
         """
         return {
             "xsi_type": "CustomCriteriaSet",  # Explicit types for zeep SOAP serialization
@@ -416,12 +417,14 @@ class GAMTargetingManager:
                             "xsi_type": "CustomCriteria",
                             "keyId": criterion.key_id,
                             "operator": "IS_NOT" if criterion.exclude else "IS",
-                            "valueIds": [
-                                value
-                                if isinstance(value, int)
-                                else self._get_or_create_custom_targeting_value(str(criterion.key_id), value)
-                                for value in criterion.values
-                            ],
+                            "valueIds": list(
+                                dict.fromkeys(
+                                    value
+                                    if isinstance(value, int)
+                                    else self._get_or_create_custom_targeting_value(str(criterion.key_id), value)
+                                    for value in criterion.values
+                                )
+                            ),
                         }
                         for criterion in branch
                     ],

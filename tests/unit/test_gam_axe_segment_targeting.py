@@ -13,6 +13,7 @@ import pytest
 from src.adapters.gam.managers.targeting import GAMTargetingManager
 from src.core.exceptions import AdCPCapabilityNotSupportedError
 from src.core.schemas import Targeting
+from tests.helpers.gam_client import gam_criteria_set, gam_criterion, stub_gam_client_manager
 
 
 @pytest.fixture
@@ -45,148 +46,72 @@ def mock_adapter_config_no_keys():
     return mock_config
 
 
-def test_axe_include_segment_translates_to_custom_targeting(mock_adapter_config_three_keys):
-    """Test that axe_include_segment translates to GAM custom targeting using configured key."""
+#: Segment and key-value names the GAM stand-in holds, by (key_id, name), and their value IDs.
+INCLUDE_SEGMENT, EXCLUDE_SEGMENT, FOOTBALL = 901, 902, 903
+GAM_VALUES = {(12345, "x8dj3k"): INCLUDE_SEGMENT, (67890, "y9kl4m"): EXCLUDE_SEGMENT, (22222, "football"): FOOTBALL}
+
+
+def _custom_targeting_built(adapter_config, targeting_overlay: Targeting) -> dict:
+    """The ``customTargeting`` the targeting manager builds for ``targeting_overlay``."""
     with patch("src.core.database.database_session.get_db_session") as mock_session:
-        mock_db = MagicMock()
-        mock_session.return_value.__enter__.return_value = mock_db
-        mock_db.scalars.return_value.first.return_value = mock_adapter_config_three_keys
+        mock_session.return_value.__enter__.return_value.scalars.return_value.first.return_value = adapter_config
+        gam_client = stub_gam_client_manager(custom_targeting_values=GAM_VALUES).get_client()
+        manager = GAMTargetingManager("tenant_123", gam_client=gam_client)
+        return manager.build_targeting(targeting_overlay)["customTargeting"]
 
-        # Mock GAM client for custom targeting value operations
-        mock_gam_client = MagicMock()
-        manager = GAMTargetingManager("tenant_123", gam_client=mock_gam_client)
 
-        targeting_overlay = Targeting(
-            geo_countries=["US"],
-            axe_include_segment="x8dj3k",
-        )
+def test_axe_include_segment_translates_to_custom_targeting(mock_adapter_config_three_keys):
+    """axe_include_segment targets the configured include key (12345 in the fixture)."""
+    sent = _custom_targeting_built(
+        mock_adapter_config_three_keys, Targeting(geo_countries=["US"], axe_include_segment="x8dj3k")
+    )
 
-        result = manager.build_targeting(targeting_overlay)
-
-        # Verify custom targeting was set with configured "audience_include" key
-        # The result has GAM API structure with CustomCriteriaSet
-        assert "customTargeting" in result
-        custom_targeting = result["customTargeting"]
-
-        # Should have CustomCriteriaSet structure with children
-        assert custom_targeting["xsi_type"] == "CustomCriteriaSet"
-        assert custom_targeting["logicalOperator"] == "OR"
-        # GAM takes an OR of AND sets; the buyer's key-values and segments are one AND set.
-        [branch] = custom_targeting["children"]
-
-        # Find the audience_include criteria by keyId (12345 from fixture)
-        criteria = [c for c in branch["children"] if c.get("keyId") == 12345]
-        assert len(criteria) > 0, "Should have audience_include custom targeting criteria"
-        assert criteria[0]["operator"] == "IS"  # Include segment uses IS operator
+    assert sent == gam_criteria_set("OR", [gam_criteria_set("AND", [gam_criterion(12345, [INCLUDE_SEGMENT])])])
 
 
 def test_axe_exclude_segment_translates_to_negative_custom_targeting(mock_adapter_config_three_keys):
-    """Test that axe_exclude_segment translates to negative GAM custom targeting using configured key."""
-    with patch("src.core.database.database_session.get_db_session") as mock_session:
-        mock_db = MagicMock()
-        mock_session.return_value.__enter__.return_value = mock_db
-        mock_db.scalars.return_value.first.return_value = mock_adapter_config_three_keys
+    """axe_exclude_segment excludes on the configured exclude key (67890 in the fixture)."""
+    sent = _custom_targeting_built(
+        mock_adapter_config_three_keys, Targeting(geo_countries=["US"], axe_exclude_segment="y9kl4m")
+    )
 
-        # Mock GAM client for custom targeting value operations
-        mock_gam_client = MagicMock()
-        manager = GAMTargetingManager("tenant_123", gam_client=mock_gam_client)
-
-        targeting_overlay = Targeting(
-            geo_countries=["US"],
-            axe_exclude_segment="y9kl4m",
-        )
-
-        result = manager.build_targeting(targeting_overlay)
-
-        # Verify negative custom targeting was set (IS_NOT operator with configured key)
-        assert "customTargeting" in result
-        custom_targeting = result["customTargeting"]
-
-        # Should have CustomCriteriaSet structure with children
-        assert custom_targeting["xsi_type"] == "CustomCriteriaSet"
-        assert custom_targeting["logicalOperator"] == "OR"
-        # GAM takes an OR of AND sets; the buyer's key-values and segments are one AND set.
-        [branch] = custom_targeting["children"]
-
-        # Find the audience_exclude criteria by keyId (67890 from fixture)
-        criteria = [c for c in branch["children"] if c.get("keyId") == 67890]
-        assert len(criteria) > 0, "Should have audience_exclude custom targeting criteria"
-        assert criteria[0]["operator"] == "IS_NOT"  # Exclude segment uses IS_NOT operator
+    assert sent == gam_criteria_set(
+        "OR", [gam_criteria_set("AND", [gam_criterion(67890, [EXCLUDE_SEGMENT], "IS_NOT")])]
+    )
 
 
 def test_axe_segments_both_include_and_exclude(mock_adapter_config_three_keys):
-    """Test that both axe_include_segment and axe_exclude_segment can be set with separate keys."""
-    with patch("src.core.database.database_session.get_db_session") as mock_session:
-        mock_db = MagicMock()
-        mock_session.return_value.__enter__.return_value = mock_db
-        mock_db.scalars.return_value.first.return_value = mock_adapter_config_three_keys
+    """Both segments are ANDed in one branch, each on its own key."""
+    sent = _custom_targeting_built(
+        mock_adapter_config_three_keys,
+        Targeting(geo_countries=["US"], axe_include_segment="x8dj3k", axe_exclude_segment="y9kl4m"),
+    )
 
-        # Mock GAM client for custom targeting value operations
-        mock_gam_client = MagicMock()
-        manager = GAMTargetingManager("tenant_123", gam_client=mock_gam_client)
-
-        targeting_overlay = Targeting(
-            geo_countries=["US"],
-            axe_include_segment="x8dj3k",
-            axe_exclude_segment="y9kl4m",
-        )
-
-        result = manager.build_targeting(targeting_overlay)
-
-        # Verify both positive and negative custom targeting were set with separate keys
-        assert "customTargeting" in result
-        custom_targeting = result["customTargeting"]
-
-        # Should have CustomCriteriaSet structure with children
-        assert custom_targeting["xsi_type"] == "CustomCriteriaSet"
-        assert custom_targeting["logicalOperator"] == "OR"
-        # GAM takes an OR of AND sets; the buyer's key-values and segments are one AND set.
-        [branch] = custom_targeting["children"]
-
-        # Find both include and exclude criteria by keyId
-        include_criteria = [c for c in branch["children"] if c.get("keyId") == 12345]
-        exclude_criteria = [c for c in branch["children"] if c.get("keyId") == 67890]
-
-        assert len(include_criteria) > 0, "Should have audience_include custom targeting criteria"
-        assert include_criteria[0]["operator"] == "IS"
-
-        assert len(exclude_criteria) > 0, "Should have audience_exclude custom targeting criteria"
-        assert exclude_criteria[0]["operator"] == "IS_NOT"
+    assert sent == gam_criteria_set(
+        "OR",
+        [
+            gam_criteria_set(
+                "AND", [gam_criterion(12345, [INCLUDE_SEGMENT]), gam_criterion(67890, [EXCLUDE_SEGMENT], "IS_NOT")]
+            )
+        ],
+    )
 
 
 def test_axe_segments_combine_with_other_custom_targeting(mock_adapter_config_three_keys):
-    """Test that AXE segments combine with other custom targeting."""
-    with patch("src.core.database.database_session.get_db_session") as mock_session:
-        mock_db = MagicMock()
-        mock_session.return_value.__enter__.return_value = mock_db
-        mock_db.scalars.return_value.first.return_value = mock_adapter_config_three_keys
-
-        # Mock GAM client for custom targeting value operations
-        mock_gam_client = MagicMock()
-        manager = GAMTargetingManager("tenant_123", gam_client=mock_gam_client)
-
-        # Test AXE segments work correctly - custom GAM key-values require numeric IDs
-        # which is a different code path. Just test AXE alone here.
-        targeting_overlay = Targeting(
+    """A segment is ANDed with the buyer's own GAM key-values in the same branch."""
+    sent = _custom_targeting_built(
+        mock_adapter_config_three_keys,
+        Targeting(
             geo_countries=["US"],
+            custom={"gam": {"key_values": {"22222": "football"}}},
             axe_include_segment="x8dj3k",
-        )
+        ),
+    )
 
-        result = manager.build_targeting(targeting_overlay)
-
-        # Verify AXE custom targeting is present
-        assert "customTargeting" in result
-        custom_targeting = result["customTargeting"]
-
-        # Should have CustomCriteriaSet structure with children
-        assert custom_targeting["xsi_type"] == "CustomCriteriaSet"
-        assert custom_targeting["logicalOperator"] == "OR"
-        # GAM takes an OR of AND sets; the buyer's key-values and segments are one AND set.
-        [branch] = custom_targeting["children"]
-
-        # Verify we have criteria for AXE include segment
-        include_criteria = [c for c in branch["children"] if c.get("keyId") == 12345]
-        assert len(include_criteria) > 0, "Should have audience_include custom targeting criteria"
+    assert sent == gam_criteria_set(
+        "OR",
+        [gam_criteria_set("AND", [gam_criterion(22222, [FOOTBALL]), gam_criterion(12345, [INCLUDE_SEGMENT])])],
+    )
 
 
 def test_axe_segments_optional(mock_adapter_config_three_keys):
@@ -207,6 +132,7 @@ def test_axe_segments_optional(mock_adapter_config_three_keys):
 
         # Verify geo targeting is present but no custom targeting for AXE
         assert "geoTargeting" in result
+        assert "customTargeting" not in result
 
 
 def test_axe_include_segment_fails_if_key_not_configured(mock_adapter_config_no_keys):

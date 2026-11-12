@@ -9,10 +9,13 @@ buy failing later.
 Real PostgreSQL, real Flask app, real form POST. Nothing on these paths calls GAM.
 """
 
+import html
 import json
+import re
 
 import pytest
 
+from src.adapters.gam_implementation_config_schema import CustomTargeting
 from src.core.database.repositories.uow import ProductUoW
 from tests.factories import AuthorizedPropertyFactory, ProductFactory, PropertyTagFactory, TenantFactory
 
@@ -50,8 +53,16 @@ def _form(name: str, key_value_pairs: dict) -> dict[str, str]:
         "rate_0": "10.00",
         "property_mode": "tags",
         "selected_property_tags": f"{PUBLISHER_DOMAIN}:all_inventory",
+        "delivery_measurement_provider": "publisher",
         "targeting_template": json.dumps({"key_value_pairs": key_value_pairs}),
     }
+
+
+def _widget_document(client, product_id: str) -> dict:
+    """The targeting document the edit page hands the targeting widget in its hidden field."""
+    page = client.get(f"/tenant/{TENANT_ID}/products/{product_id}/edit").get_data(as_text=True)
+    [value] = re.findall(r"id=\"targeting-data\" name=\"targeting_template\" value='([^']*)'", page)
+    return json.loads(html.unescape(value))
 
 
 def _add_product(client, name: str, key_value_pairs: dict):
@@ -86,3 +97,50 @@ def test_edit_refusal_leaves_stored_custom_targeting_unchanged(authenticated_adm
         assert any(REFUSAL in message for _, message in flask_session["_flashes"])
     assert response.headers["Location"].endswith(f"/tenant/{TENANT_ID}/products/{product.product_id}/edit")
     assert _stored_products()["Existing"]["custom_targeting_keys"] == VALID
+
+
+def test_a_legacy_name_of_digits_stays_a_name_through_the_edit_page(authenticated_admin_session, gam_tenant):
+    """The widget edits what the model wrote, so saving it back cannot turn the name into a value ID."""
+    legacy = {"11001": "448512"}
+    product = ProductFactory(
+        tenant=gam_tenant, name="Legacy", targeting_template={}, implementation_config={"custom_targeting_keys": legacy}
+    )
+
+    handed = _widget_document(authenticated_admin_session, product.product_id)["key_value_pairs"]
+    response = authenticated_admin_session.post(
+        f"/tenant/{TENANT_ID}/products/{product.product_id}/edit", data=_form("Legacy", handed)
+    )
+
+    assert handed == {"groups": [{"criteria": [{"keyId": "11001", "values": [{"name": "448512"}], "exclude": False}]}]}
+    assert response.status_code == 302
+    stored = _stored_products()["Legacy"]["custom_targeting_keys"]
+    assert stored == handed
+    assert CustomTargeting.from_stored(stored) == CustomTargeting.from_stored(legacy)
+
+
+def test_edit_page_says_when_stored_custom_targeting_cannot_be_shown(authenticated_admin_session, gam_tenant):
+    product = ProductFactory(
+        tenant=gam_tenant,
+        name="Unreadable",
+        targeting_template={},
+        implementation_config={"custom_targeting_keys": {"sport": "football"}},
+    )
+
+    response = authenticated_admin_session.get(f"/tenant/{TENANT_ID}/products/{product.product_id}/edit")
+
+    page = response.get_data(as_text=True)
+    assert REFUSAL in page
+    assert "stored custom targeting is not shown below, and saving replaces it" in page
+    assert _widget_document(authenticated_admin_session, product.product_id)["key_value_pairs"] == {"groups": []}
+
+
+def test_saving_no_custom_targeting_clears_it(authenticated_admin_session, gam_tenant):
+    """The widget sends an empty groups document once the last criterion is removed."""
+    product = ProductFactory(tenant=gam_tenant, name="Cleared", implementation_config={"custom_targeting_keys": VALID})
+
+    response = authenticated_admin_session.post(
+        f"/tenant/{TENANT_ID}/products/{product.product_id}/edit", data=_form("Cleared", {"groups": []})
+    )
+
+    assert response.status_code == 302
+    assert _stored_products()["Cleared"]["custom_targeting_keys"] == {"groups": []}

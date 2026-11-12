@@ -167,3 +167,12 @@ def test_a_buyer_key_that_is_not_a_gam_key_id_is_the_buyers_to_correct(bound_fac
         _create_media_buy(client_manager, WIDGET_GROUPS, targeting_overlay=buyer_overlay)
 
     assert client_manager.get_service("OrderService").createOrders.call_args_list == []
+
+
+def test_a_name_and_the_id_it_resolves_to_reach_gam_once(bound_factory_session):
+    """A converted legacy name can sit beside the ID the widget picks for it; GAM gets the ID once."""
+    sent = _custom_targeting_sent_to_gam(
+        {"groups": [{"criteria": [{"keyId": "11001", "values": [{"name": "sports"}, str(SPORTS)]}]}]}
+    )
+
+    assert sent == gam_criteria_set("OR", [gam_criteria_set("AND", [gam_criterion(11001, [SPORTS])])])
