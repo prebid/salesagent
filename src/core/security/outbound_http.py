@@ -32,10 +32,8 @@ so the next reader can tell a sanctioned dialer from an unnoticed bypass
 without archaeology through a PR description:
 
 * ``adcp.adagents.fetch_adagents`` (called from
-  ``src/admin/blueprints/publisher_partners.py``,
-  ``src/services/property_discovery_service.py``,
-  ``src/services/property_verification_service.py`` — all dialing a
-  tenant-admin-configured ``publisher_domain``). Its ``_owned_pinned_client``
+  ``src/services/publisher_ingest.py`` alone, dialing a tenant-admin-configured
+  publisher domain). Its ``_owned_pinned_client``
   builds an ``AsyncIpPinnedTransport`` on the validated IP with
   ``trust_env=False`` and mints a FRESH pinned client per redirect hop — this
   is *stronger* than injecting this seam's client would be: our client

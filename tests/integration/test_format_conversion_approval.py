@@ -116,11 +116,7 @@ def test_currency_limit(integration_db, test_tenant):
 
 @pytest.fixture
 def test_property_tag(integration_db, test_tenant):
-    """Create required PropertyTag for property_tags array references.
-
-    Per CLAUDE.md "Database Initialization Dependencies":
-    Products with property_tags=["all_inventory"] require PropertyTag record.
-    """
+    """Create the tenant's all_inventory PropertyTag (CLAUDE.md "Tenant setup dependencies")."""
     with get_db_session() as session:
         property_tag = PropertyTag(
             tenant_id=test_tenant,

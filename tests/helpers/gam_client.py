@@ -12,7 +12,7 @@ Two stand-ins, one network:
 * ``stub_gam_client_manager`` stands in for this repo's ``GAMClientManager`` and serves the
   same client. It exists for tests that build the adapter from a config whose credentials
   could not be built (a key file path that does not exist), so the manager itself cannot
-  run.
+  run. ``build_gam_adapter`` builds the real adapter over one.
 
 ``serve_gam_report`` configures a ``stub_gam_client``'s ``ReportService`` to run one report
 job, and returns the report body Google's report host serves (``gam_report_csv_dump``).
@@ -29,10 +29,12 @@ import io
 import itertools
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from googleads.errors import GoogleAdsServerFault
 
+from src.adapters.google_ad_manager import GoogleAdManager
+from src.core.schemas import Principal
 from src.core.security.egress.response import OutboundResult
 
 
@@ -55,6 +57,33 @@ def gam_line_item(name: str, *, item_id: str = "1001", sizes: tuple[tuple[int, i
             SoapObject(size=SoapObject(width=width, height=height), creativeSizeType="PIXEL") for width, height in sizes
         ],
     )
+
+
+def _custom_targeting_values(values: dict[tuple[int, str], int]) -> Callable[[dict[str, str]], SoapObject]:
+    """``getCustomTargetingValuesByStatement`` answering the key id and name it is filtered on.
+
+    Production looks a value up by ``customTargetingKeyId = <id> AND name = '<name>'`` and
+    reads ``results[0].id``. An unknown pair answers no results.
+    """
+
+    def lookup(statement: dict[str, str]) -> SoapObject:
+        query = statement["query"]
+        key_id = int(query.split("customTargetingKeyId = ", 1)[1].split(" ", 1)[0])
+        name = query.split("name = '", 1)[1].rstrip("'")
+        found = [SoapObject(id=values[(key_id, name)])] if (key_id, name) in values else []
+        return SoapObject(results=found)
+
+    return lookup
+
+
+def gam_criterion(key_id: int, value_ids: list[int], operator: str = "IS") -> dict[str, Any]:
+    """One ``CustomCriteria`` as the targeting manager builds it for GAM."""
+    return {"xsi_type": "CustomCriteria", "keyId": key_id, "operator": operator, "valueIds": value_ids}
+
+
+def gam_criteria_set(operator: str, children: list[dict[str, Any]]) -> dict[str, Any]:
+    """One ``CustomCriteriaSet`` (``"AND"`` or ``"OR"``) as the targeting manager builds it for GAM."""
+    return {"xsi_type": "CustomCriteriaSet", "logicalOperator": operator, "children": children}
 
 
 #: The ``create*`` methods the stand-in network answers as GAM does: with each sent object,
@@ -85,12 +114,19 @@ def stub_gam_client(
     line_items: tuple[SoapObject, ...] | list[SoapObject] = (),
     network_time_zone: str = STAND_IN_NETWORK_TIME_ZONE,
     network_fault: str | None = None,
+    custom_targeting_values: dict[tuple[int, str], int] | None = None,
 ) -> MagicMock:
     """An ``AdManagerClient`` stand-in: one recorded GAM network.
 
     ``GetService(name)`` returns the same stand-in for a name for the life of the client,
     so a call on a service nobody configured is still recorded on it and readable
     afterwards. Configured answers:
+
+    * ``CustomTargetingService.getCustomTargetingValuesByStatement`` answers from
+      ``custom_targeting_values``, which maps ``(key_id, value_name)`` to the id GAM holds
+      for that value, for the targeting paths that resolve value names. The stand-in does
+      not create values: a name it does not hold fails the create call instead of being
+      given an id, so a test states every value its targeting resolves.
 
     * ``NetworkService.getCurrentNetwork`` answers a network whose ``timeZone`` is
       ``network_time_zone``. Any other network field raises ``AttributeError``, so a new
@@ -165,6 +201,14 @@ def stub_gam_client(
                 side_effect=None if network_fault is None else gam_fault(network_fault),
             )
         ),
+        "CustomTargetingService": MagicMock(
+            getCustomTargetingValuesByStatement=MagicMock(
+                side_effect=_custom_targeting_values(custom_targeting_values or {})
+            ),
+            createCustomTargetingValues=MagicMock(
+                side_effect=RuntimeError("the GAM stand-in creates no custom targeting values")
+            ),
+        ),
     }
     for service, method in GAM_CREATE_METHODS:
         setattr(services.setdefault(service, MagicMock()), method, MagicMock(side_effect=_creates(service, method)))
@@ -220,14 +264,18 @@ def stub_gam_client(
     return client
 
 
-def stub_gam_client_manager(*, line_items: tuple[SoapObject, ...] | list[SoapObject] = ()) -> MagicMock:
+def stub_gam_client_manager(
+    *,
+    line_items: tuple[SoapObject, ...] | list[SoapObject] = (),
+    custom_targeting_values: dict[tuple[int, str], int] | None = None,
+) -> MagicMock:
     """A ``GAMClientManager`` instance stand-in serving one ``stub_gam_client`` network.
 
     ``get_client()`` returns the client and ``get_service(name)`` resolves through its
     ``GetService``, so both of the adapter's access paths reach the same per-service
     stand-ins.
     """
-    client = stub_gam_client(line_items=line_items)
+    client = stub_gam_client(line_items=line_items, custom_targeting_values=custom_targeting_values)
     client_manager = MagicMock()
     client_manager.get_client.return_value = client
     client_manager.get_service.side_effect = client.GetService
@@ -308,3 +356,38 @@ def serve_gam_report(
     return OutboundResult(
         http_status=200, headers={}, content=gam_report_csv_dump(rows), attempts=1, duration_seconds=0.0
     )
+
+
+def build_gam_adapter(
+    client_manager: MagicMock,
+    *,
+    principal: Principal | None = None,
+    config: dict[str, Any] | None = None,
+    tenant_id: str = "test_tenant",
+) -> GoogleAdManager:
+    """The real GAM adapter, built over ``client_manager`` in place of the GAM client.
+
+    By default the principal is mapped to GAM advertiser 123 and the config names network
+    123456 and trafficker ``trafficker_123``; a test passes only what it needs to differ.
+    The advertiser is the principal's ``google_ad_manager`` mapping, as production reads it.
+    """
+    principal = principal or Principal(
+        principal_id="test_principal",
+        name="Test Principal",
+        platform_mappings={"google_ad_manager": {"advertiser_id": "123"}},
+    )
+    config = config or {
+        "network_code": "123456",
+        "service_account_key_file": "/path/to/key.json",
+        "trafficker_id": "trafficker_123",
+    }
+    with patch("src.adapters.google_ad_manager.GAMClientManager", return_value=client_manager):
+        return GoogleAdManager(
+            config=config,
+            principal=principal,
+            network_code=config["network_code"],
+            advertiser_id=principal.platform_mappings["google_ad_manager"]["advertiser_id"],
+            trafficker_id=config["trafficker_id"],
+            tenant_id=tenant_id,
+            tenant_ai_config=None,
+        )

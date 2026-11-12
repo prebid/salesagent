@@ -9,13 +9,64 @@ from typing import Any
 import factory
 from factory import LazyAttribute, Sequence, SubFactory
 
-from src.core.database.models import PricingOption, Product
+from src.core.database.models import PricingOption, Product, ProductPublisherSelection
+from src.core.helpers.publisher_property_helpers import AuthorizedPropertyRef
 from src.core.schemas.pricing import CpmPricingOption
 from tests.factories.core import TenantFactory
+from tests.factories.publisher import (  # noqa: F401 -- re-exported for the tests that seed selections
+    SellsPublishersMixin,
+    authorize_publishers,
+    authorize_selected_properties,
+    domain_property_id,
+)
 from tests.factories.request import _RequestFactory
 
 
-class ProductFactory(factory.alchemy.SQLAlchemyModelFactory):
+def authorized_refs(*domains: str) -> tuple[AuthorizedPropertyRef, ...]:
+    """One authorized untagged property per publisher domain, as ``PublisherCatalog.refs`` holds them."""
+    return tuple(
+        AuthorizedPropertyRef(
+            property_id=domain_property_id(domain),
+            publisher_domain=domain,
+            tags=(),
+            name=domain_property_id(domain),
+            property_type="website",
+        )
+        for domain in domains
+    )
+
+
+#: The property the default publisher's stored adagents.json authorizes a test product's
+#: seller for. The ONE spelling of the default publisher: a product names only publishers
+#: whose document authorizes the seller (#1845).
+ONE_AUTHORIZED_PROPERTY = authorized_refs("publisher.psatest.com")
+DEFAULT_PUBLISHER_DOMAIN = ONE_AUTHORIZED_PROPERTY[0].publisher_domain
+
+
+def default_publisher_properties() -> list[dict]:
+    """The selector a test product carries unless it names its own ``properties``.
+
+    The shape the admin product form stores: it names its publisher, and the product is
+    offered because ``ProductFactory`` also stores that publisher's document authorizing
+    the seller (:func:`~tests.factories.publisher.authorize_publishers`).
+    """
+    return [{"publisher_domain": DEFAULT_PUBLISHER_DOMAIN, "selection_type": "all"}]
+
+
+def default_publisher_selections(session, tenant_id: str) -> list[ProductPublisherSelection]:
+    """Selection rows naming the default publisher, for a product a test builds by hand on *session*.
+
+    The publisher's document authorizing *tenant_id* is stored on *session* first (without a
+    fetch, as a seed stores it), so the selection's foreign key holds and the product is
+    offered. Call it before adding the product to the session.
+    """
+    from scripts.setup.seed_products import seed_verified_website
+
+    seed_verified_website(session, tenant_id, DEFAULT_PUBLISHER_DOMAIN)
+    return ProductPublisherSelection.from_selectors(tenant_id, default_publisher_properties())
+
+
+class ProductFactory(SellsPublishersMixin, factory.alchemy.SQLAlchemyModelFactory):
     class Meta:
         model = Product
         sqlalchemy_session = None
@@ -49,8 +100,25 @@ class ProductFactory(factory.alchemy.SQLAlchemyModelFactory):
     format_options = None
     targeting_template = factory.LazyFunction(lambda: {"geo": ["US"]})
     delivery_type = "guaranteed"
-    property_tags = factory.LazyFunction(lambda: ["all_inventory"])
     delivery_measurement = factory.LazyFunction(lambda: {"provider": "publisher"})
+    # The publishers the product sells, as selectors (``properties=[...]``); stored as
+    # selection rows, each publisher created first (SellsPublishersMixin).
+    publisher_selections = LazyAttribute(lambda o: ProductPublisherSelection.from_selectors(o.tenant_id, o.properties))
+
+    class Params:
+        properties = factory.LazyFunction(default_publisher_properties)
+
+    @factory.post_generation
+    def authorize_publisher(obj, create, extracted, **kwargs):  # noqa: N805 -- factory_boy hook
+        """Store the default publisher's document authorizing the seller, for a product naming it.
+
+        A product is offered only for a publisher whose stored adagents.json authorizes the
+        seller, so the default selector comes with that document rather than past the check.
+        ``authorize_publisher=False`` leaves it out, for a product that is tenant data only
+        (a catalogue's channels) and must not add a publisher to the seller's portfolio.
+        """
+        if create and extracted is not False and obj.stored_publisher_properties == default_publisher_properties():
+            authorize_publishers(obj.tenant, DEFAULT_PUBLISHER_DOMAIN)
 
 
 class StoredPlacementFactory(factory.DictFactory):
@@ -73,10 +141,10 @@ class StoredPlacementFactory(factory.DictFactory):
 #: common intersection accepted across every selected publisher/property scope"): two
 #: publishers' ``publisher_properties``, a product-local option every scope accepts, and an
 #: option scoped to the first publisher, which the second does not.
-FIRST_PUBLISHER_DOMAIN = "first-publisher.example"
+FIRST_PUBLISHER_DOMAIN = "first-publisher-psatest.com"
 TWO_PUBLISHER_PROPERTIES = [
     {"publisher_domain": domain, "selection_type": "all"}
-    for domain in (FIRST_PUBLISHER_DOMAIN, "second-publisher.example")
+    for domain in (FIRST_PUBLISHER_DOMAIN, "second-publisher-psatest.com")
 ]
 PRODUCT_LOCAL_MREC = {"format_kind": "image", "format_option_id": "mrec", "params": {"width": 300, "height": 250}}
 FIRST_PUBLISHER_LEADERBOARD = {
@@ -85,6 +153,17 @@ FIRST_PUBLISHER_LEADERBOARD = {
     "params": {"width": 728, "height": 90},
     "publisher_domain": FIRST_PUBLISHER_DOMAIN,
 }
+#: The key a product stores the first publisher's leaderboard by (owner decision 2).
+FIRST_PUBLISHER_LEADERBOARD_KEY = {"publisher_domain": FIRST_PUBLISHER_DOMAIN, "format_option_id": "leaderboard"}
+
+
+def catalog_first_publisher_leaderboard(tenant) -> None:
+    """Both publishers authorize *tenant*, and the first declares the leaderboard in its formats[]."""
+    from tests.factories.publisher import declare_format_options
+
+    authorize_publishers(tenant, *(selector["publisher_domain"] for selector in TWO_PUBLISHER_PROPERTIES))
+    entry = {key: value for key, value in FIRST_PUBLISHER_LEADERBOARD.items() if key != "publisher_domain"}
+    declare_format_options(tenant, FIRST_PUBLISHER_DOMAIN, [entry])
 
 
 class PricingOptionFactory(factory.alchemy.SQLAlchemyModelFactory):

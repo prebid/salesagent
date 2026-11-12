@@ -41,6 +41,7 @@ from tests.bdd.steps._outcome_helpers import (
 )
 from tests.factories import PricingOptionFactory, ProductFactory, StoredPlacementFactory
 from tests.factories.creative import DEFAULT_CREATIVE_AGENT_URL
+from tests.factories.product import authorize_publishers, default_publisher_properties
 
 #: The legacy arm every product here also carries, matching ``MediaBuyCreateEnv``'s own
 #: seeded default so the deprecated selector route and the rest of the create flow behave
@@ -107,7 +108,7 @@ def _agent_url_spelled(variant: str) -> str:
 #: The option id the product publishes, and the id a publisher-scoped declaration publishes
 #: under its own domain. Named once so a selector row and its declaration cannot drift.
 _PRODUCT_OPTION_ID = "satisfaction_image_mrec"
-_PUBLISHER_DOMAIN = "shorts.streamhaus.example"
+_PUBLISHER_DOMAIN = "shorts.streamhaus-psatest.com"
 
 #: A legacy id the SELLER names in a declaration's ``v1_format_ref`` and nothing else
 #: resolves: no registry glob, no size-encoded slug for the SDK to upgrade, absent from the
@@ -571,7 +572,7 @@ _DECLARATIONS["publisher_only_options"] = [
 ]
 
 #: The publisher no option is scoped to, beside ``_PUBLISHER_DOMAIN`` in a multi-publisher product.
-_OTHER_PUBLISHER_DOMAIN = "other.example"
+_OTHER_PUBLISHER_DOMAIN = "other-psatest.com"
 
 #: What the seller STORES in ``properties`` (served as ``publisher_properties``), per name, for
 #: the publisher-slice coverage scenarios. One ``core/publisher-property-selector.json``
@@ -1243,7 +1244,7 @@ _SELECTORS: dict[str, dict[str, Any]] = {
     # exact-publisher-claim rule.
     "wrong_publisher_domain": {
         "format_option_refs": [
-            {"scope": "publisher", "publisher_domain": "other.example", "format_option_id": _PRODUCT_OPTION_ID}
+            {"scope": "publisher", "publisher_domain": "other-psatest.com", "format_option_id": _PRODUCT_OPTION_ID}
         ]
     },
     # The other half: the RIGHT publisher domain with an option id it does not publish.
@@ -1433,16 +1434,29 @@ def _store_product(
     placements: list[dict[str, Any]] | None = None,
     properties: list[dict[str, Any]] | None = None,
     inventory_profile_id: int | None = None,
+    authorize: bool = True,
 ) -> None:
     """Store one product with the given arms and point the buyer's package at it.
 
     The product becomes ``ctx["default_product"]``, which is what the shared create-request
     builder points the package at -- so the buyer's request names THIS product without this
-    module duplicating the request literal. *properties* replaces the ``all_inventory`` tag:
-    ``ck_product_properties_xor`` stores exactly one of the two.
+    module duplicating the request literal. *properties* names the product's publishers; left
+    out, the product sells ``ProductFactory``'s default publisher.
     """
     from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
 
+    if not properties:
+        # A publisher-scoped option belongs to a publisher the product sells
+        # (publisher_format_catalog.format_option_refusal), so a product carrying one and naming
+        # no publishers of its own sells that option's publisher.
+        scoped = list(dict.fromkeys(d["publisher_domain"] for d in format_options or () if d.get("publisher_domain")))
+        properties = [{"publisher_domain": domain, "selection_type": "all"} for domain in scoped] or None
+    if properties and authorize:
+        # A product is offered only for a publisher the seller holds a verified property of
+        # (#1845); the default publisher's comes with ProductFactory, a named one's here.
+        # ``authorize=False`` when the scenario's publisher served its own file and the seller
+        # ingested it: that document is the one graded, so nothing stores another.
+        authorize_publishers(ctx["tenant"], *dict.fromkeys(s["publisher_domain"] for s in properties))
     product = ProductFactory(
         tenant=ctx["tenant"],
         product_id=product_id,
@@ -1450,8 +1464,7 @@ def _store_product(
         format_ids=format_ids,
         format_options=format_options,
         placements=placements,
-        properties=properties,
-        property_tags=None if properties else ["all_inventory"],
+        **({"properties": properties} if properties else {}),
         inventory_profile_id=inventory_profile_id,
     )
     ctx["default_pricing_option"] = PricingOptionFactory(
@@ -1493,6 +1506,24 @@ def given_declaration_across_publishers(ctx: dict, declaration: str, publishers:
     coverage rule slices it by (formats.mdx § Matching and satisfaction).
     """
     _store_declaring_product(ctx, declaration, with_legacy_arm=True, publishers=publishers)
+
+
+@given(parsers.parse('the seller sells publisher "{publisher}" whole by its format option "{option_id}"'))
+def given_product_selling_publisher_option(ctx: dict, publisher: str, option_id: str) -> None:
+    """A product selling *publisher* whole and carrying its option by the key alone.
+
+    The publisher's ingested adagents.json declares the option (owner decision 2: the product
+    stores ``{publisher_domain, format_option_id}`` and the publisher's catalog supplies the
+    rest on every read).
+    """
+    _store_product(
+        ctx,
+        f"publisher_option_{option_id}",
+        format_ids=None,
+        format_options=[{"publisher_domain": publisher, "format_option_id": option_id}],
+        properties=[{"publisher_domain": publisher, "selection_type": "all"}],
+        authorize=False,
+    )
 
 
 @given(parsers.parse("the seller publishes only a deprecated format sized {width:d}x{height:d}"))
@@ -1630,8 +1661,13 @@ def given_profile_linked_declaration(ctx: dict, declaration: str, profile_declar
     """
     from tests.factories.inventory_profile import InventoryProfileFactory
 
+    # The profile supplies the product's publishers, so it names the default one the linked
+    # ProductFactory row seeds a verified property for (#1845).
     profile = InventoryProfileFactory(
-        tenant=ctx["tenant"], format_ids=None, format_options=_DECLARATIONS[profile_declaration]
+        tenant=ctx["tenant"],
+        format_ids=None,
+        format_options=_DECLARATIONS[profile_declaration],
+        publisher_properties=default_publisher_properties(),
     )
     _store_product(
         ctx,
@@ -2162,7 +2198,6 @@ def _seed_sync_chain(
         format_ids=format_ids,
         format_options=format_options,
         placements=placements,
-        property_tags=["all_inventory"],
     )
     PricingOptionFactory(product=product, pricing_model="cpm", currency="USD", is_fixed=True)
     media_buy = MediaBuyFactory(tenant=tenant, principal=principal)

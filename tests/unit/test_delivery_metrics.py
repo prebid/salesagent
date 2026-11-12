@@ -5,8 +5,8 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
-from src.adapters.google_ad_manager import GoogleAdManager
 from src.core.schemas import Principal, ReportingPeriod
+from tests.helpers.gam_client import build_gam_adapter
 
 
 @pytest.fixture
@@ -14,7 +14,7 @@ def mock_principal():
     """Create a mock principal for testing."""
     principal = Mock(spec=Principal)
     principal.principal_id = "test_principal"
-    principal.platform_mappings = {}
+    principal.platform_mappings = {"google_ad_manager": {"advertiser_id": "789"}}
     return principal
 
 
@@ -23,18 +23,11 @@ def gam_adapter(mock_principal):
     """Create a GAM adapter for testing."""
     config = {
         "network_code": "123456",
+        "trafficker_id": "101112",
         "refresh_token": "test_token",
         "enabled": True,
     }
-    return GoogleAdManager(
-        config=config,
-        principal=mock_principal,
-        network_code="123456",
-        advertiser_id="789",
-        trafficker_id="101112",
-        tenant_id="test_tenant",
-        tenant_ai_config=None,
-    )
+    return build_gam_adapter(MagicMock(), principal=mock_principal, config=config, tenant_id="test_tenant")
 
 
 def test_get_media_buy_delivery_media_buy_not_found(gam_adapter):

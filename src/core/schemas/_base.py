@@ -4223,53 +4223,14 @@ class SimulationControlResponse(SalesAgentBaseModel):
     context: ContextObject | None = Field(None, description="Application-level context echoed from the request")
 
 
-# --- Authorized Properties Constants ---
+# --- Property tag admin messages ---
 
-# Valid property types per AdCP specification
-PROPERTY_TYPES = ["website", "mobile_app", "ctv_app", "dooh", "podcast", "radio", "streaming_audio"]
-
-# Valid verification statuses
-VERIFICATION_STATUSES = ["pending", "verified", "failed"]
-
-# Valid identifier types by property type (AdCP compliant mappings)
-IDENTIFIER_TYPES_BY_PROPERTY_TYPE = {
-    "website": ["domain", "subdomain"],
-    "mobile_app": ["bundle_id", "store_id"],
-    "ctv_app": ["roku_store_id", "amazon_store_id", "samsung_store_id", "lg_store_id"],
-    "dooh": ["venue_id", "network_id"],
-    "podcast": ["podcast_guid", "rss_feed_url"],
-    "radio": ["station_call_sign", "stream_url"],
-    "streaming_audio": ["platform_id", "stream_id"],
-}
-
-# Property form field requirements
-PROPERTY_REQUIRED_FIELDS = ["property_type", "name", "identifiers", "publisher_domain"]
-
-# Property form validation rules
-PROPERTY_VALIDATION_RULES = {
-    "name": {"min_length": 1, "max_length": 255},
-    "publisher_domain": {"min_length": 1, "max_length": 255},
-    "property_type": {"allowed_values": PROPERTY_TYPES},
-    "verification_status": {"allowed_values": VERIFICATION_STATUSES},
-    "tag_id": {"pattern": r"^[a-z0-9_]+$", "max_length": 50},
-}
-
-# Supported file types for bulk upload
-SUPPORTED_UPLOAD_FILE_TYPES = [".json", ".csv"]
-
-# Property form error messages
+# Error messages of the admin property-tag pages. Properties themselves are never typed:
+# they come only from each publisher's adagents.json (src/services/publisher_ingest.py).
 PROPERTY_ERROR_MESSAGES = {
-    "missing_required_field": "Property type, name, and publisher domain are required",
-    "invalid_property_type": "Invalid property type: {property_type}. Must be one of: {valid_types}",
-    "invalid_file_type": "Only JSON and CSV files are supported",
-    "no_file_selected": "No file selected",
-    "at_least_one_identifier": "At least one identifier is required",
-    "identifier_incomplete": "Identifier {index}: Both type and value are required",
-    "invalid_json": "Invalid JSON format: {error}",
     "invalid_tag_id": "Tag ID must contain only letters, numbers, and underscores",
     "tag_already_exists": "Tag '{tag_id}' already exists",
     "all_fields_required": "All fields are required",
-    "property_not_found": "Property not found",
     "tenant_not_found": "Tenant not found",
 }
 

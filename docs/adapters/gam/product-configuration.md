@@ -224,15 +224,29 @@ The authoritative field list is the `GAMImplementationConfig` schema in `src/ada
 #### Custom targeting
 
 - **Field**: `custom_targeting_keys`
-- **Type**: JSON object
-- **Example**:
+- **Type**: JSON object in the groups format the product form's targeting widget saves
+- **Behavior**: Criteria within a group are ANDed and groups are ORed. Every line item for the product must match this targeting AND any custom targeting in the buyer's request.
+- **Example**: `(11001 is 448512 or 448513, and 11002 is not 448601) or (11003 is 448701)`
 
   ```json
   {
-    "sport": ["football", "basketball"],
-    "geo": ["us-ny", "us-ca"]
+    "groups": [
+      {
+        "criteria": [
+          {"keyId": "11001", "values": ["448512", "448513"]},
+          {"keyId": "11002", "values": ["448601"], "exclude": true}
+        ]
+      },
+      {
+        "criteria": [{"keyId": "11003", "values": ["448701"]}]
+      }
+    ]
   }
   ```
+
+  `keyId` is a numeric GAM custom targeting key ID. Each value is a numeric GAM value ID, or a value name, which is looked up in GAM and created if it does not exist. A value written `{"name": "..."}` is always a name, even when it is all digits.
+  Two older formats are still read. In `{"<key_id>": "<value_name>"}` a `NOT_<key_id>` key excludes the value, and the value is always a name, even when it is all digits. `{"include": {"<key_id>": [values]}, "exclude": {...}, "operator": "AND"}` reads values the way the groups format does. The edit page shows a product stored in either one in the groups format, with a name of digits written `{"name": "..."}`, and saving stores the groups format.
+  A criterion with no values and a group with no criteria are ignored. Anything else GAM cannot take, such as a key that is not a numeric key ID or a field none of the formats has, is refused when the product is saved. A product already stored that way refuses every media buy with `CONFIGURATION_ERROR`; its edit page says so and keeps the stored targeting until new targeting is set.
 
 #### Non-guaranteed automation
 

@@ -788,14 +788,45 @@ def given_package_budget_set_to(ctx: dict, value: str) -> None:
 
 
 @given(parsers.parse('a package references product_id "{product_id}" which does not exist'))
+@given(parsers.parse('a package references the unoffered product "{product_id}"'))
 def given_nonexistent_product(ctx: dict, product_id: str) -> None:
-    """Override first package to reference a nonexistent product."""
+    """Override first package to reference a product absent from the catalog."""
     kwargs = _ensure_request_defaults(ctx)
     assert kwargs.get("packages"), (
         "No packages in request — step claims 'a package references product_id' "
         "but cannot override product_id without packages"
     )
     kwargs["packages"][0]["product_id"] = product_id
+
+
+@given(
+    parsers.re(
+        r'a package references product "(?P<product_id>[^"]+)" selecting format option "(?P<option_id>[^"]+)" '
+        r'of (?:the seller\'s own host|"(?P<publisher>[^"]+)")'
+    )
+)
+def given_package_selects_publisher_option(ctx: dict, product_id: str, option_id: str, publisher: str | None) -> None:
+    """Point the first package at *product_id*, priced by its own option, selecting a publisher's option.
+
+    ``core/format-option-ref.json`` publisher branch: ``{scope, publisher_domain,
+    format_option_id}``; the publisher is the one named, or the agent host. The pricing option
+    is the product's stored one, so the package is valid in every other respect.
+    """
+    kwargs = _ensure_request_defaults(ctx)
+    assert kwargs.get("packages"), "No packages in request to point at the product"
+    pricing = ctx["env"].get_one(PricingOption, tenant_id=ctx["tenant"].tenant_id, product_id=product_id)
+    assert pricing is not None, f"product {product_id!r} has no pricing option to buy it with"
+    kwargs["packages"][0].update(
+        product_id=product_id,
+        pricing_option_id=pricing_option_id(pricing),
+        format_option_refs=[
+            {
+                "scope": "publisher",
+                "publisher_domain": publisher or ctx["tenant"].virtual_host_name,
+                "format_option_id": option_id,
+            }
+        ],
+    )
 
 
 @given("end_time is before start_time")
@@ -879,7 +910,6 @@ def given_duplicate_product(ctx: dict, product_id: str) -> None:
         ProductFactory(
             tenant=ctx["tenant"],
             product_id=product_id,
-            property_tags=["all_inventory"],
         )
         env._commit_factory_data()
     for pkg in packages:
@@ -1254,9 +1284,7 @@ def _set_packages(ctx: dict, selections: list[tuple[str, str]]) -> None:
     packages = []
     for product_id, currency in selections:
         if product_id not in products:
-            products[product_id] = ProductFactory(
-                tenant=ctx["tenant"], product_id=product_id, property_tags=["all_inventory"]
-            )
+            products[product_id] = ProductFactory(tenant=ctx["tenant"], product_id=product_id)
         if (product_id, currency) not in options:
             options[(product_id, currency)] = PricingOptionFactory(
                 product=products[product_id], pricing_model="cpm", currency=currency, is_fixed=True, rate=5.00
