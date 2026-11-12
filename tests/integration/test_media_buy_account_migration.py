@@ -17,7 +17,7 @@ from tests.integration.migration_helpers import reset_to_revision, run_alembic_d
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 _REVISION = "5b0563cb0ac6"
-_PREVIOUS = "f7c2e8a13d64"
+_PREVIOUS = "e2af0c242a7f"
 _TENANT = "account_migration"
 _PRINCIPAL = "buyer"
 

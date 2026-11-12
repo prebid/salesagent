@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from sqlalchemy import select
 
+from scripts.setup.seed_products import whole_publisher_selections
 from src.core.database.models import Creative as DBCreative
 from src.core.database.models import CreativeAssignment as DBAssignment
 from src.core.schemas import UpdateMediaBuyRequest, UpdateMediaBuyResponse, UpdateMediaBuyResult
@@ -75,7 +76,7 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
             format_ids=["display_300x250"],
             targeting_template={},
             delivery_type="guaranteed",
-            property_tags=["all_inventory"],
+            publisher_selections=whole_publisher_selections(session, "test_tenant"),
         )
         session.add(product)
 
@@ -234,7 +235,7 @@ def test_creative_assignments_with_weights(integration_db):
             format_ids=["display_300x250"],
             targeting_template={},
             delivery_type="guaranteed",
-            property_tags=["all_inventory"],
+            publisher_selections=whole_publisher_selections(session, "test_tenant"),
         )
         session.add(product)
 
@@ -391,7 +392,7 @@ def test_creative_assignments_replaces_all(integration_db):
             format_ids=["display_300x250"],
             targeting_template={},
             delivery_type="guaranteed",
-            property_tags=["all_inventory"],
+            publisher_selections=whole_publisher_selections(session, "test_tenant"),
         )
         session.add(product)
 

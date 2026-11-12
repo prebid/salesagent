@@ -14,6 +14,7 @@ from src.admin.blueprints import inventory_profiles as inventory_profiles_module
 from src.core.database.database_session import get_db_session
 from src.core.database.models import InventoryProfile, Tenant
 from tests.factories import InventoryProfileFactory, TenantFactory
+from tests.factories.publisher import authorize_publishers
 from tests.helpers import concurrent_commit_in_write_window, operator_answer
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
@@ -56,10 +57,7 @@ def test_tenant(integration_db):
             tenant_id=_TENANT_ID,
             name="Inventory Profile Test Tenant",
             subdomain="inv-prof-test",
-            # The host this tenant is served at. `Tenant.primary_domain` projects it and
-            # fabricates nothing (#1845), so the inventory-profile create and edit routes
-            # refuse a tenant that declares no host. A tenant that sells inventory states
-            # the host it sells from.
+            # The host this tenant is served at; mandatory on every tenant.
             virtual_host="inv-prof-test.real-configured-domain.test",
             ad_server="mock",
             is_active=True,
@@ -95,13 +93,6 @@ def _create_sample_profile(tenant_id: str, name: str = "Sample Profile", profile
             description="A sample profile for testing",
             inventory_config={"ad_units": [], "placements": [], "include_descendants": False},
             format_ids=[{"agent_url": "https://formats.example.com", "id": "display_300x250_image"}],
-            publisher_properties=[
-                {
-                    "publisher_domain": f"{tenant_id}.example.com",
-                    "property_tags": ["all_inventory"],
-                    "selection_type": "by_tag",
-                }
-            ],
             created_at=datetime.now(UTC),
             updated_at=datetime.now(UTC),
         )
@@ -146,8 +137,10 @@ class TestInventoryProfileCreate:
         response = client.get(f"/tenant/{test_tenant}/inventory-profiles/add")
         assert response.status_code == 200
 
-    def test_create_profile_with_tags_saves_to_db(self, client, test_tenant):
+    def test_create_profile_with_tags_saves_to_db(self, client, test_tenant, factory_session):
         """POST with valid tag-based config creates a profile."""
+        # The tag names the publishers of the tenant's authorized properties (#1845).
+        authorize_publishers(factory_session.get(Tenant, test_tenant), "tagged-publisher.psatest.com")
         _auth_session(client, test_tenant)
         response = client.post(
             f"/tenant/{test_tenant}/inventory-profiles/add",
@@ -313,12 +306,12 @@ class TestAddInventoryProfileDuplicateId:
         }
 
     def test_winner_and_loser_get_the_same_answer(self, client, factory_session):
-        # A real virtual_host is required to reach the write window at all:
-        # Tenant.primary_domain no longer fabricates a placeholder domain, and the
-        # add route refuses to proceed without one BEFORE it ever gets to the
-        # uq_inventory_profile write this test grades. Same reseeding the
-        # test_tenant fixture above needed.
+        # A publisher authorizing a property is required to reach the write window at all: the
+        # "tags" selection names the publishers whose properties carry the tag, and the
+        # add route refuses a selection naming none BEFORE it ever gets to the
+        # uq_inventory_profile write this test grades.
         tenant = TenantFactory(virtual_host="contested-profile.real-configured-domain.test")
+        authorize_publishers(tenant, "tagged-publisher.psatest.com")
         _auth_session(client, tenant.tenant_id)
 
         def post_add():

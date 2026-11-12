@@ -932,7 +932,7 @@ Each bead carries the obligation's pin text, code evidence, scenarios and gaps.
 |---|---|---|---|---|
 | S1 | Move each product's creative contract into format_options[] | implemented | partly | `salesagent-ol033.20.1` |
 | S2 | A canonical-only product is servable: the product root anyOf admits format_options without format_ids | implemented | yes | `salesagent-ol033.20.2` |
-| S3 | Publish reusable publisher options in /.well-known/adagents.json and reference them by {publisher_domain, format_option_id} | implemented | yes | `salesagent-ol033.20.3` |
+| S3 | Publish reusable publisher options in /.well-known/adagents.json and reference them by {publisher_domain, format_option_id} | withdrawn: the publisher declares formats[] in its own file, so this seller publishes none and refuses an option under its own host (adagents.json#/properties/formats, "Publisher-authoritative format catalog") | yes | `salesagent-o127e` |
 | S4 | Return the applicable options from get_products | implemented | partly | `salesagent-ol033.20.4` |
 | S5 | list_creative_formats is a deprecated compatibility surface, projected from product declarations and never authored | implemented | yes | `salesagent-ol033.20.5` |
 | F1 | Canonical compatibility is directional and exact: exact dimensions/durations match; a requested range must be contained, overlap insufficient; required slots present with compatible asset types; an exact publisher claim matches both halves | implemented | yes | `salesagent-ol033.20.6` |

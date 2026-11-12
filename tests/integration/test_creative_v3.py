@@ -578,7 +578,6 @@ class TestFormatCompatibility:
                 ],
                 targeting_template={},
                 delivery_type="non_guaranteed",
-                properties=[{"publisher_domain": "test.com", "selection_type": "all"}],
             )
             session.add(product)
 
@@ -712,7 +711,6 @@ class TestMediaBuyStatusTransition:
                 ],
                 targeting_template={},
                 delivery_type="non_guaranteed",
-                properties=[{"publisher_domain": "test.com", "selection_type": "all"}],
             )
             session.add(product)
 

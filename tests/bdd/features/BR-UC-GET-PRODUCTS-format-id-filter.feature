@@ -76,7 +76,7 @@ Feature: A legacy format_id filter on get_products selects on the declaring agen
       | trailing root-label dot             | https://formats.agent.example/api  | https://formats.agent.example/other  | https://formats.agent.example./api     |
       | removable dot segment               | https://formats.agent.example/api  | https://formats.agent.example/other  | https://formats.agent.example/x/../api |
       | percent-encoded unreserved octet    | https://formats.agent.example/api  | https://formats.agent.example/other  | https://formats.agent.example/%61pi    |
-      | root-label dot on an IDN host       | https://xn--bcher-kva.example/api  | https://xn--bcher-kva.example/other  | https://xn--bcher-kva.example./api     |
+      | root-label dot on an IDN host       | https://books-psatest.com/api  | https://books-psatest.com/other  | https://books-psatest.com./api     |
 
   # A LEGACY REFERENCE IS MATCHED ON THE CANONICAL SHAPE IT NORMALIZES TO.
   # docs/creative/template-format-ids.mdx (3.2.7) § Compatibility: "Normalize them to

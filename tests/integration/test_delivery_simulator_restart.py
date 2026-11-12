@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy import select
 
+from scripts.setup.seed_products import whole_publisher_selections
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, Principal, PushNotificationConfig, Tenant
 from src.services.delivery_simulator import delivery_simulator
@@ -74,7 +75,7 @@ class TestDeliverySimulatorRestart:
                 format_ids=[{"agent_url": "https://example.com", "id": "display_300x250"}],
                 targeting_template={},
                 delivery_type="guaranteed",
-                property_tags=["all_inventory"],
+                publisher_selections=whole_publisher_selections(session, test_tenant),
                 implementation_config={
                     "delivery_simulation": {"enabled": True, "time_acceleration": 3600, "update_interval_seconds": 1.0}
                 },

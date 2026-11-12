@@ -49,7 +49,7 @@ def seeded_tenant(integration_db):
         # A product with a pricing option: "Products" is one of the critical checklist
         # tasks, so without one validate_setup_complete refuses before the duplicate
         # check this file is about.
-        PricingOptionFactory(product=ProductFactory(tenant=tenant, property_tags=["all_inventory"]))
+        PricingOptionFactory(product=ProductFactory(tenant=tenant))
         session = env.get_session()
         add_required_setup_data(session, _TENANT_ID)
         session.commit()

@@ -184,14 +184,13 @@ The SSO requirement varies based on deployment mode:
 | `ENVIRONMENT` | `development` | `development` or `production` |
 | `PRODUCTION` | `false` | Set to `true` for production deployments |
 | `FLY_APP_NAME` | unset | Set by Fly.io; its presence also marks the deployment as production |
-| `PUBLISHER_AUTO_VERIFY` | derived | `false` checks each publisher partner's adagents.json before verifying it; `true` verifies partners without reading the file. Unset, it is `true` outside production and `false` in production. Leave it unset unless a non-production deployment must run the check |
 | `ADMIN_UI_URL` | `http://localhost:8001` | Public URL for the Admin UI (used in notifications) |
 
 Any one of `PRODUCTION=true`, `ENVIRONMENT=production` or a `FLY_APP_NAME` makes the
 deployment production, and every production-dependent behaviour reads that one answer:
 lenient request validation, structured JSON logging, secure session cookies, the trust in
-proxy headers, the absence of verbose auth logging, and (unless `PUBLISHER_AUTO_VERIFY`
-says otherwise) checking a publisher partner's adagents.json.
+proxy headers, and the absence of verbose auth logging. A publisher's adagents.json is read
+in every deployment: properties come only from it.
 
 ### Demo data
 

@@ -5,6 +5,7 @@ import json
 import logging
 import uuid
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -20,13 +21,41 @@ from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
-from src.core.database.models import PersistedMediaBuyStatus, PricingOption, Product, ProductInventoryMapping, Tenant
+from src.core.database.models import (
+    PersistedMediaBuyStatus,
+    PricingOption,
+    Product,
+    ProductInventoryMapping,
+    ProductPublisherSelection,
+    Tenant,
+)
 from src.core.database.product_pricing import get_product_pricing_options
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.principal import PrincipalRepository
+from src.core.database.repositories.product import offer_refusal
+from src.core.database.repositories.publisher import PublisherRepository
 from src.core.format_resolver import linked_format_contract
 from src.core.format_satisfaction import refuse_outside_common_intersection
-from src.core.publisher_format_catalog import PublisherCatalog, format_declarations_type
+from src.core.helpers.publisher_property_helpers import (
+    STALE_SELECTION_MESSAGE,
+    RenderedSelection,
+    SelectableProperty,
+    authorized_selectors,
+    id_selection,
+    judge_selection_save,
+    kept_choices,
+    kept_selectors,
+    product_form_fields,
+    publisher_tag_selection,
+    selection_digest,
+)
+from src.core.publisher_format_catalog import (
+    PublisherCatalog,
+    format_declarations_type,
+    format_option_refusal,
+    option_key,
+    stored_declaration,
+)
 from src.core.schemas import Format
 from src.services.gam_product_config_service import GAMProductConfigService
 
@@ -103,7 +132,14 @@ def _parse_format_entries(formats_parsed: list[dict]) -> list[dict]:
     return entries
 
 
-def _parse_authored_format_options(raw: str | None, catalog: PublisherCatalog) -> list[dict] | None:
+#: The refusal of a publisher-backed format option that carries more than its key.
+PUBLISHER_OPTION_KEY_ONLY = (
+    "A format option naming a publisher_domain references that publisher's adagents.json formats[] entry, "
+    "and carries only publisher_domain and format_option_id: the publisher's catalog supplies the rest."
+)
+
+
+def _parse_authored_format_options(raw: str | None) -> list[dict] | None:
     """The canonical arm of core/product.json's root anyOf, as the operator authored it.
 
     Validated at AUTHOR time against the pinned discriminated union
@@ -121,9 +157,10 @@ def _parse_authored_format_options(raw: str | None, catalog: PublisherCatalog) -
     deprecated arm is satisfied by its KEY alone -- an empty array asserts a declaration
     that is not there.
 
-    A declaration naming a publisher option in this seller's OWN namespace must name one its
-    publisher format catalog declares (*catalog*, read off the tenant by the caller): RFC S3,
-    see ``src/core/publisher_format_catalog.py``.
+    A declaration naming a ``publisher_domain`` references that publisher's catalog entry and
+    is stored as its key alone (``core/product-format-declaration.json``: the pair is the
+    identity); anything more is refused. Whether the key resolves is asked once the
+    selection is known (:func:`_refuse_unresolved_format_options`).
     """
     if not raw or not raw.strip():
         return None
@@ -133,16 +170,40 @@ def _parse_authored_format_options(raw: str | None, catalog: PublisherCatalog) -
         raise ValueError(f"format_options is not valid JSON: {e}") from e
     if not document:
         return None
+    if not isinstance(document, list):
+        raise ValueError("format_options must be a JSON array of declarations")
+    product_local = [d for d in document if not (isinstance(d, dict) and option_key(d))]
+    for declaration in document:
+        if declaration not in product_local and (
+            set(declaration) != {"publisher_domain", "format_option_id"} or not declaration["format_option_id"]
+        ):
+            raise ValueError(PUBLISHER_OPTION_KEY_ONLY)
     try:
-        format_declarations_type().validate_python(document)
+        if product_local:
+            format_declarations_type().validate_python(product_local)
     except ValidationError as e:
         first = e.errors()[0]
         location = "/".join(str(part) for part in first["loc"]) or "format_options"
         raise ValueError(
             f"format_options is not a valid canonical format declaration ({location}: {first['msg']})"
         ) from e
-    catalog.refuse_unresolved(document)
-    return document
+    return [dict(stored_declaration(declaration)) for declaration in document]
+
+
+def _publisher_catalog(db_session, tenant_id: str) -> PublisherCatalog:
+    """What the tenant's publishers authorize now: what a form offers and a save is checked against."""
+    return PublisherRepository(db_session, tenant_id).catalog(datetime.now(UTC))
+
+
+def _refuse_unresolved_format_options(declarations, selectors: list[dict], catalog: PublisherCatalog) -> None:
+    """``ValueError`` when a publisher-backed format option of a product selling *selectors* does not resolve.
+
+    The rule ``get_products`` applies (``offer_refusal``): a product saved with such an option
+    would not be offered, so the form refuses it instead.
+    """
+    refusal = format_option_refusal(declarations, authorized_selectors(selectors, catalog.refs), catalog)
+    if refusal:
+        raise ValueError(f"format_options do not resolve: {refusal}")
 
 
 def _refuse_a_product_with_no_format_arm(
@@ -617,6 +678,10 @@ def list_products(tenant_id):
                     "custom_keys": custom_key_count,
                 }
 
+            # What a buyer is sold is resolved against these, so the page marks a product
+            # get_products leaves out (#1845).
+            catalog = _publisher_catalog(db_session, tenant_id)
+
             # Convert products to dict format for template
             products_list = []
             for product in products:
@@ -684,6 +749,9 @@ def list_products(tenant_id):
                         },
                     ),
                     "inventory_profile": inventory_profile_dict,
+                    "not_offered_reason": offer_refusal(
+                        product, product.resolve_publisher_properties(catalog.refs), catalog
+                    ),
                     # Dynamic product fields
                     "is_dynamic": getattr(product, "is_dynamic", False),
                     "is_dynamic_variant": getattr(product, "is_dynamic_variant", False),
@@ -704,6 +772,40 @@ def list_products(tenant_id):
         return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
 
 
+def _own_selectors(product: Product) -> list[dict]:
+    """The selectors the product itself stores, whatever profile it links."""
+    return [row.as_selector() for row in product.publisher_selections]
+
+
+def _selection_digest(product: Product) -> str:
+    """The digest of the product's own stored selection (``selection_digest``)."""
+    return selection_digest(_own_selectors(product))
+
+
+#: The form field holding the choices of each property mode that builds selectors. ``full``
+#: (legacy) is a choice of property ids, held to the same check as ``property_ids``.
+_SELECTION_FIELDS = {
+    "tags": "selected_property_tags",
+    "property_ids": "selected_property_ids",
+    "full": "full_property_ids",
+}
+
+
+def _selectors_from_product_form(
+    authorized: list[SelectableProperty] | tuple[SelectableProperty, ...], property_mode: str
+) -> tuple[list[dict], str | None]:
+    """The product form's ``tags`` (``domain:tag``) or ``property_ids`` choices as selectors, or why not.
+
+    Checked against the *authorized* properties by the validators the inventory-profile form
+    uses (``publisher_property_helpers.tag_selection`` / ``id_selection``), because a
+    selection no authorized property backs is one ``get_products`` would not sell.
+    """
+    choices = request.form.getlist(_SELECTION_FIELDS[property_mode])
+    if property_mode == "tags":
+        return publisher_tag_selection(choices, authorized)
+    return id_selection(choices, authorized)
+
+
 def _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data=None):
     """Helper to render add product form with optional preserved form data.
 
@@ -718,7 +820,6 @@ def _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_d
         Rendered template response
     """
     from src.core.database.models import (
-        AuthorizedProperty,
         GAMInventory,
         InventoryProfile,
         PropertyTag,
@@ -726,21 +827,9 @@ def _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_d
     )
 
     with get_db_session() as db_session:
-        # Load authorized properties (all statuses - verification can take time)
-        authorized_properties_query = db_session.scalars(
-            select(AuthorizedProperty).filter_by(tenant_id=tenant_id).order_by(AuthorizedProperty.name)
-        ).all()
-        properties_list = [
-            {
-                "property_id": p.property_id,
-                "name": p.name,
-                "property_type": p.property_type,
-                "tags": p.tags or [],
-                "verification_status": p.verification_status,
-                "publisher_domain": p.publisher_domain,
-            }
-            for p in authorized_properties_query
-        ]
+        # The properties the publishers authorize now; nothing else can be selected.
+        catalog = _publisher_catalog(db_session, tenant_id)
+        properties_list = catalog.refs
 
         # Load property tags
         property_tags = db_session.scalars(
@@ -774,6 +863,7 @@ def _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_d
                 inventory_synced=inventory_synced,
                 formats=get_creative_formats(tenant_id=tenant_id),
                 authorized_properties=properties_list,
+                publisher_format_options=list(catalog.options.values()),
                 property_tags=property_tags,
                 currencies=currencies,
                 signals_agents=signals_agents,
@@ -791,6 +881,7 @@ def _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_d
                 adapter_type=adapter_type,
                 formats=formats,
                 authorized_properties=properties_list,
+                publisher_format_options=list(catalog.options.values()),
                 property_tags=property_tags,
                 currencies=currencies,
                 principals=principals_list,
@@ -869,15 +960,24 @@ def add_product(tenant_id):
                 # contract the product will be SERVED, so a product linked to a profile
                 # that declares formats is not made to author declarations its profile
                 # then overrides.
+                catalog = _publisher_catalog(db_session, tenant_id)
                 try:
-                    format_options = _parse_authored_format_options(
-                        form_data.get("format_options"), PublisherCatalog.of(tenant)
-                    )
+                    format_options = _parse_authored_format_options(form_data.get("format_options"))
                     # ``None`` for the legacy arm, literally: a product created here HAS no
                     # legacy arm, and its canonical declarations come from the product or
                     # its profile, never from a legacy-only profile's ``format_ids``.
-                    contract = linked_format_contract(profile=profile, format_options=format_options, format_ids=None)
-                    _refuse_a_product_with_no_format_arm(None, contract.format_options)
+                    contract = linked_format_contract(
+                        profile=profile,
+                        format_options=format_options,
+                        format_ids=None,
+                        publisher_options=catalog.options,
+                    )
+                    # The arm as AUTHORED: a publisher-backed option that does not resolve is
+                    # an authored option, refused with its own reason once the selection is
+                    # known (``_refuse_unresolved_format_options``).
+                    _refuse_a_product_with_no_format_arm(
+                        None, (profile.format_options if profile else None) or format_options
+                    )
                 except ValueError as e:
                     flash(str(e), "error")
                     return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
@@ -1118,166 +1218,25 @@ def add_product(tenant_id):
                             product_kwargs["product_card"]["manifest"]["pricing_amount"] = str(first_option.rate)
                             product_kwargs["product_card"]["manifest"]["pricing_currency"] = first_option.currency
 
-                # Handle property authorization (AdCP requirement)
-                # Default to empty property_tags if not specified (satisfies DB constraint)
+                # The publishers the product sells (AdCP requirement): every mode builds selectors.
                 property_mode = form_data.get("property_mode", "tags")
-                if property_mode == "tags":
-                    # Get selected property tags (format: "domain:tag")
-                    selected_tags = request.form.getlist("selected_property_tags")
-
-                    if not selected_tags:
-                        flash("Please select at least one property tag", "error")
-                        return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
-
-                    # Parse domain:tag pairs and group by publisher_domain
-                    import re
-                    from collections import defaultdict
-
-                    tags_by_domain: dict[str, list[str]] = defaultdict(list)
-                    tag_pattern = re.compile(r"^[a-z0-9_]+$")
-
-                    for selection in selected_tags:
-                        if ":" not in selection:
-                            flash(f"Invalid tag selection format: {selection}", "error")
-                            return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
-
-                        domain, tag = selection.split(":", 1)
-
-                        # Validate tag format
-                        if not tag_pattern.match(tag):
-                            flash(f"Invalid tag '{tag}': use only lowercase letters, numbers, and underscores", "error")
-                            return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
-
-                        if tag not in tags_by_domain[domain]:
-                            tags_by_domain[domain].append(tag)
-
-                    # Validate that tags exist for properties from these publishers
-                    from src.core.database.models import AuthorizedProperty
-
-                    for domain, tags in tags_by_domain.items():
-                        # Check that properties with these tags exist for this publisher
-                        props_with_tags = db_session.scalars(
-                            select(AuthorizedProperty).filter(
-                                AuthorizedProperty.tenant_id == tenant_id,
-                                AuthorizedProperty.publisher_domain == domain,
-                            )
-                        ).all()
-
-                        available_tags = set()
-                        for prop in props_with_tags:
-                            if prop.tags:
-                                available_tags.update(prop.tags)
-
-                        missing_tags = set(tags) - available_tags
-                        if missing_tags:
-                            flash(
-                                f"Tags not found for publisher {domain}: {', '.join(missing_tags)}",
-                                "error",
-                            )
-                            return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
-
-                    # Build discriminated union format
-                    publisher_properties = []
-                    for domain, tags in tags_by_domain.items():
-                        publisher_properties.append(
-                            {
-                                "publisher_domain": domain,
-                                "property_tags": tags,
-                                "selection_type": "by_tag",
-                            }
-                        )
-
-                    # Store in the properties field (supports full publisher_properties structure)
-                    product_kwargs["properties"] = publisher_properties
-                elif property_mode == "property_ids":
-                    # Get selected property IDs and store in AdCP discriminated union format
-                    # grouped by publisher_domain
-                    property_ids_list = request.form.getlist("selected_property_ids")
-
-                    if not property_ids_list:
-                        flash("Please select at least one property", "error")
-                        return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
-
-                    from src.core.database.models import AuthorizedProperty
-
-                    # Query by property_id (string), not integer id
-                    properties = db_session.scalars(
-                        select(AuthorizedProperty).filter(
-                            AuthorizedProperty.property_id.in_(property_ids_list),
-                            AuthorizedProperty.tenant_id == tenant_id,
-                        )
-                    ).all()
-
-                    # Verify all requested IDs were found (prevent TOCTOU)
-                    if len(properties) != len(property_ids_list):
-                        flash("One or more selected properties not found or not authorized", "error")
-                        return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
-
-                    # Group property_ids by publisher_domain for correct AdCP format
-                    from collections import defaultdict
-
-                    properties_by_domain: dict[str, list[str]] = defaultdict(list)
-                    for prop in properties:
-                        properties_by_domain[prop.publisher_domain].append(prop.property_id)
-
-                    # Build discriminated union format
-                    publisher_properties = []
-                    for domain, prop_ids in properties_by_domain.items():
-                        publisher_properties.append(
-                            {
-                                "publisher_domain": domain,
-                                "property_ids": prop_ids,
-                                "selection_type": "by_id",
-                            }
-                        )
-
-                    # Store in the properties field (supports full publisher_properties structure)
-                    product_kwargs["properties"] = publisher_properties
-
-                elif property_mode == "full":
-                    # Get selected property IDs and load full property objects (legacy mode)
-                    property_ids_list = request.form.getlist("full_property_ids")
-
-                    if not property_ids_list:
-                        # No properties selected, default to empty property_tags to satisfy DB constraint
-                        product_kwargs["property_tags"] = []
-                    else:
-                        from src.core.database.models import AuthorizedProperty
-
-                        # Query by property_id (string), not integer id
-                        properties = db_session.scalars(
-                            select(AuthorizedProperty).filter(
-                                AuthorizedProperty.property_id.in_(property_ids_list),
-                                AuthorizedProperty.tenant_id == tenant_id,
-                            )
-                        ).all()
-
-                        # Verify all requested IDs were found (prevent TOCTOU)
-                        if len(properties) != len(property_ids_list):
-                            flash("One or more selected properties not found or not authorized", "error")
-                            return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
-
-                        if properties:
-                            # Convert to dict format for JSONB storage (legacy format)
-                            properties_data = []
-                            for prop in properties:
-                                prop_dict = {
-                                    "property_type": prop.property_type,
-                                    "name": prop.name,
-                                    "identifiers": prop.identifiers or [],
-                                    "tags": prop.tags or [],
-                                    "publisher_domain": prop.publisher_domain,
-                                }
-                                properties_data.append(prop_dict)
-                            product_kwargs["properties"] = properties_data
-                        else:
-                            # No properties found, default to empty property_tags to satisfy DB constraint
-                            product_kwargs["property_tags"] = []
-
-                # Ensure either properties or property_tags is set (DB constraint requirement)
-                if "properties" not in product_kwargs and "property_tags" not in product_kwargs:
-                    # Default to empty property_tags list if neither was set
-                    product_kwargs["property_tags"] = []
+                if property_mode not in _SELECTION_FIELDS:
+                    flash(f"Unknown property selection mode: {property_mode}", "error")
+                    return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
+                selectors, refusal = _selectors_from_product_form(catalog.refs, property_mode)
+                if refusal:
+                    flash(refusal, "error")
+                    return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
+                product_kwargs["publisher_selections"] = ProductPublisherSelection.from_selectors(tenant_id, selectors)
+                try:
+                    _refuse_unresolved_format_options(
+                        (profile.format_options if profile else None) or format_options,
+                        profile.stored_publisher_properties if profile else selectors,
+                        catalog,
+                    )
+                except ValueError as e:
+                    flash(str(e), "error")
+                    return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
 
                 # Handle dynamic product fields
                 is_dynamic = form_data.get("is_dynamic") in [True, "true", "on", 1, "1"]
@@ -1336,10 +1295,8 @@ def add_product(tenant_id):
                 product = Product(**product_kwargs)
                 db_session.add(product)
                 # The contract the product is SERVED, whichever arm supplies it: a linked
-                # profile announces its declarations on the product's behalf, and those were
-                # checked against the catalog when the profile was authored, not since.
+                # profile announces its declarations on the product's behalf.
                 try:
-                    PublisherCatalog.of(tenant).refuse_unresolved(product.format_contract.format_options)
                     refuse_outside_common_intersection(product)
                 except ValueError as e:
                     db_session.rollback()
@@ -1456,9 +1413,7 @@ def edit_product(tenant_id, product_id):
     if request.method == "POST":
         if format_options_submitted:
             try:
-                authored_format_options = _parse_authored_format_options(
-                    request.form.get("format_options"), PublisherCatalog.of(tenant)
-                )
+                authored_format_options = _parse_authored_format_options(request.form.get("format_options"))
             except ValueError as e:
                 flash(str(e), "error")
                 return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
@@ -1475,6 +1430,7 @@ def edit_product(tenant_id, product_id):
             if not product:
                 flash("Product not found", "error")
                 return redirect(url_for("products.list_products", tenant_id=tenant_id))
+            catalog = _publisher_catalog(db_session, tenant_id)
 
             if request.method == "POST":
                 # Sanitize form data
@@ -1484,7 +1440,16 @@ def edit_product(tenant_id, product_id):
                 product.name = form_data.get("name", product.name)
                 product.description = form_data.get("description", product.description)
 
+                # The save is judged against the selection the page rendered, not one recomputed now.
+                selection_save = judge_selection_save(
+                    request.form.get("rendered_selection"), request.form.getlist, _selection_digest(product)
+                )
+                if selection_save == "stale":
+                    flash(STALE_SELECTION_MESSAGE.format(subject="product"), "error")
+                    return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
+
                 # Handle inventory profile association (optional)
+
                 # Check for inventory_profile_id directly (no need for inventory_mode radio button)
                 inventory_profile_id = form_data.get("inventory_profile_id", "").strip()
                 if inventory_profile_id:
@@ -1531,13 +1496,15 @@ def edit_product(tenant_id, product_id):
 
                     attributes.flag_modified(product, "format_options")
 
-                # The anyOf, and the served contract's own-namespace options, now that both arms
-                # and the profile link carry their post-edit values: the contract the product
-                # will be served, so a linked profile's declarations count.
+                # The anyOf, now that both arms and the profile link carry their post-edit
+                # values: the contract the product will be served, so a linked profile's
+                # declarations count.
                 try:
-                    contract = product.format_contract
-                    _refuse_a_product_with_no_format_arm(list(contract.format_ids), contract.format_options)
-                    PublisherCatalog.of(tenant).refuse_unresolved(contract.format_options)
+                    linked = product.inventory_profile if product.inventory_profile_id else None
+                    _refuse_a_product_with_no_format_arm(
+                        list(product.format_contract.format_ids),
+                        (linked.format_options if linked else None) or product.format_options,
+                    )
                 except ValueError as e:
                     flash(str(e), "error")
                     return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
@@ -1578,106 +1545,35 @@ def edit_product(tenant_id, product_id):
 
                 # Handle publisher properties (AdCP requirement)
                 property_mode = form_data.get("property_mode", "tags")
-                if property_mode == "tags":
-                    # Get selected property tags (format: "domain:tag")
-                    selected_tags = request.form.getlist("selected_property_tags")
-                    if selected_tags:
-                        import re
-                        from collections import defaultdict
-
-                        tags_by_domain: dict[str, list[str]] = defaultdict(list)
-                        tag_pattern = re.compile(r"^[a-z0-9_]+$")
-
-                        for selection in selected_tags:
-                            if ":" in selection:
-                                domain, tag = selection.split(":", 1)
-                                if tag_pattern.match(tag) and tag not in tags_by_domain[domain]:
-                                    tags_by_domain[domain].append(tag)
-
-                        # Build AdCP discriminated union format
-                        publisher_properties = []
-                        for domain, tags in tags_by_domain.items():
-                            publisher_properties.append(
-                                {
-                                    "publisher_domain": domain,
-                                    "property_tags": tags,
-                                    "selection_type": "by_tag",
-                                }
+                if property_mode in _SELECTION_FIELDS and selection_save == "changed":
+                    # An empty selection leaves the stored one as it is, and so does a save posting
+                    # what the page rendered: the boxes cannot express every stored selection, so
+                    # writing them back would rewrite what the save never touched.
+                    if request.form.getlist(_SELECTION_FIELDS[property_mode]):
+                        selectors, refusal = _selectors_from_product_form(catalog.refs, property_mode)
+                        if refusal:
+                            flash(refusal, "error")
+                            return redirect(
+                                url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id)
                             )
+                        # A stored choice this section shows no box for is kept (kept_choices).
+                        kept = kept_choices(_own_selectors(product), catalog.refs, property_mode)
+                        product.publisher_selections = ProductPublisherSelection.from_selectors(
+                            tenant_id, kept_selectors(selectors, kept)
+                        )
 
-                        if publisher_properties:
-                            product.properties = publisher_properties
-                            product.property_tags = None
-                            product.property_ids = None
-                            attributes.flag_modified(product, "properties")
-
-                elif property_mode == "property_ids":
-                    # Get selected property IDs
-                    property_ids_list = request.form.getlist("selected_property_ids")
-                    if property_ids_list:
-                        from collections import defaultdict
-
-                        from src.core.database.models import AuthorizedProperty
-
-                        # Query properties to get their publisher_domain
-                        properties = db_session.scalars(
-                            select(AuthorizedProperty).filter(
-                                AuthorizedProperty.property_id.in_(property_ids_list),
-                                AuthorizedProperty.tenant_id == tenant_id,
-                            )
-                        ).all()
-
-                        # Group by publisher_domain
-                        properties_by_domain: dict[str, list[str]] = defaultdict(list)
-                        for prop in properties:
-                            properties_by_domain[prop.publisher_domain].append(prop.property_id)
-
-                        # Build AdCP discriminated union format
-                        publisher_properties = []
-                        for domain, prop_ids in properties_by_domain.items():
-                            publisher_properties.append(
-                                {
-                                    "publisher_domain": domain,
-                                    "property_ids": prop_ids,
-                                    "selection_type": "by_id",
-                                }
-                            )
-
-                        if publisher_properties:
-                            product.properties = publisher_properties
-                            product.property_tags = None
-                            product.property_ids = None
-                            attributes.flag_modified(product, "properties")
-
-                elif property_mode == "full":
-                    # Get selected full property IDs (legacy mode)
-                    property_ids_list = request.form.getlist("full_property_ids")
-                    if property_ids_list:
-                        from src.core.database.models import AuthorizedProperty
-
-                        properties = db_session.scalars(
-                            select(AuthorizedProperty).filter(
-                                AuthorizedProperty.property_id.in_(property_ids_list),
-                                AuthorizedProperty.tenant_id == tenant_id,
-                            )
-                        ).all()
-
-                        if properties:
-                            properties_data = []
-                            for prop in properties:
-                                prop_dict = {
-                                    "property_type": prop.property_type,
-                                    "name": prop.name,
-                                    "identifiers": prop.identifiers or [],
-                                    "tags": prop.tags or [],
-                                    "publisher_domain": prop.publisher_domain,
-                                }
-                                properties_data.append(prop_dict)
-
-                            product.properties = properties_data
-                            product.property_tags = None
-                            product.property_ids = None
-                            attributes.flag_modified(product, "properties")
+                # A publisher-backed format option must resolve for the product as saved: its
+                # declarations and its selection (its profile's, when it links one).
+                try:
+                    profile = product.inventory_profile if product.inventory_profile_id else None
+                    _refuse_unresolved_format_options(
+                        (profile.format_options if profile else None) or product.format_options,
+                        product.stored_publisher_properties,
+                        catalog,
+                    )
+                except ValueError as e:
+                    flash(str(e), "error")
+                    return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
 
                 # No ``line_item_type`` is read here. The GAM form does not submit one -- no
                 # template in this repository declares a field by that name -- so the branches
@@ -2047,26 +1943,20 @@ def edit_product(tenant_id, product_id):
             principals = PrincipalRepository(db_session, tenant_id).list_all()
             principals_list = [{"principal_id": p.principal_id, "name": p.name} for p in principals]
 
-            # Get authorized properties for publisher properties selector
-            from src.core.database.models import AuthorizedProperty
-
-            authorized_properties_query = db_session.scalars(
-                select(AuthorizedProperty).filter_by(tenant_id=tenant_id).order_by(AuthorizedProperty.name)
-            ).all()
-            authorized_properties_list = [
-                {
-                    "property_id": p.property_id,
-                    "name": p.name,
-                    "property_type": p.property_type,
-                    "tags": p.tags or [],
-                    "verification_status": p.verification_status,
-                    "publisher_domain": p.publisher_domain,
-                }
-                for p in authorized_properties_query
-            ]
-
-            # Get current publisher properties from product (for pre-selecting in edit form)
-            selected_publisher_properties = product.effective_properties
+            # Offer the authorized properties and pre-select what the product sells: its
+            # selectors resolved against them, as list_products and get_products resolve them.
+            authorized_properties_list = catalog.refs
+            rendered_selection = RenderedSelection(
+                product_form_fields(
+                    product.resolve_publisher_properties(authorized_properties_list), list(authorized_properties_list)
+                ),
+                _selection_digest(product),
+            )
+            # What each section shows disabled: the stored choices it has no box for.
+            kept_by_mode = {
+                mode: kept_choices(_own_selectors(product), authorized_properties_list, mode)
+                for mode in ("tags", "property_ids")
+            }
 
             # Show adapter-specific form
             if adapter_type == "google_ad_manager":
@@ -2123,7 +2013,9 @@ def edit_product(tenant_id, product_id):
                     inventory_profiles=inventory_profiles,
                     principals=principals_list,
                     authorized_properties=authorized_properties_list,
-                    selected_publisher_properties=selected_publisher_properties,
+                    publisher_format_options=list(catalog.options.values()),
+                    rendered_selection=rendered_selection,
+                    kept_by_mode=kept_by_mode,
                 )
             else:
                 # For non-GAM adapters - use unified edit template
@@ -2138,7 +2030,9 @@ def edit_product(tenant_id, product_id):
                     currencies=currencies,
                     principals=principals_list,
                     authorized_properties=authorized_properties_list,
-                    selected_publisher_properties=selected_publisher_properties,
+                    publisher_format_options=list(catalog.options.values()),
+                    rendered_selection=rendered_selection,
+                    kept_by_mode=kept_by_mode,
                     **_legacy_format_facts(product),
                 )
 

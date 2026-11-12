@@ -1,7 +1,7 @@
 """Require proven media-buy account ownership.
 
 Revision ID: 5b0563cb0ac6
-Revises: f7c2e8a13d64
+Revises: e2af0c242a7f
 
 Only the original create request, its scoped creation workflow, or a cached
 create response naming this exact buy can identify its account. Current grants
@@ -25,7 +25,7 @@ from alembic import op
 from src.core.database.migration_guards import abort_if_rows
 
 revision = "5b0563cb0ac6"
-down_revision = "f7c2e8a13d64"
+down_revision = "e2af0c242a7f"
 branch_labels = None
 depends_on = None
 
