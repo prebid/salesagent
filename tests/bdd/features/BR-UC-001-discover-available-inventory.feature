@@ -1685,8 +1685,8 @@ Feature: BR-UC-001 Discover Available Inventory
   @T-UC-001-v31-seller-agent-ref-not-authorized @v3.1 @seller-agent-ref @federation
   Scenario: Seller agent reference not in authorized_agents is rejected as seller_not_authorized
     Given the Buyer is authenticated with a valid principal_id
-    And a product declares seller_agent_ref.agent_url "https://rogue.example"
-    And the property publisher's adagents.json does NOT list "https://rogue.example" in authorized_agents
+    And a product declares seller_agent_ref.agent_url "https://rogue-psatest.com"
+    And the property publisher's adagents.json does NOT list "https://rogue-psatest.com" in authorized_agents
     When the seller validates the product
     Then the seller should reject the seller_agent_ref with error code "seller_not_authorized"
     And the URL comparison should use AdCP canonicalization rules rather than byte equality

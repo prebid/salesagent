@@ -23,6 +23,7 @@ from src.core.database.models import PricingOption
 from src.core.database.models import Product as ProductModel
 from src.core.product_conversion import convert_product_model_to_schema, default_reporting_capabilities
 from src.core.schemas import Product as ProductSchema
+from tests.factories.product import ONE_AUTHORIZED_PROPERTY, default_publisher_properties
 from tests.helpers.adcp_factories import create_test_db_product
 
 ADCP_36_PRODUCT_FIELDS = {
@@ -73,7 +74,7 @@ class TestProductAdcp36FieldsPersistence:
             publisher_properties=[
                 {
                     "selection_type": "by_id",
-                    "publisher_domain": "example.com",
+                    "publisher_domain": "psatest.com",
                     "property_ids": ["all_inventory"],
                 }
             ],
@@ -111,7 +112,7 @@ class TestProductAdcp36FieldsPersistence:
             publisher_properties=[
                 {
                     "selection_type": "by_id",
-                    "publisher_domain": "example.com",
+                    "publisher_domain": "psatest.com",
                     "property_ids": ["all_inventory"],
                 }
             ],
@@ -138,6 +139,7 @@ def _make_db_product_for_conversion(**overrides) -> ProductModel:
     """
     product = create_test_db_product(
         tenant_id="conv_test",
+        properties=default_publisher_properties(),
         product_id="conv_test_001",
         name="Conversion Test",
         delivery_type="non_guaranteed",
@@ -162,11 +164,15 @@ class TestPropertyTargetingAllowedConversion:
     def test_conversion_includes_property_targeting_allowed_true(self):
         """property_targeting_allowed=True on DB model should appear in converted schema."""
         product_model = _make_db_product_for_conversion(property_targeting_allowed=True)
-        product = convert_product_model_to_schema(product_model)
+        product = convert_product_model_to_schema(
+            product_model, publisher_properties=product_model.resolve_publisher_properties(ONE_AUTHORIZED_PROPERTY)
+        )
         assert product.property_targeting_allowed is True
 
     def test_conversion_defaults_to_false_when_not_set(self):
         """property_targeting_allowed=False on DB model results in False (library default)."""
         product_model = _make_db_product_for_conversion()
-        product = convert_product_model_to_schema(product_model)
+        product = convert_product_model_to_schema(
+            product_model, publisher_properties=product_model.resolve_publisher_properties(ONE_AUTHORIZED_PROPERTY)
+        )
         assert product.property_targeting_allowed is False

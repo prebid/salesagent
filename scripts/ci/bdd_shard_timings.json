@@ -15,7 +15,6 @@
   "tests/bdd/test_local_database_fail_fast.py": 34.029,
   "tests/bdd/test_local_pre_dispatch_refusals.py": 10.513,
   "tests/bdd/test_local_publisher_authorization.py": 54.533,
-  "tests/bdd/test_local_publisher_format_catalog.py": 14.832,
   "tests/bdd/test_local_tenant_identification.py": 20.047,
   "tests/bdd/test_media_buy_status_dual_emit.py": 36.183,
   "tests/bdd/test_protocol001_version_negotiation.py": 40.183,

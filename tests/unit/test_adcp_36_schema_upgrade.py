@@ -170,14 +170,14 @@ class TestPropertyRequiredFields:
         from src.core.schemas import Property
 
         with pytest.raises(ValidationError, match="property_type"):
-            Property(name="Example", identifiers=[{"type": "domain", "value": "example.com"}])
+            Property(name="Example", identifiers=[{"type": "domain", "value": "psatest.com"}])
 
     def test_property_without_name_is_rejected(self):
         """name is REQUIRED in adcp 3.10 Property."""
         from src.core.schemas import Property
 
         with pytest.raises(ValidationError, match="name"):
-            Property(property_type="website", identifiers=[{"type": "domain", "value": "example.com"}])
+            Property(property_type="website", identifiers=[{"type": "domain", "value": "psatest.com"}])
 
     def test_property_without_identifiers_is_rejected(self):
         """identifiers is REQUIRED in adcp 3.10 Property."""
@@ -193,9 +193,9 @@ class TestPropertyRequiredFields:
         p = Property(
             property_type="website",
             name="Example",
-            identifiers=[{"type": "domain", "value": "pub.example.com"}],
+            identifiers=[{"type": "domain", "value": "pub.psatest.com"}],
         )
         assert p.name == "Example"
         assert p.property_type.value == "website"
         assert len(p.identifiers) == 1
-        assert p.identifiers[0].value == "pub.example.com"
+        assert p.identifiers[0].value == "pub.psatest.com"

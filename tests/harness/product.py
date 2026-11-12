@@ -55,13 +55,19 @@ from tests.harness._realize import realize_e2e
 from tests.harness.admin_client import AdminOperatorMixin
 from tests.harness.database_faults import DatabaseFaultMixin
 from tests.harness.egress import EgressHatchMixin
+from tests.harness.publisher_authorization import PublisherAdagentsMixin
 
 if TYPE_CHECKING:
     from tests.e2e._scripted_llm import ScriptedFailure
 
 
-class ProductEnv(AdminOperatorMixin, DatabaseFaultMixin, ProductMixin, IntegrationEnv):
+class ProductEnv(PublisherAdagentsMixin, AdminOperatorMixin, DatabaseFaultMixin, ProductMixin, IntegrationEnv):
     """Integration test environment for _get_products_impl.
+
+    A property is authorized only by a publisher's stored adagents.json: a scenario writes
+    what each publisher serves and the seller ingests it through the operator's admin routes
+    on the env's own transport -- on e2e the live server fetches the file itself
+    (``PublisherAdagentsMixin``).
 
     Only mocks external services (policy, dynamic variants,
     AI ranking, property list resolution). Everything else is real:

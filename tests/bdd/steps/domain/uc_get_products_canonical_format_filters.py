@@ -56,12 +56,12 @@ _SHARED_OPTION_ID = "premium_above_fold"
 
 #: The publisher whose catalogue the OTHER product's option belongs to. The filter names the
 #: product-scoped option, so this one is the counter-example.
-_PUBLISHER_DOMAIN = "publisher.example.com"
+_PUBLISHER_DOMAIN = "publisher.psatest.com"
 
 #: A second publisher declaring the same option id. The publisher-scoped filter names
 #: ``_PUBLISHER_DOMAIN``, so this one is the counter-example that only an exact
 #: ``publisher_domain`` comparison excludes.
-_OTHER_PUBLISHER_DOMAIN = "other-publisher.example.com"
+_OTHER_PUBLISHER_DOMAIN = "other-publisher.psatest.com"
 
 
 def _canonical_product_declaring_option(tenant: Any, publisher_domain: str | None) -> Any:

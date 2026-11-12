@@ -82,3 +82,13 @@ def drop_header_if(datatable: Any, first_cell: str) -> list[Any]:
     if datatable and str(datatable[0][0]).strip().lower() == first_cell.lower():
         return list(datatable[1:])
     return list(datatable)
+
+
+def comma_list(cell: str) -> list[str]:
+    """A comma-separated step argument or cell as its non-empty, stripped items.
+
+    ``"a, b,,c "`` is ``["a", "b", "c"]``. Three step modules carried this as a private
+    helper of their own (``_split``, ``_parse_event_types``, and ``_quoted_list``'s
+    unquoted branch).
+    """
+    return [item.strip() for item in cell.split(",") if item.strip()]

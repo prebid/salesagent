@@ -59,7 +59,7 @@ def editable_product(factory_session):
     """
     tenant = TenantFactory(ad_server="mock")
     selection = seed_property_tag_selection(tenant)
-    product = ProductFactory(tenant=tenant, product_id="edit_me", property_tags=["all_inventory"])
+    product = ProductFactory(tenant=tenant, product_id="edit_me")
     PricingOptionFactory(product=product, pricing_model="cpm", currency="USD", is_fixed=True)
     factory_session.commit()
     tenant.property_tag_selection = selection

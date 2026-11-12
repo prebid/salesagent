@@ -107,9 +107,10 @@ _DUPLICATE_THRESHOLD = 2
 # and the two Givens that seeded only the deleted outlines, but that was not measured, so it
 # is recorded as a guess and not as a fact.
 #
-# 20 -> 19: the uc003 "should NOT contain an \"errors\" field" Then and its unregistered
-# then_media_buy.py twin ("should NOT have ...") shared a body. The twin's sentence is now a
-# second decorator on the uc003 function, so the group is gone rather than merged.
+# 20 -> 19: the two "errors" absence Thens ('NOT contain an "errors" field' in uc003, 'NOT have
+# an "errors" field' in then_media_buy.py) were one body, ``wire_absent(ctx, "errors")``. Both
+# are deleted and their feature lines bind to the one absence step, ``the response should NOT
+# contain "errors" field``, so the group is gone rather than merged.
 _DUPLICATE_GROUP_BASELINE = 19
 
 # Steps exempt from the 3+ identical-body scan (load-bearing: each suppresses a
@@ -142,7 +143,7 @@ _ALLOWED_DUPLICATES: set[str] = set()
 # disappearing is invisible to the group count. Neither number is hand-reasoned: both are what
 # the scan reports on this tree, and the guard's equality arm fails if either drifts.
 #
-# 41 -> 39: the two members of the "errors" field group recorded at the group baseline.
+# 41 -> 39: the two members of the "errors" absence group are deleted (see 20 -> 19 above).
 _DUPLICATE_MEMBER_BASELINE = 39
 
 

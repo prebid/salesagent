@@ -7,6 +7,7 @@ shared implementation pattern from CLAUDE.md.
 import logging
 import time
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from typing import Any, cast
 
 from adcp.types import PropertyListReference
@@ -81,6 +82,7 @@ def get_recommended_cpm(product: Product) -> float | None:
 
 
 # Import conversion utilities from dedicated module to avoid circular imports
+from src.core.database.repositories.product import offered_products
 from src.core.product_conversion import convert_product_model_to_schema
 
 
@@ -402,14 +404,18 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
     from src.core.database.repositories.uow import ProductUoW
 
     with ProductUoW(tenant.tenant_id) as uow:
-        assert uow.products is not None
-        db_products = uow.products.list_all()
+        assert uow.publishers is not None
+        # Once per request: dynamic variants resolve their selectors against these too (#1845).
+        publisher_catalog = uow.publishers.catalog(datetime.now(UTC))
 
-        # Convert database Product models to AdCP Product schema
+        # Convert the offered database Product models to AdCP Product schema
         products = []
-        for product_obj in db_products:
+        for offered in uow.list_offered():
+            product_obj = offered.product
             try:
-                validated_product = convert_product_model_to_schema(product_obj, adapter_type=tenant_adapter_type)
+                validated_product = convert_product_model_to_schema(
+                    product_obj, adapter_type=tenant_adapter_type, publisher_properties=offered.publisher_properties
+                )
                 products.append(validated_product)
                 logger.debug(f"Successfully converted product {product_obj.product_id}")
             except AdCPSalesAgentError:
@@ -500,12 +506,14 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
         if dynamic_variants:
             # Convert Product models to Product schemas for response
 
-            for variant_model in dynamic_variants:
-                # Convert database model to schema (returns library Product)
-                # Cast to our extended Product type for mypy compatibility
-                variant_schema = convert_product_model_to_schema(variant_model, adapter_type=tenant_adapter_type)
-                # Type: ignore - library Product is compatible with our extended Product at runtime
-                products.append(variant_schema)
+            for offered_variant in offered_products(dynamic_variants, publisher_catalog):
+                products.append(
+                    convert_product_model_to_schema(
+                        offered_variant.product,
+                        adapter_type=tenant_adapter_type,
+                        publisher_properties=offered_variant.publisher_properties,
+                    )
+                )
 
             logger.info(f"[GET_PRODUCTS] Added {len(dynamic_variants)} dynamic product variants")
     except (ImportError, RuntimeError, OSError) as e:
@@ -920,17 +928,13 @@ def get_product_catalog(tenant_id: str) -> list[Product]:
     """Get products for a tenant.
 
     Returns:
-        List of Product objects with full pricing options
+        List of Product objects with full pricing options: the products get_products offers,
+        read through the same ``list_offered``.
     """
     from src.core.database.repositories.uow import ProductUoW
 
     with ProductUoW(tenant_id) as uow:
-        assert uow.products is not None
-        products = uow.products.list_all_with_inventory()
-
-        # Use convert_product_model_to_schema for consistency
-        loaded_products = []
-        for product in products:
-            loaded_products.append(convert_product_model_to_schema(product))
-
-    return loaded_products
+        return [
+            convert_product_model_to_schema(offered.product, publisher_properties=offered.publisher_properties)
+            for offered in uow.list_offered()
+        ]
