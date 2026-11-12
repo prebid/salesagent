@@ -249,21 +249,24 @@ Feature: BR-UC-019 Query Media Buys
 
   @T-UC-019-inv-150-4 @invariant @BR-RULE-150
   Scenario: INV-4 holds - start_time takes precedence over start_date
-    Given the principal "buyer-001" owns media buy "mb-001" with start_date "2026-03-15" and start_time "2026-03-10T00:00:00Z" and end_date "2026-03-31"
-    And today is "2026-03-12"
+    Given the principal "buyer-001" owns media buy "mb-001" with start_date in 3 days, end_date in 19 days, and start_time 2 days ago
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
     Then the response is compliant with the get_media_buys spec
     And the media buy "mb-001" should have status "active"
-    # BR-RULE-150 INV-4: start_time.date() (2026-03-10) used instead of start_date (2026-03-15)
+    # The timestamp places the buy in flight; the date alone would yield pending_start.
+    # Both edges have a multi-day margin around the real UTC date on every transport.
 
   @T-UC-019-inv-150-5 @invariant @BR-RULE-150
   Scenario: INV-5 holds - end_time takes precedence over end_date
-    Given the principal "buyer-001" owns media buy "mb-001" with start_date "2026-03-01" and end_date "2026-03-31" and end_time "2026-03-25T23:59:59Z"
-    And today is "2026-03-28"
+    Given the principal "buyer-001" owns media buy "mb-001" with start_date 16 days ago, end_date 3 days ago, and end_time in 3 days
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
     Then the response is compliant with the get_media_buys spec
-    And the media buy "mb-001" should have status "completed"
-    # BR-RULE-150 INV-5: end_time.date() (2026-03-25) used instead of end_date (2026-03-31)
+    And the media buy "mb-001" should have status "active"
+    # The timestamp keeps the buy in flight; the date alone would yield completed.
+    # A future end_time also prevents the live scheduler from completing this seed
+    # between the Given and When (#2503), which could mask a broken read-time resolver.
+    # Date-column precedence is a seller storage invariant, ungraded by the storyboard;
+    # AdCP 3.2.7 enums/media-buy-status.json defines active as currently running.
 
   @T-UC-019-partition-status-filter @partition @status_filter
   Scenario Outline: Default status filter behavior - <partition>
@@ -542,8 +545,7 @@ Feature: BR-UC-019 Query Media Buys
 
   @T-UC-019-inv-150-2 @invariant @BR-RULE-150
   Scenario: INV-2 holds - in-flight media buy has active status
-    Given the principal "buyer-001" owns media buy "mb-001" with start_date "2026-03-01" and end_date "2026-03-31"
-    And today is "2026-03-15"
+    Given the principal "buyer-001" owns media buy "mb-001" whose flight window starts 14 days ago and ends in 16 days
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
     Then the response is compliant with the get_media_buys spec
     And the response should include media buy "mb-001" with status "active"

@@ -10,31 +10,20 @@ from unittest.mock import patch
 
 import pytest
 
-from src.adapters.google_ad_manager import GoogleAdManager
-from src.core.schemas import Principal
+from tests.helpers.gam_client import build_gam_adapter, stub_gam_client_manager
 from tests.helpers.gam_client import gam_line_item as _line_item
-from tests.helpers.gam_client import stub_gam_client_manager
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
-def _build_adapter(principal, config, *, line_items=()):
+def _build_adapter(*, line_items=()):
     """Build the GAM adapter over a stand-in GAM client.
 
     The order's line items are supplied BY THE TEST — see
     ``tests/helpers/gam_client.py`` for why they must not come from the adapter's own
     unreachable fabrication branch (GH #2245).
     """
-    with patch("src.adapters.google_ad_manager.GAMClientManager") as client_manager:
-        client_manager.return_value = stub_gam_client_manager(line_items=line_items)
-        return GoogleAdManager(
-            config=config,
-            principal=principal,
-            network_code=config["network_code"],
-            advertiser_id=principal.platform_mappings["google_ad_manager"]["advertiser_id"],
-            trafficker_id=config["trafficker_id"],
-            tenant_id="test_tenant",
-        )
+    return build_gam_adapter(stub_gam_client_manager(line_items=line_items))
 
 
 class TestGAMValidationIntegration:
@@ -55,25 +44,9 @@ class TestGAMValidationIntegration:
     drive the real type detection and the real creative build against a stand-in client.
     """
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        # Create a mock principal
-        self.principal = Principal(
-            principal_id="test_principal",
-            name="Test Principal",
-            platform_mappings={"google_ad_manager": {"advertiser_id": "123"}},
-        )
-
-        # Create GAM adapter config
-        self.config = {
-            "network_code": "123456",
-            "service_account_key_file": "/path/to/key.json",
-            "trafficker_id": "trafficker_123",
-        }
-
     def test_add_creative_assets_validates_before_processing(self):
         """Test that creative assets are validated before GAM API calls."""
-        adapter = _build_adapter(self.principal, self.config)
+        adapter = _build_adapter()
 
         # Mock the validation method to return validation errors
         with patch.object(adapter, "_validate_creative_for_gam") as mock_validate:
@@ -100,7 +73,7 @@ class TestGAMValidationIntegration:
 
     def test_validate_creative_for_gam_method(self):
         """Test the _validate_creative_for_gam method directly."""
-        adapter = _build_adapter(self.principal, self.config)
+        adapter = _build_adapter()
 
         # Test with invalid asset
         invalid_asset = {
@@ -133,11 +106,7 @@ class TestGAMValidationIntegration:
         """Test that HTML5 creatives are detected and handled correctly."""
         # 970x250 comes from the asset's format string, so the order's line item must
         # accept that size for the creative to reach GAM.
-        adapter = _build_adapter(
-            self.principal,
-            self.config,
-            line_items=[_line_item("test_package", sizes=((970, 250),))],
-        )
+        adapter = _build_adapter(line_items=[_line_item("test_package", sizes=((970, 250),))])
 
         # Test HTML5 creative detection by file extension
         html5_asset = {
@@ -167,11 +136,7 @@ class TestGAMValidationIntegration:
         """Test HTML5 creative with ZIP file containing assets."""
         # "html5_interactive" carries no dimensions, so the size check falls back to
         # 300x250 and the line item must accept that.
-        adapter = _build_adapter(
-            self.principal,
-            self.config,
-            line_items=[_line_item("test_package", sizes=((300, 250),))],
-        )
+        adapter = _build_adapter(line_items=[_line_item("test_package", sizes=((300, 250),))])
 
         zip_asset = {
             "creative_id": "html5_zip_1",
@@ -207,11 +172,7 @@ class TestGAMValidationIntegration:
         tagged with ``concept_source`` so it stays distinguishable from a future
         buyer-supplied concept.
         """
-        adapter = _build_adapter(
-            self.principal,
-            self.config,
-            line_items=[_line_item("test_package", sizes=((970, 250),))],
-        )
+        adapter = _build_adapter(line_items=[_line_item("test_package", sizes=((970, 250),))])
 
         asset = {
             "creative_id": "html5_creative_1",
@@ -234,7 +195,7 @@ class TestGAMValidationIntegration:
 
     def test_failed_creative_carries_no_concept_enrichment(self):
         """A creative that fails GAM validation is never pushed, so it gets no concept (#1506)."""
-        adapter = _build_adapter(self.principal, self.config)
+        adapter = _build_adapter()
 
         invalid_asset = {
             "creative_id": "bad_creative_1",
@@ -255,7 +216,7 @@ class TestGAMValidationIntegration:
 
     def test_validation_handles_different_creative_types(self):
         """Test validation works for different creative types."""
-        adapter = _build_adapter(self.principal, self.config)
+        adapter = _build_adapter()
 
         # Test third-party tag validation
         third_party_asset = {
@@ -290,29 +251,18 @@ class TestGAMValidationIntegration:
             "package_assignments": ["mock_package"],  # Assign to mock package
         }
 
-        with patch("src.adapters.google_ad_manager.GAMClientManager"):
-            # Mock the log method before creating adapter so it gets the mocked version
-            with patch.object(GoogleAdManager, "log") as mock_log:
-                adapter = GoogleAdManager(
-                    config=self.config,
-                    principal=self.principal,
-                    network_code=self.config["network_code"],
-                    advertiser_id=self.principal.platform_mappings["google_ad_manager"]["advertiser_id"],
-                    trafficker_id=self.config["trafficker_id"],
-                    tenant_id="test_tenant",
-                )
+        adapter = _build_adapter()
 
-                result = adapter.add_creative_assets("123", [invalid_asset], None)
+        result = adapter.add_creative_assets("123", [invalid_asset], None)
 
-                # Check that validation error was detected
-                assert result[0].status == "failed"
+        # Check that validation error was detected
+        assert result[0].status == "failed"
 
-                # The log assertion that stood here was wrapped in ``if mock_log.called:``,
-                # so it passed whenever the log had NOT been written — the one outcome it
-                # existed to catch. Removed rather than unwrapped: the manager captures
-                # ``self.log`` at construction, so what reaches it is an implementation
-                # detail of the wiring, and the failed status above is the buyer-visible
-                # fact.
+        # The log assertion that stood here was wrapped in ``if mock_log.called:``, so it
+        # passed whenever the log had NOT been written — the one outcome it existed to
+        # catch. Removed rather than unwrapped: the manager captures ``self.log`` at
+        # construction, so what reaches it is an implementation detail of the wiring, and
+        # the failed status above is the buyer-visible fact.
 
 
 class TestGAMValidationPerformance:
@@ -325,23 +275,9 @@ class TestGAMValidationPerformance:
     every value that field can take on that path. Neither could fail.
     """
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.principal = Principal(
-            principal_id="test_principal",
-            name="Test Principal",
-            platform_mappings={"google_ad_manager": {"advertiser_id": "123"}},
-        )
-
-        self.config = {
-            "network_code": "123456",
-            "service_account_key_file": "/path/to/key.json",
-            "trafficker_id": "trafficker_123",
-        }
-
     def test_validation_early_exit_on_failure(self):
         """Test that validation provides early feedback on failures."""
-        adapter = _build_adapter(self.principal, self.config)
+        adapter = _build_adapter()
 
         # Mix of valid and invalid assets
         assets = [

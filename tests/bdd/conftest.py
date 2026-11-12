@@ -97,6 +97,8 @@ pytest_plugins = [
     "tests.bdd.steps.domain.admin_inventory_profiles",
     "tests.bdd.steps.domain.uc_get_products_inventory",
     "tests.bdd.steps.domain.uc_get_products_pricing",
+    "tests.bdd.steps.domain.uc_get_products_publisher_domain",
+    "tests.bdd.steps.domain.uc001_discovery",
     "tests.bdd.steps.domain.uc_get_products_format_options",
     "tests.bdd.steps.domain.uc_get_products_format_id_filter",
     "tests.bdd.steps.domain.uc_get_products_canonical_format_filters",
@@ -108,7 +110,6 @@ pytest_plugins = [
     "tests.bdd.steps.domain.agent_card_discovery",
     "tests.bdd.steps.domain.mcp_tool_discovery",
     "tests.bdd.steps.domain.mcp_endpoint_paths",
-    "tests.bdd.steps.domain.publisher_format_catalog",
     "tests.bdd.steps.domain.publisher_authorization",
     "tests.bdd.steps.domain.pre_dispatch_refusals",
     "tests.bdd.steps.domain.codes_open_vocabulary",
@@ -4516,49 +4517,19 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-019-inv-150-1",
         }
 
-        # --- UC-019: e2e_rest xfails for datetime-mock-dependent tests ---
-        # These scenarios use `And today is "<date>"` which patches datetime
-        # in-process. The patch has no effect on Docker — real datetime.now()
-        # is used, so status assertions fail.
-        #
-        # THE FIX IS THE SCENARIO, not this route. 2026-09-15: the three tags below
-        # that carried the whole status-refinement contract were rewritten to state
-        # their flight windows as offsets from the run date and to pin no clock at
-        # all, so each boundary is now graded identically on a2a, mcp, rest and
-        # e2e_rest. They are gone from this set. What that removed was not coverage
-        # but a false reading: under the old shape the rows expecting "completed"
-        # xpassed merely because the real calendar had drifted past a fixed 2026-03
-        # window, so a production that ignored the flight window entirely would have
-        # passed them, while the rows naming every other boundary could not run here
-        # at all. The three tags that REMAIN genuinely need a clock they cannot set
-        # (they pin start_time / end_time precedence against a fixed date) and are
-        # the real remainder of this gap.
+        # --- UC-019: e2e_rest xfails for remaining adapter/fixture gaps ---
+        # Graduated T-UC-019-inv-150-2/4/5 (GH #1830): real-clock-relative
+        # flights and contradictory date/timestamp edges pass on all four
+        # transports. The status assertions read the captured wire JSON;
+        # ignoring timestamps fails both precedence scenarios. INV-5 keeps its
+        # effective end in the future, so the live scheduler cannot complete
+        # the seed and mask a resolver regression (GH #2503).
         if is_e2e_rest and any(t.startswith("T-UC-019") for t in marker_names):
-            _UC019_E2E_DATETIME_TAGS: set[str] = {
-                "T-UC-019-inv-150-2",
-                "T-UC-019-inv-150-4",
-                "T-UC-019-inv-150-5",
-            }
             _UC019_E2E_MOCK_TAGS: set[str] = {
                 # Adapter mock (get_adapter patch) has no effect in Docker.
                 "T-UC-019-partition-snapshot",
                 "T-UC-019-boundary-snapshot",
             }
-            # The per-example exemption that used to sit here is deleted with the tags
-            # it exempted. It had also silently stopped matching: it keyed on nodeid
-            # substrings ("day after end_date", "post_flight") that a feature
-            # regeneration had renamed, which is why those rows reported XPASS rather
-            # than PASS. A substring exemption that decays into a no-op the moment
-            # someone rewords an Examples cell is the wrong mechanism; the scenario
-            # rewrite removes the need for one.
-            _inv150_5_graduated = "T-UC-019-inv-150-5" in marker_names  # all examples pass
-            if marker_names & _UC019_E2E_DATETIME_TAGS and not _inv150_5_graduated:
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="e2e_rest: datetime.now() mock has no effect in Docker — status computed from real date",
-                        strict=False,
-                    )
-                )
             if marker_names & _UC019_E2E_SUITE_DB_SEED_TAGS:
                 item.add_marker(
                     pytest.mark.xfail(
@@ -5427,6 +5398,12 @@ def _uc010_wired_tags() -> frozenset[str]:
             # than for its real, cited reason (#1291).
             "T-UC-010-main-reporting-delivery",
             "T-UC-010-degradation-no-cascade",
+            # portfolio.publisher_domains: the verified publishers, or no portfolio at all
+            "T-UC-010-portfolio-verified-publishers",
+            "T-UC-010-portfolio-no-verified-publisher",
+            "T-UC-010-portfolio-canonical-domain",
+            "T-UC-010-portfolio-rejected-domain",
+            "T-UC-010-portfolio-only-rejected-domain",
             "T-UC-010-main-timestamp",
             "T-UC-010-main-readonly",
             "T-UC-010-pricing",
@@ -5434,6 +5411,8 @@ def _uc010_wired_tags() -> frozenset[str]:
             "T-UC-010-conversion-caps",
             "T-UC-010-creative-caps",
             "T-UC-010-ext-b-schema-valid",
+            # portfolio under each failed dependency: named, or omitted, never a placeholder
+            "T-UC-010-ext-b-degradation",
             "T-UC-010-ext-a",
             "T-UC-010-account-require-operator-auth",
             "T-UC-010-account-authorization-endpoint",
@@ -5513,6 +5492,13 @@ def _uc010_wired_tags() -> frozenset[str]:
             "T-UC-010-local-orphaned-specialism",
             "T-UC-010-local-unbacked-protocol",
             "T-UC-010-local-inline-creative-management",
+            # Batch 17 — the locally-added advertising-policy graders. Their feature was
+            # edited before it was wired, so it had never run; portfolio, and the policy
+            # inside it, now exists only for a seller some publisher has verified.
+            "T-UC-010-local-advertising-policy-declared",
+            "T-UC-010-local-advertising-policy-absent",
+            "T-UC-010-local-advertising-policy-empty-description",
+            "T-UC-010-local-advertising-policy-no-verified-publisher",
             # Batch 14 — account.sandbox boundary outline (#1721 M4). Was dormant
             # (no bound Given for "the tenant account is configured for
             # {boundary_point}"), citing #1855 (generic wiring) instead of the
@@ -5744,6 +5730,7 @@ def e2e_stack():
     # shared-server/shared-DB contention. Falls back to the shared stack when off.
     ca_bundle = os.environ.get("E2E_CA_BUNDLE")
     tls_base_url = os.environ.get("E2E_TLS_BASE_URL")
+    server_host = os.environ.get("E2E_SERVER_HOST")
     worker = os.environ.get("PYTEST_XDIST_WORKER")  # e.g. "gw3"
     if os.environ.get("E2E_PER_WORKER") == "1" and worker and worker.startswith("gw"):
         import re
@@ -5753,7 +5740,8 @@ def e2e_stack():
         # compose network. Hit the server directly on :8080 (SKIP_NGINX).
         proj = os.environ.get("COMPOSE_PROJECT_NAME", "")
         prefix = f"{proj}-" if proj else ""
-        base_url = f"http://{prefix}server-{worker}:8080"
+        server_host = f"{prefix}server-{worker}"
+        base_url = f"http://{server_host}:8080"
         # Each worker's TLS sidecar carries its own DOTTED CONTAINER NAME for the
         # same reason — `docker compose run` cannot give it a network alias.
         if tls_base_url:
@@ -5799,6 +5787,7 @@ def e2e_stack():
         postgres_url=postgres_url,
         tls_base_url=tls_base_url,
         ca_bundle=ca_bundle,
+        server_host=server_host,
     )
 
 
@@ -6096,6 +6085,19 @@ def _build_product_env(e2e_config: object | None) -> AbstractContextManager:
     from tests.harness.product import ProductEnv
 
     return ProductEnv(e2e_config=e2e_config)
+
+
+def _build_admin_inventory_profile_env(e2e_config: object | None) -> AbstractContextManager:
+    """ProductEnv plus the operator's inventory-profile form and products page (#1845).
+
+    Serves both the admin feature (admin_integration / e2e_admin) and the publisher-domain
+    scenarios that save a profile through the form and read the product off get_products
+    on every buyer transport. The admin requests follow the env's own transport: in
+    process without ``e2e_config``, over the live stack with it.
+    """
+    from tests.harness.admin_inventory_profile import AdminInventoryProfileEnv
+
+    return AdminInventoryProfileEnv(e2e_config=e2e_config)
 
 
 def _build_capabilities_env(e2e_config: object | None) -> AbstractContextManager:
@@ -6430,14 +6432,24 @@ _UC_BUCKET_ROUTES: dict[str, EnvRoute] = {
         env_builder=_build_uc003_storyboard_generic_client_env,
         seed=_seed_uc003_storyboard_generic_client,
     ),
-    # The five rows below are keyed by the coarse `uc` bucket (from
+    # The seven rows below are keyed by the coarse `uc` bucket (from
     # storyboard_spec.detect_uc), not a per-scenario tag: they are what a scenario in these
     # UCs falls back to when no predicate row above claims it. ADMIN, COMPAT,
-    # UC-GET-PRODUCTS and UC-005 have no predicate rows at all — one env + one
-    # seed serves every scenario. UC-019 does have one (@post-create-poll needs
-    # create + list in a single scenario), so its bucket row is the remainder.
+    # UC-001, UC-GET-PRODUCTS and UC-005 have no predicate rows at all — one env
+    # + one seed serves every scenario. UC-019 does have one (@post-create-poll
+    # needs create + list in a single scenario), so its bucket row is the
+    # remainder.
     "ADMIN": EnvRoute(tag="ADMIN", env_builder=_build_admin_env),
     "COMPAT": EnvRoute(tag="COMPAT", env_builder=_build_product_env),
+    # UC-001 is get_products discovery, so it takes the SAME env as
+    # UC-GET-PRODUCTS. It had no row at all until now, which meant a
+    # `@T-UC-001-*` scenario xfailed with "No harness wired for UC-001" — the
+    # catch-all that exists for UCs whose harness does not exist yet, standing in
+    # for a harness that has existed all along. Adding the row binds nothing on
+    # its own: the generated BR-UC-001 feature carries 121 scenarios and NO
+    # `scenarios()` call binds it whole, so the only collected UC-001 scenarios
+    # are the ones test_uc001_discover_available_inventory.py binds by name.
+    "UC-001": EnvRoute(tag="UC-001", env_builder=_build_product_env),
     "UC-GET-PRODUCTS": EnvRoute(tag="UC-GET-PRODUCTS", env_builder=_build_product_env),
     # UC-005 seeds the tenant on EVERY transport, not e2e only. The e2e-only row said
     # "in-process the registry is mocked and the DB is per-test, so the in-process status
@@ -6802,19 +6814,6 @@ ENV_ROUTES: list[EnvRoute] = [
         env_builder=_build_capabilities_env,
         seed=_seed_tenant_and_principal,
     ),
-    # ── @pubformats (local publisher-format-catalog feature, RFC S3) ────────
-    # An UNSCOPED `when` row for the same reason as the rows around it: T-PUBFORMATS-* tags
-    # carry no T-UC-<n>, so detect_uc returns None and no coarse bucket claims them.
-    #
-    # The product env, because one scenario dispatches get_products and reads the product
-    # off the wire; the adagents.json fetches use `fetch_agent_card`, which every env has.
-    # No seed: the Background's "a tenant is configured for product discovery" seeds the
-    # tenant and principal, as for the canonical-format-filter rows.
-    EnvRoute(
-        tag="pubformats",
-        when=lambda m: "pubformats" in m,
-        env_builder=_build_product_env,
-    ),
     # ── @pubauth (local publisher-authorization feature) ────────────────────
     # A `when` row because its scenarios carry T-ADMIN-PUBAUTH-* tags, which detect_uc
     # files under the ADMIN bucket -- whose env drives the accounts pages and serves no
@@ -6840,6 +6839,16 @@ ENV_ROUTES: list[EnvRoute] = [
     EnvRoute(
         tag="mcptools",
         when=lambda m: "mcptools" in m,
+        env_builder=_build_capabilities_env,
+        seed=_seed_tenant_and_principal,
+    ),
+    # ── @adagents (local trust-root adagents.json feature) ──────────────────
+    # The same shape as @agentcard: an unscoped row for T-ADAGENTS-* identity tags, the
+    # capabilities env for its in-process ASGI client, and a tenant declaring its own
+    # virtual_host, whose properties are what the document is built from.
+    EnvRoute(
+        tag="adagents",
+        when=lambda m: "adagents" in m,
         env_builder=_build_capabilities_env,
         seed=_seed_tenant_and_principal,
     ),
@@ -6953,6 +6962,24 @@ ENV_ROUTES: list[EnvRoute] = [
         # returns None for it and no coarse bucket claims it.
         when=lambda m: "pricing_option_announcement" in m,
         env_builder=_build_product_env,
+    ),
+    EnvRoute(
+        tag="get-products-publisher-domain",
+        # BR-UC-GET-PRODUCTS publisher_domain resolution (#1845): stores real authorized
+        # properties and products and reads publisher_properties back off get_products, so
+        # it takes the UC-GET-PRODUCTS branch. Like the pricing row above it carries its own
+        # identity tag, so detect_uc returns None for it and no coarse bucket claims it.
+        when=lambda m: "publisher_domain_resolution" in m,
+        env_builder=_build_admin_inventory_profile_env,
+    ),
+    EnvRoute(
+        tag="admin-inventory-profile-publishers",
+        # BR-ADMIN-INVENTORY-PROFILE-publishers (#1845): the inventory-profile form and the
+        # products page. Its T-ADMIN- tags parametrize it over the admin transports, and
+        # this row claims it before the ADMIN bucket, whose AdminAccountEnv has no
+        # factories or products.
+        when=lambda m: "admin_inventory_profile" in m,
+        env_builder=_build_admin_inventory_profile_env,
     ),
     EnvRoute(
         tag="get-products-format-options",
@@ -7612,8 +7639,8 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
     """Provide the appropriate harness for each BDD scenario.
 
     - A ``uc`` bucket with no marker_names-based sub-branching (ADMIN, COMPAT,
-      UC-GET-PRODUCTS, UC-005, UC-019) is a row in ``ENV_ROUTES`` and goes
-      through the one generic ``_run_env_route`` consumer.
+      UC-001, UC-GET-PRODUCTS, UC-005, UC-019) is a row in ``ENV_ROUTES`` and
+      goes through the one generic ``_run_env_route`` consumer.
     - UC-004 @polling → DeliveryPollEnv
     - UC-004 @webhook → WebhookEnv (unit variant, no DB needed)
     - UC-004 @webhook-reliability → CircuitBreakerEnv (unit variant)

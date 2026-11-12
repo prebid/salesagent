@@ -181,22 +181,6 @@ class TestAuthorizedPropertiesRoutes:
         response = authenticated_admin_session.get(f"/tenant/{tenant_id}/authorized-properties", follow_redirects=True)
         assert response.status_code == 200
 
-    def test_authorized_properties_create_page(self, authenticated_admin_session, test_tenant_with_data):
-        """Test authorized properties create page."""
-        tenant_id = test_tenant_with_data["tenant_id"]
-        response = authenticated_admin_session.get(
-            f"/tenant/{tenant_id}/authorized-properties/create", follow_redirects=True
-        )
-        assert response.status_code == 200
-
-    def test_authorized_properties_upload_page(self, authenticated_admin_session, test_tenant_with_data):
-        """Test authorized properties upload page."""
-        tenant_id = test_tenant_with_data["tenant_id"]
-        response = authenticated_admin_session.get(
-            f"/tenant/{tenant_id}/authorized-properties/upload", follow_redirects=True
-        )
-        assert response.status_code == 200
-
     def test_property_tags_list(self, authenticated_admin_session, test_tenant_with_data):
         """Test property tags list."""
         tenant_id = test_tenant_with_data["tenant_id"]

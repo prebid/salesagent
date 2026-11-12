@@ -1,578 +1,151 @@
-"""Blueprint for managing publisher partnerships."""
+"""Admin routes for the publishers a tenant sells for.
 
-import asyncio
+The operator adds a publisher's domain; everything else comes from the publisher's own
+adagents.json, which ``src/services/publisher_ingest.py`` fetches and stores. Adding a
+publisher ingests it at once, "Sync All" ingests every publisher (the scheduled refresh
+does the same every six hours), and the properties view reads the stored document. No
+route here reads a publisher's file except through the ingest service.
+"""
+
 import logging
 from datetime import UTC, datetime
+from typing import Any
 
-from adcp.adagents import (
-    AuthorizationContext,
-    fetch_adagents,
-    get_properties_by_agent,
-    verify_agent_authorization,
-)
-from adcp.exceptions import AdagentsNotFoundError, AdagentsTimeoutError, AdagentsValidationError
 from flask import Blueprint, Response, jsonify, request
-from sqlalchemy import select
 
 from src.admin.utils.operator_errors import safe_error_message
-from src.core.agent_identity import adagents_scoped_to_agent
-from src.core.config import get_settings
-from src.core.database.database_session import get_db_session
-from src.core.database.integrity import resolve_or_write
-from src.core.database.models import AuthorizedProperty, PropertyTag, PublisherPartner, Tenant
-from src.services.adagents_error_messages import describe_adagents_error
+from src.core.database.models import Publisher
+from src.core.database.repositories.uow import PublisherUoW
+from src.core.http_utils import canonical_publisher_domain
+from src.core.publisher_format_catalog import authorized_properties
+from src.services.publisher_ingest import IngestOutcome, ingest_sync
 
 logger = logging.getLogger(__name__)
 
 publisher_partners_bp = Blueprint("publisher_partners", __name__)
 
 
+def _outcome_json(outcome: IngestOutcome) -> dict[str, Any]:
+    return {
+        "publisher_domain": outcome.domain,
+        "fetch_status": outcome.fetch_status,
+        "error": outcome.error,
+        "property_count": outcome.property_count,
+        "format_option_count": outcome.format_option_count,
+    }
+
+
+def _publisher_json(publisher: Publisher, now: datetime) -> dict[str, Any]:
+    authorized = authorized_properties(publisher, now)
+    return {
+        "publisher_domain": publisher.domain,
+        "display_name": publisher.display_name,
+        "authorizes": bool(authorized),
+        "fetch_status": publisher.fetch_status,
+        "fetch_error": publisher.fetch_error,
+        "fetched_at": publisher.fetched_at.isoformat() if publisher.fetched_at else None,
+        "fetch_attempted_at": publisher.fetch_attempted_at.isoformat() if publisher.fetch_attempted_at else None,
+        "property_count": len(authorized),
+        "format_option_count": len(publisher.format_options),
+    }
+
+
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners", methods=["GET"])
 def list_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
-    """List all publisher partners for a tenant."""
-    try:
-        with get_db_session() as session:
-            # Get tenant
-            stmt_tenant = select(Tenant).filter_by(tenant_id=tenant_id)
-            tenant = session.scalars(stmt_tenant).first()
-            if not tenant:
-                return jsonify({"error": "Tenant not found"}), 404
-
-            # Get all publisher partners
-            stmt_partners = (
-                select(PublisherPartner).filter_by(tenant_id=tenant_id).order_by(PublisherPartner.publisher_domain)
-            )
-            partners = session.scalars(stmt_partners).all()
-
-            # Get property counts per publisher domain
-            from sqlalchemy import func
-
-            from src.core.database.models import AuthorizedProperty
-
-            property_counts_stmt = (
-                select(AuthorizedProperty.publisher_domain, func.count(AuthorizedProperty.property_id))
-                .filter(AuthorizedProperty.tenant_id == tenant_id)
-                .group_by(AuthorizedProperty.publisher_domain)
-            )
-            property_counts = {row[0]: row[1] for row in session.execute(property_counts_stmt).all()}
-
-            # Convert to dict
-            partners_list = []
-            for partner in partners:
-                partners_list.append(
-                    {
-                        "id": partner.id,
-                        "publisher_domain": partner.publisher_domain,
-                        "display_name": partner.display_name,
-                        "is_verified": partner.is_verified,
-                        "last_synced_at": partner.last_synced_at.isoformat() if partner.last_synced_at else None,
-                        "sync_status": partner.sync_status,
-                        "sync_error": partner.sync_error,
-                        "created_at": partner.created_at.isoformat(),
-                        "property_count": property_counts.get(partner.publisher_domain, 0),
-                    }
-                )
-
-            return jsonify(
-                {
-                    "partners": partners_list,
-                    "total": len(partners_list),
-                    "verified": sum(1 for p in partners_list if p["is_verified"]),
-                    "pending": sum(1 for p in partners_list if p["sync_status"] == "pending"),
-                }
-            )
-
-    except Exception as e:
-        logger.error(f"Error listing publisher partners: {e}", exc_info=True)
-        return jsonify({"error": safe_error_message(e)}), 500
+    """The tenant's publishers, with what each one's stored adagents.json authorizes now."""
+    now = datetime.now(UTC)
+    with PublisherUoW(tenant_id) as uow:
+        assert uow.publishers is not None
+        partners = [_publisher_json(publisher, now) for publisher in uow.publishers.list_all()]
+    return jsonify(
+        {
+            "partners": partners,
+            "total": len(partners),
+            "authorizing": sum(1 for p in partners if p["authorizes"]),
+            "never_fetched": sum(1 for p in partners if p["fetch_status"] == "never_fetched"),
+        }
+    )
 
 
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners", methods=["POST"])
 def add_publisher_partner(tenant_id: str) -> Response | tuple[Response, int]:
-    """Add a new publisher partner."""
+    """Add a publisher by its domain, and ingest its adagents.json."""
+    data = request.get_json(silent=True) or {}
+    domain = canonical_publisher_domain(str(data.get("publisher_domain") or ""))
+    if not domain:
+        return jsonify({"error": "Publisher domain is required"}), 400
     try:
-        data = request.get_json()
-        publisher_domain = data.get("publisher_domain", "").strip().lower()
-        display_name = data.get("display_name", "").strip()
-
-        if not publisher_domain:
-            return jsonify({"error": "Publisher domain is required"}), 400
-
-        # Remove http:// or https:// if present
-        publisher_domain = publisher_domain.replace("https://", "").replace("http://", "")
-        # Remove trailing slash
-        publisher_domain = publisher_domain.rstrip("/")
-
-        with get_db_session() as session:
-            # Check tenant adapter type
-            stmt_tenant = select(Tenant).filter_by(tenant_id=tenant_id)
-            tenant = session.scalars(stmt_tenant).first()
-            if not tenant:
+        with PublisherUoW(tenant_id) as uow:
+            assert uow.publishers is not None and uow.tenant_config is not None
+            if uow.tenant_config.get_tenant() is None:
                 return jsonify({"error": "Tenant not found"}), 404
-
-            # For mock adapters OR development environment, auto-verify publishers (no adagents.json to check)
-            # Development: Local dev servers won't be in any publisher's adagents.json
-            # Mock: Testing tenants use fake domains
-            is_dev = get_settings().publisher_auto_verify_allowed
-            is_mock = tenant.adapter_config and tenant.adapter_config.adapter_type == "mock"
-            should_auto_verify = is_dev or is_mock
-
-            # Check if already exists. The unique index is the authority, so this
-            # same answer serves the loser of a concurrent create (see
-            # resolve_or_write) rather than a 500 carrying the driver's message.
-            existing_partner_stmt = select(PublisherPartner).filter_by(
-                tenant_id=tenant_id, publisher_domain=publisher_domain
-            )
-
-            def already_exists() -> tuple[Response, int] | None:
-                if session.scalars(existing_partner_stmt).first():
-                    return jsonify({"error": "Publisher already exists"}), 409
-                return None
-
-            # Create new partner
-            # Auto-verify for dev environment or mock adapters (no real adagents.json to check)
-            partner = PublisherPartner(
-                tenant_id=tenant_id,
-                publisher_domain=publisher_domain,
-                display_name=display_name or publisher_domain,
-                sync_status="success" if should_auto_verify else "pending",
-                is_verified=should_auto_verify,
-                last_synced_at=datetime.now(UTC) if should_auto_verify else None,
-            )
-            conflict = resolve_or_write(
-                session,
-                conflict=already_exists,
-                write=lambda: session.add(partner),
-                constraint="uq_tenant_publisher",
-            )
-            if conflict is not None:
-                return conflict
-            session.commit()
-
-            # Build message
-            message = "Publisher added successfully"
-            if should_auto_verify:
-                reasons = []
-                if is_dev:
-                    reasons.append("development environment")
-                if is_mock:
-                    reasons.append("mock tenant")
-                message += f" (auto-verified for {' and '.join(reasons)})"
-
-            return (
-                jsonify(
-                    {
-                        "id": partner.id,
-                        "publisher_domain": partner.publisher_domain,
-                        "display_name": partner.display_name,
-                        "sync_status": partner.sync_status,
-                        "is_verified": partner.is_verified,
-                        "message": message,
-                    }
-                ),
-                201,
-            )
-
+            if not uow.publishers.add_publisher(domain, str(data.get("display_name") or "").strip() or None):
+                return jsonify({"error": "Publisher already exists"}), 409
     except Exception as e:
-        logger.error(f"Error adding publisher partner: {e}", exc_info=True)
+        # Anything but the duplicate the repository resolves: the operator is told the write
+        # failed, never the driver's statement or parameters.
+        logger.error(f"Error adding publisher: {e}", exc_info=True)
         return jsonify({"error": safe_error_message(e)}), 500
+    (outcome,) = ingest_sync(tenant_id, [domain])
+    return jsonify({**_outcome_json(outcome), "message": "Publisher added"}), 201
 
 
-@publisher_partners_bp.route("/<tenant_id>/publisher-partners/<int:partner_id>", methods=["DELETE"])
-def delete_publisher_partner(tenant_id: str, partner_id: int) -> Response | tuple[Response, int]:
-    """Delete a publisher partner."""
-    try:
-        with get_db_session() as session:
-            stmt = select(PublisherPartner).filter_by(id=partner_id, tenant_id=tenant_id)
-            partner = session.scalars(stmt).first()
-
-            if not partner:
-                return jsonify({"error": "Publisher not found"}), 404
-
-            session.delete(partner)
-            session.commit()
-
-            return jsonify({"message": "Publisher deleted successfully"})
-
-    except Exception as e:
-        logger.error(f"Error deleting publisher partner: {e}", exc_info=True)
-        return jsonify({"error": safe_error_message(e)}), 500
+@publisher_partners_bp.route("/<tenant_id>/publisher-partners/<path:domain>", methods=["DELETE"])
+def delete_publisher_partner(tenant_id: str, domain: str) -> Response | tuple[Response, int]:
+    """Remove a publisher; its derived properties and every selection of it go with it."""
+    with PublisherUoW(tenant_id) as uow:
+        assert uow.publishers is not None
+        if not uow.publishers.delete(domain):
+            return jsonify({"error": "Publisher not found"}), 404
+    return jsonify({"message": "Publisher deleted successfully"})
 
 
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners/sync", methods=["POST"])
 def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
-    """Sync verification status for all publisher partners."""
+    """Ingest every publisher's adagents.json now."""
     try:
-        with get_db_session() as session:
-            # Get tenant
-            stmt_tenant = select(Tenant).filter_by(tenant_id=tenant_id)
-            tenant = session.scalars(stmt_tenant).first()
-            if not tenant:
-                return jsonify({"error": "Tenant not found"}), 404
+        with PublisherUoW(tenant_id) as uow:
+            assert uow.publishers is not None
+            domains = [publisher.domain for publisher in uow.publishers.list_all()]
+        outcomes = ingest_sync(tenant_id, domains)
+    except Exception as e:
+        logger.error(f"Error syncing publishers: {e}", exc_info=True)
+        return jsonify({"error": safe_error_message(e)}), 500
+    return jsonify(
+        {
+            "message": "Sync completed",
+            "total": len(outcomes),
+            "ok": sum(1 for outcome in outcomes if outcome.fetch_status == "ok"),
+            "errors": sum(1 for outcome in outcomes if outcome.fetch_status != "ok"),
+            "outcomes": [_outcome_json(outcome) for outcome in outcomes],
+        }
+    )
 
-            # Get all publisher partners
-            stmt_partners = select(PublisherPartner).filter_by(tenant_id=tenant_id)
-            partners = session.scalars(stmt_partners).all()
 
-            if not partners:
-                return jsonify({"message": "No publishers to sync"}), 200
-
-            # For development environment or mock adapters, auto-verify publishers
-            # (don't require our agent to be in their adagents.json)
-            # BUT still fetch real properties from adagents.json if available
-            is_dev = get_settings().publisher_auto_verify_allowed
-            is_mock = tenant.adapter_config and tenant.adapter_config.adapter_type == "mock"
-            should_auto_verify = is_dev or is_mock
-
-            if should_auto_verify:
-                reasons = []
-                if is_dev:
-                    reasons.append("development environment")
-                if is_mock:
-                    reasons.append("mock tenant")
-                reason_str = " and ".join(reasons)
-
-                logger.info(f"{reason_str} detected - auto-verifying {len(partners)} publishers")
-                verified_domains = []
-                for partner in partners:
-                    partner.sync_status = "success"
-                    partner.sync_error = None
-                    partner.is_verified = True
-                    partner.last_synced_at = datetime.now(UTC)
-                    verified_domains.append(partner.publisher_domain)
-
-                session.commit()
-
-                # Try to fetch real properties from adagents.json for each publisher
-                # This allows mock tenants to test with real publisher inventory
-                properties_created = 0
-                properties_updated = 0
-                tags_created = 0
-                fallback_properties = 0
-
-                if verified_domains:
-                    from src.services.property_discovery_service import get_property_discovery_service
-
-                    discovery_service = get_property_discovery_service()
-
-                    # The one accessor, so this matches the URL the card publishes byte
-                    # for byte — a counterparty's adagents.json check compares the two.
-                    agent_url_for_sync: str = tenant.agent_url
-
-                    for domain in verified_domains:
-                        # Try to fetch real properties from adagents.json
-                        property_stats = discovery_service.sync_properties_from_adagents_sync(
-                            tenant_id, publisher_domains=[domain], dry_run=False, agent_url=agent_url_for_sync
-                        )
-                        domain_properties_created = property_stats.get("properties_created", 0)
-                        properties_created += domain_properties_created
-                        properties_updated += property_stats.get("properties_updated", 0)
-                        tags_created += property_stats.get("tags_created", 0)
-
-                        # Check if sync failed or created no properties
-                        # (errors list or 0 properties means adagents.json unavailable/empty)
-                        has_errors = bool(property_stats.get("errors", []))
-                        if has_errors or domain_properties_created == 0:
-                            # Create a fallback mock property for this domain
-                            logger.info(
-                                f"No properties from {domain} adagents.json "
-                                f"(errors: {has_errors}, created: {domain_properties_created}) - "
-                                f"creating fallback mock property"
-                            )
-
-                            # Ensure 'all_inventory' tag exists
-                            tag_stmt = select(PropertyTag).where(
-                                PropertyTag.tenant_id == tenant_id, PropertyTag.tag_id == "all_inventory"
-                            )
-                            all_inventory_tag = PropertyTag(
-                                tag_id="all_inventory",
-                                tenant_id=tenant_id,
-                                name="All Inventory",
-                                description="Default tag that applies to all properties.",
-                                created_at=datetime.now(UTC),
-                                updated_at=datetime.now(UTC),
-                            )
-
-                            # A tag and a property are each identified by their own primary
-                            # key, so losing the race leaves exactly the row this branch
-                            # wanted — nothing to count, nothing to redo. Both callables run
-                            # before this iteration ends, so the late binding B023 warns
-                            # about cannot happen.
-                            if (
-                                resolve_or_write(
-                                    session,
-                                    conflict=lambda: session.scalars(tag_stmt).first(),  # noqa: B023
-                                    write=lambda: session.add(all_inventory_tag),  # noqa: B023
-                                    constraint="property_tags_pkey",
-                                )
-                                is None
-                            ):
-                                tags_created += 1
-
-                            # Create fallback property
-                            property_id = f"website_{domain.replace('.', '_').replace('-', '_')}"
-                            prop_stmt = select(AuthorizedProperty).where(
-                                AuthorizedProperty.tenant_id == tenant_id,
-                                AuthorizedProperty.property_id == property_id,
-                            )
-                            fallback_property = AuthorizedProperty(
-                                tenant_id=tenant_id,
-                                property_id=property_id,
-                                property_type="website",
-                                name=domain,
-                                publisher_domain=domain,
-                                identifiers=[{"type": "domain", "value": domain}],
-                                tags=["all_inventory"],
-                                verification_status="verified",
-                                verification_checked_at=datetime.now(UTC),
-                                created_at=datetime.now(UTC),
-                                updated_at=datetime.now(UTC),
-                            )
-
-                            if (
-                                resolve_or_write(
-                                    session,
-                                    conflict=lambda: session.scalars(prop_stmt).first(),  # noqa: B023
-                                    write=lambda: session.add(fallback_property),  # noqa: B023
-                                    constraint="authorized_properties_pkey",
-                                )
-                                is None
-                            ):
-                                fallback_properties += 1
-
-                            session.commit()
-                        else:
-                            logger.info(f"Fetched real properties from {domain}: {domain_properties_created} created")
-
-                return jsonify(
-                    {
-                        "message": f"Sync completed ({reason_str} - auto-verified)",
-                        "synced": len(partners),
-                        "verified": len(partners),
-                        "errors": 0,
-                        "total": len(partners),
-                        "properties_created": properties_created + fallback_properties,
-                        "properties_updated": properties_updated,
-                        "tags_created": tags_created,
-                    }
-                )
-
-            # The one accessor, so this matches the URL the card publishes byte for byte —
-            # a counterparty's adagents.json check compares the two. Always a string: the
-            # column does not admit a tenant with no host.
-            agent_url: str = tenant.agent_url
-
-            # Fetch authorization for each publisher (real verification for non-mock tenants)
-            logger.info(f"Fetching authorizations for {len(partners)} publishers")
-
-            synced = 0
-            verified = 0
-            errors = 0
-
-            async def check_publisher(domain: str) -> tuple[str, dict]:
-                """Check a single publisher and return status."""
-                try:
-                    # Sanctioned self-pinning dialer, deliberately outside the
-                    # egress seam -- see src/core/security/outbound_http.py's
-                    # module docstring.
-                    adagents_data = await fetch_adagents(domain, timeout=10.0)
-                    adagents_data = adagents_scoped_to_agent(adagents_data, agent_url)
-
-                    # Check if agent is authorized
-                    is_authorized = verify_agent_authorization(adagents_data, agent_url)
-
-                    if is_authorized:
-                        # Get properties for this agent
-                        properties = get_properties_by_agent(adagents_data, agent_url)
-                        ctx = AuthorizationContext(properties)
-
-                        return (domain, {"status": "success", "is_verified": True, "error": None, "context": ctx})
-                    else:
-                        # Agent not authorized
-                        return (
-                            domain,
-                            {
-                                "status": "error",
-                                "is_verified": False,
-                                "error": f"Agent {agent_url} is not authorized by this publisher",
-                                "context": None,
-                            },
-                        )
-
-                except AdagentsNotFoundError:
-                    return (
-                        domain,
-                        {
-                            "status": "error",
-                            "is_verified": False,
-                            "error": "Publisher adagents.json not found (404)",
-                            "context": None,
-                        },
-                    )
-                except AdagentsTimeoutError:
-                    return (
-                        domain,
-                        {"status": "error", "is_verified": False, "error": "Request timed out", "context": None},
-                    )
-                except AdagentsValidationError as e:
-                    logger.error("Invalid adagents.json for %r: %s", domain, e)
-                    return (
-                        domain,
-                        {
-                            "status": "error",
-                            "is_verified": False,
-                            "error": describe_adagents_error(e),
-                            "context": None,
-                        },
-                    )
-                except Exception as e:
-                    return (
-                        domain,
-                        {
-                            "status": "error",
-                            "is_verified": False,
-                            "error": f"Unexpected error: {safe_error_message(e)}",
-                            "context": None,
-                        },
-                    )
-
-            # Run async checks with overall timeout
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                tasks = [check_publisher(p.publisher_domain) for p in partners]
-                # Add 30s overall timeout to prevent infinite hangs (individual checks have 10s timeout)
-                results = loop.run_until_complete(asyncio.wait_for(asyncio.gather(*tasks), timeout=30.0))
-                results_dict = dict(results)
-            finally:
-                loop.close()
-
-            # Update each partner with results
-            verified_domains = []
-            for partner in partners:
-                result = results_dict.get(partner.publisher_domain)
-
-                if result and result["status"] == "success":
-                    partner.sync_status = "success"
-                    partner.sync_error = None
-                    partner.is_verified = result["is_verified"]
-                    partner.last_synced_at = datetime.now(UTC)
-                    synced += 1
-                    if result["is_verified"]:
-                        verified += 1
-                        verified_domains.append(partner.publisher_domain)
-                elif result:
-                    partner.sync_status = "error"
-                    partner.sync_error = result["error"]
-                    partner.is_verified = False
-                    errors += 1
-
-            session.commit()
-
-            # CRITICAL: Now sync properties from verified publishers
-            # This populates AuthorizedProperty table which is used by Admin UI for building
-            # inventory profiles and products (requires full property details)
-            if verified_domains:
-                logger.info(f"Syncing properties from {len(verified_domains)} verified publishers")
-                from src.services.property_discovery_service import get_property_discovery_service
-
-                discovery_service = get_property_discovery_service()
-                property_stats = discovery_service.sync_properties_from_adagents_sync(
-                    tenant_id, publisher_domains=verified_domains, dry_run=False, agent_url=agent_url
-                )
-                logger.info(
-                    f"Property sync completed: {property_stats['properties_created']} created, "
-                    f"{property_stats['properties_updated']} updated, "
-                    f"{property_stats['tags_created']} tags created"
-                )
-
+@publisher_partners_bp.route("/<tenant_id>/publisher-partners/<path:domain>/properties", methods=["GET"])
+def get_publisher_properties(tenant_id: str, domain: str) -> Response | tuple[Response, int]:
+    """What the publisher's stored adagents.json authorizes this agent for now. Fetches nothing."""
+    now = datetime.now(UTC)
+    with PublisherUoW(tenant_id) as uow:
+        assert uow.publishers is not None and uow.tenant_config is not None
+        publisher = uow.publishers.get(domain)
+        tenant = uow.tenant_config.get_tenant()
+        if publisher is None or tenant is None:
+            return jsonify({"error": "Publisher not found"}), 404
+        if publisher.adagents is None:
+            return jsonify({"error": "No adagents.json has been fetched from this publisher", "is_authorized": False})
+        properties = authorized_properties(publisher, now)
+        if not properties:
             return jsonify(
-                {
-                    "message": "Sync completed",
-                    "synced": synced,
-                    "verified": verified,
-                    "errors": errors,
-                    "total": len(partners),
-                }
+                {"error": f"Agent {tenant.agent_url} is not authorized by this publisher", "is_authorized": False}
             )
-
-    except Exception as e:
-        logger.error(f"Error syncing publisher partners: {e}", exc_info=True)
-        return jsonify({"error": safe_error_message(e)}), 500
-
-
-@publisher_partners_bp.route("/<tenant_id>/publisher-partners/<int:partner_id>/properties", methods=["GET"])
-def get_publisher_properties(tenant_id: str, partner_id: int) -> Response | tuple[Response, int]:
-    """Get properties for a specific publisher (fetched fresh from adagents.json)."""
-    try:
-        with get_db_session() as session:
-            # Get tenant
-            stmt_tenant = select(Tenant).filter_by(tenant_id=tenant_id)
-            tenant = session.scalars(stmt_tenant).first()
-            if not tenant:
-                return jsonify({"error": "Tenant not found"}), 404
-
-            # Get publisher partner
-            stmt_partner = select(PublisherPartner).filter_by(id=partner_id, tenant_id=tenant_id)
-            partner = session.scalars(stmt_partner).first()
-
-            if not partner:
-                return jsonify({"error": "Publisher not found"}), 404
-
-            # The one accessor, so this matches the URL the card publishes byte for byte —
-            # a counterparty's adagents.json check compares the two. Always a string: the
-            # column does not admit a tenant with no host.
-            agent_url: str = tenant.agent_url
-
-            # Fetch fresh authorization context
-            logger.info(f"Fetching properties for {partner.publisher_domain}")
-
-            try:
-                # Sanctioned self-pinning dialer, deliberately outside the
-                # egress seam -- see src/core/security/outbound_http.py's
-                # module docstring.
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    adagents_data = loop.run_until_complete(fetch_adagents(partner.publisher_domain, timeout=10.0))
-                finally:
-                    loop.close()
-                adagents_data = adagents_scoped_to_agent(adagents_data, agent_url)
-
-                # Check if agent is authorized
-                is_authorized = verify_agent_authorization(adagents_data, agent_url)
-
-                if not is_authorized:
-                    return (
-                        jsonify(
-                            {"error": f"Agent {agent_url} is not authorized by this publisher", "is_authorized": False}
-                        ),
-                        200,
-                    )
-
-                # Get properties for this agent
-                properties = get_properties_by_agent(adagents_data, agent_url)
-                ctx = AuthorizationContext(properties)
-
-                # Return authorization context
-                return jsonify(
-                    {
-                        "domain": partner.publisher_domain,
-                        "is_authorized": True,
-                        "property_ids": ctx.property_ids,
-                        "property_tags": ctx.property_tags,
-                        "properties": ctx.raw_properties,
-                    }
-                )
-
-            except AdagentsNotFoundError:
-                return jsonify({"error": "Publisher adagents.json not found (404)", "is_authorized": False}), 200
-            except AdagentsTimeoutError:
-                return jsonify({"error": "Request timed out", "is_authorized": False}), 200
-            except AdagentsValidationError as e:
-                logger.error("Invalid adagents.json: %s", e)
-                return jsonify({"error": describe_adagents_error(e), "is_authorized": False}), 200
-
-    except Exception as e:
-        logger.error(f"Error fetching publisher properties: {e}", exc_info=True)
-        return jsonify({"error": safe_error_message(e)}), 500
+        return jsonify(
+            {
+                "domain": publisher.domain,
+                "is_authorized": True,
+                "property_ids": list(dict.fromkeys(p.property_id for p in properties if p.property_id)),
+                "property_tags": sorted({tag for p in properties for tag in p.tags or ()}),
+                "format_option_ids": sorted(option.format_option_id for option in publisher.format_options),
+                "fetched_at": publisher.fetched_at.isoformat() if publisher.fetched_at else None,
+            }
+        )

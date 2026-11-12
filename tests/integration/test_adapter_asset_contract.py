@@ -93,6 +93,8 @@ def test_the_adapter_names_the_creative_the_builder_named(bound_factory_session)
             platform_mappings={"mock": {"account_id": "acct_asset_contract"}},
         ),
         tenant_id=tenant.tenant_id,
+        order_name_template=None,
+        tenant_ai_config=None,
     )
 
     statuses = adapter.add_creative_assets(_live_buy(adapter), [asset], datetime.now(UTC))

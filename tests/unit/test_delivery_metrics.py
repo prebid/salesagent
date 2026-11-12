@@ -7,8 +7,8 @@ import pytest
 from freezegun import freeze_time
 
 from src.adapters.gam_reporting_service import ReportingData
-from src.adapters.google_ad_manager import GoogleAdManager
 from src.core.schemas import Principal, ReportingPeriod
+from tests.helpers.gam_client import build_gam_adapter
 
 
 @pytest.fixture
@@ -16,7 +16,7 @@ def mock_principal():
     """Create a mock principal for testing."""
     principal = Mock(spec=Principal)
     principal.principal_id = "test_principal"
-    principal.platform_mappings = {}
+    principal.platform_mappings = {"google_ad_manager": {"advertiser_id": "789"}}
     return principal
 
 
@@ -25,17 +25,11 @@ def gam_adapter(mock_principal):
     """Create a GAM adapter for testing."""
     config = {
         "network_code": "123456",
+        "trafficker_id": "101112",
         "refresh_token": "test_token",
         "enabled": True,
     }
-    return GoogleAdManager(
-        config=config,
-        principal=mock_principal,
-        network_code="123456",
-        advertiser_id="789",
-        trafficker_id="101112",
-        tenant_id="test_tenant",
-    )
+    return build_gam_adapter(MagicMock(), principal=mock_principal, config=config, tenant_id="test_tenant")
 
 
 def test_get_media_buy_delivery_media_buy_not_found(gam_adapter):
@@ -65,30 +59,12 @@ def test_get_media_buy_delivery_media_buy_not_found(gam_adapter):
 
 @patch("src.core.database.database_session.get_db_session")
 @patch("src.adapters.gam_reporting_service.GAMReportingService")
-def test_get_media_buy_delivery_with_real_gam_data(mock_reporting_service_class, mock_db, mock_principal):
+def test_get_media_buy_delivery_with_real_gam_data(mock_reporting_service_class, mock_db, gam_adapter):
     """Test get_media_buy_delivery with real GAM reporting data."""
 
     with freeze_time("2024-1-15 03:00:00"):
-        # Setup adapter in non-dry-run mode
-        config = {
-            "network_code": "123456",
-            "refresh_token": "test_token",
-            "enabled": True,
-        }
-
-        # Create mock client
-        mock_client = Mock()
-
-        # Create adapter with mocked client
-        adapter = GoogleAdManager(
-            config=config,
-            principal=mock_principal,
-            network_code="123456",
-            advertiser_id="789",
-            trafficker_id="101112",
-            tenant_id="test_tenant",
-        )
-        adapter.client = mock_client
+        adapter = gam_adapter
+        adapter.client = Mock()
 
         # Mock database query
         mock_session = MagicMock()

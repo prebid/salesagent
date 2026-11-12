@@ -19,7 +19,7 @@ from typing import Any
 from adcp.types.canonical_creative import CanonicalFormatKind
 from pytest_bdd import given, then, when
 
-from tests.bdd.steps._outcome_helpers import wire_field
+from tests.bdd.steps._outcome_helpers import wire_product_ids
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories import PricingOptionFactory, ProductFactory
 
@@ -56,12 +56,12 @@ _SHARED_OPTION_ID = "premium_above_fold"
 
 #: The publisher whose catalogue the OTHER product's option belongs to. The filter names the
 #: product-scoped option, so this one is the counter-example.
-_PUBLISHER_DOMAIN = "publisher.example.com"
+_PUBLISHER_DOMAIN = "publisher.psatest.com"
 
 #: A second publisher declaring the same option id. The publisher-scoped filter names
 #: ``_PUBLISHER_DOMAIN``, so this one is the counter-example that only an exact
 #: ``publisher_domain`` comparison excludes.
-_OTHER_PUBLISHER_DOMAIN = "other-publisher.example.com"
+_OTHER_PUBLISHER_DOMAIN = "other-publisher.psatest.com"
 
 
 def _canonical_product_declaring_option(tenant: Any, publisher_domain: str | None) -> Any:
@@ -278,12 +278,6 @@ def when_request_products_standard_only(ctx: dict) -> None:
 # ── Then steps ──────────────────────────────────────────────────────
 
 
-def _announced_product_ids(ctx: dict) -> set[str]:
-    """The product_ids the buyer received, off the wire."""
-    products: list[dict[str, Any]] = wire_field(ctx, "products")
-    return {product["product_id"] for product in products}
-
-
 def _assert_exactly_the_named_products(ctx: dict, *, filter_name: str) -> None:
     """An EXACT set, which is what separates a working filter from its two failure modes.
 
@@ -291,7 +285,7 @@ def _assert_exactly_the_named_products(ctx: dict, *, filter_name: str) -> None:
     filter that returned both products, and ``<=`` passes on a filter that matched nothing
     and returned neither.
     """
-    announced = _announced_product_ids(ctx)
+    announced = set(wire_product_ids(ctx))
     expected = {product.product_id for product in ctx["named_products"]}
     assert announced == expected, (
         f"the {filter_name} filter did not select exactly the products it named: "
@@ -301,7 +295,7 @@ def _assert_exactly_the_named_products(ctx: dict, *, filter_name: str) -> None:
 
 def _assert_counter_example_excluded(ctx: dict, *, what: str) -> None:
     """Named as its own outcome because it is the false positive the filter exists to stop."""
-    announced = _announced_product_ids(ctx)
+    announced = set(wire_product_ids(ctx))
     excluded = {product.product_id for product in ctx["excluded_products"]}
     assert excluded, "the scenario stored no counter-example, so exclusion grades nothing"
     assert not (excluded & announced), (

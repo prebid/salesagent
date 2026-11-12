@@ -89,8 +89,12 @@ def seed_setup_checklist_rows(session: Any, tenant: Any) -> None:
     declare ``tenant`` as a SubFactory, so omitting it would seed a SECOND tenant instead
     of attaching to this one. The caller must flush the tenant first.
     """
-    from tests.factories import AuthorizedPropertyFactory, TenantAuthConfigFactory
+    from tests.factories import TenantAuthConfigFactory
+    from tests.factories.product import DEFAULT_PUBLISHER_DOMAIN
+    from tests.factories.publisher import authorize_publishers
 
     with bind_factories_to_session(session):
-        AuthorizedPropertyFactory(tenant=tenant)
+        # The default publisher (the one create_test_db_product's products name) authorizes
+        # the tenant in its stored adagents.json.
+        authorize_publishers(tenant, DEFAULT_PUBLISHER_DOMAIN)
         TenantAuthConfigFactory(tenant=tenant, oidc_enabled=True)

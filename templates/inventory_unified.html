@@ -229,11 +229,9 @@
                     <div class="alert alert-info">
                         <h5><i class="fas fa-info-circle"></i> Publisher Partnerships</h5>
                         <p class="mb-0">
-                            Manage your publisher partnerships{% if is_gam %} and discover which properties you're authorized to represent.
-                            Properties are fetched fresh from each publisher's <code>adagents.json</code> file{% endif %}.
-                            {% if not is_gam %}
-                            <br><strong>Note:</strong> For {{ adapter_type }} tenants{% if adapter_type == 'mock' %} or development environments{% endif %}, publishers are automatically verified without requiring adagents.json verification.
-                            {% endif %}
+                            Add the publishers you sell for. Each publisher's <code>adagents.json</code> decides which of its
+                            properties this agent is authorized for and which format options it accepts; it is fetched when
+                            you add the publisher, refreshed every six hours, and used for 24 hours after the last successful fetch.
                         </p>
                     </div>
                 </div>
@@ -265,7 +263,7 @@
                     <div class="card">
                         <div class="card-body text-center">
                             <h3 class="text-success" id="verifiedPublishers">0</h3>
-                            <p class="card-text">Verified</p>
+                            <p class="card-text">Authorizing</p>
                         </div>
                     </div>
                 </div>
@@ -273,7 +271,7 @@
                     <div class="card">
                         <div class="card-body text-center">
                             <h3 class="text-warning" id="pendingPublishers">0</h3>
-                            <p class="card-text">Pending</p>
+                            <p class="card-text">Not fetched yet</p>
                         </div>
                     </div>
                 </div>
@@ -448,9 +446,9 @@ const API_URLS = {
     // Publisher partners endpoints
     publishersList: scriptRoot + '/tenant/{{ tenant_id }}/publisher-partners',
     publishersAdd: scriptRoot + '/tenant/{{ tenant_id }}/publisher-partners',
-    publishersDelete: scriptRoot + '/tenant/{{ tenant_id }}/publisher-partners/{id}',
+    publishersDelete: scriptRoot + '/tenant/{{ tenant_id }}/publisher-partners/{domain}',
     publishersSync: scriptRoot + '/tenant/{{ tenant_id }}/publisher-partners/sync',
-    publisherProperties: scriptRoot + '/tenant/{{ tenant_id }}/publisher-partners/{id}/properties'
+    publisherProperties: scriptRoot + '/tenant/{{ tenant_id }}/publisher-partners/{domain}/properties'
 };
 
 let selectedInventory = null;
@@ -1176,8 +1174,8 @@ async function loadPublishers() {
         const pendingEl = document.getElementById('pendingPublishers');
 
         if (totalEl) totalEl.textContent = data.total || 0;
-        if (verifiedEl) verifiedEl.textContent = data.verified || 0;
-        if (pendingEl) pendingEl.textContent = data.pending || 0;
+        if (verifiedEl) verifiedEl.textContent = data.authorizing || 0;
+        if (pendingEl) pendingEl.textContent = data.never_fetched || 0;
 
         // Render publishers list
         renderPublishers(data.partners || []);
@@ -1211,14 +1209,15 @@ function renderPublishers(publishers) {
     let html = '<div class="list-group">';
 
     publishers.forEach(pub => {
-        const statusIcon = pub.sync_status === 'success' ?
-            (pub.is_verified ? '<i class="fas fa-check-circle text-success"></i>' : '<i class="fas fa-times-circle text-warning"></i>') :
-            pub.sync_status === 'error' ? '<i class="fas fa-exclamation-circle text-danger"></i>' :
-            '<i class="fas fa-clock text-muted"></i>';
+        // Authorization is read from the stored adagents.json: fresh, with a property in effect.
+        const statusIcon = pub.authorizes ? '<i class="fas fa-check-circle text-success"></i>' :
+            pub.fetch_status === 'never_fetched' ? '<i class="fas fa-clock text-muted"></i>' :
+            pub.fetch_status === 'ok' ? '<i class="fas fa-times-circle text-warning"></i>' :
+            '<i class="fas fa-exclamation-circle text-danger"></i>';
 
-        const statusText = pub.sync_status === 'success' ?
-            (pub.is_verified ? 'Verified' : 'Not Authorized') :
-            pub.sync_status === 'error' ? 'Error' : 'Pending';
+        const statusText = pub.authorizes ? 'Authorizes this agent' :
+            pub.fetch_status === 'never_fetched' ? 'Not fetched yet' :
+            pub.fetch_status === 'ok' ? 'Not authorized' : 'Fetch failed';
 
         html += `
             <div class="list-group-item">
@@ -1227,22 +1226,23 @@ function renderPublishers(publishers) {
                         <div class="d-flex align-items-center mb-2">
                             ${statusIcon}
                             <h6 class="mb-0 ms-2">${pub.display_name || pub.publisher_domain}</h6>
-                            <span class="badge bg-${pub.is_verified ? 'success' : 'secondary'} ms-2">${statusText}</span>
+                            <span class="badge bg-${pub.authorizes ? 'success' : 'secondary'} ms-2">${statusText}</span>
                         </div>
                         <div class="small text-muted">
                             <div><strong>Domain:</strong> ${pub.publisher_domain}</div>
-                            ${pub.property_count > 0 ? `<div><strong>Properties:</strong> ${pub.property_count} discovered</div>` : ''}
-                            ${pub.last_synced_at ? `<div><strong>Last Synced:</strong> ${new Date(pub.last_synced_at).toLocaleString()}</div>` : ''}
-                            ${pub.sync_error ? `<div class="text-danger"><strong>Error:</strong> ${pub.sync_error}</div>` : ''}
+                            ${pub.property_count > 0 ? `<div><strong>Properties:</strong> ${pub.property_count} authorized</div>` : ''}
+                            ${pub.format_option_count > 0 ? `<div><strong>Format options:</strong> ${pub.format_option_count}</div>` : ''}
+                            ${pub.fetched_at ? `<div><strong>Last fetched:</strong> ${new Date(pub.fetched_at).toLocaleString()}</div>` : ''}
+                            ${pub.fetch_status !== 'ok' && pub.fetch_error ? `<div class="text-danger"><strong>Last fetch failed:</strong> ${pub.fetch_error}</div>` : ''}
                         </div>
                     </div>
                     <div class="btn-group btn-group-sm">
-                        ${pub.is_verified ? `
-                            <button class="btn btn-outline-primary" onclick="viewPublisherProperties(${pub.id}, '${pub.publisher_domain}')" title="View Properties">
+                        ${pub.authorizes ? `
+                            <button class="btn btn-outline-primary" onclick="viewPublisherProperties('${pub.publisher_domain}')" title="View Properties">
                                 <i class="fas fa-list"></i>
                             </button>
                         ` : ''}
-                        <button class="btn btn-outline-danger" onclick="deletePublisher(${pub.id}, '${pub.publisher_domain}')" title="Delete">
+                        <button class="btn btn-outline-danger" onclick="deletePublisher('${pub.publisher_domain}')" title="Delete">
                             <i class="fas fa-trash"></i>
                         </button>
                     </div>
@@ -1292,11 +1292,11 @@ async function addPublisher() {
     }
 }
 
-async function deletePublisher(id, domain) {
+async function deletePublisher(domain) {
     if (!confirm(`Delete publisher ${domain}?`)) return;
 
     try {
-        const url = API_URLS.publishersDelete.replace('{id}', id);
+        const url = API_URLS.publishersDelete.replace('{domain}', encodeURIComponent(domain));
         const response = await fetch(url, {
             method: 'DELETE',
             credentials: 'same-origin'
@@ -1325,7 +1325,7 @@ async function syncAllPublishers() {
         if (!response.ok) throw new Error('Sync failed');
 
         const data = await response.json();
-        alert(`Sync completed!\nSynced: ${data.synced}\nVerified: ${data.verified}\nErrors: ${data.errors}`);
+        alert(`Sync completed!\nFetched: ${data.ok}\nFailed: ${data.errors}`);
         loadPublishers();
     } catch (error) {
         alert('Error syncing publishers: ' + error.message);
@@ -1335,7 +1335,7 @@ async function syncAllPublishers() {
     }
 }
 
-async function viewPublisherProperties(id, domain) {
+async function viewPublisherProperties(domain) {
     const modal = document.createElement('div');
     modal.className = 'modal fade';
     modal.id = 'publisherPropertiesModal';
@@ -1363,7 +1363,7 @@ async function viewPublisherProperties(id, domain) {
     modal.addEventListener('hidden.bs.modal', () => modal.remove());
 
     try {
-        const url = API_URLS.publisherProperties.replace('{id}', id);
+        const url = API_URLS.publisherProperties.replace('{domain}', encodeURIComponent(domain));
         const response = await fetch(url, { credentials: 'same-origin' });
 
         if (!response.ok) throw new Error('Failed to load properties');

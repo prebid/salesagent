@@ -18,7 +18,7 @@ from typing import Any
 from pytest_bdd import given, parsers, then, when
 
 from src.core.schemas import canonical_agent_url
-from tests.bdd.steps._outcome_helpers import wire_field
+from tests.bdd.steps._outcome_helpers import wire_product_ids
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories import PricingOptionFactory, ProductFactory
 from tests.factories.creative import DEFAULT_CREATIVE_AGENT_URL
@@ -204,12 +204,6 @@ def when_request_products_filtered_by_legacy_id(ctx: dict, format_id: str) -> No
 # ── Then steps ──────────────────────────────────────────────────────
 
 
-def _announced_product_ids(ctx: dict) -> set[str]:
-    """The product_ids the buyer received, off the wire."""
-    products: list[dict[str, Any]] = wire_field(ctx, "products")
-    return {product["product_id"] for product in products}
-
-
 @then("the announced products are exactly the product whose format the filter named")
 def then_only_the_named_product_announced(ctx: dict) -> None:
     """An EXACT set, which is what separates pair matching from the two failure modes.
@@ -218,7 +212,7 @@ def then_only_the_named_product_announced(ctx: dict) -> None:
     compared the id alone and returned both products, and ``<=`` passes on a filter that
     matched nothing and returned neither.
     """
-    announced = _announced_product_ids(ctx)
+    announced = set(wire_product_ids(ctx))
     expected = {ctx["named_product"].product_id}
     assert announced == expected, (
         f"the format_ids filter did not select exactly the product it named: expected {sorted(expected)}, "
@@ -234,7 +228,7 @@ def then_other_agent_product_excluded(ctx: dict) -> None:
     references as the same format. The other agent's product shares only the id, so a
     seller that returns it has answered a reference to a format it does not host.
     """
-    announced = _announced_product_ids(ctx)
+    announced = set(wire_product_ids(ctx))
     other = ctx["other_agent_product"].product_id
     assert other not in announced, (
         f"product {other!r} declares {_SHARED_FORMAT_ID!r} under {_FIRST_AGENT!r}, which the "
@@ -249,7 +243,7 @@ def then_only_the_accepting_products_announced(ctx: dict) -> None:
     A raw-pair filter announces none of them (no product spells the filter's id), and a
     filter that ignored the parameters announces the rejected one too; each fails the equality.
     """
-    announced = _announced_product_ids(ctx)
+    announced = set(wire_product_ids(ctx))
     expected = {product.product_id for product in ctx["accepting_products"]}
     assert announced == expected, (
         f"the format_ids filter did not select exactly the products accepting its normalized shape: "
