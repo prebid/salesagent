@@ -144,6 +144,100 @@ def given_buyer_signs_the_request(ctx: dict) -> None:
     ctx["signed"] = True
 
 
+@given("the seller onboarded the Buyer Agent's signing key")
+def given_seller_onboarded_buyer_key(ctx: dict) -> None:
+    """Record the Buyer Agent's keyid in the Buyer's onboarding record on this seller.
+
+    security.mdx L1323-1325, checklist step 1: given a keyid, the verifier resolves
+    the signing agent's ``agents[]`` entry, and "Discovery MAY come from prior onboarding".
+    The keys themselves still come from the agent's own origin.
+    """
+    ctx["env"].onboard_signing_keyid()
+
+
+@given("the Buyer Agent's signing key was onboarded only by another seller")
+def given_buyer_key_onboarded_by_another_seller(ctx: dict) -> None:
+    """Onboard the Buyer Agent's keyid in a DIFFERENT tenant, and nowhere on this seller.
+
+    A seller resolves a keyid against its own onboarding records (L1329: a keyid it cannot
+    resolve to a specific ``agents[]`` entry is not accepted), so another tenant's mapping
+    must not reach this one.
+    """
+    from tests.factories import TenantFactory
+
+    ctx["env"].onboard_buyer_agent_key_for_another_counterparty(TenantFactory())
+
+
+@given("the Buyer Agent's signing key was onboarded for another counterparty of this seller")
+def given_buyer_key_onboarded_for_another_counterparty(ctx: dict) -> None:
+    """Onboard the Buyer Agent's keyid for a different principal of THIS seller.
+
+    That principal sits at the Buyer Agent's published origin, so a verifier that borrowed
+    its mapping would find the Buyer Agent's keys and verify.
+    """
+    tenant, _principal = ctx["env"].setup_default_data()
+    ctx["env"].onboard_buyer_agent_key_for_another_counterparty(tenant)
+
+
+@given("the Buyer's onboarding record names no agent URL")
+def given_buyer_onboarded_without_agent_url(ctx: dict) -> None:
+    """The Buyer authenticates by its bearer, and its onboarding names no agent URL.
+
+    With no ``agents[]`` coordinate there is no origin to walk, so no key can be resolved
+    for the Buyer itself (security.mdx L1456: on the bearer transport identity is
+    the credential-to-agent mapping in the onboarding record).
+    """
+    ctx["env"].attach_agent_url(None)
+
+
+@given(
+    parsers.re(
+        r"the Buyer is the signed-requests test counterparty, accepting the Buyer Agent's keys"
+        r"(?:, with a replay cap of (?P<cap>\d+))?$"
+    )
+)
+def given_buyer_is_test_counterparty(ctx: dict, cap: str | None) -> None:
+    """Make the Buyer the ``signed_requests`` test counterparty, its accepted JWKS the Buyer Agent's.
+
+    signed-requests-runner.yaml L41-43, L64-69: the agent under test pre-configures an accepted
+    JWKS for the test-kit counterparty only. The Buyer becomes that counterparty: its keyid
+    is onboarded for it, its agent URL publishes no keys, so only the accepted JWKS on its
+    record can verify its signature. With a replay cap named, the record carries it too:
+    L146-164 allow the lower per-keyid cap for the test-kit counterparty only.
+    """
+    ctx["env"].declare_signed_requests_grading(replay_cap=int(cap) if cap is not None else None)
+
+
+@given(
+    parsers.parse(
+        "another counterparty of this seller is the signed-requests test counterparty, "
+        "accepting only its own keys, with a replay cap of {cap:d}"
+    )
+)
+def given_another_counterparty_is_test_counterparty(ctx: dict, cap: int) -> None:
+    """Make a different principal of THIS seller the ``signed_requests`` test counterparty.
+
+    signed-requests-runner.yaml L41-43, L64-69 and L146-164: the accepted JWKS and the lower
+    per-keyid cap are for the test-kit counterparty only. That counterparty is another
+    principal of the Buyer's own tenant, with a key of its own onboarded for it, so the Buyer
+    stays an ordinary counterparty on a tenant that carries a grading record.
+    """
+    ctx["env"].declare_another_signed_requests_test_counterparty(replay_cap=cap)
+
+
+@given("the Buyer Agent signs the request with an additional signature label ahead of it naming a key nobody onboarded")
+def given_buyer_signs_with_extra_label(ctx: dict) -> None:
+    """Ask for the ``"extra_label"`` realization: a real ``sig1`` signature, one unverified label first.
+
+    security.mdx L1209: verifiers MUST process exactly one ``Signature-Input`` label
+    (conventionally ``sig1``) and MUST ignore any additional labels. The extra label names a
+    keyid nobody onboarded, so a verifier that took the counterparty from it resolves no key.
+    Verbatim, like the other named realizations
+    (:func:`tests.helpers.signing.realization`).
+    """
+    ctx["signed"] = "extra_label"
+
+
 @given(parsers.parse('the seller places "{operation}" in the "{bucket}" request-signature bucket'))
 def given_seller_buckets_operation(ctx: dict, operation: str, bucket: str) -> None:
     """Declare the seller's REAL posture with *operation* in exactly one bucket.
@@ -390,6 +484,7 @@ def then_seller_recorded_failure(ctx: dict, count: int, code: str) -> None:
 
 
 @then(parsers.parse("the seller verified exactly {count:d} request under the Buyer Agent's published key"))
+@then(parsers.parse("the seller verified exactly {count:d} requests under the Buyer Agent's published key"))
 def then_seller_verified_requests(ctx: dict, count: int) -> None:
     """Pin how many requests the seller's verifier ACCEPTED under THIS buyer's key.
 

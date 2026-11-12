@@ -28,6 +28,15 @@
 # @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx pointer=L1620
 # @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx pointer=L1709-L1712
 # @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/test-vectors/request-signing/negative/027-webhook-registration-authentication-unsigned.json pointer=/expected_outcome
+# @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx pointer=L1209
+# @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx pointer=L1323-L1329
+# @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx pointer=L1337
+# @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx pointer=L1357
+# @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx pointer=L1452
+# @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx pointer=L1456
+# @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/test-kits/signed-requests-runner.yaml pointer=L48-L69
+# @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/test-kits/signed-requests-runner.yaml pointer=L146-L164
+# @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx pointer=L1481
 Feature: Inbound request-signature enforcement on an AdCP operation (local)
 
   @T-UC-006-local-signing-required-unsigned @request-signing @error-path @invariant
@@ -244,3 +253,142 @@ Feature: Inbound request-signature enforcement on an AdCP operation (local)
     # `none` is also the arm where the promotion does the MOST work: without it this request
     # reaches no checklist at all, so the refusal cannot be explained by anything the posture
     # says.
+
+  @T-UC-006-local-signing-onboarded-no-bearer @request-signing @invariant
+  Scenario: a request signed by an onboarded counterparty is served without a bearer
+    Given a creative with a known format_id
+    And the Buyer Agent has published a signing key the seller can resolve
+    And the seller onboarded the Buyer Agent's signing key
+    And the seller requires a request signature for "sync_creatives"
+    And the Buyer has no authentication credentials
+    And the Buyer Agent signs the request
+    When the Buyer Agent syncs the creative
+    Then the creative should be processed successfully
+    And the seller verified exactly 1 request under the Buyer Agent's published key
+    # security.mdx @ v3.2.7 L1323-1325: given a keyid, the verifier resolves the signing
+    # agent's agents[] entry, and "Discovery MAY come from prior onboarding". The seller
+    # recorded the keyid against the Buyer's agent URL; the keys come from the agent's own
+    # origin. The signature is the only credential (L1456, L746-747).
+
+  @T-UC-006-local-signing-onboarded-other-tenant @request-signing @error-path @invariant
+  Scenario: a keyid onboarded only by another seller is not resolved
+    Given a creative with a known format_id
+    And the Buyer Agent has published a signing key the seller can resolve
+    And the Buyer Agent's signing key was onboarded only by another seller
+    And the seller requires a request signature for "sync_creatives"
+    And the Buyer has no authentication credentials
+    And the Buyer Agent signs the request
+    When the Buyer Agent syncs the creative
+    Then the seller answers with the request-signature challenge "request_signature_key_unknown" and recovery "correctable"
+    # ONE variable apart from the scenario above: the onboarding record belongs to another
+    # tenant. A seller resolves a keyid against its own onboarding records; L1329 forbids
+    # accepting a keyid it cannot resolve to a specific agents[] entry.
+
+  @T-UC-006-local-signing-bearer-never-borrows-a-key @request-signing @error-path @invariant
+  Scenario: a bearer-authenticated caller is never verified against another counterparty's onboarded key
+    Given a creative with a known format_id
+    And the Buyer Agent has published a signing key the seller can resolve
+    And the Buyer's onboarding record names no agent URL
+    And the Buyer Agent's signing key was onboarded for another counterparty of this seller
+    And the seller requires a request signature for "sync_creatives"
+    And the Buyer Agent signs the request
+    When the Buyer Agent syncs the creative
+    Then the seller answers with the request-signature challenge "request_signature_key_unknown" and recovery "correctable"
+    # The Buyer keeps its bearer. On the bearer transport identity comes from the
+    # credential-to-agent mapping in the onboarding record (L1456), and the Buyer's names no
+    # agent URL, so no key resolves for it. The other counterparty sits at the Buyer
+    # Agent's published origin: a verifier that looked the keyid up for a bearer caller
+    # would verify and serve this request.
+
+  @T-UC-006-local-signing-test-counterparty @request-signing @invariant
+  Scenario: the signed-requests test counterparty is served from its accepted JWKS without a bearer
+    Given a creative with a known format_id
+    And the Buyer Agent has published a signing key the seller can resolve
+    And the Buyer is the signed-requests test counterparty, accepting the Buyer Agent's keys
+    And the seller requires a request signature for "sync_creatives"
+    And the Buyer has no authentication credentials
+    And the Buyer Agent signs the request
+    When the Buyer Agent syncs the creative
+    Then the creative should be processed successfully
+    And the seller verified exactly 1 request under the Buyer Agent's published key
+    # signed-requests-runner.yaml @ v3.2.7 L64-69: the agent "MUST treat these keyids as a
+    # registered test counterparty whose JWKS contains the corresponding public keys".
+    # The Buyer is that counterparty: its keyid is onboarded for it, its agent URL publishes
+    # nothing, so only the accepted JWKS on its own record can verify the signature.
+
+  @T-UC-006-local-signing-test-counterparty-replay-cap @request-signing @error-path @invariant
+  Scenario: the signed-requests test counterparty meets its record's replay cap
+    Given a creative with a known format_id
+    And the Buyer Agent has published a signing key the seller can resolve
+    And the Buyer is the signed-requests test counterparty, accepting the Buyer Agent's keys, with a replay cap of 1
+    And the seller requires a request signature for "sync_creatives"
+    And the Buyer has no authentication credentials
+    And the Buyer Agent signs the request
+    And that creative was already synced with idempotency_key "sig-replay-cap-0001"
+    When the Buyer Agent syncs the creative
+    Then the seller answers with the request-signature challenge "request_signature_rate_abuse" and recovery "terminal"
+    And the seller verified exactly 1 request under the Buyer Agent's published key
+    # runner.yaml @ v3.2.7 L146-164: the agent MUST reject the (N+1)th distinct-nonce request
+    # with request_signature_rate_abuse once the per-keyid cap is hit, and MAY lower the cap
+    # for the test-kit counterparty only. Each signature carries a fresh nonce, and the shared
+    # idempotency_key only makes the second sync a retry that the verifier runs ahead of. The
+    # first sync leaves one live replay entry, so the second meets the record's cap of 1 at
+    # checklist step 9a (security.mdx L1481; "No (block new)" at L1637). A verifier that kept
+    # the deployment's cap for the test counterparty would serve it.
+
+  @T-UC-006-local-signing-grading-target-other-counterparty @request-signing @invariant
+  Scenario: on a grading target an onboarded counterparty outside the test kit is verified against its own keys
+    Given a creative with a known format_id
+    And the Buyer Agent has published a signing key the seller can resolve
+    And the seller onboarded the Buyer Agent's signing key
+    And another counterparty of this seller is the signed-requests test counterparty, accepting only its own keys, with a replay cap of 1
+    And the seller requires a request signature for "sync_creatives"
+    And the Buyer has no authentication credentials
+    And the Buyer Agent signs the request
+    When the Buyer Agent syncs the creative
+    Then the creative should be processed successfully
+    And the seller verified exactly 1 request under the Buyer Agent's published key
+    # ONE variable apart from "a request signed by an onboarded counterparty is served
+    # without a bearer": another principal of the same tenant carries a grading record.
+    # runner.yaml @ v3.2.7 L64-69 and L146-164 scope the accepted JWKS and the replay
+    # relaxations to the test-kit counterparty. The Buyer is not it, so its keys come from its
+    # own agent URL (security.mdx L1326-1327); a verifier that used the record's JWKS for it
+    # would find no key and answer request_signature_key_unknown.
+
+  @T-UC-006-local-signing-grading-target-other-counterparty-replay-cap @request-signing @invariant
+  Scenario: on a grading target an onboarded counterparty outside the test kit keeps the deployment's replay cap
+    Given a creative with a known format_id
+    And the Buyer Agent has published a signing key the seller can resolve
+    And the seller onboarded the Buyer Agent's signing key
+    And another counterparty of this seller is the signed-requests test counterparty, accepting only its own keys, with a replay cap of 1
+    And the seller requires a request signature for "sync_creatives"
+    And the Buyer has no authentication credentials
+    And the Buyer Agent signs the request
+    And that creative was already synced with idempotency_key "sig-replay-cap-0001"
+    When the Buyer Agent syncs the creative
+    Then the creative should be processed successfully
+    And the seller verified exactly 2 requests under the Buyer Agent's published key
+    # ONE variable apart from the scenario above: the Buyer has already made one signed
+    # request, so one live replay entry exists for its keyid when the second arrives. Each
+    # signature carries a fresh nonce; the shared idempotency_key only makes the second sync
+    # a retry, and the verifier runs ahead of it, so both requests reach checklist step 9a.
+    # runner.yaml @ v3.2.7 L154-155 allows the lower cap "for the test-kit counterparty only",
+    # and every other keyid keeps the production floor of 1,000,000 (L158). A verifier that
+    # applied the record's cap of 1 to the Buyer would refuse the second request with
+    # request_signature_rate_abuse.
+
+  @T-UC-006-local-signing-verified-label-identifies @request-signing @invariant
+  Scenario: an onboarded counterparty is identified by the signature label the seller verifies
+    Given a creative with a known format_id
+    And the Buyer Agent has published a signing key the seller can resolve
+    And the seller onboarded the Buyer Agent's signing key
+    And the seller requires a request signature for "sync_creatives"
+    And the Buyer has no authentication credentials
+    And the Buyer Agent signs the request with an additional signature label ahead of it naming a key nobody onboarded
+    When the Buyer Agent syncs the creative
+    Then the creative should be processed successfully
+    And the seller verified exactly 1 request under the Buyer Agent's published key
+    # ONE variable apart from "a request signed by an onboarded counterparty is served
+    # without a bearer": an unverified label placed first. L1209: verifiers MUST process
+    # exactly one label (conventionally sig1) and MUST ignore any additional labels, so the
+    # keyid that selects the counterparty is the verified label's (L1452).

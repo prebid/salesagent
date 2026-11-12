@@ -119,7 +119,16 @@ def ci_products() -> list[dict]:
 
 
 def init_db_ci():
-    """Initialize database with migrations only for CI testing."""
+    """Initialize database with migrations only for CI testing.
+
+    REFUSES on a production deployment, before the migrations run: the principals it
+    creates authenticate with bearer tokens written in this repository.
+    """
+    from scripts.setup.production_guard import refuse_on_production
+
+    refuse_on_production(
+        "seed the CI tenants", "it would create principals whose bearer tokens are published in this repository"
+    )
     try:
         # Import here to ensure path is set up first
         import uuid
@@ -692,4 +701,7 @@ def init_db_ci():
 
 
 if __name__ == "__main__":
+    from src.core.config import load_settings
+
+    load_settings()
     init_db_ci()

@@ -541,9 +541,11 @@ jobs:
       # inside the compose network — the runner reaches the agent at
       # adcp-server-storyboard:8080 by service name, which is tests/storyboard's own
       # default. That is a SECOND server running the same anchored configuration with
-      # ENVIRONMENT=production, because a conformance storyboard grades a deployed
-      # seller; the shared adcp-server behind proxy:8000 stays on development
-      # strictness for the BDD In-Network job above. (_setup-env IS
+      # ENVIRONMENT=conformance and ADCP_PYDANTIC_EXTRA_MODE=ignore: a conformance
+      # storyboard grades a deployed seller, so it needs the forward-compatible request
+      # boundary, and a grading deployment is not a production one
+      # (docker-compose.e2e.yml says why). The shared adcp-server behind proxy:8000
+      # stays on development strictness for the BDD In-Network job above. (_setup-env IS
       # present above, but only so the report-publishing step below has a venv;
       # the conformance run itself uses none of it.)
       # Identical shape to the BDD In-Network job above; hand-rolling a compose

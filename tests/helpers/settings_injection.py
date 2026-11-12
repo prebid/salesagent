@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 
     import pytest
 
-    from src.core.config import LimitSettings
+    from src.core.config import LimitSettings, RuntimeSettings
 
 # Where the platform's AI credential comes from. With PYDANTIC_AI_PROVIDER unset the
 # platform provider is Google, so GEMINI_API_KEY is the key that counts; the others are
@@ -67,24 +67,39 @@ def inject_limits(monkeypatch: pytest.MonkeyPatch, **overrides: Any) -> LimitSet
         The injected ``LimitSettings``, for a caller that wants to read a shipped default
         off it without a second import.
     """
+    return _inject(monkeypatch, "limits", overrides)
+
+
+def inject_runtime(monkeypatch: pytest.MonkeyPatch, **overrides: Any) -> RuntimeSettings:
+    """Put ``overrides`` on the cached settings' :class:`RuntimeSettings` and return it.
+
+    The same contract as :func:`inject_limits`, for the deployment facts --
+    ``production=True`` makes ``RuntimeSettings.is_production`` answer True.
+    """
+    return _inject(monkeypatch, "runtime", overrides)
+
+
+def _inject(monkeypatch: pytest.MonkeyPatch, section: str, overrides: dict[str, Any]) -> Any:
+    """Replace the named *section* of the cached settings with a copy carrying *overrides*."""
     # Compose the app first. src.app calls load_settings() when it is imported, which
     # replaces the settings object, so an injection made before a later first import of it (an
     # env entered after this call, say) would be discarded.
     import src.app  # noqa: F401
     import src.core.config as config_module
-    from src.core.config import LimitSettings, get_settings
-
-    unknown = set(overrides) - set(LimitSettings.model_fields)
-    if unknown:
-        raise AttributeError(f"not LimitSettings fields: {sorted(unknown)}")
+    from src.core.config import get_settings
 
     current = get_settings()
+    model = getattr(current, section)
+    unknown = set(overrides) - set(type(model).model_fields)
+    if unknown:
+        raise AttributeError(f"not {type(model).__name__} fields: {sorted(unknown)}")
+
     # ``model_copy`` rather than a re-validated construction: the value is already typed,
     # and re-running validation here would make this helper's behaviour depend on the
     # constraints of fields the caller did not name.
-    limits = current.limits.model_copy(update=overrides)
-    monkeypatch.setattr(config_module, "_settings", replace(current, limits=limits))
-    return limits
+    injected = model.model_copy(update=overrides)
+    monkeypatch.setattr(config_module, "_settings", replace(current, **{section: injected}))
+    return injected
 
 
 class PlatformAICredential:

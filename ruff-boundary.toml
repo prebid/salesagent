@@ -135,7 +135,7 @@ select = ["TID251"]
 # Exempt: src/core/resolved_identity.py, which is where the assembling is SUPPOSED to happen,
 # and src/core/auth_utils.py, which defines one of them.
 "src.core.auth_utils.get_principal_from_token".msg = "Resolving a principal from a token is identity resolution, and it happens once, in src/core/resolved_identity._resolve_identity, called only from the tool boundary. A second caller is a second resolver -- which this codebase had, unnoticed, until it was deleted (salesagent-02rgd)."
-"src.core.auth_utils.get_principal_by_agent_url".msg = "Resolving a principal from a VERIFIED signer is identity resolution too, and it happens in the same one place. The lookup is only sound downstream of verification -- an unverified agent_url is a self-assertion -- so a second caller is both a second resolver and a trust bypass."
+"src.core.auth_utils.get_principal_by_signing_keyid".msg = "Looking a principal up by keyid is identity resolution, and the keyid is UNVERIFIED at lookup time. Only the resolver may call it, and only to hand the verifier a candidate; the principal is established when the verifier returns it."
 "src.core.resolved_identity._detect_tenant".msg = "Detecting the tenant from request headers happens once, inside _resolve_identity. A caller that detects its own tenant is a second tenant resolver, and the two WILL disagree -- the deleted get_principal_from_context disagreed by reading x-adcp-tenant with different fallbacks (salesagent-02rgd)."
 
 # The ORM Principal model is repository-private. A request's principal is loaded once, by the
@@ -151,6 +151,9 @@ select = ["TID251"]
 # script. TID251 bans the NAME, so `import Principal as ModelPrincipal` and an import under
 # TYPE_CHECKING are both caught.
 "src.core.database.models.Principal".msg = "The ORM Principal model is repository-private (src/core/database/repositories/). A tool reads identity.principal; everything else goes through PrincipalRepository or the reads in repositories/principal_lookup.py. For a type annotation use the repository's return type or src.core.schemas.Principal."
+# The onboarding mapping from a request-signing keyid to a counterparty is repository-private for
+# the same reason: the keyid lookup is identity resolution, and PrincipalRepository owns it.
+"src.core.database.models.PrincipalSigningKeyid".msg = "The ORM PrincipalSigningKeyid model is repository-private (src/core/database/repositories/principal.py). Onboard keyids with PrincipalRepository.onboard_signing_keyids; the resolver looks one up through auth_utils.get_principal_by_signing_keyid."
 
 # The account a request names is resolved by the resolver alone. core/account-ref.json lets a
 # request name an account by id or by natural key, and one credential may access many, so the

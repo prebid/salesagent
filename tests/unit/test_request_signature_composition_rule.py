@@ -75,6 +75,11 @@ def _a_caller() -> Principal:
     return Principal(principal_id="p-1", name="Acme Buying", platform_mappings={})
 
 
+def _no_onboarded_keyid(_keyid: str) -> Principal | None:
+    """The tenant's keyid lookup when it onboarded nothing; these requests are unsigned anyway."""
+    return None
+
+
 def _unsigned(operation: str = A_PROTECTED_OPERATION, *, registers_credentials: bool = False) -> SignatureSubject:
     """A request carrying no signature at all: no capture, hence nothing presented."""
     return SignatureSubject(operation=operation, registers_credentials=registers_credentials, exchange=None)
@@ -83,7 +88,9 @@ def _unsigned(operation: str = A_PROTECTED_OPERATION, *, registers_credentials: 
 def test_an_unauthenticated_unsigned_request_to_a_required_operation_is_refused() -> None:
     """The control for everything below, and the rule's first bullet verbatim."""
     with _tenant_requiring_signatures() as tenant, pytest.raises(AdCPRequestSignatureError) as refusal:
-        verify_inbound_signature(_unsigned(), headers={}, tenant=tenant, principal=None)
+        verify_inbound_signature(
+            _unsigned(), headers={}, tenant=tenant, principal=None, signer_by_keyid=_no_onboarded_keyid
+        )
     assert str(refusal.value.error_code) == "request_signature_required"
 
 
@@ -94,13 +101,27 @@ def test_an_authenticated_unsigned_request_to_a_required_operation_is_served() -
     configuration: the bearer is what this seller advertised as sufficient for this caller.
     """
     with _tenant_requiring_signatures() as tenant:
-        assert verify_inbound_signature(_unsigned(), headers={}, tenant=tenant, principal=_a_caller()) is None
+        assert (
+            verify_inbound_signature(
+                _unsigned(), headers={}, tenant=tenant, principal=_a_caller(), signer_by_keyid=_no_onboarded_keyid
+            )
+            is None
+        )
 
 
 def test_an_operation_outside_the_buckets_is_served_unsigned_and_unauthenticated() -> None:
     """The refusal is scoped to the declared membership, not to signing being enabled."""
     with _tenant_requiring_signatures() as tenant:
-        assert verify_inbound_signature(_unsigned("get_products"), headers={}, tenant=tenant, principal=None) is None
+        assert (
+            verify_inbound_signature(
+                _unsigned("get_products"),
+                headers={},
+                tenant=tenant,
+                principal=None,
+                signer_by_keyid=_no_onboarded_keyid,
+            )
+            is None
+        )
 
 
 def test_registering_webhook_credentials_is_refused_even_for_an_authenticated_caller() -> None:
@@ -120,6 +141,7 @@ def test_registering_webhook_credentials_is_refused_even_for_an_authenticated_ca
             headers={},
             tenant=tenant,
             principal=_a_caller(),
+            signer_by_keyid=_no_onboarded_keyid,
         )
     assert str(refusal.value.error_code) == "request_signature_required", (
         "the escalation fires on an operation in NO bucket and for an authenticated caller — "
@@ -141,7 +163,11 @@ def test_a_seller_that_does_not_verify_refuses_nothing() -> None:
     )
     assert (
         verify_inbound_signature(
-            _unsigned("get_products", registers_credentials=True), headers={}, tenant=tenant, principal=None
+            _unsigned("get_products", registers_credentials=True),
+            headers={},
+            tenant=tenant,
+            principal=None,
+            signer_by_keyid=_no_onboarded_keyid,
         )
         is None
     )
@@ -152,4 +178,9 @@ def test_the_kill_switch_reads_no_posture_at_all() -> None:
     from tests.helpers.signing import verifier_disabled
 
     with _tenant_requiring_signatures() as tenant, verifier_disabled():
-        assert verify_inbound_signature(_unsigned(), headers={}, tenant=tenant, principal=None) is None
+        assert (
+            verify_inbound_signature(
+                _unsigned(), headers={}, tenant=tenant, principal=None, signer_by_keyid=_no_onboarded_keyid
+            )
+            is None
+        )

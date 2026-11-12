@@ -1361,6 +1361,36 @@ class BaseTestEnv:
             self.__dict__["_signing"] = build_signing_capability(self)
         return self.__dict__["_signing"]
 
+    def onboard_signing_keyid(self) -> None:
+        """Onboard this env's signing key for its own principal (the keyid -> agent mapping)."""
+        from tests.harness.signing_capability import onboard_signing_keyid
+
+        onboard_signing_keyid(self)
+
+    def onboard_buyer_agent_key_for_another_counterparty(self, tenant: Any) -> None:
+        """Onboard this env's signing key for a different principal of *tenant*."""
+        from tests.harness.signing_capability import onboard_buyer_agent_key_for_another_counterparty
+
+        onboard_buyer_agent_key_for_another_counterparty(self, tenant)
+
+    def attach_agent_url(self, agent_url: str | None) -> str:
+        """Record *agent_url* (``None``: no agent URL) on this env's principal; return its token."""
+        from tests.harness.signing_capability import attach_agent_url
+
+        return attach_agent_url(self, agent_url)
+
+    def declare_signed_requests_grading(self, *, replay_cap: int | None = None) -> None:
+        """Make this env's principal the signed-requests test counterparty accepting this env's keys."""
+        from tests.harness.signing_capability import declare_signed_requests_grading
+
+        declare_signed_requests_grading(self, replay_cap=replay_cap)
+
+    def declare_another_signed_requests_test_counterparty(self, *, replay_cap: int) -> None:
+        """Make a different principal of this env's tenant the test counterparty, with its own key."""
+        from tests.harness.signing_capability import declare_another_signed_requests_test_counterparty
+
+        declare_another_signed_requests_test_counterparty(self, replay_cap=replay_cap)
+
     def repoint_signing_agent_url(self, agent_url: str) -> Any:
         """Move this buyer's PUBLISHED ``agent_url`` to *agent_url*, keeping its key.
 
@@ -2614,8 +2644,8 @@ class BaseTestEnv:
 
         *signed* is a REALIZATION, not a flag
         (:data:`tests.helpers.signing.SIGNATURE_REALIZATIONS`). This is the one place
-        any leg signs, so it is the one place the four realizations are spelled out,
-        and every leg gets all four for free:
+        any leg signs, so it is the one place the seven realizations are spelled out,
+        and every leg gets all seven for free:
 
         * ``False`` — no signature headers at all;
         * ``True`` — a real signature over exactly the bytes returned;
@@ -2631,7 +2661,10 @@ class BaseTestEnv:
         * ``"unknown_key"`` — a real signature over exactly the bytes returned, under a
           ``keyid`` the trust root does not publish;
         * ``"wrong_key"`` — a signature over exactly the bytes returned, under the published
-          ``keyid``, by a private key other than the published one.
+          ``keyid``, by a private key other than the published one;
+        * ``"extra_label"`` — the ``True`` signature with
+          :func:`~tests.helpers.signing.prepend_unverified_label` applied: a second,
+          unverified label ahead of ``sig1`` naming a key nobody onboarded.
 
         Rule 2 above holds for all of them: the credential and the tenant hint are carried
         whether or not a signature is, so a realization is the ONLY variable.
@@ -2645,6 +2678,7 @@ class BaseTestEnv:
             MALFORMED_SIGNATURE_HEADERS,
             WIRE_ORIGIN,
             keypair_for,
+            prepend_unverified_label,
             realization,
             request_headers,
             signed_headers,
@@ -2683,7 +2717,7 @@ class BaseTestEnv:
         # about the two — key, kid, origin, method, header set — must be identical or
         # the mismatch would not be attributable to the body.
         signed_over = tampered_signing_body(raw) if signed == "tampered" else raw
-        return raw, signed_headers(
+        headers = signed_headers(
             keypair_for(f"{capability.key_id}-other")[0] if signed == "wrong_key" else capability.private_key,
             token,
             # ``@method`` is inside the signature base, so a signature made as
@@ -2695,6 +2729,9 @@ class BaseTestEnv:
             key_id=f"{capability.key_id}-unpublished" if signed == "unknown_key" else capability.key_id,
             origin=origin or WIRE_ORIGIN,
         )
+        # ``"extra_label"`` is the ``True`` signature plus one unverified label ahead of it,
+        # so the two differ by that label alone.
+        return raw, prepend_unverified_label(headers) if signed == "extra_label" else headers
 
     def call_rest(self, **kwargs: Any) -> Any:
         """Call the REST endpoint and parse the response.

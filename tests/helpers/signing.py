@@ -80,13 +80,6 @@ COUNTERPARTY_AGENT_URL = "https://buyer.example.com/a2a"
 #: The ``keyid`` the counterparty signs under.
 COUNTERPARTY_KID = "buyer-request-signing-1"
 
-#: The counterparty as a REGISTERED entry of
-#: :attr:`~src.core.config.SigningSettings.counterparty_registry` carries it (#1291 B4).
-#: Deliberately different from :data:`COUNTERPARTY_AGENT_URL` and its origin: the two
-#: resolution paths must be distinguishable at the assertion, so a test can say WHICH
-#: one supplied the key rather than only that some key was found.
-REGISTRY_AGENT_URL = "https://test-kit.example.com/a2a"
-
 #: An ``agent_url`` whose capabilities hop CANNOT BE REACHED, deterministically.
 #:
 #: The SDK resolves and validates the host SYNCHRONOUSLY before any socket is opened
@@ -796,10 +789,10 @@ def counterparty_key(
     run the REAL verifier against real keys without a live counterparty — nothing
     about the outcome is faked.
 
-    Built via ``build_registry_resolution`` (#1291 B4) — the SAME production
-    constructor the configured counterparty registry uses — rather than a
-    second inline ``AgentResolution(...)`` here, so this fixture and the
-    registry fallback can never drift into two different resolution shapes.
+    Built via ``build_pinned_resolution`` — the SAME production constructor a
+    test counterparty's accepted JWKS uses — rather than a second inline
+    ``AgentResolution(...)`` here, so this fixture and the pinned path can never
+    drift into two different resolution shapes.
 
     A resolution seeded here lands in the SAME ``AGENT_RESOLUTION_CACHE`` a real
     brand.json walk populates, so ``_resolution_for`` tags it ``source="walk"``
@@ -814,27 +807,11 @@ def counterparty_key(
     resolution refuses to do — a helper that pokes a cache nothing reads makes every
     caller LOOK like it configured Tier 3 while configuring nothing.
     """
-    from src.core.signing.verifier import AGENT_RESOLUTION_CACHE, build_registry_resolution
+    from src.core.signing.verifier import AGENT_RESOLUTION_CACHE, build_pinned_resolution
 
-    resolution = build_registry_resolution({"agent_url": agent_url, "jwks": jwks})
+    resolution = build_pinned_resolution(agent_url, jwks)
     with seeded_cache_entry(AGENT_RESOLUTION_CACHE, agent_url, resolution):
         yield
-
-
-def registry_entry(
-    jwks: dict[str, Any],
-    *,
-    agent_url: str = REGISTRY_AGENT_URL,
-) -> dict[str, Any]:
-    """One entry of the configured counterparty registry (#1291 B4).
-
-    The same two values :func:`counterparty_key` seeds into the cache, because the
-    registry's whole job is to produce the SAME ``AgentResolution`` shape from config
-    instead of from the brand.json walk. Keeping one vocabulary for both is what lets
-    a test swap the resolution SOURCE while changing nothing else — and what makes it
-    visible if the two shapes ever drift apart.
-    """
-    return {"agent_url": agent_url, "jwks": jwks}
 
 
 @contextmanager
@@ -1336,10 +1313,55 @@ MALFORMED_SIGNATURE_HEADERS = {
 #:   ``request_signature_key_unknown`` at its key lookup;
 #: * ``"wrong_key"`` — a signature over the exact bytes sent, under the published ``keyid``, by a
 #:   private key other than the published one: ``request_signature_invalid``.
-SIGNATURE_REALIZATIONS: tuple[Any, ...] = (False, True, "malformed", "tampered", "unknown_key", "wrong_key")
+#:
+#: ``"extra_label"`` is a CORRECT signature with one more label in front of it: the
+#: ``True`` realization, then :func:`prepend_unverified_label`. security.mdx L1209 makes
+#: the verifier process exactly one label and ignore the rest, so the extra label must
+#: change nothing — including which counterparty the keyid selects.
+SIGNATURE_REALIZATIONS: tuple[Any, ...] = (
+    False,
+    True,
+    "malformed",
+    "tampered",
+    "unknown_key",
+    "wrong_key",
+    "extra_label",
+)
 
 #: The type every seam that carries a realization is annotated with.
-SignatureRealization = bool | Literal["malformed", "tampered", "unknown_key", "wrong_key"]
+SignatureRealization = bool | Literal["malformed", "tampered", "unknown_key", "wrong_key", "extra_label"]
+
+#: The keyid of the label :func:`prepend_unverified_label` adds. No Given onboards it and
+#: no JWKS publishes it, so a verifier that took the counterparty from this label would
+#: resolve no key.
+UNONBOARDED_KID = "unonboarded-request-signing-key"
+
+
+def prepend_unverified_label(headers: dict[str, str]) -> dict[str, str]:
+    """*headers* with a second label, ``sig2``, ahead of ``sig1`` in both signature headers.
+
+    Shaped after ``positive/004-multiple-signature-labels``: its own ``created``,
+    ``expires``, nonce, ``alg`` and ``tag``, and a well-formed ``sf-binary`` signature that
+    verifies nothing. Its keyid is :data:`UNONBOARDED_KID`. It goes FIRST, so a verifier
+    reading the first label in header order reads this one; the label the checklist
+    verifies is still ``sig1``, unchanged.
+    """
+    from uuid import uuid4
+
+    from adcp.signing import DEFAULT_TAG
+
+    signature_input = next(name for name in headers if name.lower() == "signature-input")
+    signature = next(name for name in headers if name.lower() == "signature")
+    created = int(time.time())
+    label = (
+        f'sig2=("@method" "@target-uri");created={created};expires={created + 300};'
+        f'nonce="{uuid4().hex}";keyid="{UNONBOARDED_KID}";alg="ed25519";tag="{DEFAULT_TAG}"'
+    )
+    return {
+        **headers,
+        signature_input: f"{label}, {headers[signature_input]}",
+        signature: f"sig2=:{'A' * 88}:, {headers[signature]}",
+    }
 
 
 def realization(signed: Any) -> SignatureRealization:
@@ -1358,7 +1380,11 @@ def realization(signed: Any) -> SignatureRealization:
     ``True``/``False`` but are not realizations, and a caller that produced an int
     where a realization belongs has a bug worth surfacing.
     """
-    if signed is True or signed is False or signed in ("malformed", "tampered", "unknown_key", "wrong_key"):
+    if (
+        signed is True
+        or signed is False
+        or signed in ("malformed", "tampered", "unknown_key", "wrong_key", "extra_label")
+    ):
         return signed
     raise ValueError(
         f"signed={signed!r} is not a signature realization. Pass one of "
@@ -1366,7 +1392,8 @@ def realization(signed: Any) -> SignatureRealization:
         "the exact bytes sent), 'malformed' (unparseable headers — a step-1 pre-check failure), "
         "'tampered' (a real signature over a different body — a checklist digest mismatch), "
         "'unknown_key' (a real signature under a keyid nobody publishes), "
-        "or 'wrong_key' (a signature its published key does not verify). "
+        "'wrong_key' (a signature its published key does not verify), "
+        "or 'extra_label' (a real signature with an unverified label ahead of it). "
         "Refusing rather than falling through to a correct signature, which would make a "
         "scenario grading a refusal pass on an acceptance."
     )

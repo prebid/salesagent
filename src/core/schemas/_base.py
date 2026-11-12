@@ -205,6 +205,7 @@ from src.core.exceptions import (
 )
 from src.core.schemas._dependencies import SchemaDependencies, as_local, narrowed_from
 from src.core.schemas.notification import PushNotificationConfig
+from src.core.signing.grading import SignedRequestsGrading
 
 # For backward compatibility, alias AdCPPackage as LibraryPackage
 LibraryPackage: TypeAlias = AdCPPackage  # noqa: UP040 — runtime re-export used as base class
@@ -2805,6 +2806,9 @@ class Principal(SalesAgentBaseModel):
     #: choose which key set it is checked against. None means no key can be resolved for
     #: this counterparty, not that it is trusted.
     agent_url: str | None = None
+    #: The signed-requests test kit's relaxations when this is the kit's test counterparty
+    #: (``principals.signed_requests_grading``); None for every other counterparty.
+    signed_requests_grading: SignedRequestsGrading | None = Field(default=None, exclude=True)
     #: Onboarded as passthrough-only: no payments relationship, so only the operator can be
     #: invoiced. The per-buyer-agent billing gate reads it (BILLING_NOT_PERMITTED_FOR_AGENT).
     billing_passthrough_only: bool = False
@@ -2817,6 +2821,7 @@ class Principal(SalesAgentBaseModel):
             name=row.name,
             platform_mappings=row.platform_mappings,
             agent_url=row.agent_url,
+            signed_requests_grading=row.signed_requests_grading,
             billing_passthrough_only=row.billing_passthrough_only,
         )
 
