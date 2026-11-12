@@ -81,7 +81,9 @@ def test_add_saves_custom_targeting_gam_can_take(authenticated_admin_session, ga
     response = _add_product(authenticated_admin_session, gam_tenant, "Valid Targeting", VALID)
 
     assert response.status_code == 302
-    assert _stored_products()["Valid Targeting"]["custom_targeting_keys"] == VALID
+    assert (
+        _stored_products()["Valid Targeting"]["custom_targeting_keys"] == CustomTargeting.from_stored(VALID).to_stored()
+    )
 
 
 def test_edit_refusal_leaves_stored_custom_targeting_unchanged(authenticated_admin_session, gam_tenant):
@@ -113,20 +115,26 @@ def test_a_legacy_name_of_digits_stays_a_name_through_the_edit_page(authenticate
     assert CustomTargeting.from_stored(stored) == CustomTargeting.from_stored(legacy)
 
 
-def test_edit_page_says_when_stored_custom_targeting_cannot_be_shown(authenticated_admin_session, gam_tenant):
+def test_saving_the_edit_page_keeps_custom_targeting_it_cannot_show(authenticated_admin_session, gam_tenant):
+    """The page hands the widget nothing for a config GAM cannot take, and saving does not clear it."""
+    unreadable = {"sport": "football"}
     product = ProductFactory(
         tenant=gam_tenant,
         name="Unreadable",
         targeting_template={},
-        implementation_config={"custom_targeting_keys": {"sport": "football"}},
+        implementation_config={"custom_targeting_keys": unreadable},
     )
 
-    response = authenticated_admin_session.get(f"/tenant/{TENANT_ID}/products/{product.product_id}/edit")
+    page = authenticated_admin_session.get(f"/tenant/{TENANT_ID}/products/{product.product_id}/edit").get_data(
+        as_text=True
+    )
+    handed = _widget_document(authenticated_admin_session, product.product_id)["key_value_pairs"]
+    response = _edit_product(authenticated_admin_session, product, handed)
 
-    page = response.get_data(as_text=True)
-    assert REFUSAL in page
-    assert "stored custom targeting is not shown below, and saving replaces it" in page
-    assert _widget_document(authenticated_admin_session, product.product_id)["key_value_pairs"] == {"groups": []}
+    assert "stored custom targeting is not shown below. Saving keeps it as it is" in page
+    assert handed == {"groups": []}
+    assert response.status_code == 302
+    assert _stored_products()["Unreadable"]["custom_targeting_keys"] == unreadable
 
 
 def test_saving_no_custom_targeting_clears_it(authenticated_admin_session, gam_tenant):

@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from src.core.schemas import Snapshot
 
 from flask import Flask
+from pydantic import ValidationError
 
 from src.adapters.base import (
     AdapterCapabilities,
@@ -504,6 +505,7 @@ class GoogleAdManager(AdServerAdapter):
 
         # Validate products have required inventory targeting BEFORE creating order
         # This prevents the "hidden failure" where order is created but line items fail
+        product_custom_targeting: dict[str, CustomTargeting] = {}
         for package in packages:
             product_config = products_map.get(package.package_id)
             if not product_config:
@@ -534,6 +536,16 @@ class GoogleAdManager(AdServerAdapter):
                 )
                 self.log(f"[red]Error: {error_msg}[/red]")
                 raise AdCPProductUnavailableError()
+
+            # A product's custom targeting is the seller's configuration: one GAM cannot take
+            # is CONFIGURATION_ERROR, which the buyer cannot fix (enums/error-code.json at the
+            # pinned spec), refused here so it precedes the approval branch and every GAM write
+            try:
+                product_custom_targeting[package.package_id] = CustomTargeting.from_stored(
+                    product_impl_config.get("custom_targeting_keys") or {}
+                )
+            except ValidationError as exc:
+                raise AdCPConfigurationError(internal_detail=exc) from exc
 
         # Validate targeting from MediaPackage objects (targeting_overlay is populated from request)
         unsupported_features = []
@@ -618,11 +630,7 @@ class GoogleAdManager(AdServerAdapter):
         # the order, so targeting GAM refuses leaves no order behind.
         package_targeting = {}
         for package in packages:
-            product_impl_config = cast(dict[str, Any], products_map[package.package_id]["implementation_config"])
-            product_custom_targeting = CustomTargeting.from_stored(
-                product_impl_config.get("custom_targeting_keys") or {}
-            )
-            targeting = self._build_targeting(package.targeting_overlay, product_custom_targeting)
+            targeting = self._build_targeting(package.targeting_overlay, product_custom_targeting[package.package_id])
             if targeting:
                 package_targeting[package.package_id] = targeting
 

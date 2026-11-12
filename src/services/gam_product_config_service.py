@@ -8,7 +8,6 @@ from typing import Any
 from adcp.canonical_formats.compat_helpers import FormatIdInput
 from pydantic import ValidationError
 
-from src.adapters.gam_implementation_config_schema import CustomTargeting
 from src.core.format_resolver import upgraded_reference
 from src.core.format_satisfaction import product_declarations
 
@@ -340,12 +339,6 @@ class GAMProductConfigService:
         for placeholder in placeholders:
             if "width" not in placeholder or "height" not in placeholder:
                 return False, "Creative placeholders must have width and height"
-
-        try:
-            CustomTargeting.from_stored(config.get("custom_targeting_keys") or {})
-        except ValidationError as exc:
-            logger.warning("Invalid custom_targeting_keys: %s", exc)
-            return False, "custom_targeting_keys is not custom targeting GAM can take"
 
         # Warn if no inventory targeting specified (will use network root as fallback)
         has_inventory_targeting = config.get("targeted_ad_unit_ids") or config.get("targeted_placement_ids")

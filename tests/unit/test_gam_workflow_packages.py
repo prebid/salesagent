@@ -176,7 +176,9 @@ class TestGAMManualApprovalPath:
             with (
                 patch.object(adapter, "_requires_manual_approval", return_value=True),
                 patch.object(adapter.workflow_manager, "create_manual_order_workflow_step") as mock_workflow,
+                patch("src.core.database.database_session.get_db_session") as mock_db_session,
             ):
+                _stub_product_session(mock_db_session)
                 mock_workflow.return_value = "workflow_step_123"
 
                 # Act
@@ -233,7 +235,9 @@ class TestGAMManualApprovalPath:
             with (
                 patch.object(adapter, "_requires_manual_approval", return_value=True),
                 patch.object(adapter.workflow_manager, "create_manual_order_workflow_step") as mock_workflow,
+                patch("src.core.database.database_session.get_db_session") as mock_db_session,
             ):
+                _stub_product_session(mock_db_session)
                 mock_workflow.return_value = None  # Simulate failure
 
                 # Act / Assert - workflow failure raises the typed AdCPWorkflowError,

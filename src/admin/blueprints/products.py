@@ -66,20 +66,28 @@ logger = logging.getLogger(__name__)
 products_bp = Blueprint("products", __name__)
 
 
-def _read_gam_custom_targeting(custom_targeting_keys: dict[str, Any]) -> CustomTargeting | None:
+def _stored_custom_targeting(custom_targeting_keys: object) -> CustomTargeting | None:
+    """``custom_targeting_keys`` read into the model, or ``None`` when GAM cannot take it."""
+    try:
+        return CustomTargeting.from_stored(custom_targeting_keys)
+    except ValidationError as exc:
+        logger.warning("Custom targeting GAM cannot take: %s", exc)
+        return None
+
+
+def _read_gam_custom_targeting(custom_targeting_keys: object) -> CustomTargeting | None:
     """``custom_targeting_keys`` read into the model, or ``None`` after saying on the form why GAM cannot take it.
 
     Refused here, the seller fixes it on the product rather than a buyer's media buy failing.
     """
-    try:
-        return CustomTargeting.from_stored(custom_targeting_keys)
-    except ValidationError:
+    custom_targeting = _stored_custom_targeting(custom_targeting_keys)
+    if custom_targeting is None:
         flash(
-            "Custom targeting is not in a form GAM can take. Every key must be a GAM key ID and "
-            "every criterion needs at least one value.",
+            "Custom targeting is not in a form GAM can take. Every key must be a GAM key ID, every value a "
+            "value ID or name, and no field may be stored that the format does not have.",
             "error",
         )
-        return None
+    return custom_targeting
 
 
 def _format_to_dict(fmt: Format) -> dict:
@@ -1097,7 +1105,8 @@ def add_product(tenant_id):
                 except json.JSONDecodeError:
                     targeting_template = {}
 
-                # The widget sends the product's whole custom targeting; GAM reads it from implementation_config
+                # The widget sends the product's whole custom targeting; GAM reads it from
+                # implementation_config, stored as the model writes it
                 custom_targeting = CustomTargeting()
                 if targeting_template.get("key_value_pairs"):
                     implementation_config["custom_targeting_keys"] = targeting_template["key_value_pairs"]
@@ -1106,6 +1115,7 @@ def add_product(tenant_id):
                         if read is None:
                             return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
                         custom_targeting = read
+                        implementation_config["custom_targeting_keys"] = custom_targeting.to_stored()
 
                 # Build product kwargs, excluding None values for JSON fields that have database constraints
                 product_kwargs = {
@@ -1597,12 +1607,21 @@ def edit_product(tenant_id, product_id):
                     except json.JSONDecodeError:
                         targeting_template = {}
 
-                    # The widget sends the product's whole custom targeting; GAM reads it from implementation_config
-                    if targeting_template.get("key_value_pairs"):
-                        base_config["custom_targeting_keys"] = targeting_template["key_value_pairs"]
-                    custom_targeting = _read_gam_custom_targeting(base_config.get("custom_targeting_keys") or {})
-                    if custom_targeting is None:
-                        return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
+                    # The widget sends the product's whole custom targeting, stored as the model
+                    # writes it. An empty one keeps a stored config GAM cannot take: the edit page
+                    # could not show that config, so the seller has not cleared it.
+                    stored = _stored_custom_targeting(base_config.get("custom_targeting_keys") or {})
+                    submitted = targeting_template.get("key_value_pairs")
+                    custom_targeting = stored or CustomTargeting()
+                    if submitted is not None:
+                        read = _read_gam_custom_targeting(submitted)
+                        if read is None:
+                            return redirect(
+                                url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id)
+                            )
+                        if read.branches or stored is not None:
+                            custom_targeting = read
+                            base_config["custom_targeting_keys"] = read.to_stored()
 
                     # Store targeting_template in product
                     product.targeting_template = targeting_template
@@ -1855,10 +1874,14 @@ def edit_product(tenant_id, product_id):
             # The widget edits only the groups format, written by the model, so it never decides
             # for itself whether a stored value is an ID or a name
             if adapter_type == "google_ad_manager" and targeting_template.get("key_value_pairs"):
-                custom_targeting = _read_gam_custom_targeting(targeting_template["key_value_pairs"])
-                if custom_targeting is None:
-                    flash("The product's stored custom targeting is not shown below, and saving replaces it.", "error")
-                targeting_template["key_value_pairs"] = (custom_targeting or CustomTargeting()).to_stored()
+                shown = _read_gam_custom_targeting(targeting_template["key_value_pairs"])
+                if shown is None:
+                    flash(
+                        "The product's stored custom targeting is not shown below. Saving keeps it as it is "
+                        "until you set new custom targeting.",
+                        "error",
+                    )
+                targeting_template["key_value_pairs"] = (shown or CustomTargeting()).to_stored()
 
             product_dict = {
                 "product_id": product.product_id,

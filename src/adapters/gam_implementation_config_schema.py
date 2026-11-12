@@ -10,7 +10,17 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr, TypeAdapter, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictInt,
+    StrictStr,
+    TypeAdapter,
+    field_serializer,
+    field_validator,
+)
 
 
 class CreativePlaceholder(BaseModel):
@@ -94,7 +104,7 @@ class CustomTargeting(BaseModel):
         return CustomTargeting(branches=tuple(mine + theirs for mine in self.branches for theirs in other.branches))
 
     @classmethod
-    def from_stored(cls, stored: dict[str, Any]) -> CustomTargeting:
+    def from_stored(cls, stored: object) -> CustomTargeting:
         """Read a product's ``custom_targeting_keys`` in any of its three stored formats.
 
         - groups, what the targeting widget saves:
@@ -108,8 +118,9 @@ class CustomTargeting(BaseModel):
         ``to_stored`` keeps a name of digits a name. A criterion with no values, and a group
         with no criteria, is left out: the widget saves those while a row is still being
         filled in. Anything else malformed, an unknown key included, raises
-        ``pydantic.ValidationError``.
+        ``pydantic.ValidationError``, as does a document that is not an object.
         """
+        stored = _STORED_DOCUMENT.validate_python(stored)
         if "groups" in stored:
             groups = _StoredGroups.model_validate(stored).groups
             return cls(
@@ -213,6 +224,7 @@ class _StoredIncludeExclude(_Stored):
     operator: Literal["AND", "OR"] = "AND"
 
 
+_STORED_DOCUMENT = TypeAdapter(dict[str, Any])
 _LEGACY_KEY_VALUES = TypeAdapter(dict[str, Annotated[StrictStr, Field(min_length=1)]])
 
 
@@ -311,9 +323,14 @@ class GAMImplementationConfig(BaseModel):
 
     @field_validator("custom_targeting_keys", mode="before")
     @classmethod
-    def read_stored_custom_targeting(cls, stored: CustomTargeting | dict[str, Any]) -> CustomTargeting:
+    def read_stored_custom_targeting(cls, stored: object) -> CustomTargeting:
         """Stored rows keep their format; all three are read into the model."""
         return stored if isinstance(stored, CustomTargeting) else CustomTargeting.from_stored(stored)
+
+    @field_serializer("custom_targeting_keys")
+    def write_stored_custom_targeting(self, custom_targeting: CustomTargeting) -> dict[str, Any]:
+        """Written in the groups format, so a dumped config reads back as the same config."""
+        return custom_targeting.to_stored()
 
     @field_validator("line_item_type")
     def validate_line_item_type(cls, v):

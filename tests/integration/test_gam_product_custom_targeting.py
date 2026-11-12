@@ -16,7 +16,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from src.adapters.base import AdapterCreateRequest
-from src.core.exceptions import AdCPAdapterError, AdCPValidationError
+from src.core.exceptions import AdCPAdapterError, AdCPConfigurationError, AdCPValidationError
 from src.core.schemas import MediaPackage, Targeting
 from tests.factories import ProductFactory, TenantFactory
 from tests.factories.request import CreateMediaBuyRequestFactory, PackageRequestFactory
@@ -167,3 +167,20 @@ def test_a_name_and_the_id_it_resolves_to_reach_gam_once(bound_factory_session):
     )
 
     assert sent == gam_criteria_set("OR", [gam_criteria_set("AND", [gam_criterion(11001, [SPORTS])])])
+
+
+def test_a_product_config_gam_cannot_take_is_the_sellers_to_fix(bound_factory_session):
+    """The seller's configuration, so CONFIGURATION_ERROR: refused before any GAM call.
+
+    A legacy key saved beside the groups is what the old blueprint merge produced.
+    """
+    client_manager = stub_gam_client_manager(custom_targeting_values=GAM_VALUES)
+    merged = WIDGET_GROUPS | {"22002": "premium"}
+    buyer_overlay = Targeting(custom={"gam": {"key_values": {"22002": "premium"}}})
+
+    with pytest.raises(AdCPConfigurationError):
+        _create_media_buy(client_manager, merged, targeting_overlay=buyer_overlay)
+
+    custom_targeting_service = client_manager.get_service("CustomTargetingService")
+    assert custom_targeting_service.getCustomTargetingValuesByStatement.call_args_list == []
+    assert client_manager.get_service("OrderService").createOrders.call_args_list == []

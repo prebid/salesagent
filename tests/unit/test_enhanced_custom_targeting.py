@@ -11,7 +11,6 @@ from pydantic import ValidationError
 
 from src.adapters.gam_implementation_config_schema import CustomCriterion, CustomTargeting, GAMImplementationConfig
 from src.admin.blueprints.products import custom_key_inventory_ids
-from src.services.gam_product_config_service import GAMProductConfigService
 
 
 def _criterion(key_id: int, *values: int | str, exclude: bool = False) -> CustomCriterion:
@@ -206,6 +205,12 @@ def test_no_custom_targeting_is_no_branches():
     assert CustomTargeting.from_stored({}) == CustomTargeting()
 
 
+@pytest.mark.parametrize("stored", [5, None, ["11001"], "11001=sports"])
+def test_a_document_that_is_not_an_object_is_refused(stored):
+    with pytest.raises(ValidationError):
+        CustomTargeting.from_stored(stored)
+
+
 class TestAnd:
     """Buyer AND product: GAM takes only an OR of ANDs, so the AND is spread over the OR branches."""
 
@@ -262,15 +267,10 @@ def test_implementation_config_reads_the_stored_format():
     assert config.custom_targeting_keys == _targeting((_criterion(11003, 448701),))
 
 
-def test_product_config_validation_refuses_custom_targeting_gam_cannot_take():
-    """The buy-time check every GAM product goes through refuses it before any GAM call."""
-    config = {"priority": 8, "creative_placeholders": [{"width": 300, "height": 250}]}
+def test_implementation_config_reads_back_what_it_writes():
+    """Dumped, ``custom_targeting_keys`` is the stored format, so the config round-trips."""
+    config = GAMImplementationConfig.model_validate(
+        {"creative_placeholders": [{"width": 300, "height": 250}], "custom_targeting_keys": {"11001": "448512"}}
+    )
 
-    assert GAMProductConfigService.validate_config(config | {"custom_targeting_keys": {"11001": "sports"}}) == (
-        True,
-        None,
-    )
-    assert GAMProductConfigService.validate_config(config | {"custom_targeting_keys": {"sport": "football"}}) == (
-        False,
-        "custom_targeting_keys is not custom targeting GAM can take",
-    )
+    assert GAMImplementationConfig.model_validate(config.model_dump(mode="json")) == config
